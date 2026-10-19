@@ -738,6 +738,7 @@ export interface AuthConfig {
   revealRegistrationConflict?: boolean;
 
   /**
+  /**
    * Whether strangers may create an account through the registration route.
    *
    * Default: `false`. While it is off, a registration is refused before any
@@ -747,6 +748,14 @@ export interface AuthConfig {
    * way gets no role, and never becomes the install's first administrator.
    */
   allowRegistration?: boolean;
+
+  /**
+   * Minimum password length for staff accounts.
+   * Default is 8 characters. Apps can raise this to 15 (NIST SP 800-63B-4).
+   *
+   * @default 8
+   */
+  minPasswordLength?: number;
 
   /**
    * @experimental Opt-in auth strategies (D71). A plugin may *provide* a
@@ -764,6 +773,8 @@ export interface SanitizedAuthConfig {
   revealRegistrationConflict: boolean;
   /** Whether strangers may register. Defaults to false. */
   allowRegistration: boolean;
+  /** Minimum password length for staff accounts. Defaults to 8. */
+  minPasswordLength: number;
   /** @experimental Opt-in auth strategies (D71); built-in password runs last. */
   strategies?: AuthStrategy[];
 }
@@ -774,6 +785,7 @@ export interface SanitizedAuthConfig {
 export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
   allowRegistration: false,
+  minPasswordLength: 8,
 };
 
 // ============================================================
@@ -1249,6 +1261,8 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       allowRegistration:
         config.auth?.allowRegistration === true ||
         DEFAULT_AUTH_CONFIG.allowRegistration,
+      minPasswordLength:
+        config.auth?.minPasswordLength ?? DEFAULT_AUTH_CONFIG.minPasswordLength,
       // Pass opt-in auth strategies through unchanged (D71).
       strategies: config.auth?.strategies,
     },

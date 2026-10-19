@@ -11,6 +11,11 @@
  *   EmailService for verification/reset flows.
  */
 
+import {
+  assertPasswordHasherContract,
+  setActivePasswordHasher,
+  setMinPasswordLength,
+} from "../../auth/password/policy";
 import { resolveWebhookWritePathInfra } from "../../domains/webhooks/write-path-infra";
 import type { EmailService } from "../../services/email/email-service";
 import { UserAccountService } from "../../services/users/user-account-service";
@@ -25,6 +30,21 @@ import type { RegistrationContext } from "./types";
 
 export function registerUserServices(ctx: RegistrationContext): void {
   const { adapter, logger, config, passwordHasher } = ctx;
+
+  if (passwordHasher) {
+    assertPasswordHasherContract(passwordHasher);
+    setActivePasswordHasher(passwordHasher);
+  }
+
+  if (
+    config.auth &&
+    typeof (config.auth as { minPasswordLength?: unknown })
+      .minPasswordLength === "number"
+  ) {
+    setMinPasswordLength(
+      (config.auth as { minPasswordLength: number }).minPasswordLength
+    );
+  }
 
   // UserFieldDefinitionService — CRUD for custom user field metadata.
   container.registerSingleton<UserFieldDefinitionService>(

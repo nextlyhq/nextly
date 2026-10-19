@@ -399,6 +399,20 @@ export class AuthService extends BaseService {
       });
     }
 
+    // R-5: the rule binds whenever a password is set, a change included. The
+    // new password is judged before anything is hashed, so a refusal leaves
+    // the current credential exactly as it was.
+    const passwordStrength = validatePasswordStrength(newPassword);
+    if (!passwordStrength.ok) {
+      throw NextlyError.validation({
+        errors: passwordStrength.errors.map(message => ({
+          path: "newPassword",
+          code: "WEAK_PASSWORD",
+          message,
+        })),
+      });
+    }
+
     const newPasswordHash = await hashPasswordBcrypt(newPassword);
 
     // The users service's own-password write, so both services that change

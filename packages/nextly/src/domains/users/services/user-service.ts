@@ -42,6 +42,11 @@
 // PR 4 of unified-error-system migration: ServiceError → NextlyError. The
 // inner services now throw NextlyError directly and return data without an
 // envelope, so this façade just propagates errors and shapes the response.
+import {
+  assertPasswordHasherContract,
+  setActivePasswordHasher,
+  validatePasswordStrength,
+} from "../../../auth/password";
 import { actorForWrite } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
 import type {
@@ -130,11 +135,30 @@ export interface ListUsersQueryOptions {
 }
 
 /**
- * Password hasher interface for authentication
+ * Password hasher interface for authentication.
+ *
+ * Implements requirement R-5 of staff-only-access:
+ * When an app supplies its own digester, it must declare its reach contract:
+ * either a finite byte count (`reach: number`), `"unbounded"` (`reach: "unbounded"`),
+ * or custom validation (`validate: (password: string) => ...`).
  */
 export interface PasswordHasher {
   hash(password: string): Promise<string>;
   verify(password: string, hash: string): Promise<boolean>;
+  /**
+   * Reach contract: what the digester reads whole.
+   * - A finite byte count (e.g. 72, 100): refuses passwords exceeding this byte count in UTF-8.
+   * - "unbounded": the digester has no byte-length truncation limit (the 128 character resource cap applies).
+   */
+  reach?: number | "unbounded";
+  /**
+   * Optional custom validation function for this digester.
+   */
+  validate?: (
+    password: string
+  ) => boolean | void | string | { ok: boolean; message?: string };
+  /** Optional name for the digester in error messages. */
+  name?: string;
 }
 
 // ============================================================
@@ -167,7 +191,12 @@ export class UserService {
     private readonly passwordHasher?: PasswordHasher,
     private readonly logger: Logger = consoleLogger,
     private readonly caller: UserWriteCaller = "app"
-  ) {}
+  ) {
+    if (passwordHasher) {
+      assertPasswordHasherContract(passwordHasher);
+      setActivePasswordHasher(passwordHasher);
+    }
+  }
 
   /**
    * @internal The same service as plugins receive it in `ctx.services.users`.
@@ -580,6 +609,22 @@ export class UserService {
           userId,
           reason: auditReason("current-password-mismatch"),
         },
+      });
+    }
+
+    // R-5: the rule binds whenever a password is set, a change included. The
+    // digester in hand answers the reach too — a custom digester's own
+    // contract, not the default 72 bytes.
+    const passwordStrength = validatePasswordStrength(newPassword, {
+      hasher: this.passwordHasher,
+    });
+    if (!passwordStrength.ok) {
+      throw NextlyError.validation({
+        errors: passwordStrength.errors.map(message => ({
+          path: "newPassword",
+          code: "WEAK_PASSWORD",
+          message,
+        })),
       });
     }
 
