@@ -49,7 +49,11 @@ const MEMBER: Principal = {
 
 const callers = {
   visitor: visitorActor(),
-  "visitor-public-read": visitorActor(only("posts", ["read", "publish"])),
+  // Holds read, update, publish and unpublish, so a refused publish or
+  // unpublish can only come from the visitor guard, not a missing permission.
+  "visitor-public-read": visitorActor(
+    only("posts", ["read", "update", "publish", "unpublish"])
+  ),
   principal: principalActor(MEMBER),
   "user-with": userActor({
     userId: "u1",
@@ -201,12 +205,11 @@ describe("a visitor", () => {
   });
 
   it("never publishes or unpublishes, even holding the permission", async () => {
-    expect(
-      await decide(callers["visitor-public-read"], "publish", postsWith("true"))
-    ).toEqual({ allowed: false, reason: "visitor-cannot-publish" });
-    expect(await allowed("visitor-public-read", "unpublish", "absent")).toBe(
-      false
-    );
+    for (const action of ["publish", "unpublish"] as const) {
+      expect(
+        await decide(callers["visitor-public-read"], action, postsWith("true"))
+      ).toEqual({ allowed: false, reason: "visitor-cannot-publish" });
+    }
   });
 });
 
@@ -274,6 +277,22 @@ describe("a publish or an unpublish", () => {
     const posts = postsWith("absent");
     expect((await decide(partial, "publish", posts)).allowed).toBe(true);
     expect((await decide(partial, "unpublish", posts)).allowed).toBe(false);
+  });
+
+  it("needs the update permission as well, since it changes the entry", async () => {
+    const publisher = userActor({
+      userId: "u5",
+      roles: ["publisher"],
+      permissions: only("posts", ["read", "publish", "unpublish"]),
+      superAdmin: false,
+    });
+    const posts = postsWith("absent");
+    for (const action of ["publish", "unpublish"] as const) {
+      expect(await decide(publisher, action, posts)).toEqual({
+        allowed: false,
+        reason: "no-permission",
+      });
+    }
   });
 });
 

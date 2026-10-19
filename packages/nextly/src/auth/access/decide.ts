@@ -11,8 +11,9 @@
  * - a super-admin passes every collection and Single rule;
  * - everyone else needs the permission for the action, AND, where the target
  *   declares a rule for the action, a rule that answers exactly `true`. A
- *   publish or an unpublish is judged on top of update, so where the target
- *   declares an update rule, it must answer `true` as well.
+ *   publish or an unpublish is judged on top of update: it needs the update
+ *   permission as well as its own, and where the target declares an update
+ *   rule, that rule must answer `true` too.
  *
  * The decision makes no queries: the actor already carries everything it
  * reads. It never knows which way in asked, and each way in presents the
@@ -146,6 +147,10 @@ export async function decide(
   }
   if (isSuperAdmin(actor)) return ALLOW;
   if (!holdsPermission(actor, action, target.slug)) {
+    return refuse("no-permission");
+  }
+  // A publish or an unpublish changes the entry, so it is an update first.
+  if (isLifecycle(action) && !holdsPermission(actor, "update", target.slug)) {
     return refuse("no-permission");
   }
   const refusal = ruleRefusal(await askRule(actor, action, target));
