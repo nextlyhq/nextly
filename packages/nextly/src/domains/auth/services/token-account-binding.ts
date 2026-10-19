@@ -318,10 +318,14 @@ export async function bindIssuedTokens(
       .from(table)
       .where(isNull(table.userId));
     if (rows.length === 0) continue;
+    // Only a live token can be bound, so only a live token's address is
+    // looked up; an expired one is removed without a read.
     const holders = await holdersOf(
       tx,
       tables,
-      rows.map(row => String(row.identifier))
+      rows
+        .filter(row => asDate(row.expires) > now)
+        .map(row => String(row.identifier))
     );
 
     const { bindTo, remove } = planBinding(
