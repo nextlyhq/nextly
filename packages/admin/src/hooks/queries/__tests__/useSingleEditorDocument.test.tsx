@@ -19,6 +19,9 @@ vi.mock("../useSingles", () => ({
     docSpy(...args);
     return { data: undefined, isLoading: false, error: null };
   },
+  singleDocumentKeys: {
+    detail: (slug: string) => ["single-documents", "detail", slug],
+  },
 }));
 
 vi.mock("../useStoredReferences", () => ({
