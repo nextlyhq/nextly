@@ -354,6 +354,31 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         );
       });
 
+      it("records a review that keeps every one of the site's lines", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await first.overrideTemplate(id, undefined, ACTOR);
+        const service = await boot(V2);
+        const { review } = await service.compareTemplate(id);
+        logged.length = 0;
+        await service.applyOwnerUpdate(
+          id,
+          {
+            "htmlContent:0": { use: "mine" },
+            "htmlContent:1": { use: "mine" },
+          },
+          review,
+          ACTOR
+        );
+        expect(logged).toEqual([
+          expect.objectContaining({
+            metadata: expect.objectContaining({
+              operation: "apply-owner-update",
+            }),
+          }),
+        ]);
+      });
+
       it("records a reset under the site's name for the template", async () => {
         const first = await boot(V1);
         const id = (await shippedTemplate(first)).id;

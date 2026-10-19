@@ -820,7 +820,10 @@ export class EmailTemplateService extends BaseService {
         baseDigest: entry.digest,
         updatedAt: new Date(),
       })
-      .where(eq(this.emailTemplates.id, id));
+      // Conditioned on the row as read: `start` carries every version field
+      // from that read, so a save in between must not be overwritten.
+      .where(this.unchanged(row));
+    await this.assertWritten(id, start, entry.digest, record.slug);
 
     await this.recordActivity({
       action: "update",
@@ -951,7 +954,12 @@ export class EmailTemplateService extends BaseService {
       templateId: id,
       templateName: record.name,
       templateKind: record.kind,
-      changedFields: changedTemplateFields({ ...mine }, { ...merged }),
+      // The base moves even when every change keeps the site's lines, so the
+      // entry always names it.
+      changedFields: [
+        ...changedTemplateFields({ ...mine }, { ...merged }),
+        "baseVersion",
+      ],
       operation: "apply-owner-update",
       actor,
     });
@@ -1005,10 +1013,10 @@ export class EmailTemplateService extends BaseService {
       templateId: id,
       templateName: record.name,
       templateKind: record.kind,
-      changedFields: changedTemplateFields(
-        { ...versionOf(row) },
-        { ...version }
-      ),
+      changedFields: [
+        ...changedTemplateFields({ ...versionOf(row) }, { ...version }),
+        "baseVersion",
+      ],
       operation: "undo-owner-update",
       actor,
     });
@@ -1019,9 +1027,8 @@ export class EmailTemplateService extends BaseService {
    * The row as it was read, in what these writes depend on: its version, its
    * description, whether it is overridden and the base it is kept against. A
    * write conditioned on it doesn't apply when the site saved any of those in
-   * between (an edit to the declared variables overrides the template, so it
-   * shows here too). Compared by value, not by `updatedAt`, which SQLite and
-   * MySQL keep to the second.
+   * between. Compared by value, and by `updatedAt` for the declared
+   * variables, which can't be compared portably in SQL.
    */
   private unchanged(row: StoredTemplateRow) {
     const t = this.emailTemplates;
@@ -1035,7 +1042,10 @@ export class EmailTemplateService extends BaseService {
       same(t.preheader, row.preheader ?? null),
       same(t.description, row.description ?? null),
       same(t.overridden, row.overridden ?? null),
-      same(t.baseDigest, row.baseDigest ?? null)
+      same(t.baseDigest, row.baseDigest ?? null),
+      // Every save moves it, to the second on SQLite and MySQL: this catches
+      // an edit to what the values above leave out, the declared variables.
+      row.updatedAt ? eq(t.updatedAt, row.updatedAt) : isNull(t.updatedAt)
     );
   }
 
@@ -1165,7 +1175,8 @@ export class EmailTemplateService extends BaseService {
           ),
           overridden: false,
         })
-        .where(eq(this.emailTemplates.id, row.id));
+        // Conditioned on the row as read: an override saved in between stays.
+        .where(this.unchanged(row));
     }
   }
 

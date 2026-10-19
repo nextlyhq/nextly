@@ -167,6 +167,22 @@ describe("applyOwnerChoices", () => {
     expect(result).toEqual(mine);
   });
 
+  it("compares very long versions without a table that grows with their square", () => {
+    // 20,000 lines on each side, every one different in the middle: an LCS
+    // table would need 400 million cells. The shared first and last lines
+    // are set aside, and the middle is offered as one change.
+    const many = (prefix: string) =>
+      Array.from({ length: 20_000 }, (_, i) => `<p>${prefix} ${i}</p>`);
+    const base = version(lines("<h1>Top</h1>", ...many("a"), "<p>End</p>"));
+    const theirs = version(lines("<h1>Top</h1>", ...many("b"), "<p>End</p>"));
+    const started = Date.now();
+    const changes = ownerChanges(base, theirs, base);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ conflict: false });
+    expect(changes[0].theirs).toHaveLength(20_000);
+  });
+
   it("refuses a review that leaves a change undecided, or decides one that wasn't offered", () => {
     const missing = () =>
       applyOwnerChoices(BASE, theirs, mine, {

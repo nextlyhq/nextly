@@ -59,8 +59,52 @@ function lines(value: string | null): string[] {
     : value.replace(/\r\n?/g, "\n").split("\n");
 }
 
-/** The ranges where `other` differs from `base`, from a longest common subsequence. */
+/**
+ * The most cells the line table may have. Past it, the differing middle is
+ * offered as one change rather than allocating a table that grows with the
+ * square of the template's length.
+ */
+export const MAX_DIFF_CELLS = 1_000_000;
+
+/**
+ * The ranges where `other` differs from `base`. Lines the two share at the
+ * start and the end are set aside first; the middle is diffed by a longest
+ * common subsequence, or, past MAX_DIFF_CELLS, taken as one change.
+ */
 function hunks(base: string[], other: string[]): Hunk[] {
+  let start = 0;
+  while (
+    start < base.length &&
+    start < other.length &&
+    base[start] === other[start]
+  ) {
+    start++;
+  }
+  let end = 0;
+  while (
+    end < base.length - start &&
+    end < other.length - start &&
+    base[base.length - 1 - end] === other[other.length - 1 - end]
+  ) {
+    end++;
+  }
+  const b = base.slice(start, base.length - end);
+  const o = other.slice(start, other.length - end);
+  if (b.length === 0 && o.length === 0) return [];
+  const middle =
+    (b.length + 1) * (o.length + 1) > MAX_DIFF_CELLS
+      ? [{ bStart: 0, bEnd: b.length, oStart: 0, oEnd: o.length }]
+      : lcsHunks(b, o);
+  return middle.map(h => ({
+    bStart: h.bStart + start,
+    bEnd: h.bEnd + start,
+    oStart: h.oStart + start,
+    oEnd: h.oEnd + start,
+  }));
+}
+
+/** The ranges where `other` differs from `base`, from a longest common subsequence. */
+function lcsHunks(base: string[], other: string[]): Hunk[] {
   const n = base.length;
   const m = other.length;
   // lcs[i][j]: length of the LCS of base[i:] and other[j:].
