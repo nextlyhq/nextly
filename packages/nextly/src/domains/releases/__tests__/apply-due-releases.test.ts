@@ -68,7 +68,7 @@ function deps(over: {
   cancelled?: string;
   /** A release POSTPONED after the plan was built: still scheduled, new instant. */
   rescheduledTo?: Date;
-  /** Make `markReleasePublished` answer `false`, as its fence does. */
+  /** Make `markReleasesPublished` settle nothing, as its fence does. */
   markRefuses?: boolean;
   /**
    * Each member's mark, by member id: the `applied_revision` column. Shared
@@ -125,11 +125,11 @@ function deps(over: {
         over.cancelled !== id &&
         (over.rescheduledTo === undefined ||
           over.rescheduledTo.getTime() === scheduledAt.getTime()),
-      markReleasePublished: async id => {
-        over.marked?.push(id);
-        // The fence answers `false` for a release an overlapping drain already
+      markReleasesPublished: async entries => {
+        for (const entry of entries) over.marked?.push(entry.id);
+        // The fence settles none of a component an overlapping drain already
         // settled. Overridable so a fixture can build that case.
-        return over.markRefuses !== true;
+        return over.markRefuses === true ? [] : entries.map(entry => entry.id);
       },
     },
     // Default: the write did what it said, and so left its mark. A case that
@@ -341,9 +341,9 @@ describe("applyDueReleases", () => {
       now: clock,
       repository: {
         ...d.repository,
-        markReleasePublished: async (_id: string, at: Date) => {
+        markReleasesPublished: async (entries, at) => {
           stamps.push(at);
-          return true;
+          return entries.map(entry => entry.id);
         },
       },
     });
@@ -677,17 +677,61 @@ describe("applyDueReleases", () => {
   it("settles a release fenced on the revision and instant the pass PLANNED against", async () => {
     // The repository refuses the settlement of a release moved since, so the
     // fence it is handed has to be the plan's, not whatever the row says now.
-    const settle = vi.fn(async () => true);
+    const settle = vi.fn(async (entries: readonly { id: string }[]) =>
+      entries.map(e => e.id)
+    );
     const d = deps({ releases: [release({ id: "r1", revision: 7 })] });
     await applyDueReleases({
       ...d,
-      repository: { ...d.repository, markReleasePublished: settle },
+      repository: { ...d.repository, markReleasesPublished: settle },
     });
 
-    expect(settle).toHaveBeenCalledWith("r1", NOW, {
-      revision: 7,
-      scheduledAt: PAST,
+    expect(settle).toHaveBeenCalledWith(
+      [{ id: "r1", revision: 7, scheduledAt: PAST }],
+      NOW
+    );
+  });
+
+  it("settles a component WHOLE, in one call, or not at all", async () => {
+    // Two releases sharing a document: an earlier publish and a later
+    // takedown. Settled one at a time, a refusal of the earlier one (renamed
+    // since the plan) would still settle the later, and the next pass would
+    // make the earlier the winner and republish the page.
+    const settle = vi.fn(
+      async (
+        _entries: readonly {
+          id: string;
+          revision: number;
+          scheduledAt: Date;
+        }[],
+        _at: Date
+      ): Promise<readonly string[]> => []
+    );
+    const d = deps({
+      releases: [
+        release({ id: "early", revision: 2 }),
+        release({ id: "late", revision: 5, scheduledAt: NOW }),
+      ],
+      members: [
+        member({ releaseId: "early", entryId: "page", action: "publish" }),
+        member({ releaseId: "late", entryId: "page", action: "unpublish" }),
+      ],
     });
+    const result = await applyDueReleases({
+      ...d,
+      repository: { ...d.repository, markReleasesPublished: settle },
+    });
+
+    expect(settle).toHaveBeenCalledTimes(1);
+    expect(settle.mock.calls[0]?.[0]).toEqual(
+      expect.arrayContaining([
+        { id: "early", revision: 2, scheduledAt: PAST },
+        { id: "late", revision: 5, scheduledAt: NOW },
+      ])
+    );
+    expect(settle.mock.calls[0]?.[0]).toHaveLength(2);
+    // The repository settled none, so the pass reports none.
+    expect(result.published).toBe(0);
   });
 
   it("counts members ALREADY marked for the current revision as applied, without writing", async () => {

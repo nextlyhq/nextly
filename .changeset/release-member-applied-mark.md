@@ -46,7 +46,8 @@ members returned by the Direct API and REST do not include it.
 Compatibility: `applyDueReleases`, exported from the package root, is experimental, and its
 dependency ports change. A custom `repository` passed to it must now provide
 `isMemberApplied(memberId, revision)`, return `appliedRevision` on the rows from
-`listMembersOf`, and accept the planned `{ revision, scheduledAt }` fence as the third argument
-of `markReleasePublished`; custom `mutations` no longer provide `applied`, and their `publish`
-and `unpublish` receive a `receipt`. The built-in drain job (`createReleasesDrainJob`) needs no
+`listMembersOf`, and replace `markReleasePublished(id, at)` with
+`markReleasesPublished(entries, at)`, which settles a whole component of releases, each fenced on
+its planned `{ revision, scheduledAt }`, or none of them; custom `mutations` no longer provide
+`applied`, and their `publish` and `unpublish` receive a `receipt`. The built-in drain job (`createReleasesDrainJob`) needs no
 change.

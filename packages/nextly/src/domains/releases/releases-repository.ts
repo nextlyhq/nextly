@@ -718,7 +718,7 @@ export class ReleasesRepository {
    * expression: `revision + 1` cannot be written as an update, only as the
    * number one more than a revision somebody read.
    *
-   * Answering `false` rather than throwing follows `markReleasePublished`: the
+   * Answering `false` rather than throwing follows `markReleasesPublished`: the
    * repository reports what the fence did, and the caller decides whether a
    * refusal is a conflict for its transport.
    */
@@ -819,13 +819,43 @@ export class ReleasesRepository {
   async blockReleases(
     entries: readonly BlockRequest[]
   ): Promise<readonly string[]> {
-    if (entries.length === 0) return [];
+    const moved = await this.moveComponentWhole(entries, entry => ({
+      set: { state: "blocked" satisfies ReleaseState },
+      where: [{ column: "scheduledAt", op: "=", value: entry.scheduledAt }],
+    }));
 
-    // ORDERED BY ID, and the reason is no longer the one the previous version
-    // gave. Correctness under partial failure now belongs to the transaction,
-    // so this order cannot affect the outcome; it exists so two drains racing
-    // on overlapping components take the same row locks in the same sequence
-    // and cannot deadlock against each other.
+    // AFTER THE COMMIT, never inside it. Revalidation makes a change visible to
+    // readers and drops the shared transition memo, and doing that from inside
+    // the transaction would announce a transition that can still roll back —
+    // the reader would then see a release stopped that is still scheduled.
+    for (const entry of moved) await this.revalidateMembersOf(entry.id);
+    return moved.map(entry => entry.id);
+  }
+
+  /**
+   * Move every release of one component out of `scheduled`, in ONE
+   * transaction, or none of them: the releases moved, or an empty list when
+   * any one's fence matched nothing. `moveOf` says what each release's move
+   * writes and what else its fence requires.
+   *
+   * A component is the set of releases sharing a document, and it moves
+   * together because a split one is not a smaller version of the right answer:
+   * the release left behind becomes the winner on every document it shares and
+   * can apply the OPPOSITE action to the one the whole component produced.
+   *
+   * ORDERED BY ID. Correctness under partial failure belongs to the
+   * transaction, so the order cannot affect the outcome; it exists so two
+   * drains racing on overlapping components take the same row locks in the
+   * same sequence and cannot deadlock against each other.
+   */
+  private async moveComponentWhole<E extends { id: string }>(
+    entries: readonly E[],
+    moveOf: (entry: E) => {
+      set: Record<string, unknown>;
+      where: readonly VersionsWhereCondition[];
+    }
+  ): Promise<readonly E[]> {
+    if (entries.length === 0) return [];
     const ordered = [...entries].sort((a, b) =>
       a.id < b.id ? -1 : a.id > b.id ? 1 : 0
     );
@@ -839,19 +869,13 @@ export class ReleasesRepository {
     try {
       await this.db.transaction(async tx => {
         for (const entry of ordered) {
-          // Each row locked, its revision read and bumped, in id order: a
-          // block is a scheduling move like any other, so a schedule judged
-          // before it misses on the revision rather than overwriting it.
+          // Each row locked, its revision read and bumped, in id order: every
+          // move of a release raises the revision a schedule is fenced on.
           const moved = await this.advanceRevision(
             tx,
             entry.id,
             ["scheduled"],
-            {
-              set: { state: "blocked" satisfies ReleaseState },
-              where: [
-                { column: "scheduledAt", op: "=", value: entry.scheduledAt },
-              ],
-            }
+            moveOf(entry)
           );
           if (moved === null) {
             fenceMissed = true;
@@ -865,22 +889,14 @@ export class ReleasesRepository {
         }
       });
     } catch (error) {
-      // A member of the component moved between the plan and this write, so
-      // the component is no longer the one that was judged. NOTHING is blocked
-      // rather than the remainder: a partial transition is the defect this
-      // method exists to make unrepresentable, and the next pass re-plans
-      // against what is now true — which terminates, because a release that
-      // moved is no longer due and drops out of the next plan.
+      // A release of the component moved between the plan and this write, so
+      // the component is no longer the one that was judged. NOTHING moves
+      // rather than the remainder, and the next pass re-plans against what is
+      // now true.
       if (fenceMissed) return [];
       throw error;
     }
-
-    // AFTER THE COMMIT, never inside it. Revalidation makes a change visible to
-    // readers and drops the shared transition memo, and doing that from inside
-    // the transaction would announce a transition that can still roll back —
-    // the reader would then see a release stopped that is still scheduled.
-    for (const entry of ordered) await this.revalidateMembersOf(entry.id);
-    return ordered.map(entry => entry.id);
+    return ordered;
   }
 
   /**
@@ -1367,8 +1383,8 @@ export class ReleasesRepository {
   }
 
   /**
-   * Move a materialised release to `published`, and say whether THIS caller
-   * moved it.
+   * Move a materialised COMPONENT of releases to `published`, all or none,
+   * and say which THIS caller moved: every release given, or none.
    *
    * Fenced on `state = "scheduled"`, and the answer matters. The runner that
    * delivers materialisation is at-least-once by contract, so two passes can
@@ -1378,39 +1394,37 @@ export class ReleasesRepository {
    * it, calling a release off during its own materialisation would still mark
    * it published.
    *
-   * Through `advanceRevision`, so publishing bumps the revision as every other
-   * move of the release does. A schedule judged before it is already refused
-   * by its state fence, which never admits `published`; the bump keeps "every
-   * move raises the revision" true without an exception a later reader would
-   * have to know about.
+   * And fenced on each release's `revision` and `scheduledAt` as the pass
+   * planned against them. State alone admits a release POSTPONED, renamed or
+   * otherwise moved after the plan was loaded: it is still `scheduled`, so a
+   * pass whose actions were applied, or already marked applied, for the old
+   * release would mark it published and lose the change. Any move since the
+   * plan raised the revision, so it matches nothing.
    *
-   * And fenced on `planned`, the revision and instant the pass planned
-   * against, the pair `blockReleases` fences on. State alone admits a release
-   * POSTPONED after the plan was loaded: it is still `scheduled`, so a pass
-   * whose actions were applied, or already marked applied, for the old
-   * schedule would mark it published and lose the new one. Any move since
-   * the plan raised the revision, so this matches nothing and the release
-   * keeps the schedule it was given.
+   * WHOLE OR NOT AT ALL, for the reason `blockReleases` gives: settling the
+   * later release of a component while an earlier one, moved since the plan,
+   * stays scheduled leaves the earlier one the winner on their shared
+   * documents, and the next pass would republish what the component took down.
+   *
+   * Through `advanceRevision`, so publishing bumps each revision as every
+   * other move of a release does.
    */
-  async markReleasePublished(
-    id: string,
-    at: Date,
-    planned: { revision: number; scheduledAt: Date }
-  ): Promise<boolean> {
-    const moved = await this.db.transaction(tx =>
-      this.advanceRevision(tx, id, ["scheduled"], {
-        set: {
-          state: "published" satisfies ReleaseState,
-          publishedAt: at,
-          updatedAt: at,
-        },
-        where: [
-          { column: "revision", op: "=", value: planned.revision },
-          { column: "scheduledAt", op: "=", value: planned.scheduledAt },
-        ],
-      })
-    );
-    return moved !== null;
+  async markReleasesPublished(
+    entries: readonly { id: string; revision: number; scheduledAt: Date }[],
+    at: Date
+  ): Promise<readonly string[]> {
+    const moved = await this.moveComponentWhole(entries, entry => ({
+      set: {
+        state: "published" satisfies ReleaseState,
+        publishedAt: at,
+        updatedAt: at,
+      },
+      where: [
+        { column: "revision", op: "=", value: entry.revision },
+        { column: "scheduledAt", op: "=", value: entry.scheduledAt },
+      ],
+    }));
+    return moved.map(entry => entry.id);
   }
 
   /**
@@ -1440,7 +1454,7 @@ export class ReleasesRepository {
    *
    * Asked immediately before each content write, because cancelling is the one
    * thing a person does to a release BETWEEN a drain reading it and the drain
-   * acting on it, and the fence on `markReleasePublished` comes too late — it
+   * acting on it, and the fence on `markReleasesPublished` comes too late — it
    * stops the row being marked published and cannot un-publish the documents.
    *
    * This narrows the window to a single action rather than closing it: a cancel

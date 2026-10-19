@@ -61,8 +61,9 @@ export async function publishAsItStands(
   if (row?.scheduledAt == null) {
     throw new Error(`no scheduled release ${id} to publish`);
   }
-  return repo.markReleasePublished(id, at, {
-    revision: row.revision,
-    scheduledAt: row.scheduledAt,
-  });
+  const settled = await repo.markReleasesPublished(
+    [{ id, revision: row.revision, scheduledAt: row.scheduledAt }],
+    at
+  );
+  return settled.length === 1;
 }

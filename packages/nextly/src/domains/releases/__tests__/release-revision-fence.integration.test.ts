@@ -536,7 +536,12 @@ describe.each(getConfiguredTestDialects())(
 
       const planned = { revision: 1, scheduledAt: PAST };
       expect(
-        await repo.markReleasePublished(release.id, new Date(), planned)
+        (
+          await repo.markReleasesPublished(
+            [{ id: release.id, ...planned }],
+            new Date()
+          )
+        ).length === 1
       ).toBe(true);
       const published = await readRelease(repo, release.id);
       expect(published.state).toBe("published");
@@ -544,7 +549,12 @@ describe.each(getConfiguredTestDialects())(
 
       // A second pass is refused by the state fence and moves nothing.
       expect(
-        await repo.markReleasePublished(release.id, new Date(), planned)
+        (
+          await repo.markReleasesPublished(
+            [{ id: release.id, ...planned }],
+            new Date()
+          )
+        ).length === 1
       ).toBe(false);
       expect((await readRelease(repo, release.id)).revision).toBe(2);
     });
@@ -573,7 +583,12 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(
-        await repo.markReleasePublished(release.id, new Date(), planned)
+        (
+          await repo.markReleasesPublished(
+            [{ id: release.id, ...planned }],
+            new Date()
+          )
+        ).length === 1
       ).toBe(false);
       const kept = await readRelease(repo, release.id);
       expect(kept.state).toBe("scheduled");

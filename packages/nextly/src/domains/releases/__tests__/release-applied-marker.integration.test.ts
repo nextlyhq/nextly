@@ -330,8 +330,8 @@ function bound(repo: ReleasesRepository): ApplyDueReleasesDeps["repository"] {
     listMembersOf: ids => repo.listMembersOf(ids),
     isStillDueAt: (id, at) => repo.isStillDueAt(id, at),
     isMemberApplied: (id, revision) => repo.isMemberApplied(id, revision),
-    markReleasePublished: (id, at, planned) =>
-      repo.markReleasePublished(id, at, planned),
+    markReleasesPublished: (entries, at) =>
+      repo.markReleasesPublished(entries, at),
     blockReleases: entries => repo.blockReleases(entries),
   };
 }
@@ -560,7 +560,7 @@ describe.each(getConfiguredTestDialects())(
       let settling = false;
       void materialise(t, mutationsOf(t), {
         ...bound(real),
-        markReleasePublished: () => {
+        markReleasesPublished: () => {
           settling = true;
           return never();
         },
@@ -576,9 +576,9 @@ describe.each(getConfiguredTestDialects())(
       changes = 0;
       const result = await materialise(t, mutationsOf(t), {
         ...bound(real),
-        markReleasePublished: async (id, at, planned) => {
+        markReleasesPublished: async (entries, at) => {
           await scheduleAsItStands(real, releaseId, later, "UTC");
-          return real.markReleasePublished(id, at, planned);
+          return real.markReleasesPublished(entries, at);
         },
       });
 
@@ -587,6 +587,69 @@ describe.each(getConfiguredTestDialects())(
       const [kept] = await real.findReleases({ ids: [releaseId] });
       expect(kept?.state).toBe("scheduled");
       expect(kept?.scheduledAt?.getTime()).toBe(later.getTime());
+    });
+
+    it("settles neither release of a component when one was renamed after the plan", async () => {
+      // An earlier release publishes a page and a later one takes it down, and
+      // both are marked. A rename of the earlier one lands between the plan and
+      // settlement: its revision moves, its schedule does not. Settling the
+      // later one alone would leave the earlier one the winner next pass,
+      // which would republish the page.
+      const t = await boot(dialect);
+      const [page] = await drafts(t, 1);
+      const real = new ReleasesRepository(t.adapter);
+      const add = async (
+        title: string,
+        action: "publish" | "unpublish",
+        at: Date
+      ) => {
+        const release = await real.createRelease({ title });
+        await real.addMember(
+          {
+            releaseId: release.id,
+            scopeKind: "collection",
+            scopeSlug: POSTS,
+            entryId: page,
+            locale: null,
+            action,
+            createdBy: "author",
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(real, release.id, at, "UTC");
+        return release.id;
+      };
+      const early = await add("Launch", "publish", PAST);
+      const late = await add("Takedown", "unpublish", LATER_PAST);
+      // Every write lands; the pass is ended before it settles.
+      let settling = false;
+      void materialise(t, mutationsOf(t), {
+        ...bound(real),
+        markReleasesPublished: () => {
+          settling = true;
+          return never();
+        },
+      });
+      await until(() => settling);
+      expect(await storedStatus(t, POSTS, page)).toBe("draft");
+
+      const result = await materialise(t, mutationsOf(t), {
+        ...bound(real),
+        markReleasesPublished: async (entries, at) => {
+          await real.updateReleaseDetails(early, { title: "Launch, renamed" });
+          return real.markReleasesPublished(entries, at);
+        },
+      });
+
+      expect(result.published).toBe(0);
+      expect(await stateOf(t, early)).toBe("scheduled");
+      expect(await stateOf(t, late)).toBe("scheduled");
+
+      // The next pass plans the whole component again: the page stays down.
+      await materialise(t);
+      expect(await storedStatus(t, POSTS, page)).toBe("draft");
+      expect(await stateOf(t, early)).toBe("published");
+      expect(await stateOf(t, late)).toBe("published");
     });
 
     it("does not take an earlier mark as applied once the release is postponed after the plan", async () => {
