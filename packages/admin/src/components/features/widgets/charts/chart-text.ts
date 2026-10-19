@@ -83,12 +83,15 @@ export function overTimeSummary(chart: {
 /**
  * A chart of groups' text alternative, from groups already in drawing order:
  * how many groups, the total, and the first group as "Most". With floors, it
- * says the counts are lower bounds instead, and names no group first.
+ * says the counts are lower bounds instead, and names no group first. Where
+ * the answer itself left groups out (`partial`), the sum is of the groups
+ * counted, not a total, and it says more exist.
  */
 export function groupsSummary(chart: {
   what: string;
   groups: readonly { label: string; count: number }[];
   floors: boolean;
+  partial?: boolean;
   format: (n: number) => string;
 }): string {
   const n = chart.groups.length;
@@ -102,10 +105,14 @@ export function groupsSummary(chart: {
     );
   }
   const first = chart.groups[0];
-  return (
-    `${chart.what}: ${groups}, ${chart.format(total)} in total. ` +
-    `Most: ${first.label}, ${chart.format(first.count)}.`
-  );
+  const most = `Most: ${first.label}, ${chart.format(first.count)}.`;
+  if (chart.partial) {
+    return (
+      `${chart.what}: ${groups} counted, ${chart.format(total)} among them. ` +
+      `${most} More groups exist.`
+    );
+  }
+  return `${chart.what}: ${groups}, ${chart.format(total)} in total. ${most}`;
 }
 
 /**

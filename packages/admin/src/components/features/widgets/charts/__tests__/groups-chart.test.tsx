@@ -117,6 +117,29 @@ describe("the text alternative", () => {
   });
 });
 
+describe("the total a text alternative states", () => {
+  const five = () =>
+    [1, 2, 3, 4, 5].map(n => group(`g${n}`, 10 - n, `Group ${n}`));
+  const described = () => {
+    const id = screen.getByRole("img").getAttribute("aria-describedby") ?? "";
+    return document.getElementById(id)?.textContent ?? "";
+  };
+
+  it("counts every group the answer holds, not only those the tier draws", () => {
+    // A small card draws three of five; its words still count all five (9+8+7+6+5 = 35).
+    drawAt("small", five());
+    expect(described()).toBe(
+      "Entries by status: 5 groups, 35 in total. Most: Group 1, 9."
+    );
+  });
+
+  it("is not called a total when the answer itself left groups out", () => {
+    drawAt("large", five(), { truncated: true });
+    expect(described()).not.toMatch(/in total/);
+    expect(described()).toMatch(/more groups exist/i);
+  });
+});
+
 describe("groups the tier leaves out", () => {
   it("are counted under the chart", () => {
     drawAt(

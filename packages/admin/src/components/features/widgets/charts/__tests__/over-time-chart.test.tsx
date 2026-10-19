@@ -7,7 +7,7 @@
  */
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CardTierContext } from "../../frame/tier";
 import { OverTimeChart, type OverTimeSeries } from "../over-time-chart";
@@ -126,5 +126,75 @@ describe("the text alternative", () => {
     expect(screen.getByRole("img")).toHaveAccessibleDescription(
       "Posts created, Day 1 to Day 3: 15 in total. Latest 4 on Day 3; highest 9 on Day 2."
     );
+  });
+});
+
+describe("a single point's value", () => {
+  it("is written beside its marker, not across the chart from it", () => {
+    // One point sits at the left edge, so its label is anchored on the left too.
+    drawAt("medium", [series("Posts", [7])]);
+    const marker = screen.getByTestId("chart-latest-point");
+    const label = screen.getByTestId("chart-latest-label");
+    expect(label.style.left).toBe(marker.style.left);
+    expect(label.style.right).toBe("");
+  });
+});
+
+describe("several series over one range", () => {
+  /** The x of each point a series' line passes through, from its path. */
+  const xs = (line: Element) =>
+    [
+      ...(
+        line.querySelector("path[fill='none']")?.getAttribute("d") ?? ""
+      ).matchAll(/[ML]\s*([\d.]+)/g),
+    ].map(match => Number(match[1]));
+
+  it("places each point by its interval, not by its position in its own series", () => {
+    // Pages has no Day 1: its first point is Day 2, drawn where Posts draws Day 2.
+    const posts = series("Posts", [2, 9, 4]);
+    const pages: OverTimeSeries = {
+      key: "Pages",
+      name: "Pages",
+      points: posts.points.slice(1).map(point => ({ ...point, value: 1 })),
+    };
+    drawAt("medium", [posts, pages]);
+    const [postsLine, pagesLine] = screen.getAllByTestId("chart-series");
+    expect(xs(pagesLine as Element)).toEqual(xs(postsLine as Element).slice(1));
+  });
+
+  it.each<SizeTier>(["small", "medium", "large"])(
+    "names each series' latest value in the legend at %s, and labels none on the chart",
+    tier => {
+      // Two latest values a pixel apart would overprint each other beside the chart.
+      drawAt(tier, [series("Posts", [2, 100]), series("Pages", [1, 99])]);
+      const legend = screen.getByTestId("chart-legend");
+      expect(legend).toHaveTextContent(/Posts\s*100/);
+      expect(legend).toHaveTextContent(/Pages\s*99/);
+      expect(screen.queryByTestId("chart-latest-label")).toBeNull();
+    }
+  );
+});
+
+describe("the table's rows", () => {
+  it("keep apart two rows whose series and point keys join to the same text", () => {
+    const errors = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    drawAt("medium", [
+      {
+        key: "a:b",
+        name: "First",
+        points: [{ key: "c", label: "Day 1", value: 1 }],
+      },
+      {
+        key: "a",
+        name: "Second",
+        points: [{ key: "b:c", label: "Day 1", value: 2 }],
+      },
+    ]);
+    expect(
+      errors.mock.calls.some(call => String(call[0]).includes("same key"))
+    ).toBe(false);
+    errors.mockRestore();
   });
 });

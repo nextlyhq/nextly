@@ -54,16 +54,20 @@ export function GroupsChart({
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const ordered = orderGroups(groups, cardLocale());
-  const drawn = ordered
-    .slice(0, GROUPS_DRAWN[tier])
-    .map(group => (floors ? { ...group, floor: true } : group));
+  const counted = floors
+    ? ordered.map(group => ({ ...group, floor: true }))
+    : ordered;
+  const drawn = counted.slice(0, GROUPS_DRAWN[tier]);
   const fractions = barFractions(drawn.map(group => group.count));
   // Composed ONCE and handed to both the frame and the graphic, so the table's caption and the
-  // chart's own description cannot describe different data. It describes the groups drawn.
+  // chart's own description cannot describe different data. It counts every group the answer
+  // holds, not only those this tier draws, so its total is the answer's; "N more groups" says
+  // which of them the bars leave out.
   const description = groupsSummary({
     what: title,
-    groups: drawn,
+    groups: counted,
     floors,
+    partial: truncated,
     format: count => cardNumber(count).label,
   });
   const note = moreGroupsNote(truncated, ordered.length - drawn.length);

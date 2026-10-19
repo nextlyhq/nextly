@@ -73,12 +73,14 @@ export function OverTimeChart({
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
   const first = series[0];
-  const labels = first ? first.points.map(point => point.label) : [];
-  // One scale for every series, so their lines are comparable: zero to the highest value.
+  // One range for every series, so a point is drawn at its interval whatever else its series
+  // holds, and one scale, so their lines are comparable: zero to the highest value.
+  const domain = sharedDomain(series);
   const highest = Math.max(
     0,
     ...series.flatMap(line => line.points.map(point => point.value))
   );
+  const plots = series.map(line => placed(line.points, domain, highest));
   const description = series
     .map(line =>
       overTimeSummary({
@@ -123,8 +125,7 @@ export function OverTimeChart({
                 {series.map((line, index) => (
                   <SeriesLine
                     key={line.key}
-                    points={line.points}
-                    highest={highest}
+                    plotted={plots[index] ?? []}
                     slot={seriesSlot(index)}
                     filled={series.length === 1}
                   />
@@ -134,13 +135,16 @@ export function OverTimeChart({
                 <LatestPoint
                   key={line.key}
                   points={line.points}
-                  highest={highest}
+                  plotted={plots[index] ?? []}
                   slot={seriesSlot(index)}
+                  // One series labels its latest value beside it; several name theirs in the
+                  // legend, where values close together cannot print over each other.
+                  labelled={series.length === 1}
                 />
               ))}
             </div>
           </div>
-          <OverTimeDates labels={labels} />
+          <OverTimeDates labels={domain.labels} />
         </div>
       )}
     </ChartFrame>
@@ -159,35 +163,77 @@ function rangeOf(points: readonly OverTimePoint[]): string {
 function tableRows(series: readonly OverTimeSeries[]): ChartRow[] {
   return series.flatMap(line =>
     line.points.map(point => ({
-      key: `${line.key}:${point.key}`,
+      // A tuple, encoded so no series key and point key can join into another pair's.
+      key: JSON.stringify([line.key, point.key]),
       label: series.length > 1 ? `${line.name}, ${point.label}` : point.label,
       count: point.value,
     }))
   );
 }
 
-/** The points of one series in the chart's box, on the chart's shared scale. */
-function scaled(points: readonly OverTimePoint[], highest: number) {
-  return linePoints(
+/** The intervals every series is drawn against, in order, and what each is called. */
+interface Domain {
+  index: ReadonlyMap<string, number>;
+  labels: string[];
+}
+
+/**
+ * Every series' point keys merged into one ordered range. Each series keeps its own order: a key
+ * already seen moves the insertion point past it, and a new one is inserted there. So a series
+ * that starts later, or skips an interval, lines up with the others rather than being stretched
+ * across the whole width by its own count.
+ */
+function sharedDomain(series: readonly OverTimeSeries[]): Domain {
+  const keys: string[] = [];
+  const labels = new Map<string, string>();
+  for (const line of series) {
+    let at = 0;
+    for (const point of line.points) {
+      const found = keys.indexOf(point.key);
+      if (found === -1) {
+        keys.splice(at, 0, point.key);
+        labels.set(point.key, point.label);
+        at += 1;
+      } else {
+        at = found + 1;
+      }
+    }
+  }
+  return {
+    index: new Map(keys.map((key, position) => [key, position])),
+    labels: keys.map(key => labels.get(key) ?? key),
+  };
+}
+
+/** A series' points in the chart's box: x by its interval in the shared range, y on one scale. */
+function placed(
+  points: readonly OverTimePoint[],
+  domain: Domain,
+  highest: number
+): Array<{ x: number; y: number }> {
+  const heights = linePoints(
     points.map(point => point.value),
     BOX,
     highest
   );
+  const size = domain.labels.length;
+  const step = size > 1 ? (BOX.width - BOX.padding * 2) / (size - 1) : 0;
+  return points.map((point, position) => ({
+    x: BOX.padding + step * (domain.index.get(point.key) ?? position),
+    y: heights[position]?.y ?? BOX.height - BOX.padding,
+  }));
 }
 
 /** One series' line, in its chart colour, and the soft fill under it for a single series. */
 function SeriesLine({
-  points,
-  highest,
+  plotted,
   slot,
   filled,
 }: {
-  points: readonly OverTimePoint[];
-  highest: number;
+  plotted: ReadonlyArray<{ x: number; y: number }>;
   slot: ChartSlot;
   filled: boolean;
 }) {
-  const plotted = scaled(points, highest);
   const line = linePath(plotted);
   const area = filled ? areaPath(plotted, BOX.height - BOX.padding) : null;
   const colour = chartColour(slot);
@@ -260,21 +306,24 @@ function ValueAxis({ highest }: { highest: number }) {
  */
 function LatestPoint({
   points,
-  highest,
+  plotted,
   slot,
+  labelled,
 }: {
   points: readonly OverTimePoint[];
-  highest: number;
+  plotted: ReadonlyArray<{ x: number; y: number }>;
   slot: ChartSlot;
+  /** Whether its value is written beside it; a chart of several series names them in its legend. */
+  labelled: boolean;
 }) {
   const tier = useCardTier() ?? "medium";
   const marker = latestMarker(tier, points.length);
-  const plotted = scaled(points, highest);
   const at = plotted[plotted.length - 1];
   const point = points[points.length - 1];
   if (!marker.circle || !at || !point) return null;
   // As fractions of the box, so the HTML mark sits on the stretched line at any width.
-  const left = `${(at.x / BOX.width) * 100}%`;
+  const across = (at.x / BOX.width) * 100;
+  const left = `${across}%`;
   const top = `${(at.y / BOX.height) * 100}%`;
   return (
     <>
@@ -285,13 +334,16 @@ function LatestPoint({
         // design-lint-ok: the position is the datum, and the colour is the series' chart slot.
         style={{ left, top, backgroundColor: chartColour(slot) }}
       />
-      {marker.label ? (
+      {labelled && marker.label ? (
         <span
           aria-hidden="true"
           data-testid="chart-latest-label"
           className="absolute -translate-y-full pb-1 text-[10px] font-medium leading-none tabular-nums text-foreground"
-          // design-lint-ok: placed by the latest point's own position.
-          style={{ right: 0, top }}
+          // design-lint-ok: placed by the latest point's own position, on its own side of the
+          // chart, so a single point at the left edge is labelled there rather than across it.
+          style={
+            across <= 50 ? { left, top } : { right: `${100 - across}%`, top }
+          }
         >
           {cardNumber(point.value).label}
         </span>
@@ -316,9 +368,21 @@ function SeriesLegend({ series }: { series: readonly OverTimeSeries[] }) {
             style={{ backgroundColor: chartColour(seriesSlot(index)) }}
           />
           {line.name}
+          <LatestValue points={line.points} />
         </li>
       ))}
     </ul>
+  );
+}
+
+/** A series' latest value in its legend entry, where several series cannot label their lines. */
+function LatestValue({ points }: { points: readonly OverTimePoint[] }) {
+  const latest = points[points.length - 1];
+  if (!latest) return null;
+  return (
+    <span className="font-medium tabular-nums text-foreground">
+      {cardNumber(latest.value).label}
+    </span>
   );
 }
 
