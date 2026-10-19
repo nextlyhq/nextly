@@ -95,6 +95,7 @@ import {
 } from "../domains/webhooks/recording-policy";
 import { collectPluginContributedSlugs } from "../domains/webhooks/recording-provenance";
 import { resolveWebhookRecording } from "../domains/webhooks/resolve-recording-config";
+import { setAdminComponentPlugins } from "../domains/widgets/declaration/component-map-store";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { describeError } from "../errors/index";
 import { NextlyError } from "../errors/nextly-error";
@@ -1670,6 +1671,10 @@ async function applyReloadHolding(
     // about which dependencies hold.
     if (Array.isArray(newConfig.plugins)) {
       publishPluginDependencies(newConfig.plugins);
+      // The plugins the admin's component check compares its map against, as
+      // the reloaded config declares them, so a plugin added or changed in
+      // development is rewritten into the map without a restart.
+      setAdminComponentPlugins(newConfig.plugins);
     }
     publishCollectionDbOptions(
       buildCollectionSyncPayload(newConfig.collections ?? [])

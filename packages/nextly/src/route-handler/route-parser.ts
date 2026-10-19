@@ -2006,8 +2006,12 @@ function parseApiKeyRoutes(
  * `api/releases`, beside the handler that enforces it.
  */
 interface ReleaseRoute {
-  /** Whether the path carries a release id. */
-  id: boolean;
+  /**
+   * Whether the path carries a release id, or the word a read of the whole
+   * set is named by in that place. Release ids are UUIDs, so a word never
+   * names a release.
+   */
+  id: boolean | string;
   /** The segment after the id, or `null` for none. */
   subresource: string | null;
   /** Whether the path carries a fourth segment, such as a member id. */
@@ -2034,6 +2038,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "create",
     method: "createRelease",
   },
+  // The calendar, a read of every release in a window of days. Before the
+  // route that reads one release by id, so the word is not taken for an id.
+  {
+    id: "calendar",
+    subresource: null,
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "releaseCalendar",
+  },
   {
     id: true,
     subresource: null,
@@ -2041,6 +2055,25 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "GET",
     operation: "single",
     method: "getRelease",
+  },
+  // A release's own title and description, and the release itself. `PATCH`
+  // changes only those two fields: a state is moved by the routes below,
+  // never by a body.
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "PATCH",
+    operation: "update",
+    method: "updateRelease",
+  },
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "DELETE",
+    operation: "delete",
+    method: "deleteRelease",
   },
   {
     id: true,
@@ -2065,6 +2098,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "DELETE",
     operation: "delete",
     method: "removeReleaseMember",
+  },
+  // Switching a document between going live and coming down: a change to the
+  // member, so the member's own path, with the new action in the body.
+  {
+    id: true,
+    subresource: "members",
+    subId: true,
+    verb: "PATCH",
+    operation: "update",
+    method: "changeReleaseMemberAction",
   },
   // Scheduling and cancelling are separate routes rather than one `PATCH` with a
   // state in the body: they are the two directions of the authority the seed
@@ -2111,6 +2154,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "list",
     method: "listReleaseBlockers",
   },
+  // Every problem the release's documents have, hard and soft. Its own route
+  // for the reason `blockers` is: answering it checks every document.
+  {
+    id: true,
+    subresource: "readiness",
+    subId: false,
+    verb: "GET",
+    operation: "single",
+    method: "getReleaseReadiness",
+  },
 ];
 
 /**
@@ -2136,14 +2189,17 @@ function parseReleaseRoutes(
 
   const route = RELEASE_ROUTES.find(
     candidate =>
-      candidate.id === Boolean(id) &&
+      (typeof candidate.id === "string"
+        ? candidate.id === id
+        : candidate.id === Boolean(id)) &&
       candidate.subresource === (subresource ?? null) &&
       candidate.subId === Boolean(subId) &&
       candidate.verb === httpMethod
   );
   if (!route) return null;
 
-  if (id) routeParams.releaseId = id;
+  // A word in the id's place names the route, not a release.
+  if (id && route.id === true) routeParams.releaseId = id;
   if (subId) routeParams.memberId = subId;
 
   return {

@@ -3,8 +3,6 @@ title: Production migrations
 description: Ship database schema changes to production safely with the Nextly migration CLI. Forward-only model, GitHub Actions, Vercel build step, and other-platform patterns.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** `nextly users:clear-plaintext-passwords`, the `--plugin` and `--no-transaction` flags, the `unfinished` state, `REFUSED_STATEMENT`, the retired auth-table variables, and the sections marked below.
-
 Nextly's schema-evolution model splits responsibilities cleanly between development and production:
 
 - **Local development:** `next dev` + Nextly's HMR pipeline auto-applies schema changes as you edit `nextly.config.ts`.
@@ -297,8 +295,6 @@ Specific examples:
 
 ## What a migration file may contain
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 Every migration file, plugin module and `-- DOWN` section runs as **one
 transaction on one database connection**, which the runner opens and commits
 itself, unless it is [marked to run outside one](#running-a-file-outside-a-transaction).
@@ -432,8 +428,6 @@ refused, because the check cannot read a string as code: write the body with
 `$$ … $$`.
 
 ### Foreign keys on SQLite
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 **On SQLite, foreign-key enforcement is off while a file runs, and checked before
 it commits.** The runner sets `PRAGMA foreign_keys = OFF` before the transaction,
@@ -622,8 +616,6 @@ judged safe. Read the whole list before setting it.
 
 ## Clearing passwords stored as typed
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 Earlier releases stored some passwords as they were typed instead of hashing them: a
 password of 32 characters or more that contained a colon, given when an account was
 created, and any value sent to `PATCH /admin/api/users/:id/password`. Such a value never let
@@ -714,6 +706,10 @@ When a translated field becomes shared, `migrate:create` writes a `<timestamp>_s
 
 On PostgreSQL and SQLite the file runs in one transaction, so a failed attempt leaves nothing behind and `nextly migrate` runs it again.
 
+### Core tables missing after an upgrade
+
+A release can add tables to Nextly's own core schema. An existing database gets them only through `nextly migrate` (or a boot run with `db.runMigrationsOnBoot`); a production boot never creates tables. Until you run it, every boot logs one warning naming each missing core table, and whatever reads or writes those tables fails: deleting a document, for one, rolls back. Run `nextly migrate` after every upgrade, and the warning goes away.
+
 ### Core schema drift after `nextly upgrade`
 
 User migration files contain **user-schema only** — core system tables are owned by the Nextly package version and reconciled by `nextly migrate` Phase 1. If `nextly migrate` reports core schema drift after upgrading from a very early alpha (e.g. a hand-edited bundled file), run `nextly upgrade --reconcile-core`. It reconciles core in dev-loose mode and prompts for confirmation on each destructive operation. Use it only when migrate reports core drift.
@@ -773,8 +769,6 @@ previous one. Examples:
 The audit trail in `nextly_schema_events` keeps both rows, so post-incident review can see exactly what was applied when, and by which CI job.
 
 ## Plugins with tables of their own
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 ### The phase order
 
@@ -951,7 +945,7 @@ limits are accepted:
 | Code | Meaning |
 | --- | --- |
 | `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
-| `PLUGIN_NOT_INSTALLED` | A configured plugin has not been installed on this database. Run `nextly plugins install <name>` for each one it names. |
+| `PLUGIN_NOT_INSTALLED` | An enabled plugin in your config has not been installed on this database. Run `nextly plugins install <name>` for each one it names, or `nextly plugins install --all`. A disabled plugin is not required to be installed: its tables exist, but its `onInstall` runs only when you enable and install it. |
 | `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled, with or without `--keep-data`, but is still in your config. Reinstall it or remove the line. |
 | `PLUGIN_UNINSTALL_UNFINISHED` | An uninstall of the plugin began and did not finish. Run it again, the way it began, to finish it, or reinstall the plugin. |
 | `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
@@ -999,6 +993,9 @@ So, for every plugin in your config, run the install command once on each
 database, after `nextly migrate`, before the first production boot that
 includes the plugin. Running it again is safe: it applies what is pending and
 calls `onInstall` again, which is why `onInstall` has to be idempotent.
+`nextly plugins install --all` runs it for every enabled plugin in your config,
+in dependency order, and stops at the first that fails; a disabled plugin is
+skipped and named.
 
 That makes the build the place to run it, against the database the build
 targets. A project from `create-nextly-app` does so already: its `build`

@@ -40,6 +40,10 @@ import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
 import { linkedTransaction } from "../../plugins/database/plugin-transaction-link";
 import {
+  CONTENT_EVENTS_TABLE,
+  contentEventsTables,
+} from "../../schemas/content-events";
+import {
   assertNoOpenTransaction,
   type OpenTransactionProbe,
 } from "../../shared/lib/open-transaction";
@@ -87,6 +91,8 @@ export interface PrincipalErasureDb extends PrincipalDigestDb {
 /** The adapter surface a report runs through. */
 export interface PrincipalErasureAdapter extends OpenTransactionProbe {
   transaction<T>(work: (tx: TransactionContext) => Promise<T>): Promise<T>;
+  /** Whether a table exists, for one a database may not have yet. */
+  tableExists?(table: string): Promise<boolean>;
 }
 
 /**
@@ -122,7 +128,14 @@ export async function reportPrincipalDeleted(
     });
   }
   const server = rowLockServer(adapter, dialect);
-  const tables = principalErasureTables(dialect);
+  // The record of content events is erased only where it exists: a database
+  // that has not run `nextly migrate` since it arrived lacks it, and an update
+  // against a missing table would fail the whole report.
+  const contentEventsExist =
+    adapter.tableExists === undefined
+      ? true
+      : await adapter.tableExists(CONTENT_EVENTS_TABLE);
+  const tables = principalErasureTables(dialect, contentEventsExist);
   const erase = (tx: TransactionContext) =>
     erasePrincipal(
       tx.getDrizzle<PrincipalErasureDb>(),
@@ -163,7 +176,7 @@ export async function resealPrincipalDigestKeyAtBoot(
   const dialect = adapterDialect(adapter);
   if (!dialect) return;
   const server = rowLockServer(adapter, dialect);
-  const { meta } = principalErasureTables(dialect);
+  const { meta } = principalErasureTables(dialect, false);
   try {
     await runAdapterTransaction(adapter.transaction.bind(adapter), tx =>
       resealPrincipalDigestKey(
@@ -187,7 +200,10 @@ export async function resealPrincipalDigestKeyAtBoot(
 }
 
 /** The tables a person's erasure touches, on this dialect. */
-function principalErasureTables(dialect: SupportedDialect): ErasureTables {
+function principalErasureTables(
+  dialect: SupportedDialect,
+  contentEventsExist: boolean
+): ErasureTables {
   const schema = getDialectTables(dialect) as unknown as {
     auditLog: PrincipalAuditLog;
     nextlyMeta: PrincipalDigestTables["meta"];
@@ -198,6 +214,9 @@ function principalErasureTables(dialect: SupportedDialect): ErasureTables {
     deliveries: deliveriesTableFor(dialect),
     meta: schema.nextlyMeta,
     deleted: schema.nextlyDeletedPrincipals,
+    ...(contentEventsExist
+      ? { contentEvents: contentEventsTables(dialect).nextlyContentEvents }
+      : {}),
   };
 }
 
@@ -205,7 +224,16 @@ function principalErasureTables(dialect: SupportedDialect): ErasureTables {
 type ErasureTables = PrincipalDigestTables & {
   auditLog: PrincipalAuditLog;
   deliveries: PersonDeliveriesTable;
+  contentEvents?: PrincipalContentEvents;
 };
+
+/** The content-event columns a person's erasure reads and writes. */
+interface PrincipalContentEvents extends Table {
+  actorKind: Column;
+  actorPrincipalKind: Column;
+  actorId: Column;
+  actorName: Column;
+}
 
 /**
  * Inside the report's transaction: take the deleted-people lock, record the
@@ -239,6 +267,14 @@ async function erasePrincipal(
   // The same transaction erases the email they were sent, so the report
   // leaves no record naming them either way or neither.
   await erasePrincipalDeliveries(db, tables.deliveries, subject, digest);
+  if (tables.contentEvents) {
+    await erasePrincipalContentEvents(
+      db,
+      tables.contentEvents,
+      subject,
+      digest
+    );
+  }
 }
 
 /**
@@ -298,4 +334,29 @@ export async function erasePrincipalAuditRows(
   // Last, as the two above find the rows by the id these replace.
   await db.update(auditLog).set({ actorPrincipalId: digest }).where(asActor);
   await db.update(auditLog).set({ targetPrincipalId: digest }).where(asTarget);
+}
+
+/**
+ * Erase a person from the record of content events: the name they had on
+ * each event they performed goes, and their id is replaced by the keyed
+ * digest the audit trail names them by, so the events still tell one actor
+ * from another and name nobody. A plugin's id for a person may itself be an
+ * address, which is why the id goes too.
+ */
+async function erasePrincipalContentEvents(
+  db: PrincipalErasureDb,
+  contentEvents: PrincipalContentEvents,
+  subject: DigestSubject,
+  digest: string
+): Promise<void> {
+  await db
+    .update(contentEvents)
+    .set({ actorName: null, actorId: digest })
+    .where(
+      and(
+        eq(contentEvents.actorKind, "principal"),
+        eq(contentEvents.actorPrincipalKind, subject.kind),
+        eq(contentEvents.actorId, subject.id)
+      )
+    );
 }

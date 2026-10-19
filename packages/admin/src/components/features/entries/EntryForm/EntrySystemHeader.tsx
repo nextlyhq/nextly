@@ -8,11 +8,13 @@ import { useFormContext } from "react-hook-form";
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
+  ChevronLeft,
   Globe,
   History,
   PanelRight,
   PanelRightClose,
 } from "@admin/components/icons";
+import { Link } from "@admin/components/ui/link";
 import { useCan } from "@admin/hooks/useCan";
 import type { AutosaveStatus } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
@@ -27,13 +29,19 @@ import { documentActions } from "./document-actions";
 import {
   acceptContributions,
   DocumentActionBar,
+  WIDE_ONLY,
   type ActionBinding,
   type ContributedAction,
+  type NarrowMenuItem,
 } from "./DocumentActionBar";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { EntryTitleInput } from "./EntryTitleInput";
-import { PreviewActions } from "./PreviewActions";
+import {
+  PreviewActions,
+  previewChoices,
+  type PreviewActionsProps,
+} from "./PreviewActions";
 import { TOOLBAR_CONTAINER } from "./toolbar-density";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
@@ -230,6 +238,12 @@ export interface EntrySystemHeaderProps {
    */
   toolbarSlot?: React.ReactNode;
   /**
+   * Where the header's back link goes, and what it is called: the list this
+   * document belongs to. Omitted where there is no such list (a Single), and
+   * then no link is drawn rather than an empty one.
+   */
+  backLink?: { href: string; label: string };
+  /**
    * Document actions the PAGE owns, folded in with the built-in ones.
    *
    * Descriptions rather than rendered controls, so placement, ordering and
@@ -289,6 +303,7 @@ export function EntrySystemHeader({
   isRailCollapsed = false,
   onToggleRail,
   toolbarSlot,
+  backLink,
   contributedActions = [],
   localized,
   isPreviewAvailable = false,
@@ -583,6 +598,47 @@ export function EntrySystemHeader({
     isReadingHistory ? [] : contributedActions
   );
 
+  // A document only has history once it has been saved, and rendering a
+  // snapshot needs the schema, so both are required to offer it.
+  const showHistory =
+    showEditMenuItems &&
+    historyFields !== undefined &&
+    historyEnabled !== false;
+
+  // What the preview control is given, once: the control draws from it on a
+  // wide screen, and the menu lists the same choices on a narrow one.
+  const previewProps: PreviewActionsProps = {
+    isPreviewAvailable,
+    ...(onPreview === undefined ? {} : { onPreview }),
+    ...(previewLabel === undefined ? {} : { previewLabel }),
+    ...(onTogglePreviewPane === undefined ? {} : { onTogglePreviewPane }),
+    previewPaneOpen,
+    isLinkAvailable,
+    ...(onCopyLink === undefined ? {} : { onCopyLink }),
+    isCopyingLink,
+    disabled: isSubmitting,
+  };
+
+  // The header's own controls as menu rows, for a screen too narrow to keep
+  // them beside the document's verbs.
+  const narrowItems: NarrowMenuItem[] = [
+    ...(showHistory
+      ? [
+          {
+            id: "history",
+            label: "Version history",
+            onSelect: () => setHistoryOpen(true),
+          },
+        ]
+      : []),
+    ...previewChoices(previewProps).map(choice => ({
+      id: `preview-${choice.id}`,
+      label: choice.label,
+      onSelect: choice.run,
+      disabled: choice.disabled,
+    })),
+  ];
+
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -595,31 +651,140 @@ export function EntrySystemHeader({
         "sticky top-0 z-30 bg-background border-b border-border"
       )}
     >
-      {/* The row WRAPS on a phone rather than overflowing. Even with every label
-        collapsed the cluster needs about 370px, which does not fit beside a
-        title on a 390px screen — so below that the title takes its own line and
-        the actions sit beneath it, which is what vertical space is for.
+      {/* The combined editor header: a top row with the way back at the left and
+        every action at the right, then the title on a line of its own at full
+        width, then the status line. One row of title and actions cut the title
+        to a few words wherever the actions took the width (a narrow window, or
+        beside the document panel); on its own line the title never shrinks,
+        and the main action keeps its corner.
 
         The container declaration sits on the PARENT because an element cannot
-        query its own width, and this row now responds to that width itself. */}
-      <div
-        className={cn(
-          "px-6 py-3 flex items-center gap-3",
-          "@max-lg/toolbar:flex-wrap @max-lg/toolbar:gap-y-2"
-        )}
-      >
-        {/* Title input — borderless, 19px, autofocus on create.
+        query its own width, and the rows respond to that width themselves. */}
+      <div className="px-6 pt-2.5 pb-3 @max-lg/toolbar:px-4">
+        <div
+          className={cn("flex min-h-9 flex-wrap items-center gap-x-3 gap-y-2")}
+        >
+          {backLink ? (
+            <Link
+              href={backLink.href}
+              className={cn(
+                "inline-flex min-w-0 items-center gap-0.5 text-[13px]",
+                "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <ChevronLeft
+                className="h-3.5 w-3.5 shrink-0"
+                aria-hidden="true"
+              />
+              <span className="truncate">{backLink.label}</span>
+            </Link>
+          ) : null}
 
-          The floor is the point: as a bare `flex-1 min-w-0` beside a cluster
-          that never shrank, the title was whatever was left over, and at common
-          window widths that was nothing. It now keeps a readable minimum and the
-          actions collapse around it (see `toolbar-density`). */}
-        <div className="flex-1 min-w-[10rem] @max-lg/toolbar:basis-full">
+          {/* Every action, right-aligned, in the header's one order: History
+            first, then what a feature contributes, then the document's own
+            verbs, then the panel toggle at the far right.
+
+            On a narrow screen History and the preview fold into the document's
+            menu and the panel toggle goes (the panel is a page there), so the
+            actions stay one row. If the cluster cannot sit beside the way back,
+            the row wraps and it takes a line of its own. It also wraps inside
+            itself, never past the editor's edge: a preview pane can narrow the
+            editor on a wide screen, and a feature's contributed controls, which
+            this cannot size, must never push the header's own off it. */}
+          <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
+            {showHistory ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={cn("px-2", WIDE_ONLY)}
+                aria-label="Version history"
+                title="Version history"
+                onClick={() => setHistoryOpen(true)}
+              >
+                <History className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            ) : null}
+            {toolbarSlot}
+            {/* Directly left of the submit cluster, which is where an author looks
+              for it: checking how something reads is part of deciding to publish
+              it, not a document-management action like Duplicate or Delete. The
+              `sm` size is the band's, so it lines up with Save beside it rather
+              than standing a few pixels taller.
+
+              `disabled` follows the submit buttons rather than the whole form:
+              minting a link and opening a preview both act on what is already
+              saved, so a submit in flight is a race with them and not merely a
+              busy form. */}
+            {/* ONE control for the preview, not three. The pane toggle used to
+              sit beside this looking like a second preview button, with opening
+              and copying already sharing a menu of their own — three of the
+              header's controls for one idea. */}
+            <div className={cn("contents", WIDE_ONLY)}>
+              <PreviewActions size="sm" {...previewProps} />
+            </div>
+            {/*
+              Every document verb, drawn where the model said each belongs.
+
+              One control leads and the rest are demoted, which the header could
+              not express while each button decided its own placement in JSX: a
+              published document with a pending draft drew Save, Publish and
+              Unpublish at equal weight, and Unpublish sat one slip from Publish.
+
+              No save affordances survive a historical view. They act on the live
+              document, which is not what is being read — an editor offered "Save"
+              over a past version has been invited to decide about something they
+              cannot see. Restoring is offered instead, from the banner over the
+              version itself. The model states that rule once, for every action,
+              rather than each control testing `isReadingHistory` for itself.
+            */}
+            <DocumentActionBar
+              actions={withContributions.actions}
+              bindings={withContributions.bindings}
+              pending={isSubmitting}
+              narrowItems={narrowItems}
+              narrowPending={isCopyingLink}
+            />
+
+            {/* Rail toggle — far right, separated by a thin divider. Not on a
+              narrow screen, where the panel is a page rather than beside. */}
+            {onToggleRail && (
+              <>
+                <span
+                  className={cn("w-px h-5 bg-border mx-1", WIDE_ONLY)}
+                  aria-hidden="true"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={cn("px-2", WIDE_ONLY)}
+                  onClick={onToggleRail}
+                  aria-label={isRailCollapsed ? "Show rail" : "Hide rail"}
+                  title={isRailCollapsed ? "Show rail" : "Hide rail"}
+                  aria-pressed={isRailCollapsed}
+                >
+                  {isRailCollapsed ? (
+                    <PanelRightClose className="h-4 w-4" />
+                  ) : (
+                    <PanelRight className="h-4 w-4" />
+                  )}
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* The title, on its own line at full width, so no action can take its
+          width. A size smaller on a phone, where the larger one cut short a
+          title of a few ordinary words. */}
+        <div className="mt-1.5">
           {/* The title is part of the document, so reading a past version
             locks it with everything else. Left editable it would mutate the
             LIVE document while the banner says the page cannot be edited — and
             go to autosave as unsaved work nobody typed on purpose. */}
           <EntryTitleInput
+            className="text-2xl leading-8 @max-lg/toolbar:text-xl @max-lg/toolbar:leading-[26px]"
             name={titleName}
             control={form.control}
             label={titleLabel}
@@ -633,78 +798,23 @@ export function EntrySystemHeader({
           />
         </div>
 
-        {/* Action cluster — right-aligned */}
-        {/* Wraps on a phone for the same reason the row does: with every label
-          already collapsed the controls still need more width than the screen
-          has, and a cluster that cannot wrap pushes them off the edge instead.
-
-          `basis-full` is what makes the wrap real. Sized to its content the
-          cluster is always exactly as wide as its widest possible line, so
-          `flex-wrap` alone had nothing to wrap against; taking the whole line
-          first gives it a width to break inside. Right-aligned so the wrapped
-          controls still read as one group. */}
+        {/* The status line: the save state lives here rather than among the
+          actions, since it reports on the document rather than offering
+          anything to do. It collapses when there is nothing to say, so no
+          empty strip is drawn. */}
         <div
           className={cn(
-            "flex items-center gap-1.5 shrink-0",
-            "@max-lg/toolbar:basis-full @max-lg/toolbar:min-w-0",
-            "@max-lg/toolbar:flex-wrap @max-lg/toolbar:justify-end @max-lg/toolbar:gap-y-2"
+            "mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1",
+            "text-[13px] leading-[18px] text-muted-foreground empty:hidden"
           )}
         >
-          {toolbarSlot}
-          {/* A document only has history once it has been saved, and rendering a
-            snapshot needs the schema, so both are required to offer this. */}
-          {showEditMenuItems && historyFields && historyEnabled !== false ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="px-2"
-              aria-label="Version history"
-              title="Version history"
-              onClick={() => setHistoryOpen(true)}
-            >
-              <History className="h-4 w-4" />
-            </Button>
-          ) : null}
-          {/* Directly left of the submit cluster, which is where an author looks
-            for it: checking how something reads is part of deciding to publish
-            it, not a document-management action like Duplicate or Delete. The
-            `sm` size is the band's, so it lines up with Save beside it rather
-            than standing a few pixels taller.
-
-            `disabled` follows the submit buttons rather than the whole form:
-            minting a link and opening a preview both act on what is already
-            saved, so a submit in flight is a race with them and not merely a
-            busy form. */}
-          {/* ONE control for the preview, not three. The pane toggle used to
-            sit beside this looking like a second preview button, with opening
-            and copying already sharing a menu of their own — three of the
-            header's controls for one idea. */}
-          <PreviewActions
-            size="sm"
-            isPreviewAvailable={isPreviewAvailable}
-            {...(onPreview === undefined ? {} : { onPreview })}
-            {...(previewLabel === undefined ? {} : { previewLabel })}
-            {...(onTogglePreviewPane === undefined
-              ? {}
-              : { onTogglePreviewPane })}
-            previewPaneOpen={previewPaneOpen}
-            isLinkAvailable={isLinkAvailable}
-            {...(onCopyLink === undefined ? {} : { onCopyLink })}
-            isCopyingLink={isCopyingLink}
-            disabled={isSubmitting}
-          />
-          {/* Sits with the actions rather than beside the title: it reports on
-            the same work the save buttons act on, and reads as status for that
-            cluster.
-
-            The condition is only whether recording is POSSIBLE, never whether
-            there is anything to show. `AutoSaveIndicator` already returns null
-            when it has no state to report, and restating that here suppressed
-            its "Not saved" state for the whole debounce window: on the first
-            edit to a saved entry the status is still idle and no recovery point
-            exists yet, which is exactly when the reader most wants to be told
-            their change is not stored. */}
+          {/* The condition is only whether recording is POSSIBLE, never
+            whether there is anything to show. `AutoSaveIndicator` already
+            returns null when it has no state to report, and restating that
+            here suppressed its "Not saved" state for the whole debounce
+            window: on the first edit to a saved entry the status is still idle
+            and no recovery point exists yet, which is exactly when the reader
+            most wants to be told their change is not stored. */}
           {autosaveEnabled ? (
             <AutoSaveIndicator
               lastSavedAt={autosaveLastSavedAt}
@@ -712,68 +822,26 @@ export function EntrySystemHeader({
               isDirty={isDirty}
             />
           ) : null}
-          {/* The spoken half of the same information. `AutoSaveIndicator` reports
-            visually only — it carries no live region — so an author using a
-            screen reader was never told whether their work had been stored.
-            This is rendered unconditionally rather than beside the indicator's
-            own condition, because a live region has to be PRESENT BEFORE the
-            text it will announce changes: mounting a region and populating it
-            in the same commit is not reliably announced. */}
-          <DocumentStatusLive
-            autosaveEnabled={autosaveEnabled}
-            isSaving={autosaveStatus === "saving"}
-            isDirty={isDirty}
-            lastSavedAt={autosaveLastSavedAt}
-            {...(entryTranslations === undefined
-              ? {}
-              : {
-                  translatedCount: counts.translated,
-                  localeCount: counts.total,
-                })}
-          />
-          {/*
-            Every document verb, drawn where the model said each belongs.
-
-            One control leads and the rest are demoted, which the header could
-            not express while each button decided its own placement in JSX: a
-            published document with a pending draft drew Save, Publish and
-            Unpublish at equal weight, and Unpublish sat one slip from Publish.
-
-            No save affordances survive a historical view. They act on the live
-            document, which is not what is being read — an editor offered "Save"
-            over a past version has been invited to decide about something they
-            cannot see. Restoring is offered instead, from the banner over the
-            version itself. The model states that rule once, for every action,
-            rather than each control testing `isReadingHistory` for itself.
-          */}
-          <DocumentActionBar
-            actions={withContributions.actions}
-            bindings={withContributions.bindings}
-            pending={isSubmitting}
-          />
-
-          {/* Rail toggle — far right, separated by a thin divider */}
-          {onToggleRail && (
-            <>
-              <span className="w-px h-5 bg-border mx-1" />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="px-2"
-                onClick={onToggleRail}
-                aria-label={isRailCollapsed ? "Show rail" : "Hide rail"}
-                aria-pressed={isRailCollapsed}
-              >
-                {isRailCollapsed ? (
-                  <PanelRightClose className="h-4 w-4" />
-                ) : (
-                  <PanelRight className="h-4 w-4" />
-                )}
-              </Button>
-            </>
-          )}
         </div>
+        {/* The spoken half of the same information. `AutoSaveIndicator` reports
+          visually only — it carries no live region — so an author using a
+          screen reader was never told whether their work had been stored.
+          This is rendered unconditionally rather than beside the indicator's
+          own condition, because a live region has to be PRESENT BEFORE the
+          text it will announce changes: mounting a region and populating it
+          in the same commit is not reliably announced. */}
+        <DocumentStatusLive
+          autosaveEnabled={autosaveEnabled}
+          isSaving={autosaveStatus === "saving"}
+          isDirty={isDirty}
+          lastSavedAt={autosaveLastSavedAt}
+          {...(entryTranslations === undefined
+            ? {}
+            : {
+                translatedCount: counts.translated,
+                localeCount: counts.total,
+              })}
+        />
       </div>
 
       {/* The language row. Its own row rather than the action cluster: sharing

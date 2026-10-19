@@ -108,6 +108,39 @@ describe("installing the page-builder plugin", () => {
   });
 });
 
+describe("the warning for a blocks field below the top level", () => {
+  it("is said through the plugin's logger when it is installed", () => {
+    const { ctx } = initContext();
+    Object.assign(ctx.config, {
+      collections: [
+        {
+          slug: "wiring-pages",
+          fields: [
+            {
+              name: "hero",
+              type: "group",
+              fields: [{ name: "layout", type: "blocks" }],
+            },
+          ],
+        },
+      ],
+    });
+
+    (pageBuilder().init as (c: unknown) => void)(ctx);
+
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('"hero.layout" on collection "wiring-pages"')
+    );
+  });
+
+  it("adds no setup transformer, which would make every request boot the app", () => {
+    // A plugin with `setup` makes the route boot decision boot for any cold
+    // request it cannot rule out, anonymous scans included, because only
+    // running the transformer could say which routes it adds.
+    expect(pageBuilder().setup).toBeUndefined();
+  });
+});
+
 describe("an integrator who renamed the index collection", () => {
   it("recognises the RENAMED collection as its own, not the declared slug", async () => {
     // `.rename()` makes the schema create only the renamed collection. A hook

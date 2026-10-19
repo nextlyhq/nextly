@@ -86,6 +86,10 @@ const logger: Logger = {
  */
 function makeAdapter(options: { mainTableExists?: boolean } = {}) {
   let created = options.mainTableExists === true;
+  const ranDdl = (sql: string) => {
+    trace.push("ddl");
+    if (/CREATE TABLE/i.test(sql)) created = true;
+  };
   return {
     getCapabilities: () => ({ dialect: "postgresql" as const }),
     dialect: "postgresql" as const,
@@ -103,13 +107,29 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
     // The i18n teardown reaches the database through Drizzle rather than `executeQuery`, so its
     // own work is not part of the trace. What the trace needs from the delete path is the DROP,
     // which arrives through `dropTable` above.
-    getDrizzle: vi.fn(() => ({
-      execute: async () => ({ rows: [] }),
-      delete: () => ({ where: async () => [] }),
-    })),
+    getDrizzle: vi.fn(() => {
+      const db = {
+        // A Schema Builder save runs its migration through Drizzle, one statement at a time, in a
+        // transaction on PostgreSQL; each statement is DDL here, as through `executeQuery`.
+        execute: async (statement: { queryChunks?: { value?: unknown }[] }) => {
+          const text = (statement.queryChunks ?? [])
+            .map(chunk =>
+              Array.isArray(chunk.value) ? chunk.value.join("") : ""
+            )
+            .join("");
+          // Only a schema statement is DDL: the live-table reads come through here too.
+          if (/^\s*(CREATE|ALTER|DROP)\b/i.test(text)) ranDdl(text);
+          return { rows: [] };
+        },
+        transaction: async (run: (tx: unknown) => Promise<void>) => run(db),
+        // No archive rows of unknown owner, so a teardown has none to label.
+        selectDistinct: () => ({ from: () => ({ where: async () => [] }) }),
+        delete: () => ({ where: async () => [] }),
+      };
+      return db;
+    }),
     executeQuery: vi.fn(async (sql: string) => {
-      trace.push("ddl");
-      if (/CREATE TABLE/i.test(sql)) created = true;
+      ranDdl(sql);
       return [];
     }),
   };

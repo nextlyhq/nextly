@@ -162,6 +162,26 @@ describe("namesScript", () => {
   it("is false when nothing calls it", () => {
     expect(namesScript("        run: echo skipped\n", "lane:test")).toBe(false);
   });
+
+  // A sharded leg runs the lane between its matrix jobs, each handing the
+  // lane its own shard. Only that hand-off may follow the name: a fixed shard
+  // would run part of the lane in a job of its own, and anything else after
+  // it is refused as before.
+  const SHARD = " -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}";
+  it("finds the script a sharded leg calls with its matrix shard", () => {
+    expect(
+      namesScript(`            pnpm lane:test:integration:mysql${SHARD}\n`, "lane:test:integration:mysql")
+    ).toBe(true);
+  });
+
+  it("does not take a fixed shard, or more after the matrix shard, for the lane", () => {
+    expect(
+      namesScript("            pnpm lane:test:integration:mysql -- --shard=1/2\n", "lane:test:integration:mysql")
+    ).toBe(false);
+    expect(
+      namesScript(`            pnpm lane:test:integration:mysql${SHARD} --dry=json\n`, "lane:test:integration:mysql")
+    ).toBe(false);
+  });
 });
 
 describe("isSingleCommand", () => {

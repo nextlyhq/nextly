@@ -55,6 +55,7 @@ import {
   S3Client,
   DeleteObjectCommand,
   DeleteObjectsCommand,
+  ListObjectsV2Command,
   HeadObjectCommand,
   GetObjectCommand,
   PutObjectCommand,
@@ -72,6 +73,7 @@ import type {
   ClientUploadData,
   FileMetadata,
   BulkDeleteResult,
+  StoredFileEntry,
 } from "nextly/storage";
 import { resolveReadBounds } from "nextly/storage/fetch-stored-bytes";
 import { StorageReadTooLargeError } from "nextly/storage/read-errors";
@@ -357,6 +359,28 @@ export class S3StorageAdapter implements IStorageAdapter {
    * @returns Public URL to access the file
    * @throws Error if R2 is used without publicUrl configuration
    */
+  /**
+   * Every object in the bucket, by key, with when it was last written, a page
+   * of up to 1,000 at a time.
+   */
+  async *list(): AsyncIterable<StoredFileEntry> {
+    let token: string | undefined;
+    do {
+      const page = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.resolvedConfig.bucket,
+          ContinuationToken: token,
+        })
+      );
+      for (const object of page.Contents ?? []) {
+        if (object.Key) {
+          yield { path: object.Key, lastModified: object.LastModified };
+        }
+      }
+      token = page.IsTruncated ? page.NextContinuationToken : undefined;
+    } while (token);
+  }
+
   getPublicUrl(filePath: string): string {
     // Use custom CDN/public URL if configured
     if (this.resolvedConfig.publicUrl) {

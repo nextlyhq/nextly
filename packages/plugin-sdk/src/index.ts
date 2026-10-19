@@ -490,6 +490,7 @@ export type {
   PluginRouteHandler,
   PluginRouteMount,
   PluginRouteRateLimit,
+  PluginRouteLimitKey,
   Middleware,
   RouteMethod,
   AuthenticatedScope,
@@ -644,6 +645,7 @@ export {
  */
 export type {
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,

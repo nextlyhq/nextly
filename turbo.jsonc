@@ -151,7 +151,8 @@
     "USE_HTTPS", // nextly HMR listener: dev server protocol
     "__NEXT_ASSET_PREFIX", // nextly HMR listener: Next.js asset prefix
     "NEXTLY_DISABLE_HMR", // nextly HMR listener: opt-out escape hatch
-    "NEXTLY_HMR_URL_OVERRIDE" // nextly HMR listener: custom URL for proxy setups
+    "NEXTLY_HMR_URL_OVERRIDE", // nextly HMR listener: custom URL for proxy setups
+    "NEXTLY_GENERATED_FILES_WRITE" // checkAdminComponents: 0 or false stops the running app rewriting generated files
   ],
 
   "tasks": {

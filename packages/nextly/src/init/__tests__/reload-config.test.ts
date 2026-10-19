@@ -48,6 +48,10 @@ import {
   collectionDbOptions,
   publishCollectionDbOptions,
 } from "../../domains/collections/services/collection-id";
+import {
+  adminComponentPlugins,
+  setAdminComponentPlugins,
+} from "../../domains/widgets/declaration/component-map-store";
 import { setInitializedPlugins } from "../../plugins/initialized-plugins";
 import { createPluginContext } from "../../plugins/plugin-context";
 import {
@@ -1815,6 +1819,57 @@ describe("reloadNextlyConfig", () => {
       // The posts table is unchanged, so only the recompiled schema can have
       // sent this reload to the pipeline.
       expect(pipelineApplySpy).toHaveBeenCalledTimes(1);
+    });
+
+    describe("the plugins the admin component check reads", () => {
+      // Taken at boot, and compared with the generated map on every admin
+      // render in development: a plugin added by a reload must reach it.
+      const added = {
+        name: "@acme/widgets",
+        version: "1.0.0",
+        contributes: {
+          dashboard: {
+            widgets: [
+              {
+                id: "acme/new",
+                display: { component: "@acme/widgets/admin#New" },
+              },
+            ],
+          },
+        },
+      } as never;
+
+      beforeEach(() => {
+        setAdminComponentPlugins([]);
+      });
+
+      it("are republished when the reload lands", async () => {
+        const plugins = [...withPluginTable.plugins, added];
+        loadConfigSpy.mockResolvedValue({
+          config: { ...withPluginTable, plugins },
+        });
+        unchangedPosts();
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() });
+
+        expect(adminComponentPlugins()).toEqual(plugins);
+      });
+
+      it("are left as they were when the reload does not land", async () => {
+        loadConfigSpy.mockResolvedValue({
+          config: {
+            ...withPluginTable,
+            plugins: [...withPluginTable.plugins, added],
+          },
+        });
+        introspectSpy.mockRejectedValue(new Error("connection refused"));
+
+        const { reloadNextlyConfig } = await import("../reload-config");
+        await reloadNextlyConfig({ resolver: buildResolver() }).catch(() => {});
+
+        expect(adminComponentPlugins()).toEqual([]);
+      });
     });
 
     describe("the plugins each plugin depends on", () => {

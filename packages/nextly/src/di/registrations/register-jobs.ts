@@ -41,6 +41,7 @@ import { collectJobs } from "../../plugins/jobs/collect-jobs";
 import type { Logger } from "../../services/shared";
 import { container } from "../container";
 
+import { releaseSettlementReads } from "./release-document-checks";
 import type { RegistrationContext } from "./types";
 
 /**
@@ -183,6 +184,9 @@ export function registerJobServices(ctx: RegistrationContext): void {
         // handler binds each call to the member's own resolved identity.
         contentApi: nextly,
         runAs: databaseRunAs(adapter),
+        // The stored lifecycle and the author gate, so a document a killed
+        // pass already published is passed over rather than written again.
+        settlement: releaseSettlementReads(adapter, logger),
         onOutcome: result => reportReleasesOutcome(logger, result),
       })
     );

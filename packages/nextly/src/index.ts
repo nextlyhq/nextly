@@ -552,6 +552,7 @@ export {
   type PluginRouteHandler,
   type PluginRouteMount,
   type PluginRouteRateLimit,
+  type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
   type NextlyPrincipals,
@@ -803,6 +804,7 @@ export type {
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
 export type {
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,
@@ -1078,10 +1080,12 @@ export type { BreachedPasswordsConfig } from "./shared/types/config";
 // MIDDLEWARE
 // ============================================================
 
-// Rate limiting middleware
+// Rate limiting middleware. `defaultSkipAdminApi` is deprecated: kept for an
+// app that passes it as `rateLimit.skip`, and no longer the default.
 export {
   createRateLimiter,
   createRateLimitHeaders,
+  defaultSkipAdminApi,
   InMemoryRateLimitStore,
   resolveRateLimitStore,
   type RateLimitConfig,
@@ -1317,6 +1321,8 @@ export {
 export {
   getMediaVariant,
   getSmallestMediaVariant,
+  // @experimental: an absolute media URL for a consumer outside the app.
+  toPublicMediaUrl,
   type MediaLike,
   type GetMediaVariantOptions,
 } from "./lib/media-variant";

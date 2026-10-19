@@ -191,3 +191,13 @@ describe("core widget definitions", () => {
     }
   });
 });
+
+describe("the team card's description", () => {
+  it("names no figure the card may leave out", () => {
+    // A small card draws the people alone, and a reader may be allowed to see only one of the
+    // two counts, so a line promising both would describe a card that is not there.
+    const team = CORE_WIDGETS.find(widget => widget.id === "core/team");
+    expect(team?.description).toBeDefined();
+    expect(team?.description).not.toMatch(/\b(users|roles)\b/i);
+  });
+});

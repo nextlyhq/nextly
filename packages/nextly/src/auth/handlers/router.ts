@@ -65,6 +65,20 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
 ]);
 
 /**
+ * Whether a request to `authPath` is judged by the auth rate limit.
+ *
+ * Exported because the REST limit leaves exactly these requests to the auth
+ * limit when their client address cannot be resolved, and one answer keeps
+ * the two from disagreeing: an auth path the auth limit does not cover is
+ * then held to the REST limit's ceiling like any other request.
+ */
+export function hasAuthRateLimit(method: string, authPath: string): boolean {
+  return (
+    method.toUpperCase() === "POST" && RATE_LIMITED_AUTH_PATHS.has(authPath)
+  );
+}
+
+/**
  * @experimental Combined dependency interface for all auth handlers.
  * Defined as a standalone interface (not multi-extends) to avoid TS2320 conflicts
  * where the same method name has different return types across handler deps.
@@ -89,6 +103,8 @@ export interface AuthRouterDeps {
    * (trades enumeration risk for UX).
    */
   revealRegistrationConflict: boolean;
+  /** Whether strangers may register (`auth.allowRegistration`); off by default. */
+  allowRegistration: boolean;
   /**
    * Dev-only auto-login config (config.admin.devAutoLogin). Hard-blocked
    * at runtime when isProduction is true. When set, the session handler
@@ -235,12 +251,12 @@ export interface AuthRouterDeps {
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
 
-  getUserCount: () => Promise<number>;
+  hasAdministrator: () => Promise<boolean>;
   createSuperAdmin: (data: {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string }>;
+  }) => Promise<{ id: string; email: string; name: string } | null>;
   seedPermissions: () => Promise<void>;
 
   // These throw NextlyError on failure and return the success-case data
@@ -336,7 +352,7 @@ async function dispatchAuthRequest(
   }
 
   if (method === "POST") {
-    if (RATE_LIMITED_AUTH_PATHS.has(authPath)) {
+    if (hasAuthRateLimit(method, authPath)) {
       const limited = await checkAuthIpRateLimit(request, authPath, deps);
       if (limited) return limited;
     }

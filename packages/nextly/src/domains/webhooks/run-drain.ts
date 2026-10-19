@@ -29,11 +29,16 @@ import {
   releaseRetentionPass,
   type RetentionGateStore,
   AUDIT_RETENTION_DRAIN_GATE_KEY,
+  CONTENT_EVENTS_RETENTION_DRAIN_GATE_KEY,
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   NOTICES_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
+import {
+  pruneContentEventsSafely,
+  type ContentEventsPruneDb,
+} from "../content-events/prune";
 import { pruneNoticesSafely } from "../notices/prune";
 import { warnQuietly } from "../../domains/retention/safe-log";
 import {
@@ -91,7 +96,8 @@ export interface RunDrainDeps {
      * keep a subject and data in clear.
      */
     oneTimeSecrets?: boolean;
-    prune: PruneDeps;
+    // The content-events sweep deletes each batch in a transaction of its own.
+    prune: PruneDeps & { adapter: ContentEventsPruneDb };
     gate: RetentionGateStore;
   };
 }
@@ -123,6 +129,11 @@ export interface RunDrainResult {
     oneTimeSecrets: number;
     /** Notices past the activity log's window removed on this call. */
     notices: number;
+    /**
+     * Content events of subjects deleted more than the activity log's window
+     * ago, removed on this call.
+     */
+    contentEvents: number;
   };
 }
 
@@ -186,6 +197,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       emailDeliveries: 0,
       oneTimeSecrets: 0,
       notices: 0,
+      contentEvents: 0,
     },
   };
 
@@ -314,6 +326,21 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           : false;
       if (noticesTurn) heldTurns.add(NOTICES_RETENTION_DRAIN_GATE_KEY);
 
+      // A deleted subject's content events keep the activity log's window
+      // too, on a drain marker of their own: the drain is the one trigger
+      // that keeps running after a site stops writing.
+      const contentEventsTurn =
+        noticesMaxAgeMs !== undefined && !deadlineSpent()
+          ? await claimRetentionPass(
+              retention.gate,
+              CONTENT_EVENTS_RETENTION_DRAIN_GATE_KEY,
+              auditPolicy!.intervalMs
+            )
+          : false;
+      if (contentEventsTurn) {
+        heldTurns.add(CONTENT_EVENTS_RETENTION_DRAIN_GATE_KEY);
+      }
+
       // How many passes still have to fit in the time that remains, counted from
       // the turns already CLAIMED rather than from the policies configured — a
       // reserve set aside for a pass that will not run leaves that share unusable
@@ -326,11 +353,13 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         webhook?: boolean;
         audit?: boolean;
         email?: boolean;
+        notices?: boolean;
       }): number =>
         (done.webhook ? 0 : 1) +
         (auditTurn && !done.audit ? 1 : 0) +
         (emailTurn && !done.email ? 1 : 0) +
-        (noticesTurn ? 1 : 0) +
+        (noticesTurn && !done.notices ? 1 : 0) +
+        (contentEventsTurn ? 1 : 0) +
         (secretsTurn ? 1 : 0);
 
       const webhookPolicy = retention.policy;
@@ -472,23 +501,61 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
 
       // Notices, by batches like the delivery log, and only with time left.
       if (noticesTurn && noticesMaxAgeMs !== undefined) {
-        result.pruned.notices = await drainNotices(
+        result.pruned.notices = await drainActivityWindowPass(
           retention,
           heldTurns,
           deadlineSpent,
-          {
-            now,
-            maxAgeMs: noticesMaxAgeMs,
-            maxBatches: auditPolicy!.maxBatchesPerRun,
-            // A share when the secrets sweep follows, the remainder when not,
-            // checked between batches so a backlog cannot carry the drain
-            // past its wall-clock promise.
-            deadline: shareOfRemaining(
-              deadline,
-              now,
-              passesLeftAfter({ webhook: true, audit: true, email: true })
+          NOTICES_RETENTION_DRAIN_GATE_KEY,
+          // A share when later sweeps follow, the remainder when not, checked
+          // between batches so a backlog cannot carry the drain past its
+          // wall-clock promise.
+          passDeadline =>
+            pruneNoticesSafely(
+              {
+                db: retention.prune.adapter,
+                now,
+                logger: retention.prune.logger,
+                deadline: passDeadline,
+              },
+              noticesMaxAgeMs,
+              auditPolicy!.maxBatchesPerRun
             ),
-          }
+          shareOfRemaining(
+            deadline,
+            now,
+            passesLeftAfter({ webhook: true, audit: true, email: true })
+          )
+        );
+      }
+
+      // Deleted subjects' content events, on the same window.
+      if (contentEventsTurn && noticesMaxAgeMs !== undefined) {
+        result.pruned.contentEvents = await drainActivityWindowPass(
+          retention,
+          heldTurns,
+          deadlineSpent,
+          CONTENT_EVENTS_RETENTION_DRAIN_GATE_KEY,
+          passDeadline =>
+            pruneContentEventsSafely(
+              {
+                db: retention.prune.adapter,
+                now,
+                logger: retention.prune.logger,
+                deadline: passDeadline,
+              },
+              noticesMaxAgeMs,
+              auditPolicy!.maxBatchesPerRun
+            ),
+          shareOfRemaining(
+            deadline,
+            now,
+            passesLeftAfter({
+              webhook: true,
+              audit: true,
+              email: true,
+              notices: true,
+            })
+          )
         );
       }
 
@@ -531,42 +598,30 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
 }
 
 /**
- * The drain's notices pass: run when time is left, the turn handed back when
- * it is not, so the next invocation runs it rather than a marker holding it
- * off for a whole interval. Bounded by batches; the pruner never throws.
+ * A drain pass on the activity log's window (notices, deleted subjects'
+ * content events): run when time is left, the turn handed back when it is
+ * not, so the next invocation runs it rather than a marker holding it off for
+ * a whole interval. Bounded by batches; the pruners never throw.
  */
-async function drainNotices(
+async function drainActivityWindowPass(
   retention: NonNullable<RunDrainDeps["retention"]>,
   heldTurns: Set<string>,
   deadlineSpent: () => boolean,
-  pass: {
-    now: () => Date;
-    maxAgeMs: number;
-    maxBatches: number;
-    deadline: Date | undefined;
-  }
+  key: string,
+  prune: (
+    deadline: Date | undefined
+  ) => Promise<{ removed: number; started: boolean }>,
+  deadline: Date | undefined
 ): Promise<number> {
   if (deadlineSpent()) {
-    await releaseRetentionPass(
-      retention.gate,
-      NOTICES_RETENTION_DRAIN_GATE_KEY
-    );
-    heldTurns.delete(NOTICES_RETENTION_DRAIN_GATE_KEY);
+    await releaseRetentionPass(retention.gate, key);
+    heldTurns.delete(key);
     return 0;
   }
-  const swept = await pruneNoticesSafely(
-    {
-      db: retention.prune.adapter,
-      now: pass.now,
-      logger: retention.prune.logger,
-      deadline: pass.deadline,
-    },
-    pass.maxAgeMs,
-    pass.maxBatches
-  );
+  const swept = await prune(deadline);
   // Kept only if a batch was attempted: a pass whose share was already spent
   // did no work, and keeping the turn would hold the sweep off a whole
   // interval. Handed back in `finally` with the other unspent turns.
-  if (swept.started) heldTurns.delete(NOTICES_RETENTION_DRAIN_GATE_KEY);
+  if (swept.started) heldTurns.delete(key);
   return swept.removed;
 }
