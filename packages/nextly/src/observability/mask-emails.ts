@@ -155,22 +155,28 @@ function maskError(error: Error, seen: WeakMap<object, unknown>): Error {
 
 /**
  * A service logger that masks every message and field it is handed, outside
- * development and test, before passing them on.
+ * development and test, before passing them on. Each method of the wrapped
+ * logger is looked up as it is called, so one replaced after wrapping, as a
+ * test or an app may do, is the one that receives the line.
  */
 export function maskingServiceLogger(logger: Logger): Logger {
   const pass =
-    (write: Logger["info"]): Logger["info"] =>
+    (level: keyof Logger): Logger["info"] =>
     (message, meta) => {
-      if (!emailMaskingActive()) {
-        write(message, meta);
+      const masking = emailMaskingActive();
+      const text = masking ? maskEmailsInText(message) : message;
+      // A line logged without fields reaches the logger without them, as it
+      // would unwrapped, rather than with a trailing `undefined`.
+      if (meta === undefined) {
+        logger[level](text);
         return;
       }
-      write(maskEmailsInText(message), meta && maskEmails(meta));
+      logger[level](text, masking ? maskEmails(meta) : meta);
     };
   return {
-    debug: pass(logger.debug.bind(logger)),
-    info: pass(logger.info.bind(logger)),
-    warn: pass(logger.warn.bind(logger)),
-    error: pass(logger.error.bind(logger)),
+    debug: pass("debug"),
+    info: pass("info"),
+    warn: pass("warn"),
+    error: pass("error"),
   };
 }

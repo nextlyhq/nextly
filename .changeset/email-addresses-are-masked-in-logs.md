@@ -29,4 +29,4 @@
 "@nextlyhq/ui": patch
 ---
 
-Outside development and test (an unset `NODE_ENV` included), email addresses in Nextly's logs, `consoleLogger` among them, are masked to their first character and domain (`j***@example.com`), and the log transport leaves message bodies out. Search production logs by domain and first character instead of the full address.
+Outside development and test (an unset `NODE_ENV` included), email addresses in everything Nextly logs, including through `consoleLogger` and a `logger` the app passes it, are masked to their first character and domain (`j***@example.com`), and the log transport leaves message bodies out. Search production logs by domain and first character instead of the full address.
