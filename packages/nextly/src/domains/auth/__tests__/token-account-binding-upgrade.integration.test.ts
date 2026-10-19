@@ -280,6 +280,21 @@ describe.each(getConfiguredTestDialects())(
         createdAt: ago(-4),
       });
 
+      // An account stored before addresses were lowercased, sent a reset link
+      // under the lowercased address. MySQL compares addresses without case,
+      // so that link worked there; elsewhere the two never matched.
+      await db.insert(tables.users).values({
+        id: "mixed-case",
+        email: "Mixed-Case@example.com",
+        name: "mixed-case",
+        emailVerified: null,
+        isActive: true,
+        passwordHash: OLD_HASH,
+        createdAt: ago(5),
+        updatedAt: ago(5),
+      });
+      const mixedCase = await links("mixed-case@example.com", ago(1));
+
       expect(await migrate(t, dialect)).toBe(true);
 
       for (const { name } of TOKEN_TABLES) {
@@ -320,6 +335,9 @@ describe.each(getConfiguredTestDialects())(
       expect(await boundTo(longLived.reset)).toEqual([]);
       expect(await boundTo(otherZone.reset)).toEqual([]);
       expect(await boundTo(otherZone.verification)).toEqual(["other-zone"]);
+      expect(await boundTo(mixedCase.reset)).toEqual(
+        dialect === "mysql" ? ["mixed-case"] : []
+      );
 
       // Nothing left unbound, so a second run changes nothing.
       expect(await migrate(t, dialect)).toBe(false);

@@ -203,9 +203,10 @@ export function issuedNoLaterThan(
 export function mayBindToAccount(
   kind: AuthTokenKind,
   token: UnboundToken,
-  account: Pick<BindingAccount, "email" | "createdAt" | "updatedAt">
+  account: Pick<BindingAccount, "email" | "createdAt" | "updatedAt">,
+  sameAddress: (a: string, b: string) => boolean = (a, b) => a === b
 ): boolean {
-  if (account.email !== token.identifier) return false;
+  if (!sameAddress(account.email, token.identifier)) return false;
   const issued = issuedNoLaterThan(kind, token);
   if (issued === null) return false;
   return (
@@ -317,7 +318,13 @@ export async function bindIssuedTokens(
       tokens.map(token => token.identifier)
     );
 
-    const { bindTo, remove } = planBinding(kind, tokens, accounts, now);
+    const { bindTo, remove } = planBinding(
+      kind,
+      tokens,
+      accounts,
+      dialect,
+      now
+    );
 
     for (const [userId, ids] of bindTo) {
       try {
@@ -363,17 +370,23 @@ export async function bindIssuedTokens(
 function planBinding(
   kind: AuthTokenKind,
   tokens: readonly (UnboundToken & { id: number })[],
-  accounts: ReadonlyMap<string, BindingAccount>,
+  accounts: readonly BindingAccount[],
+  dialect: SupportedDialect,
   now: Date
 ): { bindTo: Map<string, number[]>; remove: number[] } {
+  const same = addressComparison(dialect);
   const bindTo = new Map<string, number[]>();
   const remove: number[] = [];
   for (const token of tokens) {
-    const account = accounts.get(token.identifier);
+    // The account the database itself says holds the address: addresses are
+    // unique under the database's own comparison, so at most one matches.
+    const account = accounts.find(candidate =>
+      same(candidate.email, token.identifier)
+    );
     if (
       token.expires > now &&
       account &&
-      mayBindToAccount(kind, token, account)
+      mayBindToAccount(kind, token, account, same)
     ) {
       bindTo.set(account.id, [...(bindTo.get(account.id) ?? []), token.id]);
     } else {
@@ -383,15 +396,29 @@ function planBinding(
   return { bindTo, remove };
 }
 
-/** The accounts holding any of `emails`, by address. */
+/**
+ * Whether two addresses are the same address to the database. MySQL compares
+ * them under its case-insensitive collation, so a token issued to
+ * `person@example.com` was redeemable by an account stored as
+ * `Person@example.com`; PostgreSQL and SQLite compare them exactly.
+ */
+function addressComparison(
+  dialect: SupportedDialect
+): (a: string, b: string) => boolean {
+  return dialect === "mysql"
+    ? (a, b) => a.toLowerCase() === b.toLowerCase()
+    : (a, b) => a === b;
+}
+
+/** The accounts holding any of `emails`, as the database matches them. */
 async function accountsHolding(
   tx: TokenBindingDb,
   tables: Pick<Tables, "users">,
   emails: readonly string[]
-): Promise<Map<string, BindingAccount>> {
+): Promise<BindingAccount[]> {
   const { users } = tables;
   const unique = [...new Set(emails)];
-  const byEmail = new Map<string, BindingAccount>();
+  const holding: BindingAccount[] = [];
   for (let i = 0; i < unique.length; i += LOOKUP_BATCH) {
     const rows = await tx
       .select({
@@ -406,8 +433,8 @@ async function accountsHolding(
       .where(inArray(users.email, unique.slice(i, i + LOOKUP_BATCH)));
     for (const row of rows) {
       const account = toAccount(row);
-      byEmail.set(account.email, account);
+      holding.push(account);
     }
   }
-  return byEmail;
+  return holding;
 }

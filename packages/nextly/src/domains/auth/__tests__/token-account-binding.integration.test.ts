@@ -39,12 +39,20 @@ const afterLock = vi.hoisted(() => ({
   run: undefined as (() => void) | undefined,
 }));
 
+/** Run once, when the next flow asks for the account's row, then cleared. */
+const beforeLock = vi.hoisted(() => ({
+  run: undefined as (() => void) | undefined,
+}));
+
 vi.mock("../services/token-account-binding", async importOriginal => {
   const real =
     await importOriginal<typeof import("../services/token-account-binding")>();
   return {
     ...real,
     lockAccount: async (...args: Parameters<typeof real.lockAccount>) => {
+      const reached = beforeLock.run;
+      beforeLock.run = undefined;
+      reached?.();
       const account = await real.lockAccount(...args);
       const hook = afterLock.run;
       afterLock.run = undefined;
@@ -145,6 +153,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
 
   afterEach(() => {
     afterLock.run = undefined;
+    beforeLock.run = undefined;
   });
 
   /** A fresh address no account has used in this run. */
@@ -249,12 +258,35 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       await released;
     });
     await wrote;
+    // PostgreSQL and MySQL: the flow reaches the account's row lock and waits
+    // there, behind the open write. A reset hashes the new password first,
+    // which takes longer than any fixed pause, so the write is released only
+    // once the flow is at the lock. SQLite queues the flow's whole
+    // transaction behind the write, so it cannot reach the lock until the
+    // write commits.
+    let reachedLock = false;
+    const atLock = new Promise<void>(resolve => {
+      beforeLock.run = () => {
+        reachedLock = true;
+        resolve();
+      };
+    });
     const started = during();
     // Rejections are read by the caller; this keeps one from going unhandled
     // while the write is still open.
     started.catch(() => undefined);
-    // Long enough for the flow to reach the account's row and wait on it.
-    await new Promise(resolve => setTimeout(resolve, 300));
+    if (dialect === "sqlite") {
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } else {
+      await Promise.race([
+        atLock,
+        new Promise(resolve => setTimeout(resolve, 20_000)),
+      ]);
+      expect(reachedLock).toBe(true);
+      // Long enough for the lock request to reach the database and wait.
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    beforeLock.run = undefined;
     release();
     await holding;
     return { flow: started };
