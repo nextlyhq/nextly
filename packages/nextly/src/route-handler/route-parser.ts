@@ -1929,6 +1929,7 @@ function parsePreviewUrlRoutes(
 
 function parseApiKeyRoutes(
   id: string | undefined,
+  subresource: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
@@ -1952,10 +1953,11 @@ function parseApiKeyRoutes(
     };
   }
 
-  if (id === "abilities" && httpMethod === "GET") {
+  if (id === "abilities" && !subresource && httpMethod === "GET") {
     // GET /api/api-keys/abilities → what a key of the asked type and role
     // would be able to do, before it is created (@experimental). Matched
-    // before `:id`, which would otherwise read "abilities" as a key's id.
+    // before `:id`, which would otherwise read "abilities" as a key's id,
+    // and only with nothing after it: a longer path is not this endpoint.
     return {
       service: "apiKeys",
       operation: "single",
@@ -2986,7 +2988,7 @@ export function parseRestRoute(
 
   // Handle API Keys endpoints
   if (resource === "api-keys") {
-    const result = parseApiKeyRoutes(id, httpMethod, routeParams);
+    const result = parseApiKeyRoutes(id, subresource, httpMethod, routeParams);
     if (result) return result;
   }
 

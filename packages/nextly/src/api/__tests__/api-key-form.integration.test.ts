@@ -300,6 +300,30 @@ describe.each(getConfiguredTestDialects())(
         expect((await abilities(headers, "?tokenType=admin")).status).toBe(400);
       });
 
+      it("is private to the session that asked, refusals included", async () => {
+        const headers = await session(editorId, [editorRoleId]);
+        for (const query of [
+          "?tokenType=read-only",
+          `?tokenType=role-based&roleId=${widerRoleId}`,
+        ]) {
+          const res = await get(["api-keys", "abilities"], headers, query);
+          expect(res.headers.get("cache-control")).toContain("private");
+          expect(res.headers.get("cache-control")).toContain("no-store");
+          expect(res.headers.get("vary")).toMatch(/cookie/i);
+          expect(res.headers.get("vary")).toMatch(/authorization/i);
+        }
+      });
+
+      it("answers only its own path", async () => {
+        const headers = await session(editorId, [editorRoleId]);
+        const res = await get(
+          ["api-keys", "abilities", "anything"],
+          headers,
+          "?tokenType=read-only"
+        );
+        expect(res.status).toBe(404);
+      });
+
       it("refuses an API key, and a person who may not create keys", async () => {
         const { key } = await keys.createApiKey(superAdminId, {
           name: "a key asking",
@@ -343,6 +367,53 @@ describe.each(getConfiguredTestDialects())(
           email: "editor@example.com",
         });
         expect(row?.expiresAt).not.toBeNull();
+      });
+
+      it("names no owner to a key that may not read users", async () => {
+        // A super-admin's key lists every key; one whose role can read keys
+        // but not people learns no person's name or address from the list.
+        await keys.createApiKey(editorId, {
+          name: "someone's key",
+          tokenType: "read-only",
+          expiresIn: "unlimited",
+        });
+        const keyReader = await keys.createApiKey(superAdminId, {
+          name: "reads keys only",
+          tokenType: "role-based",
+          roleId: await role("key-readers", ["read-api-keys"]),
+          expiresIn: "unlimited",
+        });
+        const peopleReader = await keys.createApiKey(superAdminId, {
+          name: "reads keys and people",
+          tokenType: "role-based",
+          roleId: await role("key-and-user-readers", [
+            "read-api-keys",
+            "read-users",
+          ]),
+          expiresIn: "unlimited",
+        });
+
+        const withoutUsers = await listed({
+          authorization: `Bearer ${keyReader.key}`,
+        });
+        expect(withoutUsers.length).toBeGreaterThan(1);
+        expect(withoutUsers.every(item => item.owner === null)).toBe(true);
+        const single = await get(["api-keys", peopleReader.meta.id], {
+          authorization: `Bearer ${keyReader.key}`,
+        });
+        expect(single.status).toBe(200);
+        expect(((await single.json()) as ListedKey).owner).toBeNull();
+
+        const withUsers = await listed({
+          authorization: `Bearer ${peopleReader.key}`,
+        });
+        expect(withUsers.some(item => item.owner?.id === editorId)).toBe(true);
+      });
+
+      it("keeps the list private to the session that asked", async () => {
+        const res = await get(["api-keys"], await session(superAdminId, []));
+        expect(res.headers.get("cache-control")).toContain("no-store");
+        expect(res.headers.get("vary")).toMatch(/authorization/i);
       });
 
       it("advances the last use of the key a request used, and no other", async () => {

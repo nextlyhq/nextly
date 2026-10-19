@@ -39,4 +39,4 @@ advances when a request uses it.
 New, and experimental while the form settles: `GET
 /admin/api/api-keys/abilities?tokenType=…&roleId=…` answers that summary,
 session-only and behind the permission to create keys. Each key's metadata
-gains an `owner` field.
+gains an `owner` field, which an API key sees only if it may read users.

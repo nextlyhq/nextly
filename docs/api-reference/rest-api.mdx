@@ -594,7 +594,7 @@ curl http://localhost:3000/admin/api/api-keys -b "nextly_session=..."
 
 `POST /admin/api/api-keys` returns the new key value once at creation; it is hashed on the server and never displayed again.
 
-Each key in the list and in `GET /admin/api/api-keys/{id}` carries its `owner` (`{ id, name, email }`, or `null` once that account is gone) and its `lastUsedAt`, which a request made with the key advances.
+Each key in the list and in `GET /admin/api/api-keys/{id}` carries its `owner` (`{ id, name, email }`) and its `lastUsedAt`, which a request made with the key advances. `owner` is `null` once that account is gone, and also when the request is made with an API key that does not hold `read-users`: a key learns who owns a key only if it may read users. These responses are private to the caller (`Cache-Control: private, no-store`).
 
 `GET /admin/api/api-keys/abilities` is **experimental**: its shape may change while the key form that uses it does. It answers from the same resolution a key's own requests use, so the summary is what the key gets. A read-only or full-access key follows its creator's permissions, so its answer changes as theirs do.
 
