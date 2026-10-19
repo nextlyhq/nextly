@@ -22,6 +22,8 @@ const seen = vi.hoisted(() => ({
   loadConfig: [] as unknown[],
   /** The process's directory when the config loaded. */
   loadedIn: [] as string[],
+  /** The config file the loader reports it loaded, as discovery finds it. */
+  loadedFrom: undefined as string | undefined,
   storage: [] as unknown[],
   resolver: null as null | { getTable: (name: string) => unknown },
 }));
@@ -30,7 +32,7 @@ vi.mock("../../utils/config-loader", () => ({
   loadConfig: async (options: unknown) => {
     seen.loadConfig.push(options);
     seen.loadedIn.push(process.cwd());
-    return { config: { storage: seen.storage } };
+    return { config: { storage: seen.storage }, configPath: seen.loadedFrom };
   },
 }));
 
@@ -73,6 +75,7 @@ beforeEach(async () => {
   seen.calls.length = 0;
   seen.loadConfig.length = 0;
   seen.loadedIn.length = 0;
+  seen.loadedFrom = undefined;
   seen.storage = [];
   seen.resolver = null;
   exits = [];
@@ -402,6 +405,49 @@ describe("nextly media orphans, as the CLI runs it", () => {
     expect(exits).toEqual([1]);
     expect(media.deleted).toEqual([]);
     expect(seen.loadConfig).toEqual([]);
+  });
+
+  // Discovery follows a link too: the project's own config file can be a
+  // link to another project's.
+  it("removes nothing when the discovered config links outside the project", async () => {
+    const media = bucketWithOrphan("media");
+    seen.storage = [
+      {
+        name: "s3-media",
+        type: "s3",
+        collections: { media: { prefix: "media" } },
+        adapter: media.adapter,
+      },
+    ];
+    const other = await mkdtemp(path.join(tmpdir(), "nextly-other-"));
+    await writeFile(
+      path.join(other, "nextly.config.ts"),
+      "export default {};\n"
+    );
+    await symlink(
+      path.join(other, "nextly.config.ts"),
+      path.join(dir, "nextly.config.ts")
+    );
+    seen.loadedFrom = path.join(dir, "nextly.config.ts");
+    process.chdir(dir);
+
+    try {
+      await createProgram().parseAsync([
+        "node",
+        "nextly",
+        "--cwd",
+        dir,
+        "media",
+        "orphans",
+        "--apply",
+      ]);
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
+
+    expect(exits).toEqual([1]);
+    expect(media.deleted).toEqual([]);
+    expect(seen.calls).not.toContain("select media");
   });
 
   it("reads the project's own .env for what is not already set", async () => {

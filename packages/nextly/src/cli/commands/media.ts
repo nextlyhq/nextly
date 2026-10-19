@@ -282,6 +282,28 @@ function enterProject(cwd: string, apply: boolean, logger: Logger): boolean {
 }
 
 /**
+ * The project's config, loaded from inside it (`enterProject`), or `null`
+ * when --apply cannot go on: with a config, given or discovered, that is not
+ * the project's own (`configIsInside`), or from another directory.
+ */
+async function projectConfig(
+  cwd: string,
+  configPath: string | undefined,
+  apply: boolean,
+  logger: Logger
+): Promise<Awaited<ReturnType<typeof loadConfig>>["config"] | null> {
+  if (apply && !configIsInside(cwd, configPath, logger)) return null;
+  if (!enterProject(cwd, apply, logger)) return null;
+  // The loader discovers the config from the project; a path is passed
+  // only when one was given.
+  const { config, configPath: loaded } = await loadConfig({ configPath, cwd });
+  // The file the loader read, as discovery found it too: a project's own
+  // config can be a link to another project's.
+  if (apply && !configIsInside(cwd, loaded, logger)) return null;
+  return config;
+}
+
+/**
  * Whether the config --apply would read is the project's own: a `--config`
  * outside `cwd` is another project's storage, which this project's database
  * settings would be compared against. Says why when it is not.
@@ -363,23 +385,16 @@ export function createMediaCommand(): Command {
         // Resolved once, from where the command was run: a relative --cwd
         // read again after the change would name a folder inside itself.
         const cwd = path.resolve(context.cwd);
-        if (
-          cmdOptions.apply === true &&
-          !configIsInside(cwd, context.configPath, context.logger)
-        ) {
-          process.exit(1);
-          return;
-        }
-        if (!enterProject(cwd, cmdOptions.apply === true, context.logger)) {
-          process.exit(1);
-          return;
-        }
-        // The loader discovers the config from the project; a path is
-        // passed only when one was given.
-        const { config } = await loadConfig({
-          configPath: context.configPath,
+        const config = await projectConfig(
           cwd,
-        });
+          context.configPath,
+          cmdOptions.apply === true,
+          context.logger
+        );
+        if (!config) {
+          process.exit(1);
+          return;
+        }
         const db = validateDatabaseEnv();
         adapter = await createCliAdapter({
           dialect: db.dialect,

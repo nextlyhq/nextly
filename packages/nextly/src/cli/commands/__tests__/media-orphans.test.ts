@@ -399,6 +399,37 @@ describe("nextly media orphans", () => {
     expect([...bucket.files.keys()].sort()).toEqual([...outside].sort());
   });
 
+  // A storage of another kind may keep keys as written too; only local disk
+  // is known to read every spelling as one.
+  it("leaves keys spelled otherwise on a storage of a kind it does not know", async () => {
+    const bucket = new Bucket("s3");
+    // The same files, under a kind of storage this does not know.
+    const custom: IStorageAdapter = Object.assign(
+      Object.create(Object.getPrototypeOf(bucket)),
+      bucket,
+      { getType: () => "custom-store" }
+    );
+    const outside = [
+      key("thumb_a.png", "/media/"),
+      key("thumb_b.png", "media//"),
+    ];
+    for (const path of outside)
+      bucket.put({ path, lastModified: TWO_HOURS_AGO });
+
+    await mediaOrphans({
+      storage: custom,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => refs(),
+      referencedNow: async () => new Set(),
+      apply: true,
+      say: () => {},
+      now: NOW,
+    });
+
+    expect([...bucket.files.keys()].sort()).toEqual([...outside].sort());
+  });
+
   // A prefix written with a leading slash, `/media`, is recorded as
   // `/media/...`, and listed by local disk relative to its folder, as
   // `media/...`.
