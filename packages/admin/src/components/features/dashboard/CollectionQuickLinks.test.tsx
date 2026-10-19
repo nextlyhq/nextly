@@ -83,6 +83,19 @@ describe("the Collections card's tiles", () => {
     expect(screen.getByRole("link", { name: /13/ })).toHaveTextContent("Posts");
   });
 
+  it("waits for the list when the counts land first, rather than drawing them in their own order", () => {
+    // 🔴 Drawn from the counts alone, the tiles took the counts' order, then re-sorted and
+    // regrouped by the list's once it arrived: tiles already on screen moved.
+    given({
+      counts: [
+        { slug: "tags", label: "Tags", group: null, count: 3 },
+        { slug: "posts", label: "Posts", group: null, count: 13 },
+      ],
+    });
+    expect(screen.getByTestId("card-skeleton")).toBeInTheDocument();
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+  });
+
   it("asks for the collections list the sidebar asks for, so the two share one answer", () => {
     // 🔴 It asked with arguments of its own, a second request the shell had not made, so the
     // list was never there when the card was drawn.

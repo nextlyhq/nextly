@@ -13,6 +13,7 @@ import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { listBody } from "../archetypes/list";
 import { metricBody } from "../archetypes/metric";
+import { statsBody } from "../archetypes/stats";
 import * as geometry from "../frame/geometry";
 import { WidgetCard } from "../WidgetCard";
 
@@ -145,6 +146,49 @@ describe("a figure card holds its number's line", () => {
     // as the number arrived.
     expect(loading).toEqual(["FIGURE_VALUE_CLASS"]);
     expect(loaded).toEqual(loading);
+  });
+});
+
+describe("a stats card holds each of its cells", () => {
+  it("draws the same line boxes and labels loading as loaded", () => {
+    // 🔴 It shared the figure's skeleton, one number's line, while the loaded card draws a
+    // value AND a label for every cell, so it grew by a line and more rows of cells.
+    const cells = [
+      { key: "total", label: "Total" },
+      { key: "published", label: "Published" },
+      { key: "draft", label: "Draft" },
+    ];
+    render(
+      <WidgetCard
+        title="Health"
+        state="loading"
+        skeleton="stats"
+        skeletonCells={cells.map(cell => cell.label)}
+      >
+        body
+      </WidgetCard>
+    );
+    const skeleton = screen.getByTestId("card-skeleton");
+    const loading = lineBoxes(skeleton);
+    const loadingLabels = [...skeleton.querySelectorAll("dt")].map(
+      dt => dt.textContent
+    );
+
+    const drawn = statsBody(
+      { title: "Health loaded", cells } as never,
+      () => ({ ok: true, result: { op: "count", total: 7 } }) as never
+    );
+    if (!drawn.ok || !("node" in drawn)) throw new Error("expected a body");
+    render(<WidgetCard title="Health loaded">{drawn.node}</WidgetCard>);
+    const body = within(
+      screen.getByRole("region", { name: "Health loaded" })
+    ).getByTestId("widget-card-body");
+
+    expect(loading).toContain("STATS_CELL_CLASS");
+    expect(lineBoxes(body)).toEqual(loading);
+    expect([...body.querySelectorAll("dt")].map(dt => dt.textContent)).toEqual(
+      loadingLabels
+    );
   });
 });
 

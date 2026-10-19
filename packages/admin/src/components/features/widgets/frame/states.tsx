@@ -27,6 +27,9 @@ import {
   LIST_ROW_CLASS,
   MORE_LINE_CLASS,
   ROWS_STACK_CLASS,
+  STATS_CELL_CLASS,
+  STATS_GRID_CLASS,
+  STATS_LABEL_CLASS,
   TABLE_CELL_CLASS,
   TABLE_CLASS,
   TABLE_HEAD_ROW_CLASS,
@@ -38,6 +41,7 @@ import type { RowsLayout } from "./tier";
 /** The kinds of body a skeleton can be shaped like, so it matches what will arrive. */
 export type SkeletonShape =
   | "figure"
+  | "stats"
   | "rows"
   | "chart"
   | "bars"
@@ -123,6 +127,35 @@ function SkeletonRows({ rows, layout }: { rows: number; layout: RowsLayout }) {
 }
 
 /**
+ * A stats card's cells, each its value's line (held) above its label, in the very grid the
+ * loaded cells are drawn in. The labels are the declaration's own, so a label that wraps wraps
+ * here too, and the cells fall into the same rows.
+ */
+function SkeletonStats({ cells }: { cells: readonly string[] }) {
+  return (
+    <dl className={STATS_GRID_CLASS}>
+      {cells.map((label, index) => (
+        <div key={index} className={STATS_CELL_CLASS}>
+          <dd>
+            <span className={FIGURE_VALUE_CLASS}>
+              <Skeleton className="inline-block h-[1em] w-12 align-top" />
+            </span>
+          </dd>
+          <dt
+            className={cn(
+              STATS_LABEL_CLASS,
+              "font-medium text-muted-foreground"
+            )}
+          >
+            {label}
+          </dt>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
  * A skeleton shaped like the body that has not arrived yet: a figure where a number will be,
  * rows where a list will be. A generic block would jump into a different shape when the data
  * lands, which is the layout shift this exists to avoid.
@@ -135,11 +168,22 @@ export function CardSkeleton({
   shape = "rows",
   rows = 3,
   layout,
+  cells = [],
 }: {
   shape?: SkeletonShape;
   rows?: number;
   layout?: RowsLayout;
+  /** A stats card's cell labels, which are known before any of its numbers. */
+  cells?: readonly string[];
 }) {
+  if (shape === "stats") {
+    return (
+      <div data-testid="card-skeleton" data-shape={shape}>
+        <span className="sr-only">Loading</span>
+        <SkeletonStats cells={cells} />
+      </div>
+    );
+  }
   if ((shape === "rows" && layout) || shape === "figure") {
     return (
       <div data-testid="card-skeleton" data-shape={shape}>

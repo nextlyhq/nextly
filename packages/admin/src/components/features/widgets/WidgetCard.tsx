@@ -124,6 +124,8 @@ export interface WidgetCardProps {
    * as the card will at its tier (`rowsLayout`): a table, or rows with or without a detail line.
    */
   skeletonFields?: number;
+  /** A stats card's cell labels, which its loading skeleton draws under each held value. */
+  skeletonCells?: readonly string[];
   /** What an empty card says. Required for `state="empty"` to say anything specific. */
   empty?: CardEmptyContent;
   /** Retry for this card only, offered in the error state. */
@@ -282,6 +284,7 @@ export function WidgetCard(props: WidgetCardProps) {
               skeleton={props.skeleton}
               skeletonItems={props.skeletonItems}
               skeletonFields={props.skeletonFields}
+              skeletonCells={props.skeletonCells}
               empty={props.empty}
             >
               {props.children}
@@ -317,6 +320,7 @@ function WidgetCardBody({
   skeleton,
   skeletonItems,
   skeletonFields,
+  skeletonCells,
   empty,
   children,
 }: {
@@ -327,6 +331,7 @@ function WidgetCardBody({
   skeleton?: SkeletonShape;
   skeletonItems?: unknown;
   skeletonFields?: number;
+  skeletonCells?: readonly string[];
   empty?: CardEmptyContent;
   children: ReactNode;
 }) {
@@ -349,6 +354,7 @@ function WidgetCardBody({
               ? undefined
               : rowsLayout(tier, skeletonFields)
           }
+          cells={skeletonCells}
         />
       );
     case "unavailable":

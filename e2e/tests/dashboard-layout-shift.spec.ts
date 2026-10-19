@@ -35,7 +35,11 @@ const WIDTHS = [
 ];
 
 interface Shift {
+  /** Entries that moved only the dashboard. */
   dashboard: number;
+  /** Entries that moved the dashboard AND the shell in one frame: counted against the dashboard. */
+  mixed: number;
+  /** Entries that moved only the shell. */
   shell: number;
 }
 
@@ -47,7 +51,7 @@ interface Shift {
  */
 async function recordShifts(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const record = { dashboard: 0, shell: 0 };
+    const record = { dashboard: 0, mixed: 0, shell: 0 };
     (window as unknown as { __shift: typeof record }).__shift = record;
     new PerformanceObserver(list => {
       for (const entry of list.getEntries() as PerformanceEntry[] &
@@ -57,12 +61,21 @@ async function recordShifts(page: Page): Promise<void> {
           sources: { node: Node | null }[];
         }[]) {
         if (entry.hadRecentInput) continue;
-        const inDashboard = entry.sources.some(
+        // An entry's value cannot be split between the elements it moved, so one that moved
+        // both is charged to the dashboard: the measurement may over-state the dashboard's
+        // share, never hide it. `mixed` keeps it visible in the report, so a red caused by
+        // the shell moving in the same frame is told apart from the dashboard's own.
+        const inside = entry.sources.map(
           source =>
             source.node instanceof Element &&
             source.node.closest('[data-testid="dashboard-container"]') !== null
         );
-        record[inDashboard ? "dashboard" : "shell"] += entry.value;
+        const kind = inside.every(Boolean)
+          ? "dashboard"
+          : inside.some(Boolean)
+            ? "mixed"
+            : "shell";
+        record[kind] += entry.value;
       }
     }).observe({ type: "layout-shift", buffered: true });
   });
@@ -77,6 +90,7 @@ const forgetShifts = (page: Page) =>
   page.evaluate(() => {
     const record = (window as unknown as { __shift: Shift }).__shift;
     record.dashboard = 0;
+    record.mixed = 0;
     record.shell = 0;
   });
 
@@ -86,7 +100,7 @@ function report(
   label: string,
   shift: Shift
 ): void {
-  const line = `${label}: dashboard ${shift.dashboard.toFixed(4)}, shell ${shift.shell.toFixed(4)}`;
+  const line = `${label}: dashboard ${shift.dashboard.toFixed(4)}, mixed ${shift.mixed.toFixed(4)}, shell ${shift.shell.toFixed(4)}`;
   info.annotations.push({ type: "layout-shift", description: line });
   console.log(`LAYOUT-SHIFT ${line}`);
 }
@@ -98,11 +112,16 @@ function report(
 async function waitForSettled(page: Page): Promise<void> {
   const cells = page.locator('[data-testid^="widget-cell-"]');
   await expect(cells.first()).toBeVisible({ timeout: 60_000 });
-  await expect(async () => {
-    expect(await page.locator('main [aria-busy="true"]').count()).toBe(0);
-  }).toPass({ timeout: 60_000 });
+  // Nothing still loading: no card marked busy, AND no skeleton drawn anywhere (every skeleton
+  // the UI kit draws is marked `data-slot="skeleton"`). A card that draws its own body (a
+  // component card) shows its own placeholders while its requests run, and the frame does not
+  // mark it busy for those, so busy alone would end the window early.
+  const loading = page.locator(
+    'main [aria-busy="true"], main [data-slot="skeleton"], main [data-testid="widget-grid-loading"]'
+  );
+  await expect(loading).toHaveCount(0, { timeout: 60_000 });
   await page.waitForTimeout(1_000);
-  await expect(page.locator('main [aria-busy="true"]')).toHaveCount(0);
+  await expect(loading).toHaveCount(0);
 }
 
 /** Follows the link at `href` the way the app does, without it counting as a reader's input. */
@@ -130,7 +149,7 @@ for (const size of WIDTHS) {
     await waitForSettled(page);
     const shift = await shiftSoFar(page);
     report(info, `cold ${size.name} ${size.width}px`, shift);
-    expect(shift.dashboard).toBeLessThan(MAX_COLD_SHIFT);
+    expect(shift.dashboard + shift.mixed).toBeLessThan(MAX_COLD_SHIFT);
   });
 
   test(`does not move at all on a warm return (${size.name})`, async ({
@@ -150,6 +169,6 @@ for (const size of WIDTHS) {
     await waitForSettled(page);
     const shift = await shiftSoFar(page);
     report(info, `warm ${size.name} ${size.width}px`, shift);
-    expect(shift.dashboard).toBe(0);
+    expect(shift.dashboard + shift.mixed).toBe(0);
   });
 }

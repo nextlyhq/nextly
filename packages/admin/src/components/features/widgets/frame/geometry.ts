@@ -48,3 +48,13 @@ export const TABLE_ROW_CLASS = "border-b border-border last:border-0";
 
 /** The "More exist" line under a list's rows. */
 export const MORE_LINE_CLASS = "text-xs";
+
+/** A stats card's cells, as many to a row as fit. */
+export const STATS_GRID_CLASS =
+  "grid grid-cols-[repeat(auto-fit,minmax(6.5rem,1fr))] gap-4";
+
+/** One stats cell: its value, then its label. */
+export const STATS_CELL_CLASS = "flex flex-col gap-1";
+
+/** A stats cell's label line. Its weight is the cell's to choose; only its type sets its height. */
+export const STATS_LABEL_CLASS = "text-xs";

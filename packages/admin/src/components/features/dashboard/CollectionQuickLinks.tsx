@@ -52,15 +52,20 @@ function getGroupDefaultIcon(group: string | null) {
  *   dashboard, so a count names a listed collection and never one the list lacks.
  * - **The list only:** every listed collection, its count still on its way. Once the counts
  *   land, a tile with no count goes, so the card can only close up, never grow.
- * - **The counts only:** the counts, in their own order, as the card drew before the list.
- * - **Neither:** nothing to draw yet.
+ * - **The list still on its way:** nothing yet, whatever the counts say. Drawn from the counts
+ *   alone, the tiles would take the counts' order and then re-sort, and regroup, when the list
+ *   arrived, moving tiles already on screen.
+ * - **No list to be had** (the request failed, or it lists nothing): the counts, in their own
+ *   order, as the card drew before the list.
  *
  * One order in every case where the list is known, so tiles do not move as the counts land.
  */
 function collectionTiles(
   list: readonly ApiCollection[] | undefined,
+  listPending: boolean,
   counts: readonly CollectionCount[] | undefined
 ): CollectionTile[] | undefined {
+  if (list === undefined && listPending) return undefined;
   if (list === undefined || list.length === 0) return counts?.slice();
   const counted = new Map(counts?.map(count => [count.slug, count]));
   return list.flatMap(collection => {
@@ -193,8 +198,13 @@ export const CollectionQuickLinks: React.FC = () => {
     useCollections(NAV_COLLECTIONS_PARAMS);
 
   const tiles = useMemo(
-    () => collectionTiles(collectionsData?.items, statsData?.collectionCounts),
-    [statsData?.collectionCounts, collectionsData?.items]
+    () =>
+      collectionTiles(
+        collectionsData?.items,
+        collectionsLoading,
+        statsData?.collectionCounts
+      ),
+    [statsData?.collectionCounts, collectionsData?.items, collectionsLoading]
   );
   const groups = useMemo(() => groupCollections(tiles ?? []), [tiles]);
 

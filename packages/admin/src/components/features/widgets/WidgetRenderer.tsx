@@ -67,8 +67,9 @@ function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
     case "metric":
-    case "stats":
       return "figure";
+    case "stats":
+      return "stats";
     case "timeseries":
       return "chart";
     case "bars":
@@ -231,6 +232,7 @@ export function WidgetRenderer({
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
     skeletonFields: skeletonFieldsFor(definition),
+    skeletonCells: definition.cells?.map(cell => cell.label),
     answerTier,
   };
 

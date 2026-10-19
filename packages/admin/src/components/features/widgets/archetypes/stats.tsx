@@ -12,9 +12,15 @@
 import type { ReactNode } from "react";
 
 import { Link } from "@admin/components/ui/link";
+import { cn } from "@admin/lib/utils";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
-import { FIGURE_VALUE_CLASS } from "../frame/geometry";
+import {
+  FIGURE_VALUE_CLASS,
+  STATS_CELL_CLASS,
+  STATS_GRID_CLASS,
+  STATS_LABEL_CLASS,
+} from "../frame/geometry";
 
 import { CountValue, countLabel } from "./count-value";
 import type { ArchetypeAccepts, CellsBody, CellSlotLookup } from "./types";
@@ -104,10 +110,7 @@ export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
       // `auto-fit` rather than a fixed column count: the same card carries three
       // numbers for one collection and six for another, and a fixed grid would
       // leave the three-cell card with three empty columns.
-      <dl
-        data-testid="widget-stats"
-        className="grid grid-cols-[repeat(auto-fit,minmax(6.5rem,1fr))] gap-4"
-      >
+      <dl data-testid="widget-stats" className={STATS_GRID_CLASS}>
         {cells.map(cell => {
           const { text, muted, spoken } = cellValue(slotFor(cell.key));
           const value = (
@@ -121,7 +124,7 @@ export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
             </span>
           );
           return (
-            <div key={cell.key} className="flex flex-col gap-1">
+            <div key={cell.key} className={STATS_CELL_CLASS}>
               <dd
                 className={muted ? "text-muted-foreground" : "text-foreground"}
               >
@@ -146,7 +149,12 @@ export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
                   value
                 )}
               </dd>
-              <dt className="text-xs font-medium text-muted-foreground">
+              <dt
+                className={cn(
+                  STATS_LABEL_CLASS,
+                  "font-medium text-muted-foreground"
+                )}
+              >
                 {cell.label}
               </dt>
             </div>
