@@ -18,6 +18,7 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors/nextly-error";
+import type { StatementKind } from "../transaction-scope";
 
 /** What core code needs from a plugin's open transaction. */
 export interface LinkedTransaction {
@@ -50,8 +51,10 @@ export interface LinkedTransaction {
 /** What `ctx.db.transaction` knows about the transaction it opened. */
 interface TransactionScopeView {
   assertOpen(): void;
-  track<R>(work: PromiseLike<R>): Promise<R>;
+  track<R>(work: PromiseLike<R>, kind?: StatementKind): Promise<R>;
   started(): number;
+  quiet(): boolean;
+  quiesce(): Promise<void>;
   fail(error: unknown): void;
 }
 
@@ -69,11 +72,8 @@ export function linkPluginTransaction(
   tx: TransactionContext,
   scope: TransactionScopeView
 ): void {
-  // The contained run before which the next one waits, and how many have
-  // been asked for: each is tracked as a statement, and one waiting its turn
-  // is not a plugin statement that a rollback to a savepoint could undo.
+  // The contained run before which the next one waits.
   let lastContained: Promise<unknown> = Promise.resolve();
-  let containedCount = 0;
   links.set(surface, {
     // Async so a refusal, or work that throws before it returns its promise,
     // rejects rather than throws, as every other path does. Nothing here
@@ -87,26 +87,20 @@ export function linkPluginTransaction(
       work: (tx: TransactionContext) => Promise<R>
     ): Promise<R> {
       scope.assertOpen();
-      containedCount += 1;
-      const others = (): number => scope.started() - containedCount;
-      const turn = lastContained.then(() =>
-        runUnderSavepoint(tx, scope, others, work)
-      );
+      const turn = lastContained.then(() => runUnderSavepoint(tx, scope, work));
       lastContained = turn.catch(() => undefined);
-      return scope.track(turn);
+      return scope.track(turn, "contained");
     },
   });
 }
 
 /**
  * Run `work` under a savepoint of `tx`, rolling back to it when `work` fails;
- * see {@link LinkedTransaction.runContained}. `others` counts the plugin's
- * statements started so far.
+ * see {@link LinkedTransaction.runContained}.
  */
 async function runUnderSavepoint<R>(
   tx: TransactionContext,
   scope: TransactionScopeView,
-  others: () => number,
   work: (tx: TransactionContext) => Promise<R>
 ): Promise<R> {
   if (!tx.savepoint || !tx.rollbackToSavepoint || !tx.releaseSavepoint) {
@@ -114,9 +108,12 @@ async function runUnderSavepoint<R>(
   }
   savepointSequence += 1;
   const name = `nextly_contained_${savepointSequence}`;
-  // Read as the savepoint is asked for: a statement started before this
-  // reached the connection ahead of it, and nothing rolls it back.
-  const before = others();
+  // Opened only once nothing the plugin started is still in flight, checked
+  // at the moment the savepoint is asked for. A statement started earlier can
+  // reach the connection later (a lazy query, or a deletion report's next
+  // step), and would then fall after the savepoint and be undone by it.
+  while (!scope.quiet()) await scope.quiesce();
+  const before = scope.started();
   await tx.savepoint(name);
   let result: R;
   try {
@@ -124,7 +121,7 @@ async function runUnderSavepoint<R>(
   } catch (error) {
     // Counted before the rollback is sent: a statement started after that is
     // queued behind it on the connection, so the rollback does not undo it.
-    const undone = others() !== before;
+    const undone = scope.started() !== before;
     try {
       await tx.rollbackToSavepoint(name);
       await tx.releaseSavepoint(name);

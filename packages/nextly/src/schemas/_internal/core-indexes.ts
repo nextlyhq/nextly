@@ -115,6 +115,17 @@ export const NOTICES_INDEXES = [
   { name: "nextly_notices_created_idx", columns: ["createdAt"] },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const NEXTLY_RELEASES_INDEXES = [
+  // The due-release query reads exactly these two columns together.
+  { name: "nextly_releases_due_idx", columns: ["state", "scheduledAt"] },
+  // The calendar and the list's day filter read a range of instants whatever
+  // the state: a release is placed by `scheduledAt`, or by `publishedAt` once
+  // published. The due index leads with `state`, so a range on either instant
+  // needs an index that leads with it.
+  { name: "nextly_releases_scheduled_idx", columns: ["scheduledAt"] },
+  { name: "nextly_releases_published_idx", columns: ["publishedAt"] },
+] as const satisfies readonly CoreIndex<string>[];
+
 type PgIndexColumn = Parameters<ReturnType<typeof pgIndex>["on"]>[0];
 type MysqlIndexColumn = Parameters<ReturnType<typeof mysqlIndex>["on"]>[0];
 type SqliteIndexColumn = Parameters<ReturnType<typeof sqliteIndex>["on"]>[0];

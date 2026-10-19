@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { invalidatePermissionCache } from "@nextly/services/lib/permissions";
 import type {
@@ -83,12 +83,33 @@ export class RoleMutationService extends BaseService {
     const insert = (this.db as RBACDatabaseInstance)
       .insert(this.tables.roles)
       .values(roleData);
+    // Two callers can find no role and insert at once (two accounts
+    // provisioned together on an empty install), so the insert yields to the
+    // one already there on every dialect: MySQL has no ON CONFLICT DO
+    // NOTHING, and a plain insert there failed the second caller with a
+    // duplicate. MySQL's update fires on ANY unique key, the role name's
+    // included, so it writes the row's own id back and changes nothing: a
+    // role that merely holds the name keeps its slug, rather than becoming
+    // the administrator role for everyone who holds it, and the lookup below
+    // then finds no administrator role, as on the other dialects.
     if (typeof insert.onConflictDoNothing === "function") {
       await insert.onConflictDoNothing();
+    } else if (typeof insert.onDuplicateKeyUpdate === "function") {
+      await insert.onDuplicateKeyUpdate({
+        set: { id: sql`${this.tables.roles.id}` },
+      });
     } else {
       await insert;
     }
-    return { id, created: true };
+    // The stored row's id, not this call's: when another caller won the
+    // insert, the id generated here was never written.
+    const settled = await this.findRoleIdBySlug("super-admin");
+    if (!settled) {
+      throw NextlyError.internal({
+        logContext: { reason: "super-admin-role-missing-after-insert" },
+      });
+    }
+    return { id: settled.id, created: settled.id === id };
   }
 
   /**

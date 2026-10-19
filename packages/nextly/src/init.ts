@@ -41,6 +41,7 @@ import {
   registerServices,
   shutdownServices,
 } from "./di/register";
+import { recordRegisteredLocalization } from "./di/registered-localization";
 import { installLegacyFieldGroupsNamespaceGuard } from "./direct-api/legacy-field-groups-namespace";
 import { requireNextly as getDirectAPI } from "./direct-api/nextly";
 import { NextlyError } from "./errors/nextly-error";
@@ -344,6 +345,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // waits on this hold rather than serving.
         releaseSeeding = holdBootSeeding();
         await registerServices(finalConfig);
+        // What these services hold, so the request path can tell an
+        // unchanged `localization` block from an edited one rather than
+        // registering them again on its first request.
+        recordRegisteredLocalization(options.config);
 
         // Log capabilities on first initialisation
         const adapter = getService("adapter");

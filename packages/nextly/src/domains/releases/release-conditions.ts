@@ -40,6 +40,22 @@ function groupHolds(row: object, group: VersionsWhere): boolean {
   );
 }
 
+/**
+ * The operators the releases domain uses, each as the database reads it, over
+ * values already made {@link comparable}. A table rather than a switch, so an
+ * operator is one entry and one not listed here answers `false`.
+ */
+const OPERATORS: Partial<
+  Record<VersionsWhereCondition["op"], (a: unknown, b: unknown) => boolean>
+> = {
+  "=": (a, b) => a === b,
+  "!=": (a, b) => a !== b,
+  IN: (a, b) => Array.isArray(b) && b.some(v => comparable(v) === a),
+  ">=": (a, b) => (a as number) >= (b as number),
+  "<=": (a, b) => (a as number) <= (b as number),
+  "<": (a, b) => (a as number) < (b as number),
+};
+
 /** One column against one value. */
 function compares(row: object, condition: VersionsWhereCondition): boolean {
   // Read by name: a releases row is a plain object whose keys are the
@@ -47,22 +63,12 @@ function compares(row: object, condition: VersionsWhereCondition): boolean {
   const actual: unknown = Reflect.get(row, condition.column);
   // A missing instant compares as SQL NULL does: it meets no comparison.
   if (actual === null || actual === undefined) return false;
-  const a = comparable(actual);
-  const expected = condition.value;
-  switch (condition.op) {
-    case "=":
-      return a === comparable(expected);
-    case "IN":
-      return Array.isArray(expected) && expected.some(v => comparable(v) === a);
-    case ">=":
-      return (a as number) >= (comparable(expected) as number);
-    case "<=":
-      return (a as number) <= (comparable(expected) as number);
-    case "<":
-      return (a as number) < (comparable(expected) as number);
-    default:
-      return false;
-  }
+  const operator = OPERATORS[condition.op];
+  // A list is compared item by item inside its operator, so it passes as is.
+  const expected = Array.isArray(condition.value)
+    ? condition.value
+    : comparable(condition.value);
+  return operator !== undefined && operator(comparable(actual), expected);
 }
 
 /** Instants compared as numbers, as the database compares them. */

@@ -17,7 +17,10 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { COMPONENT_IMPORT_MAP_FILENAME } from "../../../plugins/codegen/component-import-map";
+import {
+  COMPONENT_IMPORT_MAP_FILENAME,
+  COMPONENT_PATHS_FILENAME,
+} from "../../../plugins/codegen/component-import-map";
 import { definePlugin } from "../../../plugins/plugin-context";
 
 const loadConfig = vi.hoisted(() => vi.fn());
@@ -81,14 +84,34 @@ const viewPlugin = definePlugin({
   },
 });
 
-async function run(cwd: string): Promise<void> {
+async function run(cwd: string, output = OUTPUT): Promise<void> {
   await runGenerateTypes(
-    { cwd, output: OUTPUT, quiet: true, zod: false },
+    { cwd, output, quiet: true, zod: false },
     createContext({ quiet: true, cwd })
   );
 }
 
 describe("the import map for an app with no code-defined schema", () => {
+  it("is written beside the configured types file, whatever --output names", async () => {
+    // The admin page imports the map from one place, and the admin's check
+    // rewrites and names it from the config: a map written beside an override
+    // would be one nothing reads.
+    const cwd = await workspace();
+    loadConfig.mockResolvedValue(schemaFreeConfig([viewPlugin]));
+
+    await run(cwd, "./elsewhere/types.ts");
+
+    expect(
+      await readFile(
+        join(cwd, dirname(OUTPUT), COMPONENT_IMPORT_MAP_FILENAME),
+        "utf-8"
+      )
+    ).toContain('"@acme/builder/admin#Builder"');
+    await expect(
+      readFile(join(cwd, "elsewhere", COMPONENT_IMPORT_MAP_FILENAME), "utf-8")
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("is written, carrying a field-type document view's component", async () => {
     const cwd = await workspace();
     loadConfig.mockResolvedValue(schemaFreeConfig([viewPlugin]));
@@ -100,19 +123,38 @@ describe("the import map for an app with no code-defined schema", () => {
       "utf-8"
     );
     expect(map).toContain('"@acme/builder/admin#Builder"');
+    // And its path list beside it, for the admin's server layout.
+    expect(
+      await readFile(
+        join(cwd, dirname(OUTPUT), COMPONENT_PATHS_FILENAME),
+        "utf-8"
+      )
+    ).toContain('"@acme/builder/admin#Builder"');
   });
 
-  it("is removed when no plugin contributes a component any more", async () => {
-    // Settled both ways before the early return: a map left behind would
-    // keep importing a package the app no longer has.
+  it("is written empty when no plugin contributes a component any more", async () => {
+    // Kept, not removed: the admin page and layout import both files. Empty,
+    // so a map left from before no longer imports a package the app dropped.
     const cwd = await workspace();
     const stale = join(cwd, dirname(OUTPUT), COMPONENT_IMPORT_MAP_FILENAME);
     await mkdir(dirname(stale), { recursive: true });
-    await writeFile(stale, "export {};\n", "utf-8");
+    await writeFile(
+      stale,
+      'import * as _p0 from "@acme/gone/admin";\n',
+      "utf-8"
+    );
     loadConfig.mockResolvedValue(schemaFreeConfig([]));
 
     await run(cwd);
 
-    await expect(readFile(stale, "utf-8")).rejects.toThrow();
+    // The dropped package is gone. The map still imports its own list, which
+    // is what holds it to that list.
+    expect(await readFile(stale, "utf-8")).not.toContain("@acme/gone/admin");
+    expect(
+      await readFile(
+        join(cwd, dirname(OUTPUT), COMPONENT_PATHS_FILENAME),
+        "utf-8"
+      )
+    ).toContain("export const registeredComponentPaths = [] as const;");
   });
 });

@@ -24,9 +24,9 @@ export * from "./logger";
 export {
   getMediaVariant,
   getSmallestMediaVariant,
-  getMediaBaseUrl,
+  normalizeMediaUrls,
   toAbsoluteMediaUrl,
-  absolutizeMediaUrls,
+  toPublicMediaUrl,
   type MediaLike,
   type GetMediaVariantOptions,
 } from "./media-variant";

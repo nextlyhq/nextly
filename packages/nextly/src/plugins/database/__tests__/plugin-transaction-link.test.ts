@@ -145,6 +145,77 @@ describe("LinkedTransaction.runContained", () => {
     expect(outcome).toBe("committed");
   });
 
+  it("keeps the transaction when only a plugin read ran during the failed write", async () => {
+    // A rollback to the savepoint cannot discard a read, so a read the
+    // plugin made meanwhile is no reason to fail its transaction.
+    const log: string[] = [];
+    const { scope, link } = linked(recordingTx(log));
+
+    const outcome = await scope.run(async () => {
+      await link
+        .runContained(async () => {
+          await scope.track(Promise.resolve(["a row"]), "read");
+          throw new Error("insert failed");
+        })
+        .catch(() => undefined);
+      return "committed";
+    });
+
+    expect(outcome).toBe("committed");
+  });
+
+  it("opens the savepoint only once the plugin's statements already in flight have finished", async () => {
+    // A statement started before the contained write may reach the
+    // connection after its savepoint (a lazy query, or work of several
+    // steps such as a deletion report), and a rollback to the savepoint
+    // would then undo it unseen. So the savepoint waits for it.
+    const log: string[] = [];
+    const { scope, link } = linked(recordingTx(log));
+
+    await scope.run(async () => {
+      void scope.track(
+        new Promise(resolve =>
+          setTimeout(() => {
+            log.push("plugin write finished");
+            resolve("row");
+          }, 5)
+        )
+      );
+      await link
+        .runContained(() => failingLater(new Error("insert failed")))
+        .catch(() => undefined);
+    });
+
+    expect(log[0]).toBe("plugin write finished");
+    expect(log[1]?.startsWith("savepoint")).toBe(true);
+  });
+
+  it("waits likewise for a linked run of several steps started before it", async () => {
+    // A deletion report runs on the plugin's transaction through `run`, as
+    // one tracked unit making several awaited statements.
+    const log: string[] = [];
+    const { scope, link } = linked(recordingTx(log));
+
+    await scope.run(async () => {
+      const report = link.run(async () => {
+        await new Promise(resolve => setTimeout(resolve, 2));
+        log.push("report step 1");
+        await new Promise(resolve => setTimeout(resolve, 2));
+        log.push("report step 2");
+      });
+      await link
+        .runContained(() => failingLater(new Error("insert failed")))
+        .catch(() => undefined);
+      await report;
+    });
+
+    expect(log.slice(0, 3).map(line => line.split(" ")[0])).toEqual([
+      "report",
+      "report",
+      "savepoint",
+    ]);
+  });
+
   it("runs contained writes one at a time, so one never rolls back another's", async () => {
     const log: string[] = [];
     const { scope, link } = linked(recordingTx(log));

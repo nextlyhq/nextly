@@ -17,6 +17,7 @@
  */
 
 import type { WidgetQuery } from "../query";
+import { MAX_WIDGET_ROWS } from "../query-limits";
 
 /**
  * Carries a setting's value type without a runtime property.
@@ -173,9 +174,16 @@ export const settings = {
   /** Group by: status, or a choice field of the collection it names. */
   groupBy: <const On extends string>(options: { of: On; default?: string }) =>
     declare<string, "groupBy", On>("groupBy", options),
-  /** Number of items: a number from 1 to 25, 5 by default. */
+  /**
+   * Number of items: a number from 1 to the most rows a card draws (`MAX_WIDGET_ROWS`, 25), 5 by
+   * default. Read from that one limit, so the editor never offers rows the card would not draw.
+   */
   items: ({ default: start = 5 }: { default?: number } = {}) =>
-    declare<number, "number">("number", { default: start, min: 1, max: 25 }),
+    declare<number, "number">("number", {
+      default: start,
+      min: 1,
+      max: MAX_WIDGET_ROWS,
+    }),
   /** Date range: a select of the four ranges, the last 30 days by default. */
   dateRange: ({ default: start = "30d" }: { default?: DateRange } = {}) =>
     declare<DateRange, "select">("select", {

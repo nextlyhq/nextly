@@ -26,6 +26,7 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { applyDueReleases } from "../apply-due-releases";
+import { VersionsRepository } from "../../versions/versions-repository";
 import { createReleaseMutations } from "../release-mutations";
 import { ReleasesRepository } from "../releases-repository";
 import {
@@ -171,7 +172,10 @@ async function scheduleMember(
 async function materialise(t: TestNextly) {
   return applyDueReleases({
     repository: new ReleasesRepository(t.adapter),
-    mutations: createReleaseMutations({ contentApi: t.nextly }),
+    mutations: createReleaseMutations({
+      contentApi: t.nextly,
+      drafts: new VersionsRepository(t.adapter),
+    }),
     runAs: {
       findUser: async id => ({ id, isActive: true }),
       listRoleSlugs: async () => [],

@@ -23,6 +23,10 @@ import {
   uniqueIndex,
 } from "drizzle-orm/mysql-core";
 
+import {
+  mysqlIndexes,
+  NEXTLY_RELEASES_INDEXES,
+} from "../_internal/core-indexes";
 import type { VersionScopeKind } from "../versions/types";
 
 import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";
@@ -59,7 +63,8 @@ export const nextlyReleasesMysql = mysqlTable(
 
     revision: int("revision").default(0).notNull(),
   },
-  table => [index("nextly_releases_due_idx").on(table.state, table.scheduledAt)]
+  // Declared once for the three dialects; what each index serves is said there.
+  table => mysqlIndexes(NEXTLY_RELEASES_INDEXES, table)
 );
 
 export const nextlyReleaseMembersMysql = mysqlTable(

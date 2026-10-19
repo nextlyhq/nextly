@@ -50,8 +50,10 @@ import type { UserContext } from "../collections/services/collection-types";
 import { EVERY_LOCALE } from "../i18n/locale-selector";
 import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
+import type { VersionsRepository } from "../versions/versions-repository";
 
 import type { ReleaseMutations } from "./apply-due-releases";
+import type { ReleaseCheckReads } from "./readiness/check-sources";
 import type { DocumentRef } from "./releases-repository";
 
 /**
@@ -64,9 +66,42 @@ import type { DocumentRef } from "./releases-repository";
  */
 const WITHDRAWN_STATUS = "draft";
 
+/**
+ * A document's lifecycle as stored: the main row's own status and each stored
+ * translation's, keyed by locale (empty where it keeps no translations).
+ */
+export interface ReleaseStoredLifecycle {
+  status: string | null;
+  languages: ReadonlyMap<string, string | null>;
+}
+
+/**
+ * What tells whether a release action already stands, answered as its write
+ * would answer it.
+ */
+export interface ReleaseSettlementReads {
+  /**
+   * The document's lifecycle read from storage, where no read hook can
+   * rewrite it; `null` where it cannot be read, which never counts as
+   * standing.
+   */
+  storedLifecycle(ref: DocumentRef): Promise<ReleaseStoredLifecycle | null>;
+  /** The access gate the action's write meets, for its author. */
+  mayPerform: ReleaseCheckReads["mayPerform"];
+}
+
 export function createReleaseMutations(deps: {
   /** The Direct API. Injected for the reason the applier's own deps are. */
   contentApi: JobContentSource;
+  /** Where a document's pending working drafts are read. */
+  drafts: Pick<VersionsRepository, "listWorkingDraftLocales">;
+  /**
+   * The stored lifecycle and the write's access gate. Without them nothing is
+   * reported settled, since the document read reports only the default
+   * language, through its read hooks, and judges no author; `applied` then
+   * reads the document back as it always has.
+   */
+  settlement?: ReleaseSettlementReads;
 }): ReleaseMutations {
   const write = async (
     ref: DocumentRef,
@@ -112,6 +147,10 @@ export function createReleaseMutations(deps: {
     // no independent READ permission on it, and the verification would then
     // report every committed write as failed for exactly the roles most likely
     // to own a scheduled publish.
+    //
+    // Only where no settlement reads are given: this read runs the scope's
+    // read hooks and reports the default language alone, which those reads
+    // do not.
     const content = deps.contentApi;
     const locale = ref.locale ?? undefined;
 
@@ -138,14 +177,61 @@ export function createReleaseMutations(deps: {
     return statusOf(doc);
   };
 
-  return {
+  /** Whether a stored lifecycle is the one an action leaves behind. */
+  const reached = (
+    status: string | undefined,
+    effect: "publish" | "unpublish"
+  ): boolean =>
+    effect === "publish" ? status === "published" : status === WITHDRAWN_STATUS;
+
+  const mutations: ReleaseMutations = {
     publish: ({ ref, user }) => write(ref, user, "published"),
     unpublish: ({ ref, user }) => write(ref, user, WITHDRAWN_STATUS),
-    applied: async ({ ref, effect }) => {
-      const status = await currentStatus(ref);
-      return effect === "publish"
-        ? status === "published"
-        : status === WITHDRAWN_STATUS;
+    applied: async ({ ref, effect }) =>
+      reached(await currentStatus(ref), effect),
+  };
+  const settlement = deps.settlement;
+  if (settlement === undefined) return mutations;
+
+  /**
+   * Whether the action stands as its write would leave it, for this author:
+   * the author passes the gate the write meets, and the stored main row and
+   * every stored translation already have the status the action leaves. The
+   * gate first, as the write asks it first: a document already live does not
+   * excuse an author who may no longer publish it.
+   */
+  const stands = async (
+    ref: DocumentRef,
+    effect: "publish" | "unpublish",
+    user: UserContext
+  ): Promise<boolean> => {
+    if (!(await settlement.mayPerform(user, ref, effect))) return false;
+    const stored = await settlement.storedLifecycle(ref);
+    if (stored === null) return false;
+    if (!reached(stored.status ?? undefined, effect)) return false;
+    for (const status of stored.languages.values()) {
+      if (!reached(status ?? undefined, effect)) return false;
+    }
+    return true;
+  };
+
+  return {
+    ...mutations,
+    // The same question after a write: a refused write leaves a document
+    // that was already live standing, and that is no proof the author's
+    // action was performed.
+    applied: ({ ref, effect, user }) => stands(ref, effect, user),
+    settled: async ({ ref, effect, user }) => {
+      if (!(await stands(ref, effect, user))) return false;
+      // A held working draft, in any language, is content the write would
+      // still promote, so the action is not a no-op while one exists. Every
+      // language, because a member names the whole document.
+      const held = await deps.drafts.listWorkingDraftLocales({
+        scopeKind: ref.scopeKind,
+        scopeSlug: ref.scopeSlug,
+        entryId: ref.entryId,
+      });
+      return held.length === 0;
     },
   };
 }

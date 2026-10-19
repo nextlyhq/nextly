@@ -52,6 +52,10 @@ import {
 import {
   getAvailableColumns,
   getDefaultVisibleColumns,
+  choiceInForce,
+  linkedSortFor,
+  linkedStatusFor,
+  type ChosenForCollection,
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
@@ -202,6 +206,9 @@ function getCollectionLabels(
 // Component
 // ============================================================================
 
+/** The list's order until the person or their link chooses one: newest entries first. */
+const DEFAULT_SORT = "-createdAt";
+
 /**
  * Entry list container with pagination, sorting, search, and bulk operations.
  *
@@ -244,9 +251,15 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // off-by-one page of content with nothing to catch it.
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
-  const [sort, setSort] = useState<string | undefined>("-createdAt"); // Default: newest entries first
+  // The sort the person chose here; until they choose, the one their link carried, else newest
+  // entries first.
+  const [chosenSort, setChosenSort] = useState<
+    ChosenForCollection | undefined
+  >();
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<string>("all");
+  const [chosenStatus, setChosenStatus] = useState<
+    ChosenForCollection | undefined
+  >();
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [updatedFrom, setUpdatedFrom] = useState("");
@@ -259,25 +272,6 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   const searchParams = useSearchParams();
   const whereParam = getSearchParam(searchParams, "where");
 
-  const whereFilter = useMemo(() => {
-    return buildEntryWhereFilter({
-      whereParam,
-      status,
-      createdFrom,
-      createdTo,
-      updatedFrom,
-      updatedTo,
-      translated: translationFilter,
-    });
-  }, [
-    whereParam,
-    status,
-    createdFrom,
-    createdTo,
-    updatedFrom,
-    updatedTo,
-    translationFilter,
-  ]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedForDelete, setSelectedForDelete] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
@@ -304,6 +298,69 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   const wantsTranslationStatus =
     localizationEnabled &&
     (collection as { localized?: boolean } | undefined)?.localized === true;
+
+  // A sort the link that opened this list carried (`?sort=-updatedAt`, from a dashboard card's
+  // "More exist"), honoured only for a column the sort menu itself can order by. Anything else
+  // is ignored rather than refused: a stale link still opens the list, newest first. Read once
+  // per address and never written back as the person changes it.
+  const sortParam = getSearchParam(searchParams, "sort");
+  const linkedSort = useMemo(
+    () =>
+      linkedSortFor(
+        sortParam,
+        collection
+          ? toCollectionForColumns(collection, collectionSlug)
+          : undefined
+      ),
+    [sortParam, collection, collectionSlug]
+  );
+  const sort = choiceInForce(
+    chosenSort,
+    collectionSlug,
+    linkedSort,
+    DEFAULT_SORT
+  );
+
+  // The lifecycle the link that opened this list carried (`?status=draft`), so a card's "More
+  // exist" lands on the drafts or published entries it showed rather than on every entry. Only
+  // for a collection with the lifecycle; read as the sort is, never written back.
+  const statusParam = getSearchParam(searchParams, "status");
+  const linkedStatus = useMemo(
+    () =>
+      linkedStatusFor(
+        statusParam,
+        collection
+          ? toCollectionForColumns(collection, collectionSlug)
+          : undefined
+      ),
+    [statusParam, collection, collectionSlug]
+  );
+  const status = choiceInForce(
+    chosenStatus,
+    collectionSlug,
+    linkedStatus,
+    "all"
+  );
+
+  const whereFilter = useMemo(() => {
+    return buildEntryWhereFilter({
+      whereParam,
+      status,
+      createdFrom,
+      createdTo,
+      updatedFrom,
+      updatedTo,
+      translated: translationFilter,
+    });
+  }, [
+    whereParam,
+    status,
+    createdFrom,
+    createdTo,
+    updatedFrom,
+    updatedTo,
+    translationFilter,
+  ]);
 
   // Fetch entries with pagination and filters
   const { data: entriesResponse, isLoading: entriesLoading } = useEntries({
@@ -461,10 +518,10 @@ export function EntryList({ collectionSlug }: EntryListProps) {
     (field: string, order: "asc" | "desc") => {
       // Sort format: -field for desc, field for asc
       const sortValue = order === "desc" ? `-${field}` : field;
-      setSort(sortValue);
+      setChosenSort({ collectionSlug, value: sortValue });
       setPage(1); // Reset to first page on sort change
     },
-    []
+    [collectionSlug]
   );
 
   const handleSearchChange = useCallback((newSearch: string) => {
@@ -472,10 +529,13 @@ export function EntryList({ collectionSlug }: EntryListProps) {
     setPage(1); // Reset to first page on search
   }, []);
 
-  const handleStatusChange = useCallback((newStatus: string) => {
-    setStatus(newStatus);
-    setPage(1); // Reset to first page on status change
-  }, []);
+  const handleStatusChange = useCallback(
+    (newStatus: string) => {
+      setChosenStatus({ collectionSlug, value: newStatus });
+      setPage(1); // Reset to first page on status change
+    },
+    [collectionSlug]
+  );
 
   const handleTranslationFilterChange = useCallback(
     (value: TranslationListFilter | null) => {

@@ -99,8 +99,10 @@ function CollectionCard({
         )}
       >
         <CardContent className="p-5 relative z-10">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
+          <div className="flex items-start justify-between gap-4">
+            {/* `min-w-0` so a long name can wrap: a flex item is otherwise as wide as its
+                longest word, and a long collection name would push past the tile. */}
+            <div className="min-w-0 space-y-1">
               {/* The card type ramp's big number, through the one card formatter. */}
               <span className="text-2xl font-semibold tabular-nums tracking-tight text-foreground leading-none transition-colors">
                 <CardFigure value={item.count} />
@@ -180,7 +182,9 @@ export const CollectionQuickLinks: React.FC = () => {
               </span>
             </h3>
           )}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+          {/* As many columns as the CARD's width fits, never the window's: a tile is at least
+              11rem, so a small card is one column and a wide one several. */}
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">
             {group.collections.map(item => (
               <CollectionCard
                 key={item.slug}
