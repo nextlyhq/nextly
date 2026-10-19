@@ -65,6 +65,20 @@ export function sameLocaleVersions<T extends PairableVersion>(
 }
 
 /**
+ * The newest version in `versionNo`'s own locale, which it is compared with to
+ * see everything since it, or null when it is that version itself or is not
+ * loaded. The list loads newest first, so the newest is in hand whenever the
+ * version is: no pager question arises, unlike a predecessor.
+ */
+export function newestInLocale(
+  versions: readonly PairableVersion[],
+  versionNo: number
+): number | null {
+  const newest = sameLocaleVersions(versions, versionNo)[0]?.versionNo ?? null;
+  return newest === versionNo ? null : newest;
+}
+
+/**
  * What `versionNo` is compared against.
  *
  * `hasMore` is whether the history has pages still unloaded. It is what
