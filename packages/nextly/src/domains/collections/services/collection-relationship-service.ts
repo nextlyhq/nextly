@@ -69,6 +69,7 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
+import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
@@ -96,6 +97,18 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  * Maximum allowed depth to prevent performance issues.
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
+
+/**
+ * The depth an expansion runs to for the depth a read asked for: absent means
+ * the default, and the result is held between 0 and the maximum. At 0 a read
+ * populates nothing and gives every relationship as stored.
+ */
+export function effectiveRelationshipDepth(depth: number | undefined): number {
+  return Math.min(
+    Math.max(depth ?? DEFAULT_RELATIONSHIP_DEPTH, 0),
+    MAX_RELATIONSHIP_DEPTH
+  );
+}
 
 /** Carried across one read's nested-hook pass. */
 interface NestedHookStateBase {
@@ -2079,7 +2092,7 @@ export class CollectionRelationshipService extends BaseService {
     };
 
     // Clamp depth to valid range
-    const effectiveDepth = Math.min(Math.max(depth, 0), MAX_RELATIONSHIP_DEPTH);
+    const effectiveDepth = effectiveRelationshipDepth(depth);
 
     // If depth is 0, don't expand relationships but still normalize
     // repeater/group fields to strip any embedded relationship objects to IDs.
@@ -2656,7 +2669,7 @@ export class CollectionRelationshipService extends BaseService {
     };
 
     // Clamp depth to valid range
-    const effectiveDepth = Math.min(Math.max(depth, 0), MAX_RELATIONSHIP_DEPTH);
+    const effectiveDepth = effectiveRelationshipDepth(depth);
 
     // If we've reached the requested depth, don't expand further
     // but still normalize repeater/group fields to strip embedded relationship objects
@@ -4152,6 +4165,40 @@ export class CollectionRelationshipService extends BaseService {
       byEntry.get(String(row.source_id))?.push(row.target_id);
     }
     return byEntry;
+  }
+
+  /**
+   * Gives each junction-backed many-to-many field on `entries` the ids its
+   * junction stores. That is what a read that populates nothing answers for
+   * every other relationship: the references as stored, not judged against the
+   * caller, and whether or not each target still exists. Such a field has no
+   * column, so without this a read at depth 0 has no value for it at all.
+   *
+   * One junction query per field for all the entries. A failed read throws
+   * rather than giving an empty list, which an editor saving the document back
+   * would store, removing every link. A junction keeps no order, so the ids
+   * come in the order the database returns them.
+   */
+  async withStoredManyToManyIds(
+    entries: Record<string, unknown>[],
+    collectionName: string,
+    fields: FieldDefinition[]
+  ): Promise<Record<string, unknown>[]> {
+    const junctionFields = fields.filter(field => usesJunctionTable(field));
+    if (junctionFields.length === 0 || entries.length === 0) return entries;
+    const ids = entries.map(entry => String(entry.id));
+    const withIds = entries.map(entry => ({ ...entry }));
+    for (const field of junctionFields) {
+      const stored = await this.fetchManyToManyTargetIdsOf(
+        collectionName,
+        ids,
+        field
+      );
+      withIds.forEach((entry, index) => {
+        entry[field.name] = stored.get(ids[index]) ?? [];
+      });
+    }
+    return withIds;
   }
 
   /**
