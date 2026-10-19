@@ -396,6 +396,31 @@ const MODELLED_CLAUSE_WORDS = new Set([
   "DETACH",
 ]);
 
+/** The words a constraint starts with when its name was omitted. */
+const ANONYMOUS_CONSTRAINT_WORDS = new Set([
+  "CHECK",
+  "FOREIGN",
+  "PRIMARY",
+  "UNIQUE",
+  "EXCLUDE",
+]);
+
+/** The element kind an added constraint is, from the word after its name. */
+function addedConstraintKind(word: string | undefined): TakenElementKind {
+  switch (word) {
+    case "CHECK":
+      return "check";
+    case "FOREIGN":
+      return "fk";
+    case "PRIMARY":
+    case "UNIQUE":
+    case "EXCLUDE":
+      return "index";
+    default:
+      return "constraint";
+  }
+}
+
 /** The act a refusal of an unmodelled form takes. */
 const UNMODELLED_ACT = "use a form the guard cannot read";
 
@@ -654,6 +679,9 @@ interface TableRef {
 export interface TakenColumn {
   table: string;
   column: string;
+  /** The order the change was read in, and whether its name is spelled as stored. */
+  seq?: number;
+  exact?: boolean;
 }
 
 /**
@@ -674,6 +702,9 @@ export interface TakenElement {
   table: string | undefined;
   name: string;
   kind: TakenElementKind;
+  /** The order the change was read in, and whether its name is spelled as stored. */
+  seq?: number;
+  exact?: boolean;
 }
 
 /**
@@ -712,6 +743,9 @@ class DropReader {
    * fails closed on them: a foreign one is refused, naming it.
    */
   readonly unmodelled: string[] = [];
+  /** Storage or unmodelled changes through a schema-qualified name. */
+  readonly qualifiedTargets: string[] = [];
+  private sequence = 0;
   /** Every table an ALTER TABLE names, which may be an index's name. */
   readonly alterTargets: string[] = [];
   /** Columns this list adds to a table, which it may then change. */
@@ -870,22 +904,48 @@ class DropReader {
     this.alterTargets.push(table);
   }
 
-  /** Records a column this list adds to a table. */
-  addColumn(table: TableRef, column: string): void {
+  /** Records a storage or unmodelled change through a qualified name. */
+  leaveQualifiedTarget(table: string): void {
+    this.qualifiedTargets.push(table);
+  }
+
+  private nextSequence(): number {
+    this.sequence += 1;
+    return this.sequence;
+  }
+
+  /**
+   * Records a column this list adds to a table. Only an addition credited
+   * for a later change is recorded: its name is spelled as stored, and its
+   * table is one the list reaches by its own name. Any other addition is
+   * left out, so a later change to that column is judged as its owner's.
+   */
+  addColumn(table: TableRef, column: string, exact: boolean): void {
     if (table.local && this.created.has(table.name)) return;
+    if (!exact || !table.local) return;
     this.addedColumns.push({
       table: this.renamedFrom.get(table.name) ?? table.name,
       column,
+      seq: this.nextSequence(),
+      exact,
     });
   }
 
-  /** Records a constraint this list adds to a table. */
-  addElement(table: TableRef, name: string, kind: TakenElementKind): void {
+  /** Records a constraint this list adds to a table, under the same rule. */
+  addElement(
+    table: TableRef,
+    name: string,
+    kind: TakenElementKind,
+    exact: boolean
+  ): void {
     if (table.local && this.created.has(table.name)) return;
+    if (!exact || !table.local) return;
     this.addedElements.push({
       table: this.renamedFrom.get(table.name) ?? table.name,
       name,
       kind,
+      seq: this.nextSequence(),
+      exact,
     });
   }
 
@@ -895,11 +955,13 @@ class DropReader {
   }
 
   /** Records a column an ALTER changes in place (`alteredColumns`). */
-  changeColumn(table: TableRef, column: string): void {
+  changeColumn(table: TableRef, column: string, exact: boolean): void {
     if (table.local && this.created.has(table.name)) return;
     this.alteredColumns.push({
       table: this.renamedFrom.get(table.name) ?? table.name,
       column,
+      seq: this.nextSequence(),
+      exact,
     });
   }
 
@@ -911,7 +973,8 @@ class DropReader {
   changeElement(
     table: TableRef | undefined,
     name: string,
-    kind: TakenElementKind
+    kind: TakenElementKind,
+    exact: boolean
   ): void {
     if (table?.local && this.created.has(table.name)) return;
     this.alteredElements.push({
@@ -921,6 +984,8 @@ class DropReader {
           : (this.renamedFrom.get(table.name) ?? table.name),
       name,
       kind,
+      seq: this.nextSequence(),
+      exact,
     });
   }
 
@@ -1831,7 +1896,12 @@ class StatementWalk {
         "an ALTER INDEX ALL IN TABLESPACE, whose indexes cannot be named"
       );
     }
-    this.reader.changeElement(undefined, index.name, "index");
+    this.reader.changeElement(
+      undefined,
+      index.name,
+      "index",
+      this.spelledAsStoredAt(this.skipIfExists(at + 2))
+    );
     if (
       this.word(index.next) === "ATTACH" &&
       this.word(index.next + 1) === "PARTITION"
@@ -1842,7 +1912,12 @@ class StatementWalk {
           "an index attached as a partition whose name cannot be read"
         );
       }
-      this.reader.changeElement(undefined, child.name, "index");
+      this.reader.changeElement(
+        undefined,
+        child.name,
+        "index",
+        child.local && this.spelledAsStoredAt(index.next + 2)
+      );
     }
   }
 
@@ -1853,6 +1928,11 @@ class StatementWalk {
     // Every PostgreSQL ALTER INDEX form other than RENAME changes the index
     // in place, so the index is judged as one.
     if (this.reader.isPostgres && this.word(index.next) !== "RENAME") {
+      // A schema-qualified index is looked up by its name alone, which may
+      // not reach the schema the statement names, so it is refused.
+      if (!index.local) {
+        this.refuse("an ALTER INDEX of an index named with a schema qualifier");
+      }
       this.readPostgresIndexChange(at, index);
       return;
     }
@@ -1886,6 +1966,23 @@ class StatementWalk {
    * One ALTER TABLE clause starting at `at` that adds a column or a named
    * constraint, which the same list may then change.
    */
+  /** Whether the name at `at` is spelled as stored, so folding cannot change it. */
+  private spelledAsStoredAt(at: number): boolean {
+    return spelledAsStored(this.tokens[at], this.reader.dialect);
+  }
+
+  /**
+   * Whether the name `name` read from the clause at `at` or the next token is
+   * spelled as stored. A column named `column` is read at `at + 1` or past
+   * an optional `COLUMN` keyword at `at + 2`.
+   */
+  private spelledAsStoredNear(at: number, name: string): boolean {
+    for (const p of [at + 1, at + 2]) {
+      if (this.nameAt(p) === name) return this.spelledAsStoredAt(p);
+    }
+    return false;
+  }
+
   private readAddedClause(table: TableRef | undefined, at: number): void {
     if (table === undefined || this.word(at) !== "ADD") return;
     const first = this.word(at + 1) ?? "";
@@ -1899,12 +1996,26 @@ class StatementWalk {
     // it is not credited to this list.
     if (this.isConditionalAddAt(k)) return;
     const column = this.nameAt(k);
-    if (column !== undefined) this.reader.addColumn(table, column);
+    if (column !== undefined) {
+      this.reader.addColumn(table, column, this.spelledAsStoredAt(k));
+    }
   }
 
+  /**
+   * `ADD CONSTRAINT name <type>`. MySQL and MariaDB allow the name to be
+   * omitted, so a constraint whose first word is its type has no name of its
+   * own, and is not credited.
+   */
   private readAddedConstraint(table: TableRef, at: number): void {
+    if (ANONYMOUS_CONSTRAINT_WORDS.has(this.word(at) ?? "")) return;
     const name = this.nameAt(at);
-    if (name !== undefined) this.reader.addElement(table, name, "constraint");
+    if (name === undefined) return;
+    this.reader.addElement(
+      table,
+      name,
+      addedConstraintKind(this.word(at + 1)),
+      this.spelledAsStoredAt(at)
+    );
   }
 
   private isConditionalAddAt(at: number): boolean {
@@ -1922,6 +2033,7 @@ class StatementWalk {
    */
   private readUnmodelledClause(table: TableRef | undefined, at: number): void {
     if (table === undefined || this.isModelledClauseAt(at)) return;
+    if (!table.local) this.reader.leaveQualifiedTarget(table.name);
     this.reader.leaveUnmodelled(table.name);
   }
 
@@ -1943,6 +2055,7 @@ class StatementWalk {
     at: number
   ): void {
     if (table === undefined || !this.isTableStorageAt(at)) return;
+    if (!table.local) this.reader.leaveQualifiedTarget(table.name);
     this.reader.changeTable(table, "change the storage of");
   }
 
@@ -1967,11 +2080,17 @@ class StatementWalk {
   ): void {
     const kind = this.changedElementKindAt(at);
     if (kind === undefined) return;
-    const element = this.elementNamedAt(this.skipIfExists(at + 2), kind);
+    const nameAt = this.skipIfExists(at + 2);
+    const element = this.elementNamedAt(nameAt, kind);
     if (element === null || table === undefined) {
       this.refuse("an index or constraint change whose names cannot be read");
     }
-    this.reader.changeElement(table, element.name, element.kind);
+    this.reader.changeElement(
+      table,
+      element.name,
+      element.kind,
+      this.spelledAsStoredAt(nameAt)
+    );
   }
 
   /** The element kind a clause changes in place, from its first word. */
@@ -2076,7 +2195,11 @@ class StatementWalk {
     if (column === null || table === undefined) {
       this.refuse("a column change whose names cannot be read");
     }
-    this.reader.changeColumn(table, column);
+    this.reader.changeColumn(
+      table,
+      column,
+      this.spelledAsStoredNear(at, column)
+    );
   }
 
   /**
@@ -2885,6 +3008,8 @@ type Reading = Pick<
   | "addedColumns"
   | "addedElements"
   | "alterTargets"
+  | "qualifiedTargets"
+  | "resolutionMayChange"
   | "rebuilt"
   | "relationRenames"
   | "changed"
@@ -4325,6 +4450,7 @@ export function assertNoForeignDrops(args: {
     });
   }
   refuseInPlaceChanges(read, holders, args);
+  refuseQualifiedTargets(read, args);
   refuseTablesNamingIndexes(read, args);
   for (const table of read.unmodelled) {
     refuseUnlessHeld(holders.table(table), {
@@ -4679,10 +4805,10 @@ function refuseInPlaceChanges(
     columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
   }
 ): void {
-  const added = addedKeys(read);
-  for (const { table, column } of read.alteredColumns) {
+  for (const change of read.alteredColumns) {
+    const { table, column } = change;
     if (overridden(args, table, column)) continue;
-    if (added.columns.has(columnKey(table, column))) continue;
+    if (creditedColumn(read, change)) continue;
     refuseUnlessHeld(holders.column(table, column), {
       ...args,
       table,
@@ -4691,13 +4817,8 @@ function refuseInPlaceChanges(
     });
   }
   for (const element of read.alteredElements) {
+    if (creditedElement(read, element)) continue;
     const table = element.table ?? args.liveIndexTables?.get(element.name);
-    if (
-      table !== undefined &&
-      added.elements.has(columnKey(table, element.name))
-    ) {
-      continue;
-    }
     refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
       ...args,
       table,
@@ -4707,19 +4828,62 @@ function refuseInPlaceChanges(
   }
 }
 
-/** The columns and elements the reading's own list adds, by table and name. */
-function addedKeys(read: Reading): {
-  columns: Set<string>;
-  elements: Set<string>;
-} {
-  return {
-    columns: new Set(
-      read.addedColumns.map(item => columnKey(item.table, item.column))
-    ),
-    elements: new Set(
-      read.addedElements.map(item => columnKey(item.table ?? "", item.name))
-    ),
-  };
+/**
+ * Whether a column change is credited to an addition the same list made
+ * earlier. Credit is withheld when the list may change which table a name
+ * reaches, and for a change whose name is not spelled as stored.
+ */
+function creditedColumn(read: Reading, change: TakenColumn): boolean {
+  if (read.resolutionMayChange || change.exact !== true) return false;
+  return read.addedColumns.some(
+    added =>
+      added.table === change.table &&
+      added.column === change.column &&
+      added.exact === true &&
+      (added.seq ?? 0) < (change.seq ?? 0)
+  );
+}
+
+/** Whether an element change is credited to an earlier addition, as above. */
+function creditedElement(read: Reading, change: TakenElement): boolean {
+  if (read.resolutionMayChange || change.exact !== true) return false;
+  if (change.table === undefined) return false;
+  const table = change.table;
+  return read.addedElements.some(
+    added =>
+      added.table === table &&
+      added.name === change.name &&
+      added.exact === true &&
+      kindsCompatible(change.kind, added.kind) &&
+      (added.seq ?? 0) < (change.seq ?? 0)
+  );
+}
+
+/**
+ * Whether a change of one element kind may be credited to an addition of
+ * another. `ALTER CONSTRAINT` and `VALIDATE CONSTRAINT` reach a check, a
+ * foreign key or a constraint, never an index.
+ */
+function kindsCompatible(
+  change: TakenElementKind,
+  added: TakenElementKind
+): boolean {
+  if (change === "constraint") return added !== "index";
+  return change === added;
+}
+
+/** Refuses a storage or unmodelled change through a schema-qualified name. */
+function refuseQualifiedTargets(
+  read: Reading,
+  args: { stream: MigrationStream; source: string }
+): void {
+  for (const table of read.qualifiedTargets) {
+    throw new NextlyError({
+      code: "DROP_OF_FOREIGN_TABLE",
+      publicMessage: `A migration alters ${table} through a schema-qualified name in a form the schema guard cannot read, so it has been refused, and nothing was applied. Rewrite the statement with the table's unqualified name, or use the app's override.`,
+      logContext: { table, changedBy: args.stream, source: args.source },
+    });
+  }
 }
 
 /** Refuses an ALTER TABLE, of storage or unmodelled, that names an index. */

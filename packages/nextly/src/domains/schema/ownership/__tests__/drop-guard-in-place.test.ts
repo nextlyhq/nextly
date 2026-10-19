@@ -63,6 +63,12 @@ const elementOwners: OwnerRecord[] = [
     elementKind: "check",
     elementName: "chk_status",
   }),
+  // A check the plugin named `check`, on the app's table.
+  record({
+    tableName: "app_notes",
+    elementKind: "check",
+    elementName: "check",
+  }),
   // A partition's index, the plugin's, on the plugin's table.
   record({
     tableName: "fx__notes",
@@ -531,16 +537,22 @@ describe("the review of the same-migration follow-up", () => {
 
 describe("the review of the follow-up's credit for same-migration changes", () => {
   it("does not credit a constraint whose kind differs from the index it unlocks", () => {
+    // The index's table is known from the live database, as in production.
     expect(
       refusal(() =>
-        guard(
-          [
+        assertNoForeignDrops({
+          statements: [
             "ALTER TABLE app_notes ADD CONSTRAINT idx_status CHECK (true)",
             "ALTER INDEX idx_status SET (fillfactor = 80)",
           ],
-          "app",
-          "postgresql"
-        )
+          stream: "app",
+          owners,
+          elementOwners,
+          dialect: "postgresql",
+          source: "0010_under_test",
+          liveTables: new Set([...owners.keys(), "users"]),
+          liveIndexTables: new Map([["idx_status", "app_notes"]]),
+        })
       )
     ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
   });
@@ -597,13 +609,13 @@ describe("the review of the follow-up's credit for same-migration changes", () =
         guard(
           [
             "ALTER TABLE app_notes ADD CONSTRAINT CHECK (status <> '')",
-            "ALTER TABLE app_notes ALTER CHECK chk_status NOT ENFORCED",
+            "ALTER TABLE app_notes ALTER CHECK check NOT ENFORCED",
           ],
           "app",
           "mysql"
         )
       )
-    ).toMatchObject({ element: "chk_status", belongsTo: "plugin:fx" });
+    ).toMatchObject({ element: "check", belongsTo: "plugin:fx" });
   });
 
   it("refuses a storage change through a schema-qualified name it cannot model", () => {
