@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Saving an entry or a Single in the admin keeps a related item or upload the editor may not read, or one that no longer exists. The edit page shows it as a "Restricted or missing item" with its id, which can be removed but not opened; before, a save removed such links. A read at `depth=0` now returns the stored ids for a Single's upload fields and for many-to-many fields kept in a junction table, as it already did for every other relationship. Populated reads are unchanged.
+Saving an entry or a Single in the admin keeps a related item or upload the editor may not read, or one that no longer exists. The edit page shows it as a "Restricted or missing item" with its id, which can be removed but not opened; before, a save removed such links. Populated reads are unchanged.
