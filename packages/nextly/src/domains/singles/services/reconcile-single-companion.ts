@@ -31,8 +31,7 @@ import {
 } from "../../i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
-  localizedColumnsOnMain,
-  translatedColumnsOnCompanion,
+  liveCompanionShape,
 } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
@@ -114,23 +113,15 @@ export async function reconcileSingleCompanion(
     wasStatus,
     joinedBefore: args.joinedBefore,
     renamed: args.renamed,
-    // Taken as they are: an earlier apply that moved a value and stopped before the registry
-    // recorded it left its companion column in place.
-    presentOnCompanion: companionExists
-      ? await translatedColumnsOnCompanion(adapter, {
-          tableName,
-          fields: newFields,
-          builtBy: "collection",
-        })
-      : undefined,
-    // Which translatable columns the main table still carries. A disable must not re-add one that
-    // is already there, and must still restore it: presence says the column exists, never that its
-    // value is current, because every localized write went to the companion alone.
-    existingMainColumns: await localizedColumnsOnMain(
-      adapter,
+    // What this database holds now, so a re-save after a part-applied one finishes it.
+    ...(await liveCompanionShape(adapter, {
       tableName,
-      oldFields
-    ).then(cols => cols.map(c => c.name)),
+      oldFields,
+      newFields,
+      builtBy: "collection",
+      companionExists,
+      renaming: args.renamed !== undefined,
+    })),
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first

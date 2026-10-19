@@ -35,6 +35,7 @@ import {
   fieldsLeavingTranslation,
 } from "../../i18n/migration/reconcile-companion";
 import {
+  companionColumnNames,
   companionHasColumn,
   companionHasStatusColumn,
   localizedColumnsOnMain,
@@ -1027,6 +1028,34 @@ export class DynamicCollectionService extends BaseService {
     ).map(c => c.name);
   }
 
+  /**
+   * The joining fields' statements as this database needs them, when its companion already has
+   * some of their columns (a run that stopped part-way, or the unattended reconcile at boot):
+   * adding a column twice fails on every dialect. Undefined when it has none, so the file's
+   * statements stand.
+   */
+  private async localJoiningStatements(
+    joinArgs: Parameters<typeof buildFieldsJoiningTranslationStatements>[0],
+    columns: readonly string[],
+    companionTable: string | null
+  ): Promise<
+    ReturnType<typeof buildFieldsJoiningTranslationStatements> | undefined
+  > {
+    if (companionTable === null) return undefined;
+    const present = new Set<string>();
+    for (const column of columns) {
+      if (await companionHasColumn(this.adapter, companionTable, column)) {
+        present.add(column);
+      }
+    }
+    return present.size > 0
+      ? buildFieldsJoiningTranslationStatements({
+          ...joinArgs,
+          companionColumns: present,
+        })
+      : undefined;
+  }
+
   private async buildCompanionTransitionSQL(args: {
     slug: string;
     tableName: string;
@@ -1083,19 +1112,11 @@ export class DynamicCollectionService extends BaseService {
             createsCompanion: false,
             statements: [],
           };
-    const presentOnCompanion = new Set<string>();
-    for (const column of companionExists ? joining.columns : []) {
-      if (await companionHasColumn(this.adapter, companionTable, column)) {
-        presentOnCompanion.add(column);
-      }
-    }
-    const localJoining =
-      presentOnCompanion.size > 0
-        ? buildFieldsJoiningTranslationStatements({
-            ...joinArgs,
-            companionColumns: presentOnCompanion,
-          })
-        : undefined;
+    const localJoining = await this.localJoiningStatements(
+      joinArgs,
+      joining.columns,
+      companionExists ? companionTable : null
+    );
     const common = {
       // This service owns Schema Builder collections, so the companion mirrors that builder.
       builtBy: "collection" as const,
@@ -1139,6 +1160,12 @@ export class DynamicCollectionService extends BaseService {
         args,
         localizedOldNames
       ),
+      // The companion as this database has it, so a rename an earlier run already made is not
+      // made again; the file still renames, since it is planned from history alone.
+      liveCompanionColumns:
+        args.renamed && companionExists
+          ? await companionColumnNames(this.adapter, args.tableName)
+          : undefined,
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
@@ -1151,11 +1178,13 @@ export class DynamicCollectionService extends BaseService {
         ...(artefact.beforeMain ?? []),
         ...joining.statements,
       ]),
-      ...(localJoining
+      // This database's own run differs when its joining columns or its companion transition do;
+      // the transition's archive writes, and a rename made before them, go ahead of main.
+      ...(localJoining || local
         ? {
             localBeforeMainSql: this.toBreakpointSql([
-              ...(artefact.beforeMain ?? []),
-              ...localJoining.statements,
+              ...((local ?? artefact).beforeMain ?? []),
+              ...(localJoining ?? joining).statements,
             ]),
           }
         : {}),

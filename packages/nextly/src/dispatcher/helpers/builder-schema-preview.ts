@@ -9,7 +9,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { companionRenameCandidate } from "../../domains/i18n/migration/companion-rename";
+import { offeredCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { previewBodyWithLeavingTranslation } from "../../domains/i18n/migration/preview-leaving-translation";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
@@ -81,26 +81,20 @@ export async function builderSchemaPreviewBody(args: {
 
 /**
  * The rename of a translated field, which lives on the companion and so is not among the
- * pipeline's candidates: the one the main table's rule (`detectFieldRename`) finds, offered on the
- * companion when the field is translated before and after (`companionRenameCandidate`).
+ * pipeline's candidates: the one the apply accepts back (`offeredCompanionRename`).
  */
 async function translatedFieldRename(
   args: Parameters<typeof builderSchemaPreviewBody>[0],
   wasLocalized: boolean
 ): Promise<RenameCandidate[]> {
-  const { DynamicCollectionSchemaService } = await import(
-    "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
-  );
-  const candidate = companionRenameCandidate({
+  const offered = await offeredCompanionRename({
     tableName: args.tableName,
-    detected: new DynamicCollectionSchemaService(
-      undefined,
-      args.dialect
-    ).detectFieldRename(args.currentFields, args.newFields),
+    oldFields: args.currentFields,
+    newFields: args.newFields,
     wasLocalized,
     isLocalized: args.requestedLocalized ?? wasLocalized,
     dialect: args.dialect,
     builtBy: args.builtBy,
   });
-  return candidate ? [candidate] : [];
+  return offered ? [offered.candidate] : [];
 }

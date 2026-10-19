@@ -38,8 +38,7 @@ import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
-  localizedColumnsOnMain,
-  translatedColumnsOnCompanion,
+  liveCompanionShape,
 } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import {
@@ -909,6 +908,18 @@ const COLLECTIONS_METHODS: Record<
             companionExists && wasLocalized && isLocalized
               ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
               : undefined;
+          const renamed = await companionRenameFromResolutions(
+            renameResolutions,
+            {
+              tableName,
+              oldFields,
+              newFields,
+              wasLocalized,
+              isLocalized,
+              dialect,
+              builtBy: "collection",
+            }
+          );
           const plan = buildCompanionTransitionStatements({
             // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
             builtBy: "collection" as const,
@@ -929,34 +940,19 @@ const COLLECTIONS_METHODS: Record<
             newFields,
             companionExists,
             companionHasStatus,
-            // Which translatable columns the main table still carries. A disable must not re-add
-            // one that is already there, and must still restore it: presence says the column
-            // exists, never that its value is current, because every localized write went to the
-            // companion alone.
-            existingMainColumns: await localizedColumnsOnMain(
-              adapter,
-              tableName,
-              oldFields
-            ).then(cols => cols.map(c => c.name)),
             // Added to the companion, with their values, by the apply before its drop.
             joinedBefore: movedOnto(result, tableName),
-            // Taken as they are: an earlier apply that moved a value and stopped before the
-            // registry recorded it left its companion column in place.
-            presentOnCompanion: companionExists
-              ? await translatedColumnsOnCompanion(adapter, {
-                  tableName,
-                  fields: newFields,
-                  builtBy: "collection",
-                })
-              : undefined,
             // A translated field the admin renamed: the dialog's answer naming the companion.
-            renamed: companionRenameFromResolutions(renameResolutions, {
+            renamed,
+            // What this database holds now, so a re-apply after a part-applied one finishes it.
+            ...(await liveCompanionShape(adapter, {
               tableName,
               oldFields,
               newFields,
-              dialect,
               builtBy: "collection",
-            }),
+              companionExists,
+              renaming: renamed !== undefined,
+            })),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is

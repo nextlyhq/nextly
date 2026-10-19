@@ -623,10 +623,13 @@ export const COMPONENTS_METHODS: Record<
               // Added to the companion, with their values, by the apply before its drop.
               joinedBefore: movedOnto(result, tableName),
               // A translated field the admin renamed: the dialog's answer naming the companion.
-              renamed: companionRenameFromResolutions(renameResolutions, {
+              renamed: await companionRenameFromResolutions(renameResolutions, {
                 tableName,
                 oldFields: component.fields as unknown as FieldDefinition[],
                 newFields: fields as unknown as FieldDefinition[],
+                wasLocalized:
+                  (component as { localized?: boolean }).localized === true,
+                isLocalized,
                 dialect: adapter.dialect,
                 builtBy: "fieldGroup",
               }),

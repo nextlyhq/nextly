@@ -115,34 +115,41 @@ export async function archiveFieldsLeavingTranslation(args: {
   isLocalized: boolean;
 }): Promise<void> {
   if (!args.wasLocalized || !args.isLocalized) return;
-  const leaving = new Set(
-    fieldsLeavingTranslation(args.oldFields, args.newFields)
-  );
-  const joining = fieldsJoiningTranslation(args.oldFields, args.newFields);
   const mayRenameTranslated = oneTranslatedFieldReplaced(args);
+  const dialect = args.adapter.getCapabilities().dialect;
+  // A translated field renamed in this change is judged under its new name, as the companion
+  // transition will move it: renamed and made shared, it leaves translation, and its archive,
+  // its refusals and its settings are asked for here, before the main table changes.
+  const rename = mayRenameTranslated
+    ? await translatedFieldRename(args, dialect)
+    : undefined;
+  const oldFields = rename
+    ? args.oldFields.map(f =>
+        f === rename.from ? { ...f, name: rename.to.name } : f
+      )
+    : args.oldFields;
+  const leaving = new Set(fieldsLeavingTranslation(oldFields, args.newFields));
+  const joining = fieldsJoiningTranslation(oldFields, args.newFields);
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !mayRenameTranslated) {
     return;
   }
 
-  const dialect = args.adapter.getCapabilities().dialect;
   const refusals = [
     ...refusalsForFieldsLeavingTranslation({
       leaving,
       newFields: args.newFields,
-      oldFields: args.oldFields,
+      oldFields,
       dialect,
       builtBy: args.builtBy,
       surface: "builder",
     }),
     ...refusalsForFieldsJoiningTranslation({
-      reshaped: reshapedJoiningFields(joining, args, dialect),
+      reshaped: reshapedJoiningFields(joining, { ...args, oldFields }, dialect),
       surface: "builder",
     }),
     ...refusalsForTranslatedFieldRenamedAndReshaped({
-      reshaped: mayRenameTranslated
-        ? await renamedAndReshaped(args, dialect)
-        : undefined,
+      reshaped: rename && reshaped(rename, args.builtBy, dialect),
     }),
   ];
   if (refusals.length > 0) {
@@ -166,8 +173,10 @@ export async function archiveFieldsLeavingTranslation(args: {
       dialect,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
-      oldFields: args.oldFields,
+      oldFields,
       newFields: args.newFields,
+      // A renamed field's values are still in the column it had: the rename runs after this.
+      renamedFrom: renamedColumn(rename, args.builtBy, dialect),
     })
   );
 }
@@ -216,18 +225,23 @@ function oneTranslatedFieldReplaced(args: {
   );
 }
 
+/** A translated field this change renames: its definition before and after. */
+interface TranslatedFieldRename {
+  from: LeavingFieldLike;
+  to: LeavingFieldLike;
+}
+
 /**
- * The new name of a translated field this change renames, by the main table's rule
- * (`detectFieldRename`), when its storage changes too; undefined otherwise.
+ * The translated field this change renames, by the main table's rule (`detectFieldRename`), which
+ * the companion transition follows too; undefined when no translated field is renamed.
  */
-async function renamedAndReshaped(
+async function translatedFieldRename(
   args: {
     oldFields: readonly LeavingFieldLike[];
     newFields: readonly LeavingFieldLike[];
-    builtBy: ColumnOrigin;
   },
   dialect: SupportedDialect
-): Promise<string | undefined> {
+): Promise<TranslatedFieldRename | undefined> {
   const { DynamicCollectionSchemaService } = await import(
     "../../dynamic-collections/services/dynamic-collection-schema-service"
   );
@@ -239,10 +253,42 @@ async function renamedAndReshaped(
     args.newFields as unknown as FieldDefinition[]
   );
   if (!rename || !isFieldLocalized(rename.from, true)) return undefined;
+  // The same objects as the change's own lists, so the caller can find the renamed field by
+  // identity.
+  const from = args.oldFields.find(f => f.name === rename.from.name);
+  const to = args.newFields.find(f => f.name === rename.to.name);
+  return from && to ? { from, to } : undefined;
+}
+
+/** The renamed field's new name when its storage changes too; undefined otherwise. */
+function reshaped(
+  rename: TranslatedFieldRename,
+  builtBy: ColumnOrigin,
+  dialect: SupportedDialect
+): string | undefined {
   return storageDiffers(
-    fieldToLocalizedColumnSpec(rename.from, dialect, args.builtBy),
-    fieldToLocalizedColumnSpec(rename.to, dialect, args.builtBy)
+    fieldToLocalizedColumnSpec(rename.from, dialect, builtBy),
+    fieldToLocalizedColumnSpec(rename.to, dialect, builtBy)
   )
     ? rename.to.name
     : undefined;
+}
+
+/**
+ * The renamed field's column under its new name, mapped to the column it has now, for the archive
+ * writes made before the rename runs.
+ */
+function renamedColumn(
+  rename: TranslatedFieldRename | undefined,
+  builtBy: ColumnOrigin,
+  dialect: SupportedDialect
+): ReadonlyMap<string, string> | undefined {
+  if (!rename) return undefined;
+  const from = fieldToLocalizedColumnSpec(rename.from, dialect, builtBy)?.name;
+  const to = fieldToLocalizedColumnSpec(
+    { ...rename.from, name: rename.to.name },
+    dialect,
+    builtBy
+  )?.name;
+  return from && to ? new Map([[to, from]]) : undefined;
 }

@@ -739,6 +739,83 @@ export async function companionHasStatusColumn(
 }
 
 /**
+ * Every column `<tableName>_locales` has in this database, read from the table itself: the answer
+ * a planner needs when an earlier apply may have stopped part-way and left the companion in a
+ * shape the registry does not record. Empty when there is no companion.
+ */
+export async function companionColumnNames(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string
+): Promise<string[]> {
+  return (await liveColumnsOf(adapter, `${tableName}_locales`)).map(
+    c => c.name
+  );
+}
+
+/** `tableName`'s columns as this database has them; empty when the table is missing. */
+async function liveColumnsOf(
+  adapter: CompanionIntrospectAdapter,
+  tableName: string
+): Promise<ReadonlyArray<{ name: string; nullable?: boolean }>> {
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [tableName]
+  );
+  return snapshot.tables.find(t => t.name === tableName)?.columns ?? [];
+}
+
+/**
+ * What this database holds for a companion transition planned against it, read the one way for
+ * every path that reconciles a companion in-process (the collection's schema dialog, a Single's
+ * and a field group's reconcile):
+ * - `existingMainColumns`: the translatable columns the main table still carries. A disable must
+ *   not re-add one that is already there, and must still restore it: presence says the column
+ *   exists, never that its value is current, because every localized write went to the companion
+ *   alone.
+ * - `presentOnCompanion`: the companion columns the new fields' translated fields already have. An
+ *   apply that moved a value and stopped before the registry recorded it left its column in place.
+ * - `liveCompanionColumns`: every companion column, when the change renames a field, so a rename
+ *   an earlier apply already made is not made again.
+ */
+export async function liveCompanionShape(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    tableName: string;
+    oldFields: readonly CompanionFieldLike[];
+    newFields: readonly CompanionFieldLike[];
+    builtBy: ColumnOrigin;
+    companionExists: boolean;
+    renaming: boolean;
+  }
+): Promise<{
+  existingMainColumns: string[];
+  presentOnCompanion?: string[];
+  liveCompanionColumns?: string[];
+}> {
+  const { tableName, companionExists } = args;
+  return {
+    existingMainColumns: (
+      await localizedColumnsOnMain(adapter, tableName, args.oldFields)
+    ).map(c => c.name),
+    presentOnCompanion: companionExists
+      ? await translatedColumnsOnCompanion(adapter, {
+          tableName,
+          fields: args.newFields,
+          builtBy: args.builtBy,
+        })
+      : undefined,
+    liveCompanionColumns:
+      companionExists && args.renaming
+        ? await companionColumnNames(adapter, tableName)
+        : undefined,
+  };
+}
+
+/**
  * The companion columns `<tableName>_locales` already has for `fields`' translated fields, for a
  * reconcile to take the companion as it is: an apply that moved a field's value and dropped its
  * main column, then stopped before the registry recorded it, leaves that column in place, and the
@@ -752,20 +829,7 @@ export async function translatedColumnsOnCompanion(
     builtBy: ColumnOrigin;
   }
 ): Promise<string[]> {
-  const companionTableName = `${args.tableName}_locales`;
-  const { introspectLiveSnapshot } = await import(
-    "../../schema/pipeline/diff/introspect-live"
-  );
-  const snapshot = await introspectLiveSnapshot(
-    adapter.getDrizzle(),
-    adapter.dialect,
-    [companionTableName]
-  );
-  const present = new Set(
-    snapshot.tables
-      .find(t => t.name === companionTableName)
-      ?.columns.map(c => c.name) ?? []
-  );
+  const present = new Set(await companionColumnNames(adapter, args.tableName));
   const { fieldToLocalizedColumnSpec } = await import(
     "../migration/field-to-column-spec"
   );
@@ -868,18 +932,10 @@ export async function localizedColumnsOnMain(
   localized: readonly CompanionFieldLike[]
 ): Promise<MainColumnPresence[]> {
   if (localized.length === 0) return [];
-  const { introspectLiveSnapshot } = await import(
-    "../../schema/pipeline/diff/introspect-live"
-  );
-  const snapshot = await introspectLiveSnapshot(
-    adapter.getDrizzle(),
-    adapter.dialect,
-    [tableName]
-  );
   const present = new Map(
-    snapshot.tables
-      .find(t => t.name === tableName)
-      ?.columns.map(c => [c.name, c.nullable !== false] as const) ?? []
+    (await liveColumnsOf(adapter, tableName)).map(
+      c => [c.name, c.nullable !== false] as const
+    )
   );
   return localized
     .map(f => toColumn(f.name))

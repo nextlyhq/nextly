@@ -577,6 +577,14 @@ export interface CompanionTransitionArgs {
    * a field that kept its name does, the other languages archived under the new name.
    */
   renamed?: FieldRename;
+  /**
+   * Every column THIS database's companion has, when `renamed` is set. An apply that renamed the
+   * companion column and then stopped (MySQL commits each schema statement, and the registry write
+   * comes last on every dialect) leaves the column under its new name while the registry still
+   * records the old field, so the retry must not rename it again. Describes one database only: a
+   * migration file is planned without it (`buildCompanionTransitionPlans`).
+   */
+  liveCompanionColumns?: readonly string[];
 }
 
 /** The plan produced by {@link buildCompanionTransitionStatements}. */
@@ -609,6 +617,11 @@ export function buildLeavingFieldsArchiveStatements(args: {
   defaultLocale: string;
   oldFields: readonly CompanionFieldLike[];
   newFields: readonly CompanionFieldLike[];
+  /**
+   * For a field renamed in the same change, given in `oldFields` under its new name: its column
+   * under the new name, mapped to the companion column it has now, which the rows are read from.
+   */
+  renamedFrom?: ReadonlyMap<string, string>;
 }): string[] {
   const leaving = new Set(
     fieldsLeavingTranslation(args.oldFields, args.newFields)
@@ -627,6 +640,7 @@ export function buildLeavingFieldsArchiveStatements(args: {
                 defaultLocale: args.defaultLocale,
               },
               { slug: args.slug, kind: args.kind },
+              args.renamedFrom?.get(col.name) ?? col.name,
               col.name
             ),
           ]
@@ -836,8 +850,9 @@ export function buildCompanionTransitionStatements(
 
 /**
  * The rename of a field translated before the change (`args.renamed`): its companion column's
- * RENAME (none when the column keeps its name), and the old fields with it under its new name. Undefined when there is no such rename,
- * or when the field's storage changes too, which a rename cannot carry since it keeps the type.
+ * RENAME (`companionRenameStatements`), and the old fields with it under its new name. Undefined
+ * when there is no such rename, or when the field's storage changes too, which a rename cannot
+ * carry since it keeps the type.
  */
 function companionColumnRename(
   args: CompanionTransitionArgs
@@ -852,19 +867,32 @@ function companionColumnRename(
   if (!fromColumn || !toColumn || storageDiffers(fromColumn, toColumn)) {
     return undefined;
   }
-  const companionTable = `${args.tableName}_locales`;
   return {
-    // A rename that keeps the column's name moves nothing on the companion.
-    statements:
-      fromColumn.name === toColumn.name
-        ? []
-        : [
-            `ALTER TABLE ${q(companionTable, dialect)} RENAME COLUMN ${q(fromColumn.name, dialect)} TO ${q(toColumn.name, dialect)}`,
-          ],
+    statements: companionRenameStatements(args, fromColumn.name, toColumn.name),
     oldFields: args.oldFields.map(f =>
       f === from ? { ...f, name: to.name } : f
     ),
   };
+}
+
+/**
+ * The companion's RENAME of `from` to `to`: none when the column keeps its name, and none when a
+ * companion has the new column and not the old one, which an earlier apply renamed and then
+ * stopped before the registry recorded it; renaming again would fail on the missing column. Both
+ * present, or neither, is not that state, so the RENAME stays and fails loudly rather than leave
+ * the translations in a column no field owns.
+ */
+function companionRenameStatements(
+  args: CompanionTransitionArgs,
+  from: string,
+  to: string
+): string[] {
+  const live = new Set(args.liveCompanionColumns ?? []);
+  if (from === to || (live.has(to) && !live.has(from))) return [];
+  const { dialect } = args;
+  return [
+    `ALTER TABLE ${q(`${args.tableName}_locales`, dialect)} RENAME COLUMN ${q(from, dialect)} TO ${q(to, dialect)}`,
+  ];
 }
 
 /**
@@ -893,8 +921,13 @@ export function buildCompanionTransitionPlans(
     ...args,
     existingMainColumns: undefined,
     presentOnCompanion: undefined,
+    liveCompanionColumns: undefined,
   });
-  if (!args.existingMainColumns?.length && !args.presentOnCompanion?.length) {
+  if (
+    !args.existingMainColumns?.length &&
+    !args.presentOnCompanion?.length &&
+    !args.liveCompanionColumns?.length
+  ) {
     return { artefact };
   }
 

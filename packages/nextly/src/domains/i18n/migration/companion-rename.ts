@@ -10,6 +10,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { RenameCandidate } from "../../schema/pipeline/pushschema-pipeline-interfaces";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
@@ -28,31 +29,68 @@ export interface CompanionRenameResolution {
 }
 
 /**
- * The field the dialog's answers rename on `tableName`'s companion, by field name, or undefined
- * when no answer names the companion as a rename, or its columns are not the fields' columns.
+ * The rename the dialog's answers make on `tableName`'s companion, by field name: the one this
+ * server offers for the change (`offeredCompanionRename`), when an answer names exactly that
+ * candidate as a rename. Undefined otherwise. An answer the server did not offer, stale or made
+ * up, is dropped as the main table's are (`BrowserPromptDispatcher`): it could otherwise attach
+ * one field's translations to another field, or rename onto a column that is already there.
  */
-export function companionRenameFromResolutions(
+export async function companionRenameFromResolutions(
   resolutions: readonly CompanionRenameResolution[] | undefined,
-  at: {
-    tableName: string;
-    oldFields: readonly CompanionFieldLike[];
-    newFields: readonly CompanionFieldLike[];
-    dialect: SupportedDialect;
-    builtBy: ColumnOrigin;
-  }
-): FieldRename | undefined {
-  const answer = (resolutions ?? []).find(
+  at: OfferedCompanionRenameArgs
+): Promise<FieldRename | undefined> {
+  const answers = (resolutions ?? []).filter(
     r => r.tableName === `${at.tableName}_locales` && r.choice === "rename"
   );
-  if (!answer) return undefined;
-  const owner = (fields: readonly CompanionFieldLike[], column: string) =>
-    fields.find(
-      f =>
-        fieldToLocalizedColumnSpec(f, at.dialect, at.builtBy)?.name === column
-    )?.name;
-  const from = owner(at.oldFields, answer.fromColumn);
-  const to = owner(at.newFields, answer.toColumn);
-  return from && to ? { from, to } : undefined;
+  if (answers.length === 0) return undefined;
+  const offered = await offeredCompanionRename(at);
+  if (!offered) return undefined;
+  const { candidate, rename } = offered;
+  const matches = answers.some(
+    r =>
+      r.fromColumn === candidate.fromColumn && r.toColumn === candidate.toColumn
+  );
+  return matches ? rename : undefined;
+}
+
+/** What {@link offeredCompanionRename} decides from: the change, and the entity around it. */
+export interface OfferedCompanionRenameArgs {
+  tableName: string;
+  oldFields: readonly CompanionFieldLike[];
+  newFields: readonly CompanionFieldLike[];
+  /** Whether the entity was translated before the change, and is after it. */
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+}
+
+/**
+ * The companion rename this change offers, as the schema dialog's candidate and by field name: the
+ * field the main table's rule (`detectFieldRename`) finds renamed, offered on its companion
+ * (`companionRenameCandidate`). One answer for the preview that offers it and the apply that takes
+ * the admin's reply, so the apply accepts only what was offered.
+ */
+export async function offeredCompanionRename(
+  at: OfferedCompanionRenameArgs
+): Promise<{ candidate: RenameCandidate; rename: FieldRename } | undefined> {
+  const { DynamicCollectionSchemaService } = await import(
+    "../../dynamic-collections/services/dynamic-collection-schema-service"
+  );
+  const detected = new DynamicCollectionSchemaService(
+    undefined,
+    at.dialect
+  ).detectFieldRename(
+    at.oldFields as unknown as FieldDefinition[],
+    at.newFields as unknown as FieldDefinition[]
+  );
+  const candidate = companionRenameCandidate({ ...at, detected });
+  return candidate && detected
+    ? {
+        candidate,
+        rename: { from: detected.from.name, to: detected.to.name },
+      }
+    : undefined;
 }
 
 /**
