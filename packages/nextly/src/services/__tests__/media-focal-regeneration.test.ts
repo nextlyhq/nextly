@@ -102,6 +102,9 @@ function makeAdapter(
     dialect: "sqlite" as const,
     getDrizzle: () => ({}),
     inTransaction: () => enclosed,
+    // The rows that share the item's files, asked once a change commits:
+    // none here, so what is superseded is the item's alone.
+    select: async () => [],
     // The ordering under test is the variant cleanup's, not the effects', so
     // an after-commit effect runs at once, unless a case holds it as an
     // enclosing transaction does until it commits.

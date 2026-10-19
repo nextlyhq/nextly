@@ -41,10 +41,9 @@ import { and, eq, isNull } from "drizzle-orm";
 import { getMediaStorage } from "@nextly/storage";
 
 import {
-  pathsReferencedBy,
+  errorForLog,
+  filesKeptByOthers,
   removeStoredFiles,
-  rowsSharingFilesWith,
-  STORED_FILE_COLUMNS,
   storedPathForLog,
   warnUnlocated,
 } from "../domains/media/remove-stored-files";
@@ -184,7 +183,7 @@ function removalFrom(
       } catch (error) {
         console.warn(
           "[MediaFolderService] Could not remove the files of the deleted items:",
-          error instanceof Error ? error.message : error
+          errorForLog(error)
         );
       }
     };
@@ -202,13 +201,13 @@ function removalFrom(
       const { failed } = await cleanup.bulkDelete(filePaths, "media");
       for (const { filePath, error } of failed) {
         console.warn(
-          `[MediaFolderService] Could not remove ${storedPathForLog(filePath)}: ${error}`
+          `[MediaFolderService] Could not remove ${storedPathForLog(filePath)}: ${errorForLog(new Error(error))}`
         );
       }
     } catch (error) {
       console.warn(
         "[MediaFolderService] Could not remove the files of the deleted items:",
-        error instanceof Error ? error.message : error
+        errorForLog(error)
       );
     }
   };
@@ -856,26 +855,22 @@ export class MediaFolderService extends BaseService {
       const inChunk = {
         and: [{ column: "id", op: "IN" as const, value: chunk }],
       };
-      const { removed, kept } = await this.adapter.transaction(async tx => {
+      const removed = await this.adapter.transaction(async tx => {
         // Locked and read in one statement, the chunk's rows at once.
         const current = await tx.select<StoredMediaRecord>("media", {
           where: inChunk,
           forUpdate: true,
         });
-        if (current.length === 0)
-          return { removed: current, kept: new Set<string>() };
-        await tx.delete("media", inChunk);
-        // The files another item still refers to, read once these are gone.
-        const sharing = await tx.select<MediaFilesRecord>("media", {
-          columns: STORED_FILE_COLUMNS,
-          where: rowsSharingFilesWith(current),
-        });
-        return { removed: current, kept: pathsReferencedBy(sharing) };
+        if (current.length > 0) await tx.delete("media", inChunk);
+        return current;
       });
       // After the statement, so this only ever names rows that are gone, and
-      // inside an enclosing SQLite transaction after that commits.
+      // inside an enclosing SQLite transaction after that commits. The files
+      // another item still refers to are asked for then (filesKeptByOthers).
       await this.afterCommit(() => revalidateMedia(chunk));
-      await this.afterCommit(() => removeFiles(removed, kept));
+      await this.afterCommit(async () =>
+        removeFiles(removed, await filesKeptByOthers(this.adapter, removed))
+      );
     }
   }
 

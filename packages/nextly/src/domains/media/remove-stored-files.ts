@@ -1,3 +1,4 @@
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
 
 import { isTransientError, withRetry } from "../../storage/retry";
@@ -36,7 +37,7 @@ export function storedPathForLog(pathOrUrl: string): string {
  * every URL in it shortened as {@link storedPathForLog} shortens one, and
  * nothing of a thrown value that is not an error, which can hold anything.
  */
-function errorForLog(error: unknown): string {
+export function errorForLog(error: unknown): string {
   if (!(error instanceof Error)) return "the storage failed without an error";
   return error.message.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, url =>
     storedPathForLog(url)
@@ -72,7 +73,7 @@ export function warnUnlocated(url: string, mediaId: string): void {
  * can copy a record and a content-addressed adapter gives one file one key.
  * Asked after the records' own rows are gone, so it finds only others.
  */
-export function rowsSharingFilesWith(
+function rowsSharingFilesWith(
   records: readonly MediaFilesRecord[]
 ): WhereClause {
   const urls = [
@@ -96,13 +97,32 @@ export function rowsSharingFilesWith(
 }
 
 /** The columns {@link storedFilesOf} reads, for a query that only needs them. */
-export const STORED_FILE_COLUMNS = ["filename", "url", "thumbnailUrl", "sizes"];
+const STORED_FILE_COLUMNS = ["filename", "url", "thumbnailUrl", "sizes"];
 
 /** Every stored path the given rows refer to. */
-export function pathsReferencedBy(
-  rows: readonly MediaFilesRecord[]
-): Set<string> {
+function pathsReferencedBy(rows: readonly MediaFilesRecord[]): Set<string> {
   return new Set(rows.flatMap(row => storedFilesOf(row).paths));
+}
+
+/**
+ * The stored files other media rows still refer to, of those `records` had:
+ * what a removal of their files must keep. Asked once the change that left
+ * the files unreferenced has committed, never inside it: two deletes of
+ * copies at once, each reading inside its own transaction on PostgreSQL,
+ * would each still see the other's row and both keep the files. Read after
+ * its own commit, the later of the two finds the other row gone.
+ */
+export async function filesKeptByOthers(
+  adapter: Pick<DrizzleAdapter, "select">,
+  records: readonly MediaFilesRecord[]
+): Promise<Set<string>> {
+  if (records.length === 0) return new Set();
+  return pathsReferencedBy(
+    await adapter.select<MediaFilesRecord>("media", {
+      columns: STORED_FILE_COLUMNS,
+      where: rowsSharingFilesWith(records),
+    })
+  );
 }
 
 /**

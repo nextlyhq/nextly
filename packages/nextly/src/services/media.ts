@@ -41,10 +41,8 @@ import {
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
 import {
-  pathsReferencedBy,
+  filesKeptByOthers,
   removeStoredFiles,
-  rowsSharingFilesWith,
-  STORED_FILE_COLUMNS,
   warnNotRemoved,
   warnUnlocated,
 } from "../domains/media/remove-stored-files";
@@ -52,11 +50,7 @@ import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
-import {
-  storedFilesOf,
-  variantPaths,
-  type MediaFilesRecord,
-} from "../domains/media/stored-files";
+import { storedFilesOf, variantPaths } from "../domains/media/stored-files";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -976,16 +970,21 @@ export class MediaService extends BaseService {
         // thumbnail, and that original is not superseded with it.
         const superseded = replacedSizes;
         const thumbnail = replacedThumbnail;
+        // So is every one another item still refers to, as a delete keeps
+        // them: an imported copy can share the replaced thumbnail. Asked
+        // once the change has committed (filesKeptByOthers).
         const stillReferenced = storedFilesOf(updatedRow).paths;
-        await this.afterCommit(() =>
-          this.deleteSupersededVariants(
+        const before = existing.data as Media;
+        await this.afterCommit(async () => {
+          const kept = await filesKeptByOthers(this.adapter, [before]);
+          await this.deleteSupersededVariants(
             superseded,
             regeneratedSizes,
             mediaId,
             thumbnail ? [thumbnail] : [],
-            stillReferenced
-          )
-        );
+            [...stillReferenced, ...kept]
+          );
+        });
       }
 
       // The update committed a media.updated outbox row; drain and prune it
@@ -1057,8 +1056,6 @@ export class MediaService extends BaseService {
       // the latest committed state rather than the pre-transaction read. The
       // transaction returns the deleted row (or null when it was already gone).
       let recorded = false;
-      // The files another item still refers to, read once this row is gone.
-      let kept = new Set<string>();
       const deletedRow = await this.adapter.transaction<Media | null>(
         async tx => {
           await tx.lockRow("media", mediaId);
@@ -1073,12 +1070,6 @@ export class MediaService extends BaseService {
           }
 
           await tx.delete("media", this.whereEq("id", mediaId));
-          kept = pathsReferencedBy(
-            await tx.select<MediaFilesRecord>("media", {
-              columns: STORED_FILE_COLUMNS,
-              where: rowsSharingFilesWith([current]),
-            })
-          );
 
           // The removed row's final state ships as `data`; there is no
           // post-delete state, so `previous` is null (mirroring create). Media
@@ -1127,7 +1118,11 @@ export class MediaService extends BaseService {
       // this delete is a savepoint of it, and a rollback would bring the row
       // back pointing at files already gone.
       await this.afterCommit(() =>
-        removeStoredFiles(this.storage, mediaData, mediaId, kept)
+        // Every file except those another item still refers to, asked
+        // now that this delete has committed (filesKeptByOthers).
+        filesKeptByOthers(this.adapter, [mediaData]).then(kept =>
+          removeStoredFiles(this.storage, mediaData, mediaId, kept)
+        )
       );
 
       // The delete committed a media.deleted outbox row; drain and prune it

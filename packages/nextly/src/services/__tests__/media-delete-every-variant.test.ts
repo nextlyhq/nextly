@@ -287,6 +287,62 @@ describe("a file another item also refers to", () => {
     expect(await onDisk()).toEqual([]);
   });
 
+  // Two deletes of copies at once must not each see the other and both
+  // keep the files: on PostgreSQL each transaction reads before the other
+  // commits. Read once the delete has committed, the later read finds the
+  // other row gone.
+  it("is looked for only once the delete has committed", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    await copyOf(id);
+    const transaction = db.adapter.transaction.bind(db.adapter);
+    const select = db.adapter.select.bind(db.adapter);
+    let committed = false;
+    const lookedAfterCommit: boolean[] = [];
+    vi.spyOn(db.adapter, "transaction").mockImplementation(
+      async (work, options) => {
+        const result = await transaction(work, options);
+        committed = true;
+        return result;
+      }
+    );
+    vi.spyOn(db.adapter, "select").mockImplementation(
+      async (table, options) => {
+        if (table === "media" && options?.where && "or" in options.where) {
+          lookedAfterCommit.push(committed);
+        }
+        return select(table, options);
+      }
+    );
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    expect(lookedAfterCommit).toEqual([true]);
+  });
+
+  it("stays when a crop of one of the items replaces its thumbnail", async () => {
+    onlySizes.configs = [];
+    onLocalDisk();
+    const id = await uploadPhoto();
+    await copyOf(id);
+    const before = await onDisk();
+    onlySizes.configs = [
+      {
+        name: "thumbnail",
+        width: 4,
+        height: 4,
+        fit: "cover",
+        quality: 80,
+        format: "webp",
+      },
+    ];
+
+    expect((await crop(id, 20)).success).toBe(true);
+
+    const stored = await onDisk();
+    for (const file of before) expect(stored).toContain(file);
+  });
+
   it("stays when a folder holding one of the items is deleted", async () => {
     onLocalDisk();
     const folder = await new MediaFolderService(
@@ -861,6 +917,26 @@ describe("deleting a folder with its contents", () => {
 
     expect(result.success).toBe(true);
     expect((await folders().getFolderById(folder)).success).toBe(false);
+  });
+
+  it("names a failed cleanup without the secrets in its error", async () => {
+    onLocalDisk();
+    const folder = await newFolder();
+    await uploadPhoto(folder);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await folders().deleteFolder(folder, true, async () => {
+      throw new Error(
+        "refused https://key-id:key-secret@bucket.example/x.png?X-Amz-Signature=signed-secret"
+      );
+    });
+
+    expect(result.success).toBe(true);
+    const said = warn.mock.calls
+      .map(args => args.map(String).join(" "))
+      .join("\n");
+    expect(said).toContain("https://bucket.example/x.png");
+    expect(said).not.toMatch(/secret/);
   });
 
   // A folder of many items would otherwise ask the storage for every one of
