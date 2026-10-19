@@ -1436,8 +1436,16 @@ export class UserMutationService extends BaseService {
       // is seen: once one exists, nothing here can grant.
       const provisionsFirstAdministrator =
         (caller === "app" && !anyAccount) || caller === "setup";
+      // A sign-up on an install with no account yet takes the same lock,
+      // first, though it is never granted: on PostgreSQL the app's check for
+      // other accounts cannot see a sign-up still uncommitted beside it, so
+      // the two must run one after the other. Once any account exists, the
+      // app promotes nothing and sign-ups are not held to it.
+      const takesFirstAdministratorLock =
+        provisionsFirstAdministrator ||
+        (caller === "self-registration" && !anyAccount);
       const bootstrapRoleReady =
-        provisionsFirstAdministrator &&
+        takesFirstAdministratorLock &&
         (await this.mayBootstrapFirstAdministrator());
       // Setup creates the install's first administrator or nothing: refused
       // here once one is seen, and inside the insert's transaction when another
@@ -1462,7 +1470,9 @@ export class UserMutationService extends BaseService {
         txDb: DrizzleTransactionLike,
         superAdminRoleId: string | undefined
       ) => {
-        if (superAdminRoleId === undefined) return;
+        if (superAdminRoleId === undefined || !provisionsFirstAdministrator) {
+          return;
+        }
         grantedFirstAdministrator = await grantFirstAdministratorInTx(
           txDb as unknown as FirstAdministratorTx,
           this.tables,

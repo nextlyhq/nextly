@@ -74,6 +74,56 @@ async function selfRegister(t: TestNextly, email: string): Promise<string> {
   return String(created.id);
 }
 
+/**
+ * Hold the next account write's transaction open once all its rows are
+ * written, before it commits. `writesDone` settles there; `release` lets it
+ * commit once `other`, the write racing it, has either finished or had a
+ * moment to reach whatever it waits on.
+ */
+function holdNextTransactionOpen(): {
+  writesDone: Promise<void>;
+  release(other: Promise<unknown>): Promise<void>;
+} {
+  let reached!: () => void;
+  const writesDone = new Promise<void>(resolve => {
+    reached = resolve;
+  });
+  let commit!: () => void;
+  const gate = new Promise<void>(resolve => {
+    commit = resolve;
+  });
+  const prototype = UserMutationService.prototype as unknown as {
+    withTransaction: (
+      work: (tx: unknown) => Promise<unknown>
+    ) => Promise<unknown>;
+  };
+  const original = prototype.withTransaction;
+  let armed = true;
+  vi.spyOn(prototype, "withTransaction").mockImplementation(function (
+    this: unknown,
+    work: (tx: unknown) => Promise<unknown>
+  ): Promise<unknown> {
+    if (!armed) return original.call(this, work);
+    armed = false;
+    return original.call(this, async tx => {
+      const result = await work(tx);
+      reached();
+      await gate;
+      return result;
+    });
+  });
+  return {
+    writesDone,
+    async release(other) {
+      await Promise.race([
+        other.catch(() => undefined),
+        new Promise(resolve => setTimeout(resolve, 500)),
+      ]);
+      commit();
+    },
+  };
+}
+
 async function isAdministrator(t: TestNextly, userId: string) {
   const { id } = await services(t).roles.ensureSuperAdminRole();
   return (await services(t).userRoles.listUserRoles(userId)).includes(id);
@@ -180,6 +230,44 @@ describe.each(getConfiguredTestDialects())(
       // The sign-up came first, so the app's account is the second: no role.
       expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
     });
+
+    // SQLite runs write transactions one at a time, so no account is ever
+    // uncommitted beside another write there.
+    it.skipIf(dialect === "sqlite")(
+      "never promotes the app's account while a sign-up is inserted but uncommitted",
+      async () => {
+        const t = await boot(dialect);
+        const held = holdNextTransactionOpen();
+        const signUp = selfRegister(t, "stranger@example.com");
+        await held.writesDone;
+        // The app looks while the sign-up's account is written, not committed.
+        const app = provision(t, "customer@example.com");
+        await held.release(app);
+        await signUp;
+        const id = await app;
+        // The sign-up commits first, so the app's account is the second.
+        expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "promotes the app's first account when a sign-up arrives while it is uncommitted",
+      async () => {
+        const t = await boot(dialect);
+        const held = holdNextTransactionOpen();
+        const app = provision(t, "customer@example.com");
+        await held.writesDone;
+        // The sign-up starts while the app's account is written, not committed.
+        const signUp = selfRegister(t, "stranger@example.com");
+        await held.release(signUp);
+        const id = await app;
+        const strangerId = await signUp;
+        expect(await isAdministrator(t, id)).toBe(true);
+        expect(await services(t).userRoles.listUserRoles(strangerId)).toEqual(
+          []
+        );
+      }
+    );
 
     it("keeps setup open after a self-registration, so the owner can still create the administrator", async () => {
       const t = await boot(dialect);
