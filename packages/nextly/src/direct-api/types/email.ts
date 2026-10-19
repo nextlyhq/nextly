@@ -206,8 +206,10 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
 export interface UpdateEmailTemplateArgs extends DirectAPIConfig {
   /** Template ID (required) */
   id: string;
-  /** Partial template data */
-  data: Partial<CreateEmailTemplateArgs["data"]>;
+  /** Partial template data; `description: null` clears the description. */
+  data: Partial<Omit<CreateEmailTemplateArgs["data"], "description">> & {
+    description?: string | null;
+  };
 }
 
 /**
@@ -261,6 +263,12 @@ export interface ApplyEmailTemplateUpdateArgs extends DirectAPIConfig {
    * site's lines, use the owner's, or use text the person wrote.
    */
   choices: Record<string, OwnerChangeChoice>;
+  /**
+   * The `review` token `compare` returned. The update is refused if the
+   * template or either version moved since, so choices are only applied to
+   * the changes they were made on.
+   */
+  review: string;
 }
 
 /**

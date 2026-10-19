@@ -176,6 +176,48 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         });
       });
 
+      it("keeps an edit made while its plugin was away when the plugin comes back", async () => {
+        await boot(V1);
+        const away = await boot(null);
+        const id = (await shippedTemplate(away)).id;
+        await away.updateTemplate(id, { subject: "Shipped, from us" }, ACTOR);
+
+        const back = await shippedTemplate(await boot(V1));
+        expect(back).toMatchObject({
+          subject: "Shipped, from us",
+          overridden: true,
+          ownerChanged: false,
+        });
+      });
+
+      it("leaves an edit saved after the boot read the template", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        const second = store.newService();
+        second.configureOwnership({
+          plugins: [{ name: ORDERS, templates: [shipped(V2)] }],
+        });
+        const internals = second as unknown as {
+          getRowBySlug(slug: string): Promise<unknown>;
+          followOwner(row: unknown, entry: unknown): Promise<void>;
+          registry: { owned: Map<string, unknown> };
+        };
+        // The boot's read, then an editor's save, then the boot's write.
+        const stale = await internals.getRowBySlug("orders-shipped");
+        await first.updateTemplate(id, { subject: "On its way" }, ACTOR);
+        await internals.followOwner(
+          stale,
+          internals.registry.owned.get("orders-shipped")
+        );
+
+        const template = await shippedTemplate(second);
+        expect(template).toMatchObject({
+          subject: "On its way",
+          htmlContent: V1,
+          overridden: true,
+        });
+      });
+
       it("keeps a removed plugin's templates, as not installed, and lets the site delete them for good", async () => {
         await boot(V1);
         const without = await boot(null);
@@ -234,6 +276,7 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
             },
             "htmlContent:1": { use: "theirs" },
           },
+          comparison.review,
           ACTOR
         );
         expect(template.htmlContent).toBe(
@@ -280,6 +323,48 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         expect(undone.htmlContent).toBe(mine);
         expect(undone.ownerChanged).toBe(true);
         expect((await service.compareTemplate(id)).changes).toHaveLength(2);
+      });
+
+      it("refuses choices made on a comparison the template has since moved on from", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await first.overrideTemplate(id, undefined, ACTOR);
+        const service = await boot(V2);
+        const { review } = await service.compareTemplate(id);
+
+        // Another editor saves the same lines in between.
+        await service.updateTemplate(
+          id,
+          { htmlContent: V1.replace("Hi", "Hey") },
+          ACTOR
+        );
+        await expect(
+          service.applyOwnerUpdate(
+            id,
+            {
+              "htmlContent:0": { use: "theirs" },
+              "htmlContent:1": { use: "theirs" },
+            },
+            review,
+            ACTOR
+          )
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect((await shippedTemplate(service)).htmlContent).toBe(
+          V1.replace("Hi", "Hey")
+        );
+      });
+
+      it("records a reset under the site's name for the template", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await first.updateTemplate(id, { name: "Parcel sent" }, ACTOR);
+        await first.overrideTemplate(id, undefined, ACTOR);
+        logged.length = 0;
+        await first.resetTemplate(id, ACTOR);
+        expect(logged.at(-1)).toMatchObject({
+          entryTitle: "Parcel sent",
+          metadata: expect.objectContaining({ operation: "reset" }),
+        });
       });
 
       it("resets an override to the owner's current version and records it", async () => {
@@ -498,6 +583,26 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         expect(passwordResetTemplate.subject).toBe(
           "Reset your {{appName}} password"
         );
+      });
+
+      it("delivers the site's code version with the stored template's settings", async () => {
+        const code = { passwordReset: fromCode };
+        const service = await boot(V1, code);
+        const id = (await service.getTemplateBySlug("password-reset"))!.id;
+        await service.updateTemplate(
+          id,
+          { fromOverride: "shop@example.com", replyTo: "help@example.com" },
+          ACTOR
+        );
+        const { email, send } = sender(service, code);
+        await email.sendWithTemplate("password-reset", "to@example.com", {
+          resetLink: "https://example.com/r",
+        });
+        expect(send.mock.calls[0]?.[0]).toMatchObject({
+          subject: "Reset (code)",
+          from: "shop@example.com",
+          replyTo: "help@example.com",
+        });
       });
 
       it("uses a configured passwordReset function on a fresh install", async () => {

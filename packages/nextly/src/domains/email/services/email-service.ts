@@ -423,11 +423,16 @@ export class EmailService extends BaseService {
           (variables.resetLink as string) ?? (variables.verifyLink as string),
       });
 
-      // Merge code-first template's default attachments with per-send
-      // attachments (same rules as DB templates — per-send wins by
+      // The code supplies the content; how it is delivered (provider, From,
+      // Reply-To, attachments) stays the stored template's settings, which
+      // are the site's whichever version it sends.
+      const settings = dbTemplate;
+
+      // Merge the code's attachments, then the stored template's, then the
+      // per-send ones (same rules as DB templates — a later entry wins by
       // mediaId, combined list validated by the resolver).
       const mergedAttachments = mergeTemplateAttachments(
-        result.attachments,
+        mergeTemplateAttachments(result.attachments, settings?.attachments),
         options?.attachments
       );
 
@@ -435,14 +440,14 @@ export class EmailService extends BaseService {
         to,
         subject: result.subject,
         html: result.html,
-        providerId: options?.providerId,
+        providerId: options?.providerId ?? settings?.providerId ?? undefined,
         templateSlug,
         person: options?.person,
         // Forward cc/bcc/from/replyTo here too — the DB-template path already
         // does, and omitting them on this branch silently dropped them for
         // code-first templates.
-        from: fromOverride,
-        replyTo: replyToOverride,
+        from: fromOverride ?? settings?.fromOverride ?? undefined,
+        replyTo: replyToOverride ?? settings?.replyTo ?? undefined,
         cc: options?.cc,
         bcc: options?.bcc,
         attachments:
@@ -1165,8 +1170,10 @@ export class EmailService extends BaseService {
     try {
       const { template, preferCode } =
         await this.templateService.resolveForSend(templateSlug);
+      // The stored template's provider, whichever version sends: the code
+      // supplies only content (see sendWithTemplate).
       const codeWins = preferCode && !!this.codeTemplateFor(templateSlug);
-      if (template?.isActive && !codeWins) {
+      if (template && (template.isActive || codeWins)) {
         providerId = template.providerId ?? undefined;
       }
     } catch {

@@ -19,10 +19,10 @@
  * @since 1.0.0
  */
 
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, desc, isNull } from "drizzle-orm";
+import { and, eq, desc, isNull, type Column } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
@@ -208,7 +208,45 @@ export type EmailTemplateComparison = {
   mine: EmailTemplateVersion;
   /** Each change the owner made since `base`, to review one by one. */
   changes: OwnerChange[];
+  /**
+   * Names the three versions this comparison was made from. Apply takes it
+   * back and refuses once any of them moved, so a choice is never applied to
+   * text the person didn't see.
+   */
+  review: string;
 };
+
+/** The refusal when a template moved on from the state an operation was based on. */
+function changedSince(
+  what: "reviewed" | "applied" | "saved",
+  id: string,
+  slug: string
+): NextlyError {
+  const publicMessage = {
+    reviewed:
+      "This template or its owner's version changed after it was compared. Compare it again, then choose.",
+    applied:
+      "This template changed after the update was applied, so it can't be undone. Review it again instead.",
+    saved:
+      "Someone saved this template at the same moment. Open it again to see their change.",
+  }[what];
+  return new NextlyError({
+    code: "CONFLICT",
+    publicMessage,
+    logContext: { id, slug, reason: `template-changed-since-${what}` },
+  });
+}
+
+/** The review token of a comparison (see EmailTemplateComparison.review). */
+function reviewToken(
+  base: EmailTemplateVersion,
+  theirs: EmailTemplateVersion,
+  mine: EmailTemplateVersion
+): string {
+  return createHash("sha256")
+    .update(JSON.stringify([base, theirs, mine].map(v => versionOf(v))))
+    .digest("hex");
+}
 
 /** What an applied review replaced, so it can be undone. */
 export interface OwnerUpdateUndo {
@@ -613,10 +651,17 @@ export class EmailTemplateService extends BaseService {
     }
     const overriding = this.overridesOwner(existing, record, updateData);
     if (overriding) {
-      const entry = this.ownedEntry(record);
+      // The owner's version as the base. A plugin that isn't running has no
+      // version to read, so its template's version before this edit is the
+      // base: if the plugin comes back, the edit stays as an override and its
+      // changes since are offered for review.
+      const entry = this.registry.owned.get(record.slug);
+      const base: KeptBase = entry
+        ? keptBase(entry)
+        : { ...versionOf(existing), details: detailsOf(existing) };
       updateData.overridden = true;
-      updateData.baseVersion = keptBase(entry);
-      updateData.baseDigest = entry.digest;
+      updateData.baseVersion = base;
+      updateData.baseDigest = entry ? entry.digest : versionDigest(base);
     }
 
     try {
@@ -667,13 +712,7 @@ export class EmailTemplateService extends BaseService {
     record: EmailTemplateRecord,
     updateData: Record<string, unknown>
   ): boolean {
-    if (
-      !isProtectedOwner(record.owner) ||
-      record.overridden ||
-      !this.registry.owned.has(record.slug)
-    ) {
-      return false;
-    }
+    if (record.owner.kind === "site" || record.overridden) return false;
     return [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
       field =>
         updateData[field] !== undefined &&
@@ -830,7 +869,8 @@ export class EmailTemplateService extends BaseService {
     await this.recordActivity({
       action: "update",
       templateId: id,
-      templateName: entry.defaults.name,
+      // The name is the site's and Reset keeps it, so the entry uses it.
+      templateName: record.name,
       templateKind: record.kind,
       changedFields: [
         "overridden",
@@ -858,6 +898,7 @@ export class EmailTemplateService extends BaseService {
       theirs: entry.version,
       mine,
       changes: ownerChanges(base, entry.version, mine),
+      review: reviewToken(base, entry.version, mine),
     };
   }
 
@@ -866,10 +907,14 @@ export class EmailTemplateService extends BaseService {
    * version, takes the owner's, or takes text the person wrote, all at once.
    * The override stays, now based on the owner's current version, so the same
    * changes are not offered again. Returns what it replaced, for Undo.
+   *
+   * `review` is the token of the comparison the choices were made on; a
+   * template, base or owner's version that moved since is refused (CONFLICT).
    */
   async applyOwnerUpdate(
     id: string,
     choices: Readonly<Record<string, OwnerChangeChoice>>,
+    review: string,
     actor?: RequestActor | null
   ): Promise<{ template: EmailTemplateRecord; undo: OwnerUpdateUndo }> {
     const row = await this.getRow(id);
@@ -879,6 +924,9 @@ export class EmailTemplateService extends BaseService {
 
     const base = versionOf(row.baseVersion ?? entry.version);
     const mine = versionOf(row);
+    if (reviewToken(base, entry.version, mine) !== review) {
+      throw changedSince("reviewed", id, record.slug);
+    }
     const merged = applyOwnerChoices(base, entry.version, mine, choices);
     this.assertLayoutMarker(row.kind, merged.htmlContent);
 
@@ -895,7 +943,8 @@ export class EmailTemplateService extends BaseService {
         baseDigest: entry.digest,
         updatedAt: new Date(),
       })
-      .where(eq(this.emailTemplates.id, id));
+      .where(this.unchanged(row));
+    await this.assertWritten(id, merged, entry.digest, record.slug);
 
     await this.recordActivity({
       action: "update",
@@ -934,12 +983,7 @@ export class EmailTemplateService extends BaseService {
       versionDigest(versionOf(row)) !== undo.applied ||
       row.baseDigest !== undo.appliedBase
     ) {
-      throw new NextlyError({
-        code: "CONFLICT",
-        publicMessage:
-          "This template changed after the update was applied, so it can't be undone. Review it again instead.",
-        logContext: { id, slug: record.slug },
-      });
+      throw changedSince("applied", id, record.slug);
     }
     const version = versionOf(undo.version);
     const base = versionOf(undo.base);
@@ -953,7 +997,8 @@ export class EmailTemplateService extends BaseService {
         baseDigest: versionDigest(base),
         updatedAt: new Date(),
       })
-      .where(eq(this.emailTemplates.id, id));
+      .where(this.unchanged(row));
+    await this.assertWritten(id, version, versionDigest(base), record.slug);
 
     await this.recordActivity({
       action: "update",
@@ -968,6 +1013,46 @@ export class EmailTemplateService extends BaseService {
       actor,
     });
     return this.getTemplate(id);
+  }
+
+  /**
+   * The row as it was read, in what these writes depend on: its version, its
+   * description, whether it is overridden and the base it is kept against. A
+   * write conditioned on it doesn't apply when the site saved any of those in
+   * between (an edit to the declared variables overrides the template, so it
+   * shows here too). Compared by value, not by `updatedAt`, which SQLite and
+   * MySQL keep to the second.
+   */
+  private unchanged(row: StoredTemplateRow) {
+    const t = this.emailTemplates;
+    const same = (column: Column, value: string | boolean | null) =>
+      value === null ? isNull(column) : eq(column, value);
+    return and(
+      eq(t.id, row.id),
+      eq(t.subject, row.subject),
+      eq(t.htmlContent, row.htmlContent),
+      same(t.plainTextContent, row.plainTextContent ?? null),
+      same(t.preheader, row.preheader ?? null),
+      same(t.description, row.description ?? null),
+      same(t.overridden, row.overridden ?? null),
+      same(t.baseDigest, row.baseDigest ?? null)
+    );
+  }
+
+  /** Refuse (CONFLICT) when a conditioned write did not land: something saved the template first. */
+  private async assertWritten(
+    id: string,
+    version: EmailTemplateVersion,
+    baseDigest: string,
+    slug: string
+  ): Promise<void> {
+    const after = await this.getRow(id);
+    if (
+      versionDigest(versionOf(after)) !== versionDigest(version) ||
+      after.baseDigest !== baseDigest
+    ) {
+      throw changedSince("saved", id, slug);
+    }
   }
 
   private assertOverridden(record: EmailTemplateRecord): void {
@@ -1204,7 +1289,9 @@ export class EmailTemplateService extends BaseService {
       (firstTime && this.registry.setInCode.has(row.slug)) ||
       row.overridden === true;
     const owner = storedOwner(entry.owner);
-    const where = eq(this.emailTemplates.id, row.id);
+    // Conditioned on the row as read: the boot runs in the background, and
+    // an edit saved in between is the site's and stays.
+    const where = this.unchanged(row);
     if (keepSitesVersion) {
       await this.db
         .update(this.emailTemplates)
@@ -1253,12 +1340,13 @@ export class EmailTemplateService extends BaseService {
       .update(this.emailTemplates)
       .set({
         ...owners,
+        updatedAt: new Date(),
         baseVersion: {
           ...versionOf(row.baseVersion ?? entry.version),
           details: owners,
         },
       })
-      .where(eq(this.emailTemplates.id, row.id));
+      .where(this.unchanged(row));
   }
 
   /** A template following its owner: rewritten whenever the owner's version, kind or details move. */
@@ -1276,7 +1364,7 @@ export class EmailTemplateService extends BaseService {
     await this.db
       .update(this.emailTemplates)
       .set({ ...wanted, updatedAt: new Date() })
-      .where(eq(this.emailTemplates.id, row.id));
+      .where(this.unchanged(row));
     this.logger.info(
       `Updated email template to its owner's version: ${row.slug}`
     );

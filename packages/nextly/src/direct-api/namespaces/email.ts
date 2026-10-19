@@ -476,6 +476,7 @@ export function createEmailTemplatesNamespace(
         await ctx.emailTemplateService.applyOwnerUpdate(
           args.id,
           args.choices,
+          args.review,
           directApiActor(ctx.defaultConfig, args)
         );
       return { message: "Owner's update applied.", item: template, undo };

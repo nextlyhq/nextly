@@ -166,6 +166,21 @@ describe("Direct API", () => {
       defaultConfig: {},
     } as unknown as NextlyContext);
 
+  it("clears a description with null", async () => {
+    const own = await service.createTemplate({
+      name: "Newsletter",
+      slug: "newsletter",
+      subject: "Hi",
+      htmlContent: "<p>Hi</p>",
+      description: "Sent monthly.",
+    });
+    const result = await api().update({
+      id: own.id,
+      data: { description: null },
+    });
+    expect(result.item.description).toBeNull();
+  });
+
   it("refuses to delete core's template or an installed plugin's", async () => {
     for (const slug of ["welcome", "default-layout", "orders-paid"]) {
       await expect(

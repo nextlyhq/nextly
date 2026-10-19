@@ -27,9 +27,15 @@ const choiceSchema = z.discriminatedUnion("use", [
   z.object({ use: z.literal("edited"), text: z.string() }).strict(),
 ]);
 
-/** `PATCH /email-templates/:id/apply-update`: a choice per offered change. */
+/**
+ * `PATCH /email-templates/:id/apply-update`: a choice per offered change, and
+ * the `review` token of the comparison they were made on.
+ */
 export const applyOwnerUpdateSchema = z
-  .object({ choices: z.record(z.string(), choiceSchema) })
+  .object({
+    choices: z.record(z.string(), choiceSchema),
+    review: z.string().min(1),
+  })
   .strict();
 
 /** `PATCH /email-templates/:id/undo-update`: what the apply returned. */

@@ -282,10 +282,11 @@ const EMAIL_TEMPLATE_METHODS: Record<
   },
   applyOwnerUpdate: {
     execute: async (svc, p, body) => {
-      const { choices } = parseBody(applyOwnerUpdateSchema, body);
+      const { choices, review } = parseBody(applyOwnerUpdateSchema, body);
       const { template, undo } = await svc.templateService.applyOwnerUpdate(
         p.templateId,
         choices,
+        review,
         readAuthenticatedActor(p)
       );
       // A non-CRUD write with a result beside the item: Undo needs it.
