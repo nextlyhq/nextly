@@ -178,6 +178,59 @@ function isMergeOf<T>(
 }
 
 /**
+ * Reads both documents again while they settle on two versions, at most
+ * {@link MAX_RECONCILE_ATTEMPTS} times per scope: a language whose reads used
+ * the retries up says nothing about the next one's. `spent` is true once they
+ * are used up and the reads still disagree; `reset` gives them back after the
+ * reads agree.
+ */
+function useReconcileRetries(
+  scope: string,
+  disagree: boolean,
+  refetchPopulated: () => unknown,
+  refetchStored: () => unknown
+): { spent: boolean; reset: () => void } {
+  const attempts = useRef(0);
+  const attemptsScope = useRef(scope);
+  if (attemptsScope.current !== scope) {
+    attemptsScope.current = scope;
+    attempts.current = 0;
+  }
+  // `scope` is a dependency so a new scope whose reads disagree is retried
+  // too, with the budget given back above.
+  useEffect(() => {
+    if (!disagree || attempts.current >= MAX_RECONCILE_ATTEMPTS) return;
+    attempts.current += 1;
+    void refetchPopulated();
+    void refetchStored();
+  }, [disagree, scope, refetchPopulated, refetchStored]);
+  return {
+    spent: disagree && attempts.current >= MAX_RECONCILE_ATTEMPTS,
+    reset: () => {
+      attempts.current = 0;
+    },
+  };
+}
+
+/** The error the editor shows, if any, for these reads. */
+function readError(
+  populated: UseQueryResult<unknown, Error>,
+  stored: UseQueryResult<unknown, Error>,
+  gaveUp: boolean
+): Error | null {
+  if (populated.error) return populated.error;
+  if (stored.error) return stored.error;
+  // Still apart after every retry: the document keeps changing under the
+  // editor. Saying so beats a form merged from two versions, and beats the
+  // previous merge, which a save would write back over the newer document.
+  return gaveUp
+    ? new Error(
+        "This document kept changing while it loaded. Reload the page to edit it."
+      )
+    : null;
+}
+
+/**
  * Merges the populated read with the depth-0 read once both have settled on
  * the same version of the document.
  *
@@ -205,18 +258,18 @@ export function useWithStoredReferences<T extends Doc>({
 }): StoredReferencesResult<T> {
   const saving = useIsMutating({ mutationKey: documentKey }) > 0;
   const last = useRef<Merge<T> | null>(null);
-  const attempts = useRef(0);
-  // Retries are counted per scope: a language whose reads used them up says
-  // nothing about the next one's.
-  const attemptsScope = useRef(scope);
-  if (attemptsScope.current !== scope) {
-    attemptsScope.current = scope;
-    attempts.current = 0;
-  }
 
   const pair = settledPair(fields, populated, stored, saving);
   const agree =
     pair !== null && versionOf(pair.populated) === versionOf(pair.stored);
+  // Settled reads of two versions: something changed the document between
+  // them. Read both again rather than wait for a refetch nothing schedules.
+  const retries = useReconcileRetries(
+    scope,
+    pair !== null && !agree,
+    populated.refetch,
+    stored.refetch
+  );
   // A cached merge for exactly these inputs is reused, so the document keeps
   // its identity across renders and the form is not reset by a re-render.
   if (agree && !isMergeOf(last.current, pair, scope)) {
@@ -225,38 +278,13 @@ export function useWithStoredReferences<T extends Doc>({
       ...pair,
       document: withStoredReferences(pair.fields, pair.populated, pair.stored),
     };
-    attempts.current = 0;
+    retries.reset();
   }
 
-  // Settled reads of two versions: something changed the document between
-  // them. Read both again rather than wait for a refetch nothing schedules.
-  const disagree = pair !== null && !agree;
-  const { refetch: refetchPopulated } = populated;
-  const { refetch: refetchStored } = stored;
-  // `scope` is a dependency so a new scope whose reads disagree is retried
-  // too, with the budget the counter above gave back.
-  useEffect(() => {
-    if (!disagree || attempts.current >= MAX_RECONCILE_ATTEMPTS) return;
-    attempts.current += 1;
-    void refetchPopulated();
-    void refetchStored();
-  }, [disagree, scope, refetchPopulated, refetchStored]);
-
-  // Still apart after every retry: the document keeps changing under the
-  // editor. Saying so beats a form merged from two versions, and beats the
-  // previous merge, which a save would write back over the newer document.
-  const gaveUp = disagree && attempts.current >= MAX_RECONCILE_ATTEMPTS;
   const document =
-    !gaveUp && last.current?.scope === scope
+    !retries.spent && last.current?.scope === scope
       ? last.current.document
       : undefined;
-  const error =
-    populated.error ??
-    stored.error ??
-    (gaveUp
-      ? new Error(
-          "This document kept changing while it loaded. Reload the page to edit it."
-        )
-      : null);
+  const error = readError(populated, stored, retries.spent);
   return { document, isLoading: document === undefined && !error, error };
 }
