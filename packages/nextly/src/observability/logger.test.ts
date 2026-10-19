@@ -106,6 +106,32 @@ describe("NextlyLogger seam", () => {
       expect(custom.warn).toHaveBeenCalledWith({ to: ["j***@example.com"] });
     });
 
+    it("restores a logger saved from the getter, still masking once", () => {
+      // What the getter hands out is the masking wrapper, so saving it and
+      // installing it again must put back the logger behind it: installing
+      // the wrapper itself would make it call itself.
+      vi.stubEnv("NODE_ENV", "production");
+      const saved: NextlyLogger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+      };
+      setNextlyLogger(saved);
+      const held = getNextlyLogger();
+      setNextlyLogger({
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+      });
+      setNextlyLogger(held);
+      expect(getNextlyLogger()).toBe(held);
+      getNextlyLogger().error({ to: "jane@example.com" });
+      expect(saved.error).toHaveBeenCalledTimes(1);
+      expect(saved.error).toHaveBeenCalledWith({ to: "j***@example.com" });
+    });
+
     it("leaves them whole in development", () => {
       vi.stubEnv("NODE_ENV", "development");
       getNextlyLogger().info({ to: "jane@example.com" });

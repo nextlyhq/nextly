@@ -47,6 +47,13 @@ describe("masking addresses in text", () => {
     ["John.Smith@Example.COM", "J***@Example.COM"],
     ["jane+orders@shop.example.co.uk", "j***@shop.example.co.uk"],
     ["to a@b.io and c_d@mail.b.io", "to a***@b.io and c***@mail.b.io"],
+    // A punycode top-level label, and an internationalized domain and local
+    // part, each masked whole.
+    ["john@example.xn--p1ai", "j***@example.xn--p1ai"],
+    ["john@bücher.de", "j***@bücher.de"],
+    ["jöhn@example.com", "j***@example.com"],
+    ["ölaf@example.com", "ö***@example.com"],
+    ["𝒥ane@example.com", "𝒥***@example.com"],
   ])("masks %s", (input, expected) => {
     expect(maskEmailsInText(input)).toBe(expected);
   });
@@ -56,6 +63,7 @@ describe("masking addresses in text", () => {
     "http://user@localhost:3000/admin",
     "price @ 3 for 2",
     "no addresses here",
+    "http://user@intranet:3000/admin",
   ])("leaves %s unchanged", text => {
     expect(maskEmailsInText(text)).toBe(text);
   });

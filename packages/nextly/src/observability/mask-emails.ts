@@ -19,12 +19,15 @@ import type { Logger } from "../shared/types";
 /**
  * An email address in running text. The local part is the characters an
  * address commonly uses, `+` tags included; the domain needs at least one dot
- * and a letter-only top-level label, so `user@localhost` in a URL and an
- * `@scope/pkg` specifier are left alone. Bounded on both sides so a longer
- * run of address characters is not split into a match.
+ * and a top-level label of letters or punycode (`xn--p1ai`), so
+ * `user@localhost` in a URL and an `@scope/pkg` specifier are left alone.
+ * Letters and digits are any script's, so an internationalized address
+ * (`jöhn@bücher.de`) is matched whole rather than missed or cut in two.
+ * Bounded on both sides so a longer run of address characters is not split
+ * into a match.
  */
 const EMAIL_PATTERN =
-  /(?<![A-Za-z0-9._%+-])([A-Za-z0-9._%+-]+)@((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,})(?![A-Za-z0-9-])/g;
+  /(?<![\p{L}\p{N}._%+-])([\p{L}\p{N}._%+-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:xn--[A-Za-z0-9-]+|\p{L}{2,}))(?![\p{L}\p{N}-])/gu;
 
 /** Whether this environment's logs mask addresses. */
 export function emailMaskingEnabled(nodeEnv: string | undefined): boolean {
@@ -42,18 +45,28 @@ export function emailMaskingActive(): boolean {
   );
 }
 
+/**
+ * The first character of a local part, whole: a letter outside the Basic
+ * Multilingual Plane is two UTF-16 units, and keeping one would write half a
+ * character.
+ */
+function firstCharacter(local: string): string {
+  return String.fromCodePoint(local.codePointAt(0) ?? 0x2a);
+}
+
 /** One address masked to its first character and its domain. */
 export function maskEmailAddress(address: string): string {
   const at = address.lastIndexOf("@");
   if (at <= 0) return address;
-  return `${address[0]}***@${address.slice(at + 1)}`;
+  return `${firstCharacter(address)}***@${address.slice(at + 1)}`;
 }
 
 /** Every address in a piece of text masked, the rest left exactly as it was. */
 export function maskEmailsInText(text: string): string {
   return text.replace(
     EMAIL_PATTERN,
-    (_match, local: string, domain: string) => `${local[0]}***@${domain}`
+    (_match, local: string, domain: string) =>
+      `${firstCharacter(local)}***@${domain}`
   );
 }
 
