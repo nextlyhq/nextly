@@ -17,17 +17,18 @@
 import type { Logger } from "../shared/types";
 
 /**
- * An email address in running text. The local part is the characters an
- * address commonly uses, `+` tags included; the domain needs at least one dot
- * and a top-level label of letters or punycode (`xn--p1ai`), so
- * `user@localhost` in a URL and an `@scope/pkg` specifier are left alone.
- * Letters and digits are any script's, so an internationalized address
- * (`jöhn@bücher.de`) is matched whole rather than missed or cut in two.
- * Bounded on both sides so a longer run of address characters is not split
- * into a match.
+ * An email address in running text. The local part is either quoted
+ * (`"john.doe"@example.com`) or made of every character an unquoted one may
+ * hold, `+`, `/` and `=` included, so no address keeps a prefix by starting
+ * the match after one of them. The domain needs at least one dot and a
+ * top-level label of letters or punycode (`xn--p1ai`), so `user@localhost`
+ * in a URL and an `@scope/pkg` specifier are left alone. Letters and digits
+ * are any script's, so an internationalized address (`jöhn@bücher.de`) is
+ * matched whole rather than missed or cut in two. Bounded on both sides so a
+ * longer run of address characters is not split into a match.
  */
 const EMAIL_PATTERN =
-  /(?<![\p{L}\p{N}._%+-])([\p{L}\p{N}._%+-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:xn--[A-Za-z0-9-]+|\p{L}{2,}))(?![\p{L}\p{N}-])/gu;
+  /(?<![\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.)+"|[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:xn--[A-Za-z0-9-]+|\p{L}{2,}))(?![\p{L}\p{N}-])/gu;
 
 /** Whether this environment's logs mask addresses. */
 export function emailMaskingEnabled(nodeEnv: string | undefined): boolean {
@@ -48,10 +49,11 @@ export function emailMaskingActive(): boolean {
 /**
  * The first character of a local part, whole: a letter outside the Basic
  * Multilingual Plane is two UTF-16 units, and keeping one would write half a
- * character.
+ * character. A quoted local part shows the first character inside its quotes.
  */
 function firstCharacter(local: string): string {
-  return String.fromCodePoint(local.codePointAt(0) ?? 0x2a);
+  const shown = local.startsWith('"') ? local.slice(1) : local;
+  return String.fromCodePoint(shown.codePointAt(0) ?? 0x2a);
 }
 
 /** One address masked to its first character and its domain. */
@@ -134,6 +136,17 @@ function maskError(error: Error, seen: WeakMap<object, unknown>): Error {
   copy.name = error.name;
   if (error.stack !== undefined) copy.stack = maskEmailsInText(error.stack);
   if (error.cause !== undefined) copy.cause = maskValue(error.cause, seen);
+  if (error instanceof AggregateError) {
+    // The constructor makes `errors` an own property that is not enumerable,
+    // so the loop below would leave the copy without its failures. Copied
+    // the same way, masked like every other value.
+    Object.defineProperty(copy, "errors", {
+      value: maskValue(error.errors, seen),
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+  }
   for (const [key, field] of Object.entries(error)) {
     (copy as unknown as Record<string, unknown>)[key] = maskValue(field, seen);
   }

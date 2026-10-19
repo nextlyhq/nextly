@@ -54,6 +54,13 @@ describe("masking addresses in text", () => {
     ["jöhn@example.com", "j***@example.com"],
     ["ölaf@example.com", "ö***@example.com"],
     ["𝒥ane@example.com", "𝒥***@example.com"],
+    // A quoted local part, and the punctuation an unquoted one may hold:
+    // masked whole, with no prefix left before the match.
+    ['"john.doe"@example.com', "j***@example.com"],
+    ['<"john doe"@example.com>', "<j***@example.com>"],
+    ["customer/department=shipping@example.com", "c***@example.com"],
+    ["o'brien@example.com", "o***@example.com"],
+    ["a!b#c$d%e&f*g?h^i`j{k|l}m~n@example.com", "a***@example.com"],
   ])("masks %s", (input, expected) => {
     expect(maskEmailsInText(input)).toBe(expected);
   });
@@ -139,6 +146,28 @@ describe("masking addresses in a value", () => {
       "550 <j***@example.com>: user unknown"
     );
     expect(masked).toBeInstanceOf(Error);
+  });
+
+  it("keeps an aggregate error's failures, each masked", () => {
+    // `errors` is an own property that is not enumerable, so a copy that
+    // only walks enumerable fields loses every failure the aggregate holds.
+    const aggregate = new AggregateError(
+      [
+        new Error("550 <john@example.com>: user unknown"),
+        "421 <jane@example.com>: try later",
+      ],
+      "every provider refused"
+    );
+    const masked = maskEmails(aggregate);
+    expect(masked).toBeInstanceOf(AggregateError);
+    expect(Object.keys(masked)).not.toContain("errors");
+    const [first, second] = (masked as AggregateError).errors as [
+      Error,
+      string,
+    ];
+    expect(first).toBeInstanceOf(Error);
+    expect(first.message).toBe("550 <j***@example.com>: user unknown");
+    expect(second).toBe("421 <j***@example.com>: try later");
   });
 
   it("does not loop on a value that refers to itself", () => {

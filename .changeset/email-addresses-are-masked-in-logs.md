@@ -29,27 +29,4 @@
 "@nextlyhq/ui": patch
 ---
 
-Outside development and test, Nextly no longer writes a full email address to
-the logs. Masking applies whenever `NODE_ENV` is not `development` or `test`,
-an unset `NODE_ENV` included, and keeps an address's first character and
-domain: `john@example.com` is logged as `j***@example.com`.
-
-- **The log transport**, used when no email provider is configured, wrote
-  every recipient, the sender, cc, bcc and reply-to in full on every send in
-  production. It now masks each of them and any address in the subject. It
-  writes the message body only in development and test; before, an unset
-  `NODE_ENV` wrote the body too, reset and verification tokens included.
-- **A failed send** logs its provider's error and cause so the diagnostic is
-  kept; an SMTP or API error that quotes the recipient now has that address
-  masked.
-- **Nextly's structured logger** (`getNextlyLogger`) masks every payload
-  before it reaches the logger, the default one or one installed with
-  `setNextlyLogger`.
-- **`consoleLogger`**, the logger services fall back to and a public export,
-  masks addresses in its messages and fields too.
-- **The dev auto-login warning**, printed when `devAutoLogin` is set in
-  production, no longer includes the configured email.
-
-To find a message in production logs, search by the address's domain and
-first character instead of the full address. No configuration, API or schema
-changes.
+Outside development and test (an unset `NODE_ENV` included), email addresses in Nextly's logs, `consoleLogger` among them, are masked to their first character and domain (`j***@example.com`), and the log transport leaves message bodies out. Search production logs by domain and first character instead of the full address.
