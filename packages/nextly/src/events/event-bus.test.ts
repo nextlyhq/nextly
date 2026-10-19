@@ -105,3 +105,47 @@ describe("EventBus", () => {
     expect(getEventBus()).toBe(getEventBus());
   });
 });
+
+describe("EventBus.settleRunning", () => {
+  const later = (ms: number) =>
+    new Promise<void>(resolve => setTimeout(resolve, ms));
+
+  it("waits for the handlers running now, and answers true", async () => {
+    const bus = new EventBus();
+    let finished = false;
+    bus.on("x", async () => {
+      await later(5);
+      finished = true;
+    });
+    bus.emit("x", {});
+
+    expect(await bus.settleRunning(1_000)).toBe(true);
+    expect(finished).toBe(true);
+  });
+
+  it("does not wait for a handler started after it was asked", async () => {
+    // A producer re-emitting from its own handler never lets the bus empty;
+    // only the handler running at the call is waited for.
+    const bus = new EventBus();
+    let producing = true;
+    bus.on("tick", async () => {
+      await later(1);
+      if (producing) bus.emit("tick", {});
+    });
+    bus.emit("tick", {});
+
+    expect(await bus.settleRunning(1_000)).toBe(true);
+    producing = false;
+    await bus.settle();
+  });
+
+  it("answers false within its time when a handler never settles", async () => {
+    const bus = new EventBus();
+    bus.on("x", () => new Promise<void>(() => {}));
+    bus.emit("x", {});
+    const started = Date.now();
+
+    expect(await bus.settleRunning(50)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
