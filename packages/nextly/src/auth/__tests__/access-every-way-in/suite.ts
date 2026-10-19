@@ -40,8 +40,8 @@
  * related row is asked by a visitor, a user with and without the permission
  * and a role-based key, under no rule, a rule returning `true`, one returning
  * `false` and one returning `null`: the callers and rules whose answer a
- * missing service can change. Some rows are pinned elsewhere for now
- * and join this table later (`table.ts`, `pinnedElsewhere`).
+ * missing service can change. Some rows join this table later (`table.ts`,
+ * `joinsLater`).
  *
  * **Without the service.** Lookups that ask the container per call are shown
  * no service. The Direct API's gates took the service when the instance

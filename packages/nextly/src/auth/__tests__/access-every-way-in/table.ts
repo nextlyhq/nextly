@@ -248,8 +248,8 @@ const NO_SERVICE_RULES: readonly Rule[] = [
   "returns-null",
 ];
 
-/** Rows pinned elsewhere for now, which join this table later. */
-function pinnedElsewhere(row: Row): boolean {
+/** Rows left out of this table for now, which join it later. */
+function joinsLater(row: Row): boolean {
   return (
     row.setup === "service" &&
     row.caller === "visitor" &&
@@ -289,7 +289,7 @@ export function rows(): Row[] {
     NO_SERVICE_CALLERS
   );
   return [...withService, ...withoutService].filter(
-    row => !pinnedElsewhere(row) && DOORS.some(door => asks(door, row))
+    row => !joinsLater(row) && DOORS.some(door => asks(door, row))
   );
 }
 
@@ -307,29 +307,34 @@ export function rowKey(row: Row): string {
 
 export type Verdict = "allow" | "refuse";
 
-/** What the target's rule says to this caller for this action. */
-function ruleSays(rule: Rule, action: Action, caller: Caller): boolean | null {
-  switch (rule) {
-    case "none":
-      return null;
-    case "other-operation":
-      return action === "update" ? false : null;
-    case "true":
-    case "returns-true":
-    case "async-true":
-      return true;
-    case "role-name":
-      return holdsRoleNamedEditor(caller);
-    case "permission-spelling":
-      return (
-        STAFF.includes(caller) && holdsPermission(caller, action, "collection")
-      );
-    case "principal-kind":
-      return caller === "principal";
-    default:
-      return false;
-  }
-}
+/**
+ * What a rule says to a caller for an action: `true` only when it answers
+ * exactly `true`, and `null` where it declares nothing for the action.
+ */
+type RuleAnswer = (action: Action, caller: Caller) => boolean | null;
+
+const SAYS_TRUE: RuleAnswer = () => true;
+/** `false`, a non-boolean answer and a throw all count as a refusal. */
+const SAYS_NOT_TRUE: RuleAnswer = () => false;
+
+/** What each rule says, one entry per rule so none is decided by a fallback. */
+const RULE_SAYS: Record<Rule, RuleAnswer> = {
+  none: () => null,
+  true: SAYS_TRUE,
+  false: SAYS_NOT_TRUE,
+  "returns-true": SAYS_TRUE,
+  "returns-false": SAYS_NOT_TRUE,
+  "returns-null": SAYS_NOT_TRUE,
+  "returns-undefined": SAYS_NOT_TRUE,
+  throws: SAYS_NOT_TRUE,
+  "async-true": SAYS_TRUE,
+  "async-false": SAYS_NOT_TRUE,
+  "other-operation": action => (action === "update" ? false : null),
+  "role-name": (_action, caller) => holdsRoleNamedEditor(caller),
+  "permission-spelling": (action, caller) =>
+    STAFF.includes(caller) && holdsPermission(caller, action, "collection"),
+  "principal-kind": (_action, caller) => caller === "principal",
+};
 
 /** The callers whose roles, as a rule sees them, include one named `editor`. */
 function holdsRoleNamedEditor(caller: Caller): boolean {
@@ -340,28 +345,29 @@ function holdsRoleNamedEditor(caller: Caller): boolean {
   );
 }
 
+const PARTIAL_ACTIONS: readonly Action[] = ["read", "update", "publish"];
+
+/**
+ * The actions the role screen grants each caller on the rule targets and
+ * media. A caller missing here holds none of them.
+ */
+const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
+  "user-with": () => true,
+  "custom-role": () => true,
+  "key-full-access": () => true,
+  "key-role-based": () => true,
+  "key-read-only": action => action === "read",
+  "user-partial": action => PARTIAL_ACTIONS.includes(action),
+  "key-partial": action => PARTIAL_ACTIONS.includes(action),
+};
+
 /** Whether the role screen grants the caller this action on this target. */
 function holdsPermission(caller: Caller, action: Action, target: Target) {
-  switch (caller) {
-    case "user-with":
-    case "custom-role":
-    case "key-full-access":
-    case "key-role-based":
-      return target !== "users";
-    case "key-read-only":
-      return action === "read" && target !== "users";
-    case "user-partial":
-    case "key-partial":
-      return (
-        target !== "users" && ["read", "update", "publish"].includes(action)
-      );
-    case "key-super-admin":
-      // A full-access key carries its maker's live permissions, and a
-      // super-admin's are the whole catalogue.
-      return true;
-    default:
-      return false;
-  }
+  // A full-access key carries its maker's live permissions, and a
+  // super-admin's are the whole catalogue, users included.
+  if (caller === "key-super-admin") return true;
+  if (target === "users") return false;
+  return GRANTS[caller]?.(action) ?? false;
 }
 
 /**
@@ -380,7 +386,7 @@ function holdsPermission(caller: Caller, action: Action, target: Target) {
  */
 export function oneAnswer(row: Row): Verdict {
   const { caller, action, target, rule } = row;
-  const says = ruleSays(rule, action, caller);
+  const says = RULE_SAYS[rule](action, caller);
   if (PRINCIPALS.includes(caller)) {
     if (action === "publish" || action === "unpublish") return "refuse";
     return says === true ? "allow" : "refuse";
