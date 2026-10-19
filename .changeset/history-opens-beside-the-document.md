@@ -29,19 +29,6 @@
 "@nextlyhq/ui": patch
 ---
 
-History opens beside the document. The editor's History control (a row of
-the document's menu on a phone) opens it in the document panel's place:
-400px wide, or 360px on a window under 1200px wide with the content sidebar
-folded while it is open, and as a page of its own under 1024px. The editor
-stays as it was, unsaved words and place on the page included. Whether
-history is open, and the version chosen in it, are kept in the page's
-address (`?history=1&version=N`), so a reload or a shared link opens the same
-version and back closes the panel; neither counts as leaving the document.
-The list stays whole with the chosen version marked, under the heading
-History. On a phone, choosing a version steps the page aside so the version
-is read in the document, and the banner's History button leads back to the
-list.
-Showing a version marks it seen for the signed-in person, once each time it
-is shown, which is what a comparison since they last looked starts from;
-the history list marks nothing. The compare dialog is gone: a comparison is
-read on its own page, opened from the version being shown.
+History opens beside the document, in the document panel's place, so the editor stays as it was, unsaved words included. On a narrow window it opens as a page of its own. The panel and the version chosen in it are kept in the page's address, so a reload or a shared link opens the same version, and Back closes the panel.
+
+Showing a version marks it seen for the signed-in person, which is where a comparison since they last looked starts. The compare dialog is gone: a comparison opens on its own page from the version being shown.

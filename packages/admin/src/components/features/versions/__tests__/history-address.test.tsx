@@ -40,7 +40,13 @@ describe("useHistoryAddress", () => {
   });
 
   it("adds a step back for opening, none for choosing a version, and closes by stepping back off it", async () => {
-    at("/admin/collections/posts/e1?locale=es");
+    // The entry before opening, marked so landing back on it can be told from
+    // an entry that merely has the same address.
+    window.history.replaceState(
+      { opener: true },
+      "",
+      "/admin/collections/posts/e1?locale=es"
+    );
     const start = window.history.length;
     const { result } = renderHook(() => useHistoryAddress());
 
@@ -61,9 +67,34 @@ describe("useHistoryAddress", () => {
     // new entry for closing.
     await waitFor(() => expect(search().get("history")).toBeNull());
     expect(window.history.length).toBe(start + 1);
+    // On that very entry, not a closed copy of the open one left in its place.
+    expect(window.history.state).toEqual({ opener: true });
     expect(search().get("version")).toBeNull();
     // Other keys are the page's own and stay.
     expect(search().get("locale")).toBe("es");
+  });
+
+  it("closes in place, undoing nothing, once the author has moved on from the entry opening added", async () => {
+    at("/admin/collections/posts/e1?locale=es");
+    const { result } = renderHook(() => useHistoryAddress());
+    act(() => result.current.setOpen(true));
+    // Another language chosen with history open, as the editor's language
+    // switch does: a new entry that keeps history open.
+    act(() =>
+      window.history.pushState(
+        null,
+        "",
+        "/admin/collections/posts/e1?locale=fr&history=1"
+      )
+    );
+    const before = window.history.length;
+
+    act(() => result.current.setOpen(false));
+
+    // Closed on the language chosen, rather than stepped back to the last.
+    await waitFor(() => expect(search().get("history")).toBeNull());
+    expect(search().get("locale")).toBe("fr");
+    expect(window.history.length).toBe(before);
   });
 
   it("closes a panel a link opened in place, adding no entry", () => {

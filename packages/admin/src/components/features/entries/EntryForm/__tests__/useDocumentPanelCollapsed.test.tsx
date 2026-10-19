@@ -31,4 +31,28 @@ describe("useDocumentPanelCollapsed", () => {
     act(() => result.current.toggle());
     expect(result.current.collapsed).toBe(true);
   });
+
+  it.each([
+    ["shown", false],
+    ["collapsed", true],
+  ])(
+    "gives back the panel %s, as the author left it, once history closes",
+    (_label, collapsedByAuthor) => {
+      at("/admin/collections/posts/e1");
+      const { result } = renderHook(() => useDocumentPanelCollapsed());
+      if (collapsedByAuthor) act(() => result.current.toggle());
+      // The address moves as back and forward move it.
+      const moveTo = (address: string) =>
+        act(() => {
+          at(address);
+          window.dispatchEvent(new PopStateEvent("popstate"));
+        });
+
+      moveTo("/admin/collections/posts/e1?history=1");
+      expect(result.current.collapsed).toBe(true);
+      moveTo("/admin/collections/posts/e1");
+
+      expect(result.current.collapsed).toBe(collapsedByAuthor);
+    }
+  );
 });

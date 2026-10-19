@@ -181,6 +181,8 @@ function renderPublishing(props: Record<string, unknown> = {}) {
 describe("VersionHistorySheet", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Every test starts from an address naming no panel, as a page load does.
+    window.history.replaceState(null, "", "/");
     useVersionsMock.mockReturnValue(listState());
     useVersionMock.mockReturnValue(detailState());
     restoreMock.mockReturnValue({ mutate: mutateMock, isPending: false });
@@ -330,6 +332,12 @@ describe("VersionHistorySheet", () => {
       })
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    // Where the open panel's address stands.
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/collections/posts/e1?history=1"
+    );
 
     const { rerender } = renderSheet();
     // The list names versions without showing any of them.
@@ -342,6 +350,21 @@ describe("VersionHistorySheet", () => {
     // Staying on the same version is the same showing.
     rerender(<VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />);
     expect(markSeenMock).toHaveBeenCalledTimes(1);
+    // Back to the list, as the address moves when the author leaves the
+    // version, and the same version chosen again: a new showing, marked again.
+    act(() => {
+      window.history.replaceState(
+        null,
+        "",
+        "/admin/collections/posts/e1?history=1"
+      );
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Version 2/ })
+    );
+    await waitFor(() => expect(markSeenMock).toHaveBeenCalledTimes(2));
+    expect(markSeenMock).toHaveBeenLastCalledWith(scope, 2);
   });
 
   it("marks nothing while the chosen version has not arrived", async () => {

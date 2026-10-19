@@ -9,7 +9,8 @@
  * Opening adds a history entry, so back closes it. Choosing a version replaces
  * the current entry rather than adding one per row looked at. Closing steps
  * back off the entry opening added, so back never reopens the panel; a panel
- * opened by a link is closed in place.
+ * opened by a link, or one the author has since moved on from (another
+ * language, say), is closed in place.
  *
  * @module components/features/versions/history-address
  */
@@ -36,6 +37,19 @@ export const HISTORY_ADDRESS_PARAMS: readonly string[] = [
 /** Whether the address names history open right now. */
 function readOpenFromAddress(): boolean {
   return new URLSearchParams(window.location.search).get(HISTORY_PARAM) === "1";
+}
+
+/**
+ * The entry an open added, told apart from any other: the address as opening
+ * left it, with the chosen version set aside, since choosing one replaces the
+ * entry rather than leaving it.
+ */
+function openerEntry(search: string): string {
+  const params = new URLSearchParams(search);
+  params.set(HISTORY_PARAM, "1");
+  params.delete(VERSION_PARAM);
+  params.sort();
+  return params.toString();
 }
 
 /** A version number from the address, or null for anything else. */
@@ -72,12 +86,13 @@ export function useHistoryAddress(available = true): HistoryAddress {
 
   const [open, setOpenState] = useState(addressOpen);
   const [version, setVersionState] = useState(addressVersion);
-  // Whether the open entry is one this hook added, and so one closing can
-  // step back off. Forgotten once the address is closed by any means.
-  const addedOpenEntry = useRef(false);
+  // The entry this hook added on opening, which closing can step back off
+  // while it is still the one showing. Forgotten once the address is closed
+  // by any means.
+  const addedOpenEntry = useRef<string | null>(null);
   useEffect(() => {
     setOpenState(addressOpen);
-    if (!addressOpen) addedOpenEntry.current = false;
+    if (!addressOpen) addedOpenEntry.current = null;
   }, [addressOpen]);
   useEffect(() => setVersionState(addressVersion), [addressVersion]);
 
@@ -88,14 +103,16 @@ export function useHistoryAddress(available = true): HistoryAddress {
       // already open, by a link, adds none, and stepping back would leave the
       // editor.
       if (!readOpenFromAddress()) {
-        addedOpenEntry.current = true;
+        addedOpenEntry.current = openerEntry(window.location.search);
         setSearchParams({ [HISTORY_PARAM]: "1" });
       }
       return;
     }
     setVersionState(null);
-    if (addedOpenEntry.current) {
-      addedOpenEntry.current = false;
+    const added = addedOpenEntry.current;
+    addedOpenEntry.current = null;
+    // Stepping back from any other entry would undo that move, not close.
+    if (added !== null && added === openerEntry(window.location.search)) {
       window.history.back();
       return;
     }
