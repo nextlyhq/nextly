@@ -62,6 +62,9 @@ describe("masking addresses in text", () => {
     ["customer/department=shipping@example.com", "c***@example.com"],
     ["o'brien@example.com", "o***@example.com"],
     ["a!b#c$d%e&f*g?h^i`j{k|l}m~n@example.com", "a***@example.com"],
+    // Domain literals, an address and a tagged one.
+    ["john@[192.0.2.1]", "j***@[192.0.2.1]"],
+    ["<john@[IPv6:2001:db8::1]>", "<j***@[IPv6:2001:db8::1]>"],
   ])("masks %s", (input, expected) => {
     expect(maskEmailsInText(input)).toBe(expected);
   });
@@ -72,6 +75,7 @@ describe("masking addresses in text", () => {
     "price @ 3 for 2",
     "no addresses here",
     "http://user@intranet:3000/admin",
+    "read arr@[0] first",
   ])("leaves %s unchanged", text => {
     expect(maskEmailsInText(text)).toBe(text);
   });
@@ -196,6 +200,48 @@ describe("masking addresses in a value", () => {
     const masked = maskEmails({ error: unreadable }).error;
     expect(masked).toBeInstanceOf(Error);
     expect(masked.message).toBe("send to j***@example.com failed");
+  });
+
+  it("masks addresses in keys, keeping two that mask alike apart", () => {
+    const masked = maskEmails({
+      "john@example.com": "rejected",
+      "jane@example.com": "deferred",
+    });
+    expect(masked).toEqual({
+      "j***@example.com": "rejected",
+      "j***@example.com (2)": "deferred",
+    });
+  });
+
+  it("keeps a __proto__ key a field of the copy", () => {
+    const parsed = JSON.parse('{"__proto__": "john@example.com"}') as object;
+    const masked = maskEmails(parsed) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(masked)).toBe(Object.prototype);
+    expect(Object.hasOwn(masked, "__proto__")).toBe(true);
+    expect(masked["__proto__"]).toBe("j***@example.com");
+  });
+
+  it("masks an address in an error's name", () => {
+    // Not enumerable, as a class or the constructor sets it: assigning it
+    // would make an own enumerable field, which is masked by another path.
+    const error = new Error("refused");
+    Object.defineProperty(error, "name", {
+      value: "RecipientError john@example.com",
+      enumerable: false,
+    });
+    expect(maskEmails(error).name).toBe("RecipientError j***@example.com");
+  });
+
+  it("never throws on an error whose message cannot be read", () => {
+    const unreadable = new Proxy(new Error("send to john@example.com failed"), {
+      get(target, key) {
+        if (key === "message") throw new Error("no message");
+        return Reflect.get(target, key) as unknown;
+      },
+    });
+    const masked = maskEmails({ error: unreadable }).error;
+    expect(masked).toBeInstanceOf(Error);
+    expect(masked.message).toBe("(unreadable error)");
   });
 
   it("does not loop on a value that refers to itself", () => {

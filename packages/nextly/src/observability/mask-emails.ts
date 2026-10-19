@@ -24,11 +24,13 @@ import type { Logger } from "../shared/types";
  * top-level label of letters or punycode (`xn--p1ai`), so `user@localhost`
  * in a URL and an `@scope/pkg` specifier are left alone. Letters and digits
  * are any script's, so an internationalized address (`jöhn@bücher.de`) is
- * matched whole rather than missed or cut in two. Bounded on both sides so a
- * longer run of address characters is not split into a match.
+ * matched whole rather than missed or cut in two. A domain literal
+ * (`john@[192.0.2.1]`, `john@[IPv6:2001:db8::1]`) is an address too, while
+ * an index such as `arr@[0]` is not. Bounded on both sides so a longer run
+ * of address characters is not split into a match.
  */
 const EMAIL_PATTERN =
-  /(?<![\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.)+"|[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:xn--[A-Za-z0-9-]+|\p{L}{2,}))(?![\p{L}\p{N}-])/gu;
+  /(?<![\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.)+"|[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:xn--[A-Za-z0-9-]+|\p{L}{2,})|\[(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]*[A-Za-z0-9]:[^[\]\s\\]+)\])(?![\p{L}\p{N}-])/gu;
 
 /** Whether this environment's logs mask addresses. */
 export function emailMaskingEnabled(nodeEnv: string | undefined): boolean {
@@ -118,9 +120,26 @@ function maskRecord(
   // Recorded before the fields, so an object that contains itself ends.
   seen.set(value, copy);
   for (const [key, field] of Object.entries(value)) {
-    copy[key] = maskValue(field, seen);
+    // Keys are masked too: a payload keyed by recipient names each one.
+    defineOwn(
+      copy,
+      freeKey(copy, maskEmailsInText(key)),
+      maskValue(field, seen),
+      true
+    );
   }
   return copy;
+}
+
+/**
+ * `key`, or `key (2)`, `key (3)` and so on when it is taken: two addresses
+ * that mask alike stay two fields rather than one overwriting the other.
+ */
+function freeKey(copy: Record<string, unknown>, key: string): string {
+  if (!Object.hasOwn(copy, key)) return key;
+  let n = 2;
+  while (Object.hasOwn(copy, `${key} (${n})`)) n++;
+  return `${key} (${n})`;
 }
 
 /**
@@ -135,19 +154,22 @@ function maskError(error: Error, seen: WeakMap<object, unknown>): Error {
   try {
     return copyErrorMasked(error, seen);
   } catch {
-    const plain = new Error(maskEmailsInText(String(error.message)));
+    const plain = new Error(
+      maskEmailsInText(readText(() => error.message, "(unreadable error)"))
+    );
     seen.set(error, plain);
     return plain;
   }
 }
 
 function copyErrorMasked(error: Error, seen: WeakMap<object, unknown>): Error {
-  const copy = blankCopyOf(error, maskEmailsInText(error.message));
+  const name = maskEmailsInText(error.name);
+  const copy = blankCopyOf(error, maskEmailsInText(error.message), name);
   seen.set(error, copy);
   // Set as own data properties rather than assigned: an error class may
   // declare any of them as an accessor with no setter on its prototype, and
   // assigning through one throws.
-  if (copy.name !== error.name) defineOwn(copy, "name", error.name, false);
+  if (copy.name !== name) defineOwn(copy, "name", name, false);
   if (error.stack !== undefined) {
     defineOwn(copy, "stack", maskEmailsInText(error.stack), false);
   }
@@ -172,16 +194,28 @@ function copyErrorMasked(error: Error, seen: WeakMap<object, unknown>): Error {
  * so a plain `Error` given its prototype throws on the first of them it
  * touches.
  */
-function blankCopyOf(error: Error, message: string): Error {
+function blankCopyOf(error: Error, message: string, name: string): Error {
   if (typeof DOMException !== "undefined" && error instanceof DOMException) {
-    return new DOMException(message, error.name);
+    return new DOMException(message, name);
   }
   const copy = new Error(message);
   Object.setPrototypeOf(copy, Object.getPrototypeOf(error) as object);
   return copy;
 }
 
-/** Set `key` on `target` as a writable own data property. */
+/** A value read as text, or `fallback` when reading it throws. */
+function readText(read: () => unknown, fallback: string): string {
+  try {
+    return String(read());
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Set `key` on `target` as a writable own data property. Defined rather than
+ * assigned, so a `__proto__` key becomes a field and not the prototype.
+ */
 function defineOwn(
   target: object,
   key: string,
