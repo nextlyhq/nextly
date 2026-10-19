@@ -24,6 +24,7 @@ import { container } from "../../di/container";
 import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
 import { NextlyError } from "../../errors/nextly-error";
 import { getAuthLogger } from "../../lib/logger";
+import { consoleLogger } from "../../shared/types";
 import type { Logger } from "../shared";
 
 import {
@@ -822,7 +823,7 @@ export async function listEffectivePermissions(
     const result = Array.from(permissionStrings).sort();
 
     if (process.env.DEBUG_RBAC === "1") {
-      console.log("[permissions][dbg] listEffectivePermissions", {
+      consoleLogger.info("[permissions][dbg] listEffectivePermissions", {
         userId,
         roleCount: roleIds.size,
         permissionCount: result.length,
