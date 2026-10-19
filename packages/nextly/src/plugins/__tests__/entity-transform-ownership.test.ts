@@ -745,17 +745,80 @@ describe("an owner's table settings a transform restates in an equivalent form",
     expect(orders.localized).toBe(false);
   });
 
-  it("accept a dbName that resolves to the collection's default table", () => {
-    // `orders` is stored in `dc_orders` whether `dbName` is unset, `orders`
-    // or `dc_orders`.
-    for (const dbName of ["orders", "dc_orders"]) {
-      const orders = ordersOf([
-        shop(),
-        changing("reviews", entity => ({ ...entity, dbName })),
-      ]);
+  it("accept a dbName naming the collection's default table", () => {
+    // `orders` is stored in `dc_orders` while `dbName` is unset.
+    const orders = ordersOf([
+      shop(),
+      changing("reviews", entity => ({ ...entity, dbName: "dc_orders" })),
+    ]);
 
-      expect(orders.dbName).toBe(dbName);
-    }
+    expect(orders.dbName).toBe("dc_orders");
+  });
+
+  it("accept dropping a dbName that names the default table", () => {
+    const orders = ordersOf([
+      plugin("shop", {
+        collections: [ordersCollection({ dbName: "dc_orders" })],
+      }),
+      changing("reviews", ({ dbName: _dropped, ...entity }) => entity),
+    ]);
+
+    expect(orders.dbName).toBeUndefined();
+  });
+
+  it("leave a Single with a blank slug to the validation that refuses it", () => {
+    // A blank slug names no default table, so there is none to resolve: the
+    // comparison must not throw where the slug's own validation would.
+    const blank = {
+      slug: " ",
+      fields: [{ name: "currency", type: "text" }],
+    } as unknown as SingleConfig;
+
+    expect(() =>
+      fold([
+        plugin("shop", { singles: [blank] }),
+        plugin("reviews", {
+          dependsOn: ["shop"],
+          transforms: [{ target: " ", transform: entity => entity }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("still refuse another spelling of the default table, which not every reader resolves", () => {
+    // The schema pipeline resolves each of these to the default table, but
+    // `i18n:restore` reads a `dbName` as written, and would look for
+    // `orders_locales` rather than `dc_orders_locales`.
+    const collection = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({ ...entity, dbName: "orders" })),
+      ])
+    );
+    const single = refusalOf(() =>
+      fold([
+        plugin("shop", {
+          singles: [
+            {
+              slug: "store-settings",
+              fields: [{ name: "currency", type: "text" }],
+            } as unknown as SingleConfig,
+          ],
+        }),
+        plugin("reviews", {
+          dependsOn: ["shop"],
+          transforms: [
+            {
+              target: "store-settings",
+              transform: entity => ({ ...entity, dbName: "store_settings" }),
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(collection?.code).toBe("TRANSFORM_TABLE_CHANGED");
+    expect(single?.code).toBe("TRANSFORM_TABLE_CHANGED");
   });
 
   it("accept a dbName that resolves to a Single's default table", () => {

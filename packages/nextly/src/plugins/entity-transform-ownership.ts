@@ -376,23 +376,26 @@ const TABLE_SETTINGS = ["dbName", "status", "localized"] as const;
 type TableSetting = (typeof TABLE_SETTINGS)[number];
 
 /**
- * The table each kind's definition is stored in, by the resolvers the schema
- * pipeline names tables with. A component's table follows its slug alone.
+ * The table each kind's entity is stored in while it sets no `dbName`, by the
+ * resolvers the schema pipeline names tables with.
  */
-const TABLE_OF: Record<
-  EntityKind,
-  (slug: string, dbName: string | undefined) => string
-> = {
-  collection: (slug, dbName) => resolveCollectionTableName(slug, dbName),
-  single: (slug, dbName) => resolveSingleTableName({ slug, dbName }),
+const DEFAULT_TABLE_OF: Record<EntityKind, (slug: string) => string> = {
+  collection: slug => resolveCollectionTableName(slug),
+  single: slug => resolveSingleTableName({ slug }),
   component: slug => resolveComponentTableName(slug),
 };
 
 /**
- * The table settings as the schema pipeline reads them, so a transform that
- * restates them in an equivalent form changes nothing: a `dbName` by the
- * table it resolves to, and `status` and `localized` as on only when `true`,
- * so an explicit `false` reads as the unset setting it is.
+ * The table settings as they are read, so a transform that restates them in
+ * an equivalent form changes nothing: `status` and `localized` are on only
+ * when `true`, so an explicit `false` reads as the unset setting it is, and
+ * an unset `dbName` reads as the name of the default table.
+ *
+ * A `dbName` that is set is compared as written. The schema pipeline
+ * resolves it, prefixing and normalizing it, but `i18n:restore` reads it
+ * verbatim to find the `_locales` companion: `orders` and `dc_orders` are one
+ * table to the first and two to the second. Only the default table's own
+ * name reads as that table everywhere.
  */
 function tableSettingsOf(
   kind: EntityKind,
@@ -401,11 +404,11 @@ function tableSettingsOf(
 ): Record<TableSetting, unknown> {
   const dbName = definition.dbName;
   return {
-    // A `dbName` that is not a string is compared as written: no resolver
-    // reads one, so nothing says which table it means.
+    // A blank slug names no default table, and is its own validation's to
+    // refuse: an unset `dbName` then stays unset rather than resolved.
     dbName:
-      dbName === undefined || typeof dbName === "string"
-        ? TABLE_OF[kind](slug, dbName)
+      dbName === undefined && slug.trim() !== ""
+        ? DEFAULT_TABLE_OF[kind](slug)
         : dbName,
     status: definition.status === true,
     localized: definition.localized === true,
