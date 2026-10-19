@@ -1,0 +1,45 @@
+name: Main catch-up
+
+# Every two hours, starts CI and Integration on main's newest commit when no
+# run has tested it. On a busy day each push supersedes the one before and
+# skips its tests (its gate then refuses rather than passes), so without this
+# main could go untested for as long as merges keep coming. A look that finds
+# the commit tested, or a run still on its way, starts nothing.
+# `scripts/main-catch-up.mjs` has the rule.
+on:
+  schedule:
+    - cron: "23 */2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: main-catch-up
+  cancel-in-progress: false
+
+jobs:
+  catch-up:
+    name: Test main's newest commit if no run has
+    if: github.repository == 'nextlyhq/nextly'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          sparse-checkout: |
+            scripts
+            .nvmrc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Start what main's newest commit is missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/main-catch-up.mjs

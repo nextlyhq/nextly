@@ -29,7 +29,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { isFieldLocalized } from "../../i18n/classify-fields";
 import {
   companionHistoryKey,
-  readCompanionColumnHistory,
+  readCompanionHistory,
 } from "../../i18n/migration/companion-history";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
@@ -263,6 +263,8 @@ export async function generateMigration(
   //     entity's table name — so a single planner call over the merged list covers them.
   // Tagged rather than concatenated: the kind is half of the transition marker's key, so an entry
   // that lost track of which list it came from could not name the record it belongs to.
+  // What the companion files left: each companion's columns, and which companions exist.
+  const companionHistory = await readCompanionHistory(args.migrationsDir);
   const companionPlans = planCompanionMigrations(
     [
       ...args.collections.map(e => tagged(e, "collection")),
@@ -271,7 +273,8 @@ export async function generateMigration(
     ],
     previousSnapshot,
     args.dialect,
-    args.defaultLocale ?? "en"
+    args.defaultLocale ?? "en",
+    companionHistory.present
   );
 
   // 3. Diff.
@@ -293,7 +296,7 @@ export async function generateMigration(
     previousSnapshot,
     args.dialect,
     args.defaultLocale ?? "en",
-    await readCompanionColumnHistory(args.migrationsDir),
+    companionHistory.columns,
     args.onWarning ?? (() => {}),
     desiredSnapshot
   );
@@ -308,7 +311,8 @@ export async function generateMigration(
     ],
     previousSnapshot,
     args.dialect,
-    args.defaultLocale ?? "en"
+    args.defaultLocale ?? "en",
+    companionHistory.present
   );
 
   const hasCompanions =
@@ -629,7 +633,9 @@ function planCompanionMigrations(
   entities: TaggedConfigEntity[],
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
-  defaultLocale: string
+  defaultLocale: string,
+  /** The entities whose companion table the migration files leave in place. */
+  companionsPresent: ReadonlySet<string>
 ): CompanionPlanEntry[] {
   const entries: CompanionPlanEntry[] = [];
   for (const { entity: c, kind: entityKind } of entities) {
@@ -704,9 +710,12 @@ function planCompanionMigrations(
     // translation still has its main column, but its move is the `joins` file's, so it does not
     // make this an enable.
     const joining = new Set(
-      fieldsJoiningTranslationIn(c, previousSnapshot, dialect).map(
-        j => j.column.name
-      )
+      fieldsJoiningTranslationIn(
+        c,
+        previousSnapshot,
+        dialect,
+        companionsPresent.has(companionHistoryKey(entityKind, c.slug))
+      ).map(j => j.column.name)
     );
     const hadLocalizedColumns = spec.columns.some(
       col => prevMainColumnNames.includes(col.name) && !joining.has(col.name)
@@ -835,16 +844,22 @@ interface FieldJoinsEntry {
  * main table, translated now. The mirror of `fieldsLeavingTranslationIn`, read from the same
  * marker, so a snapshot written before the marker existed plans nothing. A field added in this
  * change has no main column and is not one of them.
+ *
+ * A snapshot records no translated columns for an entity with none, which is also how the last
+ * field leaving translation leaves it; the companion table outlives that column, so when the
+ * migration files say it is still there (`companionPresent`) the empty record is read as none.
  */
 function fieldsJoiningTranslationIn(
   c: MinimalConfigEntity,
   previousSnapshot: NextlySchemaSnapshot,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  companionPresent: boolean
 ): LeavingField[] {
   if (c.localized !== true) return [];
   const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
-  if (prevMain?.localized !== true || !prevMain.localizedColumns) return [];
-  const translated = new Set(prevMain.localizedColumns);
+  if (prevMain?.localized !== true) return [];
+  if (!prevMain.localizedColumns && !companionPresent) return [];
+  const translated = new Set(prevMain.localizedColumns ?? []);
   const onMain = new Set(prevMain.columns.map(col => col.name));
   return c.fields.flatMap(field => {
     if (!isFieldLocalized(field, true)) return [];
@@ -863,10 +878,20 @@ function planFieldsJoiningTranslation(
   entities: TaggedConfigEntity[],
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
-  defaultLocale: string
+  defaultLocale: string,
+  /** The entities whose companion table the migration files leave in place. */
+  companionsPresent: ReadonlySet<string>
 ): FieldJoinsEntry[] {
   return entities.flatMap(({ entity: c, kind }) => {
-    const joining = fieldsJoiningTranslationIn(c, previousSnapshot, dialect);
+    const companionPresent = companionsPresent.has(
+      companionHistoryKey(kind, c.slug)
+    );
+    const joining = fieldsJoiningTranslationIn(
+      c,
+      previousSnapshot,
+      dialect,
+      companionPresent
+    );
     if (joining.length === 0) return [];
     const names = new Set(joining.map(j => j.field.name));
     // The fields as they were: the joining ones shared.
@@ -903,8 +928,10 @@ function planFieldsJoiningTranslation(
           builtBy: "codeFirst",
           oldFields,
           newFields: c.fields,
-          // A translated entity whose fields were all shared has no companion yet.
-          companionExists: (prevMain?.localizedColumns?.length ?? 0) > 0,
+          // A companion outlives its last column: a `shared` file drops the column and keeps the
+          // table, so the snapshot's empty list of translated columns does not say it is gone.
+          companionExists:
+            companionPresent || (prevMain?.localizedColumns?.length ?? 0) > 0,
           restoreRequired: requiredAgain(
             c.tableName,
             joining,

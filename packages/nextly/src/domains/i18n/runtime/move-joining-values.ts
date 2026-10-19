@@ -62,7 +62,10 @@ export async function moveValuesOfFieldsJoiningTranslation(
     defaultLocale: args.defaultLocale,
     oldFields: args.oldFields,
     newFields: args.newFields,
-    status: args.wasStatus && companionHasStatus,
+    // A companion created here has `_status` when the entity has Draft/Published after the change,
+    // so the default-language rows it gets take each entry's publishing state.
+    status:
+      args.wasStatus && (companionExists ? companionHasStatus : args.status),
     companionStatus: args.status,
     companionExists,
   };

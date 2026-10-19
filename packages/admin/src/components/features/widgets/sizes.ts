@@ -58,6 +58,59 @@ const WIDTH_TRACKS: Readonly<Record<WidgetWidth, number>> = Object.freeze({
   full: 12,
 });
 
+/** From this dashboard width the narrow widths share a row two at a time. */
+export const DASHBOARD_MEDIUM_FROM_PX = 640;
+/** From this dashboard width every width is drawn as chosen. */
+export const DASHBOARD_WIDE_FROM_PX = 1024;
+
+/**
+ * The space between the grid's tracks, in pixels: the grid's `gap-[24px]`, in pixels rather than
+ * rem so it does not follow the page's root font size. A card's drawn width is
+ * its tracks plus the gaps between them, so a width predicted without it is too wide by up to
+ * a gap, which is enough to move a card across a tier's edge.
+ */
+export const GRID_GAP_PX = 24;
+
+/** The columns of the table above: which spans a dashboard of a given width draws. */
+export type DashboardBand = "narrow" | "medium" | "wide";
+
+/** The band a dashboard of `width` pixels draws, by the DASHBOARD's width, never the window's. */
+export function bandForWidth(width: number): DashboardBand {
+  if (width < DASHBOARD_MEDIUM_FROM_PX) return "narrow";
+  return width >= DASHBOARD_WIDE_FROM_PX ? "wide" : "medium";
+}
+
+/**
+ * The tracks a width spans in each band, the table above as numbers.
+ *
+ * The class text has to be written out in full for Tailwind, so it cannot be built from this;
+ * a test reads the classes back and holds the two to the same answer at every band edge.
+ */
+const BAND_TRACKS: Readonly<
+  Record<DashboardBand, Readonly<Record<WidgetWidth, number>>>
+> = Object.freeze({
+  narrow: Object.freeze({
+    quarter: 12,
+    third: 12,
+    half: 12,
+    twoThirds: 12,
+    full: 12,
+  }),
+  medium: Object.freeze({
+    quarter: 6,
+    third: 6,
+    half: 6,
+    twoThirds: 12,
+    full: 12,
+  }),
+  wide: WIDTH_TRACKS,
+});
+
+/** How many of the twelve tracks a card drawn at `width` spans in `band`. */
+export function drawnSpan(width: WidgetWidth, band: DashboardBand): number {
+  return BAND_TRACKS[band][width];
+}
+
 /** What each width is called in the card menu, and its short label. */
 export const WIDTH_NAMES: Readonly<
   Record<WidgetWidth, { name: string; fraction: string }>

@@ -28,6 +28,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
 import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
 import type { ReleaseReadiness } from "../../domains/releases/readiness/evaluate-readiness";
+import type { ReleaseCalendar } from "../../domains/releases/release-calendar";
 import type {
   ReleaseMemberRow,
   ReleaseRow,
@@ -36,6 +37,7 @@ import type {
   AddMemberInput,
   FindReleasesQuery,
   ReleaseBlocker,
+  ReleaseCalendarQuery,
   ReleaseCountQuery,
   ReleaseDetailsChange,
   ReleasesService,
@@ -108,8 +110,10 @@ export interface ReleasesNamespace {
    *
    * Narrow it by `tab` (`upcoming`, `attention`, `drafts`, `done`), by `state`
    * and a window on the scheduled instant, by `kind` (`release` leaves out
-   * single-document releases), and by `search`, a case-insensitive
-   * match on the title or description. Page it with `page` (from 1) and
+   * single-document releases), by `search`, a case-insensitive
+   * match on the title or description, and by `day`, a date in a named time
+   * zone (`{ date: "2026-03-29", timezone: "Europe/Berlin" }`), for the
+   * releases whose time falls on that day there. Page it with `page` (from 1) and
    * `limit` (50 by default, at most 200). The scheduled releases come soonest
    * first unless `order` says otherwise; other listings latest first.
    *
@@ -120,7 +124,7 @@ export interface ReleasesNamespace {
    * runtime: a caller that cannot see `memberAction` cannot tell which way a
    * release moves the document it just asked about.
    *
-   * `tab`, `kind`, `search` and `page` are `@experimental`.
+   * `tab`, `kind`, `search`, `day` and `page` are `@experimental`.
    */
   find(
     args?: FindReleasesQuery & ReleaseCallerArgs
@@ -134,6 +138,21 @@ export interface ReleasesNamespace {
    * @experimental
    */
   count(args?: ReleaseCountQuery & ReleaseCallerArgs): Promise<number>;
+  /**
+   * The releases in a window of days, `from` to `to` inclusive and at most six
+   * weeks, grouped by the day their time falls on in `timezone`.
+   *
+   * Every day of the window comes back, in order, with `total` and `counts`
+   * (by state) covering all of that day's releases and `releases` holding the
+   * first three in time order; the rest of a day is `find({ day })`. Refused
+   * for an unknown zone, a date that does not exist, a `to` before `from`, or
+   * a window longer than 42 days.
+   *
+   * @experimental
+   */
+  calendar(
+    args: ReleaseCalendarQuery & ReleaseCallerArgs
+  ): Promise<ReleaseCalendar>;
   findByID(
     args: { id: string } & ReleaseCallerArgs
   ): Promise<ReleaseRow | null>;
@@ -401,6 +420,18 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       void userRoles;
       return service().count(query, actorOf(ctx, args));
     },
+
+    calendar: args =>
+      // The window's own fields, named, so no caller key reaches the query.
+      service().calendar(
+        {
+          from: args.from,
+          to: args.to,
+          timezone: args.timezone,
+          kind: args.kind,
+        },
+        actorOf(ctx, args)
+      ),
 
     findByID: args => service().findByID(args.id, actorOf(ctx, args)),
 

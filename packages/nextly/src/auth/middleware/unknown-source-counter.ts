@@ -65,7 +65,14 @@ export interface UnknownSourceCounter {
   ): Promise<UnknownSourceVerdict>;
   /** Spend one place in the ceiling before a token is looked up. */
   arrive(limits: UnknownSourceLimits): Promise<UnknownSourceArrival>;
-  /** Admit against `key`'s budget alone, for a request that arrived at `at`. */
+  /**
+   * Admit against `key`'s budget alone, for a request that arrived at `at`.
+   *
+   * The key is charged at the time of admission, not at `at`: work between
+   * arrival and admission, such as reading a body its caller controls, can
+   * outlast the window, and a charge stamped at an arrival already expired
+   * would count for nothing. The ceiling place the arrival spent stays spent.
+   */
   admitArrived(
     key: string,
     limits: UnknownSourceLimits,
@@ -144,7 +151,21 @@ export class MemoryUnknownSourceCounter implements UnknownSourceCounter {
     limits: UnknownSourceLimits,
     at: number
   ): Promise<UnknownSourceVerdict> {
-    return Promise.resolve(this.record(key, limits, Date.now(), at, false));
+    const now = Date.now();
+    const verdict = this.record(key, limits, now, now, false);
+    // In the same synchronous step, the ceiling place the arrival spent moves
+    // to the time the key was charged, so the two still expire together and
+    // the size bound below holds. A place already expired is spent again:
+    // stricter, never looser.
+    if (verdict.allowed) this.moveCeilingEntry(at, now);
+    return Promise.resolve(verdict);
+  }
+
+  /** Move one ceiling entry from `from` to `to`, keeping the order. */
+  private moveCeilingEntry(from: number, to: number): void {
+    const index = this.ceilingEntries.indexOf(from);
+    if (index !== -1) this.ceilingEntries.splice(index, 1);
+    insertInOrder(this.ceilingEntries, to);
   }
 
   /** The ceiling's refusal when it is met; nothing else is touched. */

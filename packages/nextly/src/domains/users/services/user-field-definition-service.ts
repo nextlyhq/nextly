@@ -36,6 +36,7 @@ import type { UserFieldConfig } from "../../../users";
 import {
   checkUserFieldName,
   checkUserFieldType,
+  userFieldColumnName,
 } from "../../../users/config/validate-user-config";
 
 // ============================================================
@@ -152,6 +153,33 @@ export class UserFieldDefinitionService extends BaseService {
   }
 
   /**
+   * Reject a name stored in the `user_ext` column another field already uses
+   * (`foo_bar` beside `fooBar`). The same name again is left to the unique
+   * index, as before.
+   */
+  private async assertColumnFree(name: string): Promise<void> {
+    const column = userFieldColumnName(name);
+    const rows: Array<{ name: string }> = await this.db
+      .select({ name: this.userFieldDefinitions.name })
+      .from(this.userFieldDefinitions);
+    const holder = rows.find(
+      row => row.name !== name && userFieldColumnName(row.name) === column
+    );
+    if (!holder) return;
+
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "name",
+          code: "USER_FIELD_NAME_DUPLICATE",
+          message: `Field '${name}' would be stored in the column '${column}', which the field '${holder.name}' already uses`,
+        },
+      ],
+      logContext: { name, column, holder: holder.name },
+    });
+  }
+
+  /**
    * Reject a type that has no `user_ext` column representation.
    */
   private assertUsableType(type: unknown): void {
@@ -245,6 +273,7 @@ export class UserFieldDefinitionService extends BaseService {
   ): Promise<UserFieldDefinitionRecord> {
     this.assertUsableName(data.name);
     this.assertUsableType(data.type);
+    await this.assertColumnFree(data.name);
 
     const id = randomUUID();
     const now = new Date();

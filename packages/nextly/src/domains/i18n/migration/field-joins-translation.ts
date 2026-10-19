@@ -320,10 +320,13 @@ export async function planJoiningMovesForApply(args: {
     ...Object.values(args.desired.components).map(e => ({
       e,
       builtBy: builtByFor("fieldGroup", e.builderOwned),
+      // A field group's row columns are described by their own rule, as its table is built.
+      rowColumns: true,
     })),
   ];
   const result: JoiningMovesForApply = { moved: [], statements: [] };
-  for (const { e, builtBy } of entities) {
+  for (const entry of entities) {
+    const { e, builtBy } = entry;
     if (e.localized !== true) continue;
     const joining = e.fields.flatMap(f => {
       if (!isFieldLocalized(f, true)) return [];
@@ -333,6 +336,7 @@ export async function planJoiningMovesForApply(args: {
         : [];
     });
     if (joining.length === 0) continue;
+    await refuseReshapedJoins(e, builtBy, "rowColumns" in entry, joining, args);
     const plan = await planEntityMove(e, builtBy, joining, args);
     if (plan.statements.length === 0) continue;
     result.statements.push(...plan.statements);
@@ -347,6 +351,76 @@ export async function planJoiningMovesForApply(args: {
     );
   }
   return result;
+}
+
+/**
+ * Refuses a field that becomes translated in the same change that changes how it is stored, before
+ * anything runs: its value would be copied as it is into a companion column of the new shape,
+ * which PostgreSQL refuses part-way and MySQL and SQLite coerce or cut. The Builder's paths and
+ * `migrate:create` refuse this from the entity's previous fields; a code-first apply has only the
+ * desired schema, so the live main column is compared with the column the field would have if it
+ * stayed shared, by the diff's own rule (`typesDiffer`).
+ */
+async function refuseReshapedJoins(
+  e: ApplyEntity,
+  builtBy: ColumnOrigin,
+  rowColumns: boolean,
+  joining: readonly { field: string; column: string }[],
+  args: { db: unknown; dialect: SupportedDialect }
+): Promise<void> {
+  const [
+    { introspectLiveSnapshot },
+    { typesDiffer },
+    { getColumnDescriptor, getComponentRowColumnDescriptor },
+    { refusalsForFieldsJoiningTranslation },
+    { NextlyError },
+  ] = await Promise.all([
+    import("../../schema/pipeline/diff/introspect-live"),
+    import("../../schema/pipeline/diff/declared-size"),
+    import("../../schema/services/field-column-descriptor"),
+    import("./field-leaves-translation-rules"),
+    import("../../../errors/nextly-error"),
+  ]);
+  const live = (
+    await introspectLiveSnapshot(args.db, args.dialect, [e.tableName])
+  ).tables.find(t => t.name === e.tableName);
+  const describe = rowColumns
+    ? getComponentRowColumnDescriptor
+    : getColumnDescriptor;
+  const reshaped = joining.filter(j => {
+    const column = live?.columns.find(c => c.name === j.column);
+    const field = e.fields.find(f => f.name === j.field);
+    const shared = field
+      ? describe(
+          { ...field, localized: false } as unknown as Parameters<
+            typeof describe
+          >[0],
+          args.dialect,
+          builtBy
+        )
+      : null;
+    return (
+      column !== undefined &&
+      shared !== null &&
+      // The column the field would have, from its descriptor alone: PostgreSQL and MySQL report a
+      // live column's length or precision apart from its type, and keeping that beside the new
+      // type would compare the old bound with itself.
+      typesDiffer(column, {
+        name: column.name,
+        type: shared.dialectType,
+        nullable: column.nullable,
+      })
+    );
+  });
+  if (reshaped.length === 0) return;
+  const refusals = refusalsForFieldsJoiningTranslation({
+    reshaped: reshaped.map(j => j.field),
+    surface: builtBy === "codeFirst" ? "code" : "builder",
+  });
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: e.slug, fields: refusals.map(r => r.path) },
+  });
 }
 
 /** One entity's move, planned against its companion as it is now. */
@@ -381,7 +455,13 @@ async function planEntityMove(
       names.has(f.name) ? { ...f, localized: false } : f
     ),
     newFields: e.fields,
-    status: onMain.has("status") && onCompanion.has("_status"),
+    // A companion created here has `_status` when the entity has Draft/Published, so the
+    // default-language rows it gets take each entry's publishing state.
+    status:
+      onMain.has("status") &&
+      (companionColumns === undefined
+        ? e.status === true
+        : onCompanion.has("_status")),
     companionStatus: e.status === true,
     companionExists: companionColumns !== undefined,
     companionColumns: onCompanion,

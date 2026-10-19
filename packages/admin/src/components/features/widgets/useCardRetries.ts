@@ -12,20 +12,26 @@
  * @module components/features/widgets/useCardRetries
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 
 import {
   useWidgetQueries,
   type CellSlots,
+  type UseWidgetQueriesResult,
   type WidgetQueryRequest,
 } from "@admin/hooks/queries/useWidgetQueries";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
+
+import { asksAgainAt } from "./tier-query";
 
 /** A retried card's answer, and when it arrived. */
 interface SettledRetry {
   slot?: WidgetSlot;
   cells?: Record<string, WidgetSlot>;
   at: Date | null;
+  /** The tier the answer was fetched at, which a later rise is judged against. */
+  tier?: SizeTier;
 }
 
 interface RetryState {
@@ -33,23 +39,57 @@ interface RetryState {
   inFlight: ReadonlyMap<string, number>;
   /** Cards whose retry has answered, with that answer. */
   settled: ReadonlyMap<string, SettledRetry & { attempt: number }>;
+  /**
+   * In-flight cards asked again because they grew, not because Retry was pressed, with the tier
+   * each grew to: they keep what they were showing until the larger answer arrives, rather than
+   * drawing a skeleton.
+   */
+  quiet: ReadonlyMap<string, SizeTier>;
+  /**
+   * Cards whose growth to a tier was refused, with that tier. A refused growth keeps the answer
+   * the card had, and is not asked for again on its own -- each refusal would otherwise start the
+   * next request at once, without end. Retry, or the batch's next answer, clears it.
+   */
+  stalled: ReadonlyMap<string, SizeTier>;
 }
 
 type RetryAction =
   | { type: "press"; placementId: string }
-  | { type: "arrived"; answers: Map<string, SettledRetry> }
+  | {
+      type: "grow";
+      placementId: string;
+      query: WidgetQueryRequest["query"];
+      tier: SizeTier;
+      /** The tier the batch's answer for the card was fetched at. */
+      batchFetchedAt: SizeTier | undefined;
+    }
+  | {
+      type: "arrived";
+      answers: Map<string, SettledRetry>;
+      /** Quiet re-asks that were refused: out of flight, their card keeping what it had. */
+      refused: ReadonlySet<string>;
+    }
   | { type: "reset" };
 
-const EMPTY: RetryState = { inFlight: new Map(), settled: new Map() };
+const EMPTY: RetryState = {
+  inFlight: new Map(),
+  settled: new Map(),
+  quiet: new Map(),
+  stalled: new Map(),
+};
 
 function reduce(state: RetryState, action: RetryAction): RetryState {
   switch (action.type) {
     case "press":
       return pressed(state, action.placementId);
+    case "grow":
+      return grown(state, action);
     case "arrived":
-      return arrived(state, action.answers);
+      return arrived(state, action.answers, action.refused);
     case "reset":
-      return state.inFlight.size === 0 && state.settled.size === 0
+      return state.inFlight.size === 0 &&
+        state.settled.size === 0 &&
+        state.stalled.size === 0
         ? state
         : EMPTY;
   }
@@ -65,27 +105,105 @@ function pressed(state: RetryState, placementId: string): RetryState {
     0;
   const settled = new Map(state.settled);
   settled.delete(placementId);
+  const quiet = new Map(state.quiet);
+  quiet.delete(placementId);
+  const stalled = new Map(state.stalled);
+  stalled.delete(placementId);
   return {
     inFlight: new Map(state.inFlight).set(placementId, previous + 1),
     settled,
+    quiet,
+    stalled,
   };
 }
 
-/** Retries that answered: out of flight, each with its answer and its time. */
+/**
+ * A card that grew past what was fetched for it: asked again alone, keeping its answer on
+ * screen until the larger one arrives. Ignored while the card is already being asked again,
+ * and when its answer already serves its tier.
+ *
+ * Judged here, against the answer the card shows in THIS state, rather than by the caller: the
+ * caller's view can be a render old, and a re-ask that answered in the same commit would
+ * otherwise read as the batch's smaller answer and be asked again.
+ */
+function grown(
+  state: RetryState,
+  action: Extract<RetryAction, { type: "grow" }>
+): RetryState {
+  const { placementId } = action;
+  if (state.inFlight.has(placementId)) return state;
+  if (state.stalled.get(placementId) === action.tier) return state;
+  const settled = state.settled.get(placementId);
+  const fetchedAt = settled ? settled.tier : action.batchFetchedAt;
+  if (!fetchedAt || !asksAgainAt(action.query, fetchedAt, action.tier))
+    return state;
+  const previous = settled?.attempt ?? 0;
+  return {
+    inFlight: new Map(state.inFlight).set(placementId, previous + 1),
+    settled: state.settled,
+    quiet: new Map(state.quiet).set(placementId, action.tier),
+    stalled: state.stalled,
+  };
+}
+
+/**
+ * Retries that answered: out of flight, each with its answer and its time. A refused quiet
+ * re-ask settles nothing: its card keeps the answer it had, stalled at the tier it grew to.
+ */
 function arrived(
   state: RetryState,
-  answers: Map<string, SettledRetry>
+  answers: Map<string, SettledRetry>,
+  refused: ReadonlySet<string>
 ): RetryState {
   const inFlight = new Map(state.inFlight);
   const settled = new Map(state.settled);
+  const quiet = new Map(state.quiet);
+  const stalled = new Map(state.stalled);
   for (const [placementId, answer] of answers) {
     settled.set(placementId, {
       ...answer,
       attempt: inFlight.get(placementId) ?? 0,
     });
     inFlight.delete(placementId);
+    quiet.delete(placementId);
   }
-  return { inFlight, settled };
+  for (const placementId of refused) {
+    const tier = quiet.get(placementId);
+    if (tier) stalled.set(placementId, tier);
+    inFlight.delete(placementId);
+    quiet.delete(placementId);
+  }
+  return { inFlight, settled, quiet, stalled };
+}
+
+/**
+ * What the in-flight retries brought in on this render: each answered card's answer, and the
+ * quiet re-asks that were refused, which must not replace the answer their card is showing.
+ */
+function arrivals(
+  state: RetryState,
+  retried: UseWidgetQueriesResult,
+  seenAt: Date
+): { answers: Map<string, SettledRetry>; refused: Set<string> } {
+  const answers = new Map<string, SettledRetry>();
+  const refused = new Set<string>();
+  for (const placementId of state.inFlight.keys()) {
+    if (retried.fetchingPlacementIds.has(placementId)) continue;
+    const slot = retried.slots[placementId];
+    const cells = retried.cellSlots[placementId];
+    if (!slot && !cells) continue;
+    if (state.quiet.has(placementId) && slot?.ok === false) {
+      refused.add(placementId);
+      continue;
+    }
+    answers.set(placementId, {
+      slot,
+      cells,
+      at: seenAt,
+      tier: retried.fetchedTierFor(placementId),
+    });
+  }
+  return { answers, refused };
 }
 
 export interface CardRetries {
@@ -95,6 +213,15 @@ export interface CardRetries {
   retry: (placementId: string) => void;
   /** When the answer this card shows arrived: its retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /** Ask one card again if it now draws more than its answer was fetched for; see `grown`. */
+  grow: (request: WidgetQueryRequest) => void;
+  /**
+   * The cards being asked again, by Retry or because they grew. A quiet re-ask keeps the answer
+   * on screen, so without this a card refreshing for its new tier would not say it is reading.
+   */
+  fetchingPlacementIds: ReadonlySet<string>;
+  /** The tier the answer this card shows was fetched at: its own re-ask's, or the batch's. */
+  fetchedTierFor: (placementId: string) => SizeTier | undefined;
 }
 
 export function useCardRetries(
@@ -103,6 +230,7 @@ export function useCardRetries(
     slots: Record<string, WidgetSlot>;
     cellSlots: CellSlots;
     updatedAt: Date | null;
+    fetchedTierFor: (placementId: string) => SizeTier | undefined;
   }
 ): CardRetries {
   const [state, dispatch] = useReducer(reduce, EMPTY);
@@ -128,22 +256,11 @@ export function useCardRetries(
   // aggregate stays `null` until the last one has, so a card from an earlier request would
   // never be dated. This runs on the render that brings the answer in, so it is the arrival.
   useEffect(() => {
-    const answers = new Map<string, SettledRetry>();
-    const seenAt = new Date(Date.now());
-    for (const placementId of state.inFlight.keys()) {
-      if (retried.fetchingPlacementIds.has(placementId)) continue;
-      const slot = retried.slots[placementId];
-      const cells = retried.cellSlots[placementId];
-      if (!slot && !cells) continue;
-      answers.set(placementId, { slot, cells, at: seenAt });
+    const { answers, refused } = arrivals(state, retried, new Date(Date.now()));
+    if (answers.size > 0 || refused.size > 0) {
+      dispatch({ type: "arrived", answers, refused });
     }
-    if (answers.size > 0) dispatch({ type: "arrived", answers });
-  }, [
-    state.inFlight,
-    retried.fetchingPlacementIds,
-    retried.slots,
-    retried.cellSlots,
-  ]);
+  }, [state, retried]);
 
   // The batch's next answer is fresher than any retry's, so a refresh of the whole batch ends
   // every retry and its cards go back to the batch's slots.
@@ -156,6 +273,20 @@ export function useCardRetries(
   const retry = useCallback(
     (placementId: string) => dispatch({ type: "press", placementId }),
     []
+  );
+  const batchTierFor = batch.fetchedTierFor;
+  const grow = useCallback(
+    (request: WidgetQueryRequest) => {
+      if (!request.sized) return;
+      dispatch({
+        type: "grow",
+        placementId: request.placementId,
+        query: request.query,
+        tier: request.sized.tier,
+        batchFetchedAt: batchTierFor(request.placementId),
+      });
+    },
+    [batchTierFor]
   );
 
   const { slots, cellSlots } = useMemo(
@@ -173,7 +304,30 @@ export function useCardRetries(
     [state.settled, batch.updatedAt]
   );
 
-  return { slots, cellSlots, retry, updatedAtFor };
+  const fetchingPlacementIds = useMemo(
+    () => new Set(state.inFlight.keys()),
+    [state.inFlight]
+  );
+
+  // A settled re-ask's answer is shown in place of the batch's, so its tier is the one shown; a
+  // quiet re-ask still in flight shows the answer it had.
+  const fetchedTierFor = useCallback(
+    (placementId: string) => {
+      const settled = state.settled.get(placementId);
+      return settled ? settled.tier : batchTierFor(placementId);
+    },
+    [state.settled, batchTierFor]
+  );
+
+  return {
+    slots,
+    cellSlots,
+    retry,
+    updatedAtFor,
+    grow,
+    fetchingPlacementIds,
+    fetchedTierFor,
+  };
 }
 
 /**
@@ -188,21 +342,40 @@ function mergeRetries(
   if (state.inFlight.size === 0 && state.settled.size === 0) {
     return { slots: batch.slots, cellSlots: batch.cellSlots };
   }
-  const slots: Record<string, WidgetSlot> = { ...batch.slots };
-  const cellSlots: CellSlots = { ...batch.cellSlots };
-  for (const placementId of state.inFlight.keys()) {
-    delete slots[placementId];
-    delete cellSlots[placementId];
-    const slot = retried.slots[placementId];
-    if (slot) slots[placementId] = slot;
-    const cells = retried.cellSlots[placementId];
-    if (cells) cellSlots[placementId] = cells;
-  }
+  const merged = {
+    slots: { ...batch.slots },
+    cellSlots: { ...batch.cellSlots },
+  };
   for (const [placementId, answer] of state.settled) {
-    delete slots[placementId];
-    delete cellSlots[placementId];
-    if (answer.slot) slots[placementId] = answer.slot;
-    if (answer.cells) cellSlots[placementId] = answer.cells;
+    // A card asked again because it grew keeps this answer until the new one is in, below.
+    putAnswer(merged, placementId, answer, true);
   }
-  return { slots, cellSlots };
+  for (const placementId of state.inFlight.keys()) {
+    const answer = {
+      slot: retried.slots[placementId],
+      cells: retried.cellSlots[placementId],
+    };
+    // A quiet re-ask keeps what the card was showing until its answer is in; a pressed Retry
+    // clears it, so the card draws its skeleton rather than the error it is retried from.
+    putAnswer(merged, placementId, answer, !state.quiet.has(placementId));
+  }
+  return merged;
+}
+
+/**
+ * Writes one card's answer over what the merged slots held for it. What the card showed is
+ * cleared first when `clear` says so or when there is a new answer to show; otherwise it stays.
+ */
+function putAnswer(
+  merged: { slots: Record<string, WidgetSlot>; cellSlots: CellSlots },
+  placementId: string,
+  answer: { slot?: WidgetSlot; cells?: Record<string, WidgetSlot> },
+  clear: boolean
+): void {
+  if (clear || answer.slot || answer.cells) {
+    delete merged.slots[placementId];
+    delete merged.cellSlots[placementId];
+  }
+  if (answer.slot) merged.slots[placementId] = answer.slot;
+  if (answer.cells) merged.cellSlots[placementId] = answer.cells;
 }

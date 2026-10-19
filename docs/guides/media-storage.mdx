@@ -365,7 +365,7 @@ or a single, fetched on its own with `media.findByID()`, or returned by
 ```json
 {
   "id": "abc-123",
-  "url": "https://example.com/uploads/2026/04/photo.jpg",
+  "url": "/uploads/2026/04/photo.jpg",
   "width": 3000,
   "height": 2000,
   "focalX": 50,
@@ -378,10 +378,12 @@ or a single, fetched on its own with `media.findByID()`, or returned by
 }
 ```
 
-Every URL in that response is absolute, the variants included, so a mobile client
-or an edge worker can resolve one without knowing where your storage adapter puts
-things. `sizes` is `null` for a file with no variants: a non-image, or an image
-uploaded before you configured any size.
+Every URL in that response, the variants included, is as your storage adapter
+wrote it: on local disk a path on the adapter's own base (`/uploads/...` by
+default), and on S3, Vercel Blob or UploadThing an absolute URL. See
+[Media URLs](#media-urls) for how they are formed, and how to get an absolute one.
+`sizes` is `null` for a file with no variants: a non-image, or an image uploaded
+before you configured any size.
 
 Select one with `getMediaVariant`, which asks for a name, tries your fallback name
 next, then `thumbnailUrl`, then the original:
@@ -476,6 +478,63 @@ The component takes the two values rather than a whole media record, because
 `media.findByID()` does not return them today: `MediaFile` has no `focalX` or `focalY`,
 so read the crop point from the media row until it does.
 
+## Media URLs
+
+A media URL is where the storage adapter that holds the file serves it.
+
+- **Local disk** builds it from its `baseUrl` and the file's path. The default
+  `baseUrl` is `/uploads`, so the URL is a path, `/uploads/2026/04/photo.jpg`.
+  Your app's pages resolve it on whatever host and port serve them: `next dev` on
+  any port, a LAN address, a tunnel or a preview deployment, with nothing to
+  configure. To serve uploads from another origin, give the adapter an absolute
+  `baseUrl`, and every URL is on it:
+
+  ```ts
+  // nextly.config.ts
+  import { defineConfig } from "nextly/config";
+  import { localStorage } from "nextly/storage";
+
+  export default defineConfig({
+    storage: [
+      localStorage({
+        basePath: "./public/uploads",
+        baseUrl: process.env.MEDIA_BASE_URL ?? "/uploads",
+        collections: { media: true },
+      }),
+    ],
+  });
+  ```
+
+- **S3, Vercel Blob and UploadThing** return absolute URLs on their own hosts,
+  unchanged.
+
+A URL is never rewritten onto `NEXT_PUBLIC_APP_URL` when it is read, so a project
+whose `.env` still says `http://localhost:3000` shows its images on any other port.
+
+### An absolute URL, for somewhere outside your app
+
+An email, a feed or JSON-LD is read somewhere a path cannot resolve. Make the URL
+absolute with `toPublicMediaUrl`:
+
+```ts
+import { toPublicMediaUrl } from "nextly";
+
+declare const media: { url: string };
+const imageUrl = toPublicMediaUrl(media.url, { baseUrl: "https://example.com" });
+```
+
+It leaves an absolute URL as it is. A relative one is resolved against the
+`baseUrl` you pass (an email's settings, or your site's own origin), else
+`NEXT_PUBLIC_APP_URL`. It never guesses a host: with neither set, in development
+it returns the path and logs a warning naming both, and in production it logs an
+error and returns `null`, so leave that image out rather than send a path that
+cannot resolve. `toPublicMediaUrl` is experimental: its shape may still change
+before Nextly's first stable release.
+
+Open Graph and Twitter images from `buildMetadata` (`nextly/runtime`) stay
+relative, as its canonical links do: Next.js resolves them against your root
+layout's `metadataBase`, which the starter templates set from your site's URL.
+
 ## Environment variables
 
 ### Auto-detection cascade
@@ -510,6 +569,30 @@ so read the crop point from the media row until it does.
 | Variable             | Description                       |
 |----------------------|-----------------------------------|
 | `UPLOADTHING_TOKEN`  | Uploadthing v7+ API token.        |
+
+## Deleting media, and thumbnails left behind
+
+Deleting a media item, singly or in bulk, removes every file stored for it: the original, the thumbnail made at upload, and every named image size. A file the storage refuses to remove is logged with its path and the item, so it can be found.
+
+Earlier releases left the thumbnail behind when an item was deleted. On local disk that file stays under `public/uploads`, and on a public S3 bucket or Vercel Blob store it stays publicly reachable. UploadThing was not affected: there the delete found the thumbnail by its key. To find those thumbnails, run:
+
+```bash
+npx nextly media orphans
+```
+
+It lists the upload-time thumbnails no media item refers to, by stored path, and changes nothing. Check each, and remove them by hand from the folder, bucket or dashboard they are in. Removal by the command itself follows in a later release; until then `--apply` is refused.
+
+A file is listed as left behind only under a `prefix` the media collection has to itself: one no other collection uses, on any storage, or nests inside or around, or begins (a prefix and an upload's folder are joined as written, so `med` with the folder `ia` stores under `media`). A collection with no prefix shares every place, since an upload to it can name any folder, and on local disk, collections with no storage plugin upload to the same uploads folder. Anywhere else, as by default, media shares the storage with other uploads, any of which can store a file of the same form: the command lists what it finds there as files nothing shows are media's, and names any collection that shares media's place. Check those with more care. To have media's files told apart, give media its own prefix in its storage config (`collections: { media: { prefix: "media" } }`) before you upload, and give each collection the command names a `prefix` of its own. Files stored before you set media's prefix stay where they were, outside it, and once it is set the command looks only under it: run it once before you set the prefix. If media's prefix held other files before, another collection's or files you put there yourself, the command cannot tell those apart.
+
+Run it again after a delete whose log names a file it could not remove, or whose process stopped before it finished, and remove by hand what it lists.
+
+What it looks at:
+
+- Only files where media uploads put a thumbnail, in the form they give it: under the media collection's `prefix`, if you set one. Another collection's folder is never touched. On UploadThing, which keeps no folders, a thumbnail is known only by the name it was uploaded under, which anything else uploading to the same app can give a file too. So there the command lists what it finds, by file key and uploaded name, as files nothing shows are media's: remove the ones that are media's from the UploadThing dashboard.
+- Only thumbnails stored more than an hour ago. A newer one may belong to an upload still in progress. If, before upgrading, you deleted an item uploaded less than an hour before you run the command, run it again an hour later.
+- Only the storage the media collection uses now. If you moved to another adapter, bucket or folder, point the media storage at the old one and run it there to clean that up.
+
+A storage adapter that cannot list its files is reported as such, and nothing is changed.
 
 ## Migrating between adapters
 

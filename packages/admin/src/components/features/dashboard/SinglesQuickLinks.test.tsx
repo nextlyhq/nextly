@@ -121,4 +121,20 @@ describe("the singles card", () => {
       screen.getByRole("link", { name: "Open Singles" })
     ).toBeInTheDocument();
   });
+
+  it("wraps a long Single name rather than cutting it", () => {
+    // R-4: a label is never clipped. jsdom lays nothing out, so what is held is the full name
+    // in the tile and the wrapping its layout depends on, in a column allowed to shrink.
+    const long =
+      "Company-wide announcement banner settings for every regional storefront";
+    singlesHook.mockReturnValue(
+      listing([{ id: "s1", slug: "banner", label: long }])
+    );
+    render(<SinglesQuickLinks />);
+
+    const name = screen.getByText(long);
+    expect(name).toHaveClass("break-words");
+    expect(name).not.toHaveClass("truncate");
+    expect(name.parentElement).toHaveClass("min-w-0");
+  });
 });

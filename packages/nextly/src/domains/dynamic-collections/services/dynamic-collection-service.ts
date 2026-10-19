@@ -1182,7 +1182,11 @@ export class DynamicCollectionService extends BaseService {
      */
     localMigrationSQL: string | null;
     migrationFileName: string | null;
-    metadataUpdates: Record<string, unknown>;
+    /**
+     * What the registry row is updated with. `fields`, when the save changes them, is the list as
+     * stored (names lowercased, reserved fields dropped), the one every table is built from.
+     */
+    metadataUpdates: Record<string, unknown> & { fields?: FieldDefinition[] };
     /**
      * Whether the migration writes `nextly_i18n_archive`. Its `CREATE TABLE IF NOT EXISTS` cannot
      * bring an older archive up to date, so a caller running it here prepares the archive first.
@@ -1243,7 +1247,9 @@ export class DynamicCollectionService extends BaseService {
       collectionName
     )) as CollectionMetadata;
 
-    const metadataUpdates: Record<string, unknown> = {
+    const metadataUpdates: Record<string, unknown> & {
+      fields?: FieldDefinition[];
+    } = {
       updatedAt: new Date(),
     };
 
