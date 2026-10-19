@@ -1185,21 +1185,31 @@ export class ApiKeyService extends BaseService {
           : null;
     if (last !== null && at - last < LAST_USE_RESOLUTION_MS) return;
     try {
-      // Only forward: two requests with one key at once each read the old
-      // record, and the older one's write, landing last, must not replace
-      // the newer use.
-      await this.db
-        .update(this.apiKeysTable)
-        .set({ lastUsedAt: new Date(at) })
-        .where(
-          and(
-            eq(this.apiKeysTable.id, keyId),
-            or(
-              isNull(this.apiKeysTable.lastUsedAt),
-              lt(this.apiKeysTable.lastUsedAt, new Date(at))
+      // The cutoff is in the write's own condition too: requests with one key
+      // at once each read the old record and pass the check above, and only
+      // the first to land writes. It also keeps the record moving forward,
+      // since an older request's time is never a minute past a newer one.
+      //
+      // On SQLite every request shares one connection, so a write issued
+      // while another request's transaction is open would run inside it and
+      // be undone by its rollback; queued behind it, it commits on its own.
+      await serializeOnSqlite(this.adapter, () =>
+        this.db
+          .update(this.apiKeysTable)
+          .set({ lastUsedAt: new Date(at) })
+          .where(
+            and(
+              eq(this.apiKeysTable.id, keyId),
+              or(
+                isNull(this.apiKeysTable.lastUsedAt),
+                lt(
+                  this.apiKeysTable.lastUsedAt,
+                  new Date(at - LAST_USE_RESOLUTION_MS)
+                )
+              )
             )
           )
-        );
+      );
     } catch (error) {
       this.logger.warn("API key last use could not be recorded", {
         keyId,

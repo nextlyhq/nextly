@@ -79,14 +79,16 @@ describe("ApiKeyService records a key's last use", () => {
   beforeEach(async () => {
     testDb = await createTestDb();
     held = heldUpdates(testDb.db);
-    service = new ApiKeyService(
-      {
-        ...testDb.adapter,
-        getDrizzle: () => held.db,
-        getCapabilities: () => testDb.adapter.getCapabilities(),
-      } as unknown as ConstructorParameters<typeof ApiKeyService>[0],
-      testLogger
-    );
+    // The real adapter, its transactions included, handing out the held
+    // database: a copy spread from it would drop its methods.
+    const adapter = new Proxy(testDb.adapter, {
+      get(target, property) {
+        if (property === "getDrizzle") return () => held.db;
+        const value: unknown = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    service = new ApiKeyService(adapter, testLogger);
     const userId = randomUUID();
     await testDb.db.insert(testDb.schema.users).values({
       id: userId,
@@ -170,10 +172,85 @@ describe("ApiKeyService records a key's last use", () => {
     ).toBeGreaterThanOrEqual(Math.floor(newer.getTime() / 1000) * 1000);
   });
 
+  it("writes nothing when another request recorded a use within the minute", async () => {
+    // Requests arriving together all read the old record and pass the early
+    // check; the write's own condition keeps all but the first from writing.
+    const auth = service.authenticateApiKey(key);
+    await vi.waitFor(() => expect(held.state.updates).toBe(1));
+    const recent = new Date(Date.now() - 30_000);
+    await testDb.db
+      .update(testDb.schema.apiKeys)
+      .set({ lastUsedAt: recent })
+      .where(eq(testDb.schema.apiKeys.id, keyId));
+
+    held.release();
+    await auth;
+
+    const recorded = await lastUsedAt();
+    expect(
+      recorded instanceof Date ? recorded.getTime() : Number(recorded)
+    ).toBe(Math.floor(recent.getTime() / 1000) * 1000);
+  });
+
   it("admits the key when the write fails", async () => {
     held.state.failing = true;
     held.release();
 
     expect(await service.authenticateApiKey(key)).not.toBeNull();
+  });
+});
+
+describe("ApiKeyService records a key's last use on SQLite's one connection", () => {
+  let testDb: TestDb;
+
+  beforeEach(async () => {
+    testDb = await createTestDb();
+  });
+
+  afterEach(async () => {
+    await testDb.reset();
+    await testDb.close();
+  });
+
+  it("keeps the record when another request's open transaction rolls back", async () => {
+    // Every request shares the one connection, so a write issued while
+    // another request's transaction is open would run inside it and be
+    // undone by its rollback.
+    const service = new ApiKeyService(testDb.adapter, testLogger);
+    const userId = randomUUID();
+    await testDb.db.insert(testDb.schema.users).values({
+      id: userId,
+      email: `owner-${userId}@example.com`,
+      isActive: true,
+    });
+    const { key } = await service.createApiKey(userId, {
+      name: "used",
+      tokenType: "read-only",
+      expiresIn: "unlimited",
+    });
+
+    let finish: () => void = () => {};
+    const finishing = new Promise<void>(resolve => (finish = resolve));
+    let opened: () => void = () => {};
+    const open = new Promise<void>(resolve => (opened = resolve));
+    const other = testDb.adapter
+      .transaction(async () => {
+        opened();
+        await finishing;
+        throw new Error("the other request rolls back");
+      })
+      .catch(() => undefined);
+    await open;
+
+    const auth = service.authenticateApiKey(key);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    finish();
+    await other;
+    expect(await auth).not.toBeNull();
+
+    const rows = await testDb.db
+      .select({ lastUsedAt: testDb.schema.apiKeys.lastUsedAt })
+      .from(testDb.schema.apiKeys);
+    expect(rows[0]?.lastUsedAt).not.toBeNull();
   });
 });
