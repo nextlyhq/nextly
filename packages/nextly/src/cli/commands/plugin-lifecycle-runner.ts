@@ -107,6 +107,14 @@ function pluginModules(
 }
 
 /**
+ * How long the command waits, after a plugin's `onInstall` or `onUninstall`,
+ * for the event handlers it set off before shutting the runtime down: long
+ * enough for a deletion's follow-up work, short enough that one handler that
+ * never settles cannot hold the command open.
+ */
+const LIFECYCLE_HANDLER_WAIT_MS = 30_000;
+
+/**
  * The statements a module's DOWN runs on one dialect, one per driver call —
  * the DOWN direction of `pluginModuleStatements`, which the apply path and
  * `migrate:down --plugin` read the same module through.
@@ -552,6 +560,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     );
     const { getImageProcessor } = await import("../../storage/image-processor");
     const { getHookRegistry } = await import("../../hooks/hook-registry");
+    const { getEventBus } = await import("../../events/event-bus");
 
     // A registration this command did not make is not this command's to tear
     // down. `registerServices` refuses when one exists, and the cleanup below
@@ -635,6 +644,24 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // destroys only the plugins that registration recorded (none, if it
       // failed before initializing them), and `clearServices` resets whatever
       // was registered, however much that was.
+      //
+      // First, the handlers of every event the hook emitted are let finish.
+      // Emitting is fire-and-forget, so another plugin's handler (removing
+      // what it kept about each account an uninstall reports deleted, say)
+      // is still running when the hook returns; torn down under it, that
+      // work would stop part way, and an uninstall's DOWNs then drop the
+      // rows it was reading.
+      // Only those running when the hook returned, and for a bounded time: a
+      // producer its plugin stops in `destroy()` never lets the bus empty,
+      // and a handler that never settles would hold the command open.
+      const settled = await getEventBus().settleRunning(
+        LIFECYCLE_HANDLER_WAIT_MS
+      );
+      if (!settled) {
+        context.logger.warn(
+          `Event handlers ${plugin.name}'s ${hook} set off were still running after ${LIFECYCLE_HANDLER_WAIT_MS / 1000}s, so the runtime was shut down under them; what they were doing may be unfinished.`
+        );
+      }
       await destroyRegisteredPlugins();
       clearServices();
     }

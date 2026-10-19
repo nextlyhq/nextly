@@ -11,6 +11,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { getEventBus } from "../../../events/event-bus";
 import type { CommandContext } from "../../program";
 import { runPluginInstall } from "../plugin-lifecycle-runner";
 
@@ -145,6 +146,74 @@ describe("the lifecycle hook's boot is torn down", () => {
       "disconnect",
     ]);
   });
+
+  it("only once the handlers of what the hook emitted have finished", async () => {
+    // Emitting is fire-and-forget. Another plugin's handler for an event the
+    // hook emitted (an uninstall reporting each account deleted, say) is
+    // still working when the hook returns, and a teardown then would stop
+    // its cleanup part way.
+    const bus = getEventBus();
+    const handler = async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      calls.push("handler finished");
+    };
+    bus.on("account.deleted", handler);
+    onInstall.mockImplementation(async () => {
+      calls.push("onInstall");
+      bus.emit("account.deleted", { id: "acc_1" });
+    });
+
+    try {
+      await runPluginInstall("@acme/fx", {}, context);
+    } finally {
+      bus.off("account.deleted", handler);
+    }
+
+    expect(calls).toEqual([
+      "register",
+      "onInstall",
+      "handler finished",
+      "destroy",
+      "clear",
+      "disconnect",
+    ]);
+  });
+
+  it("even while a plugin keeps emitting until it is destroyed", async () => {
+    // A producer its plugin stops only in `destroy()` never lets the bus
+    // empty, so waiting for every handler on it would hold the command open
+    // for good. Only the handlers running when the hook returns are waited
+    // for, and the teardown that stops the producer still runs.
+    // Each tick's handler emits the next before it finishes, as a producer
+    // does, so some handler is always running until the producer stops.
+    const bus = getEventBus();
+    let producing = true;
+    const handler = async () => {
+      await new Promise(resolve => setTimeout(resolve, 1));
+      if (producing) bus.emit("tick", {});
+    };
+    bus.on("tick", handler);
+    onInstall.mockImplementation(async () => {
+      calls.push("onInstall");
+      bus.emit("tick", {});
+    });
+
+    try {
+      await runPluginInstall("@acme/fx", {}, context);
+    } finally {
+      producing = false;
+      bus.off("tick", handler);
+      await bus.settle();
+    }
+
+    expect(calls).toEqual([
+      "register",
+      "onInstall",
+      "destroy",
+      "clear",
+      "disconnect",
+    ]);
+  }, 5_000);
 
   it("when the hook throws", async () => {
     onInstall.mockImplementation(async () => {

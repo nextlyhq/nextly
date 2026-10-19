@@ -161,9 +161,31 @@ export class EventBus {
   }
 
   /**
+   * Await the async handlers running at this moment, for at most
+   * `timeoutMs`, for a caller about to tear the runtime down under them: the
+   * plugin lifecycle command, after a plugin's `onInstall` or `onUninstall`.
+   * Only those already running, not those they or anything else start
+   * after, since a producer that its plugin stops only in `destroy()` would
+   * otherwise never let the bus empty. Resolves true when every one of them
+   * settled in time.
+   */
+  async settleRunning(timeoutMs: number): Promise<boolean> {
+    const running = Promise.allSettled([...this.inFlight]).then(() => true);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<false>(resolve => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    try {
+      return await Promise.race([running, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
    * Await all in-flight async handlers. **Testing aid** — production emit is
-   * fire-and-forget. Drains repeatedly so handler chains that emit again settle
-   * too.
+   * fire-and-forget. Drains repeatedly so handler chains that emit again
+   * settle too.
    */
   async settle(): Promise<void> {
     while (this.inFlight.size > 0) {
