@@ -27,7 +27,7 @@
  * @module domains/releases/plan-release-materialisation
  */
 
-import type { DocumentRef, ReleaseMemberRow } from "./releases-repository";
+import type { DocumentRef, DrainMemberRow } from "./releases-repository";
 import { documentRefKey, memberAppliedFor } from "./releases-repository";
 import { resolveReleaseEffect } from "./resolve-release-effect";
 import type { DueMember } from "./resolve-release-effect";
@@ -114,7 +114,7 @@ export interface MaterialisationPlan {
  */
 export function planReleaseMaterialisation(input: {
   releases: DueRelease[];
-  members: ReleaseMemberRow[];
+  members: DrainMemberRow[];
   now: Date;
 }): MaterialisationPlan {
   const scheduledAt = new Map(input.releases.map(r => [r.id, r.scheduledAt]));
@@ -219,7 +219,7 @@ function groupBySharedDocument(
   return [...sets.values()];
 }
 
-function refOf(member: ReleaseMemberRow): DocumentRef {
+function refOf(member: DrainMemberRow): DocumentRef {
   return {
     scopeKind: member.scopeKind,
     scopeSlug: member.scopeSlug,

@@ -470,11 +470,59 @@ describe.each(getConfiguredTestDialects())(
       // Marked for the revision the pass planned against, which the cancel
       // moved on from.
       const [release] = await repo.findReleases({ ids: [releaseId] });
-      const marks = (await repo.listMembers(releaseId)).map(
+      const marks = (await repo.listMembersOf([releaseId])).map(
         m => m.appliedRevision
       );
       expect(marks.filter(m => m !== null)).toHaveLength(2);
       expect(marks).not.toContain(release?.revision);
+    });
+
+    it("keeps the mark out of every member read a caller receives", async () => {
+      // Internal bookkeeping: only the drain's own read carries it.
+      const t = await boot(dialect);
+      const ids = await drafts(t, 3);
+      const releaseId = await dueRelease(t, ids);
+      await killedAfter(t, 2);
+      const repo = new ReleasesRepository(t.adapter);
+
+      // The control: the marks are there to leak.
+      const drained = await repo.listMembersOf([releaseId]);
+      expect(drained.filter(m => m.appliedRevision !== null)).toHaveLength(2);
+
+      const listed = await repo.listMembers(releaseId);
+      const found = await repo.findMember(drained[0]?.id ?? "");
+      const viaApi = await t.nextly.releases.listMembers({ releaseId });
+      expect(listed).toHaveLength(3);
+      expect(viaApi).toHaveLength(3);
+      for (const row of [...listed, found, ...viaApi]) {
+        expect(row).toBeDefined();
+        expect(Object.keys(row ?? {})).not.toContain("appliedRevision");
+        expect(Object.keys(row ?? {})).not.toContain("applied_revision");
+      }
+    });
+
+    it("leaves every member as it was on an ordinary write", async () => {
+      // No receipt is pinned outside the drain, so an editor's write, even a
+      // publish of a document the release holds, records and clears nothing.
+      const t = await boot(dialect);
+      const ids = await drafts(t, 3);
+      const releaseId = await dueRelease(t, ids);
+      await killedAfter(t, 2);
+      const repo = new ReleasesRepository(t.adapter);
+      const before = await repo.listMembersOf([releaseId]);
+      expect(before.filter(m => m.appliedRevision !== null)).toHaveLength(2);
+
+      for (const id of ids) {
+        await handlerOf(t).updateEntry(
+          { collectionName: POSTS, entryId: id, overrideAccess: true },
+          { title: "edited", status: "published" }
+        );
+      }
+
+      const after = await repo.listMembersOf([releaseId]);
+      const byId = (rows: typeof before) =>
+        Object.fromEntries(rows.map(m => [m.id, m.appliedRevision]));
+      expect(byId(after)).toEqual(byId(before));
     });
 
     it("writes every document once on a pass nothing ends early", async () => {
@@ -574,9 +622,9 @@ describe.each(getConfiguredTestDialects())(
       expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
       expect(await stateOf(t, releaseId)).toBe("scheduled");
       // The refused write left no mark, so no later pass takes it as done.
-      const [member] = await new ReleasesRepository(t.adapter).listMembers(
-        releaseId
-      );
+      const [member] = await new ReleasesRepository(t.adapter).listMembersOf([
+        releaseId,
+      ]);
       expect(member?.appliedRevision).toBeNull();
     });
 
@@ -679,7 +727,7 @@ describe.each(getConfiguredTestDialects())(
       expect(await stateOf(t, releaseId)).toBe("published");
       // The Single's write marked its member for the revision it was applied
       // for, in the write's transaction.
-      const [member] = await repo.listMembers(releaseId);
+      const [member] = await repo.listMembersOf([releaseId]);
       expect(member?.appliedRevision).toBe(planned?.revision);
     });
   }

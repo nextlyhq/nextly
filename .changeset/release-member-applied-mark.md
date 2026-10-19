@@ -40,5 +40,5 @@ Whether a refused write counted is now decided by that record rather than by rea
 document back: a release whose author may no longer publish a document is no longer marked
 published because the document already read as live, and a read hook that rewrites `status`
 changes nothing. `nextly migrate` and boot add one nullable column, `applied_revision`, to
-`nextly_release_members` on every dialect; no row is rewritten. Release members returned by
-the Direct API carry it as `appliedRevision`.
+`nextly_release_members` on every dialect; no row is rewritten. It is internal: release
+members returned by the Direct API and REST do not include it.

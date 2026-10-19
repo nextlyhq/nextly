@@ -69,7 +69,7 @@ import { planReleaseMaterialisation } from "./plan-release-materialisation";
 import type { MaterialisationAction } from "./plan-release-materialisation";
 import type {
   DocumentRef,
-  ReleaseMemberRow,
+  DrainMemberRow,
   ReleaseRow,
 } from "./releases-repository";
 
@@ -126,7 +126,7 @@ export interface ApplyDueReleasesDeps {
      * creation time, then member id), so no answer depends on the order rows
      * come back in.
      */
-    listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]>;
+    listMembersOf(releaseIds: string[]): Promise<DrainMemberRow[]>;
     isStillDueAt(releaseId: string, scheduledAt: Date): Promise<boolean>;
     /** Whether the member's own write marked it applied for `revision`. */
     isMemberApplied(memberId: string, revision: number): Promise<boolean>;

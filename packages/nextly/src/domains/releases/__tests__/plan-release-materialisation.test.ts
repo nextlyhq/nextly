@@ -6,14 +6,14 @@
 import { describe, expect, it } from "vitest";
 
 import { planReleaseMaterialisation } from "../plan-release-materialisation";
-import type { ReleaseMemberRow } from "../releases-repository";
+import type { DrainMemberRow } from "../releases-repository";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
 const JAN = new Date("2026-01-01T00:00:00.000Z");
 const FEB = new Date("2026-02-01T00:00:00.000Z");
 
 let seq = 0;
-function member(over: Partial<ReleaseMemberRow> = {}): ReleaseMemberRow {
+function member(over: Partial<DrainMemberRow> = {}): DrainMemberRow {
   seq += 1;
   return {
     id: `m${seq}`,

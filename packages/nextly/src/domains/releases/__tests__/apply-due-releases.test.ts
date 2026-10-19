@@ -15,7 +15,7 @@ import type {
   ApplyDueReleasesDeps,
   ReleaseMutations,
 } from "../apply-due-releases";
-import type { ReleaseMemberRow, ReleaseRow } from "../releases-repository";
+import type { DrainMemberRow, ReleaseRow } from "../releases-repository";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
 const PAST = new Date("2026-01-01T00:00:00.000Z");
@@ -39,7 +39,7 @@ function release(over: Partial<ReleaseRow> = {}): ReleaseRow {
 }
 
 let seq = 0;
-function member(over: Partial<ReleaseMemberRow> = {}): ReleaseMemberRow {
+function member(over: Partial<DrainMemberRow> = {}): DrainMemberRow {
   seq += 1;
   return {
     id: `m${seq}`,
@@ -60,7 +60,7 @@ function member(over: Partial<ReleaseMemberRow> = {}): ReleaseMemberRow {
 
 function deps(over: {
   releases?: ReleaseRow[];
-  members?: ReleaseMemberRow[];
+  members?: DrainMemberRow[];
   runAs?: Partial<ApplyDueReleasesDeps["runAs"]>;
   mutations?: Partial<ApplyDueReleasesDeps["mutations"]>;
   marked?: string[];

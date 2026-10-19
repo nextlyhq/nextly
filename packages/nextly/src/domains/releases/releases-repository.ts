@@ -349,19 +349,61 @@ export interface ReleaseMemberRow {
    * release's kind.
    */
   singleSlot: number | null;
+  createdBy: string | null;
+  createdAt: Date;
+}
+
+/**
+ * A member as the drain reads it: with its applied mark.
+ *
+ * Internal bookkeeping, kept off {@link ReleaseMemberRow} so no member read
+ * a caller receives (the Direct API, REST) carries it: every read of that
+ * shape selects {@link MEMBER_COLUMNS}, and only {@link
+ * ReleasesRepository.listMembersOf}, the drain's read, adds the mark.
+ */
+export interface DrainMemberRow extends ReleaseMemberRow {
   /**
    * The release revision this member's action was last applied for, or null
    * when no write of it has landed. Written only in the transaction of the
    * content write itself; see {@link recordMemberApplied}. Read it through
    * {@link memberAppliedFor}, never on its own: a mark for any revision but
    * the release's current one describes a release that has since moved.
-   *
-   * @experimental
    */
   appliedRevision: number | null;
-  createdBy: string | null;
-  createdAt: Date;
 }
+
+/**
+ * The columns of {@link ReleaseMemberRow}, which every member read a caller
+ * receives selects. Listed rather than left to `SELECT *`, so a bookkeeping
+ * column the table gains (the applied mark) never reaches a response.
+ */
+const MEMBER_COLUMNS = [
+  "id",
+  "releaseId",
+  "scopeKind",
+  "scopeSlug",
+  "entryId",
+  "locale",
+  "action",
+  "memberKey",
+  "singleSlot",
+  "createdBy",
+  "createdAt",
+] as const satisfies readonly (keyof ReleaseMemberRow)[];
+
+/**
+ * Fails to compile when {@link ReleaseMemberRow} gains a field the list above
+ * leaves out, which would otherwise read back as undefined from every member
+ * read.
+ */
+type UnselectedMemberField = Exclude<
+  keyof ReleaseMemberRow,
+  (typeof MEMBER_COLUMNS)[number]
+>;
+type AssertEveryMemberFieldSelected = [UnselectedMemberField] extends [never]
+  ? true
+  : UnselectedMemberField;
+const _everyMemberFieldSelected: AssertEveryMemberFieldSelected = true;
 
 /**
  * Whether a member's action has been applied for the release as it now
@@ -373,7 +415,7 @@ export interface ReleaseMemberRow {
  * membership changed, and nothing needs to clear it.
  */
 export function memberAppliedFor(
-  member: Pick<ReleaseMemberRow, "appliedRevision">,
+  member: Pick<DrainMemberRow, "appliedRevision">,
   revision: number
 ): boolean {
   return member.appliedRevision === revision;
@@ -967,6 +1009,7 @@ export class ReleasesRepository {
         return null;
       }
       const members = await tx.select<ReleaseMemberRow>(MEMBERS, {
+        columns: [...MEMBER_COLUMNS],
         where: ofThisRelease,
       });
       await tx.delete(MEMBERS, ofThisRelease);
@@ -1076,6 +1119,7 @@ export class ReleasesRepository {
   /** One member by id, so a caller can learn which release it belongs to. */
   async findMember(memberId: string): Promise<ReleaseMemberRow | undefined> {
     const rows = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+      columns: [...MEMBER_COLUMNS],
       where: { and: [{ column: "id", op: "=", value: memberId }] },
     });
     return rows[0];
@@ -1348,12 +1392,13 @@ export class ReleasesRepository {
    * both without reading the document, which a read hook could rewrite.
    */
   async isMemberApplied(memberId: string, revision: number): Promise<boolean> {
-    const [row] = await this.db.select<
-      Pick<ReleaseMemberRow, "appliedRevision">
-    >(MEMBERS, {
-      columns: ["appliedRevision"],
-      where: { and: [{ column: "id", op: "=", value: memberId }] },
-    });
+    const [row] = await this.db.select<Pick<DrainMemberRow, "appliedRevision">>(
+      MEMBERS,
+      {
+        columns: ["appliedRevision"],
+        where: { and: [{ column: "id", op: "=", value: memberId }] },
+      }
+    );
     return row !== undefined && memberAppliedFor(row, revision);
   }
 
@@ -1414,6 +1459,7 @@ export class ReleasesRepository {
    */
   async listMembers(releaseId: string): Promise<ReleaseMemberRow[]> {
     return this.db.select<ReleaseMemberRow>(MEMBERS, {
+      columns: [...MEMBER_COLUMNS],
       where: { and: [{ column: "releaseId", op: "=", value: releaseId }] },
       orderBy: [
         { column: "createdAt", direction: "asc" },
@@ -1454,9 +1500,11 @@ export class ReleasesRepository {
     return counts;
   }
 
-  async listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]> {
+  async listMembersOf(releaseIds: string[]): Promise<DrainMemberRow[]> {
     if (releaseIds.length === 0) return [];
-    return this.db.select<ReleaseMemberRow>(MEMBERS, {
+    // The drain's read, and the one read that carries the applied mark.
+    return this.db.select<DrainMemberRow>(MEMBERS, {
+      columns: [...MEMBER_COLUMNS, "appliedRevision"],
       where: membersOf(releaseIds),
     });
   }
@@ -1538,8 +1586,6 @@ export class ReleasesRepository {
           // leave a single release's member without its slot — and so
           // unprotected.
           singleSlot: release.kind === "single" ? 1 : null,
-          // No write of it has landed yet.
-          appliedRevision: null,
           createdBy: input.createdBy ?? null,
           createdAt: new Date(),
         };
@@ -1605,7 +1651,10 @@ export class ReleasesRepository {
         // The row is read BEFORE the delete: afterwards there is nothing left
         // to say which document's tags to flush, and the projection that
         // release was producing would stay cached with no write to clear it.
-        const [row] = await tx.select<ReleaseMemberRow>(MEMBERS, { where });
+        const [row] = await tx.select<ReleaseMemberRow>(MEMBERS, {
+          columns: [...MEMBER_COLUMNS],
+          where,
+        });
         if (row !== undefined) await tx.delete(MEMBERS, where);
         return row;
       });
@@ -1656,7 +1705,10 @@ export class ReleasesRepository {
     try {
       outcome = await this.db.transaction(async tx => {
         await tx.lockRow(RELEASES, member.releaseId);
-        const [stored] = await tx.select<ReleaseMemberRow>(MEMBERS, { where });
+        const [stored] = await tx.select<ReleaseMemberRow>(MEMBERS, {
+          columns: [...MEMBER_COLUMNS],
+          where,
+        });
         if (stored === undefined) return undefined;
         if (stored.action === action) return { row: stored, wrote: false };
         if (
@@ -1726,6 +1778,7 @@ export class ReleasesRepository {
     const scheduled = await this.db.select<
       ReleaseMemberRow & { scheduledAt: Date | null; state: ReleaseState }
     >(MEMBERS, {
+      columns: [...MEMBER_COLUMNS],
       where: {
         and: [
           { column: "entryId", op: "IN", value: refs.map(r => r.entryId) },
@@ -1811,6 +1864,7 @@ export class ReleasesRepository {
     // it cannot regress anything today, because releases have no write surface
     // and no locale member can exist.
     const members = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+      columns: [...MEMBER_COLUMNS],
       where: {
         and: [
           { column: "scopeKind", op: "=", value: input.scopeKind },
