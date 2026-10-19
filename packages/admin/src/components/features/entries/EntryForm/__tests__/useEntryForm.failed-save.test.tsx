@@ -32,7 +32,10 @@ import { useEntryForm } from "../useEntryForm";
 const collection = {
   name: "posts",
   label: "Posts",
-  fields: [{ name: "title", type: "text", label: "Title" }],
+  fields: [
+    { name: "title", type: "text", label: "Title" },
+    { name: "summary", type: "text", label: "Summary" },
+  ],
 } as never;
 const stored = {
   id: "e1",
@@ -101,6 +104,40 @@ describe("a save that fails", () => {
 
     expect(result.current.form.getValues("title")).toBe("Shot ab");
     expect(result.current.form.formState.isDirty).toBe(true);
+    // Still a submitted form, so fixing a field re-validates it as it did.
+    expect(result.current.form.formState.isSubmitted).toBe(true);
+    expect(result.current.form.formState.submitCount).toBe(1);
+  });
+
+  it("keeps the field error the failure reported when the copy is rolled back", () => {
+    // The update maps the server's field errors onto the form as it fails, and
+    // the rolled-back entry reaches the form after that.
+    const { result, rerender } = render();
+    act(() => {
+      result.current.form.setValue("title", "Shot ab", {
+        shouldDirty: true,
+        shouldTouch: true,
+      });
+    });
+    act(() => {
+      rerender({ entry: { ...stored, title: "Shot ab" } });
+    });
+    act(() => {
+      result.current.form.setError("title", {
+        type: "server",
+        message: "Title is already taken",
+      });
+    });
+
+    act(() => {
+      rerender({ entry: { ...stored } });
+    });
+
+    expect(result.current.form.getValues("title")).toBe("Shot ab");
+    expect(result.current.form.formState.errors.title?.message).toBe(
+      "Title is already taken"
+    );
+    expect(result.current.form.formState.touchedFields.title).toBe(true);
   });
 
   it("still starts from a genuinely new version of the entry", () => {
@@ -159,6 +196,51 @@ describe("a save that fails", () => {
     });
 
     expect(result.current.form.getValues("title")).toBe("Shot a");
+  });
+
+  /*
+   * Every save of a published entry's working draft keeps the published row's
+   * `updatedAt`, so a colleague's newer draft arrives with the identity the
+   * editor already holds. Only its values are new.
+   */
+  const draft = {
+    ...stored,
+    title: "Draft",
+    summary: "First take",
+    _isWorkingDraft: true,
+  };
+
+  it("shows a colleague's newer working draft when nothing here is unsaved", () => {
+    const { result, rerender } = render();
+    act(() => {
+      rerender({ entry: draft });
+    });
+    expect(result.current.form.getValues("summary")).toBe("First take");
+
+    act(() => {
+      rerender({ entry: { ...draft, summary: "Second take" } });
+    });
+
+    expect(result.current.form.getValues("summary")).toBe("Second take");
+    expect(result.current.form.formState.isDirty).toBe(false);
+  });
+
+  it("shows a colleague's newer working draft in the fields the author left alone", () => {
+    const { result, rerender } = render();
+    act(() => {
+      rerender({ entry: draft });
+    });
+    act(() => {
+      result.current.form.setValue("title", "Mine", { shouldDirty: true });
+    });
+
+    act(() => {
+      rerender({ entry: { ...draft, summary: "Second take" } });
+    });
+
+    expect(result.current.form.getValues("summary")).toBe("Second take");
+    expect(result.current.form.getValues("title")).toBe("Mine");
+    expect(result.current.form.formState.isDirty).toBe(true);
   });
 
   it("changes nothing the author typed when the write is refused", async () => {
