@@ -31,6 +31,7 @@ import type {
 } from "../../../schemas/user-field-definitions/types";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { carriedUserFieldOptions } from "../../../shared/lib/user-field-plugin-options";
 import type { UserFieldConfig } from "../../../users";
 import {
@@ -505,6 +506,31 @@ export class UserFieldDefinitionService extends BaseService {
       return;
     }
 
+    // Processes starting at once each find a code field missing and insert
+    // it; one wins, and the rest roll back on its name, taking every other
+    // change they meant to write with them. So a sync that lost on a
+    // duplicate runs once more, from the rows now stored: the field that won
+    // is updated rather than inserted, and the rest of this config's changes
+    // are written. A name an admin's own field holds collides again, and
+    // that, like any other failure, is thrown.
+    try {
+      await this.writeCodeFields(codeFields);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      this.logger.debug(
+        "Code-defined user fields were written by another process; syncing again from the stored rows"
+      );
+      await this.writeCodeFields(codeFields);
+    }
+  }
+
+  /**
+   * Bring the stored code fields into line with `codeFields`, in one
+   * transaction, from the rows as they are when it starts.
+   */
+  private async writeCodeFields(
+    codeFields: { name: string; [key: string]: unknown }[]
+  ): Promise<void> {
     // Fetch all existing code-sourced field definitions
     const existingCodeFields: UserFieldDefinitionRecord[] = await this.db
       .select()

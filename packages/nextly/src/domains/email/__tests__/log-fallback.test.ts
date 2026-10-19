@@ -15,7 +15,7 @@ import type { Logger } from "../../../services/shared";
 import type { EmailProviderService } from "../services/email-provider-service";
 import { EmailService } from "../services/email-service";
 import type { EmailTemplateService } from "../services/email-template-service";
-import { shouldIncludeBody } from "../services/providers/log-provider";
+import { logProviderConfigFor } from "../services/providers/log-provider";
 
 const logger = {
   debug: vi.fn(),
@@ -52,14 +52,16 @@ function serviceWithNoProvider() {
 }
 
 describe("body inclusion by environment", () => {
-  it("includes the body outside production", () => {
-    expect(shouldIncludeBody("development")).toBe(true);
-    expect(shouldIncludeBody("test")).toBe(true);
-    expect(shouldIncludeBody(undefined)).toBe(true);
+  it("includes the body only in development and test", () => {
+    expect(logProviderConfigFor("development").includeBody).toBe(true);
+    expect(logProviderConfigFor("test").includeBody).toBe(true);
   });
 
-  it("excludes the body in production, where a reset token would be a leak", () => {
-    expect(shouldIncludeBody("production")).toBe(false);
+  it("excludes the body everywhere else, an unset NODE_ENV included", () => {
+    // A server started without NODE_ENV is as likely to be a production host
+    // as a laptop, and a reset token in its logs would be a leak.
+    expect(logProviderConfigFor("production").includeBody).toBe(false);
+    expect(logProviderConfigFor(undefined).includeBody).toBe(false);
   });
 });
 

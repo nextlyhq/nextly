@@ -12,6 +12,7 @@
 
 import { NextlyError } from "../../errors";
 import type { VersionStatus } from "../../schemas/versions/types";
+import { markWriteIntegrityFailure } from "../../shared/write-integrity";
 import {
   CORE_CONTENT_EVENT_KINDS,
   ensureCoreContentEventKinds,
@@ -150,6 +151,10 @@ export class VersionCaptureService {
  * versions went. The retention policy removed them, so the system is named
  * as who did it. Collections and Singles keep a record of content events; a
  * page's history keeps none yet.
+ *
+ * A failure is marked write-integrity: the pass has already removed versions,
+ * and a batch that softened it to one failed item would commit the removal
+ * with no record of it.
  */
 async function recordRetentionRemoval(
   db: VersionsDbApi,
@@ -159,10 +164,14 @@ async function recordRetentionRemoval(
   if (count <= 0) return;
   if (ref.scopeKind !== "collection" && ref.scopeKind !== "single") return;
   ensureCoreContentEventKinds();
-  await recordContentEvent(db, {
-    subject: { kind: ref.scopeKind, slug: ref.scopeSlug, id: ref.entryId },
-    kind: CORE_CONTENT_EVENT_KINDS.versionsRemoved.name,
-    actor: { kind: "system" },
-    payload: { count },
-  });
+  try {
+    await recordContentEvent(db, {
+      subject: { kind: ref.scopeKind, slug: ref.scopeSlug, id: ref.entryId },
+      kind: CORE_CONTENT_EVENT_KINDS.versionsRemoved.name,
+      actor: { kind: "system" },
+      payload: { count },
+    });
+  } catch (error) {
+    throw markWriteIntegrityFailure(error);
+  }
 }
