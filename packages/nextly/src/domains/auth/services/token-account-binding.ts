@@ -374,15 +374,18 @@ function planBinding(
   dialect: SupportedDialect,
   now: Date
 ): { bindTo: Map<string, number[]>; remove: number[] } {
-  const same = addressComparison(dialect);
+  const key = addressKey(dialect);
+  // The account the database itself says holds each address, looked up once
+  // per token: addresses are unique under the database's own comparison, so
+  // each key names at most one account.
+  const byAddress = new Map(
+    accounts.map(account => [key(account.email), account] as const)
+  );
+  const same = (a: string, b: string): boolean => key(a) === key(b);
   const bindTo = new Map<string, number[]>();
   const remove: number[] = [];
   for (const token of tokens) {
-    // The account the database itself says holds the address: addresses are
-    // unique under the database's own comparison, so at most one matches.
-    const account = accounts.find(candidate =>
-      same(candidate.email, token.identifier)
-    );
+    const account = byAddress.get(key(token.identifier));
     if (
       token.expires > now &&
       account &&
@@ -397,17 +400,14 @@ function planBinding(
 }
 
 /**
- * Whether two addresses are the same address to the database. MySQL compares
+ * An address in the form the database compares it in, so two addresses are
+ * the same address to the database when their keys are equal. MySQL compares
  * them under its case-insensitive collation, so a token issued to
  * `person@example.com` was redeemable by an account stored as
  * `Person@example.com`; PostgreSQL and SQLite compare them exactly.
  */
-function addressComparison(
-  dialect: SupportedDialect
-): (a: string, b: string) => boolean {
-  return dialect === "mysql"
-    ? (a, b) => a.toLowerCase() === b.toLowerCase()
-    : (a, b) => a === b;
+function addressKey(dialect: SupportedDialect): (address: string) => string {
+  return dialect === "mysql" ? address => address.toLowerCase() : a => a;
 }
 
 /** The accounts holding any of `emails`, as the database matches them. */
