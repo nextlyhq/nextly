@@ -728,6 +728,48 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 }
 
 /**
+ * The caller an expansion judges every related row for, from the options it was
+ * handed. Built in one place so a single-entry and a batched expansion can
+ * never carry different callers for the same request.
+ */
+function relatedRowAccessOf(
+  options: RelationshipExpansionOptions
+): RelatedRowAccess {
+  return {
+    enforceFieldAccess: options.enforceFieldAccess,
+    enforceCollectionAccess: options.enforceCollectionAccess,
+    fieldAccessStage: options.fieldAccessStage,
+    user: options.user,
+    // Carried BESIDE `user`, never folded into it. A preview judges a related
+    // row's fields as the sharer while every hook goes on seeing the
+    // anonymous bearer; dropping it here silently restores the anonymous
+    // reading for the whole expansion, which is the direction that leaks.
+    fieldAccessUser: options.fieldAccessUser,
+    overrideAccess: options.overrideAccess,
+    trusted: assumedBound(options.trusted),
+    authenticatedScope: options.authenticatedScope,
+    locale: options.locale,
+    status: options.status,
+    withheldByAccess: options.withheldByAccess,
+    // One per expansion, so a relationship holding many references reads its
+    // target's rules once rather than once per value. A nested hop inherits
+    // the map rather than starting its own: several children populating the
+    // same collection would otherwise each resolve its policy again, which
+    // is the repetition this cache exists to remove. Created fresh only for
+    // the outermost call, because a collection's rules can change between
+    // requests.
+    targetPolicies: options.targetPolicies ?? new Map(),
+    // Shared and inherited exactly as the policy map is, for the same reason:
+    // a nested hop starting its own would re-read the metadata of a collection
+    // an ancestor already looked up.
+    targetCompanions: options.targetCompanions ?? new Map(),
+    // And the access verdicts, likewise: the caller is the same on every hop,
+    // so a target already judged for it is not asked again.
+    targetVerdicts: options.targetVerdicts ?? new Map(),
+  };
+}
+
+/**
  * Strips expanded relationship objects in a data row down to just their IDs.
  * Used when depth=0 to ensure no nested relationships are returned as full objects.
  * Recursively handles nested repeater/group fields.
@@ -2058,38 +2100,7 @@ export class CollectionRelationshipService extends BaseService {
     const { depth = DEFAULT_RELATIONSHIP_DEPTH } = options;
     // The caller travels with every fetch below so each related row is judged
     // by its own collection's field rules.
-    const access: RelatedRowAccess = {
-      enforceFieldAccess: options.enforceFieldAccess,
-      enforceCollectionAccess: options.enforceCollectionAccess,
-      fieldAccessStage: options.fieldAccessStage,
-      user: options.user,
-      // Carried BESIDE `user`, never folded into it. A preview judges a related
-      // row's fields as the sharer while every hook goes on seeing the
-      // anonymous bearer; dropping it here silently restores the anonymous
-      // reading for the whole expansion, which is the direction that leaks.
-      fieldAccessUser: options.fieldAccessUser,
-      overrideAccess: options.overrideAccess,
-      trusted: assumedBound(options.trusted),
-      authenticatedScope: options.authenticatedScope,
-      locale: options.locale,
-      status: options.status,
-      withheldByAccess: options.withheldByAccess,
-      // One per expansion, so a relationship holding many references reads its
-      // target's rules once rather than once per value. A nested hop inherits
-      // the map rather than starting its own: several children populating the
-      // same collection would otherwise each resolve its policy again, which
-      // is the repetition this cache exists to remove. Created fresh only for
-      // the outermost call, because a collection's rules can change between
-      // requests.
-      targetPolicies: options.targetPolicies ?? new Map(),
-      // Shared and inherited exactly as the policy map is, for the same reason:
-      // a nested hop starting its own would re-read the metadata of a collection
-      // an ancestor already looked up.
-      targetCompanions: options.targetCompanions ?? new Map(),
-      // And the access verdicts, likewise: the caller is the same on every hop,
-      // so a target already judged for it is not asked again.
-      targetVerdicts: options.targetVerdicts ?? new Map(),
-    };
+    const access = relatedRowAccessOf(options);
 
     // Clamp depth to valid range
     const effectiveDepth = effectiveRelationshipDepth(depth);
@@ -2635,38 +2646,7 @@ export class CollectionRelationshipService extends BaseService {
     const { depth = DEFAULT_RELATIONSHIP_DEPTH, currentDepth = 0 } = options;
     // Travels with every nested expansion and row fetch, so a related row at
     // any depth is judged by its own collection's field rules.
-    const access: RelatedRowAccess = {
-      enforceFieldAccess: options.enforceFieldAccess,
-      enforceCollectionAccess: options.enforceCollectionAccess,
-      fieldAccessStage: options.fieldAccessStage,
-      user: options.user,
-      // Carried BESIDE `user`, never folded into it. A preview judges a related
-      // row's fields as the sharer while every hook goes on seeing the
-      // anonymous bearer; dropping it here silently restores the anonymous
-      // reading for the whole expansion, which is the direction that leaks.
-      fieldAccessUser: options.fieldAccessUser,
-      overrideAccess: options.overrideAccess,
-      trusted: assumedBound(options.trusted),
-      authenticatedScope: options.authenticatedScope,
-      locale: options.locale,
-      status: options.status,
-      withheldByAccess: options.withheldByAccess,
-      // One per expansion, so a relationship holding many references reads its
-      // target's rules once rather than once per value. A nested hop inherits
-      // the map rather than starting its own: several children populating the
-      // same collection would otherwise each resolve its policy again, which
-      // is the repetition this cache exists to remove. Created fresh only for
-      // the outermost call, because a collection's rules can change between
-      // requests.
-      targetPolicies: options.targetPolicies ?? new Map(),
-      // Shared and inherited exactly as the policy map is, for the same reason:
-      // a nested hop starting its own would re-read the metadata of a collection
-      // an ancestor already looked up.
-      targetCompanions: options.targetCompanions ?? new Map(),
-      // And the access verdicts, likewise: the caller is the same on every hop,
-      // so a target already judged for it is not asked again.
-      targetVerdicts: options.targetVerdicts ?? new Map(),
-    };
+    const access = relatedRowAccessOf(options);
 
     // Clamp depth to valid range
     const effectiveDepth = effectiveRelationshipDepth(depth);
