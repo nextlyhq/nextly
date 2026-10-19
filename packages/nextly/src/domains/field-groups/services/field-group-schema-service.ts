@@ -68,6 +68,7 @@ import type { ExtensionColumn } from "../../schema/extension/types";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
+  componentRelationshipStoresList,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
 import {
@@ -366,7 +367,7 @@ export class FieldGroupSchemaService {
       if (!columnType) continue;
 
       const columnName = this.toSnakeCase(name);
-      const nullable = "required" in field && field.required ? "NOT NULL" : "";
+      const nullable = this.writesNotNull(field) ? "NOT NULL" : "";
 
       // When adding NOT NULL columns to existing tables, provide a sensible default.
       let defaultVal = "";
@@ -844,7 +845,7 @@ export class FieldGroupSchemaService {
 
     const parts = [`${this.q}${columnName}${this.q}`, columnType];
 
-    if ("required" in field && field.required) {
+    if (this.writesNotNull(field)) {
       parts.push("NOT NULL");
     }
 
@@ -856,6 +857,19 @@ export class FieldGroupSchemaService {
     }
 
     return parts.join(" ");
+  }
+
+  /**
+   * Whether the creating SQL writes `field`'s column NOT NULL: a required field, except a
+   * many-to-many. That column is nullable on every route, as the desired schema records it, with
+   * `required` enforced when the entry is saved; a NOT NULL here would make the next preview plan
+   * to drop a constraint the runtime table never had.
+   */
+  private writesNotNull(field: FieldConfig): boolean {
+    return (
+      Boolean("required" in field && field.required) &&
+      !usesJunctionTable(field)
+    );
   }
 
   // Classifies a number field's storage the same way collections and
@@ -922,15 +936,10 @@ export class FieldGroupSchemaService {
       return types.varchar(255);
     }
     if (isUploadField(field) || isRelationshipField(field)) {
-      if (Array.isArray(field.relationTo) || field.hasMany) {
-        return types.json;
-      }
-      // A component's many-to-many keeps its ids on the component row as text on PostgreSQL, the
-      // type the runtime table writes too. A scalar uuid cannot hold a multi-value relation.
-      if (this.dialect === "postgresql" && usesJunctionTable(field)) {
-        return types.text;
-      }
-      return types.uuid;
+      // A relation holding a list (hasMany, several targets, or a many-to-many, which a component
+      // keeps on its row) is a JSON column; the runtime table and the desired schema ask the same
+      // rule.
+      return componentRelationshipStoresList(field) ? types.json : types.uuid;
     }
     if (isRepeaterField(field) || isGroupField(field)) {
       return types.json;
@@ -979,7 +988,10 @@ export class FieldGroupSchemaService {
       return isRequired ? pgText(colName).notNull() : pgText(colName);
     }
     if (isRelationshipField(field) || isUploadField(field)) {
-      return pgText(colName);
+      // A list of references is JSON, as the creating SQL and the desired schema store it.
+      return componentRelationshipStoresList(field)
+        ? pgJsonb(colName)
+        : pgText(colName);
     }
     if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? pgJsonb(colName).notNull() : pgJsonb(colName);
@@ -1031,7 +1043,10 @@ export class FieldGroupSchemaService {
         : mysqlVarchar(colName, { length: 255 });
     }
     if (isRelationshipField(field) || isUploadField(field)) {
-      return mysqlVarchar(colName, { length: 36 });
+      // A list of references is JSON, as the creating SQL and the desired schema store it.
+      return componentRelationshipStoresList(field)
+        ? mysqlJson(colName)
+        : mysqlVarchar(colName, { length: 36 });
     }
     if (isRepeaterField(field) || isGroupField(field) || isJSONField(field)) {
       return isRequired ? mysqlJson(colName).notNull() : mysqlJson(colName);

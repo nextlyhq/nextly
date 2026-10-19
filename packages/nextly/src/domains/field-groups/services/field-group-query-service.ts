@@ -40,6 +40,7 @@ import {
   DEFAULT_COMPONENT_DEPTH,
   POPULATE_INTERNAL_COLUMNS,
   toSnakeCase,
+  asComponentReferenceList,
   shouldTreatAsJson,
   type ComponentRow,
 } from "./field-group-utils";
@@ -1159,6 +1160,9 @@ export class FieldGroupQueryService extends BaseService {
         }
       } else {
         result[fieldName] = value ?? null;
+      }
+      if (field) {
+        result[fieldName] = asComponentReferenceList(field, result[fieldName]);
       }
     }
 

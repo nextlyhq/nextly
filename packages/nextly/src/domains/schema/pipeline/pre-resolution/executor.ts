@@ -28,15 +28,24 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
-import { isPreResolutionOp, type Operation } from "../diff/types";
+import {
+  isPreResolutionOp,
+  isReferenceListConversion,
+  type Operation,
+} from "../diff/types";
 // F11 PR 3: SQL-template generation moved to the shared sql-templates/
 // module (pipeline/sql-templates/) so both the apply pipeline (renames +
 // drops) and migrate:create (all op types) consume the same per-dialect
 // templates. Eliminates the byte-identical-SQL drift risk.
+import { referenceListConversionStatements } from "../reference-list-conversion";
 import { conversionForRename } from "../rename-conversion";
 import { generateSQL } from "../sql-templates/index";
 
-import { columnHoldsOnlyJson, isJsonTarget } from "./json-convertibility";
+import {
+  columnHoldsOnlyJson,
+  columnReadsAsReferenceList,
+  isJsonTarget,
+} from "./json-convertibility";
 
 interface AsyncExecuteHandle {
   execute(query: unknown): Promise<unknown>;
@@ -82,8 +91,9 @@ export async function executePreResolutionOps(
   }
 
   for (const op of ordered) {
-    const sqlString = sqlForOp(op, dialect);
-    await runRaw(txOrDb, sqlString, dialect);
+    for (const statement of statementsForOp(op, dialect)) {
+      await runRaw(txOrDb, statement, dialect);
+    }
   }
 
   // A rename moves the column; it does not change what the column IS. When the two sides differ, the
@@ -216,6 +226,46 @@ async function assertConversionsAreSafe(
       ],
     });
   }
+
+  await assertReferenceListsConvert(txOrDb, ordered, currentTableName, dialect);
+}
+
+/**
+ * Refuse an apply in which a column becoming a relation's list of references holds a value that
+ * cannot be read as one. Asked before the first statement runs, so a refused conversion leaves the
+ * whole apply unchanged, on MySQL too.
+ */
+async function assertReferenceListsConvert(
+  txOrDb: unknown,
+  ordered: Operation[],
+  currentTableName: ReadonlyMap<string, string>,
+  dialect: SupportedDialect
+): Promise<void> {
+  for (const op of ordered) {
+    if (!isReferenceListConversion(op)) continue;
+    const liveTable = currentTableName.get(op.tableName) ?? op.tableName;
+    const readable = await columnReadsAsReferenceList(
+      txOrDb,
+      liveTable,
+      op.columnName,
+      dialect
+    );
+    if (readable) continue;
+
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: `${liveTable}.${op.columnName}`,
+          code: "COLUMN_NOT_CONVERTIBLE",
+          message:
+            `Column "${op.columnName}" on "${liveTable}" holds a value that is neither a single id, ` +
+            `an array of ids nor a JSON list, so it cannot become a list of references. Nothing has ` +
+            `been changed. Find the row whose value starts with "{" or "[" but does not parse, and ` +
+            `correct or clear it first.`,
+        },
+      ],
+    });
+  }
 }
 
 // Returns ops sorted into the execution-safe order described above.
@@ -226,19 +276,24 @@ function orderForExecution(ops: Operation[]): Operation[] {
   const dropIndexes: Operation[] = [];
   const dropColumns: Operation[] = [];
   const dropTables: Operation[] = [];
+  const referenceListConversions: Operation[] = [];
   for (const op of ops) {
     if (op.type === "rename_table") renameTables.push(op);
     else if (op.type === "rename_column") renameColumns.push(op);
     else if (op.type === "drop_index") dropIndexes.push(op);
     else if (op.type === "drop_column") dropColumns.push(op);
     else if (op.type === "drop_table") dropTables.push(op);
+    else if (isReferenceListConversion(op)) referenceListConversions.push(op);
   }
+  // Conversions last: they name a column by the name it has once every rename has run, on a table
+  // no drop removes, and they must run before the route's own DDL, which this whole pass precedes.
   return [
     ...renameTables,
     ...renameColumns,
     ...dropIndexes,
     ...dropColumns,
     ...dropTables,
+    ...referenceListConversions,
   ];
 }
 
@@ -248,8 +303,14 @@ function orderForExecution(ops: Operation[]): Operation[] {
 // entry point that handles all 9 Operation variants. The `isPreResolutionOp`
 // filter still gates which ops reach this executor — additive ops (add_*,
 // change_*) are handled by pushSchema's later pass, not here.
-function sqlForOp(op: Operation, dialect: SupportedDialect): string {
-  return generateSQL(op, dialect);
+//
+// A reference-list conversion is asked for its statement LIST: on MySQL it is three statements, and
+// the driver runs one per call, so the joined form a migration file carries would be refused.
+function statementsForOp(op: Operation, dialect: SupportedDialect): string[] {
+  if (isReferenceListConversion(op)) {
+    return referenceListConversionStatements(op, dialect);
+  }
+  return [generateSQL(op, dialect)];
 }
 
 /**

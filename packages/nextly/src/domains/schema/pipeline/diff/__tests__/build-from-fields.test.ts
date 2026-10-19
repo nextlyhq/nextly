@@ -721,10 +721,14 @@ describe("buildDesiredTableFromComponentFields - the discriminator column", () =
 describe.each(["postgresql", "mysql", "sqlite"] as const)(
   "buildDesiredTableFromComponentFields - many-to-many on %s",
   dialect => {
-    // A component has no junction table, so its many-to-many keeps the ids on its own row. The
-    // desired table must carry that column with the same shape a plain single relationship gets,
-    // which is the shape the component DDL and the runtime table already emit for it.
-    const relation = { type: "relationship", options: { target: "tags" } };
+    // A component has no junction table, so its many-to-many keeps the ids on its own row as a list.
+    // The desired table must carry that column with the JSON list shape a hasMany relationship gets,
+    // which is the shape the component DDL and the runtime table emit for it.
+    const relation = {
+      type: "relationship",
+      hasMany: true,
+      options: { target: "tags" },
+    };
     const manyToMany = {
       ...relation,
       options: { target: "tags", relationType: "manyToMany" },
@@ -744,7 +748,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       expect(columnNamed(table.columns, "tags")).toBeDefined();
     });
 
-    it("gives it the same column a plain single relationship gets", () => {
+    it("gives it the same column a hasMany relationship gets", () => {
       const withManyToMany = buildDesiredTableFromComponentFields(
         "comp_hero",
         [{ name: "tags", ...manyToMany }] as never,
@@ -813,7 +817,7 @@ describe("buildDesiredTableFromComponentFields - many-to-many index", () => {
 
 describe("buildDesiredTableFromComponentFields - many-to-many column type on PostgreSQL", () => {
   // The desired column must name the same type the creating SQL and the runtime table write.
-  it("is text, the type the component creation routes write", () => {
+  it("is jsonb, the type the component creation routes write", () => {
     const table = buildDesiredTableFromComponentFields(
       "comp_hero",
       [
@@ -826,6 +830,6 @@ describe("buildDesiredTableFromComponentFields - many-to-many column type on Pos
       "postgresql",
       { builtBy: "codeFirst" }
     );
-    expect(table.columns.find(c => c.name === "tags")?.type).toBe("text");
+    expect(table.columns.find(c => c.name === "tags")?.type).toBe("jsonb");
   });
 });

@@ -263,14 +263,56 @@ export function usesJunctionTable(field: {
 }
 
 /**
+ * Whether a relationship or upload keeps several references in its column on a collection or Single
+ * row, as a JSON list: it is `hasMany`, or it names several target collections.
+ *
+ * The one rule for that question, asked by the column descriptor, the Single row serializer and,
+ * through `componentRelationshipStoresList`, everything that builds or reads a component row. A
+ * many-to-many is not a list here: on these rows its links live in a junction table, and
+ * `fieldProducesColumn` gives it no column at all.
+ *
+ * Structural rather than typed, because the field-group and Single services ask it of their own
+ * field shapes.
+ */
+export function relationshipStoresList(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  relationTo?: unknown;
+}): boolean {
+  if (field.type !== "relationship" && field.type !== "upload") return false;
+  return Boolean(field.hasMany) || Array.isArray(field.relationTo);
+}
+
+/**
+ * Whether a relationship or upload keeps several references in its column on a component row.
+ *
+ * Everything `relationshipStoresList` answers yes to, and a many-to-many as well: a component has
+ * no junction table, so a many-to-many keeps its ids on the instance row. The write path keeps that
+ * value a list (`normalizeRelationshipField` reads `relationType: "manyToMany"` as many-valued), so
+ * the column holds a JSON list on every dialect.
+ *
+ * The creating SQL, the runtime table, the row serializer and the desired schema all ask this, so a
+ * route cannot create a scalar column for a value that is a list. A scalar column refused a
+ * multi-value save on MySQL and handed the list back as a string on PostgreSQL.
+ */
+export function componentRelationshipStoresList(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  relationTo?: unknown;
+  options?: unknown;
+}): boolean {
+  return relationshipStoresList(field) || usesJunctionTable(field);
+}
+
+/**
  * The descriptor for a field stored on a component's own row, which is where a component's values
  * live when they are not in a nested field group's table.
  *
  * A component has no junction table, so a many-to-many on one keeps its ids on the instance row as
- * a plain single relationship. `getColumnDescriptor` answers "no column" for it because it is asked
- * the collection question; the component table, its DDL and its runtime schema all store the value
- * in a column, so this answers the component question with the same shape a single relationship
- * gets. Every other field is answered exactly as `getColumnDescriptor` answers it.
+ * a list, the JSON column a `hasMany` relationship gets (`componentRelationshipStoresList`).
+ * `getColumnDescriptor` answers "no column" for it because it is asked the collection question, so
+ * this answers the component question. Every other field is answered exactly as
+ * `getColumnDescriptor` answers it.
  */
 export function getComponentRowColumnDescriptor(
   field: FieldDefinition,
@@ -281,11 +323,15 @@ export function getComponentRowColumnDescriptor(
     return getColumnDescriptor(field, dialect, builtBy);
   }
   const options = field.options as Record<string, unknown>;
-  const asSingleRelation = {
+  const asListRelation = {
     ...field,
+    hasMany: true,
     options: { ...options, relationType: undefined },
   } as FieldDefinition;
-  return getColumnDescriptor(asSingleRelation, dialect, builtBy);
+  const descriptor = getColumnDescriptor(asListRelation, dialect, builtBy);
+  // Nullable whether or not the field is required, as every relationship column is: `required` is
+  // enforced when the entry is saved, and both creating routes leave this column nullable.
+  return descriptor ? { ...descriptor, nullable: true } : null;
 }
 
 /**
@@ -582,10 +628,7 @@ export function classifyFieldKind(
       // that rule. An upload never is, so `relationType: "manyToMany"` on one falls through to the
       // ordinary shapes below: hasMany or array-target is a JSON array of FK ids, single-target a
       // plain FK column. That matches what the write path does with it.
-      const hasMany = (field as { hasMany?: boolean }).hasMany;
-      const relationTo = (field as { relationTo?: unknown }).relationTo;
-      if (hasMany || Array.isArray(relationTo)) return "json";
-      return "fkSingle";
+      return relationshipStoresList(field) ? "json" : "fkSingle";
     }
 
     case "repeater":

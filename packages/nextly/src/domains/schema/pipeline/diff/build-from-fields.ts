@@ -35,6 +35,7 @@ import {
   type WeighedColumn,
 } from "../../extension/naming";
 import {
+  componentRelationshipStoresList,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
   type ColumnOrigin,
@@ -707,6 +708,11 @@ export function buildDesiredTableFromComponentFields(
       type: desc.dialectType,
       nullable: desc.nullable,
       default: undefined,
+      // A relation keeping its list of references on the component row, which an older table may
+      // hold in a scalar column; a type change into it is then a reference-list conversion.
+      ...(componentRelationshipStoresList(field)
+        ? { holdsReferenceList: true }
+        : {}),
     });
   }
 
