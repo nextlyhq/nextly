@@ -158,12 +158,14 @@ describe("the console guard", () => {
   }, 60_000);
 
   it("does not refuse it in a terminal file or a pending one", async () => {
-    // The complement: the exemptions are what suppress the rule.
+    // The complement: the exemptions are what suppress the rule. A pending
+    // file is checked while there is one; an empty list is where it ends.
     const pendingFile = [...ALLOWLIST.pending.keys()][0];
-    if (pendingFile === undefined) {
-      throw new TypeError(`${ALLOWLIST_FILE} has no pending file to check`);
-    }
-    for (const file of [TERMINAL_FILE, pendingFile]) {
+    const exempt =
+      pendingFile === undefined
+        ? [TERMINAL_FILE]
+        : [TERMINAL_FILE, pendingFile];
+    for (const file of exempt) {
       expect(await ruleIds(packageRoot, file, withProbe(file))).not.toContain(
         "no-console"
       );
