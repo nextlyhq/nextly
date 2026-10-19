@@ -247,7 +247,8 @@ leave the page and the total one apart for that one response. The next request r
         "cancel": true,
         "addMember": true,
         "removeMember": true
-      }
+      },
+      "memberCounts": { "total": 6, "goLive": 5, "comeDown": 1 }
     }
   ],
   "meta": {
@@ -263,6 +264,11 @@ leave the page and the total one apart for that one response. The next request r
 
 To count a tab without reading its releases, ask for one row and read `meta.total`:
 `GET /api/releases?tab=attention&limit=1`.
+
+Each release on the REST list carries `memberCounts` (experimental): how many documents it holds,
+how many it puts live (`goLive`) and how many it takes down (`comeDown`). They are read for the
+whole page at once. From the Direct API, ask `nextly.releases.memberCounts({ releaseIds })`, which
+answers every id with its counts, zeros for a release holding none.
 
 ### From the Direct API
 
@@ -500,6 +506,19 @@ export async function hardProblems(nextly: Nextly, releaseId: string) {
   );
 }
 ```
+
+To read the problems of a page of releases at once (experimental), name up to 50 of them:
+
+|            |                                                                     |
+| ---------- | ------------------------------------------------------------------- |
+| REST       | `GET /api/releases/readiness?ids=id1,id2`                           |
+| Direct API | `nextly.releases.readinessOf({ releaseIds })`                       |
+| Permission | Reading releases, as for one release. More than 50 ids answer `400` |
+
+Each release comes back in the order asked, as one release's read answers it, with
+`checked: true`. A release that does not exist is left out. A release holding more documents than
+a release may now hold comes back as `{ releaseId, checked: false, reason: "over-member-limit" }`:
+read it on its own to check it in full.
 
 Each problem names its document (`memberId`, `scopeKind`, `scopeSlug`, `entryId`, `action`) and
 the check that found it (`source`). Hard problems come before soft ones, each in the order the

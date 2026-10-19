@@ -42,6 +42,7 @@ import {
   RELEASE_LIST_ORDERS,
   type DocumentRef,
   type ReleaseListOrder,
+  type ReleaseMemberCounts,
   type ReleaseRow,
 } from "../domains/releases/releases-repository";
 import {
@@ -95,6 +96,7 @@ const RELEASE_AUTHORITY: Record<string, ReleaseAuthority> = {
   listReleaseMembers: "read",
   listReleaseBlockers: "read",
   getReleaseReadiness: "read",
+  listReleasesReadiness: "read",
   createRelease: "create",
   addReleaseMember: "create",
   // Removing a member un-does part of assembling a release and can only ever
@@ -583,6 +585,32 @@ async function withCapabilities(
 }
 
 /**
+ * Each listed release with how many documents it holds and what it does with
+ * them, read for the whole page in one request rather than one per row.
+ *
+ * On the REST list only, as the capabilities are: it is what a list screen
+ * shows beside each release, and a Direct API caller asks `memberCounts` for
+ * it when it wants it.
+ *
+ * @experimental
+ */
+async function withMemberCounts<Row extends { id: string }>(
+  rows: Row[],
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+): Promise<Array<Row & { memberCounts: ReleaseMemberCounts }>> {
+  if (rows.length === 0) return [];
+  const counts = await releases.memberCounts({
+    ...caller,
+    releaseIds: rows.map(row => row.id),
+  });
+  return rows.map(row => ({
+    ...row,
+    memberCounts: counts[row.id] ?? { total: 0, goLive: 0, comeDown: 0 },
+  }));
+}
+
+/**
  * What a Publish now answer says, by the state the run left the release in.
  *
  * One sentence per state, in a record keyed by every state, so a state added
@@ -721,7 +749,38 @@ const RELEASE_OPERATIONS: Record<
     const items = await withCapabilities(found.items, caller, releases);
     // The service's own page and total, so `meta.total` is every release the
     // query matches, not the rows this page holds.
-    return respondList(items, found.meta);
+    return respondList(
+      containing === undefined
+        ? await withMemberCounts(items, caller, releases)
+        : items,
+      found.meta
+    );
+  },
+
+  /**
+   * What the checks say about each of a page of releases, in one request.
+   *
+   * The ids travel as `?ids=a,b` or repeated `?ids=`, so a client can send a
+   * page's ids however it builds a query string. The service bounds how many.
+   */
+  listReleasesReadiness: async ({ request, caller, releases }) => {
+    const releaseIds = new URL(request.url).searchParams
+      .getAll("ids")
+      .flatMap(value => value.split(","))
+      .map(id => id.trim())
+      .filter(id => id.length > 0);
+    if (releaseIds.length === 0) {
+      throw badRequest("`ids` must name at least one release.");
+    }
+    const entries = await releases.readinessOf({ ...caller, releaseIds });
+    return respondList(entries, {
+      total: entries.length,
+      page: 1,
+      limit: entries.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
   },
 
   releaseCalendar: async ({ request, caller, releases }) => {

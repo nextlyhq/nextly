@@ -30,6 +30,7 @@ import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
 import type { ReleaseReadiness } from "../../domains/releases/readiness/evaluate-readiness";
 import type { ReleaseCalendar } from "../../domains/releases/release-calendar";
 import type {
+  ReleaseMemberCounts,
   ReleaseMemberRow,
   ReleaseRow,
 } from "../../domains/releases/releases-repository";
@@ -40,6 +41,7 @@ import type {
   ReleaseCalendarQuery,
   ReleaseCountQuery,
   ReleaseDetailsChange,
+  ReleaseReadinessEntry,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
@@ -187,6 +189,28 @@ export interface ReleasesNamespace {
   readiness(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseReadiness>;
+  /**
+   * {@link readiness} for up to fifty releases at once, in the order asked,
+   * under the same authority. A release that does not exist is left out; one
+   * holding more documents than a release may now hold comes back
+   * `checked: false`, for the single read to check in full. More than fifty
+   * ids are refused.
+   *
+   * @experimental
+   */
+  readinessOf(
+    args: { releaseIds: readonly string[] } & ReleaseCallerArgs
+  ): Promise<ReleaseReadinessEntry[]>;
+  /**
+   * How many documents each of these releases holds, and how many it puts
+   * live and takes down, keyed by release id. Every id asked about is
+   * answered, with zeros for a release holding none.
+   *
+   * @experimental
+   */
+  memberCounts(
+    args: { releaseIds: readonly string[] } & ReleaseCallerArgs
+  ): Promise<Record<string, ReleaseMemberCounts>>;
   /**
    * Put a document into a release under a lifecycle action.
    *
@@ -472,6 +496,12 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       service().listMembers(args.releaseId, actorOf(ctx, args)),
 
     readiness: args => service().readiness(args.releaseId, actorOf(ctx, args)),
+
+    readinessOf: args =>
+      service().readinessOf(args.releaseIds, actorOf(ctx, args)),
+
+    memberCounts: args =>
+      service().memberCounts(args.releaseIds, actorOf(ctx, args)),
 
     changeMemberAction: args =>
       service().changeMemberAction(
