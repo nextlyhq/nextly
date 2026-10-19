@@ -1,6 +1,6 @@
 /**
- * What the document area and the banner do while a chosen version has not
- * arrived.
+ * What the document area and the version's Restore… do while a chosen version
+ * has not arrived.
  *
  * `isLoading` is false for a query that was never started as well as for one
  * that has finished, so it cannot stand for "the snapshot is here": the version
@@ -83,17 +83,18 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "collection", slug: "posts", entryId: "e1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
 
     expect(screen.getByTestId("snapshot-form")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /restore this version/i })
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Restore…" })).toBeEnabled();
   });
 
   it("prevents the native form submit while a version is being read", () => {
-    // The banner's restore button has no type attribute, so it submits the
-    // entry form natively. The submit must be prevented even when the write
+    // A button inside the entry form without a type attribute submits it
+    // natively. The submit must be prevented even when the write
     // gate refuses to run the save — an unprevented submit reloads the page
     // and drops the reader's history state.
     renderViewing({
@@ -102,6 +103,9 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "collection", slug: "posts", entryId: "e1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
 
     const form = document.querySelector("form");
@@ -126,13 +130,14 @@ describe("EntryForm — a version has to be on screen before it can be acted on"
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "collection", slug: "posts", entryId: "e1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
 
     // An absent snapshot must not render as an empty version.
     expect(screen.queryByTestId("snapshot-form")).toBeNull();
     expect(screen.getByText(/loading version 7/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /restore this version/i })
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restore…" })).toBeDisabled();
   });
 });

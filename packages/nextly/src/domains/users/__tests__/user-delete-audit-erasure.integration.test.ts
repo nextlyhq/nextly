@@ -39,6 +39,8 @@ import { buildAuditLogWriter } from "../../audit/audit-log-writer";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import { UserMutationService } from "../services/user-mutation-service";
 
+import { makeAdministrator } from "./administrator-fixture";
+
 const silentLogger = {
   debug: () => {},
   info: () => {},
@@ -102,8 +104,10 @@ describe.each(getConfiguredTestDialects())(
 
     beforeAll(async () => {
       handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
-      // A sentinel user so createLocalUser's "first user ever" branch (which
-      // needs more of the RBAC wiring) is never taken.
+      // An administrator already, so no account this suite creates is made the
+      // install's first one: deleting it would then be refused as removing the
+      // last administrator. A user row alone does not settle that; holding the
+      // role does.
       const now = new Date();
       await db().insert(tables.users).values({
         id: "sentinel",
@@ -113,6 +117,7 @@ describe.each(getConfiguredTestDialects())(
         createdAt: now,
         updatedAt: now,
       });
+      await makeAdministrator(handle.adapter, "sentinel");
       users = new UserMutationService(handle.adapter, silentLogger);
       activity = new ActivityLogService(handle.adapter, silentLogger);
       // The production writer, resolved against this adapter, so the columns

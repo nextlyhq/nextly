@@ -1,12 +1,16 @@
 import { config } from "@nextlyhq/eslint-config/base";
 
 import { bareErrorConfig } from "./eslint-bare-error-rule.js";
+import { consoleConfig } from "./eslint-console-rule.js";
 
 export default [
   ...config,
   // Globs are relative to packages/nextly/ because the lint command runs `eslint .` from this
   // directory. The repository-root config mounts the same builder with a path prefix.
   ...bareErrorConfig(),
+  // No direct console output from source: lines go through a masked logger
+  // (eslint-console-rule.js says why and which files are exempt).
+  ...consoleConfig(),
   // F1 PR 1 + F11 PR 5: bans on imports from the deployed app's
   // runtime code (the request graph + boot path).
   //
@@ -98,6 +102,7 @@ export default [
       // fails to parse.
       "eslint-bare-error-rule.js",
       "eslint-api-key-scope-rule.js",
+      "eslint-console-rule.js",
       "vitest.config.ts",
       "vitest.*.config.ts",
       "scripts/*.cjs",

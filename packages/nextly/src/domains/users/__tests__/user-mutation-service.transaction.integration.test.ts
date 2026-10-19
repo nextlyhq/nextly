@@ -40,6 +40,10 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
 import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
 import { users as usersSqlite } from "../../../schemas/users/sqlite";
+import {
+  ADMINISTRATOR_TABLES_SQLITE,
+  makeAdministrator,
+} from "./administrator-fixture";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -77,9 +81,12 @@ async function usersDdl(): Promise<string[]> {
     // `nextly_events` is included because createLocalUser now records a
     // `user.created` outbox event in the same transaction (a core system table
     // that always exists in a migrated app; recording is not resilient to its
-    // absence, matching the content write paths).
+    // absence, matching the content write paths). The administrator tables are
+    // included because createLocalUser asks whether anybody administers the
+    // install before it inserts.
     await kit.generateDrizzleJson({
       users: usersSqlite,
+      ...ADMINISTRATOR_TABLES_SQLITE,
       nextlyEvents: eventsSqlite,
     })
   );
@@ -122,14 +129,11 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
       await adapter.executeQuery(stmt);
     }
 
-    // Pre-seed a sentinel user so that createLocalUser's "first user ever"
-    // branch (which tries to create a super-admin role + assign it via
-    // ensureSuperAdminRole / assignRoleToUser) is NOT taken on the real test
-    // calls. That branch requires the full roles + user_roles + permissions
-    // tables to exist, which is way outside this test's scope — we only care
-    // about the transaction path. Inserting any row with a different email
-    // makes `isFirstUser` truthy inside createLocalUser and routes it straight
-    // to the insert without touching RBAC.
+    // Pre-seed a sentinel administrator so that createLocalUser's
+    // first-administrator grant is NOT taken on the real test calls: we only
+    // care about the transaction path. While nobody holds `super-admin`, an
+    // account the app creates is granted it inside the insert's transaction,
+    // so a user row alone is not enough; the sentinel holds the role.
     const nowEpoch = Math.floor(Date.now() / 1000);
     await adapter.executeQuery(
       `INSERT INTO users (id, email, name, is_active, created_at, updated_at)
@@ -143,6 +147,7 @@ describe("UserMutationService.createLocalUser — transaction path regression", 
         nowEpoch,
       ]
     );
+    await makeAdministrator(adapter, "sentinel-user-id");
 
     // Construct the mutation service directly — no ServiceContainer needed
     // for this targeted test (the container would eagerly wire up RBAC

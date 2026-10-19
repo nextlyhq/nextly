@@ -189,6 +189,7 @@ import {
 
 import type { CollectionAccessService } from "./collection-access-service";
 import type { CollectionHookService } from "./collection-hook-service";
+import { effectiveRelationshipDepth } from "./collection-relationship-service";
 import type { CollectionServiceResult, UserContext } from "./collection-types";
 import {
   collectionTableName,
@@ -3075,6 +3076,16 @@ export class CollectionQueryService extends BaseService {
             }),
           }
         );
+      // A read that populates nothing gives every relationship as stored, and
+      // a junction-backed one has no column to give it from.
+      if (effectiveRelationshipDepth(params.depth) === 0) {
+        expandedEntries =
+          await this.relationshipService.withStoredManyToManyIds(
+            expandedEntries,
+            params.collectionName,
+            fields
+          );
+      }
 
       // Batch-populate component field data from comp_{slug} tables
       // Uses WHERE _parent_id IN (...) for N+1 prevention
@@ -4233,6 +4244,17 @@ export class CollectionQueryService extends BaseService {
         fields,
         this.buildDetailExpansionOptions(params, localeChain, caches)
       );
+      // As on the list path: at depth 0 a junction-backed relationship gives
+      // its stored ids too. A working draft shown below replaces this row, and
+      // its snapshot already holds them.
+      if (effectiveRelationshipDepth(params.depth) === 0) {
+        [expandedEntry] =
+          await this.relationshipService.withStoredManyToManyIds(
+            [expandedEntry],
+            params.collectionName,
+            fields
+          );
+      }
 
       // Populate component field data from comp_{slug} tables
       // Pass depth for relationship expansion within component data

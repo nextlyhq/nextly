@@ -30,9 +30,9 @@ import {
 } from "../../audit/__tests__/legacy-activity-log-fixture";
 import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
 import {
-  roles as rolesSqlite,
-  userRoles as userRolesSqlite,
-} from "../../../schemas/rbac/sqlite";
+  ADMINISTRATOR_TABLES_SQLITE,
+  makeAdministrator,
+} from "./administrator-fixture";
 import { nextlyPluginSettings as settingsSqlite } from "../../../schemas/plugin-settings/sqlite";
 import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
@@ -55,8 +55,7 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      roles: rolesSqlite,
-      userRoles: userRolesSqlite,
+      ...ADMINISTRATOR_TABLES_SQLITE,
       nextlyEvents: eventsSqlite,
       nextlyPluginSettings: settingsSqlite,
     })
@@ -88,6 +87,11 @@ describe("deleting a user on a database with no activity_log (real SQLite)", () 
        VALUES (?, ?, ?, ?, ?, ?)`,
       ["sentinel", "sentinel@test.local", "Sentinel", 1, nowEpoch, nowEpoch]
     );
+    // An administrator already, so no account this suite creates is made the
+    // install's first one: deleting it would then be refused as removing the
+    // last administrator. A user row alone does not settle that; holding the
+    // role does.
+    await makeAdministrator(adapter, "sentinel");
     users = new UserMutationService(adapter, silentLogger);
   });
 
