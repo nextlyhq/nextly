@@ -275,12 +275,14 @@ A key created by a Super Admin copies the whole permission catalogue rather than
 
 Keys can be time-bound (set an expiry date) and revoked at any time. The full key value is shown to the operator **once** at creation; the database only stores the SHA-256 hash.
 
+A key acts with its creator's authority, so it is refused while its creator is deactivated and works again once they are reactivated. The instance that deactivates the account refuses its keys at once, and every other instance within ten seconds, the same bound as the account's sessions. A key is a credential of its own: an administrator setting the creator's password ends their sessions but not their keys.
+
 ### How verification works
 
 When a request includes a `Bearer` token, the auth middleware:
 
 1. Hashes the key with SHA-256 and looks it up in the `api_keys` table.
-2. Rejects expired or revoked keys.
+2. Rejects expired or revoked keys, and keys whose creator is deactivated.
 3. Enforces per-key rate limiting (default: 1,000 requests/hour, configurable via `apiKeys.rateLimit` in `defineConfig()`).
 4. Resolves the effective permission set based on the token type and creator's roles.
 5. Attaches an `AuthContext` with `authMethod: "api-key"` to the request.

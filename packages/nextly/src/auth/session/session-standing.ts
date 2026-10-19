@@ -454,6 +454,21 @@ export async function sessionTokenIsCurrent(
 }
 
 /**
+ * Whether the account is active, read through the same cache as a session's
+ * standing, so the bound and the local refusal on deactivation are the ones
+ * sessions have.
+ *
+ * Asked at epoch zero, which every held answer is at least as new as: only
+ * the active flag matters here, and ending an account's sessions, as a new
+ * password does, does not make it inactive. A failed read throws, as it does
+ * for a session.
+ */
+export async function accountIsActive(userId: string): Promise<boolean> {
+  const standing = await cacheFor(await standingAdapter()).standing(userId, 0);
+  return standing?.isActive === true;
+}
+
+/**
  * Drop this process's answer for the account, after a change that ends its
  * sessions, so the instance that made the change refuses the old tokens
  * without waiting out the cache.
