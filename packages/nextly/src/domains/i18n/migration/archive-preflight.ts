@@ -116,12 +116,11 @@ export async function archiveFieldsLeavingTranslation(args: {
 }): Promise<void> {
   if (!args.wasLocalized || !args.isLocalized) return;
   const mayRenameTranslated = oneTranslatedFieldReplaced(args);
-  const dialect = args.adapter.getCapabilities().dialect;
   // A translated field renamed in this change is judged under its new name, as the companion
   // transition will move it: renamed and made shared, it leaves translation, and its archive,
   // its refusals and its settings are asked for here, before the main table changes.
   const rename = mayRenameTranslated
-    ? await translatedFieldRename(args, dialect)
+    ? await translatedFieldRename(args, args.adapter.getCapabilities().dialect)
     : undefined;
   const oldFields = rename
     ? args.oldFields.map(f =>
@@ -134,6 +133,7 @@ export async function archiveFieldsLeavingTranslation(args: {
   if (leaving.size === 0 && joining.length === 0 && !mayRenameTranslated) {
     return;
   }
+  const dialect = args.adapter.getCapabilities().dialect;
 
   const refusals = [
     ...refusalsForFieldsLeavingTranslation({
