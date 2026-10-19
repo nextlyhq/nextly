@@ -101,7 +101,7 @@ describe("captureInTx", () => {
     );
   });
 
-  it("still assembles the snapshot and normalizes the status", async () => {
+  it("still assembles the snapshot, and records a status it does not know as it is", async () => {
     await captureInTx(tx, service(), {
       ref,
       contentStatus: "nonsense",
@@ -111,10 +111,12 @@ describe("captureInTx", () => {
       },
     });
 
+    // Never "published": a status outside the lifecycle is the document's
+    // own, and calling it published would claim it live.
     expect(capture).toHaveBeenCalledWith(
       tx,
       expect.objectContaining({
-        status: "published",
+        status: "nonsense",
         snapshot: { id: "e1", title: "Hi", tags: ["t1"] },
       })
     );

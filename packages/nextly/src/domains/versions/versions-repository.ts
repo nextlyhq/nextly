@@ -24,6 +24,7 @@ import type {
   VersionsWhere,
   VersionsWhereCondition,
 } from "./db-api";
+import type { RecordedVersionStatus } from "./recorded-status";
 import type { PrunableVersion } from "./retention";
 import { workingDraftKey } from "./working-draft-key";
 
@@ -221,7 +222,8 @@ export interface VersionRef {
 export interface InsertVersionInput {
   ref: VersionRef;
   versionNo: number | null;
-  status: VersionStatus;
+  /** A lifecycle status, or a document's own where it has no lifecycle. */
+  status: RecordedVersionStatus;
   isAutosave: boolean;
   snapshot: unknown;
   label?: string | null;
@@ -237,7 +239,8 @@ export interface VersionRow {
   scopeSlug: string;
   entryId: string;
   versionNo: number | null;
-  status: VersionStatus;
+  /** A lifecycle status, or a document's own where it has no lifecycle. */
+  status: RecordedVersionStatus;
   isAutosave: boolean;
   snapshot: unknown;
   label: string | null;
@@ -764,10 +767,18 @@ export class VersionsRepository {
    * partial unique index on Postgres; a MySQL/SQLite serialization or unique
    * guard is needed before capture is wired into concurrent writes.
    */
-  async getMaxVersionNo(ref: VersionRef): Promise<number> {
+  async getMaxVersionNo(
+    ref: VersionRef,
+    // A locking read, for a retry after a lost race: on MySQL a plain read
+    // answers from the transaction's snapshot, which still lacks the number a
+    // concurrent transaction committed, so it would hand out the same number
+    // again. A locking read sees the latest committed row on every dialect.
+    options: { latest?: boolean } = {}
+  ): Promise<number> {
     // Project only version_no and take a single row (order desc, limit 1), so
     // this never materializes a full version row (which carries the snapshot).
     const rows = await this.db.select<VersionRow>(TABLE, {
+      ...(options.latest ? { forUpdate: true } : {}),
       columns: ["versionNo"],
       where: {
         and: [
