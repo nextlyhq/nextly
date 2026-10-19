@@ -55,17 +55,10 @@ describe("a chart's colours", () => {
           />
           <OverTimeChart
             title="Over time"
+            intervals={[{ key: "1", label: "Day 1" }]}
             series={[
-              {
-                key: "x",
-                name: "Posts",
-                points: [{ key: "1", label: "Day 1", value: 2 }],
-              },
-              {
-                key: "y",
-                name: "Pages",
-                points: [{ key: "1", label: "Day 1", value: 1 }],
-              },
+              { key: "x", name: "Posts", points: [{ key: "1", value: 2 }] },
+              { key: "y", name: "Pages", points: [{ key: "1", value: 1 }] },
             ]}
           />
         </CardTierContext.Provider>

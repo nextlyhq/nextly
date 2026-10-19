@@ -93,15 +93,12 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
       <OverTimeChart
         title={definition.title ?? "Over time"}
         labelHeading="Interval"
+        intervals={rows.map(row => ({ key: row.key, label: row.label }))}
         series={[
           {
             key: "count",
             name: definition.title ?? "Over time",
-            points: rows.map(row => ({
-              key: row.key,
-              label: row.label,
-              value: row.count,
-            })),
+            points: rows.map(row => ({ key: row.key, value: row.count })),
           },
         ]}
       />

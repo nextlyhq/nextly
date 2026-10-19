@@ -27,11 +27,16 @@ import { useCardTier } from "../frame/tier";
 import { chartColour, type ChartSlot } from "./chart-colour";
 import { latestMarker, overTimeSummary } from "./chart-text";
 
-/** One point of a series: when, written as the table writes it, and how many. */
-export interface OverTimePoint {
-  /** Unique within its series: the instant, not the label, since two can format alike. */
+/** One interval of the chart's range: its key, and how it is written, as the table writes it. */
+export interface OverTimeInterval {
+  /** Unique within the range: the instant, not the label, since two can format alike. */
   key: string;
   label: string;
+}
+
+/** One point of a series: the interval it is in, by key, and how many. */
+export interface OverTimePoint {
+  key: string;
   value: number;
 }
 
@@ -46,6 +51,13 @@ export interface OverTimeSeries {
 export interface OverTimeChartProps {
   /** What the chart shows, named to assistive tech and above the table. */
   title: string;
+  /**
+   * The intervals every series is drawn against, oldest first. Given by the caller, who knows
+   * their order: a point's key alone cannot say when it falls, so a series that shares no
+   * interval with another could not be placed beside it. A point whose key is not here is not
+   * drawn.
+   */
+  intervals: readonly OverTimeInterval[];
   series: readonly OverTimeSeries[];
   /** Heads the table's first column. */
   labelHeading?: string;
@@ -67,15 +79,20 @@ function seriesSlot(index: number): ChartSlot {
 
 export function OverTimeChart({
   title,
-  series,
+  intervals,
+  series: given,
   labelHeading = "Interval",
 }: OverTimeChartProps) {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
-  const first = series[0];
   // One range for every series, so a point is drawn at its interval whatever else its series
   // holds, and one scale, so their lines are comparable: zero to the highest value.
-  const domain = sharedDomain(series);
+  const domain = domainOf(intervals);
+  const series = given.map(line => ({
+    ...line,
+    points: line.points.filter(point => domain.index.has(point.key)),
+  }));
+  const first = series[0];
   const highest = Math.max(
     0,
     ...series.flatMap(line => line.points.map(point => point.value))
@@ -85,9 +102,9 @@ export function OverTimeChart({
     .map(line =>
       overTimeSummary({
         what: series.length > 1 ? `${title}, ${line.name}` : title,
-        range: rangeOf(line.points),
+        range: rangeOf(line.points, domain),
         points: line.points.map(point => ({
-          when: point.label,
+          when: domain.labelOf(point.key),
           value: point.value,
         })),
         format: value => cardNumber(value).label,
@@ -100,7 +117,7 @@ export function OverTimeChart({
       title={title}
       description={description}
       labelHeading={labelHeading}
-      rows={tableRows(series)}
+      rows={tableRows(series, domain)}
     >
       {({ titleId, descId, title: heading, description: text }) => (
         <div className="flex flex-col gap-1">
@@ -151,57 +168,52 @@ export function OverTimeChart({
   );
 }
 
-/** "first to last", or the one point's label, or nothing. */
-function rangeOf(points: readonly OverTimePoint[]): string {
+/** "first to last", or the one point's interval, or nothing. */
+function rangeOf(points: readonly OverTimePoint[], domain: Domain): string {
   const start = points[0];
   const end = points[points.length - 1];
   if (!start || !end) return "no range";
-  return start === end ? start.label : `${start.label} to ${end.label}`;
+  const from = domain.labelOf(start.key);
+  return start === end ? from : `${from} to ${domain.labelOf(end.key)}`;
 }
 
 /** The table's rows: one per point, named by its series where there are several. */
-function tableRows(series: readonly OverTimeSeries[]): ChartRow[] {
+function tableRows(
+  series: readonly OverTimeSeries[],
+  domain: Domain
+): ChartRow[] {
   return series.flatMap(line =>
-    line.points.map(point => ({
-      // A tuple, encoded so no series key and point key can join into another pair's.
-      key: JSON.stringify([line.key, point.key]),
-      label: series.length > 1 ? `${line.name}, ${point.label}` : point.label,
-      count: point.value,
-    }))
+    line.points.map(point => {
+      const when = domain.labelOf(point.key);
+      return {
+        // A tuple, encoded so no series key and point key can join into another pair's.
+        key: JSON.stringify([line.key, point.key]),
+        label: series.length > 1 ? `${line.name}, ${when}` : when,
+        count: point.value,
+      };
+    })
   );
 }
 
-/** The intervals every series is drawn against, in order, and what each is called. */
+/** The intervals every series is drawn against: each key's position, and how it is written. */
 interface Domain {
   index: ReadonlyMap<string, number>;
   labels: string[];
+  labelOf: (key: string) => string;
 }
 
-/**
- * Every series' point keys merged into one ordered range. Each series keeps its own order: a key
- * already seen moves the insertion point past it, and a new one is inserted there. So a series
- * that starts later, or skips an interval, lines up with the others rather than being stretched
- * across the whole width by its own count.
- */
-function sharedDomain(series: readonly OverTimeSeries[]): Domain {
-  const keys: string[] = [];
-  const labels = new Map<string, string>();
-  for (const line of series) {
-    let at = 0;
-    for (const point of line.points) {
-      const found = keys.indexOf(point.key);
-      if (found === -1) {
-        keys.splice(at, 0, point.key);
-        labels.set(point.key, point.label);
-        at += 1;
-      } else {
-        at = found + 1;
-      }
-    }
-  }
+/** The caller's range, as positions and labels by key. */
+function domainOf(intervals: readonly OverTimeInterval[]): Domain {
+  const index = new Map(
+    intervals.map((interval, position) => [interval.key, position])
+  );
+  const names = new Map(
+    intervals.map(interval => [interval.key, interval.label])
+  );
   return {
-    index: new Map(keys.map((key, position) => [key, position])),
-    labels: keys.map(key => labels.get(key) ?? key),
+    index,
+    labels: intervals.map(interval => interval.label),
+    labelOf: key => names.get(key) ?? key,
   };
 }
 

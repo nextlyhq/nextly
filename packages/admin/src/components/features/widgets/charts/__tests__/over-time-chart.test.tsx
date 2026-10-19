@@ -10,26 +10,53 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CardTierContext } from "../../frame/tier";
-import { OverTimeChart, type OverTimeSeries } from "../over-time-chart";
+import {
+  OverTimeChart,
+  type OverTimeInterval,
+  type OverTimeSeries,
+} from "../over-time-chart";
 
 afterEach(() => cleanup());
 
-function series(name: string, values: number[]): OverTimeSeries {
+/** A series of `values` on consecutive days, its first on day `from`. */
+function series(name: string, values: number[], from = 1): OverTimeSeries {
   return {
     key: name,
     name,
-    points: values.map((value, i) => ({
-      key: `${name}${i}`,
-      label: `Day ${i + 1}`,
-      value,
-    })),
+    points: values.map((value, i) => ({ key: `d${from + i}`, value })),
   };
 }
 
-function drawAt(tier: SizeTier, lines: OverTimeSeries[]) {
+/** Days 1 to `count`, in order: the range every series is drawn against. */
+function days(count: number): OverTimeInterval[] {
+  return Array.from({ length: count }, (_, i) => ({
+    key: `d${i + 1}`,
+    label: `Day ${i + 1}`,
+  }));
+}
+
+/** The days the series reach, from Day 1. */
+function spanOf(lines: OverTimeSeries[]): number {
+  return Math.max(
+    0,
+    ...lines.flatMap(line =>
+      line.points.map(point => Number(point.key.slice(1)))
+    )
+  );
+}
+
+function drawAt(
+  tier: SizeTier,
+  lines: OverTimeSeries[],
+  intervals = days(spanOf(lines))
+) {
   render(
     <CardTierContext.Provider value={tier}>
-      <OverTimeChart title="Posts created" series={lines} />
+      <OverTimeChart
+        title="Posts created"
+        intervals={intervals}
+        series={lines}
+      />
     </CardTierContext.Provider>
   );
 }
@@ -151,15 +178,28 @@ describe("several series over one range", () => {
 
   it("places each point by its interval, not by its position in its own series", () => {
     // Pages has no Day 1: its first point is Day 2, drawn where Posts draws Day 2.
-    const posts = series("Posts", [2, 9, 4]);
-    const pages: OverTimeSeries = {
-      key: "Pages",
-      name: "Pages",
-      points: posts.points.slice(1).map(point => ({ ...point, value: 1 })),
-    };
-    drawAt("medium", [posts, pages]);
+    drawAt("medium", [series("Posts", [2, 9, 4]), series("Pages", [1, 1], 2)]);
     const [postsLine, pagesLine] = screen.getAllByTestId("chart-series");
     expect(xs(pagesLine as Element)).toEqual(xs(postsLine as Element).slice(1));
+  });
+
+  it("places a series that shares no interval with the others in its own place in the range", () => {
+    // Posts has Days 1 and 2 and Pages only Days 3 and 4: Pages is drawn after Posts, not before.
+    drawAt("medium", [series("Posts", [2, 4], 1), series("Pages", [1, 1], 3)]);
+    const [postsLine, pagesLine] = screen.getAllByTestId("chart-series");
+    const lastPost = xs(postsLine as Element).at(-1) ?? Infinity;
+    expect(xs(pagesLine as Element).every(x => x > lastPost)).toBe(true);
+  });
+
+  it("does not move a point when the series are given in another order", () => {
+    const posts = series("Posts", [2, 4], 1);
+    const pages = series("Pages", [1, 1], 3);
+    drawAt("medium", [posts, pages]);
+    const before = screen.getAllByTestId("chart-series").map(line => xs(line));
+    cleanup();
+    drawAt("medium", [pages, posts]);
+    const after = screen.getAllByTestId("chart-series").map(line => xs(line));
+    expect(after).toEqual([before[1], before[0]]);
   });
 
   it.each<SizeTier>(["small", "medium", "large"])(
@@ -180,18 +220,17 @@ describe("the table's rows", () => {
     const errors = vi
       .spyOn(console, "error")
       .mockImplementation(() => undefined);
-    drawAt("medium", [
-      {
-        key: "a:b",
-        name: "First",
-        points: [{ key: "c", label: "Day 1", value: 1 }],
-      },
-      {
-        key: "a",
-        name: "Second",
-        points: [{ key: "b:c", label: "Day 1", value: 2 }],
-      },
-    ]);
+    drawAt(
+      "medium",
+      [
+        { key: "a:b", name: "First", points: [{ key: "c", value: 1 }] },
+        { key: "a", name: "Second", points: [{ key: "b:c", value: 2 }] },
+      ],
+      [
+        { key: "c", label: "Day 1" },
+        { key: "b:c", label: "Day 2" },
+      ]
+    );
     expect(
       errors.mock.calls.some(call => String(call[0]).includes("same key"))
     ).toBe(false);
