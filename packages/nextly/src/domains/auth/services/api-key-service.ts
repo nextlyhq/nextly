@@ -113,9 +113,13 @@ export interface ApiKeyMeta {
   role: { id: string; name: string; slug: string } | null;
   /**
    * The person who created the key, whose permissions a read-only or
-   * full-access key follows. Null only when their account no longer exists.
+   * full-access key follows. Null when their account no longer exists, and
+   * for an API key reading keys without being allowed to read users.
+   *
+   * Always set by the service. Optional in the type, so a value built before
+   * the field existed (a test double, an adapter) still type-checks.
    */
-  owner: { id: string; name: string | null; email: string } | null;
+  owner?: { id: string; name: string | null; email: string } | null;
   /** ISO 8601 string, or null for unlimited keys. */
   expiresAt: string | null;
   /** ISO 8601 string of the last request that used this key, or null if never used. */
@@ -386,6 +390,13 @@ interface ApiKeyRow {
   createdAt: Date | number | string;
   updatedAt: Date | number | string;
 }
+
+/**
+ * How fresh a key's recorded last use is kept: one write per key per minute
+ * at most, which is finer than the list shows it ("just now", "2 minutes
+ * ago").
+ */
+const LAST_USE_RESOLUTION_MS = 60_000;
 
 export class ApiKeyService extends BaseService {
   private apiKeysTable:
@@ -1041,11 +1052,12 @@ export class ApiKeyService extends BaseService {
    *
    * Called by auth middleware on every request that presents a
    * `Authorization: Bearer nx_live_...` header. Designed for the hot path:
-   * - Single SELECT with 5 columns, no JOIN
+   * - Single SELECT of the key's own columns, no JOIN
    * - Unique index hit on `keyHash` (O(1) lookup)
    * - The creator's active flag from the per-process account-standing cache,
    *   which reads the user row at most once per few seconds per person
-   * - Fire-and-forget `lastUsedAt` update (not awaited)
+   * - A `lastUsedAt` write at most once a minute per key, made before the
+   *   request is answered
    *
    * Returns `null` for any failure case (not found, revoked, expired) so the
    * middleware can respond with a uniform 401 without leaking the reason.
@@ -1077,6 +1089,7 @@ export class ApiKeyService extends BaseService {
         tokenType: this.apiKeysTable.tokenType,
         roleId: this.apiKeysTable.roleId,
         expiresAt: this.apiKeysTable.expiresAt,
+        lastUsedAt: this.apiKeysTable.lastUsedAt,
       })
       .from(this.apiKeysTable)
       .where(
@@ -1093,6 +1106,7 @@ export class ApiKeyService extends BaseService {
       tokenType: string;
       roleId: string | null;
       expiresAt: Date | number | null;
+      lastUsedAt: Date | number | null;
     };
     if ((rows as AuthRow[]).length === 0) return null;
 
@@ -1115,20 +1129,7 @@ export class ApiKeyService extends BaseService {
     // lifetime elsewhere. A failed read throws rather than admitting the key.
     if (!(await accountIsActive(row.userId))) return null;
 
-    // The key's last use, recorded without holding up the request it is for.
-    // A query runs only once something asks for its result, so `.then` is
-    // what sends it: discarding the query unawaited, as before, never wrote
-    // the row at all. A failed write is logged and costs only this one record.
-    this.db
-      .update(this.apiKeysTable)
-      .set({ lastUsedAt: new Date() })
-      .where(eq(this.apiKeysTable.id, row.id))
-      .then(undefined, (error: unknown) => {
-        this.logger.warn("API key last use could not be recorded", {
-          keyId: row.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      });
+    await this.recordLastUse(row.id, row.lastUsedAt);
 
     return {
       id: row.id,
@@ -1136,6 +1137,41 @@ export class ApiKeyService extends BaseService {
       tokenType: row.tokenType as ApiKeyTokenType,
       roleId: row.roleId ?? null,
     };
+  }
+
+  /**
+   * Record that the key was used now, when the record is more than
+   * {@link LAST_USE_RESOLUTION_MS} old.
+   *
+   * Awaited, so the write is made before the request it records is answered:
+   * a serverless runtime may freeze or end the invocation once the response
+   * is out, and a write still pending then is lost. Once per resolution
+   * rather than on every request, so a busy key costs one write a minute. A
+   * failed write is logged and never refuses the key it records.
+   */
+  private async recordLastUse(
+    keyId: string,
+    recorded: Date | number | null
+  ): Promise<void> {
+    const at = Date.now();
+    const last =
+      recorded instanceof Date
+        ? recorded.getTime()
+        : recorded != null
+          ? new Date(recorded).getTime()
+          : null;
+    if (last !== null && at - last < LAST_USE_RESOLUTION_MS) return;
+    try {
+      await this.db
+        .update(this.apiKeysTable)
+        .set({ lastUsedAt: new Date(at) })
+        .where(eq(this.apiKeysTable.id, keyId));
+    } catch (error) {
+      this.logger.warn("API key last use could not be recorded", {
+        keyId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
