@@ -80,13 +80,43 @@
  * so it is refused, and so is `CASCADE` on an ALTER TABLE's drop of a column
  * or constraint, which takes another table's foreign key or a view with it.
  * Without `CASCADE` PostgreSQL itself refuses the drop while anything depends
- * on the object.
+ * on the object. `ALTER TYPE ... CASCADE` is refused too: it changes every
+ * table typed by the type.
+ *
+ * **What a statement reaches below a table.** On PostgreSQL an
+ * `ALTER TABLE` or `TRUNCATE` without `ONLY` acts on every table inheriting
+ * from the one it names and every partition of it, at any depth, and a
+ * `DROP TABLE` takes its partitions and, with `CASCADE`, its inheriting
+ * tables. The text names none of them, so they are read from the live
+ * catalog (`readLiveTables`), and each is judged as the table the statement
+ * names: one the stream does not hold is refused.
+ *
+ * **A form the guard cannot read.** An ALTER TABLE clause this reader does
+ * not model is refused on another owner's table, and on any table another
+ * owner has a column, index or constraint on, since it may change those:
+ * `CONVERT TO CHARACTER SET` rewrites every column. MySQL table options that
+ * change no element (a comment, the lock or algorithm, the default
+ * character set) are let through on a table the stream holds. MariaDB's
+ * `WAIT n` and `NOWAIT` before the clauses, and its `IF EXISTS` inside a
+ * column clause, are stepped past, so the clause after them is read.
+ *
+ * **A name looked up before the list runs.** An index named without its
+ * table, and a PostgreSQL ALTER TABLE target that may be an index, are found
+ * in the live database once, before the list runs. A statement naming one
+ * after an earlier statement dropped, renamed or moved a relation of that
+ * name is refused, since the name may then reach a relation it shadowed.
+ *
+ * **What a change to another owner's table is credited for.** A column or
+ * constraint a list adds is the list's to change afterwards only where the
+ * text proves the addition: `ADD COLUMN c`, `ADD` with a quoted name, or a
+ * named constraint, in an ALTER TABLE that opens its statement. One inside a
+ * routine body may never run, and a bare word after `ADD` may be a keyword.
  *
  * **Known limit.** Only text is read. SQL passed as a string to a function
  * that runs it is data to this reader, not code. And on PostgreSQL a
  * `DROP TABLE ... CASCADE`, which generated migrations write, also removes
- * the views and foreign keys that depend on the table, and the tables that
- * inherit from it (`INHERITS`), which only the database knows. What a
+ * the views and foreign keys that depend on the table, which only the
+ * database knows. What a
  * statement does to rows it keeps the table for is not judged: `DELETE`,
  * `UPDATE`, and a column's type changed in place (`ALTER COLUMN ... TYPE`).
  * Nor are MySQL's partition changes that keep every row (`REORGANIZE`,
@@ -396,6 +426,44 @@ const MODELLED_CLAUSE_WORDS = new Set([
   "DETACH",
 ]);
 
+/**
+ * The words after ADD that name the kind of element added: a column, a
+ * constraint, an index, a key or a partition. MariaDB's `IF NOT EXISTS`
+ * may follow ADD directly, and `NOT` starts a `NOT NULL` constraint. A bare word after ADD that is none of these is
+ * not read as a column (`isModelledClauseAt`).
+ */
+const ADDED_ELEMENT_WORDS = new Set([
+  "COLUMN",
+  "CONSTRAINT",
+  "INDEX",
+  "KEY",
+  "UNIQUE",
+  "PRIMARY",
+  "FOREIGN",
+  "CHECK",
+  "EXCLUDE",
+  "FULLTEXT",
+  "SPATIAL",
+  "VECTOR",
+  "PARTITION",
+  "IF",
+  "NOT",
+]);
+
+/**
+ * MySQL table options that change none of a table's columns, indexes or
+ * constraints (`isTableOptionsAt`), each taking one value.
+ */
+const TABLE_OPTION_WORDS = new Set([
+  "COMMENT",
+  "AUTO_INCREMENT",
+  "ALGORITHM",
+  "LOCK",
+  "ROW_FORMAT",
+  "CHARSET",
+  "COLLATE",
+]);
+
 /** The words a constraint starts with when its name was omitted. */
 const ANONYMOUS_CONSTRAINT_WORDS = new Set([
   "CHECK",
@@ -466,6 +534,9 @@ const RELATION_KIND_WORDS: ReadonlyMap<string, { next?: string }> = new Map([
   ["MATERIALIZED", { next: "VIEW" }],
   ["FOREIGN", { next: "TABLE" }],
 ]);
+
+/** What may stand between `CREATE OR REPLACE` and `INDEX` in MariaDB. */
+const INDEX_KIND_WORDS = new Set(["UNIQUE", "FULLTEXT", "SPATIAL", "VECTOR"]);
 
 /** What may stand between CREATE and TABLE in a table's creation. */
 const CREATE_TABLE_MODIFIERS = new Set([
@@ -743,6 +814,12 @@ class DropReader {
    * fails closed on them: a foreign one is refused, naming it.
    */
   readonly unmodelled: string[] = [];
+  /**
+   * Tables a statement alters in a form this reader does not model that may
+   * change their columns, indexes or constraints. Each other owner's element
+   * recorded on one is judged too, whoever holds the table.
+   */
+  readonly unreadOnElements: string[] = [];
   /** Storage or unmodelled changes through a schema-qualified name. */
   readonly qualifiedTargets: string[] = [];
   private sequence = 0;
@@ -793,6 +870,34 @@ class DropReader {
    * creation is credited anywhere in the list (`readStatements`).
    */
   resolutionMayChange = false;
+  /**
+   * The tables a PostgreSQL statement acts on together with every table that
+   * inherits from them or is a partition of them, by the name each had before
+   * the list renamed it, and what it does to them (`reach`). The text names
+   * none of those descendants; the guard judges each from the live catalog
+   * (`LiveTables.descendants`).
+   */
+  readonly reaching: Array<{ table: string; act: DescendantAct }> = [];
+  /**
+   * Names a later statement looks up in the live database, as an index named
+   * without its table or a PostgreSQL ALTER TABLE target, after an earlier
+   * statement of the list dropped, renamed or moved a table or index of that
+   * name (`lookUp`). The lookup was made once, before the list ran, so what
+   * the name reaches by then is not known.
+   */
+  readonly lookupsAfterVacating: string[] = [];
+  /**
+   * Types a PostgreSQL `ALTER TYPE ... CASCADE` changes together with every
+   * table typed by them, which the text does not name.
+   */
+  readonly typesCascaded: string[] = [];
+  /**
+   * Relation names an earlier statement dropped, renamed or moved away and
+   * none has filled again since, with the statement that did it.
+   */
+  private readonly vacated = new Map<string, number>();
+  /** Which statement of the list is being read: each `end` starts another. */
+  private statementIndex = 0;
 
   constructor(
     readonly dialect: SupportedDialect,
@@ -804,8 +909,54 @@ class DropReader {
   ) {}
 
   read(statement: string): void {
+    this.nextStatement();
     const tokens = new Lexer(this.dialect, statement).tokens(statement);
     new StatementWalk(this, tokens, statement).run();
+  }
+
+  /**
+   * Starts the next statement: a new entry of the list, or one that follows
+   * an `end` inside it, such as a statement of a routine body.
+   */
+  nextStatement(): void {
+    this.statementIndex += 1;
+  }
+
+  /**
+   * Records a PostgreSQL statement that acts on `table` and on every table
+   * descending from it (`reaching`). Other dialects have no inheritance.
+   */
+  reach(table: TableRef, act: DescendantAct): void {
+    if (!this.isPostgres) return;
+    this.reaching.push({
+      table: this.renamedFrom.get(table.name) ?? table.name,
+      act,
+    });
+  }
+
+  /**
+   * A relation name that a statement drops, renames or moves away: a later
+   * lookup of it may reach a relation it shadowed (`lookupsAfterVacating`).
+   */
+  private vacate(name: string): void {
+    this.vacated.set(name, this.statementIndex);
+  }
+
+  /** A name a CREATE or a rename fills again: it reaches what the list put there. */
+  private occupy(table: TableRef): void {
+    if (table.local) this.vacated.delete(table.name);
+  }
+
+  /**
+   * A name looked up in the live database before the list ran. Refused when
+   * an earlier statement vacated it; one statement's own drop or rename does
+   * not count against its own lookup, which PostgreSQL resolves first.
+   */
+  private lookUp(name: string): void {
+    const at = this.vacated.get(name);
+    if (at !== undefined && at < this.statementIndex) {
+      this.lookupsAfterVacating.push(name);
+    }
   }
 
   /**
@@ -816,6 +967,7 @@ class DropReader {
    * statement naming the existing table reaches the existing table.
    */
   create(table: TableRef): void {
+    this.occupy(table);
     if (!table.local) return;
     this.creating.add(table.name);
     if (this.absentBefore(table)) this.created.add(table.name);
@@ -856,6 +1008,7 @@ class DropReader {
 
   /** Records a dropped name, and the original name if a rename made it. */
   drop(table: TableRef): void {
+    this.vacate(table.name);
     if (this.takeCreated(table)) return;
     const original = this.renamedFrom.get(table.name);
     if (original !== undefined) this.dropped.push(original);
@@ -863,6 +1016,7 @@ class DropReader {
   }
 
   rename(from: TableRef, to: TableRef): void {
+    this.vacate(from.name);
     if (this.takeCreated(from)) {
       this.create(to);
       return;
@@ -871,6 +1025,7 @@ class DropReader {
     this.renamedFrom.delete(from.name);
     if (to.name === original) this.renamedFrom.delete(to.name);
     else this.renamedFrom.set(to.name, original);
+    this.occupy(to);
   }
 
   /**
@@ -880,6 +1035,7 @@ class DropReader {
    */
   relocate(table: TableRef): string {
     const { name } = table;
+    this.vacate(name);
     if (this.takeCreated(table)) return name;
     const original = this.renamedFrom.get(name) ?? name;
     this.renamed.push(original);
@@ -899,8 +1055,12 @@ class DropReader {
     });
   }
 
-  /** Records a table an ALTER TABLE names. */
+  /**
+   * Records a table an ALTER TABLE names, which the live database is asked
+   * about as a possible index's name (`readLiveIndexTables`).
+   */
   targetAltered(table: string): void {
+    this.lookUp(table);
     this.alterTargets.push(table);
   }
 
@@ -954,6 +1114,15 @@ class DropReader {
     this.unmodelled.push(table);
   }
 
+  /**
+   * Records a table an ALTER alters in a form this reader does not model
+   * that may change its columns, indexes or constraints, by the name it had
+   * before this list renamed it (`unreadOnElements`).
+   */
+  leaveUnreadOnElements(table: TableRef): void {
+    this.unreadOnElements.push(this.renamedFrom.get(table.name) ?? table.name);
+  }
+
   /** Records a column an ALTER changes in place (`alteredColumns`). */
   changeColumn(table: TableRef, column: string, exact: boolean): void {
     if (table.local && this.created.has(table.name)) return;
@@ -976,6 +1145,8 @@ class DropReader {
     kind: TakenElementKind,
     exact: boolean
   ): void {
+    // An index named alone is found through the live database.
+    if (table === undefined) this.lookUp(name);
     if (table?.local && this.created.has(table.name)) return;
     this.alteredElements.push({
       table:
@@ -998,6 +1169,12 @@ class DropReader {
     name: string,
     kind: TakenElementKind
   ): void {
+    // An index named alone is found through the live database, and once it
+    // is dropped or renamed its name may reach a relation it shadowed.
+    if (table === undefined) {
+      this.lookUp(name);
+      this.vacate(name);
+    }
     if (table?.local && this.created.has(table.name)) return;
     this.elements.push({
       table:
@@ -1058,7 +1235,17 @@ type TableChange =
   | "truncate"
   | "change the partitions of"
   | "attach as a partition"
+  | "detach as a partition"
   | "exchange a partition with";
+
+/**
+ * What a PostgreSQL statement does to the descendants of a table it acts on
+ * (`DropReader.reach`): an ALTER TABLE or TRUNCATE without `ONLY` alters or
+ * empties every table inheriting from the one it names, and every partition
+ * of it; a DROP TABLE drops its partitions, and with CASCADE its inheriting
+ * tables.
+ */
+type DescendantAct = "alter" | "truncate" | "drop";
 
 /** A table a statement list empties or changes the partitions of. */
 interface ChangedTable {
@@ -1132,6 +1319,7 @@ class StatementWalk {
     this.sawTrigger = false;
     this.inPrivileges = false;
     this.inAlterTable = false;
+    this.reader.nextStatement();
     if (token.body === "open") this.bodyDepth += 1;
     else if (token.body === "close") this.bodyDepth -= 1;
   }
@@ -1209,8 +1397,10 @@ class StatementWalk {
       this.readAlterIndexRename(at);
       this.readAlterForeignTable(at);
       this.readRelationColumnRename(at);
+      this.readTypeCascade(at);
     } else if (word === "CREATE") {
       this.readCreateTable(at);
+      this.readReplacedIndex(at);
       this.readPartitionOf(at);
       if (this.reader.isPostgres) this.assertDollarQuotedRoutine(at);
     }
@@ -1256,16 +1446,10 @@ class StatementWalk {
    * refused. Returns where to resume.
    */
   private readTruncate(at: number): number {
-    let k = this.word(at + 1) === "TABLE" ? at + 2 : at + 1;
-    for (;;) {
-      const table = this.qualifiedName(this.word(k) === "ONLY" ? k + 1 : k);
-      if (table === undefined)
-        this.refuse("a TRUNCATE whose table names cannot be read");
-      this.reader.changeTable(table, "truncate");
-      k = this.pastDescendants(table.next);
-      if (this.punct(k) !== ",") break;
-      k += 1;
-    }
+    let k = this.readTruncatedTable(
+      this.word(at + 1) === "TABLE" ? at + 2 : at + 1
+    );
+    while (this.punct(k) === ",") k = this.readTruncatedTable(k + 1);
     if (this.word(k + 1) === "IDENTITY") k += 2;
     if (this.reader.isPostgres && this.word(k) === "CASCADE") {
       this.refuse(
@@ -1273,6 +1457,22 @@ class StatementWalk {
       );
     }
     return this.dropTail(k);
+  }
+
+  /**
+   * One table of a TRUNCATE's list, from `at`, past an optional `ONLY`,
+   * recorded as emptied. Returns where its name, and any `*`, ends.
+   */
+  private readTruncatedTable(at: number): number {
+    const only = this.word(at) === "ONLY";
+    const table = this.qualifiedName(only ? at + 1 : at);
+    if (table === undefined) {
+      this.refuse("a TRUNCATE whose table names cannot be read");
+    }
+    this.reader.changeTable(table, "truncate");
+    // Without ONLY, PostgreSQL empties every descendant of the table too.
+    if (!only) this.reader.reach(table, "truncate");
+    return this.pastDescendants(table.next);
   }
 
   /**
@@ -1578,6 +1778,9 @@ class StatementWalk {
     for (;;) {
       const target = this.qualifiedName(k);
       if (!target) this.refuse("no readable table name");
+      // PostgreSQL drops a table's partitions with it, and with CASCADE the
+      // tables inheriting from it; without CASCADE it refuses while one does.
+      this.reader.reach(target, "drop");
       this.reader.drop(target);
       k = target.next;
       if (this.punct(k) !== ",") return k;
@@ -1676,6 +1879,41 @@ class StatementWalk {
     return this.word(k) === "TABLE" ? k + 1 : undefined;
   }
 
+  /**
+   * MariaDB's `CREATE OR REPLACE [UNIQUE|FULLTEXT|SPATIAL|VECTOR] INDEX i ON t`,
+   * which drops the index `i` on `t` when there is one and creates it anew:
+   * read as the index taken from its table. Other dialects reject it.
+   */
+  private readReplacedIndex(at: number): void {
+    const nameAt = this.replacedIndexNameAt(at);
+    if (nameAt === undefined) return;
+    const index = this.qualifiedName(nameAt);
+    const table =
+      index !== undefined && this.word(index.next) === "ON"
+        ? this.qualifiedName(index.next + 1)
+        : undefined;
+    if (index === undefined || table === undefined) {
+      this.refuse("a CREATE OR REPLACE INDEX whose names cannot be read");
+    }
+    this.reader.takeElement(table, index.name, "index");
+  }
+
+  /**
+   * Where the index's name starts in MariaDB's `CREATE OR REPLACE ... INDEX
+   * [IF NOT EXISTS]` from the CREATE at `at`; undefined for any other CREATE.
+   */
+  private replacedIndexNameAt(at: number): number | undefined {
+    if (!this.reader.isMysql) return undefined;
+    if (this.word(at + 1) !== "OR" || this.word(at + 2) !== "REPLACE") {
+      return undefined;
+    }
+    const kindAt = INDEX_KIND_WORDS.has(this.word(at + 3) ?? "")
+      ? at + 4
+      : at + 3;
+    if (this.word(kindAt) !== "INDEX") return undefined;
+    return this.word(kindAt + 1) === "IF" ? kindAt + 4 : kindAt + 1;
+  }
+
   /** The table a plain `CREATE TABLE` names at `at`, recorded as created. */
   private readCreatedTable(at: number): void {
     if (this.word(at) === "IF") return;
@@ -1710,16 +1948,13 @@ class StatementWalk {
     const tableAt = this.alteredTableAt(at);
     if (tableAt === undefined) return;
     const table = this.qualifiedName(tableAt);
-    // PostgreSQL's ALTER TABLE can name an index; MySQL's cannot.
-    if (table !== undefined && this.reader.isPostgres) {
-      this.reader.targetAltered(table.name);
-      // A schema-qualified target is looked up by its name alone, which may not
-      // reach the schema the statement names, so every such form is refused.
-      if (!table.local) this.reader.leaveQualifiedTarget(table.name);
-    }
-    const clausesAt = this.pastDescendants(table?.next ?? tableAt + 1);
+    if (table !== undefined) this.recordPostgresTarget(table);
+    const clausesAt = this.pastLockWait(
+      this.pastDescendants(table?.next ?? tableAt + 1)
+    );
+    if (table !== undefined) this.readAlterReach(table, tableAt, clausesAt);
     for (const clause of this.clauseStarts(clausesAt)) {
-      this.readAddedClause(table, clause);
+      this.readAddedClause(table, clause, at);
       this.readColumnClause(table, clause);
       this.readColumnChangeClause(table, clause);
       this.readTableStorageClause(table, clause);
@@ -1731,6 +1966,49 @@ class StatementWalk {
   }
 
   /**
+   * PostgreSQL's ALTER TABLE can name an index (MySQL's cannot), so its
+   * target is recorded for the live lookup. A schema-qualified target is
+   * looked up by its name alone, which may not reach the schema the statement
+   * names, so every such form is refused.
+   */
+  private recordPostgresTarget(table: TableRef): void {
+    if (!this.reader.isPostgres) return;
+    this.reader.targetAltered(table.name);
+    if (!table.local) this.reader.leaveQualifiedTarget(table.name);
+  }
+
+  /**
+   * Records an ALTER TABLE as reaching the descendants of the table named at
+   * `tableAt`, unless `ONLY` precedes the name or its clauses, from
+   * `clausesAt`, act on the table alone (`actsOnTableAlone`).
+   */
+  private readAlterReach(
+    table: TableRef,
+    tableAt: number,
+    clausesAt: number
+  ): void {
+    if (this.word(tableAt - 1) === "ONLY") return;
+    if (this.actsOnTableAlone(clausesAt)) return;
+    this.reader.reach(table, "alter");
+  }
+
+  /**
+   * Whether the ALTER TABLE whose clauses start at `at` acts on the table it
+   * names alone, whatever its descendants: PostgreSQL's table rename, its
+   * `SET SCHEMA`, and `ATTACH` or `DETACH PARTITION`, none of which takes
+   * `ONLY` or reaches an inheriting table. Every other form alters the
+   * descendants too unless `ONLY` is written, and is read so.
+   */
+  private actsOnTableAlone(at: number): boolean {
+    if (this.isSetSchemaAt(at)) return true;
+    if (this.word(at) === "RENAME" && this.word(at + 1) === "TO") return true;
+    return (
+      (this.word(at) === "ATTACH" || this.word(at) === "DETACH") &&
+      this.word(at + 1) === "PARTITION"
+    );
+  }
+
+  /**
    * One ALTER TABLE clause starting at `at`, for a partition change to the
    * table (`PARTITION_CHANGES`), recorded as one. PostgreSQL's
    * `ATTACH PARTITION y` also makes `y` a partition of the table, which a
@@ -1739,18 +2017,37 @@ class StatementWalk {
    * partition's. Either way `y` is recorded as well.
    */
   private readPartitionClause(table: TableRef | undefined, at: number): void {
-    const change = this.word(at);
-    if (this.word(at + 1) !== "PARTITION") return;
-    if (!PARTITION_CHANGES.has(change ?? "")) return;
+    const change = this.word(at) ?? "";
+    // MariaDB's `CONVERT TABLE x TO PARTITION p ...` makes `x` a partition of
+    // the table: `x` is gone under its own name, its rows the table's.
+    const converts = change === "CONVERT" && this.word(at + 1) === "TABLE";
+    const partitions =
+      this.word(at + 1) === "PARTITION" && PARTITION_CHANGES.has(change);
+    if (!converts && !partitions) return;
     if (table === undefined) {
       this.refuse("a partition change whose table name cannot be read");
     }
     this.reader.changeTable(table, "change the partitions of");
-    if (change === "ATTACH") {
+    if (converts) {
       this.recordPartitionTable(at + 2, "attach as a partition");
+    } else {
+      this.recordPartitionChangeTable(change, at + 2);
+    }
+  }
+
+  /**
+   * The other table a partition clause names, from its partition's name at
+   * `at`: PostgreSQL's `ATTACH` and `DETACH PARTITION y`, whose `y` joins or
+   * leaves the table's tree, and MySQL's `EXCHANGE PARTITION p WITH TABLE y`.
+   */
+  private recordPartitionChangeTable(change: string, at: number): void {
+    if (change === "ATTACH") {
+      this.recordPartitionTable(at, "attach as a partition");
+    } else if (change === "DETACH" && this.reader.isPostgres) {
+      this.recordPartitionTable(at, "detach as a partition");
     } else if (change === "EXCHANGE") {
       this.recordPartitionTable(
-        this.exchangedTableAt(at + 2),
+        this.exchangedTableAt(at),
         "exchange a partition with"
       );
     }
@@ -1851,6 +2148,19 @@ class StatementWalk {
     return this.pastOnly(this.skipIfExists(k));
   }
 
+  /**
+   * Past MariaDB's `WAIT n` or `NOWAIT` after an ALTER TABLE's table name,
+   * which says how long to wait for the table's lock. Read as the first
+   * clause, it hid the clause after it.
+   */
+  private pastLockWait(at: number): number {
+    if (!this.reader.isMysql) return at;
+    if (this.word(at) === "NOWAIT") return at + 1;
+    return this.word(at) === "WAIT" && /^\d+$/.test(this.word(at + 1) ?? "")
+      ? at + 2
+      : at;
+  }
+
   /** Past PostgreSQL's `ONLY` before a relation's name, if it is there. */
   private pastOnly(at: number): number {
     return this.word(at) === "ONLY" ? at + 1 : at;
@@ -1873,16 +2183,36 @@ class StatementWalk {
    * are not consumed.
    */
   /**
-   * PostgreSQL's `ALTER FOREIGN TABLE t ...`: its clauses are not read, so the
-   * table is recorded as unmodelled.
+   * PostgreSQL's `ALTER FOREIGN TABLE [IF EXISTS] [ONLY] t ...`: its clauses
+   * are not read, so the table is recorded as unmodelled. A foreign table can
+   * inherit and be inherited from, so without `ONLY` its descendants are
+   * altered too.
    */
   private readAlterForeignTable(at: number): void {
     if (this.word(at + 1) !== "FOREIGN" || this.word(at + 2) !== "TABLE") {
       return;
     }
-    const relation = this.qualifiedName(this.skipIfExists(at + 3));
+    const nameAt = this.skipIfExists(at + 3);
+    const relation = this.qualifiedName(this.pastOnly(nameAt));
     if (relation === undefined) return;
     this.reader.leaveUnmodelled(relation.name);
+    if (this.word(nameAt) !== "ONLY") this.reader.reach(relation, "alter");
+  }
+
+  /**
+   * PostgreSQL's `ALTER TYPE t ... CASCADE`, recorded (`typesCascaded`):
+   * CASCADE carries an attribute's addition, removal, type change or rename
+   * to every table typed by the type (`CREATE TABLE ... OF`), and their
+   * descendants, none of which the text names. Without CASCADE PostgreSQL
+   * refuses the change while any such table exists.
+   */
+  private readTypeCascade(at: number): void {
+    if (!this.reader.isPostgres || this.word(at + 1) !== "TYPE") return;
+    for (let k = at + 2; !this.atStatementEnd(k); k += 1) {
+      if (this.word(k) !== "CASCADE") continue;
+      this.reader.typesCascaded.push(this.nameAt(at + 2) ?? "a type");
+      return;
+    }
   }
 
   /**
@@ -1965,10 +2295,6 @@ class StatementWalk {
     this.reader.takeElement(table, element.name, element.kind);
   }
 
-  /**
-   * One ALTER TABLE clause starting at `at` that adds a column or a named
-   * constraint, which the same list may then change.
-   */
   /** Whether the name at `at` is spelled as stored, so folding cannot change it. */
   private spelledAsStoredAt(at: number): boolean {
     return spelledAsStored(this.tokens[at], this.reader.dialect);
@@ -1976,30 +2302,50 @@ class StatementWalk {
 
   /**
    * Whether the name `name` read from the clause at `at` or the next token is
-   * spelled as stored. A column named `column` is read at `at + 1` or past
-   * an optional `COLUMN` keyword at `at + 2`.
+   * spelled as stored. A column named `column` is read at `at + 1`, or past
+   * an optional `COLUMN` keyword and MariaDB's `IF EXISTS`, up to `at + 4`.
    */
   private spelledAsStoredNear(at: number, name: string): boolean {
-    for (const p of [at + 1, at + 2]) {
+    for (const p of [at + 1, at + 2, at + 3, at + 4]) {
       if (this.nameAt(p) === name) return this.spelledAsStoredAt(p);
     }
     return false;
   }
 
-  private readAddedClause(table: TableRef | undefined, at: number): void {
+  /**
+   * One ALTER TABLE clause starting at `at` that adds a column or a named
+   * constraint, which the same list may then change. `alterAt` is where the
+   * statement's ALTER stands.
+   */
+  private readAddedClause(
+    table: TableRef | undefined,
+    at: number,
+    alterAt: number
+  ): void {
     if (table === undefined || this.word(at) !== "ADD") return;
     // A takeover is judged wherever it is written, inside a routine or not.
     this.readUsingIndexClause(table, at);
-    // An addition inside a dollar-quoted body may not run: a branch not taken,
-    // an exception swallowed, or a routine never called. It is not credited.
-    if (this.bodyDepth > 0) return;
+    // Only an ALTER TABLE that opens its statement is run as written. One
+    // anywhere else is inside a routine body — PostgreSQL's dollar-quoted
+    // body, MySQL's `CREATE PROCEDURE ... BEGIN ... END`, MariaDB's
+    // `BEGIN NOT ATOMIC` — whose branch may not be taken, whose exception
+    // may be swallowed, or which may never be called. It is not credited.
+    if (alterAt !== 0) return;
     const first = this.word(at + 1) ?? "";
     if (first === "CONSTRAINT") {
       this.readAddedConstraint(table, at + 2);
       return;
     }
-    if (NON_COLUMN_ELEMENTS.has(first)) return;
-    this.readAddedColumn(table, first === "COLUMN" ? at + 2 : at + 1);
+    if (first === "COLUMN") {
+      this.readAddedColumn(table, at + 2);
+      return;
+    }
+    // Without COLUMN, only a quoted name proves a column is added. A bare
+    // word may be a keyword of a table-level form: MariaDB's
+    // `ADD SYSTEM VERSIONING` and `ADD PERIOD FOR`, an index's `ADD KEY` or
+    // `ADD FULLTEXT`, or one no list here names. It is not credited.
+    if (this.tokens[at + 1]?.kind === "word") return;
+    this.readAddedColumn(table, at + 1);
   }
 
   /** The token position of `USING INDEX` in an ADD clause, if it has one. */
@@ -2106,6 +2452,9 @@ class StatementWalk {
     if (table === undefined || this.isModelledClauseAt(at)) return;
     if (!table.local) this.reader.leaveQualifiedTarget(table.name);
     this.reader.leaveUnmodelled(table.name);
+    // A table option that changes none of the table's columns, indexes or
+    // constraints leaves the other owners' elements on it as they were.
+    if (!this.isTableOptionsAt(at)) this.reader.leaveUnreadOnElements(table);
   }
 
   private isModelledClauseAt(at: number): boolean {
@@ -2113,7 +2462,65 @@ class StatementWalk {
     if (word === "SET") {
       return ["TABLESPACE", "ACCESS"].includes(this.word(at + 1) ?? "");
     }
+    // On MySQL and MariaDB, an ADD whose next word is a bare word that names
+    // no kind of element may be a keyword of a table-level form (MariaDB's
+    // `ADD SYSTEM VERSIONING`, `ADD PERIOD FOR`) as well as a column's name.
+    // PostgreSQL's and SQLite's grammars have no such form: there it is a
+    // column.
+    if (
+      word === "ADD" &&
+      this.reader.isMysql &&
+      this.tokens[at + 1]?.kind === "word"
+    ) {
+      return ADDED_ELEMENT_WORDS.has(this.word(at + 1) ?? "");
+    }
     return MODELLED_CLAUSE_WORDS.has(word);
+  }
+
+  /**
+   * Whether the clause starting at `at` is MySQL table options alone, each
+   * `option [=] value`, which change none of the table's columns, indexes
+   * or constraints: a comment, the next auto-increment value, the algorithm
+   * or lock the change runs with, the row format, the default character set
+   * or collation for new columns, a rebuild (`FORCE`) and a row order
+   * (`ORDER BY c`). `CONVERT TO CHARACTER SET`, which rewrites every
+   * column, is not one.
+   */
+  private isTableOptionsAt(at: number): boolean {
+    if (!this.reader.isMysql) return false;
+    const end = this.clauseEnd(at);
+    let k: number | undefined = at;
+    while (k !== undefined && k < end) k = this.pastTableOption(k, end);
+    return k !== undefined;
+  }
+
+  /**
+   * Past one table option at `at` that `isTableOptionsAt` allows, ending by
+   * `end`; undefined when none stands there. `FORCE` and `ORDER BY c` take
+   * no value; the rest are `[DEFAULT] option [=] value`.
+   */
+  private pastTableOption(at: number, end: number): number | undefined {
+    if (this.word(at) === "FORCE") return at + 1;
+    if (this.word(at) === "ORDER" && this.word(at + 1) === "BY") {
+      return this.nameAt(at + 2) === undefined ? undefined : at + 3;
+    }
+    const valueAt = this.tableOptionValueAt(at);
+    if (valueAt === undefined || valueAt >= end) return undefined;
+    return this.tokens[valueAt]?.kind === "punct" ? undefined : valueAt + 1;
+  }
+
+  /**
+   * Where the value of a `[DEFAULT] option [=]` starting at `at` stands, or
+   * undefined when no option `TABLE_OPTION_WORDS` lists starts there.
+   */
+  private tableOptionValueAt(at: number): number | undefined {
+    const k = this.word(at) === "DEFAULT" ? at + 1 : at;
+    let next: number;
+    if (this.word(k) === "CHARACTER" && this.word(k + 1) === "SET")
+      next = k + 2;
+    else if (TABLE_OPTION_WORDS.has(this.word(k) ?? "")) next = k + 1;
+    else return undefined;
+    return this.punct(next) === "=" ? next + 1 : next;
   }
 
   /**
@@ -2220,9 +2627,10 @@ class StatementWalk {
     at: number
   ): { name: string; kind: TakenElementKind } | null | undefined {
     const what = this.word(at);
-    if (what === "CONSTRAINT") return this.elementNamedAt(at + 1, "constraint");
+    const nameAt = this.skipIfExists(at + 1);
+    if (what === "CONSTRAINT") return this.elementNamedAt(nameAt, "constraint");
     if (this.reader.isMysql && (what === "INDEX" || what === "KEY")) {
-      return this.elementNamedAt(at + 1, "index");
+      return this.elementNamedAt(nameAt, "index");
     }
     return undefined;
   }
@@ -2286,11 +2694,12 @@ class StatementWalk {
     switch (this.word(at)) {
       case "ALTER":
         return this.alteredColumnAt(at + 1);
-      case "MODIFY":
+      case "MODIFY": {
         if (!this.reader.isMysql) return undefined;
-        return this.word(at + 1) === "COLUMN"
-          ? (this.nameAt(at + 2) ?? null)
-          : (this.nameAt(at + 1) ?? null);
+        // MariaDB's `MODIFY [COLUMN] [IF EXISTS] c`.
+        const named = this.word(at + 1) === "COLUMN" ? at + 2 : at + 1;
+        return this.nameAt(this.skipIfExists(named)) ?? null;
+      }
       case "CHANGE":
         return this.reader.isMysql ? this.redefinedColumnAt(at + 1) : undefined;
       default:
@@ -2300,10 +2709,12 @@ class StatementWalk {
 
   /** The column an `ALTER` clause changes in place, from past `ALTER`. */
   private alteredColumnAt(at: number): string | null | undefined {
-    const named = this.word(at) === "COLUMN" ? at + 1 : at;
-    if (named === at && NOT_COLUMN_ALTERS.has(this.word(at) ?? "")) {
+    const keyword = this.word(at) === "COLUMN" ? at + 1 : at;
+    if (keyword === at && NOT_COLUMN_ALTERS.has(this.word(at) ?? "")) {
       return undefined;
     }
+    // MariaDB's `ALTER [COLUMN] [IF EXISTS] c`.
+    const named = this.skipIfExists(keyword);
     const column = this.nameAt(named);
     if (column === undefined) {
       return named === at ? undefined : null;
@@ -2313,9 +2724,9 @@ class StatementWalk {
       : undefined;
   }
 
-  /** MySQL's `CHANGE [COLUMN] c c`: the same name, so no rename. */
+  /** MySQL's `CHANGE [COLUMN] [IF EXISTS] c c`: the same name, so no rename. */
   private redefinedColumnAt(at: number): string | undefined {
-    const k = this.word(at) === "COLUMN" ? at + 1 : at;
+    const k = this.skipIfExists(this.word(at) === "COLUMN" ? at + 1 : at);
     const from = this.nameAt(k);
     const to = this.nameAt(k + 1);
     return from !== undefined && from === to ? from : undefined;
@@ -2363,7 +2774,10 @@ class StatementWalk {
   }
 
   private renamedColumnAt(at: number): string | null | undefined {
-    if (this.word(at) === "COLUMN") return this.nameAt(at + 1) ?? null;
+    // MariaDB's `RENAME COLUMN [IF EXISTS] a TO b`.
+    if (this.word(at) === "COLUMN") {
+      return this.nameAt(this.skipIfExists(at + 1)) ?? null;
+    }
     if (this.reader.isMysql) return undefined;
     const next = this.word(at);
     if (next === "TO" || next === "CONSTRAINT") return undefined;
@@ -2374,7 +2788,7 @@ class StatementWalk {
   }
 
   private changedColumnAt(at: number): string | null | undefined {
-    const k = this.word(at) === "COLUMN" ? at + 1 : at;
+    const k = this.skipIfExists(this.word(at) === "COLUMN" ? at + 1 : at);
     const from = this.nameAt(k);
     const to = this.nameAt(k + 1);
     if (from === undefined || to === undefined) return null;
@@ -2520,10 +2934,10 @@ export function tablesCreatedBy(
 
 /**
  * What a statement may begin with for `tablesLeftInPlace` to follow it: the
- * statements a generated DOWN is made of. Data statements change no table's
- * existence; schema statements on indexes, types and sequences change none
- * either; the table statements are the ones `TableFates` follows. A rebuild
- * is a CREATE TABLE, an INSERT, a DROP TABLE and an ALTER TABLE.
+ * statements a generated DOWN is made of. Schema statements on indexes, types
+ * and sequences change no table's existence; the table statements are the
+ * ones `TableFates` follows. Data statements are listed apart
+ * (`DATA_STATEMENTS`).
  */
 const MODELED_STATEMENTS: readonly (readonly string[])[] = [
   ["DROP", "TABLE"],
@@ -2540,17 +2954,29 @@ const MODELED_STATEMENTS: readonly (readonly string[])[] = [
   ["CREATE", "TYPE"],
   ["CREATE", "SEQUENCE"],
   ["RENAME", "TABLE"],
-  ["INSERT"],
-  ["UPDATE"],
-  ["DELETE"],
   ["PRAGMA", "FOREIGN_KEYS"],
   ["PRAGMA", "FOREIGN_KEY_CHECK"],
 ];
 
 /**
+ * Data statements, which `tablesLeftInPlace` follows only where they cannot
+ * change a table: on MySQL and SQLite, whose triggers and stored functions
+ * cannot run DDL, and where a SQLite rebuild copies its rows with an INSERT.
+ * On PostgreSQL a trigger on the target, or a function the statement calls,
+ * can run any DDL — rename the plugin's table away, say, so a later drop of
+ * the name reaches nothing — and the text shows none of it, so there a data
+ * statement is unmodeled.
+ */
+const DATA_STATEMENTS: readonly (readonly string[])[] = [
+  ["INSERT"],
+  ["UPDATE"],
+  ["DELETE"],
+];
+
+/**
  * Whether `tablesLeftInPlace` can follow a statement: a single statement that
- * begins as one of `MODELED_STATEMENTS` and names no table through a
- * qualifier. Anything else is unmodeled, and refused: a savepoint and its
+ * begins as one of `MODELED_STATEMENTS` — or, outside PostgreSQL, of
+ * `DATA_STATEMENTS` — and names no table through a qualifier. Anything else is unmodeled, and refused: a savepoint and its
  * rollback, a procedural block whose branches may not run, a view or virtual
  * table taking a dropped table's name, a temporary table shadowing one, and
  * a qualified name such as SQLite's `temp.t`, which can reach another table
@@ -2565,7 +2991,11 @@ function modelsStatement(
   const words = tokens.map(token =>
     token.kind === "word" ? token.upper : undefined
   );
-  const begins = MODELED_STATEMENTS.some(prefix =>
+  const modeled =
+    dialect === "postgresql"
+      ? MODELED_STATEMENTS
+      : [...MODELED_STATEMENTS, ...DATA_STATEMENTS];
+  const begins = modeled.some(prefix =>
     prefix.every((word, at) => words[at] === word)
   );
   if (!begins) return false;
@@ -2782,7 +3212,9 @@ class FollowingReader extends DropReader {
  * unqualified name reaches: what it drops is then not known, and an uninstall
  * is refused rather than run on a guess. The reading models the statements a
  * plugin's generated DOWN is made of, and refuses the rest by kind rather
- * than by exception, so a form nobody listed is refused, not trusted.
+ * than by exception, so a form nobody listed is refused, not trusted. On
+ * PostgreSQL that includes a data statement, which may run DDL through a
+ * trigger or a function it calls; no generated PostgreSQL DOWN holds one.
  */
 export function tablesLeftInPlace(
   statements: readonly string[],
@@ -3076,6 +3508,7 @@ type Reading = Pick<
   | "elements"
   | "alteredElements"
   | "unmodelled"
+  | "unreadOnElements"
   | "addedColumns"
   | "addedElements"
   | "alterTargets"
@@ -3084,6 +3517,9 @@ type Reading = Pick<
   | "rebuilt"
   | "relationRenames"
   | "changed"
+  | "reaching"
+  | "lookupsAfterVacating"
+  | "typesCascaded"
 >;
 
 /**
@@ -3828,6 +4264,20 @@ function liveShape(
 }
 
 /**
+ * The tables standing before a statement list runs, as the guard reads them
+ * (`readLiveTables`): which of the names the list creates or renames through
+ * `ALTER INDEX` are tables already, and on PostgreSQL, `descendants`.
+ */
+export type LiveTables = ReadonlySet<string> & {
+  /**
+   * Each table a statement of the list acts on that has descendants, by
+   * lower-cased name: every table inheriting from it and every partition of
+   * it, at any depth, lower-cased. Absent where it was not read.
+   */
+  readonly descendants?: ReadonlyMap<string, readonly string[]>;
+};
+
+/**
  * Which of the tables the statement lists create, and of the names
  * PostgreSQL's `ALTER INDEX ... RENAME` renames in them, exist already as
  * tables, read from the database the statements are about to run on — the
@@ -3835,24 +4285,40 @@ function liveShape(
  * judges such a rename of as a table's (`liveTables`). Read through the
  * introspection `readLiveColumns` uses, so on PostgreSQL a table counts when
  * an unqualified name reaches it, wherever the search path finds it.
+ *
+ * On PostgreSQL it also reads the descendants of every table a statement
+ * acts on in a way that reaches them (`DropReader.reaching`), from the
+ * catalog's inheritance records (`introspectDescendants`): the statements
+ * name none of them.
  */
 export async function readLiveTables(
   db: unknown,
   dialect: SupportedDialect,
   statementLists: ReadonlyArray<readonly string[]>
-): Promise<ReadonlySet<string>> {
+): Promise<LiveTables> {
+  const readings = statementLists.map(list =>
+    readAsIfNoTableExisted(list, dialect)
+  );
   const live = await liveColumnsOf(
     db,
     dialect,
-    statementLists.flatMap(list => {
-      const reading = readAsIfNoTableExisted(list, dialect);
-      return [
-        ...(reading?.creating ?? []),
-        ...(reading?.relationRenames ?? []),
-      ];
-    })
+    readings.flatMap(reading => [
+      ...(reading?.creating ?? []),
+      ...(reading?.relationRenames ?? []),
+    ])
   );
-  return new Set(live.keys());
+  const reached = [
+    ...new Set(
+      readings.flatMap(reading => reading?.reaching.map(r => r.table) ?? [])
+    ),
+  ];
+  const descendants =
+    dialect === "postgresql" && reached.length > 0
+      ? await (
+          await import("../pipeline/diff/introspect-live")
+        ).introspectDescendants(db, reached)
+      : new Map<string, string[]>();
+  return Object.assign(new Set(live.keys()), { descendants });
 }
 
 /**
@@ -4488,9 +4954,11 @@ export function assertNoForeignDrops(args: {
    * and the names PostgreSQL's `ALTER INDEX ... RENAME` renames in them
    * (`readLiveTables`). Absent, no creation is credited: every drop is judged
    * by who holds the table, and every such rename that no live index explains
-   * as a rename of a table.
+   * as a rename of a table. On PostgreSQL it also carries the descendants of
+   * each table a statement acts on (`LiveTables.descendants`); without them,
+   * what a statement does to a table's descendants is not judged.
    */
-  liveTables?: ReadonlySet<string>;
+  liveTables?: LiveTables;
   /**
    * The table each index the statements name without one is on, lower-cased
    * (`readLiveIndexTables`): PostgreSQL's and SQLite's `DROP INDEX` names
@@ -4512,6 +4980,13 @@ export function assertNoForeignDrops(args: {
   for (const { table, act } of tablesTaken(read, holders, args)) {
     refuseUnlessHeld(holders.table(table), { ...args, table, act });
   }
+  for (const { table, parent, act } of descendantsReached(
+    read,
+    args.liveTables
+  )) {
+    refuseUnlessHeld(holders.table(table), { ...args, table, parent, act });
+  }
+  refuseLookupsAfterVacating(read, args);
   for (const { table, column } of read.columns) {
     refuseUnlessHeld(holders.column(table, column), {
       ...args,
@@ -4530,6 +5005,7 @@ export function assertNoForeignDrops(args: {
       act: UNMODELLED_ACT,
     });
   }
+  refuseUnreadOnElements(read, holders, args);
   for (const element of [
     ...read.elements,
     ...elementsLeftOut(read.rebuilt, args.liveElements, args.elementOwners),
@@ -4553,6 +5029,7 @@ export function assertNoForeignDrops(args: {
       act: "strip the keys, column definitions or triggers of",
     });
   }
+  refuseTypesCascaded(read, args);
 }
 
 /**
@@ -4585,6 +5062,150 @@ function readOrRefuse(args: {
       );
     }
     throw error;
+  }
+}
+
+/**
+ * Refuses a clause the reader cannot read on a table another owner has a
+ * column, index, foreign key or check on (`DropReader.unreadOnElements`),
+ * whoever holds the table: the clause may change those elements, and which
+ * it changes cannot be read. Judged by every element row recorded on the
+ * table.
+ */
+function refuseUnreadOnElements(
+  read: Reading,
+  holders: OwnershipView,
+  args: {
+    stream: MigrationStream;
+    source: string;
+    elementOwners: readonly OwnerRecord[];
+    liveIndexTables?: ReadonlyMap<string, string>;
+  }
+): void {
+  for (const table of new Set(read.unreadOnElements)) {
+    for (const row of args.elementOwners) {
+      if (row.tableName.toLowerCase() !== table) continue;
+      const name = row.elementName?.toLowerCase();
+      if (name === undefined) continue;
+      if (row.elementKind === "column") {
+        refuseUnreadOn(holders.column(table, name), {
+          ...args,
+          table,
+          column: name,
+        });
+      } else if (ELEMENT_ROW_KINDS.has(row.elementKind ?? "")) {
+        const kind = row.elementKind as TakenElementKind;
+        refuseUnreadOn(
+          holders.element({ table, name, kind }, table, args.liveIndexTables),
+          { ...args, table, element: name }
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Throws the refusal of a clause the guard cannot read, on a table holding
+ * a column or element (`refuseUnreadOnElements`) the stream does not hold.
+ */
+function refuseUnreadOn(
+  claim: Claim,
+  args: {
+    stream: MigrationStream;
+    source: string;
+    table: string;
+    column?: string;
+    element?: string;
+  }
+): void {
+  if (claim.kind === "own") return;
+  throw new NextlyError({
+    code: "DROP_OF_FOREIGN_TABLE",
+    publicMessage: `A migration alters ${args.table} in a form the schema guard cannot read, and ${takenThing(args)} on that table belongs to a different owner. It has been refused, and nothing was applied. Rewrite the statement as plain ALTER TABLE clauses.`,
+    logContext: {
+      ...knownNames({
+        table: args.table,
+        column: args.column,
+        element: args.element,
+      }),
+      changedBy: args.stream,
+      belongsTo: claim.kind === "foreign" ? claim.owner.migratedBy : null,
+      source: args.source,
+    },
+  });
+}
+
+/** What a refusal says a statement does to a descendant, by its act. */
+const DESCENDANT_ACTS: Record<DescendantAct, string> = {
+  alter: "alter, through a table it inherits from,",
+  truncate: "empty, through a table it inherits from,",
+  drop: "drop, through a table it inherits from,",
+};
+
+/**
+ * Every descendant of a table a PostgreSQL statement acts on without `ONLY`
+ * (`DropReader.reaching`): the tables inheriting from it and its partitions,
+ * at any depth, as the live catalog has them before the list runs
+ * (`LiveTables.descendants`). The text names none of them, and each may be
+ * another owner's, so each is judged as the table the statement acts on.
+ */
+function descendantsReached(
+  read: Reading,
+  liveTables: LiveTables | undefined
+): Array<{ table: string; parent: string; act: string }> {
+  const descendants = liveTables?.descendants;
+  if (descendants === undefined) return [];
+  return read.reaching.flatMap(({ table: parent, act }) =>
+    (descendants.get(parent) ?? []).map(table => ({
+      table,
+      parent,
+      act: DESCENDANT_ACTS[act],
+    }))
+  );
+}
+
+/**
+ * Refuses a statement that looks a name up after an earlier statement of
+ * the list vacated it (`DropReader.lookupsAfterVacating`). The live lookup
+ * of an index named alone, or of an ALTER TABLE target that may be an index,
+ * is made once before the list runs, so it shows what the name reached then:
+ * once a table or index of that name is dropped, renamed or moved, the name
+ * may reach another relation it shadowed on the search path, which the
+ * lookup never saw.
+ */
+function refuseLookupsAfterVacating(
+  read: Reading,
+  args: { stream: MigrationStream; source: string }
+): void {
+  for (const name of read.lookupsAfterVacating) {
+    throw new NextlyError({
+      code: "DROP_OF_FOREIGN_TABLE",
+      publicMessage: `A migration names ${name} after an earlier statement in it dropped, renamed or moved a table or index of that name, so which one the name then reaches cannot be checked. It has been refused, and nothing was applied. Run the later statement in a migration of its own.`,
+      logContext: {
+        name,
+        changedBy: args.stream,
+        source: args.source,
+      },
+    });
+  }
+}
+
+/**
+ * Refuses PostgreSQL's `ALTER TYPE ... CASCADE` (`DropReader.typesCascaded`):
+ * it changes every table typed by the type, which may be another owner's and
+ * which the text does not name. Judged last, so a statement whose other
+ * reading is refused for something it names is refused for that.
+ */
+function refuseTypesCascaded(
+  read: Reading,
+  args: { stream: MigrationStream; source: string }
+): void {
+  for (const type of read.typesCascaded) {
+    throw new NextlyError({
+      code: "DROP_OF_FOREIGN_TABLE",
+      publicMessage: `A migration changes the type ${type} with CASCADE, which also changes every table typed by it, and those may belong to a different owner. It has been refused, and nothing was applied. Change those tables explicitly, then the type without CASCADE.`,
+      logContext: { type, changedBy: args.stream, source: args.source },
+    });
   }
 }
 
@@ -5017,7 +5638,11 @@ function overridden(
 /** The log field that names who acted: a rename, a change or a drop. */
 function logKey(act: string): string {
   if (act === "rename") return "renamedBy";
-  if (act === "change in place" || act === "change the storage of") {
+  if (
+    act === "change in place" ||
+    act === "change the storage of" ||
+    act === DESCENDANT_ACTS.alter
+  ) {
     return "changedBy";
   }
   return "droppedBy";
@@ -5033,6 +5658,8 @@ function refuseUnlessHeld(
     table: string | undefined;
     column?: string;
     element?: string;
+    /** The table a statement acts on, when `table` is reached through it. */
+    parent?: string;
     act: string;
   }
 ): void {
@@ -5063,6 +5690,7 @@ function refuseUnlessHeld(
         table: args.table,
         column: args.column,
         element: args.element,
+        parent: args.parent,
       }),
       [logKey(args.act)]: args.stream,
       ...(claim.kind === "foreign"
