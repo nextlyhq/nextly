@@ -60,13 +60,22 @@ translated field:
 SELECT m.id, m.updated_at, m.title AS on_main, l.title AS in_translations
 FROM dc_<slug> AS m
 JOIN dc_<slug>_locales AS l ON l._parent = m.id AND l._locale = '<default locale>'
-WHERE NOT (m.title <=> l.title);
+WHERE NOT (CAST(m.title AS BINARY) <=> CAST(l.title AS BINARY));
 ```
+
+The binary cast on both sides makes the comparison exact and keeps it null-safe:
+under MySQL's default collation, `<=>` alone takes `Foo` and `foo` for the
+same value, so an edit that changed only letter case or accents would not be
+listed. For an entity defined with `timestamps: false`, leave out
+`m.updated_at`: it has no such column.
 
 A row whose `updated_at` is later than the disable was edited on the main
 table since, and the upgrade replaces it with `in_translations`. Every other
 listed row is an edit made while the entity was localized, which the upgrade
-brings back.
+brings back. `updated_at` moves only with saves made through Nextly: a row
+changed outside it (from a SQL client or a script) can keep an older
+`updated_at`, so if anything wrote to the main table that way, judge its rows
+by their values, not by the date.
 
 Recovery, after upgrading: run `nextly db:sync` (or start the dev server, or
 run `nextly migrate`). For an entity whose localization was turned off, the

@@ -1227,6 +1227,82 @@ describe("change-password handler: respondAction shape", () => {
     expect(body).not.toHaveProperty("data");
     expect(body).toEqual({ message: "Password changed." });
   });
+
+  // Signed in, so the request reaches the CSRF check rather than stopping at
+  // the 401 an anonymous request gets first.
+  async function signedInRequest(
+    origin: string,
+    csrf: { cookie?: string; body?: string }
+  ): Promise<Request> {
+    const accessToken = await signAccessToken(
+      {
+        sub: "u1",
+        email: "a@example.com",
+        name: "A",
+        image: null,
+        roleIds: ["super-admin"],
+      },
+      SECRET,
+      900
+    );
+    const cookies = [`nextly_session=${accessToken}`];
+    if (csrf.cookie) cookies.push(`nextly_csrf=${csrf.cookie}`);
+    return new Request("http://localhost:3000/admin/api/auth/cp", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: origin,
+        cookie: cookies.join(";"),
+      },
+      body: JSON.stringify({
+        currentPassword: "old",
+        newPassword: "new-Pass1234!",
+        ...(csrf.body ? { csrfToken: csrf.body } : {}),
+      }),
+    });
+  }
+
+  const refusingDeps = () => ({
+    secret: SECRET,
+    allowedOrigins: ALLOWED_ORIGINS,
+    changePassword: vi.fn(),
+    auditLog: { write: vi.fn().mockResolvedValue(undefined) },
+    trustProxy: false,
+    trustedProxyIps: [],
+  });
+
+  it("a refused origin names the reason and the app's own address", async () => {
+    const deps = refusingDeps();
+    const res = await handleChangePassword(
+      await signedInRequest("http://127.0.0.1:3000", {
+        cookie: "ct",
+        body: "ct",
+      }),
+      deps
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: unknown }).error).toEqual({
+      code: "CSRF_FAILED",
+      message: "Invalid request origin",
+      data: { reason: "origin", appOrigin: "http://localhost:3000" },
+    });
+    expect(deps.changePassword).not.toHaveBeenCalled();
+  });
+
+  it("a refused token names the reason, and no address", async () => {
+    const deps = refusingDeps();
+    const res = await handleChangePassword(
+      await signedInRequest("http://localhost:3000", {}),
+      deps
+    );
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: unknown }).error).toEqual({
+      code: "CSRF_FAILED",
+      message: "Missing CSRF token",
+      data: { reason: "token" },
+    });
+    expect(deps.changePassword).not.toHaveBeenCalled();
+  });
 });
 
 describe("session handler: respondData shape", () => {
