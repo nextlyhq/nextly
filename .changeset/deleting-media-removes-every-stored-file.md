@@ -39,5 +39,5 @@ Deleting a media item now removes every file stored for it: the original, the th
 - A crop inside a plugin's `ctx.db.transaction` on SQLite removes the sizes it replaced once that transaction commits. They were kept before, stored indefinitely.
 - A crop or rotation whose new sizes include `thumbnail` removes the thumbnail made at upload, which nothing refers to any more.
 - A crop on SQLite saves its regenerated sizes. It failed before, because the sizes were written as an object the driver cannot store.
-- A delete and a crop of the same item at once, or two crops at once, leave no file of the item behind.
+- A delete and a crop of the same item at once leave no file of the item behind, and two crops at once leave no file behind that nothing refers to.
 - Storage adapters can now list their files (`list()`, optional). `@nextlyhq/storage-s3`, `@nextlyhq/storage-vercel-blob` and `@nextlyhq/storage-uploadthing` implement it; an adapter without it is reported as one that cannot be searched.
