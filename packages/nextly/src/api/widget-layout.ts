@@ -35,6 +35,7 @@ import type { AuthContext } from "../auth/middleware";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import { addPanelFacts, inAddPanelOrder } from "../domains/widgets/add-panel";
 import {
   declaredWidgets,
   widthFacts,
@@ -198,6 +199,23 @@ function widthsOf(
 }
 
 /**
+ * Each widget this reader may see, as the dashboard and its add panel need it:
+ * the widths its cards may take, and where the panel lists it (group,
+ * sub-group, description, category and sketch kind).
+ *
+ * The group is core's to assign, so the admin never works one out for itself;
+ * {@link addPanelFacts} is the one place it is decided.
+ */
+function widgetFactsOf(widgets: readonly CanonicalWidget[]) {
+  return Object.fromEntries(
+    widgets.map(widget => [
+      widget.id,
+      { ...widthFacts(widget), ...addPanelFacts(widget) },
+    ])
+  );
+}
+
+/**
  * The scope a layout belongs to today.
  *
  * Every row this endpoint writes is the caller's own, so there is exactly one
@@ -270,11 +288,14 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   //
   // Ids only. Titles and icons already reach the admin through the widget
   // metadata it renders from; what only this endpoint can answer is WHICH of
-  // them this caller is allowed to know about.
+  // them this caller is allowed to know about. In the add panel's order, so
+  // the panel lists them as sent.
   const placed = new Set(placements.map(placement => placement.widgetId));
-  const available = view.widgets
-    .filter(widget => !placed.has(widget.id) || widths[widget.id].allowsSeveral)
-    .map(widget => widget.id);
+  const available = inAddPanelOrder(
+    view.widgets.filter(
+      widget => !placed.has(widget.id) || widths[widget.id].allowsSeveral
+    )
+  ).map(widget => widget.id);
 
   return respondData(
     {
@@ -283,7 +304,7 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
       // reader following it is shown: a staged reset draws it, and the admin
       // never works the default out for itself.
       defaultPlacements: visibleArrangement(undefined, view.visibleIds),
-      widgets: widths,
+      widgets: widgetFactsOf(view.widgets),
       available,
       version: stored.version,
       source,

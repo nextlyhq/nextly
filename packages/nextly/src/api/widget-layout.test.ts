@@ -173,7 +173,16 @@ interface LayoutPayload {
   defaultPlacements?: WidgetPlacement[];
   widgets?: Record<
     string,
-    { allowedWidths: string[]; defaultWidth: string; allowsSeveral: boolean }
+    {
+      allowedWidths: string[];
+      defaultWidth: string;
+      allowsSeveral: boolean;
+      group?: string;
+      subgroup?: string;
+      description?: string;
+      category?: string;
+      sketch?: string;
+    }
   >;
 }
 
@@ -345,6 +354,65 @@ describe("GET /api/dashboard/layout", () => {
     // that is still there -- turning a recoverable bad row into a dashboard
     // that can never be saved.
     expect(body.version).toBe(7);
+  });
+});
+
+describe("where the add panel lists each widget", () => {
+  it("says each widget's group, sub-group, description, category and sketch", async () => {
+    registerWidget(
+      widget({
+        id: "core/team",
+        title: "Team",
+        description: "How many users and roles the project has.",
+      })
+    );
+    setContributedWidgets([
+      {
+        id: "forms/latest",
+        plugin: "@acme/forms",
+        description: "The newest submissions.",
+        category: "Forms",
+        archetype: "list",
+      },
+    ]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    // Core's group, beside the widths the editor already reads.
+    expect(body.widgets?.["core/team"]).toMatchObject({
+      group: "team",
+      description: "How many users and roles the project has.",
+      sketch: "custom",
+      allowsSeveral: false,
+    });
+    expect(body.widgets?.["forms/latest"]).toMatchObject({
+      group: "plugins",
+      subgroup: "@acme/forms",
+      description: "The newest submissions.",
+      category: "Forms",
+      sketch: "list",
+    });
+  });
+
+  it("offers widgets in the panel's order: the built-ins, the site's own, Team, then each plugin's", async () => {
+    // Registered in an order the panel must not follow.
+    registerWidget(widget({ id: "site/zeta" }));
+    registerWidget(widget({ id: "core/team" }));
+    registerWidget(widget({ id: "core/recently-edited" }));
+    registerWidget(widget({ id: "site/alpha" }));
+    setContributedWidgets([{ id: "forms/latest", plugin: "@acme/forms" }]);
+    // Something stored, so every widget is offered rather than placed.
+    stored = { version: 1, layout: serializeLayout([]) };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.available).toEqual([
+      "core/recently-edited",
+      "site/zeta",
+      "site/alpha",
+      "core/team",
+      "forms/latest",
+    ]);
   });
 });
 
@@ -1648,16 +1716,22 @@ describe("the widths a card may take", () => {
   it("are answered for every widget the reader may see", async () => {
     registerWidget(widget({ id: "core/any" }));
     const body = await bodyOf(await getWidgetLayout(getReq()));
+    // With where the add panel lists each one: neither is a built-in core
+    // knows, so both are the site's own, under Overview.
     expect(body.widgets).toEqual({
       "core/narrow": {
         allowedWidths: ["third", "half", "twoThirds"],
         defaultWidth: "third",
         allowsSeveral: false,
+        group: "overview",
+        sketch: "custom",
       },
       "core/any": {
         allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
         defaultWidth: "full",
         allowsSeveral: false,
+        group: "overview",
+        sketch: "custom",
       },
     });
   });

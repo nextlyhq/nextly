@@ -75,6 +75,18 @@ export interface CanonicalWidget {
    * rather than a slug recovered from a display identity.
    */
   collection?: string;
+  /**
+   * The plugin that contributed this widget, by its name. Set by the
+   * contribution channel alone, so a registration overriding a plugin's widget
+   * leaves it where its plugin's users look for it: the add panel lists it
+   * under that plugin.
+   */
+  plugin?: string;
+  /** The declaration's own one-line description and category, as stated. */
+  description?: string;
+  category?: string;
+  /** The declaration's archetype, which picks the add panel's sketch. */
+  archetype?: string;
   requiredPermission?: string | readonly string[];
   defaultSize?: string;
   /**
@@ -147,6 +159,9 @@ function gatesOf(widget: CanonicalWidget): readonly unknown[] {
  * `undefined` and the merge's fallbacks read it as unstated.
  */
 const REGISTRATION_FIELDS = [
+  "description",
+  "category",
+  "archetype",
   "requiredPermission",
   "defaultSize",
   "minSize",
