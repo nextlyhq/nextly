@@ -30,7 +30,7 @@
  * @module domains/auth/services/token-account-binding
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, or, type SQL } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
 import { getDialectTables } from "../../../database/index";
@@ -251,21 +251,32 @@ export const TOKEN_TABLE_NAMES = {
 export async function revokeAccountTokens(
   tx: Pick<TokenBindingDb, "delete">,
   tokenTables: readonly TokenTable[],
-  account: { userId: string; addresses: readonly string[] }
+  account: {
+    userId: string;
+    addresses: readonly string[];
+    /**
+     * The address the account holds once the change commits. A token bound
+     * to it is kept: one issued there after an earlier change already moved
+     * the account was issued for that address. Without it every bound token
+     * goes, as a deletion needs.
+     */
+    keepAddress?: string;
+  }
 ): Promise<void> {
   const addresses = [...new Set(account.addresses.filter(a => a !== ""))];
   for (const table of tokenTables) {
+    const bound =
+      account.keepAddress === undefined
+        ? eq(table.userId, account.userId)
+        : and(
+            eq(table.userId, account.userId),
+            ne(table.identifier, account.keepAddress)
+          );
     const unbound =
       addresses.length > 0
         ? and(isNull(table.userId), inArray(table.identifier, addresses))
         : undefined;
-    await tx
-      .delete(table)
-      .where(
-        unbound
-          ? or(eq(table.userId, account.userId), unbound)
-          : eq(table.userId, account.userId)
-      );
+    await tx.delete(table).where(unbound ? or(bound, unbound) : bound);
   }
 }
 

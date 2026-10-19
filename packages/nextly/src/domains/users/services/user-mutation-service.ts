@@ -2095,12 +2095,18 @@ export class UserMutationService extends BaseService {
             // for the old address either committed first and is removed here,
             // or finds the account no longer there.
             if (revokesTokens) {
+              // Kept: a link already bound to the address this write leaves
+              // the account at. The snapshot above may be older than the row,
+              // so a concurrent change may already have moved the account
+              // there and a link been issued for it since; this write moves
+              // nothing then.
               await revokeAccountTokens(txDb, revokesTokens, {
                 userId: String(currentUser.id),
                 addresses:
                   typeof currentUser.email === "string"
                     ? [currentUser.email]
                     : [],
+                keepAddress: updateData.email,
               });
             }
             if (requestedRoleIds && services) {

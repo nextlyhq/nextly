@@ -250,7 +250,8 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
    */
   async function holdWrite<T>(
     write: (tx: TestDb) => Promise<unknown>,
-    during: () => Promise<T>
+    during: () => Promise<T>,
+    options: { atLock?: boolean } = {}
   ): Promise<{ flow: Promise<T> }> {
     let release!: () => void;
     const released = new Promise<void>(resolve => (release = resolve));
@@ -279,7 +280,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
     // Rejections are read by the caller; this keeps one from going unhandled
     // while the write is still open.
     started.catch(() => undefined);
-    if (dialect === "sqlite") {
+    if (dialect === "sqlite" || options.atLock === false) {
       await new Promise(resolve => setTimeout(resolve, 300));
     } else {
       await Promise.race([
@@ -472,6 +473,43 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
         ).toHaveLength(0);
       });
     });
+
+    it.runIf(dialect !== "sqlite")(
+      "keeps a link issued at the new address when a stale change moves the account there again",
+      async () => {
+        // A first change has moved the account from a to b, and a link was
+        // issued at b, while a second change to b had already read the
+        // account at a. The second change then writes b over b: it moves
+        // nothing, so the link stands.
+        const a = address("stale-from");
+        const b = address("stale-to");
+        const id = await account(a);
+        const raw = randomBytes(32).toString("hex");
+        const table = kind.table(tables);
+
+        const { flow: second } = await holdWrite(
+          async tx => {
+            await tx
+              .update(tables.users)
+              .set({ email: b, updatedAt: new Date() })
+              .where(eq(tables.users.id, id));
+            await tx.insert(table).values({
+              identifier: b,
+              userId: id,
+              tokenHash: createHash("sha256").update(raw).digest("hex"),
+              expires: new Date(Date.now() + 3600_000),
+            });
+          },
+          () => moveTo(id, b),
+          { atLock: false }
+        );
+        await second;
+
+        expect(await tokensFor(kind, raw)).toHaveLength(1);
+        await kind.redeem(auth, raw);
+        expect(kind.applied(await userRow(id))).toBe(true);
+      }
+    );
 
     describe("redeemed while the address changes", () => {
       it("completes first when it holds the account, and the change follows", async () => {
