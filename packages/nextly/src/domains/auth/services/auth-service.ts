@@ -558,18 +558,7 @@ export class AuthService extends BaseService {
     }
 
     if (resetToken.expires < new Date()) {
-      // §13.8 mandates the canonical session-expired message for
-      // TOKEN_EXPIRED. We use the literal spec message; the per-token
-      // identifier moves into logContext.
-      throw new NextlyError({
-        code: "TOKEN_EXPIRED",
-        publicMessage: "Your session has expired. Please sign in again.",
-        logContext: {
-          reason: "reset-token-expired",
-          tokenId: resetToken.id,
-          expiredAt: resetToken.expires,
-        },
-      });
+      throw this.resetTokenExpiredError(resetToken);
     }
 
     const email = resetToken.identifier;
@@ -689,15 +678,7 @@ export class AuthService extends BaseService {
 
       if (!consumed) {
         if (new Date(resetToken.expires) <= new Date()) {
-          throw new NextlyError({
-            code: "TOKEN_EXPIRED",
-            publicMessage: "Your session has expired. Please sign in again.",
-            logContext: {
-              reason: "reset-token-expired",
-              tokenId: resetToken.id,
-              expiredAt: resetToken.expires,
-            },
-          });
+          throw this.resetTokenExpiredError(resetToken);
         }
 
         throw NextlyError.validation({
@@ -723,6 +704,29 @@ export class AuthService extends BaseService {
     emitAuthEvent("passwordReset", { email });
 
     return { email };
+  }
+
+  /**
+   * The one construction of the reset-token TOKEN_EXPIRED answer: §13.8
+   * mandates the canonical session-expired public message, and the
+   * per-token identifier moves into logContext. Raised from both places
+   * that can see a past-expiry token — the pre-transaction expiry check
+   * and the failed-claim branch, where the token expired between that
+   * check and the consumption write.
+   */
+  private resetTokenExpiredError(resetToken: {
+    id: number;
+    expires: Date;
+  }): NextlyError {
+    return new NextlyError({
+      code: "TOKEN_EXPIRED",
+      publicMessage: "Your session has expired. Please sign in again.",
+      logContext: {
+        reason: "reset-token-expired",
+        tokenId: resetToken.id,
+        expiredAt: resetToken.expires,
+      },
+    });
   }
 
   /**

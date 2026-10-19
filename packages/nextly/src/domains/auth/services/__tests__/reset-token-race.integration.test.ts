@@ -34,10 +34,13 @@ vi.mock("../../../users/services/password-write", async importOriginal => {
     updateUserEndingSessions: async (
       ...args: Parameters<typeof actual.updateUserEndingSessions>
     ) => {
+      // Let the real write run first: the rollback under test has to undo a
+      // password change that was actually made, not one the mock prevented.
+      const result = await actual.updateUserEndingSessions(...args);
       if (between.failReset) {
         throw new Error("simulated failure after token claim");
       }
-      return actual.updateUserEndingSessions(...args);
+      return result;
     },
   };
 });
@@ -103,6 +106,28 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
       const passA = "Passw0rdA123!";
       const passB = "Passw0rdB456!";
+
+      // Hold both requests at the transaction gate until each has read the
+      // token row, so neither can see the other's committed usedAt and
+      // refuse before claiming: the loser must lose the conditional claim.
+      // No transaction is open while waiting, so serialized dialects queue
+      // here without deadlocking.
+      let arrived = 0;
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      for (const svc of [auth1, auth2]) {
+        const original = svc["withTransaction"].bind(svc);
+        svc["withTransaction"] = (async (
+          fn: Parameters<AuthService["withTransaction"]>[0]
+        ) => {
+          arrived += 1;
+          if (arrived === 2) release();
+          await gate;
+          return original(fn);
+        }) as unknown as AuthService["withTransaction"];
+      }
 
       // Race two resets running against separate service instances over the same database
       const [res1, res2] = await Promise.allSettled([
