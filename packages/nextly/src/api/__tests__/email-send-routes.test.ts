@@ -126,6 +126,22 @@ describe("POST /api/email/send", () => {
     expect(res.status).toBe(200);
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ to }));
   });
+  it.each(["from", "replyTo"])(
+    "refuses a %s with a line break in its display name",
+    async field => {
+      const res = await postSend(
+        post({
+          to: "a@example.com",
+          subject: "Hi",
+          html: "<p>x</p>",
+          [field]: '"Shop\r\nBcc: attacker@example.com" <shop@example.com>',
+        })
+      );
+
+      expect(res.status).toBe(400);
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("POST /api/email/send-with-template", () => {

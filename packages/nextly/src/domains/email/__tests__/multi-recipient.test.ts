@@ -536,6 +536,24 @@ describe("several `to` addresses reach the provider", () => {
     expect(firstAddress(A)).toBe(A);
   });
 
+  it.each([
+    '"Victim\r\nBcc: attacker@example.com" <user@example.com>',
+    "user@example.com\nBcc: attacker@example.com",
+    '"Tab\there" <user@example.com>',
+  ])("refuses an address with a control character in it: %j", async address => {
+    // Each would let the value write a header of its own at an adapter that
+    // puts it in the message unescaped.
+    const { adapter, send } = mockAdapter(10);
+    const { service } = build(adapter);
+
+    const error = await service
+      .send({ to: address, subject: "Hi", html: "<p>x</p>" })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(NextlyError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("sends the same address once when it is listed twice", async () => {
     const { adapter, send } = mockAdapter();
     const { service } = build(adapter);

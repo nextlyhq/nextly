@@ -86,12 +86,26 @@ export function messageToAddresses(options: {
  */
 export function isSendableAddress(value: unknown): value is string {
   if (typeof value !== "string") return false;
+  // No line break or other control character anywhere, display name
+  // included: an address becomes a header, and a line break in it would let
+  // the value add a header of its own (`"x\r\nBcc: y" <a@b>`) at an adapter
+  // that writes it out unescaped.
+  if (hasControlCharacter(value)) return false;
   // One address, not a list: a second mailbox would be read as this one's
   // display name, and only the last would be checked, counted or recorded.
   if (splitAddressList(value).length !== 1) return false;
   const brackets = unquoted(value).match(/[<>]/g) ?? [];
   if (brackets.length !== 0 && brackets.join("") !== "<>") return false;
   return MAILBOX.test(mailboxOf(value));
+}
+
+/** Whether `value` holds a C0 control character (line breaks included) or DEL. */
+function hasControlCharacter(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
 }
 
 /**
