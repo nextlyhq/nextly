@@ -46,9 +46,19 @@ afterEach(() => {
 
 function render() {
   return renderHook(
-    ({ entry }: { entry: Record<string, unknown> }) =>
-      useEntryForm({ collection, entry: entry as never, mode: "edit" }),
-    { initialProps: { entry: stored } }
+    ({ entry, locale }: { entry: Record<string, unknown>; locale?: string }) =>
+      useEntryForm({
+        collection,
+        entry: entry as never,
+        mode: "edit",
+        ...(locale === undefined ? {} : { locale }),
+      }),
+    {
+      initialProps: { entry: stored } as {
+        entry: Record<string, unknown>;
+        locale?: string;
+      },
+    }
   );
 }
 
@@ -78,13 +88,15 @@ describe("a save that fails", () => {
     act(() => {
       rerender({ entry: { ...stored, title: "Shot ab" } });
     });
-    // The request fails, and the cache is put back to the entry as stored.
+    // The request fails, and the cache is put back to the entry as stored —
+    // as a NEW object: the query cache's structural sharing does not return the
+    // snapshot it was handed once a field differs from what it holds.
     await act(async () => {
       fail(new Error("The server is unavailable."));
       await saving;
     });
     act(() => {
-      rerender({ entry: stored });
+      rerender({ entry: { ...stored } });
     });
 
     expect(result.current.form.getValues("title")).toBe("Shot ab");
@@ -106,6 +118,47 @@ describe("a save that fails", () => {
     });
 
     expect(result.current.form.getValues("title")).toBe("Theirs");
+  });
+
+  it("starts from another entry opened while a save is in flight", async () => {
+    // A guard that ignored every change during a save would keep this entry's
+    // values under the other one, and a later save would write them there.
+    update.mockImplementation(() => new Promise(() => {}));
+    const { result, rerender } = render();
+    act(() => {
+      void result.current.handleSubmit();
+    });
+    await vi.waitFor(() => expect(update).toHaveBeenCalled());
+
+    act(() => {
+      rerender({ entry: { ...stored, id: "e2", title: "Another" } });
+    });
+
+    expect(result.current.form.getValues("title")).toBe("Another");
+  });
+
+  it("starts from another language's values when the language changes", () => {
+    // The same row in another language keeps its id and often its version.
+    const { result, rerender } = render();
+    act(() => {
+      rerender({ entry: { ...stored, title: "Plan a" }, locale: "es" });
+    });
+
+    expect(result.current.form.getValues("title")).toBe("Plan a");
+  });
+
+  it("starts from the live entry when its working draft goes", () => {
+    const { result, rerender } = render();
+    act(() => {
+      rerender({ entry: { ...stored, title: "Draft", _isWorkingDraft: true } });
+    });
+    // The draft is shown first, so the check below is about leaving it.
+    expect(result.current.form.getValues("title")).toBe("Draft");
+    act(() => {
+      rerender({ entry: { ...stored } });
+    });
+
+    expect(result.current.form.getValues("title")).toBe("Shot a");
   });
 
   it("changes nothing the author typed when the write is refused", async () => {

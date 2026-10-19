@@ -442,23 +442,29 @@ export function useEntryForm({
   // changes — keeps this effect from firing on every keystroke. `form` is
   // a stable RHF ref.
   //
-  // Two arrivals are this editor's own save rather than a new entry, and are
-  // not reset to. The update writes its payload into the entry's cache before
-  // the request goes (an optimistic update), so that copy arrives while the
-  // save is in flight; and when the request fails it puts back the very entry
-  // object the form started from. Resetting to the first would make what the
-  // author typed the form's starting point before it was stored; resetting to
-  // the second would then wipe it. A failed save has to leave the form as the
-  // author left it, still unsaved.
-  const savingUpdate = useRef(false);
-  const startedFrom = useRef<unknown>(undefined);
+  // "Changes" is the entry's identity, never its object: its id, its stored
+  // version, the language and the read it was loaded for, and whether a
+  // working draft is overlaid — the key the Single editor resets on too. A
+  // save rewrites the entry's cache twice without changing any of those: the
+  // update writes its payload over the cached entry before the request goes
+  // (an optimistic update), and puts the stored entry back when the request
+  // fails, as a new object. Resetting to either wiped what the author had typed
+  // and not yet saved. Another entry, another language, a version saved
+  // elsewhere, or a working draft appearing or going, each still resets it.
+  const resetKey = useRef<string | null>(null);
   useEffect(() => {
-    if (entry && mode === "edit") {
-      if (savingUpdate.current || entry === startedFrom.current) return;
-      form.reset(defaultValues);
-      startedFrom.current = entry;
-    }
-  }, [entry, mode, defaultValues, form]);
+    if (!entry || mode !== "edit") return;
+    const key = JSON.stringify([
+      entry.id,
+      typeof entry.updatedAt === "string" ? entry.updatedAt : null,
+      locale ?? null,
+      readDraft ?? null,
+      entry._isWorkingDraft === true,
+    ]);
+    if (resetKey.current === key) return;
+    resetKey.current = key;
+    form.reset(defaultValues);
+  }, [entry, mode, defaultValues, form, locale, readDraft]);
 
   // Mutations - pass setError to enable server error mapping to form fields
   const createMutation = useCreateEntry({
@@ -555,12 +561,9 @@ export function useEntryForm({
                 throw new Error("Entry ID is required for update");
               }
               // entryId is passed to useUpdateEntry hook, so we just pass data here
-              savingUpdate.current = true;
-              const result = await updateMutation
-                .mutateAsync(data as Record<string, EntryValue>)
-                .finally(() => {
-                  savingUpdate.current = false;
-                });
+              const result = await updateMutation.mutateAsync(
+                data as Record<string, EntryValue>
+              );
               // Reset form to mark as clean after successful update
               form.reset(data);
               onSuccess?.(result.item);
