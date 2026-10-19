@@ -1,9 +1,16 @@
+import { z } from "zod";
+
 import { isStrategyName } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
 import { withoutRefreshCookie } from "../cookies/refresh-token-cookie";
 
-import type { AuthInput, AuthOutcome, AuthStrategy } from "./types";
+import type {
+  AuthInput,
+  AuthLimitAnswer,
+  AuthOutcome,
+  AuthStrategy,
+} from "./types";
 
 /** What the chain decided, and which strategy decided it. */
 export interface StrategyChainResult {
@@ -78,4 +85,86 @@ export async function runStrategyChain(
     }
   }
   return { outcome: { type: "pass" }, strategyName: null };
+}
+
+/** A strategy's answer to the limiter, parsed: it comes from app code. */
+const limitAnswer = z.discriminatedUnion("handles", [
+  z.object({ handles: z.literal(false) }),
+  z.object({ handles: z.literal(true), key: z.string().nullable() }),
+]);
+
+/** What a `limitKey` is handed, and answers from alone. */
+export interface LimitKeyInput {
+  request: Request;
+  body: Record<string, unknown>;
+}
+
+/** A strategy's `limitKey`, as the chain asks it. */
+export type LimitKeyFn = (
+  input: LimitKeyInput
+) => AuthLimitAnswer | Promise<AuthLimitAnswer>;
+
+/**
+ * The request a `limitKey` is shown: headers and address only, since the body
+ * arrives parsed and the request's own is left for the handler to read, and
+ * without the refresh cookie, which names a session no limiter needs.
+ */
+export async function limiterRequest(request: Request): Promise<Request> {
+  return withoutRefreshCookie(
+    new Request(request.url, {
+      method: request.method,
+      headers: request.headers,
+    })
+  );
+}
+
+/**
+ * Ask one `limitKey`, never letting its answer escape the limiter: one that
+ * throws, rejects or is not an answer is taken as handling the request under
+ * no key, which the caller counts as naming no identity.
+ */
+export async function askLimitKey(
+  limitKey: LimitKeyFn,
+  input: LimitKeyInput
+): Promise<AuthLimitAnswer> {
+  let answer: unknown;
+  try {
+    answer = await limitKey(input);
+  } catch {
+    return { handles: true, key: null };
+  }
+  const parsed = limitAnswer.safeParse(answer);
+  return parsed.success ? parsed.data : { handles: true, key: null };
+}
+
+/**
+ * Which strategy decides how a sign-in is limited, and the key it names, or
+ * `"unanswerable"` when a strategy that cannot answer is reached first.
+ *
+ * The strategies are asked in the chain's own order, so the first that
+ * handles a request decides, as the first non-`pass` outcome decides who
+ * authenticates it. A strategy without `limitKey` could claim the request
+ * itself, so once one is reached nothing after it is asked. An answer that
+ * throws, rejects or is not an answer is taken as handling the request under
+ * no key ({@link askLimitKey}): the limiter then counts it against the budget
+ * shared by requests naming no account, and it never escapes the limiter. A
+ * chain in which no strategy handles the request names no key either.
+ */
+export async function limitKeyFor(
+  strategies: readonly AuthStrategy[],
+  input: LimitKeyInput
+): Promise<
+  { strategy: AuthStrategy | null; key: string | null } | "unanswerable"
+> {
+  const request = await limiterRequest(input.request);
+  for (const strategy of strategies) {
+    if (!strategy.limitKey) return "unanswerable";
+    const answer = await askLimitKey(strategy.limitKey.bind(strategy), {
+      request,
+      body: input.body,
+    });
+    if (!answer.handles) continue;
+    return { strategy, key: answer.key };
+  }
+  return { strategy: null, key: null };
 }

@@ -20,11 +20,9 @@
  * @module components/features/widgets/archetypes/list
  */
 
-import { asPresentedText, selectsNothing } from "./cell-text";
+import { selectsNothing } from "./cell-text";
+import { TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
-
-/** How many rows a card of this size can show without becoming a table. */
-const MAX_ROWS = 5;
 
 /**
  * A list needs to know which field heads each row, and only `select` says.
@@ -42,11 +40,12 @@ export const listAccepts: ArchetypeAccepts = definition => {
 };
 
 /**
- * How many of a list card's selected fields this renderer actually draws.
+ * How many of a list card's selected fields this renderer draws below the large tier.
  *
  * 🔴 Declared because the number is otherwise invisible at the only place it
  * matters -- the card DECLARATION, in another package. A row is a label and a
- * detail, so a third selected field is not extra information: it is dropped in
+ * detail, so below the large tier (where the rows become a table with every
+ * column) a third selected field is not extra information: it is dropped in
  * silence, and the card looks finished while answering a narrower question than
  * it was written to answer. Two shipped cards did exactly that, one of them
  * omitting the timestamp from a card sorted by time.
@@ -91,53 +90,19 @@ export const listBody: ArchetypeBody = (result, definition) => {
     };
   }
 
-  const rows = result.items.slice(0, MAX_ROWS);
-  // The declared kind per column, so each cell is presented rather than
-  // printed. `fields` is what the SOURCE said survived the read; a column it
-  // does not describe falls back to plain text, which is what every row did
-  // before types were carried.
-  const typeOf = new Map(
-    (result.fields ?? []).map(field => [field.name, field.type])
-  );
-
   return {
     ok: true,
     node: (
-      <ul data-testid="widget-list" className="flex flex-col gap-2">
-        {rows.map((item, index) => {
-          const label = asPresentedText(
-            item[labelField],
-            typeOf.get(labelField)
-          );
-          const detail = detailField
-            ? asPresentedText(item[detailField], typeOf.get(detailField))
-            : undefined;
-          return (
-            <li
-              // The index, because a widget's rows have no identity core can
-              // rely on: `select` need not include a key, and two rows may be
-              // identical in the fields it did select. The list is replaced
-              // wholesale on every refetch and nothing in it is stateful or
-              // reorderable, so there is no state for a wrong key to strand.
-              key={index}
-              data-testid="widget-list-row"
-              className="flex min-w-0 flex-col gap-0.5"
-            >
-              <span className="truncate text-sm text-foreground">
-                {/* An em dash rather than an empty line, so a row whose label
-                    is absent or unprintable still occupies its place and the
-                    count of rows matches the count of results. */}
-                {label ?? "—"}
-              </span>
-              {detail !== undefined && (
-                <span className="truncate text-xs text-muted-foreground">
-                  {detail}
-                </span>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+      <TieredRows
+        items={result.items}
+        // The columns the SOURCE said survived the read, each with its declared kind and
+        // value labels, so each cell is presented rather than printed; a column it does not
+        // describe falls back to plain text. They also head the large tier's table.
+        columns={result.fields ?? []}
+        labelField={labelField}
+        detailField={detailField}
+        query={definition.query}
+      />
     ),
   };
 };

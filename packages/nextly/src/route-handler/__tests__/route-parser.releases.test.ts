@@ -26,6 +26,21 @@ describe("releases routes", () => {
     });
   });
 
+  it("reads the calendar by name, never as a release id", () => {
+    // `calendar` sits where an id goes. Matched as an id it would be read as
+    // the release "calendar" and answer 404 to every calendar read.
+    const route = parseRestRoute(["releases", "calendar"], "GET");
+    expect(route).toMatchObject({
+      service: "releases",
+      method: "releaseCalendar",
+    });
+    expect(route.routeParams?.releaseId).toBeUndefined();
+    // Read only: nothing else answers at that path.
+    expect(parseRestRoute(["releases", "calendar"], "POST").method).not.toBe(
+      "releaseCalendar"
+    );
+  });
+
   it("reads one release by id", () => {
     expect(parseRestRoute(["releases", "r1"], "GET")).toMatchObject({
       service: "releases",
@@ -44,9 +59,44 @@ describe("releases routes", () => {
     expect(parseRestRoute(["releases", "r1", "cancel"], "POST").method).toBe(
       "cancelRelease"
     );
+    // Publish now is its own route: it is refused in states scheduling
+    // accepts, so it cannot be a schedule with "now" in the body.
+    expect(parseRestRoute(["releases", "r1", "publish"], "POST")).toMatchObject(
+      { method: "publishRelease", routeParams: { releaseId: "r1" } }
+    );
     expect(parseRestRoute(["releases", "r1", "members"], "POST").method).toBe(
       "addReleaseMember"
     );
+  });
+
+  it("renames with PATCH and deletes with DELETE on the release itself", () => {
+    expect(parseRestRoute(["releases", "r1"], "PATCH")).toMatchObject({
+      service: "releases",
+      method: "updateRelease",
+      operation: "update",
+      routeParams: { releaseId: "r1" },
+    });
+    expect(parseRestRoute(["releases", "r1"], "DELETE")).toMatchObject({
+      service: "releases",
+      method: "deleteRelease",
+      operation: "delete",
+      routeParams: { releaseId: "r1" },
+    });
+    // Neither at the collection root: there is no rename or delete of every
+    // release at once.
+    expect(parseRestRoute(["releases"], "PATCH").method).not.toBe(
+      "updateRelease"
+    );
+    expect(parseRestRoute(["releases"], "DELETE").method).not.toBe(
+      "deleteRelease"
+    );
+    // Nor on a subresource, so `DELETE .../members` is not a release delete.
+    expect(
+      parseRestRoute(["releases", "r1", "members"], "DELETE").method
+    ).not.toBe("deleteRelease");
+    expect(
+      parseRestRoute(["releases", "r1", "schedule"], "PATCH").method
+    ).not.toBe("updateRelease");
   });
 
   it("routes members by verb, and one member by id", () => {
@@ -60,6 +110,28 @@ describe("releases routes", () => {
       method: "removeReleaseMember",
       routeParams: { releaseId: "r1", memberId: "m1" },
     });
+  });
+
+  it("switches one member's action, and reads a release's readiness", () => {
+    expect(
+      parseRestRoute(["releases", "r1", "members", "m1"], "PATCH")
+    ).toMatchObject({
+      method: "changeReleaseMemberAction",
+      routeParams: { releaseId: "r1", memberId: "m1" },
+    });
+    expect(
+      parseRestRoute(["releases", "r1", "readiness"], "GET")
+    ).toMatchObject({
+      method: "getReleaseReadiness",
+      routeParams: { releaseId: "r1" },
+    });
+    // A switch names a member; the members list takes no PATCH.
+    expect(
+      parseRestRoute(["releases", "r1", "members"], "PATCH").method
+    ).not.toBe("changeReleaseMemberAction");
+    expect(
+      parseRestRoute(["releases", "r1", "readiness"], "POST").method
+    ).not.toBe("getReleaseReadiness");
   });
 
   it("claims only the verb each route declares", () => {

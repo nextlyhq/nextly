@@ -56,7 +56,7 @@ import { NextlyError } from "../../../errors";
 import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
 import { emitMediaEvent } from "../../../events/domain-events";
 import { normalizeDbTimestamp } from "../../../lib/date-formatting";
-import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import { normalizeMediaUrls } from "../../../lib/media-variant";
 import type { MediaService as LegacyMediaService } from "../../../services/media";
 import type {
   MediaFolderService as LegacyFolderService,
@@ -1265,15 +1265,16 @@ export class MediaService {
    * variants when populated as a relationship on another collection, without
    * them from `media.findByID()` and `GET /api/media/:id`.
    *
-   * The URLs go through `absolutizeMediaUrls` rather than a second pass of
-   * `toAbsoluteMediaUrl` per field. That function is what the relationship path
-   * already uses, so the two answers cannot disagree about what an absolute
-   * media URL is, and it carries the part that is easy to get wrong by hand:
-   * SQLite stores `sizes` as TEXT and returns a JSON string, which it parses,
-   * so the shape a caller receives is the same on all three dialects.
+   * The URLs go through `normalizeMediaUrls`, which the relationship and
+   * Single paths use too, so the three cannot disagree about what a media URL
+   * is: as the storage wrote it, the local adapter's own base followed by the
+   * file's path, which the app's pages resolve on whatever host serves them.
+   * It carries the part that is easy to get wrong by hand: SQLite stores
+   * `sizes` as TEXT and returns a JSON string, which it parses, so the shape a
+   * caller receives is the same on all three dialects.
    */
   private mapToMediaFile(data: MediaRow): MediaFile {
-    const { url, thumbnailUrl, sizes } = absolutizeMediaUrls({
+    const { url, thumbnailUrl, sizes } = normalizeMediaUrls({
       url: data.url,
       thumbnailUrl: data.thumbnailUrl,
       sizes: data.sizes,

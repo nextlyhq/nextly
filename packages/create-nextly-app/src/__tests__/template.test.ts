@@ -20,6 +20,10 @@ import {
 vi.mock("fs-extra", () => ({
   default: {
     pathExists: vi.fn(),
+    // Nothing at any path: the target these cases scaffold into is empty.
+    lstat: vi.fn(async () => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    }),
     existsSync: vi.fn(),
     copy: vi.fn(),
     writeFile: vi.fn(),

@@ -58,7 +58,10 @@ export const WHERE_OPERATORS = [
   "CONTAINS",
   // CONTAINS without regard to case: a substring match on a TEXT column with the value taken
   // literally (`%` and `_` are characters to find, not wildcards), ignoring case on every
-  // dialect whatever the column's collation. SQLite folds ASCII letters only.
+  // dialect even where the column's collation is case-sensitive. Which letters fold is the
+  // database's `lower()` under the column's collation: the collation's Unicode version on
+  // MySQL; non-ASCII too under a linguistic PostgreSQL collation; ASCII letters only on
+  // SQLite and under PostgreSQL's `C` or `POSIX`.
   "ICONTAINS",
   // Declared, never implemented — the builder throws `Unsupported operator: OVERLAPS`. Kept in
   // the union because removing it would be a breaking change to a published type; the refusal

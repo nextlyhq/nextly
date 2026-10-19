@@ -361,6 +361,17 @@ export interface VersionDiff {
    */
   hasChanges: boolean;
   /**
+   * The baseline the server resolved `from` with, when the request named one
+   * (or took the default) instead of an explicit pair.
+   *
+   * `replaces` names the version the baseline named instead, when retention
+   * had removed it ("the version you last looked at was removed; comparing
+   * with the nearest older one").
+   *
+   * @experimental
+   */
+  baseline?: { name: string; versionNo: number; replaces?: number };
+  /**
    * True when fields were withheld from the reader. Their changes cannot be
    * shown, so `hasChanges: false` then means only that nothing the reader may
    * read changed, never that the versions are the same.

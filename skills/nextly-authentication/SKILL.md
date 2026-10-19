@@ -6,11 +6,13 @@ description: >-
   other apps and scripts, checking the signed-in user in your own server
   code, and extra fields on users. Also use when asked to add login or
   sign-up to a Nextly site, so the answer matches what Nextly provides.
+metadata:
+  nextly-version: 0.0.2-alpha.69
 ---
 
 # Authentication and access in Nextly
 
-Checked against `nextly` 0.0.2-alpha.66 with Next.js 16.4. Run
+Checked against `nextly` 0.0.2-alpha.67 with Next.js 16.4. Run
 `npx nextly --version`; if it prints a newer version, prefer
 <https://nextlyhq.com/docs/guides/authentication> where it disagrees with this
 skill.
@@ -27,6 +29,11 @@ Its session cookies are scoped to `/admin`. So in this release Nextly does
 OAuth login. If the site needs visitor accounts, use an auth library for the
 site and keep Nextly for content; do not try to reuse the admin sign-in for
 visitors.
+
+In particular, do not build a sign-in form for your own pages on the Direct
+API's `nextly.login()`. It is for trusted server code, not for signing people
+in, and this release has no ready path for members-only pages. Protect those
+with the auth library the site uses.
 
 ## The secret
 

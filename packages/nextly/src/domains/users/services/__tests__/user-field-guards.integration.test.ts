@@ -58,6 +58,30 @@ describe("createField — name guard", () => {
     ).rejects.toBeInstanceOf(NextlyError);
   });
 
+  it("refuses a field stored in the column another field already uses", async () => {
+    const service = await bootService();
+    await service.createField({ ...validField, name: "fooBar" });
+
+    const error = await service
+      .createField({ ...validField, name: "foo_bar" })
+      .catch((e: unknown) => e);
+
+    expect(NextlyError.is(error)).toBe(true);
+    const data = (error as NextlyError).publicData as {
+      errors: Array<{ path: string; code: string; message: string }>;
+    };
+    expect(data.errors[0].path).toBe("name");
+    expect(data.errors[0].code).toBe("USER_FIELD_NAME_DUPLICATE");
+    expect(data.errors[0].message).toContain("foo_bar");
+  });
+
+  it("refuses a name whose column user_ext keeps for itself", async () => {
+    const service = await bootService();
+    await expect(
+      service.createField({ ...validField, name: "userId" })
+    ).rejects.toBeInstanceOf(NextlyError);
+  });
+
   it("refuses a name that cannot be a column identifier", async () => {
     const service = await bootService();
     await expect(

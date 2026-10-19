@@ -16,6 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { ServiceMap } from "../di/register";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
+import type { NoticesNamespace } from "../direct-api/namespaces/notices";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
 import type {
   AuthResult,
@@ -78,6 +79,7 @@ import type {
   ListFoldersArgs,
   ListResult,
   LoginArgs,
+  LoginResult,
   MutationResult,
   Permission,
   PreviewEmailTemplateArgs,
@@ -334,10 +336,9 @@ export interface Nextly {
   // ==========================================================================
 
   /**
-   * Verify user credentials and return user info.
-   *
-   * Since Direct API operates server-side without sessions, this simply
-   * verifies credentials and returns the user object (no JWT token).
+   * Verify user credentials and return the user with a signed session token
+   * and its expiry, as the Direct API's `login` returns them. Typed by the
+   * Direct API's own result type, so the two cannot describe different shapes.
    *
    * @example
    * ```typescript
@@ -348,7 +349,7 @@ export interface Nextly {
    * console.log('Logged in as:', result.user.email);
    * ```
    */
-  login: (args: LoginArgs) => Promise<{ user: Record<string, unknown> }>;
+  login: (args: LoginArgs) => Promise<LoginResult>;
 
   /**
    * Logout operation (no-op for Direct API).
@@ -951,6 +952,19 @@ export interface Nextly {
    * ```
    */
   releases: ReleasesNamespace;
+
+  /**
+   * A person's own notices — read, count and mark read, for the person named.
+   *
+   * @example
+   * ```typescript
+   * const { items } = await nextly.notices.find({ userId, unread: true });
+   * await nextly.notices.markRead({ userId, all: true });
+   * ```
+   *
+   * @experimental
+   */
+  notices: NoticesNamespace;
 
   roles: {
     find: (args?: FindRolesArgs) => Promise<ListResult<Role>>;

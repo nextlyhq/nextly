@@ -16,6 +16,7 @@ import type {
 
 import { tableAccepts, tableBody } from "../table";
 import { CardEmpty } from "../../frame/states";
+import { CardTierContext } from "../../frame/tier";
 
 const widget = (select?: string[]): DashboardWidget =>
   ({
@@ -38,8 +39,12 @@ const listOf = (
 function draw(result: WidgetResult, definition: DashboardWidget) {
   const outcome = tableBody(result, definition);
   if (!outcome.ok) throw new Error(`expected a body, got: ${outcome.message}`);
+  // At the large tier, where a table card is drawn as a table; below it, it is a list
+  // (`list-tiers.test.tsx` covers that).
   render(
-    <>{outcome.empty ? <CardEmpty {...outcome.empty} /> : outcome.node}</>
+    <CardTierContext.Provider value="large">
+      {outcome.empty ? <CardEmpty {...outcome.empty} /> : outcome.node}
+    </CardTierContext.Provider>
   );
 }
 

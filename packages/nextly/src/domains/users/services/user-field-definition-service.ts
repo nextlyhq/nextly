@@ -31,11 +31,13 @@ import type {
 } from "../../../schemas/user-field-definitions/types";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { carriedUserFieldOptions } from "../../../shared/lib/user-field-plugin-options";
 import type { UserFieldConfig } from "../../../users";
 import {
   checkUserFieldName,
   checkUserFieldType,
+  userFieldColumnName,
 } from "../../../users/config/validate-user-config";
 
 // ============================================================
@@ -152,6 +154,33 @@ export class UserFieldDefinitionService extends BaseService {
   }
 
   /**
+   * Reject a name stored in the `user_ext` column another field already uses
+   * (`foo_bar` beside `fooBar`). The same name again is left to the unique
+   * index, as before.
+   */
+  private async assertColumnFree(name: string): Promise<void> {
+    const column = userFieldColumnName(name);
+    const rows: Array<{ name: string }> = await this.db
+      .select({ name: this.userFieldDefinitions.name })
+      .from(this.userFieldDefinitions);
+    const holder = rows.find(
+      row => row.name !== name && userFieldColumnName(row.name) === column
+    );
+    if (!holder) return;
+
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "name",
+          code: "USER_FIELD_NAME_DUPLICATE",
+          message: `Field '${name}' would be stored in the column '${column}', which the field '${holder.name}' already uses`,
+        },
+      ],
+      logContext: { name, column, holder: holder.name },
+    });
+  }
+
+  /**
    * Reject a type that has no `user_ext` column representation.
    */
   private assertUsableType(type: unknown): void {
@@ -245,6 +274,7 @@ export class UserFieldDefinitionService extends BaseService {
   ): Promise<UserFieldDefinitionRecord> {
     this.assertUsableName(data.name);
     this.assertUsableType(data.type);
+    await this.assertColumnFree(data.name);
 
     const id = randomUUID();
     const now = new Date();
@@ -476,6 +506,31 @@ export class UserFieldDefinitionService extends BaseService {
       return;
     }
 
+    // Processes starting at once each find a code field missing and insert
+    // it; one wins, and the rest roll back on its name, taking every other
+    // change they meant to write with them. So a sync that lost on a
+    // duplicate runs once more, from the rows now stored: the field that won
+    // is updated rather than inserted, and the rest of this config's changes
+    // are written. A name an admin's own field holds collides again, and
+    // that, like any other failure, is thrown.
+    try {
+      await this.writeCodeFields(codeFields);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      this.logger.debug(
+        "Code-defined user fields were written by another process; syncing again from the stored rows"
+      );
+      await this.writeCodeFields(codeFields);
+    }
+  }
+
+  /**
+   * Bring the stored code fields into line with `codeFields`, in one
+   * transaction, from the rows as they are when it starts.
+   */
+  private async writeCodeFields(
+    codeFields: { name: string; [key: string]: unknown }[]
+  ): Promise<void> {
     // Fetch all existing code-sourced field definitions
     const existingCodeFields: UserFieldDefinitionRecord[] = await this.db
       .select()

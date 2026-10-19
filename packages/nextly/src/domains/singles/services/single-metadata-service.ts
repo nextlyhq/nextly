@@ -55,8 +55,13 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../shared/types";
+import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
-import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
+import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
+import {
+  applyMigrationStatements,
+  applyMigrationWhole,
+} from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
@@ -645,6 +650,11 @@ export class SingleMetadataService {
       hasStatus: args.statusRequested ? args.hasStatus : wasStatus,
     };
 
+    // Asked here, from the flags this exclusion just re-derived, because the caller's reading can
+    // be stale: a concurrent save that turned translation on would make this edit a field leaving
+    // translation that the caller never saw as one.
+    await this.assertFieldsMayLeaveTranslation(input);
+
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
     const plan = await this.planUpdate(input);
 
@@ -688,6 +698,50 @@ export class SingleMetadataService {
    * leaves nothing to update, and a Single that became `locked` in the same window is code-first
    * now, so applying a UI edit to it would write a row the config is about to contradict.
    */
+  /**
+   * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
+   * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
+   * fields or the Single is not translated before and after it.
+   */
+  private async assertFieldsMayLeaveTranslation(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    if (
+      input.fields === undefined ||
+      !input.wasLocalized ||
+      !input.isLocalized
+    ) {
+      return;
+    }
+    if (!this.adapter) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "database adapter not initialized",
+          slug: input.slug,
+        },
+      });
+    }
+    // Imported when needed, as this service does for its other runtime collaborators, to keep the
+    // dispatcher's module graph out of this one. The same default locale the Single's companion
+    // reconcile reads.
+    const { getConfigFromDI } = await import("../../../dispatcher/helpers/di");
+    const defaultLocale =
+      getConfigFromDI()?.localization?.defaultLocale ?? "en";
+    await archiveFieldsLeavingTranslation({
+      // Singles are built by the collection schema service.
+      builtBy: "collection",
+      tableName: input.existing.tableName,
+      defaultLocale: defaultLocale,
+      adapter: this.adapter,
+      entity: input.slug,
+      kind: "single",
+      oldFields: (input.existing.fields ?? []) as unknown as FieldDefinition[],
+      newFields: input.fields,
+      wasLocalized: input.wasLocalized,
+      isLocalized: input.isLocalized,
+    });
+  }
+
   private async refreshForUpdate(
     input: UpdateSingleSchemaInput
   ): Promise<DynamicSingleRecord> {
@@ -811,8 +865,17 @@ export class SingleMetadataService {
       };
     }
 
-    const alterInput = await this.normalizeFieldsForAlter(
+    // MySQL commits each schema statement, so a save refused part-way can have renamed a column
+    // while the registry still has the old name: the plan starts from the table as it is, or the
+    // rename runs again on a column that is gone.
+    const startingFields = await this.withRenameAlreadyMade(
+      tableName,
       previousFields,
+      fields,
+      schemaService
+    );
+    const alterInput = await this.normalizeFieldsForAlter(
+      startingFields,
       fields,
       isLocalized || wasLocalized
     );
@@ -839,6 +902,19 @@ export class SingleMetadataService {
       alterInput.oldFields
     );
 
+    await this.refuseWhatTheValueCannotTake(
+      input.slug,
+      tableName,
+      {
+        previousFields: startingFields,
+        fields,
+        wasLocalized,
+        isLocalized,
+      },
+      liveFacts.liveColumnTypes,
+      schemaService
+    );
+
     // Detected from the FULL field lists: a renamed LOCALIZED field-group
     // field sits in neither side of alterInput (the localized filter removes
     // both spellings), and its association migration must not be excluded
@@ -860,6 +936,7 @@ export class SingleMetadataService {
           tableHasRows: liveFacts.tableHasRows,
           foreignKeysByColumn: liveFacts.foreignKeysByColumn,
           indexNames: liveFacts.indexNames,
+          uniqueColumns: liveFacts.uniqueColumns,
           columnsContainingNull: liveFacts.columnsContainingNull,
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           liveColumnTypes: liveFacts.liveColumnTypes,
@@ -871,6 +948,182 @@ export class SingleMetadataService {
       describesWholeTable: false,
       ownsMigrationStatus: true,
     };
+  }
+
+  /**
+   * Refuses the save, before any statement runs, when the value the Single holds cannot take the
+   * change: a field made unique over a repeated value, or a text field narrowed below the value it
+   * holds. A Single's table is built by the collection's generator, so the collection save's rule
+   * (`refusalsForCollectionSave`) is the one asked. Asked here rather than left to the database,
+   * because MySQL would have committed every statement before the refused one, and PostgreSQL's
+   * cast would cut a longer value to fit rather than refuse it.
+   *
+   * @throws NextlyError `VALIDATION_ERROR` naming each field, with the stored value kept out of
+   *   the message and the log
+   */
+  private async refuseWhatTheValueCannotTake(
+    slug: string,
+    tableName: string,
+    change: {
+      previousFields: FieldDefinition[];
+      fields: FieldDefinition[];
+      wasLocalized: boolean;
+      isLocalized: boolean;
+    },
+    liveColumnTypes: ReadonlyMap<string, string>,
+    schemaService: Pick<
+      DynamicCollectionSchemaService,
+      "detectFieldRename" | "addedColumnBackfill"
+    >
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+    const { refusalsForCollectionSave } = await import(
+      "../../dynamic-collections/services/save-preconditions"
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    const where = await this.whereTheValuesAre(change);
+    const onMain = await refusalsForCollectionSave({
+      adapter,
+      dialect,
+      tableName,
+      oldFields: where.main.oldFields,
+      newFields: where.main.newFields,
+      rename: schemaService.detectFieldRename(
+        where.main.oldFields,
+        where.main.newFields
+      ),
+      addedColumnBackfill: field => schemaService.addedColumnBackfill(field),
+      presentColumns: new Set(liveColumnTypes.keys()),
+    });
+    const companionTable = `${tableName}_locales`;
+    const companionColumns =
+      where.companion.oldFields.length > 0
+        ? await this.liveColumnsOf(companionTable)
+        : undefined;
+    const onCompanion = companionColumns
+      ? await refusalsForCollectionSave({
+          adapter,
+          dialect,
+          tableName: companionTable,
+          oldFields: where.companion.oldFields,
+          newFields: where.companion.newFields,
+          rename: null,
+          // A translated field gains no column here: its language rows are the companion's.
+          addedColumnBackfill: () => null,
+          presentColumns: companionColumns,
+        })
+      : [];
+    const refusals = [...onMain, ...onCompanion];
+    if (refusals.length === 0) return;
+    throw NextlyError.validation({
+      errors: refusals.map(r => r.error),
+      logContext: {
+        single: slug,
+        fields: refusals.map(r => r.error.path),
+        // What is in the way, for the log only, and never the value itself.
+        details: refusals.flatMap(r => (r.logContext ? [r.logContext] : [])),
+      },
+    });
+  }
+
+  /**
+   * Where each field's values are before this save, which is where a precondition reads them: on
+   * the companion for a field translated before it, on the main table otherwise. A field
+   * translated after the save is judged on its length alone, since being unique is a question
+   * about the main table's rows.
+   */
+  private async whereTheValuesAre(change: {
+    previousFields: FieldDefinition[];
+    fields: FieldDefinition[];
+    wasLocalized: boolean;
+    isLocalized: boolean;
+  }): Promise<{
+    main: { oldFields: FieldDefinition[]; newFields: FieldDefinition[] };
+    companion: { oldFields: FieldDefinition[]; newFields: FieldDefinition[] };
+  }> {
+    const { isFieldLocalized } = await import("../../i18n/classify-fields");
+    const translatedBefore = new Set(
+      change.previousFields
+        .filter(f => isFieldLocalized(f, change.wasLocalized))
+        .map(f => f.name)
+    );
+    const lengthOnly = (f: FieldDefinition): FieldDefinition =>
+      isFieldLocalized(f, change.isLocalized) ? { ...f, unique: false } : f;
+    return {
+      main: {
+        oldFields: change.previousFields.filter(
+          f => !translatedBefore.has(f.name)
+        ),
+        newFields: change.fields
+          .filter(f => !translatedBefore.has(f.name))
+          .map(lengthOnly),
+      },
+      companion: {
+        oldFields: change.previousFields.filter(f =>
+          translatedBefore.has(f.name)
+        ),
+        newFields: change.fields
+          .filter(f => translatedBefore.has(f.name))
+          .map(f => ({ ...f, unique: false })),
+      },
+    };
+  }
+
+  /** The columns `table` has now, or undefined when it does not exist. */
+  private async liveColumnsOf(
+    table: string
+  ): Promise<ReadonlySet<string> | undefined> {
+    const adapter = this.adapter;
+    if (!adapter) return undefined;
+    const { queryLiveColumnTypes } = await import(
+      "../../schema/pipeline/live-column-types"
+    );
+    const live = await queryLiveColumnTypes(
+      adapter.getDrizzle(),
+      adapter.getCapabilities().dialect,
+      [table]
+    );
+    const columns = live.get(table);
+    return columns && columns.size > 0 ? new Set(columns.keys()) : undefined;
+  }
+
+  /**
+   * The previous fields with a rename this database already made applied to them: the field the
+   * main table's rule (`detectFieldRename`) finds renamed, when the live table has its new column
+   * and not its old one. Otherwise the previous fields as they are.
+   */
+  private async withRenameAlreadyMade(
+    tableName: string,
+    previousFields: FieldDefinition[],
+    fields: FieldDefinition[],
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ): Promise<FieldDefinition[]> {
+    const rename = schemaService.detectFieldRename(previousFields, fields);
+    const columns = rename ? await this.renamedColumns(rename) : undefined;
+    if (!rename || !columns) return previousFields;
+    const live = await this.liveColumnsOf(tableName);
+    const made = live?.has(columns.to) === true && !live.has(columns.from);
+    if (!made) return previousFields;
+    return previousFields.map(f =>
+      f === rename.from ? { ...rename.from, name: rename.to.name } : f
+    );
+  }
+
+  /** The columns a rename moves between, or undefined when it renames no column. */
+  private async renamedColumns(rename: {
+    from: FieldDefinition;
+    to: FieldDefinition;
+  }): Promise<{ from: string; to: string } | undefined> {
+    const adapter = this.adapter;
+    if (!adapter) return undefined;
+    const { getColumnDescriptor } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    const from = getColumnDescriptor(rename.from, dialect, "collection")?.name;
+    const to = getColumnDescriptor(rename.to, dialect, "collection")?.name;
+    return from && to && from !== to ? { from, to } : undefined;
   }
 
   /**
@@ -1016,6 +1269,7 @@ export class SingleMetadataService {
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
+    uniqueColumns: ReadonlyMap<string, string | null>;
     columnsContainingNull: ReadonlySet<string>;
     columnsAbsentFromTable: ReadonlySet<string>;
     liveColumnTypes: ReadonlyMap<string, string>;
@@ -1024,6 +1278,7 @@ export class SingleMetadataService {
       readColumnNullState,
       readForeignKeyColumns,
       readIndexNames,
+      readUniqueColumns,
       tableHasRows,
     } = await import("../../schema/pipeline/live-table-facts");
     const { queryLiveColumnTypes } = await import(
@@ -1040,11 +1295,15 @@ export class SingleMetadataService {
     // probes anything, so a column this list names and the table lacks comes
     // back as absent rather than as an error.
     const mayHoldNull = columnsThatMayHoldNull(previousAlterFields);
-    const [hasRows, foreignKeys, indexes, nullState, liveTypes] =
+    const [hasRows, foreignKeys, indexes, unique, nullState, liveTypes] =
       await Promise.all([
         tableHasRows(db, dialect, tableName),
         readForeignKeyColumns(db, dialect, tableName),
         readIndexNames(db, dialect, tableName),
+        // What each unique index covers, which its name does not say: a column renamed by a save
+        // MySQL refused part-way keeps its unique index under the old name, and turning Unique off
+        // on the retry has to drop that one.
+        readUniqueColumns(db, dialect, tableName),
         readColumnNullState(db, dialect, tableName, mayHoldNull),
         // What each column IS, for MySQL's `MODIFY`, which has to restate a column it is not
         // otherwise changing. Rendering that type asks which renderer built the column, and that
@@ -1055,10 +1314,39 @@ export class SingleMetadataService {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
+      uniqueColumns: unique,
       columnsContainingNull: nullState.holdingNull,
       columnsAbsentFromTable: nullState.absent,
       liveColumnTypes: liveTypes.get(tableName) ?? new Map<string, string>(),
     };
+  }
+
+  /**
+   * Moves the values of fields becoming translated into the default language's companion rows,
+   * and returns their names for the companion reconcile to skip.
+   */
+  private async moveJoiningFieldValues(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan
+  ): Promise<string[]> {
+    const { moveValuesOfFieldsJoiningTranslation } = await import(
+      "../../i18n/runtime/move-joining-values"
+    );
+    const { getConfigFromDI } = await import("../../../dispatcher/helpers/di");
+    return moveValuesOfFieldsJoiningTranslation(adapter, {
+      slug: input.slug,
+      tableName: input.existing.tableName,
+      // A single's table comes from the same builder as a collection's.
+      builtBy: "collection",
+      defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+      oldFields: plan.previousFields,
+      newFields: plan.fields,
+      wasLocalized: input.wasLocalized,
+      isLocalized: input.isLocalized,
+      wasStatus: input.wasStatus,
+      status: input.hasStatus,
+    });
   }
 
   /**
@@ -1068,10 +1356,15 @@ export class SingleMetadataService {
    * asked nothing of the main table's schema, so overwriting the previous verdict with one about a
    * migration that was never requested would be a claim this apply cannot make.
    *
-   * 🔴 Never throws once it has begun. The PHASE decides that, not the error type: from here on a
-   * statement may already have run, and raising would skip the row write and leave the registry
-   * describing storage that no longer matches it. Refusals are the plan's job, which is where
-   * raising is free because nothing has been touched yet.
+   * The main table's migration runs whole or not at all (`applyMigrationWhole`), and a refusal
+   * there is thrown, so the save fails with the database's reason and the registry keeps the fields
+   * it had: on PostgreSQL and SQLite nothing changed, and on MySQL the refusal says how far it got,
+   * the next save passing over what already ran to finish it.
+   *
+   * 🔴 Past the main migration it never throws. The PHASE decides that, not the error type: the
+   * main table is in its new shape by then, and raising would skip the row write and leave the
+   * registry describing storage that no longer matches it. A companion that fails to follow is
+   * reported as a failed migration instead.
    */
   private async applyUpdateDdl(
     input: UpdateSingleSchemaInput,
@@ -1087,13 +1380,30 @@ export class SingleMetadataService {
       return plan.ownsMigrationStatus ? "pending" : undefined;
     }
 
-    try {
-      if (plan.migrationSQL) {
-        // The shared runner, not a private copy: it owns both the splitting rule and the tolerance
-        // that makes re-running over half-applied schema the repair case rather than a dead end.
-        await applyMigrationStatements(adapter, plan.migrationSQL);
-      }
+    // A field becoming translated takes its value to the default language's companion row first:
+    // the main ALTER below drops its column. Before the try below, as the migration is: a failure
+    // here stops the save before the main table changes.
+    const joinedBefore = await this.moveJoiningFieldValues(
+      adapter,
+      input,
+      plan
+    );
 
+    if (plan.migrationSQL) {
+      // Before the try below, which records what it catches: a refusal here has changed nothing
+      // the registry should describe, so it fails the save. The collection save's runner, so the
+      // two apply a migration the same way; MySQL passes over what an earlier refused save already
+      // applied, since this plan is drawn from the registry rather than the live table.
+      await applyMigrationWhole({
+        db: adapter.getDrizzle(),
+        dialect: adapter.getCapabilities().dialect,
+        migrationSQL: plan.migrationSQL,
+        entity: "single",
+        tolerateApplied: true,
+      });
+    }
+
+    try {
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
       // created the table has to find it afterwards for "applied" to mean anything.
       if (!(await adapter.tableExists(tableName))) {
@@ -1125,6 +1435,7 @@ export class SingleMetadataService {
           status: input.hasStatus,
           wasStatus: input.wasStatus,
           adapter,
+          joinedBefore,
         });
       } catch (companionError) {
         // 🔴 The shape is RETRACTED here, never rebound, because nothing at this level knows what

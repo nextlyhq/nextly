@@ -24,7 +24,8 @@ export function createSilentLogger(): Logger {
  * - delete() → undefined
  * - tableExists() → true
  * - executeQuery() → undefined
- * - getDrizzle() → a stub whose `.delete().where()` resolves to `{ rowCount: 0 }`
+ * - getDrizzle() → a stub whose `.delete().where()` resolves to `{ rowCount: 0 }`, and whose
+ *   `.selectDistinct().from().where()` finds no archive rows of unknown owner
  * - listTables() → [] (no component tables for the embedded-component sweep to scan)
  *
  * Override any method via the `overrides` parameter.
@@ -58,6 +59,11 @@ export function createMockAdapter(overrides: MockRecord = {}): MockRecord {
     // don't cover — currently the `nextly_i18n_archive` purge on entity delete. Resolves to
     // a driver-shaped result so the caller's row-count read finds a number.
     getDrizzle: vi.fn().mockReturnValue({
+      selectDistinct: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      }),
       delete: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue({ rowCount: 0 }),
       }),

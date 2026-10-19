@@ -37,7 +37,7 @@ function nodeByName(fields: FieldDiff[], name: string): FieldDiff | undefined {
 }
 
 describe("version diff (integration)", () => {
-  it("surfaces a change on each field kind, and nothing on an identical re-save", async () => {
+  it("surfaces a change on each field kind, and records nothing for an identical re-save", async () => {
     current = await createTestNextly({
       collections: [
         defineCollection({
@@ -66,7 +66,8 @@ describe("version diff (integration)", () => {
       { collectionName: "posts", entryId: id, overrideAccess: true },
       { title: "Second", views: 2, featured: true, tags: ["b", "c"] }
     );
-    // v3 re-saves v2's exact values, so v2 vs v3 must diff clean.
+    // A re-save of v2's exact values reads back as v2 holds them, every field
+    // kind included, so it changes nothing and records no v3.
     await handler.updateEntry(
       { collectionName: "posts", entryId: id, overrideAccess: true },
       { title: "Second", views: 2, featured: true, tags: ["b", "c"] }
@@ -95,15 +96,16 @@ describe("version diff (integration)", () => {
     expect(nodeByName(changed.fields, "featured")?.status).toBe("changed");
     expect(nodeByName(changed.fields, "tags")?.status).toBe("changed");
 
-    const identical = await getVersionDiffForDocument({
-      scopeKind: "collection",
-      slug: "posts",
-      entryId: id,
-      user: SUPER_ADMIN,
-      from: 2,
-      to: 3,
-    });
-    expect(identical.hasChanges).toBe(false);
+    await expect(
+      getVersionDiffForDocument({
+        scopeKind: "collection",
+        slug: "posts",
+        entryId: id,
+        user: SUPER_ADMIN,
+        from: 2,
+        to: 3,
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
   it("drops unchanged fields under modifiedOnly", async () => {

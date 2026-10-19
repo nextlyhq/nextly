@@ -25,7 +25,10 @@
  *
  * @module domains/collections/services/stored-field-read
  */
-import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
+import type {
+  DynamicCollectionRecord,
+  FieldDefinition,
+} from "@nextly/schemas/dynamic-collections";
 
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getService } from "../../../di";
@@ -78,6 +81,7 @@ export function entryWriteContext(args: {
   id?: string;
   connection: StoredFieldConnection;
 }): EntryWriteContext {
+  const records = registryRecords(args.connection);
   return {
     kind: args.kind,
     slug: args.slug,
@@ -85,7 +89,37 @@ export function entryWriteContext(args: {
     // The executor is the transaction's own, and it is handed only for one.
     inTransaction: args.connection.executor !== undefined,
     readStored: (allowedType, target) =>
-      readStoredField(args.connection, allowedType, target),
+      readStoredField(args.connection, allowedType, target, records),
+  };
+}
+
+/** A collection's registry record by slug, or `null` where there is none. */
+type RegistryRecords = (
+  slug: string
+) => Promise<DynamicCollectionRecord | null>;
+
+/**
+ * Registry records read on `connection`, each collection's at most once.
+ *
+ * One per write context, so per write: a composition reads up to a hundred
+ * definitions from one collection, and the record is the same for every one of
+ * them within a write. Not kept beyond it, so a schema change is seen by the
+ * next write. A failed lookup is forgotten rather than kept, so a transient
+ * error is not repeated for the rest of the write.
+ */
+function registryRecords(connection: StoredFieldConnection): RegistryRecords {
+  const held = new Map<string, Promise<DynamicCollectionRecord | null>>();
+  return slug => {
+    let record = held.get(slug);
+    if (record === undefined) {
+      record = getService("collectionRegistryService").getCollectionBySlug(
+        slug,
+        connection.executor
+      );
+      held.set(slug, record);
+      record.catch(() => held.delete(slug));
+    }
+    return record;
   };
 }
 
@@ -102,9 +136,10 @@ export function entryWriteContext(args: {
 export async function readStoredField(
   connection: StoredFieldConnection,
   allowedType: string,
-  target: StoredFieldTarget
+  target: StoredFieldTarget,
+  records: RegistryRecords = registryRecords(connection)
 ): Promise<PluginStoredValue> {
-  const entity = await storedEntity(connection, target, allowedType);
+  const entity = await storedEntity(records, target, allowedType);
   const field = entity.fields.find(entry => entry.name === target.field);
   if (field === undefined || field.type !== allowedType) {
     throw refused(target, allowedType, "is not a field of that type");
@@ -154,13 +189,11 @@ interface StoredEntity {
  * stored.
  */
 async function storedEntity(
-  connection: StoredFieldConnection,
+  records: RegistryRecords,
   target: StoredFieldTarget,
   allowedType: string
 ): Promise<StoredEntity> {
-  const collection = await getService(
-    "collectionRegistryService"
-  ).getCollectionBySlug(target.collection, connection.executor);
+  const collection = await records(target.collection);
   if (collection === null) {
     throw refused(target, allowedType, "names no collection");
   }

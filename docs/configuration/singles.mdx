@@ -57,7 +57,7 @@ export default defineSingle({
   ],
   access: {
     read: true,
-    update: ({ roles }) => roles.includes("admin"),
+    update: ({ permissions }) => permissions.includes("site-settings:update"),
   },
   hooks: {
     afterChange: [
@@ -205,11 +205,12 @@ Singles only support `read` and `update` — there is no create or delete since 
 ```typescript
 access: {
   read: true,
-  update: ({ roles }) => roles.includes("admin"),
+  update: ({ permissions, collection }) =>
+    permissions.includes(`${collection}:update`),
 }
 ```
 
-Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. Code-defined access takes precedence; super-admin always bypasses checks. The `AccessControlContext` shape is the same as for [collections](/docs/configuration/collections#access-control).
+Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. A declared rule is what a signed-in user is judged by, so it checks the permission itself and narrows from there; don't decide by a role's name. Super-admin always bypasses checks. The `AccessControlContext` shape is the same as for [collections](/docs/configuration/collections#access-control).
 
 ## Hooks
 
@@ -304,7 +305,7 @@ export default defineSingle({
   ],
   access: {
     read: true,
-    update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+    update: ({ permissions }) => permissions.includes("header:update"),
   },
 });
 ```

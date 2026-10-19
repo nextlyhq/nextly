@@ -44,6 +44,8 @@ my-nextly-app/
 ├── public/                           # Static files; uploads land in public/uploads/
 ├── nextly.config.ts                  # Nextly configuration
 ├── next.config.ts                    # Next.js configuration
+├── .agents/skills/                   # Skills for coding agents (see Coding agents)
+├── .claude/skills/                   # The same skills, where Claude Code reads them
 ├── AGENTS.md                         # Instructions for coding agents (CLAUDE.md points to it)
 ├── CLAUDE.md
 ├── eslint.config.mjs
@@ -157,6 +159,24 @@ Generated TypeScript types for your content schema. The output path is configure
 
 ```bash
 pnpm types:generate
+```
+
+If your app keeps its code at the root rather than under `src/`, the generated files follow it: types go to `types/generated/` and schemas to `db/schemas/collections/zod/`, with no `src/` folder created. That holds while `typescript.outputFile` and `db.schemasDir` are left at their defaults; a path you set is used as written.
+
+### Generated Zod schemas
+
+`generate:types` also writes a Zod schema for each collection, in `zod/` under `db.schemasDir` (`src/db/schemas/collections/zod/` by default). They import Zod from `nextly/zod`, a re-export of the Zod Nextly itself uses, so they compile whether or not your app depends on `zod`, with npm, pnpm, Yarn (Plug'n'Play too) or Bun.
+
+To combine them with your own Zod code, import `z` from `nextly/zod` as well, so both use one Zod instance:
+
+```ts title="src/lib/post-form.ts"
+import { z } from "nextly/zod";
+
+import { PostsCreateInputSchema } from "../db/schemas/collections/zod";
+
+export const PostFormSchema = PostsCreateInputSchema.extend({
+  acceptTerms: z.literal(true),
+});
 ```
 
 ### Schema files (Visual Schema Builder)

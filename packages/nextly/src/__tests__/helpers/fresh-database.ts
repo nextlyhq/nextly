@@ -33,6 +33,10 @@ export interface FreshDatabase {
   exec(statement: string): Promise<void>;
   /** The column names a table currently has, in the live database. */
   columnsOf(table: string): Promise<string[]>;
+  /** The index names a table currently has, in the live database. */
+  indexesOf(table: string): Promise<string[]>;
+  /** The columns an index covers, in index order, in the live database. */
+  indexColumnsOf(table: string, index: string): Promise<string[]>;
 }
 
 /** Every dialect that has a URL in this run, with SQLite always present. */
@@ -238,6 +242,21 @@ export async function withFreshDatabase(
                 name: string;
               }>
             ).map(column => column.name),
+          indexesOf: async table =>
+            (
+              sqlite.prepare(`PRAGMA index_list(${table})`).all() as Array<{
+                name: string;
+              }>
+            ).map(index => index.name),
+          indexColumnsOf: async (_table, index) =>
+            (
+              sqlite.prepare(`PRAGMA index_info(${index})`).all() as Array<{
+                seqno: number;
+                name: string;
+              }>
+            )
+              .sort((a, b) => a.seqno - b.seqno)
+              .map(column => column.name),
         });
       } finally {
         sqlite.close();
@@ -265,6 +284,20 @@ export async function withFreshDatabase(
                   [table]
                 )
               ).rows.map(row => row.column_name),
+            indexesOf: async table =>
+              (
+                await pool.query<{ indexname: string }>(
+                  "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1",
+                  [table]
+                )
+              ).rows.map(row => row.indexname),
+            indexColumnsOf: async (table, index) =>
+              (
+                await pool.query<{ attname: string }>(
+                  "SELECT a.attname FROM pg_index i JOIN pg_class ix ON ix.oid = i.indexrelid JOIN pg_class t ON t.oid = i.indrelid JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey) WHERE t.relname = $1 AND ix.relname = $2 ORDER BY array_position(i.indkey::int2[], a.attnum)",
+                  [table, index]
+                )
+              ).rows.map(row => row.attname),
           });
         } finally {
           await pool.end();
@@ -294,6 +327,28 @@ export async function withFreshDatabase(
                 .query(
                   "SELECT column_name AS column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?",
                   [table]
+                );
+              return (rows as Array<{ column_name: string }>).map(
+                row => row.column_name
+              );
+            },
+            indexesOf: async table => {
+              const [rows] = await pool
+                .promise()
+                .query(
+                  "SELECT DISTINCT index_name AS index_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ?",
+                  [table]
+                );
+              return (rows as Array<{ index_name: string }>).map(
+                row => row.index_name
+              );
+            },
+            indexColumnsOf: async (table, index) => {
+              const [rows] = await pool
+                .promise()
+                .query(
+                  "SELECT column_name AS column_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? ORDER BY seq_in_index",
+                  [table, index]
                 );
               return (rows as Array<{ column_name: string }>).map(
                 row => row.column_name

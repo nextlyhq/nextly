@@ -448,6 +448,24 @@ describe("retired widgets", () => {
     ]);
   });
 
+  it("keeps the widest carried width when the successor allows none of them", () => {
+    // Count allows no full width. The merged card keeps the reader's widest
+    // choice, as every stored card keeps a width its widget stops allowing:
+    // the admin draws it at the nearest width Count allows, and the choice
+    // returns if Count allows it again. Picking an allowed width here would
+    // be a second nearest-width rule beside the admin's.
+    const merged = applyRetirements(
+      [
+        card("first", "gen/count", { width: "full", config: of("posts") }),
+        card("second", "gen/health", { width: "full", config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged.map(p => [p.id, p.widgetId, p.width])).toEqual([
+      ["first", "core/count", "full"],
+    ]);
+  });
+
   it("merges into a successor card the layout already holds, which keeps everything it had", () => {
     const existing = card("content", "core/content", {
       width: "twoThirds",

@@ -32,7 +32,11 @@
  *
  * @module composition-faults
  */
-import { COMPONENT_INSTANCE_TYPE, type BlockDocument } from "./document";
+import {
+  COMPONENT_INSTANCE_TYPE,
+  type BlockDocument,
+  type BlockNode,
+} from "./document";
 import { describeValue } from "./issue-text";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import {
@@ -47,7 +51,20 @@ import type {
   ResolvedComposition,
 } from "./resolve-instances";
 import { boundedOwnKeys, ownEntry } from "./safe-record";
-import { walkNodes } from "./tree";
+import {
+  slotLockBreaks,
+  slotLockOf,
+  typeOfChild,
+  type ActiveSlotLock,
+  type LockBreak,
+} from "./slot-lock";
+import { startingChildrenSource } from "./starting-children";
+import {
+  counterpartsOf,
+  storedFormsOf,
+  type StoredForms,
+} from "./stored-counterparts";
+import { walkNodes, type SlotDefaultSource } from "./tree";
 import { isNodeType } from "./validation";
 
 /** Which rule a composition breaks. */
@@ -58,7 +75,11 @@ export type CompositionFaultCode =
   /** The resolver refused an instance for nesting components too deeply. */
   | "composed-depth"
   /** The resolver refused an instance whose definition alone is too deep. */
-  | "node-depth";
+  | "node-depth"
+  /** A locked slot in the composed tree does not hold the blocks it starts with. */
+  | "locked-slot-altered"
+  /** A block in a `"contentOnly"` slot of the composed tree changed besides content. */
+  | "locked-slot-content-only";
 
 /** One thing a composition breaks, and the placement it is reached through. */
 export interface CompositionFault {
@@ -68,6 +89,33 @@ export interface CompositionFault {
   /** The component that instance places; empty when it names none. */
   readonly componentId: string;
   readonly message: string;
+  /**
+   * For a lock break, where it is in the composed tree and what it breaks, so
+   * an editor that refuses the edit first can word it, and tell a break the
+   * edit adds from one the page already had. Absent for every other rule.
+   */
+  readonly lock?: ComposedLockBreak;
+}
+
+/** A lock break in the composed tree: the block whose slot is locked, and how. */
+export interface ComposedLockBreak {
+  /** The composed node holding the locked slot: a definition's node, as composed. */
+  readonly holderId: string;
+  readonly holderType: string;
+  readonly slot: string;
+  readonly lock: ActiveSlotLock;
+  /** For a `"contentOnly"` break, the child whose design changed. */
+  readonly childType?: string;
+  /** For a `"contentOnly"` break, what about it changed; empty otherwise. */
+  readonly changes: readonly string[];
+  /**
+   * For a membership break, the type of each block the slot holds in the
+   * composed tree, in order, as far as the node cap, and how many it holds;
+   * empty and 0 otherwise. What tells a further change to a slot already
+   * broken from leaving it as it was.
+   */
+  readonly held: readonly (string | undefined)[];
+  readonly heldCount: number;
 }
 
 /** What the judgement is measured against. */
@@ -76,6 +124,19 @@ export interface CompositionFaultOptions {
   limits?: DocumentLimits;
   /** The site's nesting rules. Absent, nesting is not judged — as for validation. */
   nesting?: NestingSource;
+  /**
+   * The block definitions, for the locks their slots declare. Absent, locks
+   * are not judged, as for validation.
+   */
+  definitions?: SlotDefaultSource;
+  /**
+   * Composed documents whose values a `"contentOnly"` lock lets this one keep:
+   * the host's stored forms composed, and the host with each placement as its
+   * component holds it. A part one of them already holds at the same place is
+   * no change (`stored-counterparts`). Absent, every locked slot is measured
+   * against its starting children alone.
+   */
+  baselines?: readonly unknown[];
 }
 
 /**
@@ -100,12 +161,21 @@ interface Visit {
   readonly containerComposed: boolean;
   /** The host instance this node is reached through, once composition began. */
   readonly through: string | undefined;
+  /** The lock of the slot this node sits in, or undefined where none applies. */
+  readonly lock: ActiveSlotLock | undefined;
+  /** The node as the baselines hold it in this place. */
+  readonly counterparts: readonly Readonly<Record<string, unknown>>[];
 }
 
 /** What every visit reports into, built once per judgement. */
 interface Judge {
   readonly limits: DocumentLimits;
   readonly nesting: NestingSource | undefined;
+  readonly definitions: SlotDefaultSource | undefined;
+  readonly startingChildren:
+    | ((type: string, slot: string) => readonly BlockNode[])
+    | undefined;
+  readonly baselines: StoredForms | undefined;
   report(code: CompositionFaultCode, instanceId: string, detail: Detail): void;
 }
 
@@ -125,14 +195,26 @@ export function compositionFaults(
   const placed = componentsPlacedBy(host, limits);
   const faults: CompositionFault[] = [];
   const reported = new Set<string>();
+  const definitions = options.definitions;
   const judge: Judge = {
     limits,
     nesting: options.nesting,
+    definitions,
+    startingChildren:
+      definitions === undefined
+        ? undefined
+        : startingChildrenSource(definitions, options.nesting),
+    baselines:
+      definitions === undefined
+        ? undefined
+        : storedFormsOf(options.baselines, limits.maxNodes),
     report: (code, instanceId, detail) => {
       // One per placement and rule: a definition breaking a rule at forty nodes
       // is one thing for its author to fix, and forty messages spend the field's
-      // issue allowance on the same repair.
-      const key = `${code}\u0000${instanceId}`;
+      // issue allowance on the same repair. A lock is per SLOT, though: two
+      // locked slots broken are two repairs, and one hidden behind the other
+      // would let a save that breaks a second pass as no worse.
+      const key = `${code}\u0000${instanceId}\u0000${detail.holder ?? ""}\u0000${detail.slot ?? ""}`;
       if (reported.has(key)) return;
       reported.add(key);
       const componentId = placed.get(instanceId) ?? "";
@@ -141,6 +223,7 @@ export function compositionFaults(
         instanceId,
         componentId,
         message: messageFor(code, componentId, detail, limits),
+        ...(detail.lockBreak === undefined ? {} : { lock: detail.lockBreak }),
       });
     },
   };
@@ -153,6 +236,9 @@ export function compositionFaults(
     where: { kind: "root" },
     containerComposed: false,
     through: undefined,
+    // A top-level node sits in no slot, so no lock reaches it.
+    lock: undefined,
+    counterparts: counterpartsOf(node, undefined, judge.baselines),
   }));
   // Bounded by the document cap. The resolver holds a composition to it, so on
   // its output this never cuts the walk short; it stands for a caller handing in
@@ -183,12 +269,10 @@ function judgeVisit(visit: Visit, judge: Judge, pending: Visit[]): void {
     if (through !== undefined) judge.report("depth-exceeded", through, {});
     return;
   }
-  // Only where composition put the node or its container: a fault among the
-  // host's own nodes is the host's validation's to report.
-  if (through !== undefined && (composed || visit.containerComposed)) {
-    reportNesting(node, visit.where, through, judge);
+  if (through !== undefined) {
+    reportComposedRules(node, visit, { composed, through }, judge);
   }
-  enqueueSlots(node, visit, composed, through, pending);
+  enqueueSlots(node, visit, { composed, through }, judge, pending);
 }
 
 /**
@@ -225,29 +309,137 @@ function reportNesting(
   });
 }
 
+/**
+ * The rules only the composed tree can answer, for a node reached through a
+ * placement. Only where composition put the node or its container: a fault
+ * among the host's own nodes is the host's validation's to report.
+ */
+function reportComposedRules(
+  node: ResolvedBlockNode,
+  visit: Visit,
+  reached: { composed: boolean; through: string },
+  judge: Judge
+): void {
+  if (reached.composed || visit.containerComposed) {
+    reportNesting(node, visit.where, reached.through, judge);
+  }
+  // A node a definition put here: its locked slots hold what the placement
+  // wrote into them, its values and its slot content, which neither the page
+  // nor the component shows on its own.
+  //
+  // And a node the PLACEMENT supplied, once it sits inside a locked slot of
+  // the definition: its own slots inherit that lock, so content it holds is
+  // held to it as much as the definition's own.
+  if (reached.composed || visit.lock !== undefined) {
+    reportLockBreaks(node, visit, reached.through, judge);
+  }
+}
+
+/** Each way a composed node's locked slots break their locks. */
+function reportLockBreaks(
+  node: ResolvedBlockNode,
+  visit: Visit,
+  through: string,
+  judge: Judge
+): void {
+  if (judge.definitions === undefined || judge.startingChildren === undefined) {
+    return;
+  }
+  const breaks = slotLockBreaks(
+    node,
+    visit.lock,
+    judge.definitions,
+    judge.startingChildren,
+    visit.counterparts
+  );
+  for (const found of breaks) {
+    const lockBreak = composedBreakOf(node, found, judge.limits.maxNodes);
+    judge.report(
+      found.kind === "membership"
+        ? "locked-slot-altered"
+        : "locked-slot-content-only",
+      through,
+      {
+        type: found.kind === "content" ? found.childType : node.type,
+        slot: found.slot,
+        holder: node.id,
+        holderType: node.type,
+        lock: lockBreak.lock,
+        changes: lockBreak.changes,
+        lockBreak,
+      }
+    );
+  }
+}
+
+/**
+ * A break in the composed tree as a fault carries it. The blocks a slot holds
+ * are read as far as the node cap, beside how many it holds.
+ */
+function composedBreakOf(
+  node: ResolvedBlockNode,
+  found: LockBreak,
+  maxNodes: number
+): ComposedLockBreak {
+  if (found.kind === "content") {
+    return {
+      holderId: node.id,
+      holderType: node.type,
+      slot: found.slot,
+      lock: "contentOnly",
+      childType: found.childType,
+      changes: found.changes,
+      held: [],
+      heldCount: 0,
+    };
+  }
+  return {
+    holderId: node.id,
+    holderType: node.type,
+    slot: found.slot,
+    lock: found.lock,
+    changes: [],
+    held: found.held.slice(0, maxNodes).map(typeOfChild),
+    heldCount: found.held.length,
+  };
+}
+
 /** Queue a node's slot children, each with where it sits. */
 function enqueueSlots(
   node: ResolvedBlockNode,
   visit: Visit,
-  composed: boolean,
-  through: string | undefined,
+  reached: { composed: boolean; through: string | undefined },
+  judge: Judge,
   pending: Visit[]
 ): void {
+  const { composed, through } = reached;
   const slots: unknown = node.slots;
   if (!isPlainRecord(slots)) return;
   const names = boundedOwnKeys(slots, Number.MAX_SAFE_INTEGER) ?? [];
   for (const slot of names) {
     const children = ownEntry(slots, slot);
     if (!Array.isArray(children)) continue;
-    for (const child of children) {
+    const lock = slotLockOf(judge.definitions, node.type, slot, visit.lock);
+    children.forEach((child: unknown, index) => {
       pending.push({
         node: child,
         depth: visit.depth + 1,
         where: { kind: "slot", parentType: node.type, slot },
         containerComposed: composed,
         through,
+        lock,
+        counterparts: counterpartsOf(
+          child,
+          {
+            holders: visit.counterparts,
+            slot,
+            index,
+            contentOnly: lock === "contentOnly",
+          },
+          judge.baselines
+        ),
       });
-    }
+    });
   }
 }
 
@@ -275,6 +467,15 @@ interface Detail {
   readonly type?: string;
   readonly where?: PlacementTarget;
   readonly permitted?: readonly string[];
+  /** The locked slot, for a lock break, and the node that declares it, by id and type. */
+  readonly slot?: string;
+  readonly holder?: string;
+  readonly holderType?: string;
+  readonly lock?: ActiveSlotLock;
+  /** What a block in a `"contentOnly"` slot changed besides content. */
+  readonly changes?: readonly string[];
+  /** For a lock break, the break as a fault carries it. */
+  readonly lockBreak?: ComposedLockBreak;
 }
 
 /** What every message is built from, worked out once. */
@@ -284,6 +485,10 @@ interface MessageParts {
   readonly parent: string;
   readonly permitted: string;
   readonly maxDepth: number;
+  readonly slot: string;
+  readonly holderType: string;
+  readonly lock: string;
+  readonly changes: string;
 }
 
 /**
@@ -307,6 +512,10 @@ const MESSAGES: Readonly<
     `${m.named} places components inside components more deeply than is allowed. Flatten the components it places.`,
   "node-depth": m =>
     `${m.named} holds content nested deeper than the maximum of ${m.maxDepth} levels. Flatten its content.`,
+  "locked-slot-altered": m =>
+    `${m.named} has the "${m.slot}" slot of a "${m.holderType}" locked "${m.lock}", which holds exactly the blocks it starts with, and this placement changes them. Give that slot exactly the blocks it starts with on this placement, or leave it to the component.`,
+  "locked-slot-content-only": m =>
+    `${m.named} has the "${m.slot}" slot of a "${m.holderType}" locked "contentOnly", where only content can change, and this placement changes its "${m.type}"'s ${m.changes}. Reset those values on this placement.`,
 };
 
 /** The sentence for one fault. */
@@ -330,5 +539,9 @@ function messageFor(
       .map(name => `"${describeValue(name)}"`)
       .join(" or "),
     maxDepth: limits.maxDepth,
+    slot: describeValue(detail.slot),
+    holderType: describeValue(detail.holderType),
+    lock: detail.lock ?? "",
+    changes: (detail.changes ?? []).join(", "),
   });
 }

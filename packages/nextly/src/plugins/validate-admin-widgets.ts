@@ -531,6 +531,34 @@ function contributedSize(
 }
 
 /**
+ * A contributed card's declared geometry: where it starts, and the smallest
+ * and largest size it allows.
+ *
+ * The bounds are carried because `widthFacts` reads the widths a card may take
+ * from them. Left out, a widget declared from half to full was offered all
+ * five widths, and a reader could narrow it below what its plugin draws at.
+ * Strings, as `defaultSize` is: the registry has validated each, and a newer
+ * plugin's size is one this core reads as no bound rather than refuses.
+ */
+function sizesOf(
+  declaration: Record<string, unknown>
+): Pick<
+  CanonicalWidget,
+  "defaultSize" | "minSize" | "maxSize" | "defaultHeight"
+> {
+  const defaultSize = contributedSize(declaration);
+  const minSize = contributedText(declaration, "minSize");
+  const maxSize = contributedText(declaration, "maxSize");
+  const defaultHeight = contributedText(declaration, "defaultHeight");
+  return {
+    ...(defaultSize === undefined ? {} : { defaultSize }),
+    ...(minSize === undefined ? {} : { minSize }),
+    ...(maxSize === undefined ? {} : { maxSize }),
+    ...(defaultHeight === undefined ? {} : { defaultHeight }),
+  };
+}
+
+/**
  * How long a contributed card stays, and who may send it away.
  *
  * Its own function rather than three more spreads inline: `toSummary` already
@@ -588,8 +616,6 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     | string
     | readonly string[]
     | undefined;
-  const defaultSize = contributedSize(declaration);
-  const defaultHeight = contributedText(declaration, "defaultHeight");
   const defaultOrder = declaration.defaultOrder;
 
   return {
@@ -598,8 +624,7 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     // The gates inside an `actions` declaration, verbatim, for the same
     // reason the card's own gate is.
     actionGates: actionGatesOf(declaration.actions),
-    ...(defaultSize === undefined ? {} : { defaultSize }),
-    ...(defaultHeight === undefined ? {} : { defaultHeight }),
+    ...sizesOf(declaration),
     // `Number.isFinite`, so a `NaN` or an infinity a plugin computed cannot
     // become a sort key that puts the card nowhere in particular.
     ...(typeof defaultOrder === "number" && Number.isFinite(defaultOrder)

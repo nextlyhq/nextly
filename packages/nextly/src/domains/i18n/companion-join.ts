@@ -206,8 +206,14 @@ export async function readCompanionLocaleStatus(
 ): Promise<string | null> {
   if (readiness !== "ready") return null;
   const table = companionTable as CompanionTable;
+  // A companion built without per-language status has no `_status` column, so
+  // there is no status of the language's own to read.
+  if (table._status === undefined) return null;
+  // Projects only `_status`: a bare select names every column of the table
+  // object, and one whose migration has not run yet would fail the read, and
+  // inside a write's transaction on PostgreSQL abort the write with it.
   const rows = await db
-    .select()
+    .select({ _status: table._status })
     .from(companionTable)
     .where(
       and(
@@ -268,24 +274,50 @@ export async function readCompanionLocaleStatusAll(
   parentId: string | number,
   readiness: CompanionReadiness | undefined
 ): Promise<Map<string, string | null>> {
+  const byParent = await readCompanionLocaleStatusAllOf(
+    db,
+    companionTable,
+    [parentId],
+    readiness
+  );
+  return byParent.get(String(parentId)) ?? new Map();
+}
+
+/**
+ * {@link readCompanionLocaleStatusAll} for many parents in one query, keyed by
+ * the parent's id as a string. A parent with no companion row is absent.
+ */
+export async function readCompanionLocaleStatusAllOf(
+  db: SelectableDb,
+  companionTable: unknown,
+  parentIds: readonly (string | number)[],
+  readiness: CompanionReadiness | undefined
+): Promise<Map<string, Map<string, string | null>>> {
   const table = companionTable as CompanionTable;
-  const byLocale = new Map<string, string | null>();
-  if (readiness !== "ready") return byLocale;
+  const byParent = new Map<string, Map<string, string | null>>();
+  if (readiness !== "ready" || parentIds.length === 0) return byParent;
   // Project ONLY the columns this scan needs. A bare `.select()` requests
   // every column of the configured Drizzle table object, which throws a
   // missing-column error when the companion table is behind its metadata (a
   // localized field added but its column migration not yet applied) — blocking
   // an otherwise valid publish. `_parent`/`_locale`/`_status` always exist.
   const rows = await db
-    .select({ locale: table._locale, status: table._status })
+    .select({
+      parent: table._parent,
+      locale: table._locale,
+      status: table._status,
+    })
     .from(companionTable)
-    .where(eq(table._parent as never, parentId));
+    .where(inArray(table._parent as never, [...new Set(parentIds)]));
   for (const row of rows) {
     const locale = row.locale;
     if (typeof locale !== "string") continue;
+    const parent = String(row.parent);
+    const byLocale = byParent.get(parent) ?? new Map<string, string | null>();
     byLocale.set(locale, typeof row.status === "string" ? row.status : null);
+    byParent.set(parent, byLocale);
   }
-  return byLocale;
+  return byParent;
 }
 
 export interface PopulateCompanionAllArgs {

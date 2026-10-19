@@ -1,0 +1,47 @@
+name: Cancel closed pull request runs
+
+# When a pull request is merged or closed, its queued and running
+# pull-request runs can no longer decide anything, yet each holds a runner
+# other pull requests are waiting for. A concurrency group cancels a run only
+# when a newer one joins it, and closing starts none, so this cancels them, for
+# every workflow at once. Runs of a push to `main`, the merge queue and
+# schedules are never touched: see `scripts/cancel-closed-pull-request-runs.mjs`.
+#
+# On a fork's pull request the token cannot cancel runs, so the job fails and
+# says so; those runs then finish on their own.
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+permissions: {}
+
+jobs:
+  cancel:
+    name: Cancel the closed pull request's runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # The script runs from the default branch, never from the closed pull
+      # request: this job holds `actions: write`, and a pull request that was
+      # rejected must not be able to run its own version of the script with it.
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          sparse-checkout: |
+            scripts
+            .nvmrc
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+      - name: Cancel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/cancel-closed-pull-request-runs.mjs

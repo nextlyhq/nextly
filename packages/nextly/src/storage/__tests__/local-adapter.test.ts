@@ -33,6 +33,32 @@ describe("LocalStorageAdapter", () => {
     await fs.rm(testDir, { recursive: true, force: true });
   });
 
+  // A file can be removed while the folder is being listed, by a delete
+  // running at the same time. It is gone, which is no reason to stop
+  // listing the rest.
+  describe("list()", () => {
+    it("skips a file removed while the folder is being listed", async () => {
+      for (const name of ["a.png", "b.png", "c.png"]) {
+        await fs.writeFile(path.join(testDir, name), "x");
+      }
+      const listed: string[] = [];
+      let removed = false;
+
+      for await (const entry of adapter.list()) {
+        listed.push(entry.path);
+        if (!removed) {
+          removed = true;
+          const others = ["a.png", "b.png", "c.png"].filter(
+            name => name !== entry.path
+          );
+          await fs.rm(path.join(testDir, others[0]));
+        }
+      }
+
+      expect(listed).toHaveLength(2);
+    });
+  });
+
   describe("getType()", () => {
     it("should return 'local'", () => {
       expect(adapter.getType()).toBe("local");
@@ -152,6 +178,34 @@ describe("LocalStorageAdapter", () => {
     it("should handle paths with leading slash", () => {
       const url = adapter.getPublicUrl("/2026/04/uuid-photo.jpg");
       expect(url).toBe("/uploads/2026/04/uuid-photo.jpg");
+    });
+
+    // A project that serves uploads from another origin sets the base to an
+    // absolute URL, and the media URLs are on it.
+    it.each([
+      [
+        "https://media.example.com",
+        "https://media.example.com/2026/04/uuid-photo.jpg",
+      ],
+      [
+        "https://media.example.com/",
+        "https://media.example.com/2026/04/uuid-photo.jpg",
+      ],
+      [
+        "https://cdn.example.com/site/uploads",
+        "https://cdn.example.com/site/uploads/2026/04/uuid-photo.jpg",
+      ],
+    ])("puts the file on an absolute baseUrl %s", async (baseUrl, expected) => {
+      const onAbsolute = new LocalStorageAdapter({
+        basePath: testDir,
+        baseUrl,
+      });
+      expect(onAbsolute.getPublicUrl("2026/04/uuid-photo.jpg")).toBe(expected);
+      const stored = await onAbsolute.upload(Buffer.from("x"), {
+        filename: "photo.jpg",
+        mimeType: "image/jpeg",
+      });
+      expect(stored.url).toBe(`${baseUrl.replace(/\/$/, "")}/${stored.path}`);
     });
 
     it("should round-trip: upload URL points to file on disk", async () => {

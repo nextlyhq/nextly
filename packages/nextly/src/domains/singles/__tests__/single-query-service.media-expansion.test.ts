@@ -24,10 +24,11 @@ import { TRUSTS_EVERY_COLLECTION } from "../../../services/collections/trust-gra
  */
 const UNBOUNDED = { trusted: TRUSTS_EVERY_COLLECTION } as const;
 
-// absolutizeMediaUrls resolves the app base URL through the validated env,
-// which unit tests don't populate; pin it like media-variant.test.ts does.
+// The public origin points at another host than the one serving the request:
+// a read that resolved media URLs against it would show here.
 vi.mock("../../../shared/lib/get-base-url", () => ({
-  getBaseUrl: () => "http://localhost:3000",
+  getBaseUrl: () => "http://elsewhere.example:4000",
+  getPublicOrigin: () => "http://elsewhere.example:4000",
 }));
 
 type Row = Record<string, unknown>;
@@ -101,7 +102,8 @@ describe("SingleQueryService.expandUploadFields — dialect-portable media fetch
       fileName: "hero.png",
       mimeType: "image/png",
     });
-    expect(String(images.url)).toContain("/uploads/hero.png");
+    // As the local adapter wrote it, on its own base.
+    expect(images.url).toBe("/uploads/hero.png");
     // No fetch error was swallowed (the old raw-execute path logged one and
     // nulled the field).
     expect(logger.error).not.toHaveBeenCalled();

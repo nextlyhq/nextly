@@ -20,7 +20,6 @@ const state = (over: Record<string, unknown> = {}) => ({
   name: "auth",
   declaredVersion: 2,
   appliedVersion: 2,
-  uninstalled: false,
   ...over,
 });
 
@@ -52,12 +51,6 @@ describe("judgeSchemaVersion", () => {
       )
     ).toEqual({ kind: "ok" });
   });
-
-  it("reports an uninstalled plugin before anything else", () => {
-    expect(
-      judgeSchemaVersion(state({ uninstalled: true, appliedVersion: 2 }))
-    ).toEqual({ kind: "uninstalled" });
-  });
 });
 
 describe("assertSchemaVersionUsable", () => {
@@ -81,19 +74,6 @@ describe("assertSchemaVersionUsable", () => {
       })
     ).not.toThrow();
     expect(warn).toHaveBeenCalledOnce();
-  });
-
-  it("refuses an uninstalled plugin in EVERY environment", () => {
-    // No amount of dev push makes a deliberately removed plugin's tables
-    // correct to recreate.
-    const warn = vi.fn();
-    expect(() =>
-      assertSchemaVersionUsable(state({ uninstalled: true }), {
-        production: false,
-        warn,
-      })
-    ).toThrow(NextlyError);
-    expect(warn).not.toHaveBeenCalled();
   });
 
   it("names the command that fixes it", () => {
@@ -223,8 +203,6 @@ describe("assertPluginSchemaVersionsUsable", () => {
         plugins: [backfill],
         readLedger: async () => [applied("plugin:backfill/001_backfill", 1)],
         ledgerExists: async () => true,
-        readUninstalled: async () => new Set(),
-        registryExists: async () => true,
         production: true,
         warn: () => {},
       })
@@ -241,8 +219,6 @@ describe("assertPluginSchemaVersionsUsable", () => {
           applied("plugin:backfill/001_backfill", 2, "rolled_back"),
         ],
         ledgerExists: async () => true,
-        readUninstalled: async () => new Set(),
-        registryExists: async () => true,
         production: true,
         warn: () => {},
       })
@@ -256,8 +232,6 @@ describe("assertPluginSchemaVersionsUsable", () => {
         plugins: [backfill],
         readLedger: () => Promise.reject(new Error("no such table")),
         ledgerExists: async () => false,
-        readUninstalled: async () => new Set(),
-        registryExists: async () => true,
         production: true,
         warn,
       })
@@ -274,55 +248,6 @@ describe("assertPluginSchemaVersionsUsable", () => {
         plugins: [backfill],
         readLedger: () => Promise.reject(fault),
         ledgerExists: async () => true,
-        readUninstalled: async () => new Set(),
-        registryExists: async () => true,
-        production: false,
-        warn: () => {},
-      })
-    ).rejects.toBe(fault);
-  });
-
-  it("refuses a plugin the owner registry marks uninstalled, in development too", async () => {
-    // Its modules are still in the ledger as applied; the registry's
-    // `uninstalled` state is what refuses it.
-    await expect(
-      assertPluginSchemaVersionsUsable({
-        plugins: [backfill],
-        readLedger: async () => [applied("plugin:backfill/001_backfill", 1)],
-        ledgerExists: async () => true,
-        readUninstalled: async () => new Set(["backfill"]),
-        registryExists: async () => true,
-        production: false,
-        warn: () => {},
-      })
-    ).rejects.toMatchObject({ code: "PLUGIN_SCHEMA_UNINSTALLED" });
-  });
-
-  it("reads a missing owner registry as nothing uninstalled", async () => {
-    await expect(
-      assertPluginSchemaVersionsUsable({
-        plugins: [backfill],
-        readLedger: async () => [applied("plugin:backfill/001_backfill", 1)],
-        ledgerExists: async () => true,
-        readUninstalled: () => Promise.reject(new Error("no such table")),
-        registryExists: async () => false,
-        production: true,
-        warn: () => {},
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it("does not turn an owner registry it cannot read into nothing uninstalled", async () => {
-    // Read as empty, the refusal would become a pass, and a development
-    // push would recreate the tables the uninstall removed.
-    const fault = new Error("connection reset");
-    await expect(
-      assertPluginSchemaVersionsUsable({
-        plugins: [backfill],
-        readLedger: async () => [applied("plugin:backfill/001_backfill", 1)],
-        ledgerExists: async () => true,
-        readUninstalled: () => Promise.reject(fault),
-        registryExists: async () => true,
         production: false,
         warn: () => {},
       })

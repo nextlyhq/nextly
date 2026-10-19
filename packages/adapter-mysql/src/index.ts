@@ -67,7 +67,7 @@ import {
   acceptsForShare,
   checkDialectVersion,
 } from "@nextlyhq/adapter-drizzle/version-check";
-import { and, eq, getTableColumns } from "drizzle-orm";
+import { and, eq, getColumns } from "drizzle-orm";
 import type { AnyRelations, Column, SQL } from "drizzle-orm";
 import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
@@ -967,14 +967,12 @@ export class MySqlAdapter extends DrizzleAdapter {
     data: Record<string, unknown>,
     options: UpsertOptions
   ): { where: SQL | undefined; nullKey: boolean } {
+    // MySQL needs every conflict value whether or not it updates: the row is
+    // found by them after a duplicate, so the keep-existing rule applies to
+    // every call here.
+    this.assertUpsertTarget(table, data, options, true);
     const key = this.conflictKey(tableObj, table, options.conflictColumns);
     const values = options.conflictColumns.map(column => data[column]);
-    if (values.some(value => value === undefined)) {
-      throw createDatabaseError({
-        kind: "query",
-        message: `upsert on ${table} needs a value for every conflict column (${options.conflictColumns.join(", ")}).`,
-      });
-    }
     return {
       where: and(...key.map((column, i) => eq(column, values[i] as never))),
       nullKey: values.some(value => value === null),
@@ -998,6 +996,14 @@ export class MySqlAdapter extends DrizzleAdapter {
     const isTarget = (key: readonly string[]) =>
       key.length === names.size && key.every(name => names.has(name));
     const { primary, unique } = keysOf(tableObj);
+    // Every row this upsert returns is read back by its primary key, so a
+    // table without one has no stable way to find the row it wrote.
+    if (primary.length === 0) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table}: MySQL upserts need a table with a primary key, to read back the row they write.`,
+      });
+    }
     const known = columns.every(column => column !== undefined);
     if (
       !known ||
@@ -1072,30 +1078,34 @@ export class MySqlAdapter extends DrizzleAdapter {
       const stored = await this.insertRow(db, tableObj, data);
       return stored ?? (await this.lockedRow(db, tableObj, where));
     } catch (error) {
-      if (!isDuplicateKey(error)) throw error;
+      // Classified as everything else is, through the driver's own error
+      // under Drizzle's wrapper (`classifyError`).
+      if (this.classifyError(error).kind !== "unique_violation") throw error;
       failure = error;
     }
     const existing = await this.lockedRow(db, tableObj, where);
     // No row holds the target key: the collision was on another unique key,
-    // refused as `ON CONFLICT (target)` refuses it. The driver's own error is
-    // thrown so it is classified as the unique violation it is, not as
-    // Drizzle's unnumbered wrapper.
-    if (existing === undefined) throw driverError(failure);
+    // refused as `ON CONFLICT (target)` refuses it, as the unique violation the
+    // classifier reads it to be.
+    if (existing === undefined) throw failure;
     const update = this.updateValues(data, options);
     if (Object.keys(update).length === 0) return existing;
     await db.update(tableObj).set(update).where(where);
     // Read back by the row's primary key as the update left it: the update may
     // set the key itself (every given column is updated by default, as `ON
     // CONFLICT DO UPDATE` does elsewhere), and a BEFORE UPDATE trigger may
-    // have changed the conflict value the update was keyed on.
-    return this.lockedRow(
-      db,
-      tableObj,
-      this.byIdentity(tableObj, {
-        ...(existing as Record<string, unknown>),
-        ...update,
-      }) ?? where
-    );
+    // have changed the conflict value the update was keyed on. A trigger that
+    // changed the primary key instead leaves the conflict value standing, so
+    // the row is looked for there next; one that changed both is not found.
+    const identity = this.byIdentity(tableObj, {
+      ...(existing as Record<string, unknown>),
+      ...update,
+    });
+    const updated =
+      identity === undefined
+        ? undefined
+        : await this.lockedRow(db, tableObj, identity);
+    return updated ?? this.lockedRow(db, tableObj, where);
   }
 
   /**
@@ -1113,7 +1123,14 @@ export class MySqlAdapter extends DrizzleAdapter {
       .insert(tableObj)
       .values(data as never)
       .$returningId()) as Record<string, unknown>[];
-    const identity = this.byIdentity(tableObj, { ...generated, ...data });
+    // A key the caller gave wins; one given as undefined or null does not hide
+    // the value MySQL generated for it.
+    const given = Object.fromEntries(
+      Object.entries(data).filter(
+        ([, value]) => value !== undefined && value !== null
+      )
+    );
+    const identity = this.byIdentity(tableObj, { ...generated, ...given });
     return identity === undefined
       ? undefined
       : this.lockedRow(db, tableObj, identity);
@@ -1129,8 +1146,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     record: Record<string, unknown>
   ): SQL | undefined {
     const primary = new Set(keysOf(tableObj).primary);
-    const parts = Object.entries(getTableColumns(tableObj)).filter(
-      ([, column]) => primary.has(column.name)
+    const parts = Object.entries(getColumns(tableObj)).filter(([, column]) =>
+      primary.has(column.name)
     );
     if (
       parts.length === 0 ||
@@ -1390,13 +1407,16 @@ export class MySqlAdapter extends DrizzleAdapter {
     // as kind: "unknown".
     if (isDatabaseError(error)) return error;
 
-    const mysqlError = error as {
+    // Classified from mysql2's own error, which Drizzle puts on `cause` when it
+    // wraps a failed query (`driverErrorIn`); it is the one carrying `errno`.
+    const mysqlError = this.driverErrorIn<{
       errno?: number;
       code?: string;
       sqlState?: string;
       message?: string;
       sql?: string;
-    };
+      cause?: unknown;
+    }>(error, candidate => typeof candidate.errno === "number");
 
     // Determine error kind from MySQL error number
     const kind: DatabaseErrorKind =
@@ -1463,31 +1483,6 @@ function keysOf(tableObj: MySqlTable): TableKeys {
   const keys = { primary, unique };
   TABLE_KEYS.set(tableObj, keys);
   return keys;
-}
-
-/**
- * The driver's own error behind a failed write: Drizzle wraps it in a query
- * error of its own that carries no error number, so the driver's is the one
- * that says what failed.
- */
-function driverError(error: unknown): unknown {
-  const cause =
-    typeof error === "object" && error !== null && "cause" in error
-      ? (error as { cause?: unknown }).cause
-      : undefined;
-  return typeof cause === "object" && cause !== null && "errno" in cause
-    ? cause
-    : error;
-}
-
-/** Whether a failed write was a duplicate key, by the driver's error number. */
-function isDuplicateKey(error: unknown): boolean {
-  const driver = driverError(error);
-  const errno =
-    typeof driver === "object" && driver !== null && "errno" in driver
-      ? (driver as { errno?: number }).errno
-      : undefined;
-  return errno !== undefined && MYSQL_ERROR_CODES[errno] === "unique_violation";
 }
 
 /**

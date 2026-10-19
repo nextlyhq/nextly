@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import {
   CONFIG_TOOLING_DEV_DEPENDENCIES,
+  FORM_BUILDER_PACKAGES,
   projectUsesFormBuilder,
 } from "../utils/template";
 
@@ -98,19 +99,16 @@ const ALL_ADAPTER_PACKAGES = [
 
 /**
  * Plugin packages added only for templates that register the plugin in their
- * `nextly.config.ts`. Must stay in sync with the deps added by
- * `generatePackageJson` (template.ts) — both paths scaffold the same project,
- * the only difference is whether deps resolve from npm or yalc. The
- * existing-project install path generates a blank-equivalent config, so it
- * never needs these.
+ * `nextly.config.ts`, read from the same list `generatePackageJson`
+ * (template.ts) uses: both paths scaffold the same project, the only
+ * difference is whether deps resolve from npm or yalc. The existing-project
+ * install path generates a blank-equivalent config, so it never needs these.
  */
-const TEMPLATE_PLUGIN_PACKAGES = ["@nextlyhq/plugin-form-builder"];
-
 function templatePluginPackages(
   projectType: ProjectType | undefined
 ): string[] {
   return projectType && projectUsesFormBuilder(projectType)
-    ? TEMPLATE_PLUGIN_PACKAGES
+    ? [...FORM_BUILDER_PACKAGES]
     : [];
 }
 
@@ -206,8 +204,28 @@ async function installIntoExistingApp(
     pm,
     pm === "pnpm" ? await readPnpmVersion(cwd) : undefined
   );
-  const allPackages = getPackagesToInstall(database);
+  try {
+    await installPackages(cwd, pm, database, useYalc, pluginPackages);
+  } catch (error) {
+    // The notes are printed after a successful install, so a failed one
+    // carries them: a version-scoped rule the app kept is what makes pnpm
+    // stop, and the note says what to do then.
+    if (notes.length === 0) throw error;
+    throw new Error(`${(error as Error).message}\n\n${notes.join("\n")}`, {
+      cause: error,
+    });
+  }
+  return notes;
+}
 
+async function installPackages(
+  cwd: string,
+  pm: PackageManager,
+  database: DatabaseConfig,
+  useYalc: boolean,
+  pluginPackages: string[]
+): Promise<void> {
+  const allPackages = getPackagesToInstall(database);
   if (useYalc) {
     await installWithYalc(cwd, pm, allPackages, pluginPackages);
   } else {
@@ -217,7 +235,6 @@ async function installIntoExistingApp(
   if (tooling.length > 0) {
     await runInstall(DEV_INSTALL_COMMANDS[pm], tooling, cwd);
   }
-  return notes;
 }
 
 /**

@@ -15,7 +15,9 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import type { PluginLifecycleRecord } from "../../../domains/schema/ownership/plugin-lifecycle-state";
 import {
+  runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
   type LifecyclePlugin,
@@ -99,6 +101,15 @@ function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
     readAppliedModules: vi.fn(async () => new Set<string>()),
     // Every recorded table still exists, as after an ordinary install.
     liveTables: vi.fn(async (tables: readonly string[]) => new Set(tables)),
+    // Both plugins these tests configure, recorded installed.
+    readLifecycle: vi.fn(
+      async () =>
+        new Map([
+          ["@acme/fx", { state: "installed" as const }],
+          ["@acme/core", { state: "installed" as const }],
+        ])
+    ),
+    recordLifecycle: vi.fn(async () => {}),
     ...over,
   };
 }
@@ -204,27 +215,21 @@ describe("what uninstall tells the operator to do next", () => {
     return String(info.mock.calls.at(-1)?.[0]);
   }
 
-  it("says boot refuses once the tables are dropped", async () => {
-    expect(
-      await lastInfo({ keepData: false }, { db: ownsTable as never })
-    ).toMatch(/boot will refuse to start/);
-  });
-
-  it("does not say boot refuses after --keep-data, which it does not", async () => {
-    // Only `uninstalled` owner rows make the boot refuse; `orphaned` boots.
-    const message = await lastInfo(
-      { keepData: true },
-      { db: ownsTable as never }
-    );
-    expect(message).not.toMatch(/refuse/);
-    expect(message).toMatch(/loads on every boot/);
-  });
-
-  it("says nothing records the uninstall for a plugin that owns no schema", async () => {
-    const message = await lastInfo({ keepData: false }, {});
-    expect(message).not.toMatch(/refuse/);
-    expect(message).toMatch(/owns no schema/);
-  });
+  // Every uninstall is recorded, so the boot refuses the plugin while it is
+  // configured: after a full uninstall, after --keep-data, and for a plugin
+  // that owns no schema, which has no owner rows to carry any state.
+  it.each([
+    ["a full uninstall", { keepData: false }, { db: ownsTable as never }],
+    ["--keep-data", { keepData: true }, { db: ownsTable as never }],
+    ["a plugin that owns no schema", { keepData: false }, {}],
+  ])(
+    "says boot refuses until the plugin leaves the config, after %s",
+    async (_case, opts, over) => {
+      expect(await lastInfo(opts, over)).toMatch(
+        /from your config to finish\. Until you do, boot will refuse to start/
+      );
+    }
+  );
 });
 
 describe("plugins uninstall over a DOWN that leaves a table", () => {
@@ -710,6 +715,32 @@ describe("plugins uninstall", () => {
     expect(order).toEqual(["onUninstall", "down", "down"]);
   });
 
+  it("runs no DOWN when onUninstall fails", async () => {
+    // The hook fails when what it set off had not finished: dropping the
+    // plugin's tables then would cut that work off part way.
+    const runDown = vi.fn(async () => 1);
+    const states: string[] = [];
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: true },
+        deps({
+          runLifecycleHook: vi.fn(async () => {
+            throw new Error("hook failed");
+          }),
+          runDown,
+          recordLifecycle: vi.fn(async (_plugin, record) => {
+            states.push(record.state);
+          }),
+        })
+      )
+    ).rejects.toThrow("hook failed");
+    expect(runDown).not.toHaveBeenCalled();
+    // Left as it stopped: `uninstalling`, which running the command again
+    // finishes.
+    expect(states).toEqual(["uninstalling"]);
+  });
+
   it("tells the hook which kind of uninstall this is", async () => {
     // `keepData` decides what onUninstall can still do: with the tables kept,
     // an external deregistration may be wanted; without, this is the last
@@ -979,5 +1010,383 @@ describe("plugins uninstall decides before it takes the lock", () => {
         c => (c as unknown as [unknown, { moduleName: string }])[1].moduleName
       )
     ).toEqual(["0002_more", "0001_init"]);
+  });
+});
+
+describe("plugins install records the plugin installed", () => {
+  it("once onInstall has returned, not before", async () => {
+    const order: string[] = [];
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({
+        runLifecycleHook: vi.fn(async () => {
+          order.push("onInstall");
+        }),
+        recordLifecycle: vi.fn(async (_plugin, record) => {
+          order.push(`record:${record.state}`);
+        }),
+      })
+    );
+    expect(order).toEqual(["onInstall", "record:installed"]);
+  });
+
+  it("not when onInstall fails", async () => {
+    const recordLifecycle = vi.fn(async () => {});
+    await expect(
+      runPluginInstallCommand(
+        "@acme/fx",
+        deps({
+          runLifecycleHook: vi.fn(async () => {
+            throw new Error("hook failed");
+          }),
+          recordLifecycle,
+        })
+      )
+    ).rejects.toThrow("hook failed");
+    expect(recordLifecycle).not.toHaveBeenCalled();
+  });
+});
+
+describe("plugins install over a dependency its install never recorded", () => {
+  const dependent: LifecyclePlugin = { ...plugin, requires: ["@acme/core"] };
+  const core = (declaredModules: string[]): LifecyclePlugin => ({
+    ...plugin,
+    name: "@acme/core",
+    declaredModules,
+    modules: [],
+  });
+  const onlyFx = vi.fn(
+    async () => new Map([["@acme/fx", { state: "installed" as const }]])
+  );
+
+  it("refuses one whose modules a plain migrate applied", async () => {
+    // Its tables are there and its onInstall never ran.
+    const applyMigrations = vi.fn(async () => {});
+    await expect(
+      runPluginInstallCommand(
+        "@acme/fx",
+        deps({
+          plugins: [dependent, core(["0001_core"])],
+          readAppliedModules: vi.fn(
+            async () => new Set(["plugin:@acme/core/0001_core"])
+          ),
+          readLifecycle: onlyFx,
+          applyMigrations,
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_DEPENDENCY_NOT_INSTALLED",
+      publicMessage: expect.stringContaining("has not run on this database"),
+    });
+    expect(applyMigrations).not.toHaveBeenCalled();
+  });
+
+  it("refuses one that owns no schema and was never installed", async () => {
+    // No module and no owner row: nothing but the record can show it.
+    await expect(
+      runPluginInstallCommand(
+        "@acme/fx",
+        deps({ plugins: [dependent, core([])], readLifecycle: onlyFx })
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_DEPENDENCY_NOT_INSTALLED" });
+  });
+
+  it("refuses one whose uninstall began", async () => {
+    await expect(
+      runPluginInstallCommand(
+        "@acme/fx",
+        deps({
+          plugins: [dependent, core([])],
+          readLifecycle: vi.fn(
+            async () =>
+              new Map([
+                [
+                  "@acme/core",
+                  { state: "uninstalling" as const, keepData: false },
+                ],
+              ])
+          ),
+        })
+      )
+    ).rejects.toMatchObject({
+      publicMessage: expect.stringContaining("did not finish"),
+    });
+  });
+
+  it("proceeds once its install is recorded", async () => {
+    // The control: the same dependency, recorded installed.
+    const applyMigrations = vi.fn(async () => {});
+    await runPluginInstallCommand(
+      "@acme/fx",
+      deps({ plugins: [dependent, core([])], applyMigrations })
+    );
+    expect(applyMigrations).toHaveBeenCalledWith(dependent);
+  });
+});
+
+describe("plugins uninstall records how far it got", () => {
+  const record = () => {
+    const order: string[] = [];
+    const recordLifecycle = vi.fn(
+      async (_plugin: LifecyclePlugin, value: { state: string }) => {
+        order.push(
+          "keepData" in value
+            ? `record:${value.state}:${String(value.keepData)}`
+            : `record:${value.state}`
+        );
+      }
+    );
+    return { order, recordLifecycle };
+  };
+
+  it("records it begun before the hook and finished after the DOWNs", async () => {
+    const { order, recordLifecycle } = record();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: true },
+      deps({
+        recordLifecycle,
+        runLifecycleHook: vi.fn(async () => {
+          order.push("onUninstall");
+        }),
+        ...droppedByDowns(async () => {
+          order.push("down");
+          return 1;
+        }),
+      })
+    );
+    expect(order).toEqual([
+      "record:uninstalling:false",
+      "onUninstall",
+      "down",
+      "down",
+      "record:uninstalled",
+    ]);
+  });
+
+  it("leaves it recorded begun when a DOWN fails part way", async () => {
+    const { order, recordLifecycle } = record();
+    let downs = 0;
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: true },
+        deps({
+          recordLifecycle,
+          runDown: vi.fn(async () => {
+            downs += 1;
+            if (downs === 2) throw new Error("connection lost");
+            return 1;
+          }),
+        })
+      )
+    ).rejects.toThrow("connection lost");
+    expect(order).toEqual(["record:uninstalling:false"]);
+  });
+
+  it("records an uninstall keeping data as orphaned", async () => {
+    const { order, recordLifecycle } = record();
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: true, yes: true },
+      deps({ recordLifecycle })
+    );
+    expect(order).toEqual(["record:uninstalling:true", "record:orphaned"]);
+  });
+});
+
+describe("plugins uninstall run again after it stopped part way", () => {
+  const begun = (keepData: boolean) =>
+    vi.fn(
+      async () =>
+        new Map([["@acme/fx", { state: "uninstalling" as const, keepData }]])
+    );
+
+  it("refuses the other --keep-data setting before anything runs", async () => {
+    const runLifecycleHook = vi.fn(async () => {});
+    const underMigrateLock = vi.fn(<T>(work: () => Promise<T>) => work());
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: true, yes: true },
+        deps({
+          readLifecycle: begun(false),
+          runLifecycleHook,
+          underMigrateLock: underMigrateLock as never,
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_UNFINISHED",
+      publicMessage: expect.stringContaining("without --keep-data"),
+    });
+    expect(underMigrateLock).not.toHaveBeenCalled();
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+  });
+
+  it("finishes when run the way it was begun", async () => {
+    const recordLifecycle = vi.fn(async () => {});
+    await runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: true },
+      deps({
+        readLifecycle: begun(false),
+        recordLifecycle,
+        ...droppedByDowns(),
+      })
+    );
+    expect(recordLifecycle).toHaveBeenLastCalledWith(plugin, {
+      state: "uninstalled",
+    });
+  });
+});
+
+/**
+ * A disabled plugin's hooks never run, so an install or an uninstall of it
+ * cannot do the work it records. Refused before anything changes: a record
+ * of "installed" or "uninstalled" would describe a hook that did not run.
+ */
+describe("a disabled plugin is refused by install and uninstall", () => {
+  const disabled: LifecyclePlugin = { ...plugin, enabled: false };
+
+  it("refuses to install it, applying nothing and recording nothing", async () => {
+    const applyMigrations = vi.fn(async () => {});
+    const runLifecycleHook = vi.fn(async () => {});
+    const recordLifecycle = vi.fn(async () => {});
+
+    await expect(
+      runPluginInstallCommand(
+        "@acme/fx",
+        deps({
+          plugins: [disabled],
+          applyMigrations,
+          runLifecycleHook,
+          recordLifecycle,
+        })
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_DISABLED" });
+
+    expect(applyMigrations).not.toHaveBeenCalled();
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("refuses to uninstall it, running no DOWN and recording nothing", async () => {
+    const runDown = vi.fn(async () => 2);
+    const recordLifecycle = vi.fn(async () => {});
+
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: true },
+        deps({
+          plugins: [disabled],
+          recordLifecycle,
+          ...droppedByDowns(runDown),
+        })
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_DISABLED" });
+
+    expect(runDown).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * `plugins install --all`: every configured plugin, in the order the config
+ * loader resolved. The loader's sort is tested where it lives; what these pin
+ * is that the run follows the order it is given, skips a disabled plugin by
+ * name instead of refusing the whole run, and stops at the first failure.
+ */
+describe("plugins install --all", () => {
+  const core: LifecyclePlugin = { ...plugin, name: "@acme/core" };
+  const fx: LifecyclePlugin = { ...plugin, dependsOn: ["@acme/core"] };
+
+  it("installs every configured plugin, in the order the loader resolved", async () => {
+    const applied: string[] = [];
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [core, fx],
+        applyMigrations: vi.fn(async (p: LifecyclePlugin) => {
+          applied.push(p.name);
+        }),
+      })
+    );
+
+    expect(applied).toEqual(["@acme/core", "@acme/fx"]);
+  });
+
+  it("installs a dependency and records it before its dependent, on a fresh database", async () => {
+    // Nothing recorded at the start, as on a database no install has touched.
+    // The dependent's install asks whether its dependency is installed, so it
+    // succeeds only if the dependency was installed AND recorded first.
+    const lifecycle = new Map<string, PluginLifecycleRecord>();
+    const recorded: string[] = [];
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [core, fx],
+        readLifecycle: vi.fn(async () => new Map(lifecycle)),
+        recordLifecycle: vi.fn(
+          async (p: LifecyclePlugin, record: PluginLifecycleRecord) => {
+            lifecycle.set(p.name, record);
+            recorded.push(p.name);
+          }
+        ),
+      })
+    );
+
+    expect(recorded).toEqual(["@acme/core", "@acme/fx"]);
+    expect(lifecycle.get("@acme/fx")).toEqual({ state: "installed" });
+  });
+
+  it("skips a disabled plugin by name and installs the rest", async () => {
+    const applied: string[] = [];
+    const warn = vi.fn();
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [
+          { ...core, enabled: false },
+          { ...fx, dependsOn: [] },
+        ],
+        logger: { ...logger, warn } as never,
+        applyMigrations: vi.fn(async (p: LifecyclePlugin) => {
+          applied.push(p.name);
+        }),
+      })
+    );
+
+    expect(applied).toEqual(["@acme/fx"]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("@acme/core"));
+  });
+
+  it("stops at the first install that fails, before the plugins after it", async () => {
+    const applied: string[] = [];
+    await expect(
+      runPluginInstallAllCommand(
+        deps({
+          plugins: [core, fx],
+          applyMigrations: vi.fn(async (p: LifecyclePlugin) => {
+            applied.push(p.name);
+            if (p.name === "@acme/core") throw new Error("disk full");
+          }),
+        })
+      )
+    ).rejects.toThrow("disk full");
+
+    expect(applied).toEqual(["@acme/core"]);
+  });
+
+  it("installs nothing, and says so, when no plugin is configured", async () => {
+    const info = vi.fn();
+    const applyMigrations = vi.fn(async () => {});
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [],
+        logger: { ...logger, info } as never,
+        applyMigrations,
+      })
+    );
+
+    expect(applyMigrations).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith("No plugins are configured.");
   });
 });

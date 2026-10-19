@@ -118,7 +118,7 @@ The adapters share a single CRUD API, but underlying dialect capabilities differ
 | JSONB columns | Yes | No (JSON only) | No (JSON as TEXT) |
 | Array columns | Yes | No | No |
 | `RETURNING` clause | Yes | No (extra `SELECT` after writes) | Yes (3.35+) |
-| Case-insensitive text matching (`ILIKE`, `ICONTAINS`) | `LOWER(...) LIKE LOWER(...)` | `LOWER(...) LIKE LOWER(...)`, whatever the column's collation | `LOWER(...) LIKE LOWER(...)`, ASCII letters only |
+| Case-insensitive text matching (`ILIKE`, `ICONTAINS`) | `LOWER(...) LIKE LOWER(...)`; ASCII letters only under the `C` or `POSIX` collation | `LOWER(...) LIKE LOWER(...)`, even under a case-sensitive collation | `LOWER(...) LIKE LOWER(...)`, ASCII letters only |
 | Savepoints (nested transactions) | Yes | Disabled by adapter | Yes |
 | Full-text search | `tsvector` | `FULLTEXT` indexes | FTS5 (extension) |
 | Upsert syntax | `ON CONFLICT DO UPDATE` | `ON DUPLICATE KEY UPDATE` | `ON CONFLICT DO UPDATE` |
@@ -140,6 +140,8 @@ The adapter's where clauses have four text operators, and they compile the same 
 | `CONTAINS` | a substring | as the column's collation compares | literal characters |
 | `ICONTAINS` | a substring | ignored | literal characters |
 
+A collection's `contains` and `search` filters, its search box in the admin and the API, and the admin's search of collections, Singles and field groups all match this way.
+
 Use `ICONTAINS` for a search box: it finds the text the person typed, whatever its case, and a `%` or `_` they type is searched for rather than read as a wildcard. `CONTAINS` and `ICONTAINS` escape `%`, `_` and the escape character `!` themselves; with `LIKE` and `ILIKE` the value is a pattern you build, so escape anything that should match literally.
 
 ```ts
@@ -151,7 +153,7 @@ const where: WhereClause = {
 };
 ```
 
-"Whatever the collation" matters on MySQL: a column under a case-sensitive collation such as `utf8mb4_bin` makes a plain `LIKE` (and `CONTAINS`) case-sensitive, while `ILIKE` and `ICONTAINS` lower-case both sides and ignore case there too. SQLite's `lower()` folds ASCII letters only, so on SQLite "É" and "é" still differ.
+This matters on MySQL: a column under a case-sensitive collation such as `utf8mb4_bin` makes a plain `LIKE` (and `CONTAINS`) case-sensitive, while `ILIKE` and `ICONTAINS` lower-case both sides and ignore case there too. Which letters count as the same in another case is the database's own `lower()`, following the column's collation. On MySQL that is the Unicode case mapping of the collation's version, so a `0900` collation knows more letters than a legacy one such as `utf8mb4_unicode_ci`. On PostgreSQL a linguistic collation such as `en_US.UTF-8` folds non-ASCII letters too. SQLite, and a PostgreSQL column under the `C` or `POSIX` collation, fold ASCII letters only, so there "É" and "é" still differ.
 
 All four are for text columns. Matching through `LOWER()` cannot use an ordinary index on the column, so on a large table a substring search reads every row.
 

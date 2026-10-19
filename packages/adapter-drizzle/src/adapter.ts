@@ -1944,6 +1944,7 @@ export abstract class DrizzleAdapter {
         // whole transaction — so it is spelled as a conflict that changes
         // nothing, and the row that stands is read back below.
         const keepExisting = Object.keys(updateData).length === 0;
+        this.assertUpsertTarget(table, data, options, keepExisting);
 
         let query;
         if (caps.supportsOnConflict) {
@@ -2659,6 +2660,35 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * Refuse an upsert target every dialect would not answer alike: a conflict
+   * column named twice, which SQLite rejects as no constraint's target and
+   * MySQL would accept; and, when nothing is to be updated, a conflict column
+   * left for the database to fill, since the row that stands is then read
+   * back by a value the caller never gave. Shared with the dialects that
+   * override `upsert`, so the refusals are one rule.
+   */
+  protected assertUpsertTarget(
+    table: string,
+    data: Record<string, unknown>,
+    options: UpsertOptions,
+    keepExisting: boolean
+  ): void {
+    const columns = options.conflictColumns;
+    if (new Set(columns).size !== columns.length) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table} names a conflict column more than once (${columns.join(", ")}).`,
+      });
+    }
+    if (keepExisting && columns.some(column => data[column] === undefined)) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table} needs a value for every conflict column (${columns.join(", ")}).`,
+      });
+    }
+  }
+
+  /**
    * The columns of a table-level `primaryKey({ columns })`, as the dialect's
    * table config reports them. The base class cannot read that config without
    * naming a dialect, so each adapter answers for its own; a dialect that does
@@ -2731,6 +2761,38 @@ export abstract class DrizzleAdapter {
       returning !== undefined &&
       !(Array.isArray(returning) && returning.length === 0)
     );
+  }
+
+  /**
+   * The driver's own error inside `error`: the first in its `cause` chain that
+   * `isDriverError` recognises, or `error` itself when none does.
+   *
+   * A query that runs through Drizzle fails with Drizzle's `DrizzleQueryError`,
+   * whose message is the SQL statement and which carries no driver code; the
+   * driver's error, the only object that knows what actually went wrong, is
+   * its `cause`. A dialect's {@link classifyError} classifies from what this
+   * returns, so a failure reads the same whether or not Drizzle wrapped it.
+   *
+   * The walk is bounded, because an error chain can be made cyclic and a
+   * classifier that can hang is worse than one that gives up. Falling back to
+   * `error` keeps an error that carries no code anywhere classified as before.
+   *
+   * @param error - The error as it was caught
+   * @param isDriverError - Whether a link in the chain is the driver's error
+   * @returns The driver's error, or `error` when no link is
+   */
+  protected driverErrorIn<T extends { cause?: unknown }>(
+    error: unknown,
+    isDriverError: (candidate: T) => boolean
+  ): T {
+    let cursor: unknown = error;
+    for (let depth = 0; depth < 10; depth++) {
+      if (cursor === null || typeof cursor !== "object") break;
+      const candidate = cursor as T;
+      if (isDriverError(candidate)) return candidate;
+      cursor = candidate.cause;
+    }
+    return (error ?? {}) as T;
   }
 
   /**

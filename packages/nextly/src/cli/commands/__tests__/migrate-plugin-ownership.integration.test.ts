@@ -325,8 +325,6 @@ describe.each(getConfiguredTestDialects())(
             ).listFileApplies(),
           ledgerExists: () =>
             handle.adapter.tableExists("nextly_schema_events"),
-          readUninstalled: async () => new Set(),
-          registryExists: async () => true,
           production: true,
           warn: () => {},
         })

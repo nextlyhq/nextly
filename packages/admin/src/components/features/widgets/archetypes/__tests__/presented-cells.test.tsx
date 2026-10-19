@@ -71,7 +71,9 @@ describe("a list cell is presented by its declared kind", () => {
 
 describe("asPresentedText", () => {
   it("leaves a non-date alone", () => {
-    expect(asPresentedText("Autumn launch", "string")).toBe("Autumn launch");
+    expect(asPresentedText("Autumn launch", { type: "string" })).toBe(
+      "Autumn launch"
+    );
   });
 
   /*
@@ -80,12 +82,12 @@ describe("asPresentedText", () => {
    * value at all, which is a different and less recoverable report.
    */
   it("falls back to the raw text on an unparseable date", () => {
-    expect(asPresentedText("not-a-date", "date")).toBe("not-a-date");
+    expect(asPresentedText("not-a-date", { type: "date" })).toBe("not-a-date");
   });
 
   it("drops what cannot be printed at all", () => {
-    expect(asPresentedText({ nested: true }, "date")).toBeUndefined();
-    expect(asPresentedText(null, "date")).toBeUndefined();
+    expect(asPresentedText({ nested: true }, { type: "date" })).toBeUndefined();
+    expect(asPresentedText(null, { type: "date" })).toBeUndefined();
   });
 });
 
@@ -107,7 +109,7 @@ describe("a date cell reads the admin's configured timezone", () => {
     setGlobalDateTimeConfig({ timezone: "Asia/Karachi", locale: "en-US" });
 
     // 07:00Z is 12:00 in Asia/Karachi (UTC+5, no DST).
-    expect(asPresentedText(ISO, "date")).toContain("12:00");
+    expect(asPresentedText(ISO, { type: "date" })).toContain("12:00");
   });
 
   /*
@@ -119,15 +121,60 @@ describe("a date cell reads the admin's configured timezone", () => {
    */
   it("renders the same instant differently in a different zone", () => {
     setGlobalDateTimeConfig({ timezone: "Asia/Karachi", locale: "en-US" });
-    const karachi = asPresentedText(ISO, "date");
+    const karachi = asPresentedText(ISO, { type: "date" });
 
     setGlobalDateTimeConfig({
       timezone: "Pacific/Kiritimati",
       locale: "en-US",
     });
-    const kiritimati = asPresentedText(ISO, "date");
+    const kiritimati = asPresentedText(ISO, { type: "date" });
 
     expect(karachi).toBeDefined();
     expect(kiritimati).not.toBe(karachi);
+  });
+});
+
+describe("a choice column shows each value's label", () => {
+  // A status stored as `published` reads "Published"; a select stored as `needs_review` reads
+  // "Needs review". The labels come from the column the server described.
+  const stage = {
+    choices: [
+      { value: "needs_review", label: "Needs review" },
+      { value: "done", label: "Done" },
+    ],
+  };
+
+  it("shows the label for a value the column names", () => {
+    expect(asPresentedText("needs_review", stage)).toBe("Needs review");
+  });
+
+  it("names an empty stored value by its declared label, as a bar does", () => {
+    // An option that stores "" under "None" is a value the column names, not a missing one.
+    const priority = { choices: [{ value: "", label: "None" }] };
+    expect(asPresentedText("", priority)).toBe("None");
+    // With no label declared for it, an empty value is still an empty cell.
+    expect(asPresentedText("", stage)).toBeUndefined();
+  });
+
+  it("keeps the stored value for one the column does not name", () => {
+    // An option removed since the row was written: the stored value is still the truth.
+    expect(asPresentedText("archived", stage)).toBe("archived");
+  });
+
+  it("draws the label in the rendered row, not the stored value", () => {
+    const outcome = listBody(
+      {
+        op: "list",
+        items: [{ title: "Autumn launch", when: "needs_review" }],
+        fields: [{ name: "title" }, { name: "when", ...stage }],
+      } as never,
+      definition
+    );
+    if (!outcome.ok) throw new Error(`renderer refused: ${outcome.message}`);
+    render(<>{outcome.node}</>);
+
+    expect(screen.getByText("Autumn launch")).toBeInTheDocument();
+    expect(screen.getByText("Needs review")).toBeInTheDocument();
+    expect(screen.queryByText("needs_review")).not.toBeInTheDocument();
   });
 });

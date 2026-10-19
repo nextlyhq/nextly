@@ -20,6 +20,7 @@ import { BaseService } from "../../../services/base-service";
 import { writingPermissions } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 
 interface PermissionsTableLike {
   resource: unknown;
@@ -493,26 +494,8 @@ export class PermissionService extends BaseService {
     await this.validateResource(resource);
 
     const { permissions } = this.tables;
-    // Case-insensitive matching to align with listPermissions behavior
 
-    const existing = await this.db
-      .select({
-        id: permissions.id,
-        owner: permissions.owner,
-        slug: permissions.slug,
-        permissionGroup: permissions.permissionGroup,
-        danger: permissions.danger,
-        orphanedAt: permissions.orphanedAt,
-      })
-      .from(permissions)
-      .where(
-        and(
-          sql`LOWER(${permissions.action}) = LOWER(${action})`,
-          sql`LOWER(${permissions.resource}) = LOWER(${resource})`
-        )
-      )
-      .limit(1)
-      .then((rows: unknown[]) => rows[0] || null);
+    const existing = await this.findByActionResource(action, resource);
     if (existing) {
       // Adopt the row's provenance and slug if either is out of step with the
       // declaration. Create-if-missing alone would leave every permission
@@ -607,25 +590,80 @@ export class PermissionService extends BaseService {
     // A row the catalogue did not have before. Stale in the widening direction
     // rather than the dangerous one, but a super-admin's key copies the
     // catalogue and would not see it for the rest of its TTL.
+    //
+    // A plain insert, on every dialect. Skipping a conflicting row in silence
+    // reported this call's id as created when the row stored was another
+    // process's, so a caller then granted an id that was never written.
+    let duplicate: unknown;
     await writingPermissions(this.tables.permissions, async table => {
       try {
-        const insertPerm = (this.db as RBACDatabaseInstance)
+        await (this.db as RBACDatabaseInstance)
           .insert(table)
           .values(permissionData);
-        if (typeof insertPerm.onConflictDoNothing === "function") {
-          await insertPerm.onConflictDoNothing();
-        } else {
-          await insertPerm;
-        }
       } catch (err) {
-        // Constraint / dialect error during insert -> NextlyError. The
-        // method's seed-style idempotency means callers don't need a
-        // distinct "duplicate" branch; fromDatabaseError is enough. Normalise
-        // raw driver errors first so the kind is mapped correctly.
+        if (isUniqueViolation(err)) {
+          duplicate = err;
+          return;
+        }
+        // Normalise raw driver errors first so the kind is mapped correctly.
         throw NextlyError.fromDatabaseError(toDbError(this.dialect, err));
       }
     });
-    return { id, created: true };
+    if (duplicate === undefined) return { id, created: true };
+
+    // Several processes starting at once each find the permission missing and
+    // insert it; one wins. Its row is the permission, so this call reports
+    // that row as found. A duplicate with no row for this action and resource
+    // collided on something else (the slug is unique too), and is a failure.
+    const winner = await this.findByActionResource(action, resource);
+    if (winner) return { id: String(winner.id), created: false };
+    throw NextlyError.fromDatabaseError(toDbError(this.dialect, duplicate));
+  }
+
+  /**
+   * The permission row for an action and resource, or null. Matched without
+   * regard to case, as `listPermissions` matches.
+   */
+  private findByActionResource(
+    action: string,
+    resource: string
+  ): Promise<Record<
+    "id" | "owner" | "slug" | "permissionGroup" | "danger" | "orphanedAt",
+    unknown
+  > | null> {
+    const { permissions } = this.tables;
+    return this.db
+      .select({
+        id: permissions.id,
+        owner: permissions.owner,
+        slug: permissions.slug,
+        permissionGroup: permissions.permissionGroup,
+        danger: permissions.danger,
+        orphanedAt: permissions.orphanedAt,
+      })
+      .from(permissions)
+      .where(
+        and(
+          sql`LOWER(${permissions.action}) = LOWER(${action})`,
+          sql`LOWER(${permissions.resource}) = LOWER(${resource})`
+        )
+      )
+      .limit(1)
+      .then(
+        (
+          rows: Array<
+            Record<
+              | "id"
+              | "owner"
+              | "slug"
+              | "permissionGroup"
+              | "danger"
+              | "orphanedAt",
+              unknown
+            >
+          >
+        ) => rows[0] ?? null
+      );
   }
 
   /**

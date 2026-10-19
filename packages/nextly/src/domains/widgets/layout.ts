@@ -597,7 +597,15 @@ function retiringCards(
   });
 }
 
-/** The widest of `widths` that `allowed` holds, or the widest of all. */
+/**
+ * The widest of `widths` that `allowed` holds, or the widest of all.
+ *
+ * Choosing only among the CARRIED widths, never inventing one: when the
+ * successor allows none of them, the merged card keeps the reader's widest
+ * choice, the way {@link WidgetPlacement.width} keeps any width its widget
+ * stops allowing. The admin draws it at the nearest allowed width, and the
+ * choice returns if the successor allows it again.
+ */
 function widestAllowed(
   widths: readonly WidgetWidth[],
   allowed: readonly WidgetWidth[] | undefined

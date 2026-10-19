@@ -66,6 +66,7 @@ import {
 } from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
 import { handleReleaseRequest } from "./api/releases";
@@ -108,6 +109,7 @@ import {
   COLLECTION_DEFINITION_RESOURCE,
 } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
+import { hasAuthRateLimit } from "./auth/handlers/router";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
@@ -130,7 +132,14 @@ import {
   withTimezoneFormatting,
 } from "./lib/date-formatting";
 import { createCorsMiddleware } from "./middleware/cors";
-import { createRateLimiter } from "./middleware/rate-limit";
+import { defaultRestCallerReaders } from "./middleware/rest-callers";
+import {
+  currentRestLimitGate,
+  openRestLimitGate,
+  runWithRestLimitGate,
+  type RestLimitTarget,
+} from "./middleware/rest-limit-gate";
+import { createRestLimits } from "./middleware/rest-limits";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import type { PluginAdminWidget } from "./plugins/admin-contributions";
 import {
@@ -139,11 +148,15 @@ import {
 } from "./plugins/admin-meta";
 import {
   pluginRouteAuthRequired,
+  restLimitTargetOf,
   runPluginRoute,
 } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
 import type { PluginRouteMount } from "./plugins/routes/route-types";
-import { pluginRouteBootDecision } from "./plugins/routes/should-register";
+import {
+  declaredPluginRoute,
+  pluginRouteBootDecision,
+} from "./plugins/routes/should-register";
 import { settingsWritePermission } from "./plugins/settings-permission";
 import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
@@ -382,6 +395,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "releases",
+  "notices",
   "jobs",
   "generalSettings",
   "previewLinks",
@@ -568,6 +582,32 @@ async function handleDocumentLockRequest(
 }
 
 // ============================================================================
+// Notices Direct Dispatch
+// ============================================================================
+
+/** The signed-in person's notices. */
+async function handleNoticesRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "getNotices":
+      return getNotices(req);
+    case "getNoticeCount":
+      return getNoticeCount(req);
+    case "markNoticesRead":
+      return markNoticesRead(req);
+    default:
+      // Thrown, not answered by hand, so the shared handler supplies the
+      // canonical envelope, request id and status, as for the jobs routes.
+      throw NextlyError.notFound({
+        message: `Unknown notices operation: ${method}`,
+        logContext: { reason: "unknown-notices-operation", method },
+      });
+  }
+}
+
+// ============================================================================
 // Translations Direct Dispatch
 // ============================================================================
 
@@ -687,6 +727,9 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   // Naming a version writes history rather than the document, but it is still
   // a write and resolves to the same permission.
   "setEntryVersionLabel",
+  // Marking a version seen changes only the caller's own marker; the route
+  // parser marks it a `read`, so it resolves to `read-{slug}`.
+  "markEntryVersionSeen",
   // Discarding the working draft reverts the document to its live row; the
   // route parser marks it an `update` operation, so it resolves to the
   // `update-{slug}` permission rather than a definition mutation's manage-settings.
@@ -712,6 +755,9 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleVersionDiff",
   // A write, authorized as an update of the document.
   "restoreSingleVersion",
+  // Changes only the caller's own marker, so it is named in the read branch
+  // below and resolves to `read`.
+  "markSingleVersionSeen",
   // Also a write. Deliberately absent from the read allowlist below, so the
   // action resolves to `update` by default.
   "setSingleVersionLabel",
@@ -762,6 +808,9 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // recovery point it is.
   "getEntryAutosave",
   "getSingleAutosave",
+  // Marking a version seen runs the same document gate as reading it.
+  "markEntryVersionSeen",
+  "markSingleVersionSeen",
   "listEntries",
   "getEntry",
   "countEntries",
@@ -856,7 +905,8 @@ async function resolveAuthorization(
         method === "listSingleVersions" ||
         method === "getSingleVersion" ||
         method === "getSingleVersionDiff" ||
-        method === "getSingleAutosave"
+        method === "getSingleAutosave" ||
+        method === "markSingleVersionSeen"
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
@@ -1134,12 +1184,81 @@ async function reachPluginRoute(
   );
 
   if (decision.kind === "authRequired") {
-    return pluginRouteAuthRequired(req, decision.route);
+    const refused = await currentRestLimitGate()?.settle(
+      restLimitTargetOf(decision.route)
+    );
+    return refused ?? pluginRouteAuthRequired(req, decision.route);
   }
-  if (decision.kind === "boot") await ensureServicesInitialized();
+  if (decision.kind === "boot") {
+    const refused = await limitBeforeBoot(httpMethod, requestPath, mount);
+    if (refused) return refused;
+    await ensureServicesInitialized();
+  }
 
   const match = getPluginRouteRegistry().match(httpMethod, requestPath, mount);
   return match === null ? null : runPluginRoute(req, match);
+}
+
+/**
+ * The REST limit for a request about to boot the app for a plugin route,
+ * judged from the route's declaration so an over-budget request costs no
+ * boot. A route asking for a person is only checked against its plugin's
+ * spent failed-resolution bound here; its limit is settled around the
+ * person's resolution, which needs the booted app. A route only boot can
+ * name, behind a `setup` transformer, is judged once it is booted.
+ */
+async function limitBeforeBoot(
+  method: string,
+  path: string,
+  mount: PluginRouteMount
+): Promise<Response | null> {
+  const gate = currentRestLimitGate();
+  if (!gate) return null;
+  const declared = declaredPluginRoute(
+    getHandlerConfig()?.plugins,
+    { method, path },
+    mount
+  );
+  if (declared === null) return null;
+  return declared.route.principal === undefined
+    ? gate.settle(restLimitTargetOf(declared.route))
+    : gate.personBoundRefusal(declared.pluginName);
+}
+
+/**
+ * Whether a plugin route could take this request: the boot decision's own
+ * question, asked of both mounts as if a credential were present, and the
+ * registry's match. Neither needs a boot or the container.
+ *
+ * When none could, the REST limit is decided before routing. When one could,
+ * the limit waits for the route, which may count the request by a plugin's
+ * kind of person or keep it out of the unresolved sources' ceiling.
+ */
+function mayReachPluginRoute(method: string, params: string[]): boolean {
+  const request = {
+    method,
+    path: "/" + params.join("/"),
+    hasCredential: true,
+  };
+  const plugins = getHandlerConfig()?.plugins;
+  // The registry as well as the declarations: an app booted elsewhere, whose
+  // handler was created without a config, has routes only the registry knows.
+  return (["plugin", "root"] as const).some(
+    mount =>
+      pluginRouteBootDecision(plugins, request, mount).kind !== "skip" ||
+      getPluginRouteRegistry().match(method, request.path, mount) !== null
+  );
+}
+
+/**
+ * Serve a request the built-in router answers, after the REST limit for it.
+ * A limit already decided answers nothing here, so a request is counted once.
+ */
+async function withinBuiltInLimit(
+  serve: () => Promise<Response>
+): Promise<Response> {
+  const refused = await currentRestLimitGate()?.settle("core");
+  return refused ?? serve();
 }
 
 async function handleServiceRequest(
@@ -1190,17 +1309,25 @@ async function handleServiceRequest(
     );
     if (rootAnswer) return rootAnswer;
 
-    return new Response(
-      JSON.stringify({
-        error:
-          "Invalid REST route format. Check supported endpoints: /api/users, /api/roles, /api/permissions",
-      }),
-      {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      }
+    return withinBuiltInLimit(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error:
+              "Invalid REST route format. Check supported endpoints: /api/users, /api/roles, /api/permissions",
+          }),
+          {
+            status: 400,
+            headers: { "Content-Type": "application/json" },
+          }
+        )
+      )
     );
   }
+
+  // The built-in router serves this request: its REST limit, before any work.
+  const refusedBuiltIn = await currentRestLimitGate()?.settle("core");
+  if (refusedBuiltIn) return refusedBuiltIn;
 
   // The builder writes DDL straight to the live database, so it is off in
   // production by default. Refuse its routes here, at the one point every
@@ -1364,6 +1491,13 @@ async function handleServiceRequest(
     return handleTranslationsRequest(req, method);
   }
 
+  // ==================== NOTICES DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication, refusing API keys) and reads its own
+  // body, so it intercepts before `req.text()` for the reason dashboard does.
+  if (service === "notices") {
+    return handleNoticesRequest(req, method);
+  }
+
   // ==================== SCHEMA DIRECT DISPATCH (F10 PR 4) ====================
   // Schema-journal handler owns its auth (requireAuthentication +
   // super-admin gate). Read-only GET — no body to consume.
@@ -1389,7 +1523,7 @@ async function handleServiceRequest(
     if (params[0] === "me") {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       // Add user ID to route params for /api/me endpoints
       if (routeParams) {
@@ -1401,7 +1535,7 @@ async function handleServiceRequest(
     else if (requiresAuthOnly(service, method)) {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1416,7 +1550,7 @@ async function handleServiceRequest(
         httpMethod
       );
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1921,6 +2055,21 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
 }
 
 /**
+ * A refusal at the route gate, before dispatch. For a method whose answers
+ * belong to one caller, the refusal does too: a shared cache replaying one
+ * person's 401 or 403 to another hides from them what they may read.
+ */
+function refuseRequest(
+  method: string,
+  refusal: Parameters<typeof createJsonErrorResponse>[0]
+): Response {
+  const response = createJsonErrorResponse(refusal);
+  return SESSION_PRIVATE_METHODS.has(method)
+    ? withSessionCacheHeaders(response)
+    : response;
+}
+
+/**
  * Mark a response as belonging to one session.
  *
  * A session-gated GET is otherwise an ordinary cacheable response, so a shared
@@ -1943,6 +2092,12 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
 const SESSION_PRIVATE_METHODS = new Set([
   "getEntryAutosave",
   "getSingleAutosave",
+  // A history page marks where the caller last looked, and a comparison can
+  // start from it, so both answer one person.
+  "listEntryVersions",
+  "listSingleVersions",
+  "getEntryVersionDiff",
+  "getSingleVersionDiff",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from
@@ -2085,42 +2240,51 @@ async function handleGet(req: Request, params: string[]) {
   // Matched before the bare `admin-meta` branch, which would otherwise answer
   // for every path beneath it and serve the public payload from the
   // authenticated route's URL.
+  // Each branch the built-in router answers before `handleServiceRequest`
+  // passes the REST limit first, as that function's own routes do.
   if (params[0] === "admin-meta" && params[1] === "workspace") {
-    return handleAdminMetaWorkspaceRequest(req);
+    return withinBuiltInLimit(() => handleAdminMetaWorkspaceRequest(req));
   }
   if (params[0] === "admin-meta") {
-    return handleAdminMetaRequest();
+    return withinBuiltInLimit(() => handleAdminMetaRequest());
   }
   if (params[0] === "dev-reload" && isDevServerRuntime()) {
-    const { subscribeDevReload } = await import(
-      "./runtime/dev-reload-broadcaster"
-    );
-    let unsub: (() => void) | undefined;
-    const stream = new ReadableStream<string>({
-      start(ctrl) {
-        unsub = subscribeDevReload(ctrl);
-        ctrl.enqueue(": keepalive\n\n");
-      },
-      cancel() {
-        unsub?.();
-      },
-    });
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive",
-        "X-Accel-Buffering": "no",
-      },
-    });
+    return withinBuiltInLimit(() => devReloadStream());
   }
   return handleServiceRequest(req, params, "GET");
 }
 
+/** The development reload stream, for the dev server only. */
+async function devReloadStream(): Promise<Response> {
+  const { subscribeDevReload } = await import(
+    "./runtime/dev-reload-broadcaster"
+  );
+  let unsub: (() => void) | undefined;
+  const stream = new ReadableStream<string>({
+    start(ctrl) {
+      unsub = subscribeDevReload(ctrl);
+      ctrl.enqueue(": keepalive\n\n");
+    },
+    cancel() {
+      unsub?.();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
 async function handlePost(req: Request, params: string[]) {
   if (params[0] === "_dev" && isDevServerRuntime()) {
-    return handleDevSchemaRequest(req, params, "POST");
+    return withinBuiltInLimit(() =>
+      handleDevSchemaRequest(req, params, "POST")
+    );
   }
   return handleServiceRequest(req, params, "POST");
 }
@@ -2131,14 +2295,16 @@ async function handlePut(req: Request, params: string[]) {
 
 async function handlePatch(req: Request, params: string[]) {
   if (params[0] === "admin-meta" && params[1] === "sidebar-groups") {
-    return handleAdminMetaSidebarGroups(req);
+    return withinBuiltInLimit(() => handleAdminMetaSidebarGroups(req));
   }
   return handleServiceRequest(req, params, "PATCH");
 }
 
 async function handleDelete(req: Request, params: string[]) {
   if (params[0] === "_dev" && isDevServerRuntime()) {
-    return handleDevSchemaRequest(req, params, "DELETE");
+    return withinBuiltInLimit(() =>
+      handleDevSchemaRequest(req, params, "DELETE")
+    );
   }
   return handleServiceRequest(req, params, "DELETE");
 }
@@ -2216,7 +2382,7 @@ export function createDynamicHandlers(options?: {
   // Read from sanitized config (rateLimit is populated by defineConfig() with
   // defaults when the user does not explicitly set `enabled: false`).
   const rateLimitConfig = options?.config?.rateLimit as
-    | Parameters<typeof createRateLimiter>[0]
+    | Parameters<typeof createRestLimits>[0]
     | undefined;
   // The default keyGenerator needs the trust-proxy settings so it
   // can resolve a real client IP rather than blindly trusting
@@ -2226,26 +2392,57 @@ export function createDynamicHandlers(options?: {
     .split(",")
     .map(s => s.trim())
     .filter(Boolean);
-  const checkRateLimit = createRateLimiter({
-    enabled: true,
-    ...(rateLimitConfig ?? {}),
-    trustProxy:
-      rateLimitConfig?.trustProxy ?? securityConfig?.trustProxy ?? false,
-    trustedProxyIps: rateLimitConfig?.trustedProxyIps ?? trustedProxyIpsFromEnv,
-  });
+  // The readers can start services, so a request presenting an API key is
+  // classified by that key on a cold worker too, as the route would boot for
+  // it next anyway.
+  const restLimits = createRestLimits(
+    {
+      enabled: true,
+      ...(rateLimitConfig ?? {}),
+      trustProxy:
+        rateLimitConfig?.trustProxy ?? securityConfig?.trustProxy ?? false,
+      trustedProxyIps:
+        rateLimitConfig?.trustedProxyIps ?? trustedProxyIpsFromEnv,
+    },
+    defaultRestCallerReaders(ensureServicesInitialized)
+  );
+
+  /**
+   * The REST limit's target when it can be decided before routing, or
+   * `null` when a plugin route may take the request and decides it.
+   *
+   * @param authRouted - Whether this verb sends `/auth/*` to the auth router.
+   */
+  function limitBeforeRouting(
+    params: string[],
+    method: string,
+    authRouted: boolean
+  ): RestLimitTarget | null {
+    // Only the auth paths the auth limit judges are left to it; every other
+    // `/auth/*` request is held to the REST limit like any request.
+    if (authRouted && isAuthRoute(params)) {
+      return hasAuthRateLimit(method, params.slice(1).join("/"))
+        ? "auth"
+        : "core";
+    }
+    return mayReachPluginRoute(method, params) ? null : "core";
+  }
 
   /**
    * Wrap a handler with rate limiting, CORS, and security headers.
    *
    * Order:
    * 1. CORS preflight — if OPTIONS, return immediately with security headers
-   * 2. Rate limit check — if exceeded, return 429 with security headers
+   * 2. Rate limit check — if exceeded, return 429 with security headers.
+   *    Decided here when `limitFirst` names a target; otherwise by the
+   *    plugin route or built-in branch the request reaches, before its work.
    * 3. Run the actual handler
    * 4. Apply CORS headers to the response
    * 5. Apply security headers to the response
    */
   async function withSecurity(
     req: Request,
+    limitFirst: RestLimitTarget | null,
     handler: () => Promise<Response>
   ): Promise<Response> {
     // CORS preflight intercept
@@ -2255,7 +2452,9 @@ export function createDynamicHandlers(options?: {
     }
 
     // Rate limit check — before running any handler logic
-    const rateLimitResponse = await checkRateLimit(req);
+    const gate = openRestLimitGate(restLimits, req);
+    const rateLimitResponse =
+      limitFirst === null ? null : await gate.settle(limitFirst);
     if (rateLimitResponse) {
       const corsRateLimited = cors.applyHeaders(req, rateLimitResponse);
       return applySecurityHeaders(corsRateLimited);
@@ -2277,7 +2476,7 @@ export function createDynamicHandlers(options?: {
     let flattenedInRequest: NextlyError[] = [];
     const { result: response } = await withSideEffectWarnings(async () => {
       try {
-        return await handler();
+        return await runWithRestLimitGate(gate, handler);
       } finally {
         flattenedInRequest = currentFlattenedErrors();
       }
@@ -2307,6 +2506,17 @@ export function createDynamicHandlers(options?: {
         method: req.method,
       }
     );
+    // A path that settled nothing would leave the request uncounted. It is
+    // counted now, after the fact, and logged so the path can be found.
+    if (gate.pending) {
+      await gate.settle("core");
+      resolveLogger().warn({
+        kind: "rest-limit-settled-late",
+        requestId: effectiveRequestId,
+        route: new URL(req.url).pathname,
+        method: req.method,
+      });
+    }
     const formattedResponse = await applyGlobalDateFormatting(
       identifiedResponse,
       req
@@ -2322,11 +2532,15 @@ export function createDynamicHandlers(options?: {
     ) => {
       const resolvedParams = await ctx.params;
       const paramsList = resolvedParams.params || [];
-      return withSecurity(req, async () => {
-        if (isAuthRoute(paramsList))
-          return handleAuthRequest(req, paramsList, "GET");
-        return handleGet(req, paramsList);
-      });
+      return withSecurity(
+        req,
+        limitBeforeRouting(paramsList, "GET", true),
+        async () => {
+          if (isAuthRoute(paramsList))
+            return handleAuthRequest(req, paramsList, "GET");
+          return handleGet(req, paramsList);
+        }
+      );
     },
     POST: async (
       req: Request,
@@ -2334,11 +2548,15 @@ export function createDynamicHandlers(options?: {
     ) => {
       const resolvedParams = await ctx.params;
       const paramsList = resolvedParams.params || [];
-      return withSecurity(req, async () => {
-        if (isAuthRoute(paramsList))
-          return handleAuthRequest(req, paramsList, "POST");
-        return handlePost(req, paramsList);
-      });
+      return withSecurity(
+        req,
+        limitBeforeRouting(paramsList, "POST", true),
+        async () => {
+          if (isAuthRoute(paramsList))
+            return handleAuthRequest(req, paramsList, "POST");
+          return handlePost(req, paramsList);
+        }
+      );
     },
     PUT: async (
       req: Request,
@@ -2346,9 +2564,13 @@ export function createDynamicHandlers(options?: {
     ) => {
       const resolvedParams = await ctx.params;
       const paramsList = resolvedParams.params || [];
-      return withSecurity(req, async () => {
-        return handlePut(req, paramsList);
-      });
+      return withSecurity(
+        req,
+        limitBeforeRouting(paramsList, "PUT", false),
+        async () => {
+          return handlePut(req, paramsList);
+        }
+      );
     },
     PATCH: async (
       req: Request,
@@ -2356,11 +2578,15 @@ export function createDynamicHandlers(options?: {
     ) => {
       const resolvedParams = await ctx.params;
       const paramsList = resolvedParams.params || [];
-      return withSecurity(req, async () => {
-        if (isAuthRoute(paramsList))
-          return handleAuthRequest(req, paramsList, "PATCH");
-        return handlePatch(req, paramsList);
-      });
+      return withSecurity(
+        req,
+        limitBeforeRouting(paramsList, "PATCH", true),
+        async () => {
+          if (isAuthRoute(paramsList))
+            return handleAuthRequest(req, paramsList, "PATCH");
+          return handlePatch(req, paramsList);
+        }
+      );
     },
     DELETE: async (
       req: Request,
@@ -2368,13 +2594,17 @@ export function createDynamicHandlers(options?: {
     ) => {
       const resolvedParams = await ctx.params;
       const paramsList = resolvedParams.params || [];
-      return withSecurity(req, async () => {
-        return handleDelete(req, paramsList);
-      });
+      return withSecurity(
+        req,
+        limitBeforeRouting(paramsList, "DELETE", false),
+        async () => {
+          return handleDelete(req, paramsList);
+        }
+      );
     },
     OPTIONS: async (req: Request) => {
       // eslint-disable-next-line @typescript-eslint/require-await
-      return withSecurity(req, async () => {
+      return withSecurity(req, "core", async () => {
         return new Response(null, {
           status: 204,
           headers: { Allow: "GET, POST, PUT, PATCH, DELETE, OPTIONS" },

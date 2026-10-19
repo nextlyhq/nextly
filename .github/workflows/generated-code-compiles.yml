@@ -1,0 +1,280 @@
+# Does what `nextly generate:types` writes COMPILE in the app it is written into?
+#
+# The generator writes TypeScript types and Zod schemas into the user's app, so every
+# import in them has to resolve from the app — not from this monorepo, where every
+# package can reach every other. An app depends on `nextly`; it need not depend on
+# `zod`. Under npm a bare `zod` import happens to resolve, because npm hoists Nextly's
+# own copy to the top of `node_modules`; under pnpm and Yarn Plug'n'Play it does not,
+# and the generated files fail to compile. The unit tests cannot see that difference:
+# it lives in how each package manager lays out an install.
+#
+# So this job packs `nextly` and the workspace packages it depends on, installs them
+# into a fresh project per package manager that depends on nothing but `nextly`,
+# `esbuild` (which loads `nextly.config.ts`) and `typescript`, runs `generate:types`
+# and then `tsc`. The project keeps its app at the root, with no `src/`, so the run
+# also checks that the generator writes no `src/` folder there.
+#
+# A control file importing `zod` directly must FAIL to compile in the pnpm and Yarn
+# legs. Without it, a leg whose install leaked `zod` to the top would pass for the
+# wrong reason, and this check would prove nothing.
+
+name: Generated code compiles
+
+# Triggered for every pull request and queued merge, and narrowed by the `changes`
+# job below rather than by `on.paths`: a workflow filtered out by `on.paths` never
+# creates its checks, so if this one is ever made a required check, an unrelated
+# pull request would wait for a status that never comes. A job skipped by `if:`
+# reports `skipped`, which branch protection and the merge queue accept.
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: generated-code-compiles-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Decide whether this commit touches generated code
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      inert: ${{ steps.decide.outputs.inert }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The merge base has to be present for the diff; anything the
+          # comparison cannot read runs the job (`scripts/change-scope.mjs`).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide
+        id: decide
+        env:
+          SCOPE_TITLE: Generated code scope
+        # Every path is inert EXCEPT the ones that shape what `generate:types`
+        # writes or how it resolves in an app. The script derives that set from
+        # the generators' own imports, so a helper they come to depend on runs
+        # the check without being listed by hand. Unlike `ci.yml` this is an
+        # inclusion list, deliberately: the check is about one pipeline, and
+        # running it for every change would hold three runners for nothing.
+        run: |
+          INERT_PATHS="$(node scripts/generated-code-scope.mjs)"
+          export INERT_PATHS
+          node scripts/change-scope.mjs
+
+  compiles:
+    name: Generated code compiles (${{ matrix.pm }})
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        pm: [pnpm, yarn-pnp, npm]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build nextly and the workspace packages it depends on
+        run: pnpm turbo build --filter=nextly...
+
+      - name: Pack them
+        shell: bash
+        run: |
+          mkdir -p /tmp/packs
+          # nextly and, recursively, every @nextlyhq/* package it depends on: the
+          # project must run THIS change, not the last published release.
+          DIRS=$(node -e '
+            const fs = require("node:fs");
+            const byName = {};
+            for (const dir of fs.readdirSync("packages")) {
+              try {
+                const m = JSON.parse(fs.readFileSync(`packages/${dir}/package.json`, "utf8"));
+                byName[m.name] = { dir, m };
+              } catch {}
+            }
+            const seen = new Set(["nextly"]);
+            const queue = ["nextly"];
+            while (queue.length) {
+              const entry = byName[queue.shift()];
+              for (const dep of Object.keys(entry.m.dependencies || {})) {
+                if (dep.startsWith("@nextlyhq/") && byName[dep] && !seen.has(dep)) {
+                  seen.add(dep);
+                  queue.push(dep);
+                }
+              }
+            }
+            console.log([...seen].map(name => byName[name].dir).join(" "));
+          ')
+          echo "packing: $DIRS"
+          for dir in $DIRS; do
+            (cd "packages/$dir" && pnpm pack --pack-destination /tmp/packs)
+          done
+          ls /tmp/packs
+
+      # Generated schemas and app code share ONE Zod only if the published entry
+      # re-exports the Zod nextly depends on. A build that bundled its own copy
+      # would still type-check below, so this reads the packed file itself:
+      # `$constructor("$ZodType"` is where Zod's core defines its base schema,
+      # and it appears in a build only when Zod was copied into it.
+      - name: The packed nextly/zod re-exports nextly's Zod, with no copy of its own
+        shell: bash
+        run: |
+          set -euo pipefail
+          pack=$(ls /tmp/packs/nextly-[0-9]*.tgz)
+          mkdir -p /tmp/nextly-pack && tar -xzf "$pack" -C /tmp/nextly-pack
+          cat /tmp/nextly-pack/package/dist/zod.mjs
+          grep -Eq 'from "zod"' /tmp/nextly-pack/package/dist/zod.mjs \
+            || { echo "dist/zod.mjs does not import the zod package"; exit 1; }
+          if grep -rlF '$constructor("$ZodType"' /tmp/nextly-pack/package/dist; then
+            echo "the files above carry a copy of Zod: nextly/zod would not be the Zod nextly uses"
+            exit 1
+          fi
+          echo "nextly/zod re-exports the zod package, and the build carries no copy of it"
+
+      - name: Make a project that depends on nextly and not on zod
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/app/app && cd /tmp/app
+          cat > tsconfig.json <<'JSON'
+          { "compilerOptions": { "target": "ES2022", "module": "esnext", "moduleResolution": "bundler",
+            "strict": true, "skipLibCheck": true, "noEmit": true, "isolatedModules": true },
+            "include": ["**/*.ts"], "exclude": ["node_modules"] }
+          JSON
+          cat > nextly.config.ts <<'TS'
+          import { defineConfig, defineCollection, text } from "nextly/config";
+
+          const posts = defineCollection({
+            slug: "posts",
+            fields: [text({ name: "title", required: true })],
+            status: true,
+          });
+
+          export default defineConfig({ collections: [posts], singles: [] });
+          TS
+          echo 'export const page = "an app at the root, with no src/";' > app/page.ts
+
+          # Every packed package, by name, as a file: specifier.
+          overrides=$(node -e '
+            const fs = require("node:fs");
+            const { execFileSync } = require("node:child_process");
+            const out = {};
+            for (const f of fs.readdirSync("/tmp/packs").filter(f => f.endsWith(".tgz"))) {
+              const manifest = execFileSync("tar", ["-xzOf", `/tmp/packs/${f}`, "package/package.json"]);
+              out[JSON.parse(manifest).name] = `file:/tmp/packs/${f}`;
+            }
+            console.log(JSON.stringify(out));
+          ')
+          nextly=$(node -e "console.log(JSON.parse(process.argv[1]).nextly)" "$overrides")
+          echo "overrides: $overrides"
+
+          case "${{ matrix.pm }}" in
+            pnpm)
+              echo '{ "name": "generated-code", "private": true }' > package.json
+              {
+                printf 'allowBuilds:\n  esbuild: true\n  better-sqlite3: true\noverrides:\n'
+                node -e 'for (const [n, s] of Object.entries(JSON.parse(process.argv[1]))) console.log(`  "${n}": "${s}"`)' "$overrides"
+              } > pnpm-workspace.yaml
+              pnpm add "$nextly" esbuild typescript@5
+              ;;
+            yarn-pnp)
+              corepack enable
+              node -e '
+                const overrides = JSON.parse(process.argv[1]);
+                require("node:fs").writeFileSync("package.json", JSON.stringify({
+                  name: "generated-code", private: true,
+                  packageManager: "yarn@4.9.2", resolutions: overrides,
+                }, null, 2));
+              ' "$overrides"
+              printf 'nodeLinker: pnp\nenableGlobalCache: false\n' > .yarnrc.yml
+              COREPACK_ENABLE_DOWNLOAD_PROMPT=0 yarn add "nextly@$nextly" esbuild typescript@5
+              test -f .pnp.cjs || { echo "no .pnp.cjs: this leg claims Plug'n'Play"; exit 1; }
+              test ! -d node_modules || { echo "node_modules exists: this leg is not Plug'n'Play"; exit 1; }
+              ;;
+            npm)
+              # npm refuses an override for a direct dependency, so nextly itself is left out.
+              node -e '
+                const overrides = JSON.parse(process.argv[1]);
+                delete overrides.nextly;
+                require("node:fs").writeFileSync("package.json", JSON.stringify({
+                  name: "generated-code", private: true, overrides,
+                }, null, 2));
+              ' "$overrides"
+              npm install --no-audit --no-fund "$nextly" esbuild typescript@5
+              ;;
+          esac
+
+          node -e '
+            const m = JSON.parse(require("node:fs").readFileSync("package.json", "utf8"));
+            const deps = { ...m.dependencies, ...m.devDependencies };
+            if (deps.zod) { console.error("the project depends on zod: this check needs one that does not"); process.exit(1); }
+            console.log("dependencies:", Object.keys(deps).join(", "));
+          '
+
+      - name: Generate, then compile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/app
+          run() {
+            case "${{ matrix.pm }}" in
+              pnpm) pnpm exec "$@" ;;
+              yarn-pnp) COREPACK_ENABLE_DOWNLOAD_PROMPT=0 yarn "$@" ;;
+              npm) npx --no-install "$@" ;;
+            esac
+          }
+
+          NEXTLY_TELEMETRY_DISABLED=1 run nextly generate:types
+
+          test ! -d src || { echo "generate:types created a src/ folder in an app without one"; exit 1; }
+          schemas=$(find db -name '*.zod.ts' 2>/dev/null | wc -l | tr -d ' ')
+          [ "$schemas" -gt 0 ] || { echo "no Zod schema was written under db/"; exit 1; }
+          types=$(find types -name '*.ts' 2>/dev/null | wc -l | tr -d ' ')
+          [ "$types" -gt 0 ] || { echo "no types file was written under types/"; exit 1; }
+
+          run tsc --noEmit -p .
+          echo "generated types and schemas compile"
+
+      - name: Control — a bare zod import does not resolve here
+        if: matrix.pm != 'npm'
+        shell: bash
+        run: |
+          cd /tmp/app
+          printf 'import { z } from "zod";\nexport const probe = z.string();\n' > probe.ts
+          if [ "${{ matrix.pm }}" = pnpm ]; then out=$(pnpm exec tsc --noEmit -p . 2>&1 || true)
+          else out=$(COREPACK_ENABLE_DOWNLOAD_PROMPT=0 yarn tsc --noEmit -p . 2>&1 || true); fi
+          rm -f probe.ts
+          if echo "$out" | grep -q "probe.ts.*TS2307"; then
+            echo "a bare zod import fails here, as it does in a user's app"
+          else
+            echo "a bare zod import resolved: this leg's install leaks zod, so the check above proves nothing"
+            echo "$out"
+            exit 1
+          fi

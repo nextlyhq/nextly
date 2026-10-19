@@ -6,7 +6,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const assertReadableSpy = vi.fn();
-const redactSpy = vi.fn();
+// Redaction answers what it withheld; nothing, unless a case says otherwise.
+const redactSpy = vi.fn((..._args: unknown[]) =>
+  Promise.resolve(new Set<string>())
+);
 const resolveSingleIdSpy = vi.fn();
 const listSpy = vi.fn();
 const getSpy = vi.fn();
@@ -21,10 +24,28 @@ vi.mock("../../../api/versions-access", () => ({
   // mutates the snapshot in place, so a mock that RETURNED one would describe a
   // contract the module does not have.
   hydrateVersionSnapshot: () => Promise.resolve(),
+  // The page as read: these cases judge paging and the gate, not the
+  // "last looked at" marking, which has its own tests.
+  withLastViewedMarks: (rows: unknown) => Promise.resolve(rows),
 }));
 
+const getAutosaveSpy = vi.fn();
+
 vi.mock("../../../di", () => ({
-  getService: vi.fn(() => ({ list: listSpy, get: getSpy })),
+  getService: vi.fn(() => ({
+    list: listSpy,
+    get: getSpy,
+    getAutosave: getAutosaveSpy,
+  })),
+}));
+
+// The entity gate the autosave read passes first; this file judges what
+// happens after it.
+vi.mock("../../../auth/entity-read-access", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../auth/entity-read-access")
+  >()),
+  canReadEntity: () => Promise.resolve(true),
 }));
 
 vi.mock("../../../domains/versions/author-hydration", () => ({
@@ -32,12 +53,46 @@ vi.mock("../../../domains/versions/author-hydration", () => ({
 }));
 
 import {
+  getAutosaveForDocument,
   getVersionForDocument,
   listVersionsForDocument,
+  respondVersionPage,
   userFromParams,
 } from "../versions-methods";
 
 const user = { id: "user-1" };
+
+describe("respondVersionPage", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("rebuilds the caller and paging from the params, and answers privately", async () => {
+    listSpy.mockResolvedValue([]);
+
+    const response = await respondVersionPage(
+      { scopeKind: "collection", slug: "posts", entryId: "e1" },
+      {
+        limit: "10",
+        _authenticatedUserId: "user-1",
+        _authenticatedUserRoles: JSON.stringify(["editor"]),
+      }
+    );
+
+    expect(assertReadableSpy).toHaveBeenCalledWith(
+      "collection",
+      "posts",
+      "e1",
+      expect.objectContaining({ id: "user-1", roles: ["editor"] }),
+      undefined
+    );
+    expect(listSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ limit: 11 })
+    );
+    // The page marks where this person last looked, so no shared cache may
+    // keep it.
+    expect(response.headers.get("cache-control")).toMatch(/private/);
+  });
+});
 
 describe("listVersionsForDocument", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -183,20 +238,24 @@ describe("getVersionForDocument", () => {
   it("redacts the snapshot before returning it", async () => {
     getSpy.mockResolvedValue({ versionNo: 1, snapshot: { title: "x" } });
 
+    const scope = { actorType: "apiKey" as const, permissions: ["read-posts"] };
     await getVersionForDocument({
       scopeKind: "collection",
       slug: "posts",
       entryId: "e1",
       user,
+      authenticatedScope: scope,
       versionNo: 1,
     });
 
-    // A stored snapshot must never reveal a field the live read would hide.
+    // A stored snapshot must never reveal a field the live read would hide,
+    // judged for a key on the key's own grants.
     expect(redactSpy).toHaveBeenCalledWith(
       { title: "x" },
       "collection",
       "posts",
-      user
+      user,
+      scope
     );
   });
 
@@ -250,5 +309,34 @@ describe("userFromParams", () => {
     });
 
     expect(result.roles).toBeUndefined();
+  });
+});
+
+describe("getAutosaveForDocument", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("redacts with the key scope the request carries", async () => {
+    getAutosaveSpy.mockResolvedValue({ snapshot: { title: "x" } });
+
+    // A direct dispatch: the key's scope arrives in the params only, not as an
+    // argument, and the read decodes it from there.
+    await getAutosaveForDocument({
+      scopeKind: "collection",
+      slug: "posts",
+      entryId: "e1",
+      user,
+      params: {
+        _authenticatedActorType: "apiKey",
+        _authenticatedPermissions: JSON.stringify(["read-posts"]),
+      },
+    });
+
+    expect(redactSpy).toHaveBeenCalledWith(
+      { title: "x" },
+      "collection",
+      "posts",
+      user,
+      { actorType: "apiKey", permissions: ["read-posts"] }
+    );
   });
 });

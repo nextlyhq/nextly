@@ -152,6 +152,22 @@ export interface JobDefinition<TInput extends JobInput = JobInput> {
   sweep: boolean;
 }
 
+/**
+ * Any job type, whatever input its handler takes: what a list of jobs holds,
+ * the config's `jobs` and a plugin's `contributes.jobs`.
+ *
+ * `handler` is declared as a method, so its input is compared bivariantly
+ * here and nowhere else: a `defineJob<{ cursor: string }>(...)` result fits
+ * without a cast, and a job written inline gets `JobInput` for its handler's
+ * input, as it did before typed jobs fit. `JobDefinition` itself keeps a
+ * contravariant handler, so a typed job still cannot be widened to the
+ * default and handed another job's input. Only the runner calls a listed
+ * handler, with the input stored for it.
+ */
+export interface AnyJobDefinition extends Omit<JobDefinition, "handler"> {
+  handler(input: JobInput, context: JobContext): Promise<void>;
+}
+
 export interface JobDefinitionInput<TInput extends JobInput = JobInput> {
   slug: string;
   handler: (input: TInput, context: JobContext) => Promise<void>;

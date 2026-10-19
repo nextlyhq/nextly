@@ -27,6 +27,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown>;
@@ -66,11 +67,15 @@ const document = (
 });
 
 /** The validation issues a refused write carries. */
-function issuesOf(error: unknown): Array<{ code: string; message: string }> {
+function issuesOf(
+  error: unknown
+): Array<{ path: string; code: string; message: string }> {
   return (
     (
       error as {
-        publicData?: { errors?: Array<{ code: string; message: string }> };
+        publicData?: {
+          errors?: Array<{ path: string; code: string; message: string }>;
+        };
       }
     ).publicData?.errors ?? []
   );
@@ -86,6 +91,32 @@ async function refusalOf(write: Promise<unknown>): Promise<unknown> {
   } catch (error) {
     return error;
   }
+}
+
+/** The entry service, as a translated collection's writes reach it. */
+interface TranslatedEntries {
+  createEntry(
+    params: {
+      collectionName: string;
+      overrideAccess?: boolean;
+      locale?: string;
+    },
+    data: Record<string, unknown>
+  ): Promise<{ success: boolean; data: unknown }>;
+  updateEntry(
+    params: {
+      collectionName: string;
+      entryId: string;
+      overrideAccess?: boolean;
+      locale?: string;
+    },
+    data: Record<string, unknown>
+  ): Promise<{ success: boolean }>;
+  publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    overrideAccess?: boolean;
+  }): Promise<{ success: boolean }>;
 }
 
 /** The batch worker behind every bulk write, imports included. */
@@ -106,6 +137,30 @@ function batchOf(t: TestNextly): BatchEntries {
     getEntryService(): BatchEntries;
   };
   return handler.getEntryService();
+}
+
+/**
+ * Write a component's live content straight to its row, past every check, as
+ * an older writer could have left it.
+ */
+async function plant(
+  t: TestNextly,
+  dialect: TestDialect,
+  id: string,
+  nodes: Node[]
+): Promise<void> {
+  const registry = t.getService("collectionRegistryService") as unknown as {
+    getCollectionBySlug(slug: string): Promise<{ tableName: string } | null>;
+  };
+  const table = (await registry.getCollectionBySlug(COMPONENTS_SLUG))!
+    .tableName;
+  const planted = document("component", nodes);
+  await t.adapter.update(
+    table,
+    // SQLite stores a JSON column as text; the others take the value.
+    { content: dialect === "sqlite" ? JSON.stringify(planted) : planted },
+    { and: [{ column: "id", op: "=", value: id }] }
+  );
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -225,20 +280,7 @@ describe.each(getConfiguredTestDialects())(
         data: { content: document("component", [placing("n1", b)]) },
         overrideAccess: true,
       });
-      const registry = t.getService("collectionRegistryService") as unknown as {
-        getCollectionBySlug(
-          slug: string
-        ): Promise<{ tableName: string } | null>;
-      };
-      const table = (await registry.getCollectionBySlug(COMPONENTS_SLUG))!
-        .tableName;
-      const planted = document("component", [placing("n2", a)]);
-      await t.adapter.update(
-        table,
-        // SQLite stores a JSON column as text; the others take the value.
-        { content: dialect === "sqlite" ? JSON.stringify(planted) : planted },
-        { and: [{ column: "id", op: "=", value: b }] }
-      );
+      await plant(t, dialect, b, [placing("n2", a)]);
 
       const refused = await refusalOf(
         t.nextly.update({
@@ -332,13 +374,270 @@ describe.each(getConfiguredTestDialects())(
       expect(issuesOf(refused)[0]!.message).not.toContain(String(home.item.id));
     });
 
-    function page(t: TestNextly, nodes: Node[]) {
+    /**
+     * A component whose two forms disagree on depth: published three deep, its
+     * pending draft one deep. A page placing it three deep fits the limit of
+     * four against the draft and is past it against what is published.
+     */
+    async function componentDeeperWhenPublished(t: TestNextly) {
+      const id = await component(t, "split", [
+        box("d1", [box("d2", [text("d3")])]),
+      ]);
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id,
+        data: { status: "published" },
+        overrideAccess: true,
+      });
+      // No status named: stored as the working draft, the live row untouched.
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id,
+        data: { content: document("component", [text("d1")]) },
+        overrideAccess: true,
+      });
+      return id;
+    }
+
+    function publish(t: TestNextly, id: string) {
+      return t.nextly.update({
+        collection: "pages",
+        id,
+        data: { status: "published" },
+        overrideAccess: true,
+      });
+    }
+
+    it("refuses a status-only first publication the published forms put past the limit", async () => {
+      const t = await boot();
+      const split = await componentDeeperWhenPublished(t);
+      // A draft page is judged against the forms a preview shows: the draft.
+      const home = await page(
+        t,
+        [box("p1", [box("p2", [placing("i1", split)])])],
+        "draft"
+      );
+
+      // The page has no working draft of its own: its row is what goes live.
+      const refused = await refusalOf(publish(t, String(home.item.id)));
+
+      // Named on the field, so the editor can show it where the content is.
+      expect(issuesOf(refused)).toEqual([
+        expect.objectContaining({ path: "content", code: "depth-exceeded" }),
+      ]);
+    });
+
+    it("refuses a status-only republish after an unpublish the published forms put past the limit", async () => {
+      const t = await boot();
+      const split = await componentDeeperWhenPublished(t);
+      // CONTROL: placed at the top, the published form fits too, so the page
+      // publishes; this also shows the publish path itself goes through.
+      const home = await page(t, [placing("i1", split)], "draft");
+      const id = String(home.item.id);
+      await expect(publish(t, id)).resolves.toBeDefined();
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: { status: "draft" },
+        overrideAccess: true,
+      });
+      // Deepened while unpublished, which a draft is judged on the draft forms for.
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: {
+          content: document("page", [
+            box("p1", [box("p2", [placing("i1", split)])]),
+          ]),
+        },
+        overrideAccess: true,
+      });
+
+      const refused = await refusalOf(publish(t, id));
+
+      expect(issuesOf(refused)).toEqual([
+        expect.objectContaining({ path: "content", code: "depth-exceeded" }),
+      ]);
+    });
+
+    it("refuses publishing every language of a translated page when one language composes past the limit as published", async () => {
+      const t = await bootTranslated();
+      const entries = translatedEntries(t);
+      const split = await componentDeeperWhenPublished(t);
+      // English places the component at the top, which fits in both forms.
+      const created = await entries.createEntry(
+        { collectionName: "articles", overrideAccess: true, locale: "en" },
+        {
+          title: "Home",
+          content: document("page", [placing("i1", split)]),
+          status: "draft",
+        }
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const id = String((created.data as { id: unknown }).id);
+      // German places it three deep: judged as a draft, against the draft forms.
+      const german = await entries.updateEntry(
+        {
+          collectionName: "articles",
+          entryId: id,
+          locale: "de",
+          overrideAccess: true,
+        },
+        {
+          title: "Start",
+          content: document("page", [
+            box("p1", [box("p2", [placing("i1", split)])]),
+          ]),
+          status: "draft",
+        }
+      );
+      expect(german.success, JSON.stringify(german)).toBe(true);
+
+      const result = await entries.publishAllLocales({
+        collectionName: "articles",
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      // This path reports a refusal in its result rather than by throwing.
+      expect(result.success).toBe(false);
+      expect(JSON.stringify(result)).toContain("depth-exceeded");
+      expect(JSON.stringify(result)).toContain('"path":"content"');
+    });
+
+    it("refuses a status-only publish on a collection that keeps no drafts", async () => {
+      // No working draft can exist here at all: the row as stored is what
+      // every publish puts live.
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } })],
+        collections: [
+          {
+            slug: "notes",
+            status: true,
+            fields: [
+              { name: "title", type: "text" },
+              { name: "content", type: BLOCKS_TYPE },
+            ],
+          } as never,
+        ],
+      });
+      const t = current;
+      const split = await componentDeeperWhenPublished(t);
+      const note = await t.nextly.create({
+        collection: "notes",
+        data: {
+          title: "Note",
+          content: document("page", [
+            box("p1", [box("p2", [placing("i1", split)])]),
+          ]),
+          status: "draft",
+        },
+        overrideAccess: true,
+      });
+
+      const refused = await refusalOf(
+        t.nextly.update({
+          collection: "notes",
+          id: String(note.item.id),
+          data: { status: "published" },
+          overrideAccess: true,
+        })
+      );
+
+      expect(issuesOf(refused)).toEqual([
+        expect.objectContaining({ path: "content", code: "depth-exceeded" }),
+      ]);
+    });
+
+    it("does not re-judge a translation already live when its status is sent again", async () => {
+      const t = await bootTranslated();
+      const entries = translatedEntries(t);
+      const shallow = await component(t, "shallow", [text("s1")]);
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id: shallow,
+        data: { status: "published" },
+        overrideAccess: true,
+      });
+      const created = await entries.createEntry(
+        { collectionName: "articles", overrideAccess: true, locale: "en" },
+        { title: "Home", content: document("page", []), status: "draft" }
+      );
+      const id = String((created.data as { id: unknown }).id);
+      // German goes live placing the component three deep, which fits.
+      const deepGerman = document("page", [
+        box("p1", [box("p2", [placing("i1", shallow)])]),
+      ]);
+      const live = await entries.updateEntry(
+        {
+          collectionName: "articles",
+          entryId: id,
+          locale: "de",
+          overrideAccess: true,
+        },
+        { title: "Start", content: deepGerman, status: "published" }
+      );
+      expect(live.success, JSON.stringify(live)).toBe(true);
+      // The component deepens in storage, as an older writer could have left
+      // it, so German as stored would now be refused if it were judged.
+      await plant(t, dialect, shallow, [box("d1", [box("d2", [text("d3")])])]);
+
+      const again = await entries.updateEntry(
+        {
+          collectionName: "articles",
+          entryId: id,
+          locale: "de",
+          overrideAccess: true,
+        },
+        { status: "published" }
+      );
+
+      // Nothing goes live that was not live already, so nothing is judged.
+      expect(again.success, JSON.stringify(again)).toBe(true);
+    });
+
+    /** A translated collection holding a blocks field, per language. */
+    async function bootTranslated(): Promise<TestNextly> {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } })],
+        collections: [
+          {
+            slug: "articles",
+            status: true,
+            localized: true,
+            fields: [
+              { name: "title", type: "text", localized: true },
+              { name: "content", type: BLOCKS_TYPE, localized: true },
+            ],
+          } as never,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      return current;
+    }
+
+    function translatedEntries(t: TestNextly): TranslatedEntries {
+      return (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): TranslatedEntries;
+        }
+      ).getEntryService();
+    }
+
+    function page(
+      t: TestNextly,
+      nodes: Node[],
+      status?: "draft" | "published"
+    ) {
       return t.nextly.create({
         collection: "pages",
         data: {
           title: "Home",
           slug: `home-${String(Math.random()).slice(2, 8)}`,
           content: document("page", nodes),
+          ...(status === undefined ? {} : { status }),
         },
         overrideAccess: true,
       });

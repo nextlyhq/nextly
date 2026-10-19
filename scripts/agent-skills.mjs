@@ -280,7 +280,7 @@ function skillProblems(home, skill) {
  * is not evidence: `description: [` is not YAML, and a folded `>-` with no
  * text under it is an empty string.
  */
-function frontmatter(text) {
+export function frontmatter(text) {
   const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!block) return { problem: "has no frontmatter" };
   const { value, problem } = parsedYaml(block[1]);
@@ -365,11 +365,45 @@ export function userSkillSeparation(base = root, files = repositoryFiles(base)) 
   if (offered.length === 0) {
     problems.push({ path: USER_SKILLS_HOME, problem: "offers no skill, so `npx skills add nextlyhq/nextly` installs nothing for people building with Nextly" });
   }
+  problems.push(...readmeDisagreements(base, files, offered.map(found => found.path.split("/").at(-2))));
   return {
     contributor: contributor.map(found => contributorSkillName(found.path)),
     user: skills.filter(found => isUserSkill(found.path)).map(found => found.path.split("/").at(-2)),
     problems,
   };
+}
+
+/** The README that tells people which skills `skills/` holds. */
+const USER_SKILLS_README = `${USER_SKILLS_HOME}/README.md`;
+
+/**
+ * Where the README and the installer disagree. The README is what people
+ * read before installing, so its table and the skills offered must be one
+ * set: a skill gone from `skills/` but still listed, or one added and never
+ * listed, is reported, and so is a README that is not there at all.
+ */
+function readmeDisagreements(base, files, offered) {
+  if (!files.includes(USER_SKILLS_README)) {
+    return [{ path: USER_SKILLS_README, problem: "is missing, so nothing lists the skills people building with Nextly install" }];
+  }
+  const listed = skillTableNames(readFileSync(join(base, USER_SKILLS_README), "utf8"));
+  return [
+    ...offered.filter(name => !listed.has(name)).map(name => ({ path: `${USER_SKILLS_HOME}/${name}/SKILL.md`, problem: `is offered by the skills command but not listed in ${USER_SKILLS_README}` })),
+    ...[...listed].filter(name => !offered.includes(name)).map(name => ({ path: USER_SKILLS_README, problem: `lists ${name}, which skills/ does not offer` })),
+  ];
+}
+
+/**
+ * The skill names a Markdown table lists: rows whose first cell is a name in
+ * backticks. AGENTS.md's skill router and `skills/README.md` use this shape.
+ */
+export function skillTableNames(markdown) {
+  const names = new Set();
+  // The first character may be a digit, as the skill format's names allow.
+  for (const row of markdown.matchAll(/^\|\s*`([a-z0-9][a-z0-9-]*)`\s*\|/gm)) {
+    names.add(row[1]);
+  }
+  return names;
 }
 
 /** A SKILL.md, by its file name as the installer matches it: in any letter case. */

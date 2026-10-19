@@ -14,7 +14,9 @@ vi.mock("../versions-methods", async () => {
   );
   return {
     ...actual,
-    listVersionsForDocument: (...a: unknown[]) => listSpy(...a),
+    // The dispatchers answer a history page through this one helper; what
+    // they owe it is the document and the request's params.
+    respondVersionPage: (...a: unknown[]) => listSpy(...a),
     getVersionForDocument: (...a: unknown[]) => getSpy(...a),
   };
 });
@@ -51,6 +53,7 @@ describe("version methods are registered", () => {
       "getEntryVersion",
       "getEntryVersionDiff",
       "listEntryVersions",
+      "markEntryVersionSeen",
       "restoreEntryVersion",
       "setEntryVersionLabel",
     ]);
@@ -65,6 +68,7 @@ describe("version methods are registered", () => {
       "getSingleVersion",
       "getSingleVersionDiff",
       "listSingleVersions",
+      "markSingleVersionSeen",
       "restoreSingleVersion",
       "setSingleVersionLabel",
     ]);
@@ -110,13 +114,14 @@ describe("version methods are registered", () => {
       undefined
     );
 
+    // The caller is rebuilt from these params inside the helper; its own
+    // tests assert that.
     expect(listSpy).toHaveBeenCalledWith(
+      { scopeKind: "collection", slug: "posts", entryId: "e1" },
       expect.objectContaining({
-        scopeKind: "collection",
-        slug: "posts",
-        entryId: "e1",
-        limit: 10,
-        user: expect.objectContaining({ id: "user-1", roles: ["editor"] }),
+        limit: "10",
+        _authenticatedUserId: "user-1",
+        _authenticatedUserRoles: JSON.stringify(["editor"]),
       })
     );
   });
@@ -139,7 +144,8 @@ describe("version methods are registered", () => {
 
     expect(resolveSingleIdSpy).toHaveBeenCalledWith("settings");
     expect(listSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ scopeKind: "single", entryId: "live-id" })
+      { scopeKind: "single", slug: "settings", entryId: "live-id" },
+      expect.anything()
     );
   });
 

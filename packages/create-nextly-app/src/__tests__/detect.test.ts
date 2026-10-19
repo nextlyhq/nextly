@@ -119,6 +119,10 @@ describe("detectPackageManager", () => {
     expect(await detectPackageManager("/test/project")).toBe("bun");
   });
 
+  // Whether an app inside a workspace takes the workspace's manager is tested
+  // against real directories in workspace-root.test.ts: it depends on the
+  // workspace listing the app, which these mocks cannot model.
+
   it("uses npm_config_user_agent when the directory has no lockfile", async () => {
     process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v22.10.0";
     expect(await detectPackageManager("/test/project")).toBe("yarn");

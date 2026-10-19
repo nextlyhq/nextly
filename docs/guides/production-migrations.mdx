@@ -3,8 +3,6 @@ title: Production migrations
 description: Ship database schema changes to production safely with the Nextly migration CLI. Forward-only model, GitHub Actions, Vercel build step, and other-platform patterns.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** `nextly users:clear-plaintext-passwords`, the `--plugin` and `--no-transaction` flags, the `unfinished` state, `REFUSED_STATEMENT`, the retired auth-table variables, and the sections marked below.
-
 Nextly's schema-evolution model splits responsibilities cleanly between development and production:
 
 - **Local development:** `next dev` + Nextly's HMR pipeline auto-applies schema changes as you edit `nextly.config.ts`.
@@ -37,7 +35,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 
 ### Per-command flags
 
-- `nextly migrate` -- `--dry-run` (list what a run would apply, without executing: each plugin's pending migration modules by `plugin:<name>/<module>`, then the app's pending files, in run order and within `--step`, with anything a run would refuse), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
+- `nextly migrate` -- `--dry-run` (list what a run would apply, without executing: each plugin's pending migration modules by `plugin:<name>/<module>`, then the app's pending files with the SQL each would run, in run order and within `--step`, with anything a run would refuse), `--step <n>` (apply only N pending migrations, counting a plugin's migration modules, which run first, together with the app's files), `--force-unlock` (clear a stale migrate lock left by a crashed run, then migrate).
 - `nextly migrate:baseline` -- `--name <name>` (the migration's name; defaults to `baseline`), `--force-unlock`.
 - `nextly migrate:create` -- `[name]` positional or `--name <name>` flag, `--blank` (empty file for custom SQL), `--no-transaction` (with `--blank`, a file whose first line is the [no-transaction marker](#running-a-file-outside-a-transaction); with `--plugin`, a module with `transaction: false`), `--non-interactive`, `--accept-renames`.
 - `nextly migrate:status` -- `--json` (machine-readable output for CI scripting), `--plugin <name>` (list that plugin's migration modules instead of the app's files).
@@ -297,8 +295,6 @@ Specific examples:
 
 ## What a migration file may contain
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 Every migration file, plugin module and `-- DOWN` section runs as **one
 transaction on one database connection**, which the runner opens and commits
 itself, unless it is [marked to run outside one](#running-a-file-outside-a-transaction).
@@ -432,8 +428,6 @@ refused, because the check cannot read a string as code: write the body with
 `$$ … $$`.
 
 ### Foreign keys on SQLite
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 **On SQLite, foreign-key enforcement is off while a file runs, and checked before
 it commits.** The runner sets `PRAGMA foreign_keys = OFF` before the transaction,
@@ -622,8 +616,6 @@ judged safe. Read the whole list before setting it.
 
 ## Clearing passwords stored as typed
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 Earlier releases stored some passwords as they were typed instead of hashing them: a
 password of 32 characters or more that contained a colon, given when an account was
 created, and any value sent to `PATCH /admin/api/users/:id/password`. Such a value never let
@@ -704,6 +696,20 @@ If `nextly migrate` fails partway through:
 
 For MySQL specifically, partial state is possible because MySQL DDL auto-commits per statement. Manual cleanup may be needed; see [MySQL caveats](/docs/database/support) for the recovery playbook.
 
+### A field leaving translation, on MySQL
+
+When a translated field becomes shared, `migrate:create` writes a `<timestamp>_shared_localization_<slug>.sql` file that copies the default language's value onto the main table and then drops the field's column from the `<table>_locales` table. If that file fails on MySQL, `nextly migrate` refuses to run it again, because the drop may already have committed. The refusal names the file and the columns. To recover, check whether `<table>_locales` still has the column:
+
+- **The column is gone:** the file finished. Mark it applied with `nextly migrate:resolve --applied <file>`.
+- **The column is still there:** nothing was dropped. Run `nextly migrate:resolve --failed-cleanup <file>`, then `nextly migrate` to run it again.
+- **The file moves several fields and only some columns are gone:** drop the rest from `<table>_locales` by hand, then mark it applied.
+
+On PostgreSQL and SQLite the file runs in one transaction, so a failed attempt leaves nothing behind and `nextly migrate` runs it again.
+
+### Core tables missing after an upgrade
+
+A release can add tables to Nextly's own core schema. An existing database gets them only through `nextly migrate` (or a boot run with `db.runMigrationsOnBoot`); a production boot never creates tables. Until you run it, every boot logs one warning naming each missing core table, and whatever reads or writes those tables fails: deleting a document, for one, rolls back. Run `nextly migrate` after every upgrade, and the warning goes away.
+
 ### Core schema drift after `nextly upgrade`
 
 User migration files contain **user-schema only** — core system tables are owned by the Nextly package version and reconciled by `nextly migrate` Phase 1. If `nextly migrate` reports core schema drift after upgrading from a very early alpha (e.g. a hand-edited bundled file), run `nextly upgrade --reconcile-core`. It reconciles core in dev-loose mode and prompts for confirmation on each destructive operation. Use it only when migrate reports core drift.
@@ -763,8 +769,6 @@ previous one. Examples:
 The audit trail in `nextly_schema_events` keeps both rows, so post-incident review can see exactly what was applied when, and by which CI job.
 
 ## Plugins with tables of their own
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 ### The phase order
 
@@ -941,14 +945,19 @@ limits are accepted:
 | Code | Meaning |
 | --- | --- |
 | `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
-| `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled but is still in your config. Reinstall it or remove the line. |
+| `PLUGIN_NOT_INSTALLED` | An enabled plugin in your config has not been installed on this database. Run `nextly plugins install <name>` for each one it names, or `nextly plugins install --all`. A disabled plugin is not required to be installed: its tables exist, but its `onInstall` runs only when you enable and install it. |
+| `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled, with or without `--keep-data`, but is still in your config. Reinstall it or remove the line. |
+| `PLUGIN_UNINSTALL_UNFINISHED` | An uninstall of the plugin began and did not finish. Run it again, the way it began, to finish it, or reinstall the plugin. |
 | `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
 | `MIGRATION_CHECKSUM_MISMATCH` | A migration changed after it was generated or applied. |
 | `DROP_OF_FOREIGN_TABLE` | A migration would drop or rename another owner's table, column, index, foreign key or check, or a plugin migration a table no owner row claims. Nothing was applied. |
 
-In development, `PLUGIN_SCHEMA_BEHIND` only logs: push reconciles from config
-on every reload, so it resolves itself moments later and refusing would make
-the edit loop impossible.
+In development, `PLUGIN_SCHEMA_BEHIND` and `PLUGIN_NOT_INSTALLED` only log:
+push reconciles from config on every reload, so a schema behind resolves
+itself moments later, and a plugin is added to the config and tried before
+anyone installs it. The other refusals hold in every environment. The
+install-state refusals come before boot migrations run, so a refused plugin's
+modules are not applied first.
 
 ### Ledger commands and plugin rows
 
@@ -970,6 +979,45 @@ longer ships shows as applied with its file missing.
 The default matters: `migrate:down` picks the newest applied migration of any
 kind, so without the exclusion it would revert a plugin's migration while
 reporting an app rollback.
+
+### Installing
+
+A plugin is installed on a database once `nextly plugins install <name>` has
+run there and finished: it applies the plugin's pending modules, runs its
+`onInstall`, and records the plugin installed. `nextly migrate` applies a
+plugin's modules too, but never runs `onInstall`, so it does not install the
+plugin. A production boot refuses an enabled plugin that has not been
+installed (`PLUGIN_NOT_INSTALLED`), whether or not migrations run at boot. A
+disabled plugin (`enabled: false`) boots without an install; once you enable
+it, the boot requires one.
+
+So, for every enabled plugin in your config, run the install command once on
+each database, after `nextly migrate`, before the first production boot that
+includes the plugin. Running it again is safe: it applies what is pending and
+calls `onInstall` again, which is why `onInstall` has to be idempotent.
+`nextly plugins install --all` runs it for every enabled plugin in your config,
+in dependency order, and stops at the first that fails; a disabled plugin is
+skipped and named.
+
+That makes the build the place to run it, against the database the build
+targets. A project from `create-nextly-app` does so already: its `build`
+script installs each plugin its config registers. Adding a plugin to an
+existing app? Add its install to your build, after `nextly migrate`:
+
+```bash
+nextly migrate && nextly plugins install <name> && next build
+```
+
+Each run of an install records one row in `nextly_schema_events` and changes
+nothing else that is already in place. When you remove a plugin from
+`nextly.config.ts`, remove its `nextly plugins install` from your build
+script, since installing a plugin that is not configured fails the build.
+Install plugins that depend on others after them, as `dependsOn` lists them.
+
+A plugin's install also refuses while a plugin it depends on is not installed
+(`PLUGIN_DEPENDENCY_NOT_INSTALLED`): one never installed, uninstalled, or
+whose uninstall has not finished. That holds for a dependency that owns no
+tables too, whose install record is the only trace it leaves.
 
 ### Uninstalling
 
@@ -1013,9 +1061,19 @@ owner rows are marked, so neither can interleave with the other or with
 `nextly migrate`. The boot each command makes to run the hook never runs boot
 migrations.
 
-The state is kept on the plugin's owner rows. A plugin that owns no tables has
-none, so nothing records its uninstall: remove it from your config, or it
-initializes again on the next boot.
+Each command records the plugin's state as an event in the migration ledger,
+so a plugin that owns no tables has one too. An uninstall records that it has
+begun before its first change, and that it has finished, `uninstalled` or, with
+`--keep-data`, `orphaned`, at its end. Until the plugin leaves your config,
+the boot refuses it in every environment: `PLUGIN_SCHEMA_UNINSTALLED` once the
+uninstall finished, `PLUGIN_UNINSTALL_UNFINISHED` while it has not.
+
+An uninstall that stops part way, after some of its DOWNs have committed, is
+finished by running it again the same way, with or without `--keep-data` as
+before: it plans over the modules still applied and the tables still there,
+calls `onUninstall` again, and carries on. Run the other way, it is refused
+(`PLUGIN_UNINSTALL_UNFINISHED`). `onUninstall` has to be idempotent for this
+reason. `nextly plugins install` reinstates the plugin instead.
 
 A full uninstall that would drop tables, or run a DOWN that drops a column,
 lists what it would drop and stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until
