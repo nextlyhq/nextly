@@ -293,6 +293,13 @@ export {
   applyWidgetSettings,
   resolveWidgetSettings,
 } from "./domains/widgets/settings";
+// The settings the sheet draws beyond field configs (a collection, and a
+// filter, sort or grouping over it), and the union every rule reads, so the
+// admin's controls and reset are typed by core's vocabulary, not a copy of it.
+export type {
+  AnyWidgetSetting,
+  ContentSetting,
+} from "./domains/widgets/settings";
 // Which field NAMES an entry. The admin draws a column with it, the activity
 // feed labels a row with it, and the dashboard's generated list widgets pick a
 // row label with it -- so it is one answer here rather than one per consumer.

@@ -20,7 +20,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@nextlyhq/ui";
-import type { WidgetSetting } from "nextly/config";
+import type { AnyWidgetSetting, WidgetSetting } from "nextly/config";
 import { useCallback, useMemo } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
@@ -111,6 +111,34 @@ export function toStoredConfig(
     stored[setting.name] = value;
   }
   return stored;
+}
+
+/**
+ * What the form holds after "Reset to defaults".
+ *
+ * Every setting goes back to its declared default, its dependents with it,
+ * except a Collection setting that declares no default. That one was given its
+ * value when the card was placed, from the collection group it was added from:
+ * it is the card's identity rather than a preference, so resetting it would
+ * turn a "Recent posts" card into a card of no collection at all. A Collection
+ * setting that declares a default (Recently edited's "All collections") resets
+ * like any other.
+ */
+export function resetToDefaults(
+  settings: readonly AnyWidgetSetting[],
+  values: Record<string, unknown>
+): Record<string, unknown> {
+  const reset: Record<string, unknown> = Object.create(null);
+  for (const setting of settings) {
+    const placed =
+      setting.type === "collection" &&
+      setting.defaultValue === undefined &&
+      Object.hasOwn(values, setting.name);
+    reset[setting.name] = placed
+      ? values[setting.name]
+      : (setting.defaultValue ?? "");
+  }
+  return reset;
 }
 
 export function WidgetSettingsSheet({

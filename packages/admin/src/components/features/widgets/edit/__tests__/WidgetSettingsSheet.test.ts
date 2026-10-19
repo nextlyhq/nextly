@@ -8,8 +8,12 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { initialValues, toStoredConfig } from "../WidgetSettingsSheet";
-import type { WidgetSetting } from "nextly/config";
+import {
+  initialValues,
+  resetToDefaults,
+  toStoredConfig,
+} from "../WidgetSettingsSheet";
+import type { AnyWidgetSetting, WidgetSetting } from "nextly/config";
 
 const limit: WidgetSetting = { name: "limit", type: "number", defaultValue: 5 };
 const title: WidgetSetting = { name: "title", type: "text" };
@@ -134,5 +138,46 @@ describe("what is stored on save", () => {
     expect(
       toStoredConfig([title], { title: "" }, { title: "old", legacy: "kept" })
     ).toEqual({ legacy: "kept" });
+  });
+});
+
+describe("what Reset to defaults leaves in the form", () => {
+  // A content card from a collection's group: its Collection was given at
+  // placement, so it declares none of its own.
+  const collection: AnyWidgetSetting = {
+    name: "collection",
+    type: "collection",
+  };
+  const sort: AnyWidgetSetting = {
+    name: "sort",
+    type: "sort",
+    of: "collection",
+    defaultValue: "-updatedAt",
+  };
+  const items: AnyWidgetSetting = {
+    name: "items",
+    type: "number",
+    defaultValue: 5,
+  };
+
+  it("restores every setting but a placed Collection", () => {
+    expect(
+      resetToDefaults([collection, sort, items], {
+        collection: "posts",
+        sort: "title",
+        items: 12,
+      })
+    ).toEqual({ collection: "posts", sort: "-updatedAt", items: 5 });
+  });
+
+  it("resets a Collection that declares its own default, as Recently edited's does", () => {
+    const anyCollection: AnyWidgetSetting = {
+      name: "collection",
+      type: "collection",
+      defaultValue: "*",
+    };
+    expect(
+      resetToDefaults([anyCollection, items], { collection: "posts", items: 9 })
+    ).toEqual({ collection: "*", items: 5 });
   });
 });
