@@ -22,8 +22,8 @@ const KEYED =
 const NAMED = /^thumb_[^/]+$/;
 
 /**
- * A stored path with each run of slashes written once, and a key without a
- * leading one. The storage puts a collection's files under `<prefix>/<key>`,
+ * A stored path with each run of slashes written once, a key without a
+ * leading one, and a URL without its query and fragment. The storage puts a collection's files under `<prefix>/<key>`,
  * so a prefix written with a slash at its end is stored as `media//...`, and
  * one written with a slash at its start as `/media/...`, where keys are kept
  * as given (S3). Local disk lists its files relative to its folder, with
@@ -34,7 +34,11 @@ const NAMED = /^thumb_[^/]+$/;
 export function canonicalStoredPath(path: string): string {
   const scheme = /^https?:\/\//.exec(path)?.[0];
   if (scheme) {
-    return scheme + path.slice(scheme.length).replace(/\/{2,}/g, "/");
+    // A URL without its query and fragment: a storage can list a file by a
+    // signed URL that a record names without them. A key keeps a `?`,
+    // which S3 allows in one.
+    const located = path.slice(scheme.length).replace(/[?#].*$/, "");
+    return scheme + located.replace(/\/{2,}/g, "/");
   }
   return path.replace(/\/{2,}/g, "/").replace(/^\//, "");
 }

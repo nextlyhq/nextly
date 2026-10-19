@@ -561,6 +561,29 @@ describe("nextly media orphans", () => {
     expect(text).not.toMatch(/secret/);
   });
 
+  // A listing can name a file by a signed URL, which a record names
+  // without its query: the same file.
+  it("keeps a referenced file the storage lists by a signed URL", async () => {
+    const bucket = new Bucket("vercel-blob");
+    const url = "https://abc.public.blob.vercel-storage.com/media/thumb_x.png";
+    bucket.put({ path: `${url}?token=t1`, lastModified: TWO_HOURS_AGO });
+    const said: string[] = [];
+
+    await mediaOrphans({
+      storage: bucket,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => refs(url),
+      referencedNow: askedOf(async () => refs(url)),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(bucket.files.size).toBe(1);
+    expect(said.join("\n")).not.toMatch(/Removed/);
+  });
+
   // A time the storage could not read is no time: the file may belong to an
   // upload still in progress.
   it("leaves a file whose stored time is not a date", async () => {
