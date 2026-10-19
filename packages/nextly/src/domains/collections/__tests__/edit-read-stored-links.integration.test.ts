@@ -31,6 +31,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { AccessControlFunction } from "../../../shared/types/access";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
@@ -39,7 +40,7 @@ afterEach(async () => {
 });
 
 /** Admits only the caller named `permitted`. */
-const readableByPermitted = ({ user }: { user?: { id?: string } }): boolean =>
+const readableByPermitted: AccessControlFunction = ({ user }) =>
   user?.id === "permitted";
 
 interface Fixture {
@@ -479,8 +480,9 @@ describe.each(getConfiguredTestDialects())(
       current
         .getService("rbacAccessControlService")
         .registerCollectionAccess("tags", { read: readableByPermitted });
-      const handler =
-        current.getService<CollectionsHandler>("collectionsHandler");
+      const handler = current.getService(
+        "collectionsHandler"
+      ) as CollectionsHandler;
       const make = async (
         collectionName: string,
         data: Record<string, unknown>
