@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -292,12 +292,26 @@ function configIsInside(
   logger: Logger
 ): boolean {
   if (configPath === undefined) return true;
-  const relative = path.relative(cwd, path.resolve(cwd, configPath));
+  // Compared as the loader reads them, through any link: a link inside the
+  // project to another project's config is that config.
+  const relative = path.relative(
+    realPathOf(cwd),
+    realPathOf(path.resolve(cwd, configPath))
+  );
   if (!relative.startsWith("..") && !path.isAbsolute(relative)) return true;
   logger.error(
     `The config ${configPath} is outside ${cwd}, whose database settings would be read, so its storage may be another project's. Nothing was changed. Run the command from that config's project to remove files.`
   );
   return false;
+}
+
+/** `target` with its links followed, or as given when it does not exist. */
+function realPathOf(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return target;
+  }
 }
 
 /**

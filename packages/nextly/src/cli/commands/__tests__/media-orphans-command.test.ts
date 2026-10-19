@@ -4,7 +4,14 @@
  * media-orphans.test.ts; here the database and the config loader are
  * stand-ins, so the order and the arguments can be observed.
  */
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -348,6 +355,49 @@ describe("nextly media orphans, as the CLI runs it", () => {
       "orphans",
       "--apply",
     ]);
+
+    expect(exits).toEqual([1]);
+    expect(media.deleted).toEqual([]);
+    expect(seen.loadConfig).toEqual([]);
+  });
+
+  // A link inside the project to another project's config is that config.
+  it("removes nothing with a config linked from outside the project", async () => {
+    const media = bucketWithOrphan("media");
+    seen.storage = [
+      {
+        name: "s3-media",
+        type: "s3",
+        collections: { media: { prefix: "media" } },
+        adapter: media.adapter,
+      },
+    ];
+    const other = await mkdtemp(path.join(tmpdir(), "nextly-other-"));
+    await writeFile(
+      path.join(other, "nextly.config.ts"),
+      "export default {};\n"
+    );
+    await symlink(
+      path.join(other, "nextly.config.ts"),
+      path.join(dir, "linked.config.ts")
+    );
+    process.chdir(dir);
+
+    try {
+      await createProgram().parseAsync([
+        "node",
+        "nextly",
+        "--cwd",
+        dir,
+        "--config",
+        "linked.config.ts",
+        "media",
+        "orphans",
+        "--apply",
+      ]);
+    } finally {
+      await rm(other, { recursive: true, force: true });
+    }
 
     expect(exits).toEqual([1]);
     expect(media.deleted).toEqual([]);
