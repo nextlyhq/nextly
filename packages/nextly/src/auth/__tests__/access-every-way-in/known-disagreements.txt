@@ -444,3 +444,11 @@ no-service key-role-based read related returns-false at population
 no-service visitor read related returns-null at population
 no-service user-with read related returns-null at population
 no-service key-role-based read related returns-null at population
+service user-with read collection async-throws at schema
+service custom-role read collection async-throws at schema
+service key-read-only read collection async-throws at schema
+service key-full-access read collection async-throws at schema
+service key-role-based read collection async-throws at schema
+service key-super-admin read collection async-throws at schema
+service user-partial read collection async-throws at schema
+service key-partial read collection async-throws at schema

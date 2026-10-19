@@ -93,6 +93,9 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   },
   "async-true": async () => true,
   "async-false": async () => false,
+  "async-throws": async () => {
+    throw new Error("the rule failed");
+  },
   "role-name": ({ roles }) => (roles ?? []).includes("editor"),
   "permission-spelling": ({ permissions, collection, operation }) =>
     (permissions ?? []).includes(`${collection}:${operation}`),

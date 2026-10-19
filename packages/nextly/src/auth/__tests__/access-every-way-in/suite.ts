@@ -9,6 +9,12 @@
  * collection list. This suite sends one table of cases through all of them, so
  * moving a door onto a different decision can be checked row by row.
  *
+ * Where a door writes (REST, the Direct API and a plugin service), the
+ * target's table is also read whole before and after the write, and the
+ * suite checks that a write the door did not allow left it exactly as it was,
+ * and that one it allowed changed it. An answer alone cannot show a door that
+ * refuses only after it has written.
+ *
  * Two tests read the same answers:
  *
  * - **Today's answers** (characterization). Every row's answer at every door
@@ -130,6 +136,9 @@ export function describeEveryWayIn(dialect: TestDialect): void {
     const known = knownDisagreements();
     let world: World | undefined;
     const answers = new Map<string, Map<Door, Answer>>();
+    // For each write a door was asked to make: the cell, its answer, and
+    // whether the write reached the database.
+    const writes: { cell: string; answer: Answer; landed: boolean }[] = [];
 
     beforeAll(async () => {
       // A rule that throws is reported by the doors that catch it.
@@ -138,7 +147,11 @@ export function describeEveryWayIn(dialect: TestDialect): void {
       for (const row of rows()) {
         const byDoor = new Map<Door, Answer>();
         for (const door of doorsAsking(row)) {
-          byDoor.set(door, await ask(world, row, door));
+          const { answer, landed } = await ask(world, row, door);
+          byDoor.set(door, answer);
+          if (landed !== undefined) {
+            writes.push({ cell: cellKey(row, door), answer, landed });
+          }
         }
         answers.set(rowKey(row), byDoor);
       }
@@ -152,6 +165,27 @@ export function describeEveryWayIn(dialect: TestDialect): void {
     describe("today's answers", () => {
       it("are the answers the file records, for every row at every door", async () => {
         await expect(renderAnswers(answers)).toMatchFileSnapshot(ANSWERS_FILE);
+      });
+    });
+
+    describe("what a write leaves behind", () => {
+      // Where a door writes, its answer is compared with the target's table,
+      // read whole before and after: a door that refuses after the write has
+      // happened would otherwise pass on its answer alone.
+      const allowed = () => writes.filter(w => w.answer === "A");
+      const notAllowed = () => writes.filter(w => w.answer !== "A");
+
+      it("is nothing, wherever the write was not allowed", () => {
+        // POPULATION CONTROL: refusals were watched, so `[]` is not vacuous.
+        expect(notAllowed().length).toBeGreaterThan(0);
+        expect(notAllowed().filter(w => w.landed)).toEqual([]);
+      });
+
+      it("is the write, wherever it was allowed", () => {
+        // The control for the check above: a write that lands is seen, so
+        // the comparison can tell a written table from an untouched one.
+        expect(allowed().length).toBeGreaterThan(0);
+        expect(allowed().filter(w => !w.landed)).toEqual([]);
       });
     });
 

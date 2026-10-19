@@ -7,6 +7,8 @@
  * the real catch-all, a Direct API call, a plugin route — and never calls the
  * decision behind it, so a door that stops asking the decision shows up here.
  */
+import { isDeepStrictEqual } from "node:util";
+
 import { vi } from "vitest";
 
 import { GET as listCollectionsSchema } from "../../../api/collections-schema";
@@ -418,7 +420,7 @@ async function withoutService<T>(work: () => Promise<T>): Promise<T> {
 }
 
 /** One door's answer to one row. */
-export function ask(world: World, row: Row, door: Door): Promise<Answer> {
+function answer(world: World, row: Row, door: Door): Promise<Answer> {
   const who = world.callers.get(row.caller);
   if (!who) throw new Error(`no caller ${row.caller}`);
   if (row.setup === "no-service") {
@@ -426,4 +428,85 @@ export function ask(world: World, row: Row, door: Door): Promise<Answer> {
     return withoutService(() => settle(() => adapter(world, row, who)));
   }
   return settle(() => ADAPTERS[door](world, row, who));
+}
+
+/**
+ * The doors where asking for a write IS the write. The others only ask a gate
+ * (`route`, `can`) or read, so nothing they answer can have been written.
+ */
+const WRITING_DOORS: ReadonlySet<Door> = new Set<Door>([
+  "rest",
+  "direct",
+  "service",
+]);
+
+function writes(row: Row, door: Door): boolean {
+  return (
+    row.setup === "service" &&
+    row.action !== "read" &&
+    (row.target === "collection" || row.target === "single") &&
+    WRITING_DOORS.has(door)
+  );
+}
+
+/** The table a write to the row's target lands in. */
+function tableOf(row: Row): string {
+  return row.target === "single"
+    ? `single_${singleOf(row.rule)}`
+    : `dc_${collectionOf(row.rule)}`;
+}
+
+/**
+ * Every row of the target's table, read raw and whole, so a write that touched
+ * any column of any row, added one or removed one, reads differently.
+ */
+async function storedTable(world: World, row: Row) {
+  const stored = await world.t.adapter.select<Record<string, unknown>>(
+    tableOf(row),
+    {}
+  );
+  return stored.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+}
+
+let marks = 0;
+
+/**
+ * Gives the row an update rewrites a value no write sends.
+ *
+ * Every update sends the same value, so once one lands, a later one that
+ * lands too would change nothing an equality can see. Marking the row first
+ * means any update that lands, allowed or refused, changes it.
+ */
+async function markUpdated(world: World, row: Row): Promise<void> {
+  if (row.action !== "update") return;
+  const table = tableOf(row);
+  const single = row.target === "single";
+  const id = single
+    ? (await storedTable(world, row))[0]?.id
+    : world.seeded.get(collectionOf(row.rule))?.updateId;
+  // A Single's row is made on its first read, which every Single's update
+  // follows in the table's order; an update finding none is seen anyway.
+  if (id === undefined || id === null) return;
+  await world.t.adapter.update(
+    table,
+    { [single ? "headline" : "title"]: `marked ${++marks}` },
+    { and: [{ column: "id", op: "=", value: String(id) }] }
+  );
+}
+
+/**
+ * A door's answer to one row, and, for a write, whether it reached the
+ * database: `landed` is set only where the door writes.
+ */
+export async function ask(
+  world: World,
+  row: Row,
+  door: Door
+): Promise<{ answer: Answer; landed?: boolean }> {
+  if (!writes(row, door)) return { answer: await answer(world, row, door) };
+  await markUpdated(world, row);
+  const before = await storedTable(world, row);
+  const given = await answer(world, row, door);
+  const after = await storedTable(world, row);
+  return { answer: given, landed: !isDeepStrictEqual(before, after) };
 }

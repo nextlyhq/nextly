@@ -66,7 +66,10 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * The code rule a target declares, for every action it is asked about.
  *
  * `true` and `false` are the plain booleans the rule types and the
- * documentation allow. `other-operation` declares only `update: false`, so a
+ * documentation allow. `throws` fails as it is called and `async-throws`
+ * returns a promise that rejects, so a door that guards the call but awaits
+ * its result outside the guard answers the two differently. `other-operation`
+ * declares only `update: false`, so a
  * read, a create or a delete meets an access object with no rule for it.
  * `role-name` admits a caller whose roles include one named `editor`, the
  * shape a template rule takes when it checks names instead of permissions.
@@ -87,6 +90,7 @@ export const RULES = [
   "throws",
   "async-true",
   "async-false",
+  "async-throws",
   "other-operation",
   "role-name",
   "permission-spelling",
@@ -329,6 +333,7 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   throws: SAYS_NOT_TRUE,
   "async-true": SAYS_TRUE,
   "async-false": SAYS_NOT_TRUE,
+  "async-throws": SAYS_NOT_TRUE,
   "other-operation": action => (action === "update" ? false : null),
   "role-name": (_action, caller) => holdsRoleNamedEditor(caller),
   "permission-spelling": (action, caller) =>
