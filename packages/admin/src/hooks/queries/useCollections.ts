@@ -56,6 +56,19 @@ const defaultParams: TableParams = {
 };
 
 /**
+ * The collections list the sidebar asks for, and the dashboard's Collections card with it.
+ *
+ * One request, so one cache entry: the shell asks first, as it draws its navigation, and the
+ * card then finds the list already there. That is what lets the card draw its tiles the moment
+ * it is placed, instead of growing from a placeholder when a list of its own arrives.
+ */
+export const NAV_COLLECTIONS_PARAMS: TableParams = {
+  pagination: { page: 0, pageSize: 100 },
+  sorting: [{ field: "name", direction: "asc" }],
+  filters: {},
+};
+
+/**
  * Query Key Factory for Collections
  *
  * Creates stable, hierarchical query keys that prevent cache misses due to
