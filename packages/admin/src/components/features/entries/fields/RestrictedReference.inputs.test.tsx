@@ -32,6 +32,25 @@ vi.mock("@admin/components/features/media-library/MediaPickerDialog", () => ({
       </button>
     ) : null,
 }));
+vi.mock("./relational/RelationshipSearch", () => ({
+  RelationshipSearch: ({
+    onSelect,
+    excludeIds,
+  }: {
+    onSelect: (item: Record<string, unknown>, collection: string) => void;
+    excludeIds: string[];
+  }) => (
+    <div>
+      <p>excluded: {excludeIds.join(",")}</p>
+      <button
+        type="button"
+        onClick={() => onSelect({ id: "1", title: "Page 1" }, "pages")}
+      >
+        Pick pages 1
+      </button>
+    </div>
+  ),
+}));
 vi.mock("./relational/RelationshipQuickEdit", () => ({
   RelationshipQuickEdit: ({
     onUpdate,
@@ -194,5 +213,38 @@ describe("removing a restricted link", () => {
     expect(
       screen.getByRole("group", { name: "Restricted or missing item m1" })
     ).toBeTruthy();
+  });
+
+  it("in an upload, shows every link a refetch adds, not the cached subset", () => {
+    renderWithProviders(
+      <UploadHarness
+        initial={[{ id: "m1", filename: "one.png", url: "/one.png" }, "m2"]}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Remove m2" }));
+    act(() => {
+      uploadForm?.reset({
+        gallery: [
+          { id: "m1", filename: "one.png", url: "/one.png" },
+          { id: "m9", [RESTRICTED_REFERENCE]: true },
+        ],
+      });
+    });
+    expect(
+      screen.getByRole("group", { name: "Restricted or missing item m9" })
+    ).toBeTruthy();
+  });
+
+  it("in a relationship, lets another collection's row with a hidden link's id be picked", () => {
+    renderWithProviders(
+      <RelationshipHarness initial={[hiddenPair("notes", "1")]} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add Item" }));
+    expect(screen.getByText("excluded:")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Pick pages 1" }));
+    const value = latest as unknown[];
+    expect(value).toHaveLength(2);
+    expect(value[0]).toEqual(hiddenPair("notes", "1"));
+    expect(value[1]).toMatchObject({ relationTo: "pages", value: "1" });
   });
 });

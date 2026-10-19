@@ -375,17 +375,19 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
   // A cached file stands for the value's only while it is the same link: a
   // file the editor could read can come back as a placeholder for one they no
   // longer can, under the same id.
+  // Position by position, and the same number: a value that gained a link the
+  // cache never saw must not be shown, and later saved, as the cached subset.
   const files =
     displayFiles.length > 0 &&
-    displayFiles.every(
-      df =>
-        normalizedFromValue.some(
-          nf =>
-            nf.id === df.id &&
-            Boolean(nf.restricted) === Boolean(df.restricted) &&
-            nf.relationTo === df.relationTo
-        ) || (Array.isArray(value) ? value.includes(df.id) : value === df.id)
-    )
+    displayFiles.length === normalizedFromValue.length &&
+    displayFiles.every((df, index) => {
+      const nf = normalizedFromValue[index];
+      return (
+        nf.id === df.id &&
+        Boolean(nf.restricted) === Boolean(df.restricted) &&
+        nf.relationTo === df.relationTo
+      );
+    })
       ? displayFiles
       : normalizedFromValue;
 

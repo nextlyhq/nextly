@@ -232,7 +232,11 @@ function valueToSelectedItems(
  * Gets IDs of all selected items for exclusion from search.
  */
 function getSelectedIds(selectedItems: RelatedItem[]): string[] {
-  return selectedItems.map(item => item.id);
+  // A link the editor cannot see never appears in a search, and its id may be
+  // another collection's readable row, which must stay selectable.
+  return selectedItems
+    .filter(item => !isRestrictedReference(item))
+    .map(item => item.id);
 }
 
 // ============================================================
@@ -352,8 +356,10 @@ export function RelationshipInput<
         // Check if already selected. Read the same way removal and quick-edit
         // read it, or a value whose target was populated compares an object
         // against an id, matches nothing, and the guard admits a duplicate.
+        // A link the editor cannot see is left out: its id can belong to
+        // another collection's row, which is not a duplicate of it.
         const isAlreadySelected = currentValues.some(
-          v => referenceIdOf(v) === item.id
+          v => !isRestrictedReference(v) && referenceIdOf(v) === item.id
         );
 
         if (!isAlreadySelected) {
