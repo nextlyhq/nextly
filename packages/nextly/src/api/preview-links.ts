@@ -660,10 +660,11 @@ async function mintForSingle(
   // the Single itself in the translation the token will name. Runs before
   // anything is signed and before the trusted read below, so a refused caller
   // reaches neither.
-  const { auth, grant: singleGrant } = await authorizePreviewSharer(req, {
-    single,
-    ...(locale === undefined ? {} : { locale }),
-  });
+  const { auth, grant: singleGrant } = await authorizePreviewSharer(
+    req,
+    { single, ...(locale === undefined ? {} : { locale }) },
+    "mint"
+  );
 
   // An unscoped token covers EVERY translation, which on a localized Single is
   // a grant over drafts nobody authorized — the admin resolves a locale before
@@ -788,10 +789,11 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
   // the draft overlay requires before surfacing the working draft the token
   // hands out. A coarse collection answer alone would let a caller bounded to
   // their own documents mint a working credential for someone else's.
-  const { auth, grant: entryGrant } = await authorizePreviewSharer(req, {
-    collection,
-    entryId,
-  });
+  const { auth, grant: entryGrant } = await authorizePreviewSharer(
+    req,
+    { collection, entryId },
+    "mint"
+  );
 
   // Refused BEFORE a token is signed, because a link that cannot land is worse
   // than no link: the reviewer who opens it sees a 404 indistinguishable from
@@ -898,6 +900,12 @@ const documentSchema = z.union([
     .strict(),
 ]);
 
+/** A page of the live list: 1-based, 50 links unless asked, at most 100. */
+const pagingSchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(50),
+});
+
 function parseDocument(input: unknown): PreviewSharedDocument {
   const parsed = documentSchema.safeParse(input);
   if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
@@ -963,14 +971,31 @@ export const listPreviewLinks = withErrorHandler(async (req: Request) => {
         .filter((pair): pair is readonly [string, string] => pair[1] !== null)
     )
   );
-  await authorizePreviewSharer(req, document);
+  const paging = pagingSchema.safeParse({
+    page: params.get("page") ?? undefined,
+    limit: params.get("limit") ?? undefined,
+  });
+  if (!paging.success) throw nextlyValidationFromZod(paging.error);
+  const { page, limit } = paging.data;
+  // A read that changes nothing: a Single with no row yet is not created to
+  // answer it, and no read hook runs.
+  await authorizePreviewSharer(req, document, "manage");
 
   const now = new Date();
   const generation = await (
     await settingsService()
   ).getPreviewTokenGeneration();
-  const live = await listLiveLinks(recordDocument(document), generation, now);
-  const olderEnd = await olderLinksEnd(now);
+  const { links: live, total } = await listLiveLinks(
+    recordDocument(document),
+    generation,
+    now,
+    { limit, offset: (page - 1) * limit }
+  );
+  const olderEnd = await olderLinksEnd(
+    recordDocument(document),
+    now,
+    generation
+  );
 
   const items: Array<ListedPreviewLink | OlderPreviewLinks> = [
     ...live.map(
@@ -985,19 +1010,22 @@ export const listPreviewLinks = withErrorHandler(async (req: Request) => {
         lastOpenedAt: link.lastOpenedAt?.toISOString() ?? null,
       })
     ),
-    ...(olderEnd === null
+    // On the first page only: it stands for no link of its own, so it is
+    // neither counted nor paged.
+    ...(olderEnd === null || page !== 1
       ? []
       : [{ kind: "older" as const, latestEnd: olderEnd.toISOString() }]),
   ];
 
-  // One document's links are few: the list is the whole of them.
+  // Paged by the live links; `total` counts them, not the older-links row.
+  const totalPages = Math.max(1, Math.ceil(total / limit));
   return respondList(items, {
-    total: items.length,
-    page: 1,
-    limit: items.length,
-    totalPages: 1,
-    hasNext: false,
-    hasPrev: false,
+    total,
+    page,
+    limit,
+    totalPages,
+    hasNext: page < totalPages,
+    hasPrev: page > 1,
   });
 });
 
@@ -1025,30 +1053,34 @@ export async function revokePreviewLink(
     }
     const body: unknown = await request.json().catch(() => undefined);
     const document = parseDocument(body);
-    const { auth } = await authorizePreviewSharer(request, document);
+    const { auth } = await authorizePreviewSharer(request, document, "manage");
 
-    const now = new Date();
-    const outcome = await revokeRecordedLink(
+    const result = await revokeRecordedLink(
       linkId,
       recordDocument(document),
       auth.userId,
-      now
+      new Date()
     );
-    if (outcome === "absent") {
+    if (result.outcome === "absent") {
       throw NextlyError.notFound({
         logContext: { reason: "preview-link-not-of-document", linkId },
       });
     }
 
-    await auditWriter().write({
-      kind: "preview-link-revoked",
-      actorUserId: auth.userId,
-      metadata: { ...auditDocument(document), linkId },
-    });
+    // Recorded once, by the request that revoked it. A repeat, or the loser
+    // of two at once, changed nothing, so it records nothing and is told when
+    // the revocation that did happen took place.
+    if (result.outcome === "revoked") {
+      await auditWriter().write({
+        kind: "preview-link-revoked",
+        actorUserId: auth.userId,
+        metadata: { ...auditDocument(document), linkId },
+      });
+    }
 
     return respondMutation("Preview link revoked", {
       id: linkId,
-      revokedAt: now.toISOString(),
+      revokedAt: result.revokedAt.toISOString(),
     });
   })(req);
 }
@@ -1061,7 +1093,7 @@ async function revokeDocumentPreviewLinks(
   req: Request,
   document: PreviewSharedDocument
 ): Promise<Response> {
-  const { auth } = await authorizePreviewSharer(req, document);
+  const { auth } = await authorizePreviewSharer(req, document, "manage");
   const revoked = await revokeDocumentLinks(
     recordDocument(document),
     auth.userId,

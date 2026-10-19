@@ -388,7 +388,8 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         (emailTurn && !done.email ? 1 : 0) +
         (noticesTurn && !done.notices ? 1 : 0) +
         (contentEventsTurn ? 1 : 0) +
-        (secretsTurn ? 1 : 0);
+        (secretsTurn ? 1 : 0) +
+        (previewLinksTurn ? 1 : 0);
 
       const webhookPolicy = retention.policy;
       if (webhookPolicy && !deadlineSpent()) {
@@ -595,7 +596,14 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           retention.prune.adapter,
           now(),
           {
-            deadline: deadline?.getTime(),
+            // Its share, not the whole remainder, while the preview-links
+            // sweep still follows: a backlog here would otherwise take every
+            // drain's last moments and leave that sweep none.
+            deadline: shareOfRemaining(
+              deadline,
+              now,
+              previewLinksTurn ? 2 : 1
+            )?.getTime(),
             clock: () => now().getTime(),
           }
         ).catch((error: unknown) => {

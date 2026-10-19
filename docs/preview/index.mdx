@@ -213,7 +213,8 @@ one editor revoking would otherwise break every other editor's links.
 Links made before an upgrade to this version were not recorded, so they can't
 be listed, counted or revoked one by one. They keep working until they expire,
 at most seven days later, and the list shows one row for them, with that latest
-end and a revoke-all that ends them too.
+end and a revoke-all that ends them too. Once a document's links have all been
+revoked, its row goes: none of its earlier links can open any more.
 
 Recording needs the `nextly_preview_links` table. On an existing database, run
 `nextly migrate` after upgrading: until then, sharing a new link is refused

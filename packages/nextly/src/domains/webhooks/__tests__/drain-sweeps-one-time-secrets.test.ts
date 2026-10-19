@@ -215,6 +215,44 @@ describe("the scheduled drain and plugins' one-purpose secrets", () => {
   });
 });
 
+describe("the scheduled drain and recorded preview links", () => {
+  it("leaves them their share behind a secrets backlog that never ends", async () => {
+    // Every secrets batch takes time and there is always another, so a sweep
+    // given the whole remainder would spend it all and the preview-links
+    // sweep after it would never start.
+    let clock = 0;
+    const tables: string[] = [];
+    const remove = async () => {
+      clock += 50;
+      return 500;
+    };
+    const adapter = {
+      select: async (table: string) => {
+        tables.push(table);
+        return Array.from({ length: 500 }, (_, i) => ({ id: `row-${i}` }));
+      },
+      delete: remove,
+      transaction: async (
+        fn: (tx: { delete: typeof remove }) => Promise<unknown>
+      ) => fn({ delete: remove }),
+    };
+
+    await drain(
+      {
+        oneTimeSecrets: true,
+        previewLinks: true,
+        prune: { adapter } as never,
+        gate: { claim: async () => true, release: async () => undefined },
+      },
+      () => new Date(clock),
+      1_000
+    );
+
+    expect(tables).toContain("nextly_one_time_secrets");
+    expect(tables).toContain("nextly_preview_links");
+  });
+});
+
 describe("the write paths' one-purpose secrets pass", () => {
   it("does not reach the write when the sweep fails and the logger throws too", async () => {
     // Every write offers this pass; a sweep failure reported through a

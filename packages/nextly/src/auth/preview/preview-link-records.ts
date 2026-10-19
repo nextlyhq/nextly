@@ -24,7 +24,7 @@ import { createHash } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, desc, eq, gt, isNull, sql, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gt, isNull, sql, type SQL } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
 import { getService } from "../../di";
@@ -110,12 +110,16 @@ interface LinkDb {
         on: SQL
       ): {
         where(condition: SQL): {
-          orderBy(...order: SQL[]): Promise<Array<Record<string, unknown>>>;
+          orderBy(...order: SQL[]): {
+            limit(count: number): {
+              offset(count: number): Promise<Array<Record<string, unknown>>>;
+            };
+          };
         };
       };
       where(condition: SQL): {
         limit(count: number): Promise<Array<Record<string, unknown>>>;
-      };
+      } & Promise<Array<Record<string, unknown>>>;
     };
   };
 }
@@ -224,7 +228,7 @@ export async function recordPreviewLink(input: {
       })
   );
   // After the row, so a mint that failed to record never starts the window.
-  await recordedSince(input.createdAt);
+  await recordedSince(input.createdAt, input.generation);
 }
 
 /**
@@ -299,18 +303,32 @@ export async function recordedLinkLive(
 }
 
 /**
- * One document's live links: not revoked, not ended, and minted under the
- * site's current generation. Newest first.
+ * One page of a document's live links: not revoked, not ended, and minted
+ * under the site's current generation. Newest first, paged in the database:
+ * nothing bounds how many links one document can have, so the list is never
+ * read whole.
+ *
+ * @returns The page, and how many live links there are in all.
  */
 export async function listLiveLinks(
   document: PreviewLinkDocument,
   generation: number,
-  now: Date
-): Promise<RecordedPreviewLink[]> {
+  now: Date,
+  page: { limit: number; offset: number }
+): Promise<{ links: RecordedPreviewLink[]; total: number }> {
   const db = adapter();
   const dialect = dialectOf(db);
   const table = linksTable(dialect);
   const { users } = getDialectTables(dialect);
+  const live = and(
+    documentIs(table, document),
+    isNull(table.revokedAt),
+    gt(table.expiresAt, now),
+    eq(table.generation, generation)
+  ) as SQL;
+  const [counted] = await managing(() =>
+    linkDb(db).select({ total: count() }).from(table).where(live)
+  );
   const rows = await managing(() =>
     linkDb(db)
       .select({
@@ -327,17 +345,12 @@ export async function listLiveLinks(
       })
       .from(table)
       .leftJoin(users, eq(users.id, table.createdBy))
-      .where(
-        and(
-          documentIs(table, document),
-          isNull(table.revokedAt),
-          gt(table.expiresAt, now),
-          eq(table.generation, generation)
-        ) as SQL
-      )
+      .where(live)
       .orderBy(desc(table.createdAt), desc(table.id))
+      .limit(page.limit)
+      .offset(page.offset)
   );
-  return rows.map(row => ({
+  const links = rows.map(row => ({
     id: String(row.id),
     locale: (row.locale as string | null) ?? null,
     createdBy:
@@ -360,6 +373,7 @@ export async function listLiveLinks(
         ? null
         : toDate(row.lastOpenedAt),
   }));
+  return { links, total: Number(counted?.total ?? 0) };
 }
 
 function toDate(value: unknown): Date {
@@ -371,24 +385,32 @@ function toDate(value: unknown): Date {
  *
  * `absent` when no link with that id belongs to the document, which the
  * endpoint answers as not found: a link of another document is reported the
- * same as one that never existed, so ids cannot be probed across documents. A
- * link already revoked is `revoked` again rather than absent, so a second
- * click is not told the link does not exist.
+ * same as one that never existed, so ids cannot be probed across documents.
+ * `already` when it was revoked before, with the moment it was: a repeated or
+ * racing request changes nothing and is told when the revocation that did
+ * happen, rather than claiming one of its own.
  */
 export async function revokeRecordedLink(
   id: string,
   document: PreviewLinkDocument,
   revokedBy: string,
   now: Date
-): Promise<"revoked" | "absent"> {
+): Promise<
+  | { outcome: "revoked"; revokedAt: Date }
+  | { outcome: "already"; revokedAt: Date }
+  | { outcome: "absent" }
+> {
   const db = adapter();
   const dialect = dialectOf(db);
   const table = linksTable(dialect);
+  // To the second, the finest every dialect stores, so the moment this answers
+  // is the one a repeated request reads back.
+  const at = new Date(Math.floor(now.getTime() / 1000) * 1000);
   const changed = await managing(async () =>
     affectedRowCount(
       await linkDb(db)
         .update(table)
-        .set({ revokedAt: now, revokedBy })
+        .set({ revokedAt: at, revokedBy })
         .where(
           and(
             eq(table.id, id),
@@ -399,20 +421,33 @@ export async function revokeRecordedLink(
       dialect
     )
   );
-  if (changed === 1) return "revoked";
-  const existing = await managing(() =>
+  if (changed === 1) return { outcome: "revoked", revokedAt: at };
+  const [existing] = await managing(() =>
     linkDb(db)
-      .select({ id: table.id })
+      .select({ revokedAt: table.revokedAt })
       .from(table)
       .where(and(eq(table.id, id), documentIs(table, document)) as SQL)
       .limit(1)
   );
-  return existing.length === 1 ? "revoked" : "absent";
+  if (existing === undefined) return { outcome: "absent" };
+  return {
+    outcome: "already",
+    revokedAt:
+      existing.revokedAt === null || existing.revokedAt === undefined
+        ? at
+        : toDate(existing.revokedAt),
+  };
 }
 
 /**
- * Revoke every link of one document: each recorded link, and, while links made
- * before recording can still be alive, every one of those too.
+ * Revoke every link of one document: each recorded link, and every link of it
+ * made without a record.
+ *
+ * The cutoff is written on every revoke-all, not only in the first days after
+ * recording began. During a rolling upgrade an instance still on the earlier
+ * version keeps minting links without a record after another has begun
+ * recording, and each of those can work for up to seven days after its own
+ * mint, which no fixed window can bound. One key per document, overwritten.
  *
  * The cutoff is written FIRST, so a failure between the two leaves the older
  * links ended rather than the recorded ones ended and the older ones not.
@@ -428,10 +463,7 @@ export async function revokeDocumentLinks(
   const dialect = dialectOf(db);
   const table = linksTable(dialect);
 
-  const since = await recordedSince(now);
-  if (now.getTime() < since.getTime() + OLDER_LINKS_WINDOW_MS) {
-    await getService("metaService").set(cutoffKey(document), now.toISOString());
-  }
+  await getService("metaService").set(cutoffKey(document), now.toISOString());
 
   return managing(async () =>
     affectedRowCount(
@@ -447,30 +479,58 @@ export async function revokeDocumentLinks(
 }
 
 /**
- * When links began to be recorded: written once, by the first caller to ask,
- * and read back by everyone.
+ * When links began to be recorded, and the site-wide generation then: written
+ * once, by the first caller to ask, and read back by everyone.
  *
- * Asked by the first mint, the first list and the first revoke-all, whichever
- * comes first. Each runs after this version did, so the moment can only be
- * later than recording truly began, which can only make the older-links row
- * stay longer, never end before an older link could have.
+ * Asked by the first mint and the first list, whichever comes first. Each runs
+ * after this version did, so the moment can only be later than recording
+ * truly began, which can only make the older-links row stay longer, never end
+ * before an older link could have. The generation says whether a site-wide
+ * revoke has happened since, which ends every older link at once.
  */
-async function recordedSince(now: Date): Promise<Date> {
+async function recordedSince(
+  now: Date,
+  generation: number
+): Promise<{ at: Date; generation: number }> {
   const meta = getService("metaService");
-  await meta.insertIfAbsent(RECORDED_SINCE_KEY, now.toISOString());
-  const stored = await meta.get<string>(RECORDED_SINCE_KEY);
-  const at = typeof stored === "string" ? new Date(stored) : null;
-  return at !== null && !Number.isNaN(at.getTime()) ? at : now;
+  await meta.insertIfAbsent(RECORDED_SINCE_KEY, {
+    at: now.toISOString(),
+    generation,
+  });
+  const stored = await meta.get<{ at?: unknown; generation?: unknown }>(
+    RECORDED_SINCE_KEY
+  );
+  const at =
+    typeof stored?.at === "string" ? new Date(stored.at) : new Date(NaN);
+  return {
+    at: Number.isNaN(at.getTime()) ? now : at,
+    generation:
+      typeof stored?.generation === "number" ? stored.generation : generation,
+  };
 }
 
 /**
- * The older-links row's end, while it is still due: the latest moment a link
- * made before recording began could still work. `null` once it has passed.
+ * The older-links row's end for one document, while it is still due: the
+ * latest moment a link made before recording began could still work.
+ *
+ * `null` once that has passed, once a site-wide revoke has moved the
+ * generation since recording began, and once a revoke-all of the document has
+ * written its cutoff. Each of the last two ends every older link in its reach:
+ * once the upgrade is complete, no link without a record is minted any more.
  */
-export async function olderLinksEnd(now: Date): Promise<Date | null> {
-  const since = await recordedSince(now);
-  const end = new Date(since.getTime() + OLDER_LINKS_WINDOW_MS);
-  return end.getTime() > now.getTime() ? end : null;
+export async function olderLinksEnd(
+  document: PreviewLinkDocument,
+  now: Date,
+  generation: number
+): Promise<Date | null> {
+  const since = await recordedSince(now, generation);
+  const end = new Date(since.at.getTime() + OLDER_LINKS_WINDOW_MS);
+  if (end.getTime() <= now.getTime()) return null;
+  if (generation !== since.generation) return null;
+  const cutoff = await getService("metaService").get<string>(
+    cutoffKey(document)
+  );
+  return typeof cutoff === "string" ? null : end;
 }
 
 /** The `nextly_meta` key of one document's cutoff, bounded in length. */

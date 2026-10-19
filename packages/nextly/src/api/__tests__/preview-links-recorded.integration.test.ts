@@ -43,6 +43,7 @@ import {
   PREVIEW_SCOPE_COOKIE,
   readPreviewSession,
 } from "../../runtime/preview/preview-route";
+import type { HookContext } from "../../hooks/types";
 import { previewLinksTables } from "../../schemas/preview-links";
 
 const SECRET = process.env.NEXTLY_SECRET;
@@ -92,9 +93,30 @@ const home = () =>
     admin: { preview: { url: () => "/" } },
   });
 
+/** Read hooks of a Single nothing ever creates, recording whether they ran. */
+const emptyReads = {
+  beforeRead: vi.fn(async () => undefined),
+  afterRead: vi.fn(async (ctx: HookContext) => ctx.data),
+};
+
+const emptyPage = () =>
+  defineSingle({
+    slug: "empty-page",
+    status: true,
+    versions: { drafts: true },
+    hooks: {
+      beforeRead: [emptyReads.beforeRead],
+      afterRead: [emptyReads.afterRead],
+    },
+    fields: [text({ name: "title" })],
+    admin: { preview: { url: () => "/empty" } },
+  });
+
 let current: TestNextly | undefined;
 afterEach(async () => {
   vi.useRealTimers();
+  emptyReads.beforeRead.mockClear();
+  emptyReads.afterRead.mockClear();
   await current?.destroy();
   current = undefined;
 });
@@ -117,7 +139,7 @@ async function boot(dialect: TestDialect): Promise<Install> {
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
     collections: [posts()],
-    singles: [home()],
+    singles: [home(), emptyPage()],
   });
   current = t;
 
@@ -138,6 +160,8 @@ async function boot(dialect: TestDialect): Promise<Install> {
     "update-posts",
     "read-home",
     "update-home",
+    "read-empty-page",
+    "update-empty-page",
   ]);
   const sharerRole = await roleId(t, "sharer");
   await assign(t, colleague, sharerRole);
@@ -720,6 +744,179 @@ describe.each(getConfiguredTestDialects())(
           (await listed(install.editor, install.post)).filter(
             i => i.kind === "older"
           )
+        ).toHaveLength(0);
+      });
+    });
+
+    describe("listing changes nothing", () => {
+      it("creates no Single and runs no hook to answer a list", async () => {
+        const install = await boot(dialect);
+        const registry = install.t.getService(
+          "singleRegistryService"
+        ) as unknown as {
+          getSingleBySlug: (slug: string) => Promise<{ tableName?: string }>;
+        };
+        const { tableName } = await registry.getSingleBySlug("empty-page");
+        expect(await install.t.adapter.selectOne(tableName!, {})).toBeNull();
+        const versionsBefore = (
+          await install.t.adapter.select("nextly_versions", {})
+        ).length;
+
+        // A Single with no row has no link to manage.
+        const res = await list(
+          { session: install.editor },
+          { single: "empty-page" }
+        );
+        expect(res.status).toBe(403);
+
+        expect(await install.t.adapter.selectOne(tableName!, {})).toBeNull();
+        expect(
+          (await install.t.adapter.select("nextly_versions", {})).length
+        ).toBe(versionsBefore);
+        expect(emptyReads.beforeRead).not.toHaveBeenCalled();
+        expect(emptyReads.afterRead).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("revoking a link twice", () => {
+      it("records one revocation, and tells the second when it happened", async () => {
+        const install = await boot(dialect);
+        const link = await mint(install.editor, install.post);
+
+        const first = await revokeOne(
+          { session: install.editor },
+          link.id,
+          install.post
+        );
+        const second = await revokeOne(
+          { session: install.colleague },
+          link.id,
+          install.post
+        );
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+        const at = (r: unknown) =>
+          (r as { item: { revokedAt: string } }).item.revokedAt;
+        expect(at(await second.json())).toBe(at(await first.json()));
+
+        const revoked = await auditRows(install, "preview-link-revoked");
+        expect(revoked).toHaveLength(1);
+        expect(revoked[0].actorUserId).toBe(install.editor);
+      });
+    });
+
+    describe("the live list, a page at a time", () => {
+      it("pages the links in the database, and counts them all", async () => {
+        const install = await boot(dialect);
+        const made: string[] = [];
+        for (let i = 0; i < 3; i += 1) {
+          made.push((await mint(install.editor, install.post)).id);
+        }
+
+        const page = async (n: number) => {
+          const res = await call(
+            { session: install.editor },
+            "GET",
+            ["preview-links"],
+            {
+              query: {
+                ...documentQuery(install.post),
+                limit: "2",
+                page: String(n),
+              },
+            }
+          );
+          expect(res.status).toBe(200);
+          return (await res.json()) as {
+            items: ListItem[];
+            meta: { total: number; hasNext: boolean; hasPrev: boolean };
+          };
+        };
+
+        const first = await page(1);
+        const second = await page(2);
+        expect(links(first.items)).toHaveLength(2);
+        expect(links(second.items)).toHaveLength(1);
+        expect(first.meta).toMatchObject({
+          total: 3,
+          hasNext: true,
+          hasPrev: false,
+        });
+        expect(second.meta).toMatchObject({ hasNext: false, hasPrev: true });
+        // Every link once, across the pages.
+        expect(
+          [...links(first.items), ...links(second.items)].map(l => l.id).sort()
+        ).toEqual([...made].sort());
+        // The earlier-links row is on the first page only.
+        expect(second.items.some(i => i.kind === "older")).toBe(false);
+      });
+    });
+
+    describe("a document whose links were all revoked", () => {
+      it("no longer shows the earlier-links row, since none of them can open", async () => {
+        const install = await boot(dialect);
+        const older = await olderLink(install, install.post);
+        await mint(install.editor, install.post);
+        // The control: the row is there while earlier links may still work,
+        // on this document and on another.
+        const olderRows = (items: ListItem[]) =>
+          items.filter(i => i.kind === "older");
+        expect(
+          olderRows(await listed(install.editor, install.post))
+        ).toHaveLength(1);
+
+        await revokeDocument({ session: install.editor }, install.post);
+
+        expect(await opens(older)).toBe(false);
+        expect(
+          olderRows(await listed(install.editor, install.post))
+        ).toHaveLength(0);
+        // Another document's earlier links are untouched, so its row stays.
+        expect(
+          olderRows(await listed(install.editor, install.otherPost))
+        ).toHaveLength(1);
+      });
+
+      it("still ends a link without a record minted long after recording began", async () => {
+        // A rolling upgrade: an instance still on the earlier version mints
+        // links without a record after another has begun recording, and such
+        // a link works for days after its own mint.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const start = new Date("2030-05-01T09:00:00Z");
+        vi.setSystemTime(start);
+        const install = await boot(dialect);
+        await mint(install.editor, install.post);
+
+        vi.setSystemTime(new Date(start.getTime() + 8 * DAY * 1000));
+        const late = await olderLink(install, install.post, DAY);
+        expect(await opens(late)).toBe(true);
+
+        vi.setSystemTime(new Date(start.getTime() + (8 * DAY + HOUR) * 1000));
+        await revokeDocument({ session: install.editor }, install.post);
+
+        expect(await opens(late)).toBe(false);
+        expect(await renders(late)).toBe(false);
+      });
+
+      it("shows no earlier-links row on any document after a site-wide revoke", async () => {
+        const install = await boot(dialect);
+        await mint(install.editor, install.post);
+        const olderRows = (items: ListItem[]) =>
+          items.filter(i => i.kind === "older");
+        expect(
+          olderRows(await listed(install.editor, install.post))
+        ).toHaveLength(1);
+
+        await call({ session: await adminId(install) }, "POST", [
+          "preview-links",
+          "revoke",
+        ]);
+
+        expect(
+          olderRows(await listed(install.editor, install.post))
+        ).toHaveLength(0);
+        expect(
+          olderRows(await listed(install.editor, install.otherPost))
         ).toHaveLength(0);
       });
     });

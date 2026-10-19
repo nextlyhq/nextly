@@ -33,6 +33,7 @@ import {
 import {
   singleDocumentEditable,
   singleDocumentReadable,
+  singleStoredDocumentReadable,
 } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
@@ -272,6 +273,44 @@ export async function assertSinglePreviewable(
 }
 
 /**
+ * {@link assertSinglePreviewable}'s question, asked of the stored row: may this
+ * person read and edit the Single. Nothing is created and no hook runs.
+ *
+ * @throws {NextlyError} `forbidden` when they may not, or there is no row.
+ */
+async function assertSingleManageable(
+  single: string,
+  locale: string | undefined,
+  user: UserContext
+): Promise<AuthorizedPreviewCaller> {
+  const identity = {
+    user,
+    ...(locale === undefined ? {} : { locale }),
+  };
+  const readable = await singleStoredDocumentReadable(single, {
+    ...identity,
+    // FALSE: the route gated `update`, which says nothing about read.
+    routeAuthorized: false,
+  });
+  const editable =
+    readable &&
+    (await singleDocumentEditable(single, {
+      ...identity,
+      // TRUE: the route ran exactly this gate.
+      routeAuthorized: true,
+    }));
+  if (!editable) {
+    throw NextlyError.forbidden({
+      logContext: { reason: "preview-links-single-not-manageable", single },
+    });
+  }
+  return previewCallerAuthorized(user, {
+    single,
+    ...(locale === undefined ? {} : { locale }),
+  });
+}
+
+/**
  * The one document a sharing request names: an entry, or a Single.
  *
  * The locale is the translation the request concerns; a Single's gate is run
@@ -342,11 +381,22 @@ async function callerFor(auth: RouteCaller): Promise<UserContext> {
  * coarse gate), never a key, and then read and edit of that very entry or
  * Single as that person. Every refusal is `forbidden`, with nothing changed.
  *
+ * **`purpose` changes how a Single is asked, never what.** A mint asks
+ * through the Single's ordinary read, which authorizes the exact view the
+ * token will hand out, and which creates a Single that has no row yet: a link
+ * to it needs one. Listing and revoking only manage links and must change
+ * nothing, so they ask the same question of the stored row, creating nothing
+ * and running no hook. A Single with no row has no link to manage.
+ *
+ * Required, because the two are right in different places and a default
+ * would be wrong in one of them without saying so.
+ *
  * @throws {NextlyError} `forbidden` when the request may not share it.
  */
 export async function authorizePreviewSharer(
   req: Request,
-  document: PreviewSharedDocument
+  document: PreviewSharedDocument,
+  purpose: "mint" | "manage"
 ): Promise<AuthorizedSharer> {
   const slug = "single" in document ? document.single : document.collection;
   // The gate is per COLLECTION or Single, so a caller who may edit posts
@@ -363,9 +413,16 @@ export async function authorizePreviewSharer(
   // one these skip. A preview RENDER passes `false`: it has no route gate.
   const grant =
     "single" in document
-      ? await assertSinglePreviewable(document.single, document.locale, user, {
-          routeAuthorized: true,
-        })
+      ? purpose === "mint"
+        ? await assertSinglePreviewable(
+            document.single,
+            document.locale,
+            user,
+            {
+              routeAuthorized: true,
+            }
+          )
+        : await assertSingleManageable(document.single, document.locale, user)
       : await assertEntryPreviewable(
           document.collection,
           document.entryId,
