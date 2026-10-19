@@ -3,6 +3,12 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import {
+  EMPTY_INSTALL_DB_RELATIVE,
+  EMPTY_INSTALL_PORT,
+  EMPTY_INSTALL_SETUP_TOKEN,
+} from "./support/empty-install";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXTLY_ROOT = path.resolve(HERE, "..");
 
@@ -70,11 +76,20 @@ export default defineConfig({
     // the playground configures is installed, as a deployment would, before
     // the server starts. The script reads which plugins those are from the
     // playground's config, so one added there is installed here too.
+    //
+    // A second install is served from the same build, on its own database
+    // that is provisioned and has its plugins installed but holds no account,
+    // so its first-administrator setup is open and needs the operator's token.
+    // It starts in the background just before the first; the setup spec waits
+    // for it to answer.
     command: [
       "node e2e/scripts/reset-e2e-db.mjs",
       "pnpm --filter playground exec tsx scripts/seed.ts",
       "pnpm --filter playground exec tsx scripts/install-plugins.ts",
+      `DATABASE_URL=${EMPTY_INSTALL_DB_RELATIVE} pnpm --filter playground exec tsx scripts/provision-empty.ts`,
+      `DATABASE_URL=${EMPTY_INSTALL_DB_RELATIVE} pnpm --filter playground exec tsx scripts/install-plugins.ts`,
       "pnpm --filter playground exec next build",
+      `{ PORT=${String(EMPTY_INSTALL_PORT)} DATABASE_URL=${EMPTY_INSTALL_DB_RELATIVE} NEXTLY_SETUP_TOKEN=${EMPTY_INSTALL_SETUP_TOKEN} pnpm --filter playground exec next start & }`,
       "pnpm --filter playground exec next start",
     ].join(" && "),
     cwd: NEXTLY_ROOT,

@@ -16,7 +16,16 @@ const DATA_DIR = path.resolve(HERE, "..", "..", "apps", "playground", "data");
 
 // sqlite in WAL mode keeps two sidecar files. Leaving them behind restores
 // pages from the previous run into a database meant to be empty.
-const FILES = ["e2e.db", "e2e.db-shm", "e2e.db-wal"];
+// The production suite's empty install is emptied too: it is only empty, and
+// its setup only open, on a database no earlier run made an administrator in.
+const FILES = [
+  "e2e.db",
+  "e2e.db-shm",
+  "e2e.db-wal",
+  "e2e-setup.db",
+  "e2e-setup.db-shm",
+  "e2e-setup.db-wal",
+];
 
 const DEV_DB = "nextly.db";
 

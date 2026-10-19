@@ -39,6 +39,7 @@ import { registerMigrateStatusCommand } from "./commands/migrate-status";
 import { createPermissionsCleanupCommand } from "./commands/permissions-cleanup";
 import { registerPluginsCommand } from "./commands/plugins";
 import { registerPruneCommand } from "./commands/prune";
+import { registerSetupTokenCommand } from "./commands/setup-token";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
 import { registerWebhooksPruneCommand } from "./commands/webhooks-prune";
@@ -237,6 +238,7 @@ function registerCommands(program: Command): void {
   registerMigrateResolveCommand(program); // Plan C3 — recovery command
   registerPruneCommand(program); // P2b — drop orphaned plugin/code schema (D14)
   registerWebhooksPruneCommand(program); // manual webhook-queue retention pass
+  registerSetupTokenCommand(program, createContext); // replace or generate the production setup token
   registerMigrateFreshCommand(program);
   registerMigrateDownCommand(program); // SP-2 — rollback
 
