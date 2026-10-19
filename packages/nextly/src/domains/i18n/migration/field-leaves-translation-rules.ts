@@ -30,7 +30,6 @@ export interface LeavingTranslationRefusal {
   path: string;
   code:
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
-    | "CONSTRAINED_FIELD_LEAVES_TRANSLATION"
     | "REQUIRED_FIELD_LEAVES_WITHOUT_VALUES"
     | "UNIQUE_FIELD_LEAVES_OVER_DUPLICATES"
     | "RESHAPED_FIELD_JOINS_TRANSLATION"
@@ -115,26 +114,6 @@ function reshapedRefusal(
   );
 }
 
-function constrainedRefusal(
-  name: string,
-  constraints: readonly Constraint[],
-  surface: Surface
-): LeavingTranslationRefusal {
-  const builder = surface === "builder";
-  return refusal(
-    `fields.${name}`,
-    "CONSTRAINED_FIELD_LEAVES_TRANSLATION",
-    // The Builder shows the reason beside the field it is about, so it does not name it again; a
-    // migration's refusal is read on its own and does.
-    builder
-      ? `A ${constraints.join(" and ")} field can't stop being translated in the same change.`
-      : `"${name}" is ${constraints.join(" and ")}, so it cannot stop being translated in the same migration.`,
-    builder
-      ? builderConstraintSteps(constraints)
-      : codeConstraintSteps(constraints)
-  );
-}
-
 /**
  * The refusals for the fields in `leaving`.
  *
@@ -143,9 +122,10 @@ function constrainedRefusal(
  *   without the conversion and confirmation such a change goes through on its own. Judged against
  *   the column the values sit in now, described by `oldFields` or, where the caller has no old
  *   definition, by `previousColumns`; a field neither describes is not judged.
- * - A required or unique field, or one a unique index covers (`uniqueIndexed`). Its shared column
- *   is created, and its constraints checked, before the default language's values are copied into
- *   it, so at that moment every existing row holds the same placeholder or none.
+ *
+ * A Required or Unique field is not refused here: every surface creates its shared column without
+ * the setting and applies it after the copy (`withoutLeavingConstraints`), and whether the values
+ * can take it is asked of the database (`refusalsForConstrainedFieldsLeaving`).
  *
  * @param surface - Whose steps the message names: the Schema Builder's settings and saves, or
  *   the config's flags and `nextly migrate:create`
@@ -156,8 +136,6 @@ export function refusalsForFieldsLeavingTranslation(args: {
   oldFields?: readonly LeavingFieldLike[];
   /** The companion columns as they are now, by column name, for a caller with no old fields. */
   previousColumns?: ReadonlyMap<string, LocalizedColumnSpec>;
-  /** Fields a unique index covers, beside their own `unique` flag. */
-  uniqueIndexed?: ReadonlySet<string>;
   dialect: SupportedDialect;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
@@ -179,14 +157,6 @@ export function refusalsForFieldsLeavingTranslation(args: {
     if (!args.leaving.has(field.name)) continue;
     if (storageDiffers(previousColumnOf(field), columnOf(field))) {
       refusals.push(reshapedRefusal(field.name, args.surface));
-      continue;
-    }
-    // The Builder's paths create the shared column without these settings, copy the values in, and
-    // only then apply them (`withoutLeavingConstraints`), asking first whether the values can take
-    // them (`refusalsForConstrainedFieldsLeaving`).
-    const constraints = leavingFieldConstraints(field, args.uniqueIndexed);
-    if (constraints.length > 0 && args.surface === "code") {
-      refusals.push(constrainedRefusal(field.name, constraints, args.surface));
     }
   }
   return refusals;
@@ -206,27 +176,6 @@ export function withoutLeavingConstraints<F extends LeavingFieldLike>(
       ? { ...f, required: false, unique: false }
       : f
   );
-}
-
-function builderConstraintSteps(constraints: readonly Constraint[]): string[] {
-  const settings = constraints
-    .map(c => (c === "required" ? "Required" : "Unique"))
-    .join(" and ");
-  // Each step names the Builder control it uses, and ends where the author saves.
-  return [
-    `Turn off ${settings} and save.`,
-    "Turn off Localized and save.",
-    `Turn ${settings} back on and save.`,
-  ];
-}
-
-function codeConstraintSteps(constraints: readonly Constraint[]): string[] {
-  const flags = constraints.map(c => `\`${c}\``).join(" and ");
-  return [
-    `Remove ${flags} from the field and run \`nextly migrate:create\`.`,
-    "Set `localized: false` and run it again.",
-    `Put ${flags} back and run it once more.`,
-  ];
 }
 
 function reshapedJoiningRefusal(

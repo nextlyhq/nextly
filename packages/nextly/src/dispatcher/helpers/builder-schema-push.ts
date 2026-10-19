@@ -22,6 +22,7 @@ import {
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
+import { NextlyError } from "../../errors/nextly-error";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 
 import { getConfigFromDI, getMigrationJournalFromDI } from "./di";
@@ -68,4 +69,24 @@ export function builderSchemaPush(args: {
       // its prompts and refusals, before it drops the main column.
       defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
     });
+}
+
+/**
+ * The error for a schema dialog's second push refused: the one that applies the Required and
+ * Unique settings of fields leaving translation after their values were shared. By then the first
+ * push and the companion transition have run, so the fields are shared without their settings; the
+ * log says so, and the public message stays generic.
+ */
+export function leavingSettingsNotApplied(
+  entity: string,
+  result: Pick<PipelineResult, "error">
+): NextlyError {
+  return NextlyError.internal({
+    logContext: {
+      op: "leavingFieldSettings",
+      entity,
+      detail: result.error?.message,
+      note: "fields leaving translation are shared without their Required or Unique settings",
+    },
+  });
 }

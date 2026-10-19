@@ -54,7 +54,10 @@ import {
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
-import { builderSchemaPush } from "../helpers/builder-schema-push";
+import {
+  builderSchemaPush,
+  leavingSettingsNotApplied,
+} from "../helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -649,9 +652,7 @@ export const COMPONENTS_METHODS: Record<
               },
             });
             if (!settled.success) {
-              throw new Error(
-                settled.error?.message ?? "Failed to apply schema changes"
-              );
+              throw leavingSettingsNotApplied(slug, settled);
             }
           }
 
