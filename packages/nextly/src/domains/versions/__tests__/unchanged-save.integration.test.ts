@@ -220,21 +220,27 @@ describe.each(getConfiguredTestDialects())(
       expect(await all()).toHaveLength(before + 1);
     });
 
-    it("compares each language with its own newest version", async () => {
+    it("compares a language's save with the document's newest version", async () => {
       const t = await boot(dialect);
       const id = await t.create("translated", { title: "hello" }, "en");
       await t.update("translated", id, { title: "hola" }, "es");
       const before = (await versionsOf(id)).length;
 
-      // Unchanged in each language: nothing recorded.
-      await t.update("translated", id, { title: "hello" }, "en");
+      // Unchanged in the language that holds the newest version: nothing.
       await t.update("translated", id, { title: "hola" }, "es");
       expect(await versionsOf(id)).toHaveLength(before);
+
+      // Unchanged in another language is still recorded: its own newest
+      // version can predate a change to the shared fields.
+      await t.update("translated", id, { title: "hello" }, "en");
+      expect(await versionsOf(id)).toHaveLength(before + 1);
+      await t.update("translated", id, { title: "hello" }, "en");
+      expect(await versionsOf(id)).toHaveLength(before + 1);
 
       // A change in one language records one version, in that language.
       await t.update("translated", id, { title: "buenas" }, "es");
       const after = await versionsOf(id);
-      expect(after).toHaveLength(before + 1);
+      expect(after).toHaveLength(before + 2);
       expect(after[after.length - 1]?.locale).toBe("es");
     });
 

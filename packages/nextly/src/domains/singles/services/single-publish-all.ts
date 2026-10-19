@@ -998,9 +998,10 @@ export class SinglePublishAllService extends BaseService {
       logContext: { single: slug },
     });
 
+    // Always recorded: publishing every language can change only a
+    // language's status, which this snapshot does not hold, so it would
+    // compare equal with the version before.
     await captureInTx(tx, this.versionCapture, {
-      // An update: a save that changes nothing records nothing.
-      onlyIfChanged: true,
       ref: { scopeKind: "single", scopeSlug: slug, entryId },
       contentStatus: "published",
       parts: {
