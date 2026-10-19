@@ -59,6 +59,7 @@ import {
   changesStateOf,
   diffForPair,
   versionChangesOf,
+  type ChangesState,
   type VersionChanges,
 } from "./version-changes";
 import { changeAnchorId, VersionChangesForm } from "./VersionChangesForm";
@@ -301,13 +302,37 @@ export function versionAwareToolbarSlots(
  * current and Restore…, in a bar at the bottom, under the thumb. Wider
  * screens carry the same actions in the title bar and the comparison bar.
  */
+/**
+ * Where the reader is among the changes, in the phone bar's few words. Says
+ * "No changes" only once the comparison has answered; while it is read, or if
+ * it failed, it says so rather than claiming the versions are the same.
+ */
+function phonePositionText(
+  state: ChangesState,
+  changed: number,
+  position: number
+): string {
+  switch (state.kind) {
+    case "reading":
+      return "Reading…";
+    case "failed":
+      return "Not read";
+    case "first":
+      return "First version";
+    case "ready":
+      return changed > 0 ? `${position + 1} of ${changed}` : "No changes";
+  }
+}
+
 function VersionPhoneBar({
   actions,
+  state,
   changed,
   position,
   onMove,
 }: {
   actions: VersionActions;
+  state: ChangesState;
   changed: number;
   position: number;
   onMove: (delta: -1 | 1) => void;
@@ -330,7 +355,7 @@ function VersionPhoneBar({
         <ArrowUp className="h-4 w-4" aria-hidden="true" />
       </Button>
       <span className="text-sm tabular-nums text-muted-foreground">
-        {changed > 0 ? `${position + 1} of ${changed}` : "No changes"}
+        {phonePositionText(state, changed, position)}
       </span>
       <Button
         type="button"
@@ -560,6 +585,7 @@ function ViewedVersionFrame({
       {actions ? (
         <VersionPhoneBar
           actions={actions}
+          state={state}
           changed={order.length}
           position={position}
           onMove={move}

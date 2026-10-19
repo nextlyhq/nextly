@@ -182,6 +182,55 @@ describe("ViewedVersionBody — a past version with its changes marked", () => {
     expect(screen.getByText("Change 2 of 2")).toBeInTheDocument();
   });
 
+  it("says it is still reading, never that nothing changed, until the comparison answers", async () => {
+    // A comparison that has not answered yet.
+    diffMock.mockReturnValue(new Promise(() => {}));
+    renderVersion();
+
+    const bar = screen.getByRole("toolbar", { name: "Version actions" });
+    expect(bar).toHaveTextContent("Reading…");
+    expect(bar).not.toHaveTextContent("No changes");
+  });
+
+  it("names the language a version of a localized document reads in", () => {
+    render(
+      <DocumentHistoryContext.Provider
+        value={{
+          viewing: {
+            ...viewing,
+            comparedWith: { kind: "first" },
+            about: {
+              id: "v4",
+              versionNo: 4,
+              status: "draft",
+              isAutosave: false,
+              label: null,
+              locale: "es",
+              sourceVersionNo: null,
+              createdBy: "u1",
+              author: { id: "u1", name: "Ana" },
+              createdAt: "2026-10-14T16:40:00.000Z",
+              updatedAt: "2026-10-14T16:40:00.000Z",
+            },
+          },
+          setViewing: () => {},
+          restore: null,
+          setRestore: () => {},
+        }}
+      >
+        <ViewedVersionBody
+          fields={fields}
+          values={viewing.snapshot as Record<string, unknown>}
+          actionsDisabled={false}
+        />
+      </DocumentHistoryContext.Provider>
+    );
+
+    expect(
+      screen.getByRole("region", { name: "Comparison" })
+    ).toHaveTextContent(/ES · .*Ana/);
+  });
+
   it("reads the first version whole, with nothing to mark", () => {
     render(
       <DocumentHistoryContext.Provider

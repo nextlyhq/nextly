@@ -69,9 +69,12 @@ function ViewingLine({
   versionNo: number;
   about: VersionMeta | null;
 }) {
-  // The number joins the detail where the title is a name rather than it.
+  // The language leads the detail on a localized document, since the version
+  // reads in it whatever language the editor is in; the number joins where
+  // the title is a name rather than it.
   const detail = about
     ? [
+        ...(about.locale ? [about.locale.toUpperCase()] : []),
         formatDateTime(about.createdAt),
         versionAuthorLabel(about),
         ...(about.label ? [`v${versionNo}`] : []),
