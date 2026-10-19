@@ -1579,6 +1579,39 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
     ]);
   });
 
+  it("keeps an earlier filter's replyTo and to when a later one leaves them out", async () => {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: object) => ({
+        ...payload,
+        to: "changed@b.com",
+        replyTo: "changed-reply@b.com",
+      })
+    );
+    // Written to fewer fields: builds a fresh payload without either key.
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { from: string; subject: string; html: string }) => ({
+        from: payload.from,
+        subject: payload.subject,
+        html: payload.html,
+      })
+    );
+    const { service, adapterSend } = buildSend();
+
+    await service.send({
+      to: "a@b.com",
+      replyTo: "help@b.com",
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(adapterSend.mock.calls[0][0]).toMatchObject({
+      to: "changed@b.com",
+      replyTo: "changed-reply@b.com",
+    });
+  });
+
   it("ignores a change made only to recipients, which is derived", async () => {
     getFilterRegistry().addFilter(
       FilterSeams.EmailBeforeSend,

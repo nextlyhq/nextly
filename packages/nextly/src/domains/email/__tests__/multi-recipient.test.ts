@@ -493,6 +493,37 @@ describe("several `to` addresses reach the provider", () => {
     ]);
   });
 
+  it("splits a list of display-name addresses, so every one is sent to", async () => {
+    // Read as one entry, only the last mailbox would be checked and counted,
+    // and here it would be dropped as a duplicate of the first entry.
+    const { adapter, send } = mockAdapter(10);
+    const { service } = build(adapter);
+
+    await service.send({
+      to: [B, "Ann <ann@example.com>, Bob <b@example.com>"],
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(send.mock.calls[0][0].toList).toEqual([B, "Ann <ann@example.com>"]);
+  });
+
+  it("refuses a list with a part that is not an address", async () => {
+    const { adapter, send } = mockAdapter(10);
+    const { service } = build(adapter);
+
+    const error = await service
+      .send({
+        to: "Ann <ann@example.com>, not-an-address",
+        subject: "Hi",
+        html: "<p>x</p>",
+      })
+      .catch((thrown: unknown) => thrown);
+
+    expect(error).toBeInstanceOf(NextlyError);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("sends the same address once when it is listed twice", async () => {
     const { adapter, send } = mockAdapter();
     const { service } = build(adapter);

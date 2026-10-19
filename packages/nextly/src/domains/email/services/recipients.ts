@@ -63,23 +63,58 @@ const MAILBOX =
  */
 export function isSendableAddress(value: unknown): value is string {
   if (typeof value !== "string") return false;
+  // One address, not a list: a second mailbox would be read as this one's
+  // display name, and only the last would be checked, counted or recorded.
+  if (splitAddressList(value).length !== 1) return false;
+  const brackets = unquoted(value).match(/[<>]/g) ?? [];
+  if (brackets.length !== 0 && brackets.join("") !== "<>") return false;
   return MAILBOX.test(mailboxOf(value));
 }
 
 /**
- * A string of bare addresses joined by commas, as the list it names.
+ * `value` with every quoted string blanked out, so `<`, `>` and `,` inside a
+ * quoted display name or local part are not read as structure.
+ */
+function unquoted(value: string): string {
+  return value.replace(/"(?:[^"\\]|\\.)*"/g, match => " ".repeat(match.length));
+}
+
+/**
+ * `value` split at each comma that is outside a quoted string and outside
+ * angle brackets: the addresses of an address list, trimmed.
+ */
+function splitAddressList(value: string): string[] {
+  const blanked = unquoted(value);
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < blanked.length; i++) {
+    const char = blanked[i];
+    if (char === "<") depth++;
+    else if (char === ">") depth = Math.max(0, depth - 1);
+    else if (char === "," && depth === 0) {
+      parts.push(value.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  parts.push(value.slice(start).trim());
+  return parts;
+}
+
+/**
+ * A string of addresses joined by commas, as the list it names.
  *
  * SMTP sends such a string to every address in it, so a caller may already
- * pass one; reading it as a list keeps that working, on every provider. Split
- * only when every part is an address on its own, so a display name with a
- * comma in it (`"Doe, Jane" <jane@example.com>`) stays one address.
+ * pass one; reading it as a list keeps that working, on every provider, and
+ * lets each address be checked, counted and recorded. Commas inside a quoted
+ * display name (`"Doe, Jane" <jane@example.com>`) or angle brackets do not
+ * split. A list with a part that is not an address is left whole, and then
+ * refused as not one address.
  */
 function commaJoined(value: unknown): unknown[] {
-  if (typeof value !== "string" || !value.includes(",")) return [value];
-  const parts = value.split(",").map(part => part.trim());
-  return parts.every(
-    part => part === mailboxOf(part) && isSendableAddress(part)
-  )
+  if (typeof value !== "string") return [value];
+  const parts = splitAddressList(value);
+  return parts.length > 1 && parts.every(part => isSendableAddress(part))
     ? parts
     : [value];
 }

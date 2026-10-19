@@ -476,22 +476,33 @@ export class EmailService extends BaseService {
       cc: options.cc,
       bcc: options.bcc,
     };
+    let previous: EmailPayloadFilterValue = {
+      ...initial,
+      recipients: recipientsOf(initial),
+    };
     const filtered = await registry.applyFilters<
       EmailPayloadFilterValue,
       EmailFilterContext
     >(
       FilterSeams.EmailBeforeSend,
-      { ...initial, recipients: recipientsOf(initial) },
+      previous,
       { providerId: options.providerId },
       {
-        afterEach: value => ({
-          ...value,
-          recipients: recipientsOf({
+        afterEach: value => {
+          // A handler that leaves `to` or `replyTo` out of what it returns
+          // keeps the value it was handed, which may be an earlier handler's
+          // change rather than the caller's. Carried forward here, after each
+          // handler, so a later handler built on fewer fields cannot undo it.
+          const merged = {
             ...value,
-            // A handler that left `to` out kept the recipients it was given.
-            to: "to" in value ? value.to : givenTo.to,
-          }),
-        }),
+            to: "to" in value ? value.to : previous.to,
+            ...("replyTo" in value || !("replyTo" in previous)
+              ? {}
+              : { replyTo: previous.replyTo }),
+          };
+          previous = { ...merged, recipients: recipientsOf(merged) };
+          return previous;
+        },
       }
     );
 
