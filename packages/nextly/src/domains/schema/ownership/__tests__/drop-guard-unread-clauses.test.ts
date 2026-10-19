@@ -233,3 +233,56 @@ describe("a clause the guard cannot read, on a table other owners have elements 
     expect(() => guard([sql])).not.toThrow();
   });
 });
+
+describe("names longer than PostgreSQL stores, on a table other owners have elements on", () => {
+  // PostgreSQL cuts a name to 63 bytes, and the guard compares every name,
+  // the owner rows' included, cut the same way.
+  const longTable = `app_${"t".repeat(70)}`;
+  const longColumn = `fx_${"c".repeat(70)}`;
+
+  function guardWith(rows: OwnerRecord[], sql: string): void {
+    assertNoForeignDrops({
+      statements: [sql],
+      stream: "app",
+      owners,
+      elementOwners: [...owners.values(), ...rows],
+      dialect: "postgresql",
+      source: "0013_under_test",
+      liveTables: new Set(owners.keys()),
+    });
+  }
+
+  it("matches an owner row whose table name is longer than PostgreSQL stores", () => {
+    expect(
+      refusal(() =>
+        guardWith(
+          [
+            record({
+              tableName: longTable,
+              elementKind: "column",
+              elementName: "status",
+            }),
+          ],
+          `ALTER TABLE ${longTable} DISABLE TRIGGER ALL`
+        )
+      )
+    ).toMatchObject({ column: "status", belongsTo: "plugin:fx" });
+  });
+
+  it("matches an owner row whose element name is longer than PostgreSQL stores", () => {
+    expect(
+      refusal(() =>
+        guardWith(
+          [
+            record({
+              tableName: "app_plain",
+              elementKind: "column",
+              elementName: longColumn,
+            }),
+          ],
+          "ALTER TABLE app_plain DISABLE TRIGGER ALL"
+        )
+      )
+    ).toMatchObject({ table: "app_plain", belongsTo: "plugin:fx" });
+  });
+});

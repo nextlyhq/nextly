@@ -5094,13 +5094,19 @@ function refuseUnreadOnElements(
     source: string;
     elementOwners: readonly OwnerRecord[];
     liveIndexTables?: ReadonlyMap<string, string>;
+    dialect: SupportedDialect;
   }
 ): void {
+  // The rows' names are compared as the reader's are, cut to what the
+  // dialect stores (`storedNameKey`): the reading and `OwnershipView` both
+  // key every name that way, so a long name compared lower-cased alone
+  // would match no row and the element would go unjudged.
+  const fold = (name: string) => storedNameKey(name, args.dialect);
   for (const table of new Set(read.unreadOnElements)) {
     for (const row of args.elementOwners) {
-      if (row.tableName.toLowerCase() !== table) continue;
-      const name = row.elementName?.toLowerCase();
-      if (name === undefined) continue;
+      if (fold(row.tableName) !== table) continue;
+      if (row.elementName == null) continue;
+      const name = fold(row.elementName);
       if (row.elementKind === "column") {
         refuseUnreadOn(holders.column(table, name), {
           ...args,
