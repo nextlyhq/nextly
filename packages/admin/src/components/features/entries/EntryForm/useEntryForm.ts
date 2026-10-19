@@ -441,9 +441,22 @@ export function useEntryForm({
   // useMemo'd on (fields, entry), so it only changes when entry's identity
   // changes — keeps this effect from firing on every keystroke. `form` is
   // a stable RHF ref.
+  //
+  // Two arrivals are this editor's own save rather than a new entry, and are
+  // not reset to. The update writes its payload into the entry's cache before
+  // the request goes (an optimistic update), so that copy arrives while the
+  // save is in flight; and when the request fails it puts back the very entry
+  // object the form started from. Resetting to the first would make what the
+  // author typed the form's starting point before it was stored; resetting to
+  // the second would then wipe it. A failed save has to leave the form as the
+  // author left it, still unsaved.
+  const savingUpdate = useRef(false);
+  const startedFrom = useRef<unknown>(undefined);
   useEffect(() => {
     if (entry && mode === "edit") {
+      if (savingUpdate.current || entry === startedFrom.current) return;
       form.reset(defaultValues);
+      startedFrom.current = entry;
     }
   }, [entry, mode, defaultValues, form]);
 
@@ -542,9 +555,12 @@ export function useEntryForm({
                 throw new Error("Entry ID is required for update");
               }
               // entryId is passed to useUpdateEntry hook, so we just pass data here
-              const result = await updateMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
+              savingUpdate.current = true;
+              const result = await updateMutation
+                .mutateAsync(data as Record<string, EntryValue>)
+                .finally(() => {
+                  savingUpdate.current = false;
+                });
               // Reset form to mark as clean after successful update
               form.reset(data);
               onSuccess?.(result.item);
