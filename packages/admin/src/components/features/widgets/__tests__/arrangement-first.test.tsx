@@ -20,6 +20,8 @@ import type { DashboardLayoutResponse } from "@admin/types/dashboard/widgets";
 
 import { WidgetGrid } from "../WidgetGrid";
 
+import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
+
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
   useBranding: () => branding,
   useBrandingStatus: () => ({
@@ -91,6 +93,8 @@ function newClient() {
 }
 
 beforeEach(() => {
+  // A measured dashboard, so a card's first query is not held for a width.
+  stubDashboardWidth(1200);
   vi.clearAllMocks();
   api.post.mockResolvedValue({
     results: [{ ok: true, result: { op: "count", total: 7 } }],
@@ -99,6 +103,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  unstubDashboardWidth();
 });
 
 describe("before the arrangement is known", () => {

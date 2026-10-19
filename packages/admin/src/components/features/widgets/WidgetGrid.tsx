@@ -388,9 +388,21 @@ export function WidgetGrid() {
 
   // Until this person's arrangement is known: no card, no card's data, and
   // one status where the grid will be. Nothing sits below the grid, so the
-  // cards arriving in its place move nothing that was already drawn.
+  // cards arriving in its place move nothing that was already drawn. Inside
+  // the measured container all the same: the dashboard's width is observed
+  // from the element mounted first, and a card's first query waits for that
+  // width, so a container drawn only once the arrangement lands would never
+  // be measured and no card would ever be asked for.
   if (arrangement.awaitingArrangement) {
-    return <ArrangementLoading />;
+    return (
+      <div
+        ref={dashboardRef}
+        data-testid="dashboard-container"
+        className="@container/dashboard"
+      >
+        <ArrangementLoading />
+      </div>
+    );
   }
 
   return (
