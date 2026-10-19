@@ -110,8 +110,16 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "permission-spelling": ({ permissions, collection, operation }) =>
     (permissions ?? []).includes(`${collection}:${operation}`),
   "principal-kind": ({ principal }) => principal?.kind === MEMBER_KIND,
-  "user-present": ({ user }) => user?.id !== undefined && user?.id !== null,
+  "user-is-key-maker": ({ user }) =>
+    keyMaker.id !== undefined && user?.id === keyMaker.id,
+  "publish-false": () => false,
 };
+
+/**
+ * The id of `user-with`, who made every key but the super-admin's, set once
+ * the users are seeded. Rules run per request, after it is set.
+ */
+const keyMaker: { id?: string } = {};
 
 const ruleBody = (rule: Rule) => RULE_BODIES[rule];
 
@@ -130,6 +138,9 @@ function accessFor(
 ): Record<string, unknown> | undefined {
   if (rule === "none") return undefined;
   if (rule === "other-operation") return { update: () => false };
+  if (rule === "publish-false") {
+    return { publish: () => false, unpublish: () => false };
+  }
   const body = ruleBody(rule);
   return Object.fromEntries(
     operations.map(operation => [
@@ -664,6 +675,7 @@ const SESSIONS: [Caller, string][] = [
 /** The headers each caller sends: a session cookie, a key, or neither. */
 async function callerHeaders(t: TestNextly) {
   const { users, reviewerRole, partialRole } = await seedUsers(t);
+  keyMaker.id = users.with.id;
   const keys = t.getService("apiKeyService");
   const mint = async (
     owner: string,

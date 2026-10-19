@@ -182,12 +182,12 @@ async function restRead(
   const body = (await res.json()) as {
     items?: { slug?: unknown }[];
     total?: unknown;
-    totalDocs?: unknown;
   };
   if (action === "list") {
     return body.items?.some(item => item.slug === "probe") ? "A" : "R";
   }
-  const total = body.total ?? body.totalDocs;
+  // `total` is the count route's answer; any other shape is recorded as is.
+  const total = body.total;
   if (typeof total !== "number") return `=${JSON.stringify(body)}`;
   return total > 0 ? "A" : "R";
 }
@@ -573,19 +573,32 @@ async function setPubStatus(world: World, row: Row): Promise<void> {
   });
 }
 
+/** The status a Single's publish or unpublish leaves it in. */
+const statusAfter = (row: Row) =>
+  row.action === "publish" ? "published" : "draft";
+
 /**
- * A door's answer to one row, and, for a write, whether it reached the
- * database: `landed` is set only where the door writes.
+ * A door's answer to one row, and, for a write, what it did to the database:
+ * `landed` says it changed the target's table at all, and `done` that it made
+ * the change asked for. Both are set only where the door writes.
  */
 export async function ask(
   world: World,
   row: Row,
   door: Door
-): Promise<{ answer: Answer; landed?: boolean }> {
+): Promise<{ answer: Answer; landed?: boolean; done?: boolean }> {
   if (!writes(row, door)) return { answer: await answer(world, row, door) };
   await markUpdated(world, row);
   const before = await storedTable(world, row);
   const given = await answer(world, row, door);
   const after = await storedTable(world, row);
-  return { answer: given, landed: !isDeepStrictEqual(before, after) };
+  const landed = !isDeepStrictEqual(before, after);
+  // A Single's publish or unpublish is done only when its status moved: a
+  // save that bumps the row's timestamps but drops the status changes the
+  // table without doing what was asked.
+  const done =
+    row.target === "single-pub"
+      ? after[0]?.status === statusAfter(row)
+      : landed;
+  return { answer: given, landed, done };
 }

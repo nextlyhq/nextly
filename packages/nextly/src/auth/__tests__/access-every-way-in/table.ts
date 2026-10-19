@@ -78,10 +78,13 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * hands a rule the stored `<operation>-<collection>` spelling refuses it.
  * `principal-kind` admits only a person of the `principal` caller's kind,
  * so a door that drops the person from the rule's context refuses it too.
- * `user-present` admits a caller the rule is handed a `user` for: a signed-in
- * user, and an API key, which acts as the user who made it. A visitor and a
- * plugin's person have none, so a door that hands a rule the wrong `user`, or
- * none, answers it differently.
+ * `user-is-key-maker` admits only the caller whose `user` is `user-with`:
+ * `user-with` itself and every key it made, since a key acts as the user who
+ * made it. A visitor and a plugin's person have no user, and the super-admin's
+ * key names its own maker, so a door that hands a rule no `user`, or the wrong
+ * one, answers it differently. `publish-false` declares only a refusing
+ * publish and unpublish rule, so a door that judges a publish by the update
+ * rule allows what it refuses.
  */
 export const RULES = [
   "none",
@@ -99,7 +102,8 @@ export const RULES = [
   "role-name",
   "permission-spelling",
   "principal-kind",
-  "user-present",
+  "user-is-key-maker",
+  "publish-false",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -371,9 +375,16 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "permission-spelling": (action, caller) =>
     STAFF.includes(caller) && holdsPermission(caller, action, "collection"),
   "principal-kind": (_action, caller) => caller === "principal",
-  "user-present": (_action, caller) =>
-    USERS.includes(caller) || KEYS.includes(caller),
+  "user-is-key-maker": (_action, caller) => MADE_BY_USER_WITH.includes(caller),
+  "publish-false": action =>
+    action === "publish" || action === "unpublish" ? false : null,
 };
+
+/** `user-with` and the keys it made: every key but the super-admin's. */
+const MADE_BY_USER_WITH: readonly Caller[] = [
+  "user-with",
+  ...KEYS.filter(key => key !== "key-super-admin"),
+];
 
 /** The callers whose roles, as a rule sees them, include one named `editor`. */
 function holdsRoleNamedEditor(caller: Caller): boolean {
