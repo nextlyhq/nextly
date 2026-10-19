@@ -79,6 +79,7 @@ import {
 import { resealPrincipalDigestKeyAtBoot } from "../../audit/erase-principal";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import {
+  EMAIL_RETENTION_CLASS,
   ERASED_RECIPIENT_HASH,
   recipientDigest,
 } from "../../email/delivery-record";
@@ -342,8 +343,32 @@ describe.each(getConfiguredTestDialects())(
       await exec("ALTER TABLE email_deliveries DROP COLUMN principal_id");
       await exec("ALTER TABLE email_deliveries DROP COLUMN principal_kind");
       await exec("DROP TABLE nextly_deleted_principals");
+      // Recorded as such a database records it, naming nobody. Read with
+      // plain SQL: the schema's own select names the columns removed above.
+      const hashes = async (): Promise<string[]> => {
+        const result = (await exec(
+          "SELECT recipient_hash FROM email_deliveries"
+        )) as unknown;
+        const rows = Array.isArray(result)
+          ? result
+          : ((result as { rows?: unknown[] }).rows ?? []);
+        return (rows as Array<Record<string, unknown>>).map(found =>
+          String(found.recipient_hash ?? found.RECIPIENT_HASH)
+        );
+      };
+      // Such a database records no new send: every insert names the columns
+      // it lacks. So the record is one it held from before.
+      const created =
+        dialect === "sqlite" ? String(Date.now()) : "CURRENT_TIMESTAMP";
+      await exec(
+        "INSERT INTO email_deliveries (id, provider_type, recipient_hash, recipient_kind, status, retention_class, created_at) " +
+          `VALUES ('00000000-0000-4000-8000-00000000c0de', 'capturing-mailer', '${recipientDigest("legacy@example.com")}', 'to', 'sent', '${EMAIL_RETENTION_CLASS}', ${created})`
+      );
+      expect(await hashes()).toEqual([recipientDigest("legacy@example.com")]);
 
       await remove(t, id);
+
+      expect(await hashes()).toEqual([ERASED_RECIPIENT_HASH]);
 
       const [left] = await t.adapter.select<{ id: string }>("users", {
         where: { and: [{ column: "id", op: "=", value: id }] },
