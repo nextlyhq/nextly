@@ -203,10 +203,23 @@ export function issuedNoLaterThan(
 export function mayBindToAccount(
   kind: AuthTokenKind,
   token: UnboundToken,
-  account: Pick<BindingAccount, "email" | "createdAt" | "updatedAt">,
-  sameAddress: (a: string, b: string) => boolean = (a, b) => a === b
+  account: Pick<BindingAccount, "email" | "createdAt" | "updatedAt">
 ): boolean {
-  if (!sameAddress(account.email, token.identifier)) return false;
+  return (
+    account.email === token.identifier && predatesToken(kind, token, account)
+  );
+}
+
+/**
+ * Whether `account` was created and last changed before `token` was issued,
+ * judged as {@link mayBindToAccount} judges it, for an account already known
+ * to hold the token's address.
+ */
+function predatesToken(
+  kind: AuthTokenKind,
+  token: UnboundToken,
+  account: Pick<BindingAccount, "createdAt" | "updatedAt">
+): boolean {
   const issued = issuedNoLaterThan(kind, token);
   if (issued === null) return false;
   return (
@@ -262,7 +275,7 @@ export interface BindIssuedTokensResult {
   removed: number;
 }
 
-/** How many addresses one account lookup names, well inside every driver's limit. */
+/** How many tokens one removal names, well inside every driver's limit. */
 const LOOKUP_BATCH = 500;
 
 /**
@@ -305,24 +318,21 @@ export async function bindIssuedTokens(
       .from(table)
       .where(isNull(table.userId));
     if (rows.length === 0) continue;
-
-    const tokens = rows.map(row => ({
-      id: Number(row.id),
-      identifier: String(row.identifier),
-      expires: asDate(row.expires),
-      createdAt: asDate(row.createdAt),
-    }));
-    const accounts = await accountsHolding(
+    const holders = await holdersOf(
       tx,
       tables,
-      tokens.map(token => token.identifier)
+      rows.map(row => String(row.identifier))
     );
 
     const { bindTo, remove } = planBinding(
       kind,
-      tokens,
-      accounts,
-      dialect,
+      rows.map(row => ({
+        id: Number(row.id),
+        identifier: String(row.identifier),
+        expires: asDate(row.expires),
+        createdAt: asDate(row.createdAt),
+        holder: holders.get(String(row.identifier)) ?? null,
+      })),
       now
     );
 
@@ -363,78 +373,70 @@ export async function bindIssuedTokens(
 }
 
 /**
+ * The account holding each of `identifiers`, found as a redemption finds it:
+ * `email = ?`, under the database's own comparison of the column. On MySQL
+ * that is the column's collation, case-insensitive by default and exact
+ * under `utf8mb4_bin`; on PostgreSQL and SQLite it is exact. Addresses are
+ * unique under it, so each names at most one account. One read per distinct
+ * address: comparing the column with another column instead could meet two
+ * collations on MySQL, which it refuses.
+ */
+async function holdersOf(
+  tx: TokenBindingDb,
+  tables: Pick<Tables, "users">,
+  identifiers: readonly string[]
+): Promise<
+  Map<string, Pick<BindingAccount, "id" | "createdAt" | "updatedAt">>
+> {
+  const { users } = tables;
+  const holders = new Map<
+    string,
+    Pick<BindingAccount, "id" | "createdAt" | "updatedAt">
+  >();
+  for (const identifier of new Set(identifiers)) {
+    const [row] = await tx
+      .select({
+        id: users.id,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      })
+      .from(users)
+      .where(eq(users.email, identifier))
+      .limit(1);
+    if (row) {
+      holders.set(identifier, {
+        id: String(row.id),
+        createdAt: asDate(row.createdAt),
+        updatedAt: asDate(row.updatedAt),
+      });
+    }
+  }
+  return holders;
+}
+
+/**
  * Which unbound tokens to bind to which account, and which to remove: a live
- * token the binding rule ties to the account holding its address is bound to
- * it; every other is removed.
+ * token whose holder, the account the database matched to its address, was
+ * created and last changed before it was issued is bound to that account;
+ * every other is removed.
  */
 function planBinding(
   kind: AuthTokenKind,
-  tokens: readonly (UnboundToken & { id: number })[],
-  accounts: readonly BindingAccount[],
-  dialect: SupportedDialect,
+  tokens: readonly (UnboundToken & {
+    id: number;
+    holder: Pick<BindingAccount, "id" | "createdAt" | "updatedAt"> | null;
+  })[],
   now: Date
 ): { bindTo: Map<string, number[]>; remove: number[] } {
-  const key = addressKey(dialect);
-  // The account the database itself says holds each address, looked up once
-  // per token: addresses are unique under the database's own comparison, so
-  // each key names at most one account.
-  const byAddress = new Map(
-    accounts.map(account => [key(account.email), account] as const)
-  );
-  const same = (a: string, b: string): boolean => key(a) === key(b);
   const bindTo = new Map<string, number[]>();
   const remove: number[] = [];
   for (const token of tokens) {
-    const account = byAddress.get(key(token.identifier));
-    if (
-      token.expires > now &&
-      account &&
-      mayBindToAccount(kind, token, account, same)
-    ) {
-      bindTo.set(account.id, [...(bindTo.get(account.id) ?? []), token.id]);
+    const { holder } = token;
+    if (token.expires > now && holder && predatesToken(kind, token, holder)) {
+      bindTo.set(holder.id, [...(bindTo.get(holder.id) ?? []), token.id]);
     } else {
       remove.push(token.id);
     }
   }
   return { bindTo, remove };
-}
-
-/**
- * An address in the form the database compares it in, so two addresses are
- * the same address to the database when their keys are equal. MySQL compares
- * them under its case-insensitive collation, so a token issued to
- * `person@example.com` was redeemable by an account stored as
- * `Person@example.com`; PostgreSQL and SQLite compare them exactly.
- */
-function addressKey(dialect: SupportedDialect): (address: string) => string {
-  return dialect === "mysql" ? address => address.toLowerCase() : a => a;
-}
-
-/** The accounts holding any of `emails`, as the database matches them. */
-async function accountsHolding(
-  tx: TokenBindingDb,
-  tables: Pick<Tables, "users">,
-  emails: readonly string[]
-): Promise<BindingAccount[]> {
-  const { users } = tables;
-  const unique = [...new Set(emails)];
-  const holding: BindingAccount[] = [];
-  for (let i = 0; i < unique.length; i += LOOKUP_BATCH) {
-    const rows = await tx
-      .select({
-        id: users.id,
-        email: users.email,
-        name: users.name,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-        deactivatedAt: users.deactivatedAt,
-      })
-      .from(users)
-      .where(inArray(users.email, unique.slice(i, i + LOOKUP_BATCH)));
-    for (const row of rows) {
-      const account = toAccount(row);
-      holding.push(account);
-    }
-  }
-  return holding;
 }

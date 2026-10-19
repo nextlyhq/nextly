@@ -34,6 +34,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { getSchemaEventsDdl } from "../../schema/events/schema-events-ddl";
+import { bindIssuedTokens } from "../services/token-account-binding";
 import type { AuthService } from "../services/auth-service";
 
 interface TestDb {
@@ -399,5 +400,68 @@ describe.each(getConfiguredTestDialects())(
         auth.verifyEmail(reassigned.verification)
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     }, 300_000);
+
+    it.runIf(dialect === "mysql")(
+      "binds each link to its own account when addresses differ only in case under a case-sensitive collation",
+      async () => {
+        current = await createTestNextly({ dialect });
+        const t = current;
+        const db = t.adapter.getDrizzle() as unknown as TestDb;
+        const tables = getDialectTables(dialect);
+        const issuedAt = new Date(Date.now() - HOUR);
+        const before = new Date(Date.now() - 5 * HOUR);
+
+        // A database already carrying the column, whose address column uses a
+        // case-sensitive collation, where two accounts can differ only in
+        // case. The core reconcile would set the column back to the schema's
+        // collation, so the binding step is run on its own.
+        await t.adapter.executeQuery(
+          "ALTER TABLE users MODIFY email VARCHAR(255) COLLATE utf8mb4_bin NOT NULL"
+        );
+        const spellings = [
+          ["upper", "Same-Address@example.com"],
+          ["lower", "same-address@example.com"],
+        ] as const;
+        const raw = new Map<string, string>();
+        for (const [id, email] of spellings) {
+          await db.insert(tables.users).values({
+            id,
+            email,
+            name: id,
+            emailVerified: null,
+            isActive: true,
+            passwordHash: OLD_HASH,
+            createdAt: before,
+            updatedAt: before,
+          });
+          const value = randomBytes(32).toString("hex");
+          raw.set(id, value);
+          const hash = createHash("sha256").update(value).digest("hex");
+          await t.adapter.executeQuery(
+            "INSERT INTO password_reset_tokens (identifier, token_hash, expires, created_at) " +
+              `VALUES ('${email}', '${hash}', ${at(dialect, new Date(issuedAt.getTime() + 24 * HOUR))}, ${at(dialect, issuedAt)})`
+          );
+        }
+
+        expect(await bindIssuedTokens(t.adapter.getDrizzle(), dialect)).toEqual(
+          {
+            bound: 2,
+            removed: 0,
+          }
+        );
+
+        for (const [id] of spellings) {
+          const hash = createHash("sha256")
+            .update(raw.get(id) as string)
+            .digest("hex");
+          const rows = await db
+            .select()
+            .from(tables.passwordResetTokens)
+            .where(eq(tables.passwordResetTokens.tokenHash, hash));
+          expect(rows.map(row => row.userId)).toEqual([id]);
+        }
+      },
+      300_000
+    );
   }
 );
