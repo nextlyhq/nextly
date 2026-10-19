@@ -41,13 +41,30 @@ const api = vi.mocked(protectedApi);
 
 /** Two data widgets, each fetching its own count. */
 const branding = {
-  widgets: ["posts", "orders"].map(name => ({
-    id: `acme/${name}`,
-    title: `${name} count`,
-    archetype: "metric",
-    defaultSize: "sm",
-    query: { source: `collection:${name}`, op: "count" },
-  })),
+  widgets: ["posts", "orders"]
+    .map(name => ({
+      id: `acme/${name}`,
+      title: `${name} count`,
+      archetype: "metric",
+      defaultSize: "sm",
+      query: { source: `collection:${name}`, op: "count" },
+    }))
+    .concat([
+      {
+        // Declared at half width, so a card sized from its declaration and one
+        // sized from an arrangement that widens it ask for different rows.
+        id: "acme/recent",
+        title: "recent list",
+        archetype: "list",
+        defaultSize: "lg",
+        query: {
+          source: "collection:recent",
+          op: "list",
+          select: ["title"],
+          limit: 8,
+        },
+      } as never,
+    ]),
 } as unknown as AdminBranding;
 
 /** This person's arrangement: only the orders card. */
@@ -170,5 +187,51 @@ describe("when the arrangement cannot be read", () => {
       await screen.findByTestId("widget-cell-acme/posts")
     ).toBeInTheDocument();
     expect(screen.getByTestId("widget-cell-acme/orders")).toBeInTheDocument();
+  });
+});
+
+describe("the first request a card makes", () => {
+  it("is sized for the width its arrangement gives it, not its declared one", async () => {
+    // On 680 px a half card is 328 px wide, small: three rows, asked as four. This person's
+    // arrangement draws the same card full width, 680 px, medium: eight rows, asked as nine.
+    // 🔴 A grid that sized from the declaration while the arrangement was on its way would ask
+    // four first. The declared fallback (a FAILED read) cannot tell the two apart, so this is
+    // the case that does.
+    unstubDashboardWidth();
+    stubDashboardWidth(680);
+    api.get.mockResolvedValue({
+      ...arrangement,
+      placements: [
+        {
+          id: "p-recent",
+          widgetId: "acme/recent",
+          width: "full",
+          removed: false,
+        },
+      ],
+      widgets: {
+        "acme/recent": {
+          allowedWidths: ["third", "half", "twoThirds", "full"],
+          defaultWidth: "half",
+          allowsSeveral: false,
+        },
+      },
+      available: [],
+    });
+    api.post.mockImplementation((_url, body) =>
+      Promise.resolve({
+        results: (body as { queries: unknown[] }).queries.map(() => ({
+          ok: true,
+          result: { op: "list", items: [] },
+        })),
+      })
+    );
+    renderGrid(newClient());
+    await waitFor(() => expect(api.post).toHaveBeenCalled());
+    const [, firstBody] = api.post.mock.calls[0];
+    const first = (
+      firstBody as { queries: { source: string; limit?: number }[] }
+    ).queries.find(query => query.source === "collection:recent");
+    expect(first?.limit).toBe(9);
   });
 });

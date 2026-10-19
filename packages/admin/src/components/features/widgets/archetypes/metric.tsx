@@ -12,6 +12,10 @@
  * @module components/features/widgets/archetypes/metric
  */
 
+import { cn } from "@admin/lib/utils";
+
+import { FIGURE_VALUE_CLASS } from "../frame/geometry";
+
 import { CountValue } from "./count-value";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
@@ -57,7 +61,7 @@ export const metricBody: ArchetypeBody = (result, definition) => {
         // Sized to the Users and Roles stat cards on the same dashboard rather
         // than a step above them: a plugin's number that shouts louder than the
         // core ones reads as a different component, not as a peer.
-        className="text-2xl font-bold leading-none tabular-nums tracking-tight text-foreground"
+        className={cn(FIGURE_VALUE_CLASS, "text-foreground")}
       >
         {/* A floor is said in the number itself: the card cannot know the whole
             figure -- the rows behind it are filtered by a rule the database

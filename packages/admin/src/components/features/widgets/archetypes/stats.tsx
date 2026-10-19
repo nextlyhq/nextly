@@ -14,6 +14,8 @@ import type { ReactNode } from "react";
 import { Link } from "@admin/components/ui/link";
 import type { WidgetSlot } from "@admin/types/dashboard/widgets";
 
+import { FIGURE_VALUE_CLASS } from "../frame/geometry";
+
 import { CountValue, countLabel } from "./count-value";
 import type { ArchetypeAccepts, CellsBody, CellSlotLookup } from "./types";
 
@@ -113,7 +115,7 @@ export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
               // `tabular-nums` for the reason `metric` uses it: the grid
               // refetches on focus, and proportional digits reflow the whole
               // number when they change.
-              className="text-2xl font-bold leading-none tabular-nums tracking-tight"
+              className={FIGURE_VALUE_CLASS}
             >
               {text}
             </span>

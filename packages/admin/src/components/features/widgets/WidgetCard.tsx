@@ -68,6 +68,7 @@ import {
   AnswerTierContext,
   CardTierContext,
   rowsDrawn,
+  rowsLayout,
   useCardTier,
   useMeasuredTier,
 } from "./frame/tier";
@@ -118,6 +119,11 @@ export interface WidgetCardProps {
    * jump; absent, a skeleton draws its default rows.
    */
   skeletonItems?: unknown;
+  /**
+   * How many columns a list or table card selects. Its loading skeleton then lays its rows out
+   * as the card will at its tier (`rowsLayout`): a table, or rows with or without a detail line.
+   */
+  skeletonFields?: number;
   /** What an empty card says. Required for `state="empty"` to say anything specific. */
   empty?: CardEmptyContent;
   /** Retry for this card only, offered in the error state. */
@@ -275,6 +281,7 @@ export function WidgetCard(props: WidgetCardProps) {
               onRetry={props.onRetry}
               skeleton={props.skeleton}
               skeletonItems={props.skeletonItems}
+              skeletonFields={props.skeletonFields}
               empty={props.empty}
             >
               {props.children}
@@ -285,6 +292,9 @@ export function WidgetCard(props: WidgetCardProps) {
             freshness={view.freshness}
             link={view.link}
             inert={view.customizing}
+            // A loading card holds its freshness line's place: the line arrives with the
+            // answer, and a footer that appeared then would push everything below the card down.
+            holdFreshness={view.shown === "loading"}
           />
         </Card>
       </AnswerTierContext.Provider>
@@ -306,6 +316,7 @@ function WidgetCardBody({
   onRetry,
   skeleton,
   skeletonItems,
+  skeletonFields,
   empty,
   children,
 }: {
@@ -315,6 +326,7 @@ function WidgetCardBody({
   onRetry?: () => void;
   skeleton?: SkeletonShape;
   skeletonItems?: unknown;
+  skeletonFields?: number;
   empty?: CardEmptyContent;
   children: ReactNode;
 }) {
@@ -328,7 +340,17 @@ function WidgetCardBody({
   }
   switch (state) {
     case "loading":
-      return <CardSkeleton shape={skeleton} rows={rows} />;
+      return (
+        <CardSkeleton
+          shape={skeleton}
+          rows={rows}
+          layout={
+            skeletonFields === undefined
+              ? undefined
+              : rowsLayout(tier, skeletonFields)
+          }
+        />
+      );
     case "unavailable":
       return <CardUnavailable />;
     case "empty":
@@ -414,17 +436,20 @@ function WidgetCardFooter({
   freshness,
   link,
   inert = false,
+  holdFreshness = false,
 }: {
   freshness: Date | null;
   link?: { label: string; href: string };
   /** Customise mode: the footer's link is out of reach, like the body's. */
   inert?: boolean;
+  /** Draw the freshness line's place, unseen, until there is a freshness to show. */
+  holdFreshness?: boolean;
 }) {
   // Before the early return, so the hook runs on every render of this
   // component whichever branch it takes.
   const relative = useRelativeTime(freshness);
 
-  if (freshness === null && link === undefined) return null;
+  if (freshness === null && link === undefined && !holdFreshness) return null;
 
   return (
     <CardFooter
@@ -454,6 +479,16 @@ function WidgetCardFooter({
         >
           Updated {relative}
         </time>
+      ) : holdFreshness ? (
+        // The freshness line's own type, unseen and unheard: as tall as the
+        // line that will replace it, so its arrival moves nothing.
+        <span
+          aria-hidden="true"
+          data-testid="widget-card-freshness-held"
+          className="invisible text-xs"
+        >
+          Updated just now
+        </span>
       ) : (
         // Holds the footer's left column so a link-only footer still sits
         // right, without a second layout branch.

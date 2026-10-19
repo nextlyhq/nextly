@@ -54,6 +54,16 @@ function skeletonItemsFor(definition: DashboardWidget): unknown {
   return definition.query?.limit ?? null;
 }
 
+/**
+ * How many columns a list or table card selects, which is how its skeleton is laid out at each
+ * tier. Undefined for any other card, whose skeleton has no rows to lay out.
+ */
+function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
+  if (definition.archetype !== "list" && definition.archetype !== "table")
+    return undefined;
+  return definition.query?.select?.length ?? 0;
+}
+
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
     case "metric":
@@ -220,6 +230,7 @@ export function WidgetRenderer({
     cardId: placement?.id ?? definition.id,
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
+    skeletonFields: skeletonFieldsFor(definition),
     answerTier,
   };
 
