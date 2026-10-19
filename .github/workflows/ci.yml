@@ -1284,7 +1284,11 @@ jobs:
     name: Browser tests
     needs: [ci]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, not 20. On a loaded runner pool this job's suite runs on one worker
+    # and a full pass took 17 minutes on main, so a 20-minute budget cancelled
+    # passing runs part way through; 30 leaves room for that without letting a
+    # hung run go on indefinitely.
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -1383,7 +1387,7 @@ jobs:
       # no browser cache carries them. Skipping them on a hit produces
       # "Host system is missing dependencies" instead of a fast job.
       #
-      # `timeout-minutes` on both, shorter than the job's 20 so a stuck mirror
+      # `timeout-minutes` on both, shorter than the job's 30 so a stuck mirror
       # fails HERE and named rather than as an ambiguous cancellation of the
       # whole job. This is the only control that bounded any of the four
       # incidents.

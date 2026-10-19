@@ -51,7 +51,13 @@ import type {
   ResolvedComposition,
 } from "./resolve-instances";
 import { boundedOwnKeys, ownEntry } from "./safe-record";
-import { slotLockBreaks, slotLockOf, type ActiveSlotLock } from "./slot-lock";
+import {
+  slotLockBreaks,
+  slotLockOf,
+  typeOfChild,
+  type ActiveSlotLock,
+  type LockBreak,
+} from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
 import {
   counterpartsOf,
@@ -83,6 +89,33 @@ export interface CompositionFault {
   /** The component that instance places; empty when it names none. */
   readonly componentId: string;
   readonly message: string;
+  /**
+   * For a lock break, where it is in the composed tree and what it breaks, so
+   * an editor that refuses the edit first can word it, and tell a break the
+   * edit adds from one the page already had. Absent for every other rule.
+   */
+  readonly lock?: ComposedLockBreak;
+}
+
+/** A lock break in the composed tree: the block whose slot is locked, and how. */
+export interface ComposedLockBreak {
+  /** The composed node holding the locked slot: a definition's node, as composed. */
+  readonly holderId: string;
+  readonly holderType: string;
+  readonly slot: string;
+  readonly lock: ActiveSlotLock;
+  /** For a `"contentOnly"` break, the child whose design changed. */
+  readonly childType?: string;
+  /** For a `"contentOnly"` break, what about it changed; empty otherwise. */
+  readonly changes: readonly string[];
+  /**
+   * For a membership break, the type of each block the slot holds in the
+   * composed tree, in order, as far as the node cap, and how many it holds;
+   * empty and 0 otherwise. What tells a further change to a slot already
+   * broken from leaving it as it was.
+   */
+  readonly held: readonly (string | undefined)[];
+  readonly heldCount: number;
 }
 
 /** What the judgement is measured against. */
@@ -190,6 +223,7 @@ export function compositionFaults(
         instanceId,
         componentId,
         message: messageFor(code, componentId, detail, limits),
+        ...(detail.lockBreak === undefined ? {} : { lock: detail.lockBreak }),
       });
     },
   };
@@ -319,6 +353,7 @@ function reportLockBreaks(
     visit.counterparts
   );
   for (const found of breaks) {
+    const lockBreak = composedBreakOf(node, found, judge.limits.maxNodes);
     judge.report(
       found.kind === "membership"
         ? "locked-slot-altered"
@@ -329,11 +364,44 @@ function reportLockBreaks(
         slot: found.slot,
         holder: node.id,
         holderType: node.type,
-        lock: found.kind === "membership" ? found.lock : "contentOnly",
-        changes: found.kind === "content" ? found.changes : [],
+        lock: lockBreak.lock,
+        changes: lockBreak.changes,
+        lockBreak,
       }
     );
   }
+}
+
+/**
+ * A break in the composed tree as a fault carries it. The blocks a slot holds
+ * are read as far as the node cap, beside how many it holds.
+ */
+function composedBreakOf(
+  node: ResolvedBlockNode,
+  found: LockBreak,
+  maxNodes: number
+): ComposedLockBreak {
+  if (found.kind === "content") {
+    return {
+      holderId: node.id,
+      holderType: node.type,
+      slot: found.slot,
+      lock: "contentOnly",
+      childType: found.childType,
+      changes: found.changes,
+      held: [],
+      heldCount: 0,
+    };
+  }
+  return {
+    holderId: node.id,
+    holderType: node.type,
+    slot: found.slot,
+    lock: found.lock,
+    changes: [],
+    held: found.held.slice(0, maxNodes).map(typeOfChild),
+    heldCount: found.held.length,
+  };
 }
 
 /** Queue a node's slot children, each with where it sits. */
@@ -406,6 +474,8 @@ interface Detail {
   readonly lock?: ActiveSlotLock;
   /** What a block in a `"contentOnly"` slot changed besides content. */
   readonly changes?: readonly string[];
+  /** For a lock break, the break as a fault carries it. */
+  readonly lockBreak?: ComposedLockBreak;
 }
 
 /** What every message is built from, worked out once. */

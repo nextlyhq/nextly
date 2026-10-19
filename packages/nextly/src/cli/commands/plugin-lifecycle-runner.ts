@@ -47,6 +47,7 @@ import {
   type PlannedDown,
 } from "./migrate-down";
 import {
+  runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
   type LifecyclePlugin,
@@ -699,6 +700,19 @@ export async function runPluginInstall(
   const deps = await connect(options, context);
   try {
     await runPluginInstallCommand(name, deps);
+  } finally {
+    await deps.adapter.disconnect();
+  }
+}
+
+/** Install every configured plugin, in the config loader's dependency order. */
+export async function runPluginInstallAll(
+  options: RunnerOptions,
+  context: CommandContext
+): Promise<void> {
+  const deps = await connect(options, context);
+  try {
+    await runPluginInstallAllCommand(deps);
   } finally {
     await deps.adapter.disconnect();
   }

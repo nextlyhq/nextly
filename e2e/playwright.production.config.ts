@@ -61,12 +61,13 @@ export default defineConfig({
     // fall back on. A production boot refuses a configured plugin that
     // `nextly plugins install` has not recorded on the database, so each plugin
     // the playground configures is installed, as a deployment would, before
-    // the server starts. The script reads which plugins those are from the
-    // playground's config, so one added there is installed here too.
+    // the server starts. `--all` reads which plugins those are from the
+    // playground's config, in dependency order, so one added there is
+    // installed here too.
     command: [
       "node e2e/scripts/reset-e2e-db.mjs",
       "pnpm --filter playground exec tsx scripts/seed.ts",
-      "pnpm --filter playground exec tsx scripts/install-plugins.ts",
+      "pnpm --filter playground exec nextly plugins install --all",
       "pnpm --filter playground exec next build",
       "pnpm --filter playground exec next start",
     ].join(" && "),
