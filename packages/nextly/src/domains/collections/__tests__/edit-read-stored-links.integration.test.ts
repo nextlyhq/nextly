@@ -534,8 +534,23 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
-    it("on the list read", async () => {
-      const { handler, tagIds } = await bootJunction();
+    it("on the list read, each entry with its own ids", async () => {
+      const { handler, postId, tagIds } = await bootJunction();
+      // Entries with different links, one with none, so ids given to the
+      // wrong entry, or the same ids to every entry, fail by name.
+      const make = async (data: Record<string, unknown>) =>
+        String(
+          (
+            (
+              await handler.createEntry(
+                { collectionName: "posts", overrideAccess: true },
+                data
+              )
+            ).data as { id: string }
+          ).id
+        );
+      const oneTag = await make({ name: "one tag", tags: [tagIds[1]] });
+      const noTags = await make({ name: "no tags" });
       const list = await handler.listEntries({
         collectionName: "posts",
         depth: 0,
@@ -543,9 +558,14 @@ describe.each(getConfiguredTestDialects())(
         routeAuthorized: true,
       });
       expect(list.success).toBe(true);
-      const docs = (list.data as { docs: Array<{ tags?: unknown }> }).docs;
-      expect(docs).toHaveLength(1);
-      expect(sorted(docs[0].tags)).toEqual(sorted(tagIds));
+      const docs = (
+        list.data as { docs: Array<{ id: string; tags?: unknown }> }
+      ).docs;
+      const tagsOf = (id: string) => docs.find(doc => doc.id === id)?.tags;
+      expect(docs).toHaveLength(3);
+      expect(sorted(tagsOf(postId))).toEqual(sorted(tagIds));
+      expect(tagsOf(oneTag)).toEqual([tagIds[1]]);
+      expect(tagsOf(noTags)).toEqual([]);
     });
 
     it("keeps the hidden junction links on a save of the edit read", async () => {
