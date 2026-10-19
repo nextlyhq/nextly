@@ -54,9 +54,13 @@ const MAILBOX =
 
 /**
  * The first `to` address a caller gave, for what renders for one recipient.
+ *
+ * Taken from the same list a send is dispatched to, so a comma-joined string
+ * renders as its first address rather than as the whole string.
  */
 export function firstAddress(to: string | readonly string[]): string {
-  return typeof to === "string" ? to : (to[0] ?? "");
+  const [first] = toAddressList(to);
+  return typeof first === "string" ? first : "";
 }
 
 /**

@@ -114,6 +114,18 @@ describe("POST /api/email/send", () => {
       expect(send).not.toHaveBeenCalled();
     }
   );
+  it.each([
+    "dev@localhost",
+    "Ann <ann@example.com>",
+    '"Joe,Smith"@example.com',
+  ])("accepts %s, as the service does", async to => {
+    send.mockResolvedValue({ success: true, messageId: "m-1" });
+
+    const res = await postSend(post({ to, subject: "Hi", html: "<p>x</p>" }));
+
+    expect(res.status).toBe(200);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ to }));
+  });
 });
 
 describe("POST /api/email/send-with-template", () => {

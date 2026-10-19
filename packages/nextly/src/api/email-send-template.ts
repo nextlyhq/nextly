@@ -40,6 +40,10 @@ async function getEmailService(): Promise<EmailService> {
   return container.get<EmailService>("emailService");
 }
 
+const recipientSchema = z
+  .string()
+  .refine(isSendableAddress, "A valid recipient email is required");
+
 const attachmentInputSchema = z.object({
   mediaId: z.string().min(1, "mediaId is required"),
   filename: z.string().min(1).optional(),
@@ -47,11 +51,11 @@ const attachmentInputSchema = z.object({
 
 const sendTemplateSchema = z.object({
   // One address, as before, or several: every one receives the email.
+  // Checked as the service checks it, so the route and the service agree on
+  // what a sendable address is (`dev@localhost`, `Name <user@example.com>`).
   to: z.union([
-    z.string().email("A valid recipient email is required"),
-    z
-      .array(z.string().email("A valid recipient email is required"))
-      .min(1, "At least one recipient is required"),
+    recipientSchema,
+    z.array(recipientSchema).min(1, "At least one recipient is required"),
   ]),
   template: z.string().min(1, "template slug is required"),
   variables: z.record(z.string(), z.unknown()).optional(),

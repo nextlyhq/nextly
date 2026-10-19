@@ -45,6 +45,7 @@ import {
   SMTP_MAX_TO,
   createSmtpProvider,
 } from "../services/providers/smtp-provider";
+import { firstAddress } from "../services/recipients";
 import type { EmailProviderAdapter } from "../types";
 
 vi.mock("../../../lib/env", () => ({
@@ -527,6 +528,12 @@ describe("several `to` addresses reach the provider", () => {
 
     expect(error).toBeInstanceOf(NextlyError);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("renders for the first address of a comma-joined string, not the whole string", () => {
+    expect(firstAddress(`${A}, ${B}`)).toBe(A);
+    expect(firstAddress([B, A])).toBe(B);
+    expect(firstAddress(A)).toBe(A);
   });
 
   it("sends the same address once when it is listed twice", async () => {
