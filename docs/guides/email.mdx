@@ -122,7 +122,7 @@ The log transport writes the full message, body included, only when `NODE_ENV` i
 
 ## Email addresses in logs
 
-Outside development and test (an unset `NODE_ENV` included), Nextly masks every email address it writes to the logs down to its first character and its domain: `john@example.com` becomes `j***@example.com`. That covers the log transport, a failed send whose provider error quotes the recipient, and every line written through Nextly's structured logger (including a logger you install with `setNextlyLogger`), and every line its services write, to the `logger` you pass Nextly or to its fallback console logger. To find a message in production logs, search by the domain and first character. Logs your own code writes outside Nextly's loggers are yours to handle.
+Outside development and test (an unset `NODE_ENV` included), Nextly masks every email address it writes to the logs down to its first character and its domain: `john@example.com` becomes `j***@example.com`. That covers the log transport, a failed send whose provider error quotes the recipient, and every line written through Nextly's structured logger (including a logger you install with `setNextlyLogger`), and every line its services write, to the `logger` you pass Nextly or to its fallback console logger. To find a message in production logs, search by the domain and first character. Output that Nextly writes to the console directly, outside these loggers, isn't masked yet. Logs your own code writes outside Nextly's loggers are yours to handle.
 
 ## Built-in email templates
 
