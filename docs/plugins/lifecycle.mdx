@@ -151,14 +151,15 @@ they can run again: an install that failed part-way is repaired by running it ag
 which calls `onInstall` again, and an uninstall that stopped part-way is finished by
 running it again, which calls `onUninstall` again. A plugin counts as installed only
 once `nextly plugins install` has finished on that database: a production boot
-refuses it before then, and so does the install of a plugin that depends on it.
+refuses it before then while it is enabled, and so does the install of a plugin that depends on it.
 `nextly plugins install --all` installs every enabled plugin in your config, its
 dependencies first, and stops at the first that fails.
 
 A disabled plugin (`enabled: false`) is not installed, by `--all` or by name, and a
-production boot does not require it to be. Its tables exist, because its schema still
-applies, but its `onInstall` runs only when you enable it and run
-`nextly plugins install <name>`. Until then, the boot refuses it as not installed. A
+production boot does not require it to be: you can keep a plugin disabled, never
+installed, and boot. Its tables exist, because its schema still applies, but its
+`onInstall` runs only when you enable it and run `nextly plugins install <name>`.
+Once you enable it, a production boot refuses it until that install has run. A
 disabled plugin that was uninstalled, or whose uninstall stopped part way, is still
 refused, as an enabled one is.
 

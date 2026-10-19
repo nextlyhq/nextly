@@ -39,6 +39,7 @@ import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
+import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -1285,6 +1286,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
         // kind is invisible to every history query filtered by its own.
         uiTargetKind: "single" as const,
+        // A field becoming translated keeps its value as this language's; the apply moves it after
+        // its prompts and refusals, before it drops the main column.
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
       });
 
       if (!result.success) {
@@ -1311,6 +1315,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // before this apply.
           wasStatus: single.status === true,
           adapter,
+          // Added to the companion, with their values, by the apply before its drop.
+          joinedBefore: movedOnto(result, tableName),
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

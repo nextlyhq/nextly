@@ -110,6 +110,12 @@ export interface ReconcileCompanionArgs {
    */
   sharedAfterArchived?: boolean;
   /**
+   * Names of fields that join translation in this change, whose companion columns the caller has
+   * already added and filled before the main table lost them
+   * (`buildFieldsJoiningTranslationStatements`). Their ADD is not repeated here.
+   */
+  joinedBefore?: readonly string[];
+  /**
    * Companion columns THIS database already carries for fields the change adds as translated. A
    * save that MySQL, which commits each schema statement, refused part-way leaves such a column
    * while the registry still lacks the field, so the next save must not add it again. Describes
@@ -286,16 +292,8 @@ function addedCompanionColumnStatements(
 export function buildCompanionReconcileStatements(
   args: ReconcileCompanionArgs
 ): string[] {
-  const {
-    slug,
-    kind,
-    tableName,
-    oldLocalized,
-    newLocalized,
-    dialect,
-    status,
-    builtBy,
-  } = args;
+  const { slug, kind, tableName, newLocalized, dialect, status, builtBy } =
+    args;
   const companionTable = `${tableName}_locales`;
 
   if (!args.companionExists) {
@@ -317,51 +315,95 @@ export function buildCompanionReconcileStatements(
     return spec ? [buildCompanionCreateOnlySql(spec).replace(/;\s*$/, "")] : [];
   }
 
-  // Companion already exists — diff the localized columns and ADD/DROP the delta.
-  const oldNames = new Set(oldLocalized.map(f => f.name));
-  const newNames = new Set(newLocalized.map(f => f.name));
-  const stmts: string[] = addedCompanionColumnStatements(
-    args,
-    oldNames,
-    companionTable
-  );
-  const sharedAfter = new Set(args.sharedAfter ?? []);
-  for (const f of oldLocalized) {
-    if (newNames.has(f.name)) continue;
-    const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
-    if (!col) continue;
-    if (sharedAfter.has(f.name)) {
-      // Dropping the column loses every language's value, so the field keeps its default
-      // language's value on main and the others go to the archive first.
-      if (args.defaultLocale === undefined) {
-        throw NextlyError.internal({
-          logContext: {
-            reason:
-              "a field leaving translation needs the default locale to keep its value",
-            slug,
-            field: f.name,
-          },
-        });
-      }
-      stmts.push(
-        ...buildFieldLeavesTranslationStatements(
-          {
-            dialect,
-            mainTable: tableName,
-            companionTable,
-            defaultLocale: args.defaultLocale,
-          },
-          archiveOwnerOf(slug, kind),
-          col.name,
-          { archive: args.sharedAfterArchived !== true }
-        )
-      );
-    }
-    stmts.push(
-      `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)}`
-    );
-  }
+  return [
+    ...companionColumnDeltaStatements(args, companionTable),
+    ...companionUpdatedAtStatements(args, companionTable),
+    ...companionStatusStatements(args, companionTable),
+  ];
+}
 
+/**
+ * The companion's column delta: ADD for each newly translated field (one that joined translation
+ * already has its column, added and filled before main lost its value), and for each field that is
+ * no longer translated, its DROP, after its values are kept when it stays as a shared field.
+ */
+function companionColumnDeltaStatements(
+  args: ReconcileCompanionArgs,
+  companionTable: string
+): string[] {
+  // A field that joined translation already has its column, added and filled before main lost it.
+  const alreadyThere = new Set([
+    ...args.oldLocalized.map(f => f.name),
+    ...(args.joinedBefore ?? []),
+  ]);
+  return [
+    ...addedCompanionColumnStatements(args, alreadyThere, companionTable),
+    ...companionColumnDrops(args, companionTable),
+  ];
+}
+
+function companionColumnDrops(
+  args: ReconcileCompanionArgs,
+  companionTable: string
+): string[] {
+  const { dialect, builtBy } = args;
+  const kept = new Set(args.newLocalized.map(f => f.name));
+  const sharedAfter = new Set(args.sharedAfter ?? []);
+  return args.oldLocalized
+    .filter(f => !kept.has(f.name))
+    .flatMap(f => {
+      const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
+      if (!col) return [];
+      return [
+        ...(sharedAfter.has(f.name)
+          ? keepLeavingFieldValues(args, companionTable, f.name, col.name)
+          : []),
+        `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)}`,
+      ];
+    });
+}
+
+/**
+ * Before a field that stays as a shared field loses its companion column: dropping the column
+ * loses every language's value, so the field keeps its default language's value on main and the
+ * others go to the archive first.
+ */
+function keepLeavingFieldValues(
+  args: ReconcileCompanionArgs,
+  companionTable: string,
+  field: string,
+  column: string
+): string[] {
+  if (args.defaultLocale === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "a field leaving translation needs the default locale to keep its value",
+        slug: args.slug,
+        field,
+      },
+    });
+  }
+  return buildFieldLeavesTranslationStatements(
+    {
+      dialect: args.dialect,
+      mainTable: args.tableName,
+      companionTable,
+      defaultLocale: args.defaultLocale,
+    },
+    archiveOwnerOf(args.slug, args.kind),
+    column,
+    { archive: args.sharedAfterArchived !== true }
+  );
+}
+
+/** `_updated_at` on a companion that predates it, and its back-fill from version history. */
+function companionUpdatedAtStatements(
+  args: ReconcileCompanionArgs,
+  companionTable: string
+): string[] {
+  const { slug, dialect } = args;
+  const stmts: string[] = [];
   // Add `_updated_at` to a companion that predates it, and seed it from version history.
   //
   // Only acts when the caller told us what the live table has. `undefined` means "not
@@ -402,6 +444,16 @@ export function buildCompanionReconcileStatements(
     );
   }
 
+  return stmts;
+}
+
+/** The per-locale `_status` column, when Draft/Published was toggled after the companion existed. */
+function companionStatusStatements(
+  args: ReconcileCompanionArgs,
+  companionTable: string
+): string[] {
+  const { tableName, dialect, status } = args;
+  const stmts: string[] = [];
   // Reconcile the per-locale `_status` column when Draft/Published was toggled AFTER the
   // companion already existed (the create branch above already bakes it in per `status`). Only
   // acts when the caller supplied the companion's current status-column state.
@@ -505,6 +557,12 @@ export interface CompanionTransitionArgs {
    * dialect without transactional DDL.
    */
   archiveBeforeMain?: boolean;
+  /**
+   * Names of fields that join translation in this change, whose companion columns the caller has
+   * already added and filled before the main table lost them
+   * (`buildFieldsJoiningTranslationStatements`). Their ADD is not repeated here.
+   */
+  joinedBefore?: readonly string[];
 }
 
 /** The plan produced by {@link buildCompanionTransitionStatements}. */
@@ -737,6 +795,7 @@ export function buildCompanionTransitionStatements(
         defaultLocale,
         sharedAfter,
         sharedAfterArchived: archiveFirst,
+        joinedBefore: args.joinedBefore,
         presentOnCompanion: args.presentOnCompanion,
       }),
       needsArchive: sharedAfter.length > 0,

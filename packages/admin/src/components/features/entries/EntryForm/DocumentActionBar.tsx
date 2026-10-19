@@ -265,7 +265,15 @@ export function DocumentActionBar({
   const hasMenu = wideMenu || narrowItems.length > 0;
 
   return (
-    <div className={cn("flex items-center gap-1.5", className)}>
+    // Wraps within the width it is given rather than past it, as the header's
+    // cluster around it does: a preview pane can narrow the editor on a wide
+    // screen, and the document's own verbs must stay inside it.
+    <div
+      className={cn(
+        "flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5",
+        className
+      )}
+    >
       {/*
         The supporting action comes FIRST in the DOM and reads first left to
         right, so the leading one sits at the end of the cluster where a

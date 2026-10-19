@@ -36,10 +36,13 @@ export async function builderSchemaPreviewBody(args: {
   schemaVersion: number | undefined;
 }): Promise<Record<string, unknown>> {
   const { db, dialect, tableName, currentFields, newFields } = args;
+  // A field becoming translated takes its value to the companion before main drops its column,
+  // so the preview judges that drop as the apply will: with the same default language.
   const pipelinePreview = await previewDesiredSchema({
     desired: args.desired,
     db,
     dialect,
+    defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
   });
   const legacyShape = await translatePipelinePreviewToLegacy(pipelinePreview, {
     tableName,

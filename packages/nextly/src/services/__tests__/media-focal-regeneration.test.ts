@@ -78,6 +78,9 @@ const existingMedia = {
   sizes: { thumbnail: { path: OLD_PATH, url: "http://x/old" } },
 };
 
+/** Other items the shared-file search finds, by the files they refer to. */
+let sharers: Array<{ filename: string; url: string }> = [];
+
 /** After-commit effects held for an enclosing transaction, or null to run them. */
 let held: Array<() => unknown> | null = null;
 
@@ -100,11 +103,13 @@ function makeAdapter(
   };
   return {
     dialect: "sqlite" as const,
-    getDrizzle: () => ({}),
+    getCapabilities: () => ({ dialect: "sqlite" as const }),
+    // The rows that may share the item's files, asked once a change
+    // commits or fails: `sharers`, none unless a case sets them.
+    getDrizzle: () => ({
+      select: () => ({ from: () => ({ where: async () => sharers }) }),
+    }),
     inTransaction: () => enclosed,
-    // The rows that share the item's files, asked once a change commits:
-    // none here, so what is superseded is the item's alone.
-    select: async () => [],
     // The ordering under test is the variant cleanup's, not the effects', so
     // an after-commit effect runs at once, unless a case holds it as an
     // enclosing transaction does until it commits.
@@ -152,6 +157,7 @@ function makeService(
 describe("MediaService focal-point regeneration ordering", () => {
   beforeEach(() => {
     held = null;
+    sharers = [];
     calls.length = 0;
     deleteSpy.mockClear();
     regen.thumbPath = NEW_PATH;
@@ -239,6 +245,17 @@ describe("MediaService focal-point regeneration ordering", () => {
     // The freshly-uploaded new variant is deleted; the old one is untouched.
     expect(deleteSpy).toHaveBeenCalledWith(NEW_PATH);
     expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+  });
+
+  // On a content-addressed adapter a "new" variant can be a key another
+  // item already uses.
+  it("keeps a new variant another item refers to when the write fails", async () => {
+    sharers = [{ filename: NEW_PATH, url: `/uploads/${NEW_PATH}` }];
+    const service = makeService("throw");
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(false);
+    expect(deleteSpy).not.toHaveBeenCalledWith(NEW_PATH);
   });
 
   it("cleans up the new variant when the row was concurrently deleted", async () => {
