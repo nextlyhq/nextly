@@ -21,6 +21,7 @@ import { NextlyError } from "../../../errors";
 import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
 import type { Logger } from "../../../shared/types";
 import { EmailTemplateService } from "../services/email-template-service";
+import { BUILT_IN_TEMPLATES } from "../services/templates";
 
 // ── Mock env BEFORE any service imports touch it ───────────────────────────
 vi.mock("../../../lib/env", () => ({
@@ -758,6 +759,65 @@ describe("EmailTemplateService", () => {
       await expect(
         service.previewTemplate("nonexistent-id", {})
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+  });
+
+  // ── Concurrent first starts ─────────────────────────────────────────────
+  // `next build` starts several workers against one fresh database at once,
+  // and each seeds the built-in templates. A worker that finds another has
+  // just written a template treats it as seeded and logs nothing above debug;
+  // any other failure is still reported.
+
+  describe("concurrent built-in seeding", () => {
+    function spyLogger(): Logger {
+      return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    }
+
+    it("seeds each built-in once, with no warning or error, when workers race", async () => {
+      const { sqlite: shared, db } = createInMemoryDb();
+      const loggers = Array.from({ length: 4 }, spyLogger);
+      const workers = loggers.map(
+        l =>
+          new EmailTemplateService(
+            makeAdapter(db) as unknown as DrizzleAdapter,
+            l
+          )
+      );
+
+      await Promise.all(workers.map(w => w.ensureBuiltInTemplates()));
+
+      for (const l of loggers) {
+        expect(l.warn).not.toHaveBeenCalled();
+        expect(l.error).not.toHaveBeenCalled();
+      }
+      const rows = shared
+        .prepare(
+          "SELECT slug, COUNT(*) AS n FROM email_templates GROUP BY slug"
+        )
+        .all() as { slug: string; n: number }[];
+      expect(rows.map(r => r.slug).sort()).toEqual(
+        BUILT_IN_TEMPLATES.map(t => t.slug).sort()
+      );
+      expect(rows.every(r => r.n === 1)).toBe(true);
+      shared.close();
+    });
+
+    it("still reports an insert failure that isn't another worker's write", async () => {
+      const { sqlite: failing, db } = createInMemoryDb();
+      // Every insert fails, and not for a duplicate key.
+      failing.exec(
+        "CREATE TRIGGER refuse_inserts BEFORE INSERT ON email_templates BEGIN SELECT RAISE(ABORT, 'disk full'); END;"
+      );
+      const l = spyLogger();
+      const worker = new EmailTemplateService(
+        makeAdapter(db) as unknown as DrizzleAdapter,
+        l
+      );
+
+      await worker.ensureBuiltInTemplates();
+
+      expect(l.warn).toHaveBeenCalled();
+      failing.close();
     });
   });
 });
