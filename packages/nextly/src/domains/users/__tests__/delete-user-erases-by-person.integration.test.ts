@@ -19,7 +19,44 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+/**
+ * Hooks into the deleted-people lock: run once when the next deletion asks for
+ * it exclusively, and once after the next write naming a person holds it
+ * shared, then cleared. They let a race be held at the contested lock instead
+ * of after a pause, so a test tells the locking order apart from one that
+ * merely ran in time.
+ */
+const digestLock = vi.hoisted(() => ({
+  beforeExclusive: undefined as (() => void) | undefined,
+  afterShared: undefined as (() => Promise<void>) | undefined,
+}));
+
+vi.mock("../../audit/principal-digest", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../../audit/principal-digest")>();
+  return {
+    ...real,
+    readPrincipalDigests: async (
+      ...args: Parameters<typeof real.readPrincipalDigests>
+    ) => {
+      const mode = args[3];
+      if (mode === "exclusive") {
+        const hook = digestLock.beforeExclusive;
+        digestLock.beforeExclusive = undefined;
+        hook?.();
+      }
+      const digests = await real.readPrincipalDigests(...args);
+      if (mode === "shared") {
+        const hook = digestLock.afterShared;
+        digestLock.afterShared = undefined;
+        await hook?.();
+      }
+      return digests;
+    },
+  };
+});
 
 import { NextlyError } from "../../../errors";
 import { runPostInitTasks } from "../../../init/post-init-tasks";
@@ -35,6 +72,10 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import {
+  buildAuditLogWriter,
+  type AuditEvent,
+} from "../../audit/audit-log-writer";
 import { resealPrincipalDigestKeyAtBoot } from "../../audit/erase-principal";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import {
@@ -63,6 +104,8 @@ let ctx: PluginContext | undefined;
 let duringSend: (() => Promise<void>) | undefined;
 
 afterEach(async () => {
+  digestLock.beforeExclusive = undefined;
+  digestLock.afterShared = undefined;
   await current?.destroy();
   current = undefined;
   ctx = undefined;
@@ -284,6 +327,30 @@ describe.each(getConfiguredTestDialects())(
       });
     }, 120_000);
 
+    it("still deletes on a database whose delivery log predates naming people", async () => {
+      // An install that has not run `nextly migrate` since the person columns
+      // and the deleted-people list arrived: the deletion erases by address,
+      // as it did then, rather than failing on columns that are not there.
+      const t = await boot(dialect);
+      const id = await staffUser(t, "legacy@example.com");
+      const exec = (statement: string) => t.adapter.executeQuery(statement);
+      await exec(
+        dialect === "mysql"
+          ? "DROP INDEX email_deliveries_principal_idx ON email_deliveries"
+          : "DROP INDEX email_deliveries_principal_idx"
+      );
+      await exec("ALTER TABLE email_deliveries DROP COLUMN principal_id");
+      await exec("ALTER TABLE email_deliveries DROP COLUMN principal_kind");
+      await exec("DROP TABLE nextly_deleted_principals");
+
+      await remove(t, id);
+
+      const [left] = await t.adapter.select<{ id: string }>("users", {
+        where: { and: [{ column: "id", op: "=", value: id }] },
+      });
+      expect(left).toBeUndefined();
+    }, 120_000);
+
     it("leaves the records of someone who later took an address they used", async () => {
       const t = await boot(dialect);
       const reused = "reused@example.com";
@@ -394,17 +461,55 @@ describe.each(getConfiguredTestDialects())(
         person: staffPerson(id),
       });
       await checked;
-      const deleting = remove(t, id);
-      // Long enough for a deletion that did not wait to record and scan.
-      await new Promise(resolve => setTimeout(resolve, 750));
+      const deleting = await deletionAtLock(dialect, () => remove(t, id));
       release();
       await writing;
-      await deleting;
+      await deleting.done;
 
       const all = await rows(t);
       expect(all).toHaveLength(1);
       expectErased(all[0]);
     }, 120_000);
+
+    it.runIf(dialect !== "sqlite")(
+      "completes beside an audit write naming the user and a person, holding the lock",
+      async () => {
+        // The write holds the deleted-people lock shared, and its row names
+        // the user as its actor, which needs the user's row. The deletion
+        // waits for the lock before it takes that row, so neither waits on
+        // the other: the write finishes, then the deletion. Taken in the other
+        // order, PostgreSQL and MySQL would end one of them as a deadlock.
+        const t = await boot(dialect);
+        const id = await staffUser(t, "audited@example.com");
+        const member = await ctx!.principals!.byId("member", "mem_audited");
+        if (!member) throw new Error("no member");
+        let held!: () => void;
+        const holding = new Promise<void>(resolve => (held = resolve));
+        let release!: () => void;
+        const released = new Promise<void>(resolve => (release = resolve));
+        digestLock.afterShared = async () => {
+          held();
+          await released;
+        };
+
+        const auditing = buildAuditLogWriter(
+          (name: string) =>
+            t.getService(name as Parameters<TestNextly["getService"]>[0]),
+          {}
+        ).write({
+          kind: "members.changed",
+          actorUserId: id,
+          targetPrincipal: member,
+        } as unknown as AuditEvent);
+        await holding;
+        const deleting = await deletionAtLock(dialect, () => remove(t, id));
+        release();
+
+        await expect(auditing).resolves.not.toThrow();
+        await expect(deleting.done).resolves.not.toThrow();
+      },
+      120_000
+    );
 
     it("writes erased the record of a send held across the deletion, a retry and a provider's report", async () => {
       const t = await boot(dialect);
@@ -443,6 +548,37 @@ describe.each(getConfiguredTestDialects())(
     }, 120_000);
   }
 );
+
+/**
+ * Start `deletion` and return it once it is waiting for the deleted-people
+ * lock. PostgreSQL and MySQL reach the lock request and wait there, which the
+ * hook shows; SQLite queues the whole deletion behind the transaction that
+ * holds the lock, so it cannot reach the request until that one ends, and a
+ * pause stands in.
+ */
+async function deletionAtLock(
+  dialect: TestDialect,
+  deletion: () => Promise<unknown>
+): Promise<{ done: Promise<unknown> }> {
+  let reached!: () => void;
+  const atLock = new Promise<void>(resolve => (reached = resolve));
+  digestLock.beforeExclusive = reached;
+  const done = deletion();
+  done.catch(() => undefined);
+  if (dialect === "sqlite") {
+    await new Promise(resolve => setTimeout(resolve, 750));
+  } else {
+    let arrived = false;
+    await Promise.race([
+      atLock.then(() => (arrived = true)),
+      new Promise(resolve => setTimeout(resolve, 20_000)),
+    ]);
+    expect(arrived).toBe(true);
+    // Long enough for the lock request to reach the database and wait.
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  return { done };
+}
 
 /**
  * The booted adapter, with every insert into `table` held at `gate` after

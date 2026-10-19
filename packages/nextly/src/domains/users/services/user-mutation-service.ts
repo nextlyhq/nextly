@@ -88,14 +88,17 @@ import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
-import { recordStaffUserDeleted } from "../../audit/erase-principal";
+import { beginStaffUserDeletion } from "../../audit/erase-principal";
 import {
   buildAcceptInviteLink,
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
 import { deliveriesTableFor } from "../../email/deliveries-table";
-import { eraseUnnamedRecipientDeliveries } from "../../email/erase-recipient";
+import {
+  eraseRecipientDeliveries,
+  eraseUnnamedRecipientDeliveries,
+} from "../../email/erase-recipient";
 import { revalidateMedia } from "../../media/revalidate-media";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
@@ -2262,6 +2265,23 @@ export class UserMutationService extends BaseService {
   }
 
   /**
+   * Whether the delivery log has its person columns, which a database that
+   * has not run `nextly migrate` since they arrived lacks. Treated as present
+   * when the catalogue cannot be read, as a table is by `tablePresent`.
+   */
+  private async deliveriesNamePeople(): Promise<boolean> {
+    try {
+      const columns = await liveColumnsOf(
+        this.db,
+        this.dialect
+      )("email_deliveries");
+      return columns.includes("principal_kind");
+    } catch {
+      return true;
+    }
+  }
+
+  /**
    * Whether a table is present, for a probe taken BEFORE the delete
    * transaction opens.
    *
@@ -2714,6 +2734,10 @@ export class UserMutationService extends BaseService {
     const deletedPeopleExist = await this.tablePresent(
       DELETED_PRINCIPALS_TABLE
     );
+    // And whether the delivery log has its person columns yet, which arrive
+    // with that list: on a database without them, no record names anyone.
+    const personColumnsExist =
+      deliveriesExist && (await this.deliveriesNamePeople());
 
     // Asked out here for the same reason, and treated as present when the
     // probe cannot answer, for the same reason too. `media.uploaded_by`
@@ -2825,9 +2849,23 @@ export class UserMutationService extends BaseService {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
 
-        // Never the last active super-admin, whoever asks. First in the
-        // transaction: its lock is the one every removal takes, so it comes
-        // before the row lock below, in the same order everywhere.
+        // The deleted-people lock, before every other lock this deletion takes
+        // and before it writes to the delivery log: a write naming a person
+        // holds it shared and may then need this user's row or a gap in the
+        // delivery log's index, so taking it any later could deadlock against
+        // such a write (`beginStaffUserDeletion`).
+        const staffDeletion =
+          personColumnsExist && deletedPeopleExist
+            ? await beginStaffUserDeletion(
+                txDb,
+                this.adapter,
+                pluginSettingsSecrets(env)
+              )
+            : undefined;
+
+        // Never the last active super-admin, whoever asks. First of the
+        // removal's own locks: its lock is the one every removal takes, so it
+        // comes before the row lock below, in the same order everywhere.
         await refuseRemovingLastSuperAdmin(
           tx as LastSuperAdminTx,
           this.tables,
@@ -3036,29 +3074,20 @@ export class UserMutationService extends BaseService {
         // By person, every record that names this user, whatever address it
         // went to: the user goes on the deleted-people list, and their records
         // lose the address digest and name them by the keyed digest instead.
-        // Under the lock every write naming a person shares, so a record being
-        // written for them now is either erased here or written erased. First,
-        // before this transaction writes to the delivery log at all: on MySQL
-        // the address erasure's update holds gap locks a waiting writer's
-        // insert needs, and taking the lock after it would deadlock with that
-        // writer.
-        if (deliveriesExist && deletedPeopleExist) {
-          await recordStaffUserDeleted(
-            txDb,
-            this.adapter,
-            String(userId),
-            pluginSettingsSecrets(env)
-          );
-        }
-        // By address, only the records that name nobody: those written before
-        // sends named their person. A record naming a person is that person's,
-        // and someone else who holds or held the address keeps theirs.
+        // By the id as stored, which on MySQL's case-insensitive collation can
+        // differ in spelling from the one the caller passed.
+        await staffDeletion?.complete(String(preimage.id));
+        // By address, the records written before sends named their person. A
+        // record naming a person is that person's, and someone else who holds
+        // or held the address keeps theirs. A database still waiting for
+        // `nextly migrate` has no person columns yet, so every record there
+        // names nobody.
         if (deliveriesExist && deletedAddress !== undefined) {
-          await eraseUnnamedRecipientDeliveries(
-            txDb,
-            deliveriesTableFor(this.dialect),
-            deletedAddress
-          );
+          await (
+            personColumnsExist
+              ? eraseUnnamedRecipientDeliveries
+              : eraseRecipientDeliveries
+          )(txDb, deliveriesTableFor(this.dialect), deletedAddress);
         }
 
         // Delete user, capturing how many rows it removed.
@@ -3183,8 +3212,12 @@ export class UserMutationService extends BaseService {
       // an already-erased row holds the sentinel, which no address hashes to —
       // so a second pass over untouched rows costs one indexed update.
       if (deliveriesExist && deletedAddress !== undefined) {
-        await eraseUnnamedRecipientDeliveries(
-          this.db as Parameters<typeof eraseUnnamedRecipientDeliveries>[0],
+        await (
+          personColumnsExist
+            ? eraseUnnamedRecipientDeliveries
+            : eraseRecipientDeliveries
+        )(
+          this.db as Parameters<typeof eraseRecipientDeliveries>[0],
           deliveriesTableFor(this.dialect),
           deletedAddress
         );

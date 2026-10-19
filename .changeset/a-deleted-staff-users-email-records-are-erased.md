@@ -29,17 +29,4 @@
 "@nextlyhq/ui": patch
 ---
 
-Deleting a staff user now erases every email delivery record that names
-them, whatever address it went to, including addresses they used before an
-address change. The record keeps its row, loses its address digest, and names
-the user by a keyed digest in place of their id. The user is added to the
-deleted-people list that plugin-defined people already use, so a record
-written for them after the deletion (a send that was in flight, a retry, a
-provider's later report) is written erased, even after the delivery log's
-retention has pruned their earlier records and after the install's secret is
-rotated.
-
-The erasure by the address the user holds at deletion still runs, now only for
-records that name nobody, so another person who holds or once held the same
-address keeps their records. An email the provider had already accepted may
-still be delivered; the docs say so.
+Deleting a staff user now erases every email delivery record that names them, under every address they used, and any record written for them afterwards is written erased. Another person at the same address keeps their records.

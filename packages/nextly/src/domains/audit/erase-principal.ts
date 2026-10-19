@@ -63,6 +63,7 @@ import {
   resealPrincipalDigestKey,
   type DigestSubject,
   type PrincipalDigestDb,
+  type PrincipalDigests,
   type PrincipalDigestTables,
 } from "./principal-digest";
 
@@ -161,26 +162,40 @@ export async function reportPrincipalDeleted(
   await runAdapterTransaction(adapter.transaction.bind(adapter), erase);
 }
 
+/** A staff user's deletion, once it holds the deleted-people lock. */
+export interface StaffUserDeletion {
+  /**
+   * Put the user on the deleted-people list and erase every delivery record
+   * that names them, whatever address it went to. `userId` is the id as
+   * stored, so the digest is the one every record of theirs is checked
+   * against.
+   */
+  complete(userId: string): Promise<void>;
+}
+
 /**
- * Inside a staff user's deletion transaction: put the user on the
- * deleted-people list, as a deleted plugin-defined person is put on it, and
- * erase every delivery record that names them, whatever address it went to.
+ * Inside a staff user's deletion transaction, take the deleted-people lock
+ * exclusively, as a plugin-defined person's deletion report takes it, and hand
+ * back the step that records the user and erases their delivery records.
  *
- * Recorded under the lock every write naming a person shares, so a delivery
- * record being written for the user is either finished first and erased here,
- * or waits for the deletion to commit and is written erased, its id replaced
- * by the digest. The list keeps only the keyed digest of kind and id, with no
+ * Taken first, before the deletion locks the user's row or writes to the
+ * delivery log. A write naming a person holds this lock shared and may then
+ * need the user's row (an audit row naming them as its actor) or a gap in the
+ * delivery log's index (MySQL's insert), so taking it after either would
+ * deadlock against such a write. Holding it, the deletion orders every such
+ * write: one already holding it finishes first and is erased by the step, and
+ * one arriving later waits for the commit and is written erased.
+ *
+ * The list keeps only the keyed digest of kind and id and when, with no
  * expiry, under the key that survives a rotation of the install's secret.
- *
- * Their audit rows are not touched here: a staff user's deletion erases those
- * through the audit trail's own staff erasure.
+ * Audit rows are not touched: a staff user's deletion erases those through the
+ * audit trail's own staff erasure.
  */
-export async function recordStaffUserDeleted(
+export async function beginStaffUserDeletion(
   db: PrincipalErasureDb,
   adapter: unknown,
-  userId: string,
   secrets: readonly string[]
-): Promise<void> {
+): Promise<StaffUserDeletion> {
   const dialect = adapterDialect(adapter);
   if (!dialect) {
     throw new NextlyError({
@@ -192,7 +207,6 @@ export async function recordStaffUserDeleted(
     });
   }
   const tables = principalErasureTables(dialect, false);
-  const subject = staffPerson(userId);
   const digests = await readPrincipalDigests(
     db,
     rowLockServer(adapter, dialect),
@@ -200,11 +214,17 @@ export async function recordStaffUserDeleted(
     "exclusive",
     secrets
   );
-  const digest = digests.digest(subject);
-  if (!(await digests.isDeleted(subject))) {
-    await db.insert(tables.deleted).values({ digest, deletedAt: new Date() });
-  }
-  await erasePrincipalDeliveries(db, tables.deliveries, subject, digest);
+  return {
+    complete: async userId => {
+      await recordDeletedPerson(
+        db,
+        tables,
+        digests,
+        staffPerson(userId),
+        new Date()
+      );
+    },
+  };
 }
 
 /**
@@ -303,17 +323,17 @@ async function erasePrincipal(
     "exclusive",
     secrets
   );
-  const digest = digests.digest(subject);
   const erasedAt = new Date();
-  // A second report of the same person finds the record and leaves it, with
-  // the time it was first recorded.
-  if (!(await digests.isDeleted(subject))) {
-    await db.insert(tables.deleted).values({ digest, deletedAt: erasedAt });
-  }
-  await erasePrincipalAuditRows(db, tables.auditLog, subject, digest, erasedAt);
   // The same transaction erases the email they were sent, so the report
   // leaves no record naming them either way or neither.
-  await erasePrincipalDeliveries(db, tables.deliveries, subject, digest);
+  const digest = await recordDeletedPerson(
+    db,
+    tables,
+    digests,
+    subject,
+    erasedAt
+  );
+  await erasePrincipalAuditRows(db, tables.auditLog, subject, digest, erasedAt);
   if (tables.contentEvents) {
     await erasePrincipalContentEvents(
       db,
@@ -322,6 +342,31 @@ async function erasePrincipal(
       digest
     );
   }
+}
+
+/**
+ * What every deletion of a person does under the deleted-people lock: record
+ * their digest on the list, unless an earlier deletion already did, and erase
+ * the delivery records that name them. Returns the digest. A plugin-defined
+ * person's report and a staff user's deletion both come through here, so the
+ * two cannot come to disagree about what deleting someone does to the list or
+ * to their email.
+ */
+async function recordDeletedPerson(
+  db: PrincipalErasureDb,
+  tables: PrincipalDigestTables & { deliveries: PersonDeliveriesTable },
+  digests: PrincipalDigests,
+  subject: DigestSubject,
+  deletedAt: Date
+): Promise<string> {
+  const digest = digests.digest(subject);
+  // A second deletion of the same person finds the record and leaves it,
+  // with the time it was first recorded.
+  if (!(await digests.isDeleted(subject))) {
+    await db.insert(tables.deleted).values({ digest, deletedAt });
+  }
+  await erasePrincipalDeliveries(db, tables.deliveries, subject, digest);
+  return digest;
 }
 
 /**
