@@ -99,6 +99,14 @@ export const nextlyReleaseMembersMysql = mysqlTable(
     // promise that: two adds can both count zero.
     singleSlot: int("single_slot"),
 
+    // The release `revision` this member's action was last applied for, set by
+    // the drain in the same transaction as the member's content write. NULL
+    // until a write lands. A member counts as applied only while this equals
+    // its release's current revision, so any move of the release (a
+    // reschedule, a cancel, an edit, a membership change) leaves it stale
+    // without anything having to clear it.
+    appliedRevision: int("applied_revision"),
+
     createdBy: varchar("created_by", { length: 36 }),
     createdAt: datetime("created_at", { fsp: 3 })
       .$defaultFn(() => new Date())

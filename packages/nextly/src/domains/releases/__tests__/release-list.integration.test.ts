@@ -27,6 +27,7 @@ import { releaseMemberKey } from "../release-member-key";
 import { ReleasesRepository, type ReleaseRow } from "../releases-repository";
 import {
   ANY_EDITABLE_STATE,
+  publishAsItStands,
   scheduleAsItStands,
 } from "./helpers/release-writes";
 
@@ -192,7 +193,7 @@ async function seedOneOfEach(repo: ReleasesRepository, now: Date) {
   const published = await repo.createRelease({ title: "Published" });
   const publishedAt = new Date(now.getTime() - 2 * DAY);
   await scheduleAsItStands(repo, published.id, publishedAt, "UTC");
-  expect(await repo.markReleasePublished(published.id, publishedAt)).toBe(true);
+  expect(await publishAsItStands(repo, published.id, publishedAt)).toBe(true);
 
   const cancelled = await repo.createRelease({ title: "Cancelled" });
   expect(await repo.cancelRelease(cancelled.id)).toBe(true);
@@ -491,11 +492,11 @@ describe.each(getConfiguredTestDialects())(
       const older = await repo.createRelease({ title: "Shipped long ago" });
       const olderAt = new Date(now.getTime() - 10 * DAY);
       await scheduleAsItStands(repo, older.id, olderAt, "UTC");
-      await repo.markReleasePublished(older.id, olderAt);
+      await publishAsItStands(repo, older.id, olderAt);
       const newer = await repo.createRelease({ title: "Shipped yesterday" });
       const newerAt = new Date(now.getTime() - DAY);
       await scheduleAsItStands(repo, newer.id, newerAt, "UTC");
-      await repo.markReleasePublished(newer.id, newerAt);
+      await publishAsItStands(repo, newer.id, newerAt);
 
       const drafts = await repo.findReleasePage({
         tab: "drafts",
