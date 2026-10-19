@@ -936,6 +936,7 @@ export class SingleMetadataService {
           tableHasRows: liveFacts.tableHasRows,
           foreignKeysByColumn: liveFacts.foreignKeysByColumn,
           indexNames: liveFacts.indexNames,
+          uniqueColumns: liveFacts.uniqueColumns,
           columnsContainingNull: liveFacts.columnsContainingNull,
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           liveColumnTypes: liveFacts.liveColumnTypes,
@@ -1268,6 +1269,7 @@ export class SingleMetadataService {
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
+    uniqueColumns: ReadonlyMap<string, string | null>;
     columnsContainingNull: ReadonlySet<string>;
     columnsAbsentFromTable: ReadonlySet<string>;
     liveColumnTypes: ReadonlyMap<string, string>;
@@ -1276,6 +1278,7 @@ export class SingleMetadataService {
       readColumnNullState,
       readForeignKeyColumns,
       readIndexNames,
+      readUniqueColumns,
       tableHasRows,
     } = await import("../../schema/pipeline/live-table-facts");
     const { queryLiveColumnTypes } = await import(
@@ -1292,11 +1295,15 @@ export class SingleMetadataService {
     // probes anything, so a column this list names and the table lacks comes
     // back as absent rather than as an error.
     const mayHoldNull = columnsThatMayHoldNull(previousAlterFields);
-    const [hasRows, foreignKeys, indexes, nullState, liveTypes] =
+    const [hasRows, foreignKeys, indexes, unique, nullState, liveTypes] =
       await Promise.all([
         tableHasRows(db, dialect, tableName),
         readForeignKeyColumns(db, dialect, tableName),
         readIndexNames(db, dialect, tableName),
+        // What each unique index covers, which its name does not say: a column renamed by a save
+        // MySQL refused part-way keeps its unique index under the old name, and turning Unique off
+        // on the retry has to drop that one.
+        readUniqueColumns(db, dialect, tableName),
         readColumnNullState(db, dialect, tableName, mayHoldNull),
         // What each column IS, for MySQL's `MODIFY`, which has to restate a column it is not
         // otherwise changing. Rendering that type asks which renderer built the column, and that
@@ -1307,10 +1314,39 @@ export class SingleMetadataService {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
+      uniqueColumns: unique,
       columnsContainingNull: nullState.holdingNull,
       columnsAbsentFromTable: nullState.absent,
       liveColumnTypes: liveTypes.get(tableName) ?? new Map<string, string>(),
     };
+  }
+
+  /**
+   * Moves the values of fields becoming translated into the default language's companion rows,
+   * and returns their names for the companion reconcile to skip.
+   */
+  private async moveJoiningFieldValues(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan
+  ): Promise<string[]> {
+    const { moveValuesOfFieldsJoiningTranslation } = await import(
+      "../../i18n/runtime/move-joining-values"
+    );
+    const { getConfigFromDI } = await import("../../../dispatcher/helpers/di");
+    return moveValuesOfFieldsJoiningTranslation(adapter, {
+      slug: input.slug,
+      tableName: input.existing.tableName,
+      // A single's table comes from the same builder as a collection's.
+      builtBy: "collection",
+      defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+      oldFields: plan.previousFields,
+      newFields: plan.fields,
+      wasLocalized: input.wasLocalized,
+      isLocalized: input.isLocalized,
+      wasStatus: input.wasStatus,
+      status: input.hasStatus,
+    });
   }
 
   /**
@@ -1343,6 +1379,15 @@ export class SingleMetadataService {
       );
       return plan.ownsMigrationStatus ? "pending" : undefined;
     }
+
+    // A field becoming translated takes its value to the default language's companion row first:
+    // the main ALTER below drops its column. Before the try below, as the migration is: a failure
+    // here stops the save before the main table changes.
+    const joinedBefore = await this.moveJoiningFieldValues(
+      adapter,
+      input,
+      plan
+    );
 
     if (plan.migrationSQL) {
       // Before the try below, which records what it catches: a refusal here has changed nothing
@@ -1390,6 +1435,7 @@ export class SingleMetadataService {
           status: input.hasStatus,
           wasStatus: input.wasStatus,
           adapter,
+          joinedBefore,
         });
       } catch (companionError) {
         // 🔴 The shape is RETRACTED here, never rebound, because nothing at this level knows what

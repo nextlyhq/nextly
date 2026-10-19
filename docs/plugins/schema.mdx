@@ -229,9 +229,9 @@ nextly plugins uninstall <name>              # onUninstall, then every module's 
 nextly plugins uninstall <name> --keep-data  # onUninstall only; the tables stay, orphaned
 ```
 
-A production boot refuses a configured plugin until the install command has run on
-that database (`PLUGIN_NOT_INSTALLED`); `nextly migrate` applies its modules but does
-not install it. Install refuses while a plugin it depends on is not installed
+A production boot refuses an enabled plugin until the install command has run on
+that database (`PLUGIN_NOT_INSTALLED`); a disabled one boots without it. `nextly
+migrate` applies a plugin's modules but does not install it. Install refuses while a plugin it depends on is not installed
 (`PLUGIN_DEPENDENCY_NOT_INSTALLED`). Uninstall refuses while another enabled plugin
 depends on it (`PLUGIN_HAS_DEPENDENTS`) or when a module has no DOWN
 (`PLUGIN_UNINSTALL_IRREVERSIBLE`), and asks for `--yes` before dropping anything

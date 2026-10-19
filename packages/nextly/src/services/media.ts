@@ -41,10 +41,12 @@ import {
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
 import {
+  errorForLog,
   filesKeptByOthers,
   removeStoredFiles,
   warnNotRemoved,
   warnUnlocated,
+  type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
 import {
   revalidateMedia,
@@ -169,6 +171,25 @@ export class MediaService extends BaseService {
    */
   private joinsPluginTransaction(): boolean {
     return inPluginTransaction() && this.adapter.inTransaction();
+  }
+
+  /** How this service reads the media rows that may share a file (filesKeptByOthers). */
+  private get storedFileSearch(): StoredFileSearch {
+    const { media } = this.tables;
+    return {
+      columns: media,
+      dialect: this.dialect,
+      read: where =>
+        this.db
+          .select({
+            filename: media.filename,
+            url: media.url,
+            thumbnailUrl: media.thumbnailUrl,
+            sizes: media.sizes,
+          })
+          .from(media)
+          .where(where),
+    };
   }
 
   /**
@@ -701,7 +722,7 @@ export class MediaService extends BaseService {
     } catch (error) {
       console.warn(
         "[MediaService] Crop point size regeneration failed:",
-        error
+        errorForLog(error)
       );
       // Continue without regeneration - crop point is still saved.
       return null;
@@ -757,12 +778,21 @@ export class MediaService extends BaseService {
     alsoKept: readonly string[] = []
   ): Promise<void> {
     const keep = new Set([...this.collectVariantPaths(keepSizes), ...alsoKept]);
-    const candidates = new Set([
-      ...this.collectVariantPaths(candidateSizes),
-      ...alsoSuperseded,
+    const candidates = [
+      ...new Set([
+        ...this.collectVariantPaths(candidateSizes),
+        ...alsoSuperseded,
+      ]),
+    ].filter(path => !keep.has(path));
+    if (candidates.length === 0) return;
+    // Nor any file another item refers to: on a content-addressed adapter a
+    // "new" variant can be a key another item already uses.
+    const others = await filesKeptByOthers(this.storedFileSearch, candidates, [
+      mediaId,
     ]);
+    if (!others) return;
     await this.deleteVariantPaths(
-      [...candidates].filter(path => !keep.has(path)),
+      candidates.filter(path => !others.has(path)),
       mediaId
     );
   }
@@ -970,21 +1000,18 @@ export class MediaService extends BaseService {
         // thumbnail, and that original is not superseded with it.
         const superseded = replacedSizes;
         const thumbnail = replacedThumbnail;
-        // So is every one another item still refers to, as a delete keeps
-        // them: an imported copy can share the replaced thumbnail. Asked
-        // once the change has committed (filesKeptByOthers).
+        // So is every one another item still refers to, asked once the
+        // change has committed (deleteSupersededVariants).
         const stillReferenced = storedFilesOf(updatedRow).paths;
-        const before = existing.data as Media;
-        await this.afterCommit(async () => {
-          const kept = await filesKeptByOthers(this.adapter, [before]);
-          await this.deleteSupersededVariants(
+        await this.afterCommit(() =>
+          this.deleteSupersededVariants(
             superseded,
             regeneratedSizes,
             mediaId,
             thumbnail ? [thumbnail] : [],
-            [...stillReferenced, ...kept]
-          );
-        });
+            stillReferenced
+          )
+        );
       }
 
       // The update committed a media.updated outbox row; drain and prune it
@@ -1117,13 +1144,17 @@ export class MediaService extends BaseService {
       // Once the delete is durable: inside an enclosing SQLite transaction
       // this delete is a savepoint of it, and a rollback would bring the row
       // back pointing at files already gone.
-      await this.afterCommit(() =>
-        // Every file except those another item still refers to, asked
-        // now that this delete has committed (filesKeptByOthers).
-        filesKeptByOthers(this.adapter, [mediaData]).then(kept =>
-          removeStoredFiles(this.storage, mediaData, mediaId, kept)
-        )
-      );
+      await this.afterCommit(async () => {
+        // Every file except those another item still refers to, asked now
+        // that this delete has committed; none when that cannot be asked.
+        const kept = await filesKeptByOthers(
+          this.storedFileSearch,
+          storedFilesOf(mediaData).paths,
+          [mediaId]
+        );
+        if (kept)
+          await removeStoredFiles(this.storage, mediaData, mediaId, kept);
+      });
 
       // The delete committed a media.deleted outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).
@@ -1135,7 +1166,7 @@ export class MediaService extends BaseService {
         message: "Media deleted successfully",
       };
     } catch (error) {
-      console.error("[MediaService] Delete media error:", error);
+      console.error("[MediaService] Delete media error:", errorForLog(error));
       return {
         success: false,
         statusCode: 500,

@@ -986,11 +986,13 @@ A plugin is installed on a database once `nextly plugins install <name>` has
 run there and finished: it applies the plugin's pending modules, runs its
 `onInstall`, and records the plugin installed. `nextly migrate` applies a
 plugin's modules too, but never runs `onInstall`, so it does not install the
-plugin. A production boot refuses a configured plugin that has not been
-installed (`PLUGIN_NOT_INSTALLED`), whether or not migrations run at boot.
+plugin. A production boot refuses an enabled plugin that has not been
+installed (`PLUGIN_NOT_INSTALLED`), whether or not migrations run at boot. A
+disabled plugin (`enabled: false`) boots without an install; once you enable
+it, the boot requires one.
 
-So, for every plugin in your config, run the install command once on each
-database, after `nextly migrate`, before the first production boot that
+So, for every enabled plugin in your config, run the install command once on
+each database, after `nextly migrate`, before the first production boot that
 includes the plugin. Running it again is safe: it applies what is pending and
 calls `onInstall` again, which is why `onInstall` has to be idempotent.
 `nextly plugins install --all` runs it for every enabled plugin in your config,

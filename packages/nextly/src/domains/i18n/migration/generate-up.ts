@@ -346,6 +346,36 @@ export function buildLocalizationUpStatements(
 }
 
 /**
+ * Create the default locale's companion row from the main row, for every main row that has none:
+ * the given columns' values and, with `status`, the main row's publishing state.
+ *
+ * An existing companion need not have a row for every entry in every language. An entry created
+ * while its entity had no translated field, or while a field was shared, has no default-locale row
+ * at all, so a value moved into the companion would otherwise have nowhere to go. Guarded on the
+ * row's absence, so it adds nothing when run again; rows that exist are the refresh's to update.
+ */
+export function buildMissingDefaultRowsInsert(
+  spec: CompanionCopyRef,
+  columnNames: readonly string[],
+  options: { status?: boolean } = {}
+): string {
+  const { dialect, mainTable, companionTable, defaultLocale } = spec;
+  const comp = q(companionTable, dialect);
+  const main = q(mainTable, dialect);
+  const mainId = `${main}.${q("id", dialect)}`;
+  return (
+    `INSERT INTO ${comp} (${q("_parent", dialect)}, ${q("_locale", dialect)}, ` +
+    `${columnNames.map(name => q(name, dialect)).join(", ")}` +
+    `${options.status ? `, ${q(COMPANION_STATUS_COLUMN, dialect)}` : ""}) ` +
+    `SELECT ${mainId}, ${lit(defaultLocale)}, ` +
+    `${columnNames.map(name => `${main}.${q(name, dialect)}`).join(", ")}` +
+    `${options.status ? `, ${main}.${q("status", dialect)}` : ""} ` +
+    `FROM ${main} WHERE NOT EXISTS (SELECT 1 FROM ${comp} WHERE ${comp}.${q("_parent", dialect)} = ${mainId} ` +
+    `AND ${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)})`
+  );
+}
+
+/**
  * Overwrite the default locale's companion values from the main row — one correlated UPDATE
  * covering every column in `columnNames`.
  *

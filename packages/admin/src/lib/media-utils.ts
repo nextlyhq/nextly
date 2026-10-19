@@ -64,3 +64,13 @@ export function getMediaTypeBadgeVariant(
       return "default";
   }
 }
+
+/**
+ * A media URL as the library copies it: absolute, so it still works pasted
+ * into an email or another application. Local storage serves a path
+ * (`/uploads/...`), which is made absolute on the page's own origin, where
+ * the admin is serving that path; a cloud storage URL is already absolute.
+ */
+export function copyableMediaUrl(url: string): string {
+  return new URL(url, window.location.origin).href;
+}
