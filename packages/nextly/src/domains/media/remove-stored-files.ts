@@ -1,8 +1,8 @@
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
+import { like, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 
 import { isTransientError, withRetry } from "../../storage/retry";
 
+import { canonicalStoredPath } from "./orphan-thumbnails";
 import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
 
 /**
@@ -33,14 +33,29 @@ export function storedPathForLog(pathOrUrl: string): string {
 }
 
 /**
- * What a storage failure said, as a log may show it: an error's message with
- * every URL in it shortened as {@link storedPathForLog} shortens one, and
- * nothing of a thrown value that is not an error, which can hold anything.
+ * What a failure said, as a log may show it: an error's message with
+ * every URL in it shortened as {@link storedPathForLog} shortens one, any
+ * query parameter outside one dropped, and nothing of a thrown value that is
+ * not an error, which can hold anything.
  */
 export function errorForLog(error: unknown): string {
-  if (!(error instanceof Error)) return "the storage failed without an error";
-  return error.message.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, url =>
-    storedPathForLog(url)
+  if (!(error instanceof Error))
+    return "a value that is not an error was thrown";
+  return (
+    error.message
+      // Every URL, with a scheme or without one (`//host/...`).
+      .replace(/(?:[a-z][a-z0-9+.-]*:)?\/\/[^\s"'<>]+/gi, url =>
+        url.startsWith("//")
+          ? storedPathForLog(`https:${url}`).slice(6)
+          : storedPathForLog(url)
+      )
+      // A query outside a URL: every parameter after a `?` or `&`, and a
+      // credential's own name anywhere (`X-Amz-Credential=...`, `token=...`).
+      .replace(/[?&][^\s=&?#]+=[^\s&#]*/g, "")
+      .replace(
+        /\b(x-amz-[\w-]+|[\w-]*(?:token|signature|secret|password|credential|key|sig))=[^\s&"'<>]*/gi,
+        "$1=[redacted]"
+      )
   );
 }
 
@@ -66,63 +81,140 @@ export function warnUnlocated(url: string, mediaId: string): void {
   );
 }
 
+/** The media columns a search for files another item refers to reads. */
+export interface StoredFileColumns {
+  filename: AnyColumn;
+  url: AnyColumn;
+  thumbnailUrl: AnyColumn;
+  sizes: AnyColumn;
+}
+
+/** How a search for files another item refers to reads the media table. */
+export interface StoredFileSearch {
+  columns: StoredFileColumns;
+  dialect: "postgresql" | "mysql" | "sqlite";
+  /** The rows matching `where`, with the columns `storedFilesOf` reads. */
+  read: (where: SQL) => Promise<MediaFilesRecord[]>;
+}
+
+/** Names searched per query, so a large folder's chunk stays one bounded statement each. */
+const NAMES_PER_QUERY = 50;
+
+/** A stored path's last segment, the part every spelling and URL of it ends in. */
+function lastSegment(path: string): string {
+  const located = canonicalStoredPath(path).replace(/[?#].*$/, "");
+  return located.slice(located.lastIndexOf("/") + 1);
+}
+
+/** `char` as a `like` pattern matches it in JSON text: itself, or anything. */
+function widenedForJson(char: string): string {
+  return char === "\\" || char === '"' || char.charCodeAt(0) < 0x20
+    ? "%"
+    : char;
+}
+
 /**
- * The media rows that may share a stored file with `records`: by the
- * original's stored path, or by a URL either names as its original or its
- * thumbnail. Nothing makes a stored path one item's alone, since an import
- * can copy a record and a content-addressed adapter gives one file one key.
- * Asked after the records' own rows are gone, so it finds only others.
+ * Rows that may refer to a file named `names`: any of whose stored path,
+ * URLs or sizes holds one of them, read as text. Wider than the rows that do
+ * (`_` is a wildcard here, and a name can occur in another), never narrower,
+ * which is what a search for what to keep needs; the caller decides by path.
  */
-function rowsSharingFilesWith(
-  records: readonly MediaFilesRecord[]
-): WhereClause {
-  const urls = [
-    ...new Set(
-      records.flatMap(record =>
-        record.thumbnailUrl ? [record.url, record.thumbnailUrl] : [record.url]
-      )
-    ),
-  ];
-  return {
-    or: [
-      {
-        column: "filename",
-        op: "IN",
-        value: [...new Set(records.map(record => record.filename))],
-      },
-      { column: "url", op: "IN", value: urls },
-      { column: "thumbnailUrl", op: "IN", value: urls },
-    ],
-  };
-}
-
-/** The columns {@link storedFilesOf} reads, for a query that only needs them. */
-const STORED_FILE_COLUMNS = ["filename", "url", "thumbnailUrl", "sizes"];
-
-/** Every stored path the given rows refer to. */
-function pathsReferencedBy(rows: readonly MediaFilesRecord[]): Set<string> {
-  return new Set(rows.flatMap(row => storedFilesOf(row).paths));
+function mayReferTo(search: StoredFileSearch, names: readonly string[]): SQL {
+  const { columns, dialect } = search;
+  // The sizes column is JSON on PostgreSQL and MySQL, which `like` cannot
+  // read as it is; it is read as its text.
+  const sizesText =
+    dialect === "postgresql"
+      ? sql`${columns.sizes}::text`
+      : dialect === "mysql"
+        ? sql`cast(${columns.sizes} as char)`
+        : sql`${columns.sizes}`;
+  const conditions = names.flatMap(name => {
+    // A character JSON escapes (a backslash, a double quote, a control
+    // character) is written otherwise in the sizes text, and a backslash is
+    // `like`'s own escape: each matches anything here, which only widens
+    // the rows found.
+    const pattern = `%${Array.from(name, widenedForJson).join("")}%`;
+    return [
+      like(columns.filename, pattern),
+      like(columns.url, pattern),
+      like(columns.thumbnailUrl, pattern),
+      sql`${sizesText} like ${pattern}`,
+    ];
+  });
+  return or(...conditions) ?? sql`false`;
 }
 
 /**
- * The stored files other media rows still refer to, of those `records` had:
- * what a removal of their files must keep. Asked once the change that left
- * the files unreferenced has committed, never inside it: two deletes of
- * copies at once, each reading inside its own transaction on PostgreSQL,
- * would each still see the other's row and both keep the files. Read after
- * its own commit, the later of the two finds the other row gone.
+ * Of `paths`, the ones `rows` refer to, compared as stored paths are
+ * (`canonicalStoredPath`): the one answer to "does an item refer to this
+ * file" that the search for left-behind thumbnails also gives.
+ *
+ * A row's thumbnail whose stored location its record does not show (an
+ * original spelled otherwise than its URL, say) cannot be compared by path;
+ * a file whose name it ends in is taken as referred to, since nothing shows
+ * it is not.
+ */
+export function pathsReferencedAmong(
+  paths: readonly string[],
+  rows: readonly MediaFilesRecord[]
+): Set<string> {
+  const referenced = new Set<string>();
+  const unlocatedNames = new Set<string>();
+  for (const row of rows) {
+    const files = storedFilesOf(row);
+    for (const path of files.paths) referenced.add(canonicalStoredPath(path));
+    for (const url of files.unlocated) unlocatedNames.add(lastSegment(url));
+  }
+  return new Set(
+    paths.filter(
+      path =>
+        referenced.has(canonicalStoredPath(path)) ||
+        unlocatedNames.has(lastSegment(path))
+    )
+  );
+}
+
+/**
+ * Of `paths`, the stored files another media item still refers to: what a
+ * removal of them must keep. Nothing makes a stored path one item's alone,
+ * since an import can copy a record and a content-addressed adapter gives
+ * one file one key, and an item can refer to a file by its stored path, a
+ * URL or one of its sizes, in any of the spellings a storage reads as one.
+ *
+ * Asked once the change that left the files unreferenced has committed,
+ * never inside it: two deletes of copies at once, each reading inside its
+ * own transaction on PostgreSQL, would each still see the other's row and
+ * both keep the files. Read after its own commit, the later of the two finds
+ * the other row gone.
+ *
+ * `null` when the media table could not be read: then nothing shows any of
+ * the files is unreferenced, and none is to be removed. Named in the log,
+ * never thrown, since the change it follows has committed.
  */
 export async function filesKeptByOthers(
-  adapter: Pick<DrizzleAdapter, "select">,
-  records: readonly MediaFilesRecord[]
-): Promise<Set<string>> {
-  if (records.length === 0) return new Set();
-  return pathsReferencedBy(
-    await adapter.select<MediaFilesRecord>("media", {
-      columns: STORED_FILE_COLUMNS,
-      where: rowsSharingFilesWith(records),
-    })
-  );
+  search: StoredFileSearch,
+  paths: readonly string[],
+  mediaIds: readonly string[]
+): Promise<Set<string> | null> {
+  const names = [...new Set(paths.map(lastSegment).filter(Boolean))];
+  try {
+    const rows: MediaFilesRecord[] = [];
+    for (let i = 0; i < names.length; i += NAMES_PER_QUERY) {
+      rows.push(
+        ...(await search.read(
+          mayReferTo(search, names.slice(i, i + NAMES_PER_QUERY))
+        ))
+      );
+    }
+    return pathsReferencedAmong(paths, rows);
+  } catch (error) {
+    console.warn(
+      `[MediaService] Left the files of media ${mediaIds.join(", ")}: could not check whether another item refers to them:`,
+      errorForLog(error)
+    );
+    return null;
+  }
 }
 
 /**

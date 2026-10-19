@@ -519,11 +519,100 @@ describe("bodies held open", () => {
     expect(await readStarts(extra)).toBe(false);
 
     // The refusal spent nothing: once the held bodies arrive (one admitted,
-    // the rest refused by their shared address's budget), the refused
-    // address still has its whole budget and the ceiling has room for it.
+    // the rest refused by their shared address's budget), the one admission
+    // is the only ceiling place spent. The refused address and 98 more each
+    // still have their whole budget, and the ceiling has room for exactly
+    // them: a refusal that spent a place would refuse the last of them.
     for (const held of open) held.end("completes");
     await Promise.all(open.map(held => held.response));
     expect(await admitted(login(h, "extra@example.com"))).toBe(true);
+    for (let i = 0; i < 98; i++) {
+      expect(await admitted(login(h, `fresh-${i}@example.com`))).toBe(true);
+    }
+    expect(await admitted(login(h, "one-too-many@example.com"))).toBe(false);
+  });
+
+  /**
+   * A login whose first chunk is already over the limiter's byte limit and
+   * whose rest arrives only when `end` is called: the limiter stops reading
+   * after that chunk, and the handler then waits for the rest. `waiting`
+   * settles once the handler asks for it.
+   */
+  function overLimitLogin(h: Harness): {
+    waiting: Promise<void>;
+    response: Promise<Response | null>;
+    end(): void;
+  } {
+    let asked!: () => void;
+    const waiting = new Promise<void>(resolve => {
+      asked = resolve;
+    });
+    let finish!: () => void;
+    const ended = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          pulls++;
+          if (pulls === 1) {
+            controller.enqueue(new TextEncoder().encode("x".repeat(40 * 1024)));
+            return;
+          }
+          asked();
+          await ended;
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 }
+    );
+    const request = new Request("http://localhost:3000/admin/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body,
+      duplex: "half",
+    } as RequestInit);
+    const response = routeAuthRequest(request, "login", h.deps);
+    open.push({ reading: waiting, response, end: () => finish() });
+    return { waiting, response, end: finish };
+  }
+
+  it("holds an over-limit body's place until its handler has read the rest", async () => {
+    const h = harness({ budget: 1 }); // ceiling 100
+    const over = overLimitLogin(h);
+    // Admitted, past the limiter, and its handler waiting on the rest.
+    await over.waiting;
+    await holdOpen(h, 99);
+
+    // The over-limit body still holds its place: the bound is full.
+    const refused = heldLogin(h, "refused@example.com");
+    expect(await readStarts(refused)).toBe(false);
+    expect((await refused.response)?.status).toBe(429);
+
+    // Once its handler has answered, the place comes back.
+    over.end();
+    await over.response;
+    expect(await readStarts(heldLogin(h, "after@example.com"))).toBe(true);
+  });
+
+  it("gives an over-limit body's place back at once when the limit refuses it", async () => {
+    const h = harness({ budget: 1 }); // ceiling 100
+    const oversized = {
+      email: "a@example.com",
+      padding: "x".repeat(40 * 1024),
+    };
+    // Both name no account the limiter read: the first spends the
+    // account-less budget, and the second is refused by it.
+    expect(await admitted(post(h, "login", oversized))).toBe(true);
+    expect(await admitted(post(h, "login", oversized))).toBe(false);
+
+    // Neither kept a place: all 100 are free.
+    await holdOpen(h, 99);
+    expect(await readStarts(heldLogin(h, "hundredth@example.com"))).toBe(true);
   });
 
   it.each<Ending>(["completes", "aborts", "overruns the byte limit"])(

@@ -20,7 +20,7 @@ export const LOCALIZATION_INTENT_HEADER = "-- Localization:";
  * Absence of the field is different, and does mean verbatim — that is what every file written
  * before this existed looks like.
  */
-export const LOCALIZATION_INTENT_VERSION = 2;
+export const LOCALIZATION_INTENT_VERSION = 3;
 
 /**
  * Every payload version this build has a parser for.
@@ -30,7 +30,7 @@ export const LOCALIZATION_INTENT_VERSION = 2;
  * When version 2 arrives and 1 is still readable, both belong here; when 1 stops being readable, it
  * comes out and its files start refusing instead of being silently misread.
  */
-const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
+const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2, 3]);
 
 /**
  * What a companion migration file declares it is FOR, as opposed to the statements it happens to
@@ -55,6 +55,9 @@ const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
  *   entity stays translated (`plan-field-leaves-migration.ts`): `archive` writes their other
  *   languages to the archive before the main migration, and `shared` copies the default language
  *   onto main and drops their companion columns after it.
+ * - `joins` is the opposite move, for shared fields that become translated while the entity stays
+ *   translated (`field-joins-translation.ts`): before the main migration drops their main columns,
+ *   it adds their companion columns and gives each entry's default-language row the shared value.
  */
 export const LOCALIZATION_MIGRATION_KINDS = [
   "enable",
@@ -62,21 +65,23 @@ export const LOCALIZATION_MIGRATION_KINDS = [
   "disable",
   "archive",
   "shared",
+  "joins",
 ] as const;
 
 export type LocalizationMigrationKind =
   (typeof LOCALIZATION_MIGRATION_KINDS)[number];
 
 /**
- * The kinds each payload version can declare. Version 2 added `archive` and `shared`; version 1
- * has only the whole-entity transitions.
+ * The kinds each payload version can declare. Version 3 added `joins`, version 2 `archive` and
+ * `shared`; version 1 has only the whole-entity transitions.
  */
 const KINDS_BY_VERSION: ReadonlyMap<
   number,
   readonly LocalizationMigrationKind[]
 > = new Map<number, readonly LocalizationMigrationKind[]>([
   [1, ["enable", "create-only", "disable"]],
-  [2, LOCALIZATION_MIGRATION_KINDS],
+  [2, ["enable", "create-only", "disable", "archive", "shared"]],
+  [3, LOCALIZATION_MIGRATION_KINDS],
 ]);
 
 /**
