@@ -56,6 +56,14 @@ async function boot(dialect: TestDialect) {
         versions: { maxPerDoc: 2 },
         fields: [text({ name: "title" })],
       }),
+      // A published document whose edits are held as a working draft, with
+      // history at its cap, so each held edit prunes a version.
+      defineCollection({
+        slug: "drafted",
+        status: true,
+        versions: { drafts: true, maxPerDoc: 2 },
+        fields: [text({ name: "title" })],
+      }),
     ],
   });
   const now = new Date();
@@ -172,6 +180,50 @@ describe.each(getConfiguredTestDialects())(
         expect(removal).toMatchObject({ actorKind: "system", actorId: null });
         expect(t.payloadOf(removal)).toEqual({ count: 1 });
       }
+    }, 120_000);
+
+    it("rolls a batch back, versions included, when a retention pass cannot record its event", async () => {
+      const t = await boot(dialect);
+      const id = await t.create("drafted", {
+        title: "live",
+        status: "published",
+      });
+      await t.update("drafted", id, { title: "held 1" });
+      await t.update("drafted", id, { title: "held 2" });
+      const versionsOf = async () =>
+        (
+          await current!.adapter.select<{
+            entryId: string;
+            versionNo: number;
+          }>("nextly_versions")
+        )
+          .filter(row => row.entryId === id)
+          .map(row => row.versionNo)
+          .sort((a, b) => a - b);
+      const before = await versionsOf();
+      // An install that has not migrated since the record arrived.
+      await current!.adapter.executeQuery("DROP TABLE nextly_content_events");
+      const service = current!.getService("collectionService") as unknown as {
+        updateMany: (
+          slug: string,
+          entries: { id: string; data: Record<string, unknown> }[],
+          ctx: Record<string, unknown>
+        ) => Promise<{ failed: number }>;
+      };
+
+      // The batch's default `stopOnError: false` reports an ordinary failure
+      // per item and carries on; a pass that pruned versions without its event
+      // must not.
+      const result = await service
+        .updateMany("drafted", [{ id, data: { title: "held 3" } }], {
+          overrideAccess: true,
+          user: ANA,
+        })
+        .catch(() => ({ failed: -1 }));
+
+      expect(result.failed).not.toBe(0);
+      // The versions the pass removed are all still there.
+      expect(await versionsOf()).toEqual(before);
     }, 120_000);
   }
 );
