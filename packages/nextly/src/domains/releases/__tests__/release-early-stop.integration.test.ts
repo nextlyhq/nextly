@@ -543,42 +543,36 @@ describe.each(getConfiguredTestDialects())(
       expect(await stoppedNotices(t, arranged)).toBe(1);
     });
 
-    // Not on SQLite: there, renaming a role fails before this is reached,
-    // since `updateRole` hands Drizzle's synchronous SQLite transaction an
-    // async callback, which it refuses.
-    it.skipIf(dialect === "sqlite")(
-      "stops it when the role a publish rule names is given a new slug",
-      async () => {
-        const t = await boot(dialect);
-        const owner = await seedLiveAuthor(t);
-        const author = await seedPlainAuthor(t);
-        const roleId = await grantRole(t, author, ["update-notes"]);
-        // The slug `grantRole` gives the role it makes.
-        publisherSlug = `role-${author.slice(0, 8)}`;
-        const note = await entry(t, "notes", "draft");
-        const arranged = await dueRelease(
-          t,
-          [
-            {
-              scopeKind: "collection",
-              scopeSlug: "notes",
-              entryId: note,
-              action: "publish",
-            },
-          ],
-          { owner, author }
-        );
-        expect(await visibleIds(t, "notes")).toContain(note);
+    it("stops it when the role a publish rule names is given a new slug", async () => {
+      const t = await boot(dialect);
+      const owner = await seedLiveAuthor(t);
+      const author = await seedPlainAuthor(t);
+      const roleId = await grantRole(t, author, ["update-notes"]);
+      // The slug `grantRole` gives the role it makes.
+      publisherSlug = `role-${author.slice(0, 8)}`;
+      const note = await entry(t, "notes", "draft");
+      const arranged = await dueRelease(
+        t,
+        [
+          {
+            scopeKind: "collection",
+            scopeSlug: "notes",
+            entryId: note,
+            action: "publish",
+          },
+        ],
+        { owner, author }
+      );
+      expect(await visibleIds(t, "notes")).toContain(note);
 
-        await new ServiceContainer(t.adapter).roles.updateRole(roleId, {
-          slug: `${publisherSlug}-renamed`,
-        });
+      await new ServiceContainer(t.adapter).roles.updateRole(roleId, {
+        slug: `${publisherSlug}-renamed`,
+      });
 
-        expect(await visibleIds(t, "notes")).not.toContain(note);
-        expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
-        expect(await stoppedNotices(t, arranged)).toBe(1);
-      }
-    );
+      expect(await visibleIds(t, "notes")).not.toContain(note);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
 
     it("stops another release when the run's own write sets off a deletion of its document", async () => {
       // The run passes over its own document; what its write sets off, here a
