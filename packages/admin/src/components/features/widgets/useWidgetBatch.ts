@@ -11,7 +11,8 @@
  * @module components/features/widgets/useWidgetBatch
  */
 
-import { useMemo } from "react";
+import type { SizeTier } from "@nextlyhq/ui/format";
+import { useEffect, useMemo } from "react";
 
 import {
   useWidgetQueries,
@@ -24,6 +25,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { coreDraws, resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
+import { queryForTier } from "./tier-query";
 import { useCardRetries } from "./useCardRetries";
 
 /**
@@ -38,6 +40,12 @@ import { useCardRetries } from "./useCardRetries";
 export interface BatchCard {
   placementId: string;
   widget: DashboardWidget;
+  /**
+   * The tier the card is drawn at, predicted from the dashboard's width and the card's span
+   * before the card can measure itself. Sizes its query (see `queryForTier`); absent for a card
+   * drawn somewhere with no dashboard width, whose query is asked as declared.
+   */
+  tier?: SizeTier;
 }
 
 export interface WidgetBatch {
@@ -61,6 +69,11 @@ export interface WidgetBatch {
   retry: (placementId: string) => void;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /**
+   * The tier the answer one card shows was fetched at. A card that grew keeps a smaller answer
+   * on screen until a larger one lands, and draws no more rows than that answer was asked for.
+   */
+  fetchedTierFor: (placementId: string) => SizeTier | undefined;
 }
 
 /**
@@ -104,7 +117,19 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
       query: cell.query,
     }));
   }
-  return widget.query ? [{ placementId, query: widget.query }] : [];
+  if (!widget.query) return [];
+  // Sized only for a card the host draws, whose body slices to its tier. A custom card's own
+  // component draws the raw answer with no tier, so it is asked exactly as declared.
+  const tier = widget.archetype === "custom" ? undefined : card.tier;
+  return [
+    tier
+      ? {
+          placementId,
+          query: widget.query,
+          sized: { query: queryForTier(widget.query, tier), tier },
+        }
+      : { placementId, query: widget.query },
+  ];
 }
 
 /**
@@ -159,13 +184,27 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
   );
 
   const batch = useWidgetQueries(requests);
-  const { isFetching, fetchingPlacementIds, updatedAt } = batch;
+  const { isFetching, updatedAt } = batch;
 
   // Retry for one card at a time, over the batch's answers; see `useCardRetries`.
-  const { slots, cellSlots, retry, updatedAtFor } = useCardRetries(
-    requests,
-    batch
+  const retries = useCardRetries(requests, batch);
+  const { slots, cellSlots, retry, updatedAtFor, grow, fetchedTierFor } =
+    retries;
+
+  // Each card's own request in flight: the batch's partition, or its own re-ask.
+  const fetchingPlacementIds = useMemo(
+    () =>
+      new Set([...batch.fetchingPlacementIds, ...retries.fetchingPlacementIds]),
+    [batch.fetchingPlacementIds, retries.fetchingPlacementIds]
   );
+
+  // A card that now draws more than its answer was fetched for asks again, alone. Each card is
+  // offered on every change, and `grow` judges it against the tier its shown answer was fetched
+  // at, so a card is never asked again for a tier it already has; a card whose tier shrinks
+  // draws a prefix of what it holds and asks nothing.
+  useEffect(() => {
+    for (const request of requests) grow(request);
+  }, [requests, slots, grow]);
 
   // Which cards are actually IN the batch, taken from the requests that were
   // sent rather than re-derived from `widget.query`.
@@ -224,5 +263,6 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     settling: outcomes.some(outcome => outcome.state === "loading"),
     retry,
     updatedAtFor,
+    fetchedTierFor,
   };
 }

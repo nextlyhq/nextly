@@ -92,7 +92,7 @@ jobs:
       # and this database is new, so its plugins are installed as a deployment
       # would install them.
       - name: Install the playground's plugins
-        run: pnpm --filter playground exec tsx scripts/install-plugins.ts
+        run: pnpm --filter playground exec nextly plugins install --all
 
       - name: Build the playground for production
         run: pnpm --filter playground exec next build

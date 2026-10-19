@@ -38,6 +38,13 @@ import type {
   VersionsWhereCondition,
 } from "../versions/db-api";
 
+import {
+  tallyByDay,
+  placedWithinCondition,
+  type ReleaseCalendarDay,
+  type ReleaseTimeSpan,
+  type ZonedDay,
+} from "./release-calendar";
 import { releaseDueCondition } from "./release-due";
 import { releaseMemberKey } from "./release-member-key";
 import type {
@@ -259,6 +266,15 @@ export interface ReleaseListFilters {
   kind?: ReleaseKind;
   scheduledAfter?: Date;
   scheduledBefore?: Date;
+  /**
+   * Only releases placed in this span, from `start` up to but not including
+   * `end`: a day in a zone, as `zonedDay` works it out. A published release is
+   * placed at the instant it went out, any other at its scheduled instant
+   * (`placedWithinCondition`).
+   *
+   * @experimental
+   */
+  placedWithin?: ReleaseTimeSpan;
   /**
    * Text the title or the description contains, without regard to case.
    * Matched literally: `%` and `_` are characters to find, not wildcards.
@@ -522,6 +538,39 @@ function scheduleOrderQuery(order?: ReleaseListOrder): ReleaseTabQuery {
       { column: "id", direction },
     ],
   };
+}
+
+/**
+ * The filters on when a release happens, as conditions: each bound given, and
+ * none for a bound left out.
+ */
+function scheduleWindowConditions(
+  filters: Pick<
+    ReleaseListFilters,
+    "scheduledAfter" | "scheduledBefore" | "placedWithin"
+  >
+): (VersionsWhereCondition | VersionsWhere)[] {
+  const conditions: (VersionsWhereCondition | VersionsWhere)[] = [];
+  if (filters.scheduledAfter !== undefined) {
+    conditions.push({
+      column: "scheduledAt",
+      op: ">=",
+      value: filters.scheduledAfter,
+    });
+  }
+  if (filters.scheduledBefore !== undefined) {
+    conditions.push({
+      column: "scheduledAt",
+      op: "<=",
+      value: filters.scheduledBefore,
+    });
+  }
+  if (filters.placedWithin !== undefined) {
+    // The same condition the calendar places a release on its day by, so a
+    // day's list and the calendar's count of that day hold the same releases.
+    conditions.push(placedWithinCondition(filters.placedWithin));
+  }
+  return conditions;
 }
 
 export class ReleasesRepository {
@@ -1173,6 +1222,56 @@ export class ReleasesRepository {
   }
 
   /**
+   * Each of these days' releases, counted by state, with the first `perDay` of
+   * them read in full.
+   *
+   * One read of every release in the window, in the order the list filtered
+   * to one day shows them. The counts and the releases each day shows are both
+   * taken from it, so they describe the same moment: two reads would let the
+   * drain publish a release between them, and a day would count it as
+   * scheduled while showing it as published. Counting every release is what
+   * makes the counts complete, since a count of a page would only count the
+   * page. Releases are one per launch, so a six-week window holds tens of
+   * them, and the window is the bound on this read. The port has no grouped
+   * count, and a count per day and state would be one query per pair.
+   *
+   * Through {@link listingFor}, with the plain soonest-first order, so the
+   * releases a day shows are the first rows of that day's list and the window
+   * narrows by `kind` exactly as the list does.
+   *
+   * @experimental
+   */
+  async findReleaseCalendar(query: {
+    days: readonly ZonedDay[];
+    kind?: ReleaseKind;
+    perDay: number;
+  }): Promise<ReleaseCalendarDay[]> {
+    const { days } = query;
+    if (days.length === 0) return [];
+    const listing = this.listingFor({
+      kind: query.kind,
+      placedWithin: { start: days[0].start, end: days[days.length - 1].end },
+      order: "soonest",
+    });
+    const rows =
+      listing === null
+        ? []
+        : await this.db.select<ReleaseRow>(RELEASES, {
+            where: listing.where,
+            orderBy: listing.orderBy,
+          });
+    const byId = new Map(rows.map(row => [row.id, row]));
+    return tallyByDay(days, rows, query.perDay).map(
+      ({ firstIds, ...tally }) => ({
+        ...tally,
+        // From the rows just counted, so a day never shows a release in a
+        // state other than the one its counts hold it in.
+        releases: firstIds.flatMap(id => byId.get(id) ?? []),
+      })
+    );
+  }
+
+  /**
    * A listing as one where clause and one order: its tab's, or the plain
    * scheduled order, narrowed by the filters. `null` when it can match
    * nothing.
@@ -1229,20 +1328,7 @@ export class ReleasesRepository {
     if (filters.kind !== undefined) {
       conditions.push({ column: "kind", op: "=", value: filters.kind });
     }
-    if (filters.scheduledAfter !== undefined) {
-      conditions.push({
-        column: "scheduledAt",
-        op: ">=",
-        value: filters.scheduledAfter,
-      });
-    }
-    if (filters.scheduledBefore !== undefined) {
-      conditions.push({
-        column: "scheduledAt",
-        op: "<=",
-        value: filters.scheduledBefore,
-      });
-    }
+    conditions.push(...scheduleWindowConditions(filters));
     if (filters.search !== undefined && filters.search.length > 0) {
       // In the WHERE clause, before the count and the page, so the total and
       // every page cover all matching releases. A search applied to a page

@@ -26,6 +26,10 @@ on:
   # merges it only if the required checks pass there too.
   merge_group:
     types: [checks_requested]
+  # main-catch-up.yml starts a run on main's newest commit when no run has
+  # tested it; a dispatched run tests everything (`scripts/change-scope.mjs`
+  # has no narrower rule for it).
+  workflow_dispatch:
 
 # Read-only: the job never writes through the GITHUB_TOKEN.
 permissions:
@@ -272,7 +276,7 @@ jobs:
   # The required check `Integration (postgres)`, read by the ruleset and by
   # scripts/verify-merge.mjs: it passes only when every shard above passed.
   #
-  # It runs on the same condition as the shards, so a run that skips them
+  # It runs on the same conditions as the shards, so a run that skips them
   # skips this too and reports `skipped` under this literal name, as the
   # unsharded leg did. When they did run, `needs.<id>.result` is `success`
   # only if every shard succeeded; anything else fails it, including a shard
@@ -280,7 +284,12 @@ jobs:
   integration-postgres:
     name: Integration (postgres)
     needs: [changes, integration-postgres-shards]
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    # `always()`, not `!cancelled()`: a shard stopped by its own backstop is
+    # cancelled, and this check, skipped then, would read to the merge gate as
+    # a pass. It runs on the shards' conditions otherwise, and fails unless
+    # every shard succeeded; a run cancelled on purpose reads as failed here
+    # rather than cancelled, on a head nothing merges.
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -361,12 +370,37 @@ jobs:
           mysql -h 127.0.0.1 -uroot -pnextly -N -e "SELECT @@innodb_redo_log_capacity, @@innodb_flush_log_at_trx_commit, @@sync_binlog;"
 
       # See the postgres leg for why every adapter is built on every leg.
+      #
+      # Every five minutes while the suite runs, the server prints the
+      # connections held for over a minute, the metadata locks of any schema
+      # where one is waiting, and the transactions open for over a minute. A
+      # suite that stops waiting on one of these leaves no other record of
+      # it, and only while it runs: the budget's stop ends the suite's
+      # process, and its connections and locks with it.
       - name: Run integration tests (mysql)
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts
+          # The watcher sleeps in a child it waits on, and stops that child
+          # when it is stopped: otherwise the sleep outlives it holding the
+          # step's output open, and the step waits for it.
+          (
+            trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+            while :; do
+              sleep 300 & nap=$!
+              wait "$nap"
+              echo "::group::What MySQL holds at $(date -u +%H:%M:%SZ)"
+              mysql -h 127.0.0.1 -uroot -pnextly -t -e "SELECT ID,USER,DB,COMMAND,TIME,STATE,LEFT(INFO,200) AS INFO FROM information_schema.PROCESSLIST WHERE TIME > 60 AND USER <> 'event_scheduler' ORDER BY TIME DESC; SELECT OBJECT_TYPE,OBJECT_SCHEMA,OBJECT_NAME,LOCK_TYPE,LOCK_DURATION,LOCK_STATUS,OWNER_THREAD_ID FROM performance_schema.metadata_locks WHERE OBJECT_SCHEMA IN (SELECT OBJECT_SCHEMA FROM performance_schema.metadata_locks WHERE LOCK_STATUS = 'PENDING'); SELECT trx_id,trx_state,trx_started,trx_mysql_thread_id,LEFT(trx_query,200) AS trx_query FROM information_schema.INNODB_TRX WHERE trx_started < NOW() - INTERVAL 60 SECOND;" 2>&1 | grep -v "Using a password" || true
+              echo "::endgroup::"
+            done
+          ) &
+          watcher=$!
+          status=0
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
             "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the MySQL integration suite" \
-            pnpm lane:test:integration:mysql -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+            pnpm lane:test:integration:mysql -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} || status=$?
+          kill "$watcher" 2>/dev/null || true
+          wait "$watcher" 2>/dev/null || true
+          exit "$status"
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
@@ -387,7 +421,7 @@ jobs:
   # The required check `Integration (mysql)`, read by the ruleset and by
   # scripts/verify-merge.mjs: it passes only when every shard above passed.
   #
-  # It runs on the same condition as the shards, so a run that skips them
+  # It runs on the same conditions as the shards, so a run that skips them
   # skips this too and reports `skipped` under this literal name, as the
   # unsharded leg did. When they did run, `needs.<id>.result` is `success`
   # only if every shard succeeded; anything else fails it, including a shard
@@ -395,7 +429,12 @@ jobs:
   integration-mysql:
     name: Integration (mysql)
     needs: [changes, integration-mysql-shards]
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    # `always()`, not `!cancelled()`: a shard stopped by its own backstop is
+    # cancelled, and this check, skipped then, would read to the merge gate as
+    # a pass. It runs on the shards' conditions otherwise, and fails unless
+    # every shard succeeded; a run cancelled on purpose reads as failed here
+    # rather than cancelled, on a head nothing merges.
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

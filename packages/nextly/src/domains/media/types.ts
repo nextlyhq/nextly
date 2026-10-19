@@ -26,8 +26,10 @@ export interface MediaFile {
    *
    * Optional and nullable because the column is: a non-image, or an image
    * uploaded before any size was configured, carries none. Every variant URL is
-   * absolutized exactly as `url` is, so a caller reading `sizes.large.url` and
-   * a caller reading `url` get the same kind of value.
+   * in the same form as `url`, as the storage wrote it: a path on the local
+   * storage's base (`/uploads/...`) by default, which any page of the app
+   * resolves, and an absolute URL on cloud storage. For an email, a feed or
+   * anything else outside the app, make it absolute with `toPublicMediaUrl`.
    */
   sizes?: Record<string, ImageSizeVariant> | null;
   /** Horizontal focal point, 0 is the left edge and 100 the right. */

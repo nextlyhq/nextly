@@ -286,6 +286,20 @@ export interface ClientUploadData {
  * - getSignedUrl: Generate temporary signed URLs for private access
  * - getPresignedUploadUrl: Generate pre-signed URL for client uploads
  */
+/** A file a storage holds, as {@link IStorageAdapter.list} names it. */
+export interface StoredFileEntry {
+  /** The stored path, as `upload` returned it and `delete` takes it. */
+  path: string;
+  /** When it was stored, where the storage says. */
+  lastModified?: Date;
+  /**
+   * The name it was uploaded under, where the storage keeps that apart from
+   * its path: UploadThing's keys carry no name. Elsewhere the name is the
+   * path's last segment.
+   */
+  name?: string;
+}
+
 export interface BulkDeleteResult {
   successful: string[];
   failed: Array<{ filePath: string; error: string }>;
@@ -328,4 +342,11 @@ export interface IStorageAdapter {
     mimeType: string,
     expiresIn?: number
   ): Promise<ClientUploadData>;
+
+  /**
+   * Every file the storage holds, a page at a time (optional). Used to find
+   * files no record refers to; a storage without it cannot be searched for
+   * them, which is said rather than taken as "none".
+   */
+  list?(): AsyncIterable<StoredFileEntry>;
 }

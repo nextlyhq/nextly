@@ -100,8 +100,13 @@ import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import { emailVerificationColumns } from "./email-verification-write";
 import {
-  refuseRemovingLastSuperAdmin,
+  firstAdministratorTaken,
+  type FirstAdministratorTx,
+  grantFirstAdministratorInTx,
   type LastSuperAdminTx,
+  lockSuperAdminRole,
+  refuseRemovingLastSuperAdmin,
+  superAdminRoleHeld,
 } from "./last-super-admin";
 import { passwordColumns, updateUserEndingSessions } from "./password-write";
 import { activationChanges } from "./user-activation";
@@ -121,8 +126,11 @@ const SUPER_ADMIN_ROLE_SLUG = "super-admin";
  * and cannot take over or remove an account that already reaches it: no
  * change to its password, email, activation, verification or roles, and no
  * deletion. An address it vouches for is recorded as verified by `"plugin"`.
+ * `"setup"` is the setup route's own provisioning: like `"app"`, except that
+ * the account must become the install's first administrator or is not created
+ * at all (firstAdministratorTaken).
  */
-export type UserWriteCaller = "app" | "plugin";
+export type UserWriteCaller = "app" | "plugin" | "self-registration" | "setup";
 
 // ============================================================
 // Drizzle Runtime Types
@@ -1164,14 +1172,14 @@ export class UserMutationService extends BaseService {
     caller: UserWriteCaller = "app"
   ): Promise<UserMutationResponse> {
     try {
-      // Determine if this is the very first user in the database (existence check)
-      const isFirstUser = await this.db.query.users.findFirst({
+      // Whether the install has any account yet (existence check).
+      const anyAccount = await this.db.query.users.findFirst({
         columns: { id: true },
       });
-      // The first account is made super-admin below, so a plugin creating it
-      // would decide who administers the site. A cheap refusal before any
-      // work; the binding one runs inside the insert's transaction.
-      if (caller === "plugin" && !isFirstUser) {
+      // A plugin never creates the install's first account: that one is the
+      // app's to provision. A cheap refusal before any work; the binding one
+      // runs inside the insert's transaction.
+      if (caller === "plugin" && !anyAccount) {
         throw NextlyError.forbidden({
           logContext: {
             reason: "plugin-user-on-empty-install",
@@ -1415,6 +1423,66 @@ export class UserMutationService extends BaseService {
         });
       };
 
+      // Only an account the app itself provisions can become the install's
+      // first administrator: never a stranger's self-registration, and never a
+      // plugin's. Granted inside the insert's own transaction, under the role
+      // row's lock, so two accounts provisioned at once on an install with no
+      // administrator leave exactly one (grantFirstAdministratorInTx). The role
+      // is ensured before the transaction opens, and only while no
+      // administrator is seen: once one exists, nothing here can grant.
+      const provisionsFirstAdministrator =
+        caller === "app" || caller === "setup";
+      const bootstrapRoleReady =
+        provisionsFirstAdministrator &&
+        (await this.mayBootstrapFirstAdministrator());
+      // Setup creates the install's first administrator or nothing: refused
+      // here once one is seen, and inside the insert's transaction when another
+      // wins the grant, so a setup that lost a race publishes no account.
+      if (caller === "setup" && !bootstrapRoleReady) {
+        throw firstAdministratorTaken();
+      }
+      let grantedFirstAdministrator = false;
+      // First, before the transaction writes anything: the role row's lock.
+      const lockForBootstrap = async (
+        txDb: DrizzleTransactionLike
+      ): Promise<string | undefined> =>
+        bootstrapRoleReady
+          ? lockSuperAdminRole(
+              txDb as unknown as FirstAdministratorTx,
+              this.tables,
+              this.dialect
+            )
+          : undefined;
+      // Then, once the account is inserted: the grant, if nobody holds it.
+      const bootstrapFirstAdministrator = async (
+        txDb: DrizzleTransactionLike,
+        superAdminRoleId: string | undefined
+      ) => {
+        if (superAdminRoleId === undefined) return;
+        grantedFirstAdministrator = await grantFirstAdministratorInTx(
+          txDb as unknown as FirstAdministratorTx,
+          this.tables,
+          this.dialect,
+          superAdminRoleId,
+          newUserId
+        );
+      };
+
+      // The account's own rows, in the order both inserts below take them: the
+      // role row's lock before any write, then the plugin guard, the account,
+      // and the first-administrator grant.
+      const insertAccount = async (txDb: DrizzleTransactionLike) => {
+        const superAdminRoleId = await lockForBootstrap(txDb);
+        await requireExistingAccount(txDb);
+        await txDb.insert(users).values(values);
+        await bootstrapFirstAdministrator(txDb, superAdminRoleId);
+        // Thrown inside the transaction, so the account and its `user.created`
+        // outbox row roll back and nothing after the commit runs for it.
+        if (caller === "setup" && !grantedFirstAdministrator) {
+          throw firstAdministratorTaken();
+        }
+      };
+
       // Wrap user + user_ext + invite inserts in a transaction for atomicity.
       // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
       // BetterSQLite3Transaction depending on dialect) that exposes the same
@@ -1430,8 +1498,7 @@ export class UserMutationService extends BaseService {
       try {
         await this.withTransaction(async tx => {
           const txDb = tx as DrizzleTransactionLike;
-          await requireExistingAccount(txDb);
-          await txDb.insert(users).values(values);
+          await insertAccount(txDb);
 
           // Always create a user_ext row when custom fields are configured
           if (hasExt && userExtTable) {
@@ -1469,8 +1536,7 @@ export class UserMutationService extends BaseService {
           this.userExtDisabled = true;
           await this.withTransaction(async tx => {
             const txDb = tx as DrizzleTransactionLike;
-            await requireExistingAccount(txDb);
-            await txDb.insert(users).values(values);
+            await insertAccount(txDb);
             await insertInviteToken(txDb);
             await recordCreatedEvent(txDb);
           });
@@ -1515,20 +1581,12 @@ export class UserMutationService extends BaseService {
         });
       }
 
-      // 🔹 If this is the first user ever, ensure super-admin exists and assign it
-      if (!isFirstUser) {
-        const services = new ServiceContainer(this.adapter);
-        const { id: superAdminRoleId } =
-          await services.roles.ensureSuperAdminRole();
-
-        await services.userRoles
-          .assignRoleToUser(user.id, superAdminRoleId)
-          .catch(error => {
-            console.error(
-              `Failed to assign super admin role to user with ID ${user.id}:`,
-              error
-            );
-          });
+      // The grant was written in the insert's transaction; the role caches
+      // that answered for this account before it existed are flushed now.
+      if (grantedFirstAdministrator) {
+        await new ServiceContainer(this.adapter).userRoles.invalidateRoleCaches(
+          String(user.id)
+        );
       }
 
       // 🔹 Assign roles if provided
@@ -2228,6 +2286,20 @@ export class UserMutationService extends BaseService {
    *
    * @param logContext - Where the refusal came from, for the log only.
    */
+  /**
+   * Whether an account created now could be the install's first
+   * administrator: true when nobody holds the `super-admin` role yet, in which
+   * case the role is ensured, so the grant inside the insert's transaction has
+   * a row to lock. Read without a lock; the grant decides under one.
+   */
+  private async mayBootstrapFirstAdministrator(): Promise<boolean> {
+    if (await superAdminRoleHeld(this.db, this.tables)) {
+      return false;
+    }
+    await new ServiceContainer(this.adapter).roles.ensureSuperAdminRole();
+    return true;
+  }
+
   private async requireExistingAccountInTx(
     txDb: DrizzleTransactionLike,
     logContext: Record<string, unknown>

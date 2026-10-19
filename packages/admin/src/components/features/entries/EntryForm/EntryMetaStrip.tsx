@@ -48,15 +48,35 @@ export function EntryMetaStrip({
   lockSlug = false,
   hasPublicAddress = false,
 }: EntryMetaStripProps) {
-  const showStatusPill = hasStatus && isRailCollapsed && !!status;
+  const showStatusPill = hasStatus && !!status;
   const showSlug = !!slugField;
 
   if (!showStatusPill && !showSlug) return null;
 
+  /*
+   * The status says itself in the document panel where that panel is on
+   * screen and open, so the pill steps aside there and only there: at the
+   * width the panel appears from (`@4xl/content`), while it is expanded. Below
+   * that width the panel is not drawn at all, so the pill is the only place
+   * the status is said, whatever the panel's setting.
+   */
+  const pillBesidePanel = isRailCollapsed ? undefined : "@4xl/content:hidden";
+
   return (
-    <div className="px-6 py-2 border-b border-border flex items-center gap-3 text-xs text-muted-foreground">
+    <div
+      className={cn(
+        "px-6 py-2 border-b border-border flex items-center gap-3 text-xs text-muted-foreground",
+        // With nothing else in it, the strip steps aside with the pill rather
+        // than standing empty.
+        !showSlug && pillBesidePanel
+      )}
+    >
       {showStatusPill && (
-        <StatusPill status={status} hasWorkingDraft={hasWorkingDraft} />
+        <StatusPill
+          status={status}
+          hasWorkingDraft={hasWorkingDraft}
+          className={pillBesidePanel}
+        />
       )}
       {showSlug && (
         <SlugInlineEditor
@@ -72,9 +92,11 @@ export function EntryMetaStrip({
 function StatusPill({
   status,
   hasWorkingDraft,
+  className,
 }: {
   status: string;
   hasWorkingDraft: boolean;
+  className?: string | undefined;
 }) {
   const isPublished = status === "published";
   // A published entry with a pending working draft is Payload's "Changed"
@@ -93,7 +115,8 @@ function StatusPill({
           ? "bg-warning-100 text-warning-800 dark:bg-warning-950/40 dark:text-warning-200"
           : isPublished
             ? "bg-muted text-foreground"
-            : "bg-muted text-muted-foreground"
+            : "bg-muted text-muted-foreground",
+        className
       )}
     >
       {isChanged ? "Changed" : isPublished ? "Published" : "Draft"}

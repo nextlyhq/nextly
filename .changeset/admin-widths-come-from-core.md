@@ -29,5 +29,5 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-`nextly/config` now exports the dashboard's widths (`WIDGET_WIDTHS`, `isWidgetWidth`,
-`widthFromSize` and the `WidgetWidth` type), and the admin reads them instead of keeping its own copy.
+`nextly/config` now exports the dashboard's widths (`WIDGET_WIDTHS`, `isWidgetWidth`, `widthFromSize` and the
+`WidgetWidth` type), so your code can name a card's width as the dashboard does. What the dashboard draws is unchanged.

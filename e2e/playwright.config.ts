@@ -144,6 +144,11 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
+      // The running app never rewrites generated files. The fixtures above add
+      // components the committed component map was not generated with, and
+      // `next dev` would otherwise write the map again, leaving the checkout
+      // changed after every run.
+      NEXTLY_GENERATED_FILES_WRITE: "0",
     },
   },
 
