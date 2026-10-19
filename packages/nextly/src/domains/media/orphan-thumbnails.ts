@@ -202,7 +202,12 @@ export async function findOrphanThumbnails(
     if (!isMediaThumbnail(entry, options.prefix, keysAsWritten)) continue;
     if (referenced.has(canonicalStoredPath(entry.path))) continue;
     const stored = entry.lastModified?.getTime();
-    if (stored === undefined || now - stored < ORPHAN_MIN_AGE_MS) {
+    // A time that is not a date (`new Date(NaN)`) is no time at all.
+    if (
+      stored === undefined ||
+      !Number.isFinite(stored) ||
+      now - stored < ORPHAN_MIN_AGE_MS
+    ) {
       tooRecent++;
       continue;
     }

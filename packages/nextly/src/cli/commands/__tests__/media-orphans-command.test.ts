@@ -323,6 +323,37 @@ describe("nextly media orphans, as the CLI runs it", () => {
     expect(seen.calls).not.toContain("select media");
   });
 
+  // A config outside the project is another project's storage, read
+  // against this project's database.
+  it("removes nothing with a config from outside the project", async () => {
+    const media = bucketWithOrphan("media");
+    seen.storage = [
+      {
+        name: "s3-media",
+        type: "s3",
+        collections: { media: { prefix: "media" } },
+        adapter: media.adapter,
+      },
+    ];
+    process.chdir(dir);
+
+    await createProgram().parseAsync([
+      "node",
+      "nextly",
+      "--cwd",
+      dir,
+      "--config",
+      "../other-project/nextly.config.ts",
+      "media",
+      "orphans",
+      "--apply",
+    ]);
+
+    expect(exits).toEqual([1]);
+    expect(media.deleted).toEqual([]);
+    expect(seen.loadConfig).toEqual([]);
+  });
+
   it("reads the project's own .env for what is not already set", async () => {
     await writeFile(
       path.join(dir, ".env"),

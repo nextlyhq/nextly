@@ -535,6 +535,47 @@ describe("nextly media orphans", () => {
     }
   });
 
+  // An adapter can list a file by a signed URL.
+  it("prints the files it lists and removes without their URLs' secrets", async () => {
+    const bucket = new Bucket("vercel-blob");
+    const signed =
+      "https://abc.public.blob.vercel-storage.com/media/thumb_x.png?token=token-secret";
+    bucket.put({ path: signed, lastModified: TWO_HOURS_AGO });
+    const said: string[] = [];
+
+    await mediaOrphans({
+      storage: bucket,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => refs(),
+      referencedNow: async () => new Set(),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    const text = said.join("\n");
+    expect(text).toContain(
+      "https://abc.public.blob.vercel-storage.com/media/thumb_x.png"
+    );
+    expect(text).not.toMatch(/secret/);
+  });
+
+  // A time the storage could not read is no time: the file may belong to an
+  // upload still in progress.
+  it("leaves a file whose stored time is not a date", async () => {
+    const layout = inBucket("s3");
+    (layout.storage as Bucket).put({
+      path: layout.orphan,
+      lastModified: new Date(Number.NaN),
+    });
+
+    const { said } = await run(layout, true);
+
+    expect(await layout.stored()).toContain(layout.orphan);
+    expect(said).not.toContain(`Removed ${layout.orphan}`);
+  });
+
   // What the storage said can quote a signed URL.
   it("names a failed removal without the secrets in the storage's error", async () => {
     const layout = inBucket("s3");

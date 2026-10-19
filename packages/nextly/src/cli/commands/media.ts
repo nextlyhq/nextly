@@ -18,6 +18,7 @@ import {
 import {
   errorForLog,
   filesKeptByOthers,
+  storedPathForLog,
 } from "../../domains/media/remove-stored-files";
 import { StoredFileSearchReader } from "../../domains/media/stored-file-search";
 import {
@@ -146,7 +147,7 @@ export async function mediaOrphans(options: {
     say(
       `${search.orphans.length} left-behind thumbnail(s), which no media item refers to:`
     );
-    for (const path of search.orphans) say(`  ${path}`);
+    for (const path of search.orphans) say(`  ${storedPathForLog(path)}`);
     say("Nothing was changed. Run again with --apply to remove them.");
     return 0;
   }
@@ -186,7 +187,9 @@ function sayUnconfirmed(
   );
   for (const { path, name } of unconfirmed) {
     context.say(
-      name === undefined ? `  ${path}` : `  ${path} (uploaded as ${name})`
+      name === undefined
+        ? `  ${storedPathForLog(path)}`
+        : `  ${storedPathForLog(path)} (uploaded as ${name})`
     );
   }
 }
@@ -220,13 +223,15 @@ function whyUnconfirmed(
 
 /** What --apply did with each listed thumbnail. */
 function sayRemoval(result: OrphanRemoval, say: (line: string) => void): void {
-  for (const path of result.removed) say(`Removed ${path}`);
+  // A listed path can be a signed URL: printed without what can carry its
+  // secret, as every path here is.
+  for (const path of result.removed) say(`Removed ${storedPathForLog(path)}`);
   for (const path of result.kept) {
-    say(`Kept ${path}: a media item refers to it now.`);
+    say(`Kept ${storedPathForLog(path)}: a media item refers to it now.`);
   }
   for (const { path, error } of result.failed) {
     // What the storage said can quote a signed URL or a token.
-    say(`Could not remove ${path}: ${errorForLog(error)}`);
+    say(`Could not remove ${storedPathForLog(path)}: ${errorForLog(error)}`);
   }
   if (result.stopped.length > 0) {
     say(
@@ -274,6 +279,25 @@ function enterProject(cwd: string, apply: boolean, logger: Logger): boolean {
   }
   process.chdir(cwd);
   return true;
+}
+
+/**
+ * Whether the config --apply would read is the project's own: a `--config`
+ * outside `cwd` is another project's storage, which this project's database
+ * settings would be compared against. Says why when it is not.
+ */
+function configIsInside(
+  cwd: string,
+  configPath: string | undefined,
+  logger: Logger
+): boolean {
+  if (configPath === undefined) return true;
+  const relative = path.relative(cwd, path.resolve(cwd, configPath));
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) return true;
+  logger.error(
+    `The config ${configPath} is outside ${cwd}, whose database settings would be read, so its storage may be another project's. Nothing was changed. Run the command from that config's project to remove files.`
+  );
+  return false;
 }
 
 /**
@@ -325,6 +349,13 @@ export function createMediaCommand(): Command {
         // Resolved once, from where the command was run: a relative --cwd
         // read again after the change would name a folder inside itself.
         const cwd = path.resolve(context.cwd);
+        if (
+          cmdOptions.apply === true &&
+          !configIsInside(cwd, context.configPath, context.logger)
+        ) {
+          process.exit(1);
+          return;
+        }
         if (!enterProject(cwd, cmdOptions.apply === true, context.logger)) {
           process.exit(1);
           return;
