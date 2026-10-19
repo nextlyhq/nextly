@@ -23,6 +23,7 @@ import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
+import { maskingServiceLogger } from "../../../observability/mask-emails";
 import { emailProvidersMysql } from "../../../schemas/email-providers/mysql";
 import { emailProvidersPg } from "../../../schemas/email-providers/postgres";
 import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
@@ -259,7 +260,10 @@ export class EmailProviderService extends BaseService {
      */
     private readonly deliveries?: EmailDeliveryService
   ) {
-    super(adapter, logger);
+    // Masked here whatever logger an app supplied: what this service logs,
+    // a provider error quoting a recipient included, never carries a full
+    // email address outside development and test.
+    super(adapter, maskingServiceLogger(logger));
 
     this.encryptionSecret = env.NEXTLY_SECRET;
 

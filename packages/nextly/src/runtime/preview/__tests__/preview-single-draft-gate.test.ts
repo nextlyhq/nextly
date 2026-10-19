@@ -28,8 +28,10 @@ const SHARER = { id: "minter-1", roles: ["editor"], role: "editor" };
 const resolvePreviewIdentity = vi.hoisted(() => vi.fn());
 vi.mock("../preview-identity", () => ({ resolvePreviewIdentity }));
 const singleDocumentEditable = vi.hoisted(() => vi.fn());
+const singleStoredDocumentReadable = vi.hoisted(() => vi.fn());
 vi.mock("../../../domains/singles/services/single-document-access", () => ({
   singleDocumentEditable,
+  singleStoredDocumentReadable,
 }));
 
 vi.mock("../preview-route-defaults", () => ({
@@ -65,6 +67,8 @@ beforeEach(() => {
   resolvePreviewIdentity.mockResolvedValue(SHARER);
   singleDocumentEditable.mockClear();
   singleDocumentEditable.mockResolvedValue(true);
+  singleStoredDocumentReadable.mockClear();
+  singleStoredDocumentReadable.mockResolvedValue(true);
 });
 
 describe("previewSingleDraftGate", () => {
@@ -181,6 +185,23 @@ describe("previewSingleDraftGate", () => {
     // nothing gated this request — a render has no route gate, and claiming one
     // ran skips the only check that notices a withdrawn role.
     expect(singleDocumentEditable).toHaveBeenCalledWith("homepage", {
+      user: SHARER,
+      routeAuthorized: false,
+    });
+  });
+
+  // The other half: a sharer who may still edit the Single but no longer read
+  // it. The draft is a view of the document, so the link closes for them too.
+  it("refuses once the sharer may no longer read the Single", async () => {
+    singleStoredDocumentReadable.mockResolvedValue(false);
+    await cookieFor({ kind: "single", single: "homepage" });
+
+    await expect(previewSingleDraftGate()({ slug: "homepage" })).resolves.toBe(
+      false
+    );
+    // Asked the same way as the editable half: the Single the token names, as
+    // the sharer, with no route gate claimed.
+    expect(singleStoredDocumentReadable).toHaveBeenCalledWith("homepage", {
       user: SHARER,
       routeAuthorized: false,
     });

@@ -1,10 +1,22 @@
 import { randomUUID } from "crypto";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createTestDb, type TestDb } from "../../../__tests__/fixtures/db";
 import type { Logger } from "../../../services/shared";
 import { ApiKeyService, generateApiKey } from "../services/api-key-service";
+
+// The service runs here on a bare in-memory database with no Nextly
+// registered, where the creator's standing cannot be read. These tests are
+// about expiry, so the creator is taken to be active; the creator check has
+// its own tests (`api-key-creator-standing.test.ts` and the integration test
+// beside the service).
+vi.mock("../../../auth/session/session-standing", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../auth/session/session-standing")
+  >()),
+  accountIsActive: async () => true,
+}));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -25,7 +37,7 @@ function createTestAdapter(db: unknown) {
   return {
     getDrizzle: () => db,
     getCapabilities: () => ({ dialect: "sqlite" as const }),
-  } as any;  
+  } as any;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

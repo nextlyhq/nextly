@@ -1,11 +1,13 @@
-import { jwtVerify } from "jose";
+import { jwtVerify, SignJWT } from "jose";
 import { afterEach, describe, it, expect, vi } from "vitest";
 
 import { buildClaims } from "../claims";
 import {
+  ALGORITHM,
   signAccessToken,
   signAccessTokenWithExpiry,
   secretToKey,
+  TOKEN_TYP,
 } from "../sign";
 import { verifyAccessToken } from "../verify";
 
@@ -73,7 +75,7 @@ describe("buildClaims", () => {
       sessionEpoch: 4,
     });
 
-    expect(claims.sev).toBe(4);
+    expect(claims.nx_sev).toBe(4);
   });
 
   it("signs epoch zero when the caller gives none", () => {
@@ -88,7 +90,25 @@ describe("buildClaims", () => {
       roleIds: [],
     });
 
-    expect(claims.sev).toBe(0);
+    expect(claims.nx_sev).toBe(0);
+  });
+
+  it("leaves a custom field named `sev` to the app", () => {
+    // An app's own claim of that name predates the epoch. Reserving it would
+    // drop the field from every new session, and reading it as the epoch would
+    // refuse every session signed before the upgrade.
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test",
+      image: null,
+      roleIds: [],
+      sessionEpoch: 4,
+      customFields: { sev: "gold" },
+    });
+
+    expect(claims.sev).toBe("gold");
+    expect(claims.nx_sev).toBe(4);
   });
 
   it("lets no custom field replace the session epoch", () => {
@@ -101,10 +121,10 @@ describe("buildClaims", () => {
       image: null,
       roleIds: [],
       sessionEpoch: 4,
-      customFields: { sev: 0 },
+      customFields: { nx_sev: 0 },
     });
 
-    expect(claims.sev).toBe(4);
+    expect(claims.nx_sev).toBe(4);
   });
 });
 
@@ -186,6 +206,44 @@ describe("verifyAccessToken", () => {
       expect(result.payload.sub).toBe("user_123");
       expect(result.payload.email).toBe("test@example.com");
       expect(result.payload.roleIds).toEqual(["role_admin"]);
+    }
+  });
+
+  it("does not read an application's nx_sev field as the session epoch", async () => {
+    // A token minted before the epoch claim existed can carry an application's
+    // own field of that name, and nothing in its header says it was minted with
+    // the epoch. Read as the epoch, that field would revive the token once the
+    // account's epoch rose to match it.
+    const token = await new SignJWT({ sub: "user_123", nx_sev: 1 })
+      .setProtectedHeader({ alg: ALGORITHM, typ: TOKEN_TYP.session })
+      .setIssuedAt()
+      .setExpirationTime("1h")
+      .sign(secretToKey(TEST_SECRET));
+
+    const result = await verifyAccessToken(token, TEST_SECRET);
+
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.payload.nx_sev).toBeUndefined();
+    }
+  });
+
+  it("keeps the session epoch on a token minted with the epoch marker", async () => {
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test",
+      image: null,
+      roleIds: [],
+      sessionEpoch: 4,
+    });
+
+    const token = await signAccessToken(claims, TEST_SECRET, 900);
+    const result = await verifyAccessToken(token, TEST_SECRET);
+
+    expect(result.valid).toBe(true);
+    if (result.valid) {
+      expect(result.payload.nx_sev).toBe(4);
     }
   });
 
