@@ -74,7 +74,9 @@ Changing a translated field to shared keeps its content, for a collection, a Sin
 
 In code, set `localized: false` on the field and run `nextly migrate:create`. It writes three files that `nextly migrate` runs in order: one that writes the other languages to the archive, the migration that gives the main table the field's column, and one that copies the default language's value into it and removes the translated column. Rolling them back with `nextly migrate:down` puts the translated field back, every language included. `nextly migrate --dry-run` shows all three before anything runs.
 
-If the archive cannot be written, the change is refused and nothing is changed. A field marked Required or Unique cannot stop being translated in the same change: turn the setting off and save, make the field shared and save, then turn the setting back on. In code the steps are the same, with `migrate:create` after each.
+If the archive cannot be written, the change is refused and nothing is changed.
+
+A field marked Required or Unique can stop being translated in the same change, as long as the default language's values can take the setting. The shared column is created without the setting, filled with the default language's values, and only then made required or unique. In the Schema Builder, the change is refused before anything runs when they can't, and the dialog says so before Apply: Required needs every entry to have a default-language value, and Unique needs no two entries to end up with the same value (an entry with no default-language value takes another language's, which counts). The refusal names the field and how many entries are in the way, never a value. In code, `migrate:create` writes the setting into the third file, after the copy and before the translated column is removed. If the values can't take it, `nextly migrate` stops at that file with every value still in place.
 
 To bring those values back, make the field translated again, then restore that field:
 

@@ -81,7 +81,10 @@ import {
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
-import { builderSchemaPush } from "../helpers/builder-schema-push";
+import {
+  builderSchemaPush,
+  leavingSettingsNotApplied,
+} from "../helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -1330,9 +1333,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           },
         });
         if (!settled.success) {
-          throw new Error(
-            settled.error?.message ?? "Failed to apply schema changes"
-          );
+          throw leavingSettingsNotApplied(slug, settled);
         }
       }
 

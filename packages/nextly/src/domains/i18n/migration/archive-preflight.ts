@@ -79,10 +79,10 @@ async function writeArchiveFirst(
  *   column as they are, without the conversion and confirmation such a change goes through on its
  *   own, so one the new column cannot hold would fail part-way, be truncated, or be kept against
  *   the field's new rules.
- * - A required or unique field. Its shared column is created, and its constraints checked, before
- *   the default language's values are copied into it, so at that moment every existing row holds
- *   the same placeholder or none. A required column then has nothing valid to hold (each dialect
- *   and path fails differently), and a unique one fails its check part-way through the change.
+ * - A Required or Unique field whose default-language values cannot take the setting once they
+ *   are shared (`refusalsForConstrainedFieldsLeaving`): an entry with none, for Required; two
+ *   entries that would share one, for Unique. Each surface creates the shared column without the
+ *   setting and applies it after the copy, so values that can take it leave in one change.
  *
  * A shared field that becomes translated while its storage changes is refused here too
  * (`refusalsForFieldsJoiningTranslation`): its value would be copied as it is into a companion
@@ -96,8 +96,9 @@ async function writeArchiveFirst(
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
  *
- * @throws NextlyError `VALIDATION_ERROR` naming each reshaped or constrained field and the order
- *   that works, leaving or joining, or `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
+ * @throws NextlyError `VALIDATION_ERROR` naming each reshaped field and the order that works,
+ *   leaving or joining, and each constrained field with how many entries are in the way; or
+ *   `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
  */
 export async function archiveFieldsLeavingTranslation(args: {
   adapter: DrizzleAdapter;

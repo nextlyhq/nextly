@@ -87,6 +87,7 @@ import {
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { leavingSettingsNotApplied } from "../helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -1041,7 +1042,9 @@ const COLLECTIONS_METHODS: Record<
           "ui",
           { promptChannel: "auto" }
         );
-        if (!settled.success) throw new Error(settled.error.message);
+        if (!settled.success) {
+          throw leavingSettingsNotApplied(String(p.collectionName), settled);
+        }
       }
 
       // pipeline.apply mutates the live DB (renamed/added/dropped

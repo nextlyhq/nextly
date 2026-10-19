@@ -62,6 +62,7 @@ import {
 import { diffSnapshots } from "../pipeline/diff/diff";
 import type {
   ColumnSpec,
+  IndexSpec,
   NextlySchemaSnapshot,
   Operation,
   RenameColumnOp,
@@ -353,6 +354,12 @@ export async function generateMigration(
     return null;
   }
 
+  // 6a. A Required or Unique field leaving translation gets its main column without the setting:
+  //     created with it, every row would hold NULL or one placeholder before the `shared` file
+  //     copies the default language's values in. That file applies the settings after the copy.
+  const heldSettings = fieldLeavesPlans.map(({ held }) => held);
+  operations = withSettingsHeldBack(operations, heldSettings);
+
   // 7. Generate UP SQL per op, a foreign-key cycle's keys split out of the
   // table operations that cannot carry them (see `withCyclicForeignKeysSplit`),
   // and — on MySQL — every existing key a type change covers lifted around it,
@@ -373,7 +380,8 @@ export async function generateMigration(
   const sqlStatements = generateStatements(
     operations,
     args.dialect,
-    desiredSnapshot.tables
+    // A table rebuilt here is rebuilt to the shape this file leaves it in: the settings held back.
+    tablesWithSettingsHeldBack(desiredSnapshot.tables, heldSettings)
   );
 
   // 7a. Generate DOWN SQL by inverting the RESOLVED ops (renames preserved).
@@ -727,6 +735,8 @@ function planCompanionMigrations(
 interface FieldLeavesEntry {
   plan: FieldLeavesMigrationPlan;
   entity: I18nTransitionKind;
+  /** The settings the main migration leaves off, which the `shared` file applies. */
+  held: HeldSettings;
 }
 
 /**
@@ -763,37 +773,185 @@ function planFieldsLeavingTranslation(
       companionHistoryKey(kind, c.slug)
     );
     warnOfUnknownShapes(c.slug, leaving, previousColumns, warn);
-    assertFieldsMayLeaveTranslation(
-      c,
-      leaving,
-      previousColumns,
-      dialect,
-      desiredSnapshot.tables.find(t => t.name === c.tableName)
+    const desiredMain = desiredSnapshot.tables.find(
+      t => t.name === c.tableName
+    );
+    assertFieldsMayLeaveTranslation(c, leaving, previousColumns, dialect);
+    const held = heldSettingsOf(
+      c.tableName,
+      leaving.map(l => l.column.name),
+      desiredMain
     );
 
     entries.push({
       entity: kind,
-      plan: planFieldLeavesTranslationMigration({
-        dialect,
-        collection: c.slug,
-        kind,
-        mainTable: c.tableName,
-        companionTable: `${c.tableName}_locales`,
-        defaultLocale,
-        parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
-        columns: leaving.map(l => l.column),
-        // A rollback recreates default-language rows with the main row's publishing state, when
-        // both have one: Draft/Published on before this change, so the companion has `_status`,
-        // and still on after it, so the main table still has `status` when the rollback runs.
-        status:
-          c.status === true &&
-          previousSnapshot.tables
-            .find(t => t.name === c.tableName)
-            ?.columns.some(col => col.name === "status") === true,
-      }),
+      held,
+      plan: planFieldLeavesTranslationMigration(
+        {
+          dialect,
+          collection: c.slug,
+          kind,
+          mainTable: c.tableName,
+          companionTable: `${c.tableName}_locales`,
+          defaultLocale,
+          parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
+          columns: leaving.map(l => l.column),
+          // A rollback recreates default-language rows with the main row's publishing state, when
+          // both have one: Draft/Published on before this change, so the companion has `_status`,
+          // and still on after it, so the main table still has `status` when the rollback runs.
+          status:
+            c.status === true &&
+            previousSnapshot.tables
+              .find(t => t.name === c.tableName)
+              ?.columns.some(col => col.name === "status") === true,
+        },
+        desiredMain
+          ? settingsAfterCopy(
+              held,
+              desiredMain,
+              dialect,
+              desiredSnapshot.tables
+            )
+          : undefined
+      ),
     });
   }
   return entries;
+}
+
+/**
+ * The main-table settings fields leaving translation take on after their values are copied, as
+ * the desired main table has them: the columns it makes required, and its unique indexes over a
+ * leaving column.
+ */
+interface HeldSettings {
+  tableName: string;
+  required: ReadonlySet<string>;
+  uniqueIndexes: readonly IndexSpec[];
+}
+
+function heldSettingsOf(
+  tableName: string,
+  columns: readonly string[],
+  desiredMain: TableSpec | undefined
+): HeldSettings {
+  const leaving = new Set(columns);
+  return {
+    tableName,
+    required: new Set(
+      (desiredMain?.columns ?? [])
+        .filter(column => leaving.has(column.name) && !column.nullable)
+        .map(column => column.name)
+    ),
+    uniqueIndexes: (desiredMain?.indexes ?? []).filter(
+      index => index.unique && index.columns.some(name => leaving.has(name))
+    ),
+  };
+}
+
+/** The main migration's operations with each held setting left off. */
+function withSettingsHeldBack(
+  operations: Operation[],
+  held: readonly HeldSettings[]
+): Operation[] {
+  const byTable = new Map(held.map(h => [h.tableName, h]));
+  return operations.flatMap((op): Operation[] => {
+    const h = byTable.get(operationTableName(op));
+    if (op.type === "add_column" && h?.required.has(op.column.name)) {
+      return [{ ...op, column: { ...op.column, nullable: true } }];
+    }
+    if (
+      op.type === "add_index" &&
+      h?.uniqueIndexes.some(index => index.name === op.index.name)
+    ) {
+      return [];
+    }
+    return [op];
+  });
+}
+
+/** The desired tables as the main migration leaves them: each held setting left off. */
+function tablesWithSettingsHeldBack(
+  tables: readonly TableSpec[],
+  held: readonly HeldSettings[]
+): TableSpec[] {
+  const byTable = new Map(held.map(h => [h.tableName, h]));
+  return tables.map(table => {
+    const h = byTable.get(table.name);
+    if (!h) return table;
+    const heldIndexes = new Set(h.uniqueIndexes.map(index => index.name));
+    return {
+      ...table,
+      columns: table.columns.map(column =>
+        h.required.has(column.name) ? { ...column, nullable: true } : column
+      ),
+      ...(table.indexes
+        ? { indexes: table.indexes.filter(i => !heldIndexes.has(i.name)) }
+        : {}),
+    };
+  });
+}
+
+/**
+ * The `shared` file's statements for the held settings: UP applies them after the copy, rendered
+ * as the main migration renders a column change (a rebuild to the desired table on SQLite, which
+ * recreates its indexes too; `SET NOT NULL` on PostgreSQL; the column restated on MySQL, which has
+ * no statement for nullability alone), and DOWN drops the unique indexes first, since SQLite drops
+ * no column an index covers and the main migration's DOWN drops the column.
+ */
+function settingsAfterCopy(
+  held: HeldSettings,
+  desiredMain: TableSpec,
+  dialect: SupportedDialect,
+  desiredTables: readonly TableSpec[]
+): { up: string[]; down: string[] } {
+  const tableName = held.tableName;
+  const down = generateStatements(
+    held.uniqueIndexes.map(index => ({
+      type: "drop_index" as const,
+      tableName,
+      index,
+    })),
+    dialect,
+    [...desiredTables]
+  );
+  if (dialect === "sqlite" && held.required.size > 0) {
+    return { up: sqliteTableRebuildStatements(desiredMain), down };
+  }
+  const required = desiredMain.columns
+    .filter(column => held.required.has(column.name))
+    .map(
+      (column): Operation =>
+        dialect === "mysql"
+          ? {
+              type: "change_column_type",
+              tableName,
+              columnName: column.name,
+              fromType: column.type,
+              toType: column.type,
+              nullable: false,
+              ...(column.default !== undefined
+                ? { columnDefault: column.default }
+                : {}),
+              fromNullable: true,
+            }
+          : {
+              type: "change_column_nullable",
+              tableName,
+              columnName: column.name,
+              fromNullable: true,
+              toNullable: false,
+            }
+    );
+  const unique = held.uniqueIndexes.map(
+    (index): Operation => ({ type: "add_index", tableName, index })
+  );
+  return {
+    up: generateStatements([...required, ...unique], dialect, [
+      ...desiredTables,
+    ]),
+    down,
+  };
 }
 
 /** A field leaving translation, with the companion column it leaves. */
@@ -1048,26 +1206,6 @@ function warnOfUnknownShapes(
 }
 
 /**
- * The leaving fields a unique index on the main table covers, read from the table as this
- * migration makes it: an index declared in the config, the one every `slug` column carries, or
- * one a schema hook adds. The main file creates them while the new columns are still empty, so a
- * value they would refuse is found only when the shared file copies it in.
- */
-function uniqueIndexedFields(
-  leaving: readonly LeavingField[],
-  desiredTable: TableSpec | undefined
-): Set<string> {
-  const unique = new Set(
-    (desiredTable?.indexes ?? [])
-      .filter(index => index.unique)
-      .flatMap(index => index.columns)
-  );
-  return new Set(
-    leaving.filter(l => unique.has(l.column.name)).map(l => l.field.name)
-  );
-}
-
-/**
  * Refuses the run when a leaving field cannot leave translation in one migration
  * (`refusalsForFieldsLeavingTranslation`), naming the steps that work, before any file is written.
  */
@@ -1075,15 +1213,12 @@ function assertFieldsMayLeaveTranslation(
   c: MinimalConfigEntity,
   leaving: readonly LeavingField[],
   previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
-  dialect: SupportedDialect,
-  /** The entity's main table as this migration makes it, with every index it will carry. */
-  desiredTable: TableSpec | undefined
+  dialect: SupportedDialect
 ): void {
   const refusals = refusalsForFieldsLeavingTranslation({
     leaving: new Set(leaving.map(l => l.field.name)),
     newFields: c.fields,
     ...(previousColumns ? { previousColumns } : {}),
-    uniqueIndexed: uniqueIndexedFields(leaving, desiredTable),
     dialect,
     builtBy: "codeFirst",
     surface: "code",
