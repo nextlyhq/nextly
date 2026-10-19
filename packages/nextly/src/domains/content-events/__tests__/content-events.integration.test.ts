@@ -220,17 +220,23 @@ describe.each(getConfiguredTestDialects())(
         );
 
       expect(failed).toBeInstanceOf(Error);
-      // Only the create's own history is left: the event the failed change
-      // wrote went with it, and so did its part.
-      expect(
-        (await t.events()).map(e => (e as { kind?: string }).kind)
-      ).toEqual(["created"]);
-      expect(await t.parts()).toEqual([]);
+      // The create committed in a transaction of its own, before this one: its
+      // row is there, as it stood, and so is its event.
       const [row] = await current!.adapter.select<{ title: string }>(
         posts!.tableName,
         { where: { and: [{ column: "id", op: "=", value: entryId }] } }
       );
+      expect(row).toBeDefined();
       expect(row?.title).toBe("before");
+      // Only that creation is left in the record: the event the failed change
+      // wrote went with its change, and so did its part.
+      expect(
+        (await t.events()).map(e => ({
+          kind: (e as { kind?: string }).kind,
+          subjectId: e.subjectId,
+        }))
+      ).toEqual([{ kind: "created", subjectId: entryId }]);
+      expect(await t.parts()).toEqual([]);
     });
 
     it("filters by part and pages in the database, newest first", async () => {
