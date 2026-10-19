@@ -1,10 +1,9 @@
 /**
- * A component's many-to-many column is a uuid on PostgreSQL in the runtime table, the same type the
- * creating SQL writes.
+ * A component's many-to-many column is text on PostgreSQL, on every route that creates the table.
  *
- * The drizzle-kit creation route builds the component table from this runtime table. If it wrote
- * text while the desired schema says uuid, the next preview would propose a text-to-uuid conversion
- * on a table nobody changed.
+ * The creating SQL, the drizzle-kit runtime table and the desired schema must name the same type. A
+ * scalar uuid cannot hold a multi-value Builder relation, which is stored as an array; text stores
+ * that value without rejecting it.
  */
 import { getColumns, type Table } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
@@ -21,14 +20,25 @@ const MANY_TO_MANY = [
   },
 ] as unknown as FieldConfig[];
 
-describe("a component many-to-many in the runtime table", () => {
-  it("is a uuid column on PostgreSQL, as the creating SQL writes it", () => {
+describe("a component many-to-many column type on PostgreSQL", () => {
+  it("is text in the runtime table that drizzle-kit creates", () => {
     const table = new FieldGroupSchemaService(
       "postgresql"
     ).generateRuntimeSchema("comp_hero", MANY_TO_MANY, {
       typeColumn: STORAGE_FORMAT.columns.type,
     }) as Table;
     const tags = Object.values(getColumns(table)).find(c => c.name === "tags");
-    expect(tags?.columnType).toBe("PgUUID");
+    expect(tags?.columnType).toBe("PgText");
+  });
+
+  it("is text in the creating SQL, not uuid", () => {
+    const sql = new FieldGroupSchemaService("postgresql").generateMigrationSQL(
+      "comp_hero",
+      MANY_TO_MANY
+    );
+    const tagsLine =
+      sql.split("\n").find(line => /"?tags"?\s/.test(line)) ?? "";
+    expect(tagsLine).toMatch(/\bTEXT\b/);
+    expect(tagsLine).not.toMatch(/\bUUID\b/);
   });
 });

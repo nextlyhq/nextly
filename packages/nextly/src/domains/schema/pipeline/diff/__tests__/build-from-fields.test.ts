@@ -834,3 +834,22 @@ describe("buildDesiredTableFromComponentFields - many-to-many column type", () =
     expect(table.columns.find(c => c.name === "tags")?.type).toBe("uuid");
   });
 });
+
+describe("buildDesiredTableFromComponentFields - many-to-many column type on PostgreSQL", () => {
+  // The desired column must name the same type the creating SQL and the runtime table write.
+  it("is text, the type the component creation routes write", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      [
+        {
+          name: "tags",
+          type: "relationship",
+          options: { target: "tags", relationType: "manyToMany" },
+        },
+      ] as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    );
+    expect(table.columns.find(c => c.name === "tags")?.type).toBe("text");
+  });
+});
