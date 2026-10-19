@@ -387,11 +387,16 @@ function holdsPermission(caller: Caller, action: Action, target: Target) {
  *   alone, and a target that declares none refuses. As today, a person never
  *   publishes or unpublishes, whatever the rule says;
  * - everyone else needs the permission AND, where the target declares a rule
- *   for the action, a rule that answers exactly `true`.
+ *   for the action, a rule that answers exactly `true`. A publish or an
+ *   unpublish is judged on top of update (`shared/types/access.ts`), so where
+ *   the target declares an update rule, it must allow the change as well.
  */
 export function oneAnswer(row: Row): Verdict {
   const { caller, action, target, rule } = row;
   const says = RULE_SAYS[rule](action, caller);
+  const lifecycle = action === "publish" || action === "unpublish";
+  const updateRefuses =
+    lifecycle && RULE_SAYS[rule]("update", caller) === false;
   if (PRINCIPALS.includes(caller)) {
     if (action === "publish" || action === "unpublish") return "refuse";
     return says === true ? "allow" : "refuse";
@@ -401,6 +406,7 @@ export function oneAnswer(row: Row): Verdict {
     return "allow";
   }
   if (!holdsPermission(caller, action, target)) return "refuse";
+  if (updateRefuses) return "refuse";
   return says === null || says === true ? "allow" : "refuse";
 }
 
