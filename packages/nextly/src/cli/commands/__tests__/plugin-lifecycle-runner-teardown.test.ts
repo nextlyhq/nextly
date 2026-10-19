@@ -11,6 +11,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { getEventBus } from "../../../events/event-bus";
 import type { CommandContext } from "../../program";
 import { runPluginInstall } from "../plugin-lifecycle-runner";
 
@@ -136,6 +137,127 @@ beforeEach(() => {
 describe("the lifecycle hook's boot is torn down", () => {
   it("after the hook runs, before the adapter is released", async () => {
     await runPluginInstall("@acme/fx", {}, context);
+
+    expect(calls).toEqual([
+      "register",
+      "onInstall",
+      "destroy",
+      "clear",
+      "disconnect",
+    ]);
+  });
+
+  it("only once the handlers of what the hook emitted have finished", async () => {
+    // Emitting is fire-and-forget. Another plugin's handler for an event the
+    // hook emitted (an uninstall reporting each account deleted, say) is
+    // still working when the hook returns, and a teardown then would stop
+    // its cleanup part way.
+    const bus = getEventBus();
+    const handler = async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      calls.push("handler finished");
+    };
+    bus.on("account.deleted", handler);
+    onInstall.mockImplementation(async () => {
+      calls.push("onInstall");
+      bus.emit("account.deleted", { id: "acc_1" });
+    });
+
+    try {
+      await runPluginInstall("@acme/fx", {}, context);
+    } finally {
+      bus.off("account.deleted", handler);
+    }
+
+    expect(calls).toEqual([
+      "register",
+      "onInstall",
+      "handler finished",
+      "destroy",
+      "clear",
+      "disconnect",
+    ]);
+  });
+
+  it("drains the follow-up events a handler of the hook's emits", async () => {
+    // A handler that emits a second event before it finishes sets off more
+    // of the hook's own work, which a teardown must not cut off either.
+    const bus = getEventBus();
+    const first = async () => {
+      await new Promise(resolve => setTimeout(resolve, 2));
+      bus.emit("account.erased", {});
+    };
+    const second = async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      calls.push("follow-up finished");
+    };
+    bus.on("account.deleted", first);
+    bus.on("account.erased", second);
+    onInstall.mockImplementation(async () => {
+      calls.push("onInstall");
+      bus.emit("account.deleted", { id: "acc_1" });
+    });
+
+    try {
+      await runPluginInstall("@acme/fx", {}, context);
+    } finally {
+      bus.off("account.deleted", first);
+      bus.off("account.erased", second);
+    }
+
+    expect(calls).toEqual([
+      "register",
+      "onInstall",
+      "follow-up finished",
+      "destroy",
+      "clear",
+      "disconnect",
+    ]);
+  });
+
+  it("is not held open by a producer a plugin started outside its hook", async () => {
+    // A producer its plugin starts in init() and stops in destroy() never
+    // lets the bus empty; started outside the hook, it is not waited for, and
+    // the teardown that stops it runs.
+    const bus = getEventBus();
+    let producing = true;
+    const handler = async () => {
+      await new Promise(resolve => setTimeout(resolve, 1));
+      if (producing) bus.emit("tick", {});
+    };
+    bus.on("tick", handler);
+    bus.emit("tick", {});
+
+    try {
+      await runPluginInstall("@acme/fx", {}, context);
+    } finally {
+      producing = false;
+      bus.off("tick", handler);
+      await bus.settle();
+    }
+
+    expect(calls).toEqual([
+      "register",
+      "onInstall",
+      "destroy",
+      "clear",
+      "disconnect",
+    ]);
+  }, 5_000);
+
+  it("and fails the hook when what it set off was still running at the time limit", async () => {
+    // The wait is bounded, and a command that went on to drop the plugin's
+    // tables would cut that work off; the runtime is still torn down.
+    const settleRunning = vi
+      .spyOn(getEventBus(), "settleCaused")
+      .mockResolvedValue(false);
+    try {
+      await expect(runPluginInstall("@acme/fx", {}, context)).rejects.toThrow(
+        /still running/
+      );
+    } finally {
+      settleRunning.mockRestore();
+    }
 
     expect(calls).toEqual([
       "register",

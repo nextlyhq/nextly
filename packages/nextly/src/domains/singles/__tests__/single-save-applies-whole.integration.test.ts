@@ -15,7 +15,10 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { uniqueIndexNameForColumn } from "../../schema/services/index-name";
+import {
+  indexNameForColumn,
+  uniqueIndexNameForColumn,
+} from "../../schema/services/index-name";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { SingleEntryService } from "../services/single-entry-service";
 import type { SingleMetadataService } from "../services/single-metadata-service";
@@ -278,6 +281,53 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
         `SELECT ${q("headline")} AS headline FROM ${q("single_hero")}`
       );
       expect(row?.headline).toBe("Hello");
+    }
+  );
+
+  // MySQL only, as above. The index this save adds is refused after the rename lands and before
+  // the unique index is dropped; the retry has to find that index on the renamed column, where it
+  // keeps the name it was created under.
+  it.skipIf(dialect !== "mysql")(
+    "turns Unique off on the retry of a save whose rename landed before a later statement was refused",
+    async () => {
+      await heroWith(
+        [
+          { name: "code", type: "number", unique: true },
+          { name: "views", type: "number" },
+        ],
+        { code: 5, views: 7 }
+      );
+      const blocking = indexNameForColumn("single_hero", "views");
+      await query(
+        `CREATE INDEX ${q(blocking)} ON ${q("single_hero")} (${q("id")})`
+      );
+      // `code` renamed to `sku` with Unique off, and `views` indexed: refused at the index on the
+      // name another index holds.
+      const fields = [
+        { name: "sku", type: "number" },
+        { name: "views", type: "number", index: true },
+      ];
+
+      const refused = await refusal(save(fields));
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(await columnsOf("single_hero")).toContain("sku");
+
+      await query(`DROP INDEX ${q(blocking)} ON ${q("single_hero")}`);
+      await save(fields);
+
+      expect(
+        (await registeredFields()).map(f => [f.name, f.unique === true])
+      ).toEqual([
+        ["sku", false],
+        ["views", false],
+      ]);
+      // The registry says `sku` is not unique, so the database takes a repeated value.
+      const indexes = await query<{ name: string }>(
+        `SELECT INDEX_NAME AS name FROM information_schema.STATISTICS ` +
+          `WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'single_hero' AND NON_UNIQUE = 0 ` +
+          `AND COLUMN_NAME = 'sku'`
+      );
+      expect(indexes).toEqual([]);
     }
   );
 

@@ -715,6 +715,32 @@ describe("plugins uninstall", () => {
     expect(order).toEqual(["onUninstall", "down", "down"]);
   });
 
+  it("runs no DOWN when onUninstall fails", async () => {
+    // The hook fails when what it set off had not finished: dropping the
+    // plugin's tables then would cut that work off part way.
+    const runDown = vi.fn(async () => 1);
+    const states: string[] = [];
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: true },
+        deps({
+          runLifecycleHook: vi.fn(async () => {
+            throw new Error("hook failed");
+          }),
+          runDown,
+          recordLifecycle: vi.fn(async (_plugin, record) => {
+            states.push(record.state);
+          }),
+        })
+      )
+    ).rejects.toThrow("hook failed");
+    expect(runDown).not.toHaveBeenCalled();
+    // Left as it stopped: `uninstalling`, which running the command again
+    // finishes.
+    expect(states).toEqual(["uninstalling"]);
+  });
+
   it("tells the hook which kind of uninstall this is", async () => {
     // `keepData` decides what onUninstall can still do: with the tables kept,
     // an external deregistration may be wanted; without, this is the last

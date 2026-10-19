@@ -72,11 +72,16 @@ export function copyBundledSkills(
   }
 }
 
-/** The frontmatter field a skill names the `nextly` release it was checked against in. */
+/**
+ * The frontmatter field a skill names the `nextly` release it ships with in.
+ * The release's version step stamps it (scripts/release/skills-version.mjs), so
+ * the skills a CLI bundles always name that CLI's own release; a skill's
+ * "Checked against" line in its body records its last hand check.
+ */
 export const SKILL_VERSION_FIELD = "nextly-version";
 
 /**
- * The `nextly` release one SKILL.md says it was checked against: its
+ * The `nextly` release one SKILL.md says it ships with: its
  * frontmatter's `metadata.nextly-version`, when that is one exact version.
  * Null when it is missing, not exact, or the frontmatter cannot be read.
  */
@@ -100,7 +105,7 @@ export function skillVersionOf(text: string): string | null {
 }
 
 /**
- * The one release a set of skills was checked against, from each SKILL.md's
+ * The one release a set of skills ships with, from each SKILL.md's
  * own declaration. It refuses a skill that declares none and skills that
  * disagree: the release decides which projects get them, so a guess would
  * hand some project instructions for APIs it does not have.

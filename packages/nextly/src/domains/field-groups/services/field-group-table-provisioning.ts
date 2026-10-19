@@ -16,7 +16,10 @@ import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
-import { localizedColumnsOnMain } from "../../i18n/runtime/companion-io";
+import {
+  localizedColumnsOnMain,
+  translatedColumnsOnCompanion,
+} from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
 /**
@@ -147,6 +150,11 @@ export async function reconcileComponentCompanion(args: {
   /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
   wasLocalized: boolean;
   adapter: DrizzleAdapter;
+  /**
+   * Fields becoming translated whose companion columns the caller already added, with their
+   * values, before the main table changed (`moveValuesOfFieldsJoiningTranslation`).
+   */
+  joinedBefore?: readonly string[];
   // Whether any DDL actually ran. The caller cannot derive this from the request: a field-set
   // change on a group that was and remains non-localized reaches here and moves nothing, and a
   // caller that inferred "the tables changed" from the request shape would report a physical
@@ -160,6 +168,7 @@ export async function reconcileComponentCompanion(args: {
   const dialect = adapter.dialect;
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
 
+  const companionExists = await adapter.tableExists(`${tableName}_locales`);
   const plan = buildCompanionTransitionStatements({
     // The companion mirrors the main table, and a field group's builder reads a width from a different key.
     builtBy: "fieldGroup" as const,
@@ -176,7 +185,7 @@ export async function reconcileComponentCompanion(args: {
     isLocalized: localized,
     oldFields,
     newFields,
-    companionExists: await adapter.tableExists(`${tableName}_locales`),
+    companionExists,
     // Which translatable columns the main table still carries. A disable must not re-add one that
     // is already there, and must still restore it: presence says the column exists, never that its
     // value is current, because every localized write went to the companion alone.
@@ -185,6 +194,16 @@ export async function reconcileComponentCompanion(args: {
       tableName,
       oldFields
     ).then(cols => cols.map(c => c.name)),
+    joinedBefore: args.joinedBefore,
+    // Taken as they are: an earlier apply that moved a value and stopped before the registry
+    // recorded it left its companion column in place.
+    presentOnCompanion: companionExists
+      ? await translatedColumnsOnCompanion(adapter, {
+          tableName,
+          fields: newFields,
+          builtBy: "fieldGroup",
+        })
+      : undefined,
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first

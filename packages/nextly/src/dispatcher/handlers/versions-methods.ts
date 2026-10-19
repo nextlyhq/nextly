@@ -30,7 +30,7 @@ import {
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { canReadEntity } from "../../auth/entity-read-access";
-import type { RequestActor } from "../../auth/request-actor";
+import { actorForWrite, type RequestActor } from "../../auth/request-actor";
 import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
 import { container } from "../../di/container";
@@ -58,7 +58,10 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { stripPasswordFieldValues } from "../../shared/lib/password-fields";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
-import { readAuthenticatedScope } from "../helpers/authenticated-actor";
+import {
+  readAuthenticatedActor,
+  readAuthenticatedScope,
+} from "../helpers/authenticated-actor";
 import type { Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -650,9 +653,13 @@ export async function setVersionLabelForDocument(
 
   // Nothing was asked for, so nothing is written. The version is still read
   // back, so the response shape is the same either way and a caller cannot
-  // tell a no-op from a rename by its status.
+  // tell a no-op from a rename by its status. A name given is recorded in the
+  // document's history in the same transaction; clearing one records nothing.
   const row = provided
-    ? await versions.setLabel(ref, args.versionNo, label)
+    ? await versions.setLabel(ref, args.versionNo, label, {
+        actor: actorForWrite(readAuthenticatedActor(args.params), args.user),
+        personName: args.user.name ?? null,
+      })
     : await versions.get(ref, args.versionNo);
 
   // The snapshot is not part of a label response: the caller asked to rename a
@@ -811,6 +818,7 @@ export async function discardWorkingDraftForDocument(
     user: args.user,
     locale: args.locale ?? null,
     authenticatedScope,
+    actor: readAuthenticatedActor(args.params),
   });
 }
 

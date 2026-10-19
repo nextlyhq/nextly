@@ -18,6 +18,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
 import {
@@ -25,6 +26,7 @@ import {
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
+import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
@@ -89,7 +91,9 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
+import { recordWriteEvent } from "../../content-events/write-event";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -1060,9 +1064,7 @@ export class SingleQueryService extends BaseService {
       // starts a history (the mutation path records its own first version).
       if (!doc) {
         this.logger.info("Auto-creating Single document", { slug });
-        doc = await this.createDefaultDocument(singleMeta, {
-          captureInitialVersion: true,
-        });
+        doc = await this.createDefaultDocumentOnce(singleMeta);
       }
 
       // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
@@ -1851,6 +1853,38 @@ export class SingleQueryService extends BaseService {
     );
   }
 
+  /**
+   * Create a Single's default document on its first read, or take the one
+   * another process created first.
+   *
+   * Several processes reading a Single for the first time at once, such as
+   * `next build`'s workers on a fresh database, each find no row and each try
+   * to create it. The table holds one row by its unique slug, so all but one
+   * insert fail; the row that won is the document every reader should get, so
+   * a loser reads it back rather than failing the read. Any other failure, or
+   * a violation that leaves no row behind, is still the read's failure.
+   */
+  private async createDefaultDocumentOnce(
+    singleMeta: DynamicSingleRecord
+  ): Promise<SingleDocument> {
+    try {
+      return await this.createDefaultDocument(singleMeta, {
+        captureInitialVersion: true,
+      });
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      const existing = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+      if (!existing) throw error;
+      this.logger.debug("Default Single document was created concurrently", {
+        slug: singleMeta.slug,
+      });
+      return existing;
+    }
+  }
+
   async createDefaultDocument(
     singleMeta: DynamicSingleRecord,
     options?: { captureInitialVersion?: boolean; draft?: DefaultDocumentDraft }
@@ -1896,22 +1930,10 @@ export class SingleQueryService extends BaseService {
       ? (this.localization?.defaultLocale ?? null)
       : null;
 
-    if (!shouldCapture && !needsCompanionSeed) {
-      const inserted = await this.adapter.insert<SingleDocument>(
-        singleMeta.tableName,
-        snakeCaseDefaults,
-        { returning: "*" }
-      );
-      this.logger.debug("Created default Single document", {
-        slug: singleMeta.slug,
-        id,
-      });
-      return inserted;
-    }
-
-    // Non-versioned but localized: insert the main row and seed the companion in
-    // one transaction, so a failed companion seed rolls the insert back rather
-    // than leaving a main row without its localized defaults.
+    // Non-versioned: insert the main row, seed the companion when the Single
+    // is localized, and record its creation, in one transaction, so a failed
+    // seed or event rolls the insert back rather than leaving a main row
+    // without its localized defaults or its history.
     if (!shouldCapture) {
       const inserted = await this.adapter.transaction(async tx => {
         const row = await tx.insert<SingleDocument>(
@@ -1919,14 +1941,17 @@ export class SingleQueryService extends BaseService {
           snakeCaseDefaults,
           { returning: "*" }
         );
-        await this.seedLocalizedDefaultsCompanion(
-          tx,
-          singleMeta,
-          id,
-          localizedDefaults,
-          status,
-          companionExists
-        );
+        if (needsCompanionSeed) {
+          await this.seedLocalizedDefaultsCompanion(
+            tx,
+            singleMeta,
+            id,
+            localizedDefaults,
+            status,
+            companionExists
+          );
+        }
+        await this.recordCreated(tx, singleMeta.slug, row, null);
         return row;
       });
       this.logger.debug("Created default Single document", {
@@ -1969,7 +1994,7 @@ export class SingleQueryService extends BaseService {
           }
         }
         applyReadShape(parentRow, singleMeta.fields, singleMeta.tableName);
-        await captureInTx(tx, this.versionCapture, {
+        const { versionNo } = await captureInTx(tx, this.versionCapture, {
           ref: {
             scopeKind: "single",
             scopeSlug: singleMeta.slug,
@@ -1994,6 +2019,7 @@ export class SingleQueryService extends BaseService {
           status,
           companionExists
         );
+        await this.recordCreated(tx, singleMeta.slug, row, versionNo);
         return row;
       })
     );
@@ -2003,6 +2029,29 @@ export class SingleQueryService extends BaseService {
       id,
     });
     return inserted;
+  }
+
+  /**
+   * The Single's first history event, for a document the system materialized
+   * from its defaults on first read: no person made it.
+   */
+  private async recordCreated(
+    tx: TransactionContext,
+    slug: string,
+    row: SingleDocument,
+    versionNo: number | null
+  ): Promise<void> {
+    await recordWriteEvent(
+      tx,
+      { adapter: this.adapter },
+      {
+        subject: { kind: "single", slug, id: (row as { id: string }).id },
+        kind: "created",
+        actor: SYSTEM_ACTOR,
+        toState: (row as { status?: string }).status ?? null,
+        versionNo,
+      }
+    );
   }
 
   /**

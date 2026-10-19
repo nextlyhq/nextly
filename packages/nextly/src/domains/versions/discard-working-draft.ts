@@ -25,6 +25,7 @@
  */
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { RequestActor } from "../../auth/request-actor";
 import { getService } from "../../di";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import type { VersionScopeKind } from "../../schemas/versions/types";
@@ -70,6 +71,8 @@ export interface DiscardWorkingDraftArgs {
    * key is judged on its OWN read grant rather than the key owner's roles.
    */
   authenticatedScope?: AuthenticatedScope;
+  /** Who discarded it, for the document's history. */
+  actor?: RequestActor;
 }
 
 /**
@@ -143,12 +146,16 @@ export async function discardWorkingDraft(
     await getService("singleEntryService").discardWorkingDraft({
       slug: args.slug,
       locale: args.locale ?? null,
+      actor: args.actor,
+      user: args.user,
     });
   } else {
     await getService("collectionsHandler").discardWorkingDraft({
       collectionName: args.slug,
       entryId: args.entryId,
       locale: args.locale ?? null,
+      actor: args.actor,
+      user: args.user,
     });
   }
 
