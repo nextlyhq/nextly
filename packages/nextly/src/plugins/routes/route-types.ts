@@ -1,4 +1,5 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { AuthLimitAnswer } from "../../auth/pipeline/types";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import type { AuthUser } from "../../types/auth";
 import type { PermissionSlug } from "../contributions";
@@ -157,6 +158,16 @@ export type Middleware = (
  */
 export type PluginRouteMount = "plugin" | "root";
 
+/**
+ * @experimental A plugin auth route's `limitKey`, answering as an
+ * `AuthStrategy`'s does: `{ handles: true, key }` for the identity a request
+ * names, `{ handles: false }` or a `null` key for none.
+ */
+export type PluginRouteLimitKey = (input: {
+  request: Request;
+  body: Record<string, unknown>;
+}) => AuthLimitAnswer | Promise<AuthLimitAnswer>;
+
 /** @experimental A plugin route's own rate-limit allowance. */
 export interface PluginRouteRateLimit {
   /** Requests one client may make in a window, a positive integer. */
@@ -239,10 +250,34 @@ export interface PluginRoute {
    * counted by their /64.
    *
    * The client address is read only when `security.trustProxy` is on. Off,
-   * every client shares one bucket, and boot warns about each rate-limited
-   * route.
+   * `"general"` and `{ max, windowMs }` routes share one bucket among every
+   * client, and boot warns about each. An `"auth"` route is counted as core's
+   * sign-in is instead: per identity its `limitKey` names, under a ceiling
+   * of 100 times the budget shared by all of this plugin's auth routes, so
+   * one visitor cannot close the route to everyone. Without a `limitKey` it
+   * is bounded by that ceiling alone, and boot names it.
    */
   rateLimit?: "general" | "auth" | PluginRouteRateLimit;
+  /**
+   * @experimental Name the identity a request to a `rateLimit: "auth"` route
+   * targets, for the clients whose address cannot be read.
+   *
+   * Answers as an `AuthStrategy`'s `limitKey` does, given the request's
+   * headers and its JSON body (read up to 32 KB; larger or unparseable bodies
+   * arrive empty). The key comes from the request alone, never from whether an account matches it, and is normalised as
+   * the handler's own lookup normalises it: a known and an unknown identity
+   * are then limited alike. For a credential that names no identity before
+   * it is looked up, such as an OAuth code or a magic-link token, name the
+   * credential itself. The key is stored only as an HMAC under the app's
+   * secret, scoped to this plugin.
+   *
+   * Every identity has the auth budget of its own, spent across all of this
+   * plugin's auth routes. `{ handles: false }`, a `null` or empty key, a
+   * throw, a rejection or anything that is not an answer counts the request
+   * against one budget shared by this plugin's requests that name no
+   * identity. Ignored on other routes, and where the address resolves.
+   */
+  limitKey?: PluginRouteLimitKey;
   /**
    * @experimental Declare that the handler reads the request body as the
    * exact bytes sent.
