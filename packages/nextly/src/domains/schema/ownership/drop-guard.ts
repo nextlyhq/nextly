@@ -2017,6 +2017,9 @@ class StatementWalk {
    */
   private namesIndexAt(at: number): boolean {
     for (let p = at + 1; p <= at + 4; p += 1) {
+      // The index prefix ends at the first parenthesis, where a CHECK's
+      // expression or a column list begins; words past it are not index syntax.
+      if (this.punct(p) === "(") return false;
       const word = this.word(p);
       if (
         (word === "INDEX" || word === "KEY") &&

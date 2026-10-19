@@ -752,3 +752,18 @@ describe("the review of 8fced47fc: named primary keys, routine bodies and MariaD
     ).toMatchObject({ element: "pk_idx", belongsTo: "plugin:fx" });
   });
 });
+
+describe("the review of a3bfa3d64: a check expression is not read as index syntax", () => {
+  it("credits a check added with a column named key, so its later validation passes", () => {
+    expect(() =>
+      guard(
+        [
+          "ALTER TABLE fx__notes ADD CONSTRAINT app_chk CHECK (key IS NOT NULL) NOT VALID",
+          "ALTER TABLE fx__notes VALIDATE CONSTRAINT app_chk",
+        ],
+        "app",
+        "postgresql"
+      )
+    ).not.toThrow();
+  });
+});
