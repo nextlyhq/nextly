@@ -16,7 +16,7 @@ import type { FieldConfig } from "nextly/config";
 
 import type { SingleDocument } from "@admin/services/singleApi";
 
-import { useSingleDocument } from "./useSingles";
+import { singleDocumentKeys, useSingleDocument } from "./useSingles";
 import {
   useStoredSingleDocument,
   useWithStoredReferences,
@@ -89,6 +89,7 @@ export function useSingleEditorDocument({
     populated,
     stored,
     scope: JSON.stringify([slug, locale]),
+    documentKey: singleDocumentKeys.detail(slug ?? ""),
   });
 
   const isNonDefaultLocale =

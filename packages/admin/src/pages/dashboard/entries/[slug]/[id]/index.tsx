@@ -56,6 +56,7 @@ import {
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
+import { entryKeys } from "@admin/services/entryApi";
 import { getCollectionFields } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -312,6 +313,7 @@ export default function EditEntryPage({
     populated: populatedEntry,
     stored: storedEntry,
     scope: JSON.stringify([slug, id, locale]),
+    documentKey: entryKeys.detail(slug ?? "", id ?? ""),
   });
 
   // While translating a non-default language, also load the default-language entry so

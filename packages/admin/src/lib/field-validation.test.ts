@@ -623,3 +623,28 @@ describe("generateClientSchema — email applies length bounds but not pattern",
     expect(result.success).toBe(true);
   });
 });
+
+describe("generateClientSchema — an upload naming several collections", () => {
+  const field = (relationTo: string | string[]) =>
+    ({
+      type: "upload",
+      name: "gallery",
+      relationTo,
+      hasMany: true,
+    }) as unknown as FieldConfig;
+  const pair = {
+    relationTo: "files",
+    value: "f1",
+    __restrictedReference: true,
+  };
+
+  it("accepts the { relationTo, value } pair it stores, so a form holding one can save", () => {
+    const schema = generateClientSchema([field(["media", "files"])]);
+    expect(schema.safeParse({ gallery: [pair, "m1"] }).success).toBe(true);
+  });
+
+  it("still refuses a pair on a field naming one collection", () => {
+    const schema = generateClientSchema([field("media")]);
+    expect(schema.safeParse({ gallery: [pair] }).success).toBe(false);
+  });
+});

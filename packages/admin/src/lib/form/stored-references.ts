@@ -184,35 +184,57 @@ function mergeFields(fields: FieldConfig[], populated: Doc, stored: Doc): Doc {
   return merged;
 }
 
-/** An object literal's shape: a value the form built, not a Date or a File. */
-function isPlainObject(value: unknown): value is Doc {
-  if (!isRecord(value)) return false;
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+/** A placeholder as the reference it stands for: the id, or the pair. */
+function referenceOf(value: unknown): unknown {
+  if (!isRecord(value) || !isRestrictedReference(value)) return value;
+  return typeof value.relationTo === "string"
+    ? { relationTo: value.relationTo, value: value.value }
+    : value.id;
+}
+
+/** One field's value to write, by what kind of field it is. */
+function writableField(field: FieldConfig, value: unknown): unknown {
+  switch (field.type) {
+    case "relationship":
+    case "upload":
+      return Array.isArray(value) ? value.map(referenceOf) : referenceOf(value);
+    case "group":
+      return isRecord(value)
+        ? withoutPlaceholders(nestedFields(field), value)
+        : value;
+    case "repeater":
+      return Array.isArray(value)
+        ? value.map((row: unknown) =>
+            isRecord(row) ? withoutPlaceholders(nestedFields(field), row) : row
+          )
+        : value;
+    default:
+      return value;
+  }
 }
 
 /**
- * A value to write, with every placeholder turned back into the reference it
- * stands for: the bare id, or the `{ relationTo, value }` pair. The marker is
- * the admin's own and never reaches the server, at any depth: the server
- * reduces a related object to its id at the top level, but not an upload
- * inside a group or a repeater.
+ * Form values to save, with every placeholder turned back into the reference
+ * it stands for: the bare id, or the `{ relationTo, value }` pair.
+ *
+ * The marker is the admin's own and never reaches the server. Only
+ * relationship and upload values are read, at the top level and inside groups
+ * and repeaters, which is everywhere {@link withStoredReferences} puts one: a
+ * JSON value that happens to carry the marker key is the author's content and
+ * is sent as it is. The server reduces a related object to its id at the top
+ * level, but not an upload inside a group or a repeater.
  */
-export function withoutPlaceholders<T>(value: T): T {
-  if (Array.isArray(value)) {
-    return value.map(item => withoutPlaceholders(item)) as T;
+export function withoutPlaceholders<T extends Doc>(
+  fields: FieldConfig[],
+  data: T
+): T {
+  const writable: Doc = { ...data };
+  for (const field of fields) {
+    const name = (field as { name?: unknown }).name;
+    if (typeof name !== "string" || !(name in data)) continue;
+    writable[name] = writableField(field, data[name]);
   }
-  if (!isPlainObject(value)) return value;
-  if (isRestrictedReference(value)) {
-    return (
-      typeof value.relationTo === "string"
-        ? { relationTo: value.relationTo, value: value.value }
-        : value.id
-    ) as T;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, withoutPlaceholders(item)])
-  ) as T;
+  return writable as T;
 }
 
 /**

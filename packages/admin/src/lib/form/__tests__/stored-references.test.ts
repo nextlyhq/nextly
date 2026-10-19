@@ -11,6 +11,7 @@ import {
   RESTRICTED_REFERENCE,
   isRestrictedReference,
   withStoredReferences,
+  withoutPlaceholders,
 } from "../stored-references";
 
 /** The field shapes are structural; the schema types are wider than this needs. */
@@ -226,5 +227,69 @@ describe("isRestrictedReference", () => {
     expect(isRestrictedReference(pageA)).toBe(false);
     expect(isRestrictedReference("a")).toBe(false);
     expect(isRestrictedReference(null)).toBe(false);
+  });
+});
+
+describe("withoutPlaceholders", () => {
+  const fields = [
+    f({
+      name: "pages",
+      type: "relationship",
+      relationTo: "pages",
+      hasMany: true,
+    }),
+    f({ name: "image", type: "upload", relationTo: "media" }),
+    f({
+      name: "related",
+      type: "relationship",
+      relationTo: ["pages", "notes"],
+      hasMany: true,
+    }),
+    f({
+      name: "box",
+      type: "group",
+      fields: [f({ name: "logo", type: "upload", relationTo: "media" })],
+    }),
+    f({
+      name: "lines",
+      type: "repeater",
+      fields: [
+        f({
+          name: "gallery",
+          type: "upload",
+          relationTo: "media",
+          hasMany: true,
+        }),
+      ],
+    }),
+    f({ name: "settings", type: "json" }),
+  ];
+
+  it("writes each placeholder as its reference, at the top level and nested", () => {
+    expect(
+      withoutPlaceholders(fields, {
+        title: "T",
+        pages: [pageA, placeholder("hidden")],
+        image: placeholder("m1"),
+        related: [pairPlaceholder("notes", "n1")],
+        box: { logo: placeholder("m2") },
+        lines: [{ gallery: ["m3", placeholder("m4")] }],
+      })
+    ).toEqual({
+      title: "T",
+      pages: [pageA, "hidden"],
+      image: "m1",
+      related: [{ relationTo: "notes", value: "n1" }],
+      box: { logo: "m2" },
+      lines: [{ gallery: ["m3", "m4"] }],
+    });
+  });
+
+  it("leaves content outside reference fields as the author wrote it", () => {
+    // A JSON value may carry any key, the marker's included; it is content.
+    const settings = { id: "s", [RESTRICTED_REFERENCE]: true, depth: 2 };
+    expect(withoutPlaceholders(fields, { settings }).settings).toEqual(
+      settings
+    );
   });
 });

@@ -10,11 +10,17 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { mutating } = vi.hoisted(() => ({ mutating: { count: 0 } }));
+/** The keys of the saves in flight, matched by prefix as React Query does. */
+const { mutating } = vi.hoisted(() => ({
+  mutating: { keys: [] as unknown[][] },
+}));
 
 vi.mock("@tanstack/react-query", async importOriginal => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useIsMutating: () => mutating.count,
+  useIsMutating: ({ mutationKey }: { mutationKey: unknown[] }) =>
+    mutating.keys.filter(key =>
+      mutationKey.every((part, index) => key[index] === part)
+    ).length,
 }));
 
 import { RESTRICTED_REFERENCE } from "@admin/lib/form/stored-references";
@@ -22,6 +28,9 @@ import { RESTRICTED_REFERENCE } from "@admin/lib/form/stored-references";
 import { useWithStoredReferences } from "../useStoredReferences";
 
 type Doc = Record<string, unknown>;
+
+/** The document's own query key, as the page passes it. */
+const DOCUMENT = ["entries", "detail", "posts", "e"];
 
 const FIELDS = [
   { name: "pages", type: "relationship", relationTo: "pages", hasMany: true },
@@ -47,7 +56,7 @@ const storedV1 = { id: "e", updatedAt: "v1", pages: ["a", "hidden"] };
 
 describe("useWithStoredReferences", () => {
   beforeEach(() => {
-    mutating.count = 0;
+    mutating.keys = [];
   });
 
   it("is loading until both reads have arrived, then hands over the merge", () => {
@@ -55,6 +64,7 @@ describe("useWithStoredReferences", () => {
       (props: { stored: Doc | undefined }) =>
         useWithStoredReferences({
           fields: FIELDS,
+          documentKey: DOCUMENT,
           populated: read(populatedV1),
           stored: read(props.stored),
           scope: "e",
@@ -83,6 +93,7 @@ describe("useWithStoredReferences", () => {
       (props: { populated: never }) =>
         useWithStoredReferences({
           fields: FIELDS,
+          documentKey: DOCUMENT,
           populated: props.populated,
           stored: read(storedV1),
           scope: "e",
@@ -91,9 +102,60 @@ describe("useWithStoredReferences", () => {
     );
     const first = result.current.document;
 
-    mutating.count = 1;
+    mutating.keys = [[...DOCUMENT, "update"]];
     rerender({ populated: read(optimistic) });
     expect(result.current.document).toBe(first);
+  });
+
+  it("is not held back by a save of another document", () => {
+    mutating.keys = [["entries", "detail", "posts", "other", "update"]];
+    const { result } = renderHook(() =>
+      useWithStoredReferences({
+        fields: FIELDS,
+        documentKey: DOCUMENT,
+        populated: read(populatedV1),
+        stored: read(storedV1),
+        scope: "e",
+      })
+    );
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.document).toBeDefined();
+  });
+
+  it("counts retries afresh in another language", () => {
+    const refetch = vi.fn();
+    const apart = (scope: string) => ({
+      scope,
+      populated: read(
+        { ...populatedV1, updatedAt: "v2" },
+        { refetch }
+      ) as never,
+      stored: read(storedV1, { refetch }) as never,
+    });
+    const settling = (scope: string) => ({
+      scope,
+      populated: read(undefined, { isFetching: true }) as never,
+      stored: read(undefined, { isFetching: true }) as never,
+    });
+    const { result, rerender } = renderHook(
+      (props: { scope: string; populated: never; stored: never }) =>
+        useWithStoredReferences({
+          fields: FIELDS,
+          documentKey: DOCUMENT,
+          ...props,
+        }),
+      { initialProps: apart("e:en") }
+    );
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      rerender(settling("e:en"));
+      rerender(apart("e:en"));
+    }
+    expect(result.current.error?.message).toMatch(/kept changing/);
+
+    refetch.mockClear();
+    rerender(apart("e:es"));
+    expect(result.current.error).toBeNull();
+    expect(refetch).toHaveBeenCalled();
   });
 
   it("keeps the last merge while either read is refetching, then merges the fresh pair", () => {
@@ -101,7 +163,12 @@ describe("useWithStoredReferences", () => {
     const storedV2 = { id: "e", updatedAt: "v2", pages: ["a"] };
     const { result, rerender } = renderHook(
       (props: { populated: never; stored: never }) =>
-        useWithStoredReferences({ fields: FIELDS, ...props, scope: "e" }),
+        useWithStoredReferences({
+          fields: FIELDS,
+          documentKey: DOCUMENT,
+          ...props,
+          scope: "e",
+        }),
       {
         initialProps: {
           populated: read(populatedV1),
@@ -134,6 +201,7 @@ describe("useWithStoredReferences", () => {
     const { result } = renderHook(() =>
       useWithStoredReferences({
         fields: FIELDS,
+        documentKey: DOCUMENT,
         populated: read(
           { ...populatedV1, updatedAt: "v2" },
           { refetch: refetchPopulated }
@@ -153,7 +221,12 @@ describe("useWithStoredReferences", () => {
     // written back over the newer document, so the editor is told instead.
     const { result, rerender } = renderHook(
       (props: { populated: never; stored: never }) =>
-        useWithStoredReferences({ fields: FIELDS, ...props, scope: "e" }),
+        useWithStoredReferences({
+          fields: FIELDS,
+          documentKey: DOCUMENT,
+          ...props,
+          scope: "e",
+        }),
       {
         initialProps: {
           populated: read(populatedV1),
@@ -180,7 +253,11 @@ describe("useWithStoredReferences", () => {
   it("does not hand over a merge made for another language", () => {
     const { result, rerender } = renderHook(
       (props: { scope: string; populated: never; stored: never }) =>
-        useWithStoredReferences({ fields: FIELDS, ...props }),
+        useWithStoredReferences({
+          fields: FIELDS,
+          documentKey: DOCUMENT,
+          ...props,
+        }),
       {
         initialProps: {
           scope: "e:en",

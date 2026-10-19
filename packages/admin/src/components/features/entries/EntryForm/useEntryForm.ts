@@ -24,6 +24,7 @@ import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
+import { withoutPlaceholders } from "@admin/lib/form/stored-references";
 import type { EntryValue } from "@admin/types/collection";
 
 // ============================================================================
@@ -525,12 +526,17 @@ export function useEntryForm({
           // extracted to mapIntentToPayload above so the contract is
           // unit-testable without renderHook plumbing.
           const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
+          // What is sent: a link the editor cannot see is held in the form as
+          // a placeholder and written as the reference it stands for. The
+          // form keeps the placeholder, so it is reset to `data`.
+          const payload = withoutPlaceholders(fields, data) as Record<
+            string,
+            EntryValue
+          >;
 
           try {
             if (mode === "create") {
-              const result = await createMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
+              const result = await createMutation.mutateAsync(payload);
               // Reset form to mark as clean after successful create
               form.reset(data);
               // The entry, not the envelope: the mutation now resolves to the
@@ -542,9 +548,7 @@ export function useEntryForm({
                 throw new Error("Entry ID is required for update");
               }
               // entryId is passed to useUpdateEntry hook, so we just pass data here
-              const result = await updateMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
+              const result = await updateMutation.mutateAsync(payload);
               // Reset form to mark as clean after successful update
               form.reset(data);
               onSuccess?.(result.item);
@@ -571,6 +575,7 @@ export function useEntryForm({
       onSuccess,
       onError,
       blankPasswordFields,
+      fields,
     ]
   );
 

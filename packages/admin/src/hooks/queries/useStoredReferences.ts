@@ -190,15 +190,29 @@ export function useWithStoredReferences<T extends Doc>({
   populated,
   stored,
   scope,
+  documentKey,
 }: {
   fields: FieldConfig[] | undefined;
   populated: UseQueryResult<T, Error>;
   stored: UseQueryResult<Doc, Error>;
   scope: string;
+  /**
+   * The document's own query key. A save of it runs under this prefix, and
+   * only such a save holds the merge back: another document's, or another
+   * screen's, says nothing about these reads.
+   */
+  documentKey: readonly unknown[];
 }): StoredReferencesResult<T> {
-  const saving = useIsMutating() > 0;
+  const saving = useIsMutating({ mutationKey: documentKey }) > 0;
   const last = useRef<Merge<T> | null>(null);
   const attempts = useRef(0);
+  // Retries are counted per scope: a language whose reads used them up says
+  // nothing about the next one's.
+  const attemptsScope = useRef(scope);
+  if (attemptsScope.current !== scope) {
+    attemptsScope.current = scope;
+    attempts.current = 0;
+  }
 
   const pair = settledPair(fields, populated, stored, saving);
   const agree =
@@ -219,12 +233,14 @@ export function useWithStoredReferences<T extends Doc>({
   const disagree = pair !== null && !agree;
   const { refetch: refetchPopulated } = populated;
   const { refetch: refetchStored } = stored;
+  // `scope` is a dependency so a new scope whose reads disagree is retried
+  // too, with the budget the counter above gave back.
   useEffect(() => {
     if (!disagree || attempts.current >= MAX_RECONCILE_ATTEMPTS) return;
     attempts.current += 1;
     void refetchPopulated();
     void refetchStored();
-  }, [disagree, refetchPopulated, refetchStored]);
+  }, [disagree, scope, refetchPopulated, refetchStored]);
 
   // Still apart after every retry: the document keeps changing under the
   // editor. Saying so beats a form merged from two versions, and beats the

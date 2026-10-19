@@ -804,7 +804,7 @@ function convertRelationshipFieldToZod(
 
 function convertUploadFieldToZod(field: UploadFieldConfig): z.ZodTypeAny {
   // Upload is similar to relationship but with file metadata
-  const singleSchema = z
+  const fileSchema = z
     .object({
       id: z.string(),
       url: z.string().optional(),
@@ -814,6 +814,19 @@ function convertUploadFieldToZod(field: UploadFieldConfig): z.ZodTypeAny {
     })
     .passthrough()
     .or(z.string()); // Accept ID string or full object
+  // A field naming several collections stores `{ relationTo, value }`, which
+  // is how a file the editor cannot see comes back for one. Without this the
+  // form would refuse every save of a document holding one.
+  const singleSchema = Array.isArray(field.relationTo)
+    ? fileSchema.or(
+        z
+          .object({
+            relationTo: z.string(),
+            value: z.string().or(z.object({ id: z.string() }).passthrough()),
+          })
+          .passthrough()
+      )
+    : fileSchema;
 
   if (field.hasMany) {
     return applyRowBounds(singleSchema, field, "files");
