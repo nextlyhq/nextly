@@ -96,7 +96,7 @@
     "postinstall": "node scripts/postinstall.js",
     "_comment_release": "=== Release & Versioning ===",
     "changeset": "changeset",
-    "release:version": "changeset version && pnpm install --no-frozen-lockfile",
+    "release:version": "changeset version && node scripts/release/skills-version.mjs stamp && node scripts/release/skills-version.mjs check && pnpm install --no-frozen-lockfile",
     "release:preflight": "node scripts/release/preflight.mjs",
     "release:verify": "node scripts/release/verify.mjs",
     "release:check-finalized": "node scripts/release/check-finalized.mjs",
