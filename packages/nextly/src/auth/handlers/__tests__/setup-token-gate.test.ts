@@ -20,6 +20,8 @@ import {
   type SetupTokenMeta,
 } from "../../setup-token/setup-token";
 import {
+  SETUP_BODY_DEADLINE_MS,
+  SETUP_READS_AT_ONCE,
   handleSetup,
   handleSetupStatus,
   type SetupHandlerDeps,
@@ -212,6 +214,50 @@ describe("setup in production", () => {
     // Its token was never read, so it was counted like any other.
     expect(counted).toHaveBeenCalledTimes(1);
     expect(createSuperAdmin).not.toHaveBeenCalled();
+  });
+
+  it("reads only so many setup bodies at once, refusing the next unread, and frees a slow one at the deadline", async () => {
+    const { deps } = await productionInstall();
+    /** A setup whose body starts and never finishes arriving. */
+    const trickle = () =>
+      new Request(`${ORIGIN}/admin/api/auth/setup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Origin: ORIGIN },
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("{"));
+          },
+        }),
+        duplex: "half",
+      } as RequestInit);
+    const hooks = { limitWithoutValidToken: async () => null };
+    vi.useFakeTimers();
+    try {
+      const slow = Array.from({ length: SETUP_READS_AT_ONCE }, () =>
+        handleSetup(trickle(), deps, hooks).catch((error: unknown) => error)
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Every reading place is held: the next is refused before any read.
+      const refused = await handleSetup(setupRequest("x"), deps, hooks);
+      expect(refused.status).toBe(429);
+
+      // At the deadline the slow bodies are cancelled, and their places free.
+      await vi.advanceTimersByTimeAsync(SETUP_BODY_DEADLINE_MS);
+      const ended = await Promise.all(slow);
+      expect(ended).toHaveLength(SETUP_READS_AT_ONCE);
+      for (const outcome of ended) {
+        expect(outcome).toMatchObject({ code: "VALIDATION_ERROR" });
+      }
+      const after = await handleSetup(
+        setupRequest("not-the-token"),
+        deps,
+        hooks
+      );
+      expect(after.status).toBe(403);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses a token replaced after it was judged, creating nothing", async () => {

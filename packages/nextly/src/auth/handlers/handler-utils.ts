@@ -84,10 +84,14 @@ export function buildCookieHeaders(
   return headers;
 }
 
-/** The first `limit` bytes of a request's body, or `null` past them. */
+/**
+ * The first `limit` bytes of a request's body, or `null` past them, or once
+ * `signal` aborts the read (for a body arriving too slowly).
+ */
 export async function boundedBody(
   request: Request,
-  limit: number
+  limit: number,
+  signal?: AbortSignal
 ): Promise<Uint8Array | null> {
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > limit) return null;
@@ -95,10 +99,21 @@ export async function boundedBody(
   const stream = request.clone().body;
   if (!stream) return new Uint8Array();
   const reader = stream.getReader();
+  // Cancelling ends a read in progress; the loop then sees the abort.
+  const abort = () => {
+    reader.cancel().catch(() => undefined);
+  };
+  if (signal?.aborted) return null;
+  signal?.addEventListener("abort", abort, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
   for (;;) {
-    const { done, value } = await reader.read();
+    if (signal?.aborted) return null;
+    const { done, value } = await reader.read().catch(() => ({
+      done: true as const,
+      value: undefined,
+    }));
+    if (signal?.aborted) return null;
     if (done) break;
     size += value.byteLength;
     if (size > limit) {
@@ -111,6 +126,7 @@ export async function boundedBody(
     }
     chunks.push(value);
   }
+  signal?.removeEventListener("abort", abort);
   const bytes = new Uint8Array(size);
   let offset = 0;
   for (const chunk of chunks) {

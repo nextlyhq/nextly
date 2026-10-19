@@ -62,6 +62,7 @@ import { NextlyError } from "../../errors/nextly-error";
 // module adds no runtime import of the program that registers it.
 import type { CommandContext, GlobalOptions } from "../program";
 import { createCliAdapter, validateDatabaseEnv } from "../utils/adapter";
+import { loadConfig } from "../utils/config-loader";
 
 export const CREATE_ADMIN_COMMAND = "users:create-admin";
 
@@ -347,10 +348,18 @@ export async function runCreateAdmin(
  * Connect to the database the install's environment names, with the system
  * tables registered so the account services can resolve them.
  */
-async function connectToInstall(logger: CommandContext["logger"]): Promise<{
+export async function connectToInstall(context: CommandContext): Promise<{
   setup: FirstAdminSetup;
   close(): Promise<void>;
 }> {
+  const { logger } = context;
+  // The config first, as every command that reads the database loads it: it
+  // publishes the configured PostgreSQL schema the connection resolves in, so
+  // an install in `cms` gets its administrator there, not in `public`.
+  await loadConfig({
+    configPath: context.options.config,
+    cwd: context.options.cwd,
+  });
   const database = validateDatabaseEnv();
   if (!database.valid) {
     // The settings it names are the operator's own, so each is reported, and
@@ -383,7 +392,7 @@ async function connectToInstall(logger: CommandContext["logger"]): Promise<{
 }
 
 /** The terminal and environment the command runs with. */
-function processIo(logger: CommandContext["logger"]): CreateAdminIo {
+function processIo(context: CommandContext): CreateAdminIo {
   const answer = (value: string | symbol): string | null =>
     p.isCancel(value) ? null : value;
   return {
@@ -391,7 +400,7 @@ function processIo(logger: CommandContext["logger"]): CreateAdminIo {
     interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     askSecret: async message => answer(await p.password({ message })),
     ask: async message => answer(await p.text({ message })),
-    connect: () => connectToInstall(logger),
+    connect: () => connectToInstall(context),
   };
 }
 
@@ -413,7 +422,7 @@ export function registerCreateAdminCommand(
         process.exitCode = await runCreateAdmin(
           options,
           context,
-          processIo(context.logger)
+          processIo(context)
         );
       } catch (error) {
         context.logger.error(describeError(error));

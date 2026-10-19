@@ -183,6 +183,19 @@ type SetupVerdict = TokenVerdict | "not-required";
 const SETUP_BODY_BYTES = 32 * 1024;
 
 /**
+ * How many setup bodies this process reads at once, and how long one may take
+ * to arrive. Setup reads a body before any limit can apply (its token decides
+ * which limit), so the reads themselves are bounded: past the ceiling a
+ * request is refused unread, and a body still arriving at the deadline is
+ * cancelled. A legitimate setup is one small request.
+ */
+export const SETUP_READS_AT_ONCE = 16;
+export const SETUP_BODY_DEADLINE_MS = 10_000;
+
+/** Setup bodies being read right now, in this process. */
+let setupBodiesBeingRead = 0;
+
+/**
  * The setup request's JSON body (an empty one when it is not an object), and
  * the error a body that is too large or not JSON fails with once it has been
  * counted.
@@ -191,15 +204,29 @@ async function parseSetupBody(request: Request): Promise<{
   body: Awaited<ReturnType<Request["json"]>>;
   malformed?: Error;
 }> {
+  // A body still arriving at the deadline is cancelled, so a client sending
+  // it slowly gives its reading place back rather than holding it.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), SETUP_BODY_DEADLINE_MS);
   try {
-    const bytes = await boundedBody(request, SETUP_BODY_BYTES);
+    const bytes = await boundedBody(request, SETUP_BODY_BYTES, deadline.signal);
     if (bytes === null) {
       return {
         body: {},
-        malformed: new NextlyError({
-          code: "PAYLOAD_TOO_LARGE",
-          publicMessage: "The request is too large.",
-        }),
+        malformed: deadline.signal.aborted
+          ? NextlyError.validation({
+              errors: [
+                {
+                  path: "",
+                  code: "BODY_TIMEOUT",
+                  message: "The request body took too long to arrive.",
+                },
+              ],
+            })
+          : new NextlyError({
+              code: "PAYLOAD_TOO_LARGE",
+              publicMessage: "The request is too large.",
+            }),
       };
     }
     const body: Awaited<ReturnType<Request["json"]>> = JSON.parse(
@@ -218,6 +245,8 @@ async function parseSetupBody(request: Request): Promise<{
               ],
             }),
     };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -239,7 +268,20 @@ async function readSetupRequest(
   | Response
 > {
   const forLimiter = request.clone();
-  const { body, malformed } = await parseSetupBody(request);
+  if (setupBodiesBeingRead >= SETUP_READS_AT_ONCE) {
+    return buildAuthErrorResponse(
+      NextlyError.rateLimited({ retryAfterSeconds: 1 }),
+      readOrGenerateRequestId(request)
+    );
+  }
+  setupBodiesBeingRead++;
+  let parsed: Awaited<ReturnType<typeof parseSetupBody>>;
+  try {
+    parsed = await parseSetupBody(request);
+  } finally {
+    setupBodiesBeingRead--;
+  }
+  const { body, malformed } = parsed;
   const verdict: SetupVerdict = setupToken.required
     ? await setupToken.verify(body.setupToken)
     : "not-required";
