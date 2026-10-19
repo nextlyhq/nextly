@@ -796,6 +796,9 @@ export class ReleasesRepository {
     // than the shape of the error, which a caught-and-rethrown driver error
     // could imitate.
     let fenceMissed = false;
+    // Before the transaction, never inside it: the probe goes through the
+    // pool, which a transaction holding its only connection would starve.
+    await this.notices.ready();
     try {
       await this.db.transaction(async tx => {
         for (const entry of ordered) {

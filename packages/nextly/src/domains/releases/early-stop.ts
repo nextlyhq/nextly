@@ -3,8 +3,9 @@
  *
  * Each such event is a thin call here, made once its own write has
  * committed: a member's draft saved, a role's grants or a user's roles
- * changed, a member deleted, a collection's or Single's schema changed, or a
- * registered check source's signal. The early stop
+ * changed, a user deactivated or their email or name changed, a member
+ * deleted, a collection's or Single's schema changed, or a registered check
+ * source's signal. The early stop
  * (`ReleasesService.stopOnHardProblems`) checks the still-scheduled releases
  * holding what the event names and stops any with a hard problem, telling its
  * owner.
@@ -22,27 +23,55 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { container } from "../../di/container";
 import { getNextlyLogger } from "../../observability/logger";
 
-import type { ReleaseRecheckTarget } from "./release-recheck";
+import type {
+  ReleaseRecheckDocument,
+  ReleaseRecheckTarget,
+} from "./release-recheck";
 
 /** The part of the releases service this calls. */
 interface EarlyStop {
   stopOnHardProblems(target: ReleaseRecheckTarget): Promise<unknown>;
 }
 
-/** Set while a release's own run writes its documents. */
-const releaseRun = new AsyncLocalStorage<true>();
+/** The document a release's own run is writing, while it writes it. */
+const releaseRun = new AsyncLocalStorage<ReleaseRecheckDocument>();
 
 /**
- * Perform `write` as part of a release's own run, whose writes are not events
- * for the early stop.
+ * Perform `write` of `document` as part of a release's own run: the write is
+ * not an event for the early stop about that document.
  *
  * The run checks each document as it writes it and stops what it cannot
  * apply itself, keeping a release's documents together. A stop raised by its
  * own write would land between two of its documents, after some were applied
  * and before the rest: the split the run exists to avoid.
+ *
+ * Only that document. Anything else the write sets off, such as a hook that
+ * saves or deletes another document, or changes someone's roles, is an event
+ * like any other.
  */
-export function asReleaseRun<T>(write: () => Promise<T>): Promise<T> {
-  return releaseRun.run(true, write);
+export function asReleaseRun<T>(
+  document: ReleaseRecheckDocument,
+  write: () => Promise<T>
+): Promise<T> {
+  return releaseRun.run(document, write);
+}
+
+/**
+ * What is left of `target` once the document a release's own run is writing
+ * is taken out, or `null` when nothing is.
+ */
+function apartFromRunWrite(
+  target: ReleaseRecheckTarget,
+  writing: ReleaseRecheckDocument | undefined
+): ReleaseRecheckTarget | null {
+  if (writing === undefined || !("documents" in target)) return target;
+  const documents = target.documents.filter(
+    document =>
+      document.scopeKind !== writing.scopeKind ||
+      document.scopeSlug !== writing.scopeSlug ||
+      document.entryId !== writing.entryId
+  );
+  return documents.length === 0 ? null : { documents };
 }
 
 /**
@@ -60,14 +89,13 @@ export function asReleaseRun<T>(write: () => Promise<T>): Promise<T> {
 export async function stopReleasesHolding(
   target: ReleaseRecheckTarget
 ): Promise<void> {
-  // A boot without releases has nothing scheduled to stop, and a release's
-  // own run decides what it stops.
-  if (releaseRun.getStore() === true) return;
+  // A release's own run decides what its own write stops, and a boot without
+  // releases has nothing scheduled to stop.
+  const named = apartFromRunWrite(target, releaseRun.getStore());
+  if (named === null) return;
   if (!container.has("releasesService")) return;
   try {
-    await container
-      .get<EarlyStop>("releasesService")
-      .stopOnHardProblems(target);
+    await container.get<EarlyStop>("releasesService").stopOnHardProblems(named);
   } catch (error) {
     getNextlyLogger().error({
       kind: "release-early-stop-failed",

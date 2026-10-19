@@ -1987,12 +1987,18 @@ export class UserMutationService extends BaseService {
             services.userRoles.invalidateRoleCaches(String(currentUser.id))
           );
         }
-        // A deactivated author can no longer be acted as, so a scheduled
-        // release holding a document they added is stopped now rather than at
-        // its instant. After the commit, outside the deactivation's
-        // transaction; the early stop logs its own failures and never throws,
-        // so a deactivation cannot fail over a release.
-        if (updateData.isActive === false) {
+        // A deactivated author can no longer be acted as, and a changed email
+        // or name is what a code-defined rule judging the author may read, so
+        // a scheduled release holding a document they added is checked again
+        // and stopped now rather than at its instant. After the commit,
+        // outside the update's transaction; the early stop logs its own
+        // failures and never throws, so this update cannot fail over a
+        // release.
+        if (
+          updateData.isActive === false ||
+          updateData.email !== undefined ||
+          updateData.name !== undefined
+        ) {
           await this.afterCommit(() =>
             stopReleasesHolding({ authors: [String(currentUser.id)] })
           );

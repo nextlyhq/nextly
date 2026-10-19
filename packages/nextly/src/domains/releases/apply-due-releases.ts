@@ -553,7 +553,7 @@ async function writeAndConfirm(
     // As the release's own run, so the write is not taken for an event that
     // stops this release between two of its documents (`asReleaseRun`).
     const input = { ref: action.ref, user };
-    await asReleaseRun(() =>
+    await asReleaseRun(action.ref, () =>
       action.effect === "publish"
         ? deps.mutations.publish(input)
         : deps.mutations.unpublish(input)

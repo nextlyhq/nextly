@@ -664,10 +664,13 @@ export class RoleMutationService extends BaseService {
           }
         });
 
-        // Invalidate cache after successful transaction
+        // Invalidate cache after successful transaction. A new slug changes
+        // the roles a code-defined rule reads, as new grants change the
+        // permissions it reads.
         if (
           changes.permissionIds !== undefined ||
-          changes.childRoleIds !== undefined
+          changes.childRoleIds !== undefined ||
+          changes.slug !== undefined
         ) {
           await afterRoleGrantsChanged(roleId);
         }

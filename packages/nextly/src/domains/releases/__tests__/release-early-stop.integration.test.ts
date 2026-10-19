@@ -24,6 +24,7 @@ import {
 import { NOTICES_TABLE } from "../../../schemas/notices/table-name";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ServiceContainer } from "../../../services/index";
+import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
 import type { CollectionRegistryService } from "../../collections/services/collection-registry-service";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { applyDueReleases } from "../apply-due-releases";
@@ -47,12 +48,21 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  afterPostChange = undefined;
   // A case may register a source of its own; the next boot starts from core's.
   clearReleaseCheckSourcesForTests();
   registerCoreReleaseCheckSources();
 });
 
 const PAST = new Date("2020-01-01T00:00:00Z");
+type Slug = "pages" | "memos" | "articles" | "posts" | "notes" | "letters";
+
+/** Run after each write to a post, for a case that acts inside one. */
+let afterPostChange: (() => Promise<void>) | undefined;
+
+/** The role slug a note's code-defined rule lets publish. */
+let publisherSlug = "";
+
 const OPEN = {
   read: () => true,
   update: () => true,
@@ -87,6 +97,32 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         access: OPEN,
         fields: [text({ name: "title" }), text({ name: "summary" })],
       }),
+      // Runs a case's own work after each write, as a project's hook would.
+      defineCollection({
+        slug: "posts",
+        status: true,
+        access: OPEN,
+        hooks: { afterChange: [() => afterPostChange?.()] },
+        fields: [text({ name: "title" })],
+      }),
+      // Published only by holders of one role, named by its slug.
+      defineCollection({
+        slug: "notes",
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: ({ roles }) => roles.includes(publisherSlug),
+        },
+        fields: [text({ name: "title" })],
+      }),
+      // Its status is given a field rule in a case: see `guardLetterStatus`.
+      defineCollection({
+        slug: "letters",
+        status: true,
+        access: OPEN,
+        fields: [text({ name: "title" })],
+      }),
     ],
     singles: [
       defineSingle({
@@ -109,7 +145,7 @@ const handlerOf = (t: TestNextly): CollectionsHandler =>
 /** A document stored through the ordinary write, trusted. */
 async function entry(
   t: TestNextly,
-  collection: "pages" | "memos" | "articles",
+  collection: Slug,
   status: "draft" | "published"
 ): Promise<string> {
   const created = await handlerOf(t).createEntry(
@@ -122,10 +158,7 @@ async function entry(
 }
 
 /** The ids an anonymous visitor's ordinary list read returns. */
-async function visibleIds(
-  t: TestNextly,
-  collection: "pages" | "memos" | "articles"
-): Promise<string[]> {
+async function visibleIds(t: TestNextly, collection: Slug): Promise<string[]> {
   const result = await handlerOf(t).listEntries({
     collectionName: collection,
     limit: 50,
@@ -182,6 +215,41 @@ async function dueRelease(
   return { releaseId: release.id, owner, author };
 }
 
+/**
+ * A release holding one article, owned and added as `dueRelease` does, and
+ * scheduled for an instant still to come.
+ */
+async function futureRelease(
+  t: TestNextly,
+  entryId: string
+): Promise<Pick<Arranged, "releaseId" | "owner">> {
+  const owner = await seedLiveAuthor(t);
+  const repo = new ReleasesRepository(t.adapter);
+  const release = await repo.createRelease({
+    title: "Later",
+    createdBy: owner,
+  });
+  await repo.addMember(
+    {
+      releaseId: release.id,
+      scopeKind: "collection",
+      scopeSlug: "articles",
+      entryId,
+      locale: null,
+      action: "publish",
+      createdBy: await seedPlainAuthor(t),
+    },
+    ANY_EDITABLE_STATE
+  );
+  await scheduleAsItStands(
+    repo,
+    release.id,
+    new Date("2099-01-01T00:00:00Z"),
+    "UTC"
+  );
+  return { releaseId: release.id, owner };
+}
+
 async function stateOf(t: TestNextly, releaseId: string): Promise<string> {
   const [row] = await new ReleasesRepository(t.adapter).findReleases({
     ids: [releaseId],
@@ -205,6 +273,24 @@ async function stoppedNotices(
     },
   });
   return rows.length;
+}
+
+/**
+ * Let only people with an address at example.com set a letter's status, by a
+ * field rule, the way a plugin's raw field contribution reaches the rules.
+ */
+function guardLetterStatus(): void {
+  registerFieldFunctions("collection", "letters", [
+    { name: "title", type: "text" },
+    {
+      name: "status",
+      type: "text",
+      access: {
+        update: ({ req }: { req: { user?: { email?: string } } }) =>
+          req.user?.email?.endsWith("@example.com") === true,
+      },
+    },
+  ]);
 }
 
 /** A role holding exactly these seeded grants, given to `userId`. */
@@ -406,6 +492,102 @@ describe.each(getConfiguredTestDialects())(
       expect(await visibleIds(t, "articles")).not.toContain(article);
       expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
       expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when the address a field rule reads is changed", async () => {
+      const t = await boot(dialect);
+      guardLetterStatus();
+      const letter = await entry(t, "letters", "draft");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "letters",
+          entryId: letter,
+          action: "publish",
+        },
+      ]);
+      expect(await visibleIds(t, "letters")).toContain(letter);
+
+      await t.nextly.users.update({
+        id: arranged.author,
+        data: { email: "moved-away@elsewhere.test" },
+      });
+
+      expect(await visibleIds(t, "letters")).not.toContain(letter);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    // Not on SQLite: there, renaming a role fails before this is reached,
+    // since `updateRole` hands Drizzle's synchronous SQLite transaction an
+    // async callback, which it refuses.
+    it.skipIf(dialect === "sqlite")(
+      "stops it when the role a publish rule names is given a new slug",
+      async () => {
+        const t = await boot(dialect);
+        const owner = await seedLiveAuthor(t);
+        const author = await seedPlainAuthor(t);
+        const roleId = await grantRole(t, author, ["update-notes"]);
+        // The slug `grantRole` gives the role it makes.
+        publisherSlug = `role-${author.slice(0, 8)}`;
+        const note = await entry(t, "notes", "draft");
+        const arranged = await dueRelease(
+          t,
+          [
+            {
+              scopeKind: "collection",
+              scopeSlug: "notes",
+              entryId: note,
+              action: "publish",
+            },
+          ],
+          { owner, author }
+        );
+        expect(await visibleIds(t, "notes")).toContain(note);
+
+        await new ServiceContainer(t.adapter).roles.updateRole(roleId, {
+          slug: `${publisherSlug}-renamed`,
+        });
+
+        expect(await visibleIds(t, "notes")).not.toContain(note);
+        expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+        expect(await stoppedNotices(t, arranged)).toBe(1);
+      }
+    );
+
+    it("stops another release when the run's own write sets off a deletion of its document", async () => {
+      // The run passes over its own document; what its write sets off, here a
+      // hook deleting a document another release holds, is an event as ever.
+      const t = await boot(dialect);
+      const post = await entry(t, "posts", "draft");
+      const running = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: post,
+          action: "publish",
+        },
+      ]);
+      const gone = await entry(t, "articles", "draft");
+      const other = await futureRelease(t, gone);
+      afterPostChange = async () => {
+        afterPostChange = undefined;
+        await t.nextly.delete({ collection: "articles" as never, id: gone });
+      };
+
+      const pass = await applyDueReleases({
+        repository: new ReleasesRepository(t.adapter),
+        mutations: createReleaseMutations({ contentApi: t.nextly }),
+        runAs: {
+          findUser: async id => ({ id, isActive: true }),
+          listRoleSlugs: async () => [],
+        },
+      });
+
+      expect(pass).toMatchObject({ applied: 1, failed: 0, published: 1 });
+      expect(await stateOf(t, running.releaseId)).toBe("published");
+      expect(await stateOf(t, other.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, other)).toBe(1);
     });
 
     it("stops it when one of its documents is deleted, so the others are not shown going live", async () => {

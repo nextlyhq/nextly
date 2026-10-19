@@ -543,15 +543,15 @@ stops a release.
 
 What is caught as it happens:
 
-| Event                                                                                                                                | What is checked again                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| A document is saved, its draft or another language's pending work included, through REST, the Direct API, the admin or a bulk update | the scheduled releases holding that document             |
-| A document is deleted                                                                                                                | the scheduled releases holding it                        |
-| A user's roles change: a role assigned, removed or replaced                                                                          | the documents that user added to scheduled releases      |
-| A user is deactivated                                                                                                                | the documents that user added to scheduled releases      |
-| A role's grants change: a permission added or removed, an inherited role added or removed, the role edited or deleted                | every scheduled release (a role's reach is not recorded) |
-| A collection's or Single's fields change, its Draft/Published or localization switch is turned, or it is deleted                     | the scheduled releases holding its documents             |
-| A registered check source reports a change                                                                                           | what the source names                                    |
+| Event                                                                                                                                        | What is checked again                                    |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| A document is saved, its draft or another language's pending work included, through REST, the Direct API, the admin or a bulk update         | the scheduled releases holding that document             |
+| A document is deleted                                                                                                                        | the scheduled releases holding it                        |
+| A user's roles change: a role assigned, removed or replaced                                                                                  | the documents that user added to scheduled releases      |
+| A user is deactivated, or their email or name changes                                                                                        | the documents that user added to scheduled releases      |
+| A role's grants change: a permission added or removed, an inherited role added or removed, the role renamed to a new slug, edited or deleted | every scheduled release (a role's reach is not recorded) |
+| A collection's or Single's fields change, its Draft/Published or localization switch is turned, or it is deleted                             | the scheduled releases holding its documents             |
+| A registered check source reports a change                                                                                                   | what the source names                                    |
 
 A write made inside the collection service's `withTransaction` is checked once that transaction
 commits, never inside it. A release's documents are always judged as the person who added each
@@ -560,6 +560,8 @@ one, as the run would judge them.
 **What is still caught only at the release's time.** The job pass checks every release again
 when it runs it, and stops it then for anything the events above do not report:
 
+- a role that expires at a set time: nothing happens when it lapses, so a release whose author
+  relied on it stops when the pass runs;
 - a user deleted. A due document whose author is gone is not shown to readers in the
   meantime, but the release stops, and its owner is told, only when the pass runs;
 - changes made outside Nextly's writes: rows edited in the database directly, or migrations;
