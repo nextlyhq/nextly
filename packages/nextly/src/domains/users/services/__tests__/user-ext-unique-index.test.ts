@@ -94,3 +94,43 @@ describe("a unique plugin field stored as text", () => {
     expect(sql).toContain("uq_user_ext_handle");
   });
 });
+
+describe("textColumnLength", () => {
+  it("is 255 for a unique plugin text field with no maxLength on MySQL, and unbounded elsewhere", () => {
+    registerHandleType("text");
+    const length = (dialect: "mysql" | "postgresql" | "sqlite") =>
+      new UserExtSchemaService(dialect, undefined, silent).textColumnLength(
+        field
+      );
+
+    expect(length("mysql")).toBe(255);
+    expect(length("postgresql")).toBeNull();
+    expect(length("sqlite")).toBeNull();
+  });
+
+  it("is the field's maxLength wherever one is set", () => {
+    registerHandleType("text");
+    const withLength = {
+      ...field,
+      maxLength: 64,
+    } as unknown as UserFieldConfig;
+
+    expect(
+      new UserExtSchemaService(
+        "postgresql",
+        undefined,
+        silent
+      ).textColumnLength(withLength)
+    ).toBe(64);
+  });
+
+  it("is unbounded for a column that is not text", () => {
+    registerHandleType("longText");
+
+    expect(
+      new UserExtSchemaService("mysql", undefined, silent).textColumnLength(
+        field
+      )
+    ).toBeNull();
+  });
+});

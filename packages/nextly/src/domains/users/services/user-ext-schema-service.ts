@@ -1301,18 +1301,44 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
 
   /**
    * The column a text value is stored in, for a built-in text field and a
-   * plugin type stored as text alike: a varchar of its `maxLength`, else TEXT.
-   * MySQL cannot index a TEXT column without a key length, so a unique field's
-   * index could never be made there; a varchar, as the schema pipeline gives a
-   * MySQL text column, can carry it.
+   * plugin type stored as text alike: a varchar of its length when it has one
+   * (see `textLength`), else TEXT.
    */
   private textColumnType(maxLength: number | undefined, unique: boolean) {
     const types = SQL_COLUMN_TYPES[this.dialect];
-    if (typeof maxLength === "number" && maxLength > 0) {
-      return types.varchar(maxLength);
+    const length = this.textLength(maxLength, unique);
+    return length === null ? types.text : types.varchar(length);
+  }
+
+  /**
+   * How many characters a text value's column holds, or null when it is TEXT
+   * and holds any length: its `maxLength`, else 255 for a unique field on
+   * MySQL. MySQL cannot index a TEXT column without a key length, so there a
+   * unique field's index could never be made; a varchar, as the schema
+   * pipeline gives a MySQL text column, can carry it.
+   */
+  private textLength(maxLength: number | undefined, unique: boolean) {
+    if (typeof maxLength === "number" && maxLength > 0) return maxLength;
+    if (this.dialect === "mysql" && unique) return 255;
+    return null;
+  }
+
+  /**
+   * How many characters a field's `user_ext` column holds, for a built-in text
+   * field or a plugin type stored as text; null for any other column, or one
+   * that holds any length. A write checks a value against it first: a longer
+   * one fails at the driver, where a failed `user_ext` write is read as the
+   * table being absent.
+   */
+  textColumnLength(field: UserFieldConfig): number | null {
+    const { maxLength, unique } = field as {
+      maxLength?: number;
+      unique?: unknown;
+    };
+    if (isTextField(field) || this.pluginUserStorage(field) === "text") {
+      return this.textLength(maxLength, unique === true);
     }
-    if (this.dialect === "mysql" && unique) return types.varchar(255);
-    return types.text;
+    return null;
   }
 
   // ============================================================

@@ -342,7 +342,8 @@ export type UserMutationResponse = MinimalUser & { invite?: InviteArtifact };
  */
 export function coerceUserExtValue(
   value: unknown,
-  field: { name?: unknown; type?: unknown }
+  field: { name?: unknown; type?: unknown },
+  maxLength?: number | null
 ): unknown {
   const token = storageTypeToken(field);
   const name = typeof field.name === "string" ? field.name : "input";
@@ -381,6 +382,17 @@ export function coerceUserExtValue(
       typeof value !== "string"
     ) {
       throw userExtValueError(name, "text");
+    }
+    // A varchar column holds so many characters, and a longer value fails at
+    // the driver, where it is read as the extension table being absent.
+    // Counted as the column counts them, by character rather than by UTF-16
+    // code unit.
+    if (
+      typeof maxLength === "number" &&
+      typeof value === "string" &&
+      Array.from(value).length > maxLength
+    ) {
+      throw userExtValueError(name, `text of at most ${maxLength} characters`);
     }
     // A JSON column stores what `JSON.stringify` can represent. A BigInt or a
     // cycle throws there, a function or symbol silently becomes `undefined`,
@@ -765,9 +777,22 @@ export class UserMutationService extends BaseService {
     input: Record<string, unknown>
   ): Record<string, unknown> {
     const values: Record<string, unknown> = {};
-    const fieldNames = this.getCustomFieldNames();
+    const shape = this.customFieldShaper();
+    for (const fieldName of this.getCustomFieldNames()) {
+      const raw = fieldName in input ? (input[fieldName] ?? null) : null;
+      values[fieldName] = shape(fieldName, raw);
+    }
+    return values;
+  }
 
-    // Keyed by name so a value can be shaped by the column its field maps to.
+  /**
+   * Shapes a custom field's value for the `user_ext` column its field maps to:
+   * its kind, and its length where the column has one. One rule for the create
+   * and update paths, which bind to the same columns, and whose failure is
+   * read the same way, as the extension table being absent, so an unshaped
+   * value would be dropped rather than refused.
+   */
+  private customFieldShaper(): (fieldName: string, raw: unknown) => unknown {
     const byName = new Map(
       this.getEffectiveFields()
         .filter(
@@ -776,15 +801,16 @@ export class UserMutationService extends BaseService {
         )
         .map(field => [field.name, field])
     );
-
-    for (const fieldName of fieldNames) {
-      const raw = fieldName in input ? (input[fieldName] ?? null) : null;
+    return (fieldName, raw) => {
       const field = byName.get(fieldName);
-      values[fieldName] = field
-        ? coerceUserExtValue(raw, { name: fieldName, type: field.type })
+      return field
+        ? coerceUserExtValue(
+            raw,
+            { name: fieldName, type: field.type },
+            this.userExtSchemaService?.textColumnLength(field)
+          )
         : raw;
-    }
-    return values;
+    };
   }
 
   private readonly emailService?: EmailService;
@@ -1884,26 +1910,12 @@ export class UserMutationService extends BaseService {
       let hasCustomFieldChanges = false;
 
       if (hasExt) {
-        const fieldNames = this.getCustomFieldNames();
-        // Shaped by the same rule the create path uses. An update binds to the
-        // same columns, and its failure is read the same way — as the extension
-        // table being absent — so an unshaped value would be skipped silently
-        // here exactly as it was dropped there.
-        const byName = new Map(
-          this.getEffectiveFields()
-            .filter(
-              (field): field is typeof field & { name: string } =>
-                "name" in field && typeof field.name === "string"
-            )
-            .map(field => [field.name, field])
-        );
-        for (const fieldName of fieldNames) {
+        // Shaped by the same rule the create path uses.
+        const shape = this.customFieldShaper();
+        for (const fieldName of this.getCustomFieldNames()) {
           if (fieldName in changes) {
             const raw = (changes as Record<string, unknown>)[fieldName] ?? null;
-            const field = byName.get(fieldName);
-            customFieldUpdates[fieldName] = field
-              ? coerceUserExtValue(raw, { name: fieldName, type: field.type })
-              : raw;
+            customFieldUpdates[fieldName] = shape(fieldName, raw);
             hasCustomFieldChanges = true;
           }
         }

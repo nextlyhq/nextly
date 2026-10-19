@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import { select, text, textarea } from "../../../collections/fields/helpers";
+import { defineConfig } from "../../../collections/config/define-config";
+import { definePlugin } from "../../../plugins/plugin-context";
 import {
   clearFieldTypes,
   registerFieldType,
@@ -139,6 +141,52 @@ describe("validateUserConfig: unique only where a column can carry it", () => {
         expect(rejection?.path).toBe("fields[0].unique");
       }
     );
+
+    it.each(["longText", "json"] as const)(
+      "refuses unique on a type the config declares as %s, before it is registered",
+      storage => {
+        // `defineConfig` validates users before boot registers the plugins'
+        // field types, so the storage comes from the declaration.
+        const result = validateUserConfig(
+          {
+            fields: [{ name: "handle", type: "handle", unique: true }],
+          } as unknown as Parameters<typeof validateUserConfig>[0],
+          new Map([["handle", storage]])
+        );
+
+        expect(result.errors.map(e => e.code)).toContain(
+          "USER_FIELD_UNIQUE_UNSUPPORTED"
+        );
+      }
+    );
+
+    it("refuses it through defineConfig, from the plugin that declares the type", () => {
+      const plugin = definePlugin({
+        name: "@test/handles",
+        version: "1.0.0",
+        nextly: ">=0.0.0",
+        contributes: {
+          fieldTypes: [
+            {
+              type: "handle",
+              storage: "longText",
+              component: "@acme/handles/admin#Handle",
+              surfaces: ["users"],
+            },
+          ],
+        },
+        init() {},
+      });
+
+      expect(() =>
+        defineConfig({
+          plugins: [plugin],
+          users: {
+            fields: [{ name: "handle", type: "handle", unique: true }],
+          },
+        } as unknown as Parameters<typeof defineConfig>[0])
+      ).toThrow(/USER_FIELD_UNIQUE_UNSUPPORTED/);
+    });
 
     it("accepts unique when it is stored as text", () => {
       registerHandleType("text");

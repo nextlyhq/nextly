@@ -27,6 +27,7 @@ import {
 import { UserExtSchemaService } from "../services/user-ext-schema-service";
 import { UserFieldDefinitionService } from "../services/user-field-definition-service";
 import { UserMutationService } from "../services/user-mutation-service";
+import type { UserConfig } from "../../../users";
 
 const silentLogger = {
   debug: () => {},
@@ -181,6 +182,67 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(account?.name).toBe("other@test.local");
       expect(await stored(other.id)).toMatchObject({ employee: "E2" });
+    });
+
+    describe("a unique plugin field stored as text, with no maxLength", () => {
+      afterEach(() => {
+        clearFieldTypes();
+      });
+
+      it("refuses a value longer than its MySQL column before writing, and keeps writing custom fields", async () => {
+        registerFieldType({
+          type: "handle",
+          storage: "text",
+          component: "@acme/handles/admin#Handle",
+          surfaces: ["users"],
+        });
+        const config = {
+          fields: [...FIELDS, { name: "handle", type: "handle", unique: true }],
+        } as unknown as UserConfig;
+        await provisionUserFieldTables(
+          config,
+          handle.adapter,
+          createLogger({ quiet: true })
+        );
+        const schema = new UserExtSchemaService(
+          dialect,
+          new UserFieldDefinitionService(handle.adapter, silentLogger),
+          silentLogger
+        );
+        await schema.loadMergedFields();
+        const withHandle = new UserMutationService(
+          handle.adapter,
+          silentLogger,
+          config,
+          schema
+        );
+        const createWith = (email: string, handleValue: string) =>
+          withHandle.createLocalUser({
+            email,
+            name: email,
+            password: "TestPassword123!",
+            isActive: true,
+            employeeId: email,
+            team: "red",
+            handle: handleValue,
+          } as Parameters<UserMutationService["createLocalUser"]>[0]);
+
+        const long = "h".repeat(300);
+        const result = await createWith("long@test.local", long).catch(
+          (e: unknown) => e
+        );
+
+        if (dialect === "mysql") {
+          // The column is a VARCHAR(255): the value is refused as the
+          // caller's, not sent to the driver to fail as a missing table.
+          expect(NextlyError.isValidation(result)).toBe(true);
+          const after = await createWith("after@test.local", "short");
+          expect(await stored(after.id)).toMatchObject({ team: "red" });
+        } else {
+          // A TEXT column, indexed as it is: nothing to bound.
+          expect(NextlyError.is(result)).toBe(false);
+        }
+      });
     });
 
     describe("a plugin field already stored as TEXT, made unique", () => {

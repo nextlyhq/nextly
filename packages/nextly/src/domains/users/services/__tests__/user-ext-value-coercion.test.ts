@@ -206,6 +206,41 @@ describe("coerceUserExtValue", () => {
     ).toBeNull();
   });
 
+  it("refuses text longer than its column holds, naming the field and never the value", () => {
+    const error = (() => {
+      try {
+        coerceUserExtValue(
+          "h".repeat(256),
+          { name: "handle", type: "text" },
+          255
+        );
+      } catch (e) {
+        return e;
+      }
+    })();
+
+    expect(NextlyError.isValidation(error)).toBe(true);
+    const detail = JSON.stringify((error as NextlyError).publicData);
+    expect(detail).toContain("handle");
+    expect(detail).toContain("255");
+    expect(detail).not.toContain("hhhh");
+  });
+
+  it("counts characters as the column does, not UTF-16 code units", () => {
+    // 255 emoji are 255 characters to MySQL, 510 code units to JavaScript.
+    const emoji = "\u{1F600}".repeat(255);
+    expect(
+      coerceUserExtValue(emoji, { name: "handle", type: "text" }, 255)
+    ).toBe(emoji);
+  });
+
+  it("puts no bound on text when the column has none", () => {
+    const long = "h".repeat(1000);
+    expect(coerceUserExtValue(long, { name: "handle", type: "text" })).toBe(
+      long
+    );
+  });
+
   it("passes through what is not a string", () => {
     expect(coerceUserExtValue(null, { type: "date" })).toBeNull();
     const already = new Date("2026-07-30T00:00:00.000Z");
