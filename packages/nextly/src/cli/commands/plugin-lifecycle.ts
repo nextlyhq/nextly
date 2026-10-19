@@ -151,6 +151,16 @@ export interface PluginLifecycleDeps {
   /** Which of the named tables exist in the database now. */
   liveTables: (tables: readonly string[]) => Promise<ReadonlySet<string>>;
   /**
+   * Each named table that exists now, with a token the database keeps for
+   * that table through a rename and gives no table that replaces it
+   * (`readTableIdentities`); null where it reports none. An uninstall reads
+   * it either side of `onUninstall`, so a hook that put another table under
+   * a name is told apart from one that left the table alone.
+   */
+  tableIdentities: (
+    tables: readonly string[]
+  ) => Promise<ReadonlyMap<string, string | null>>;
+  /**
    * Every plugin's recorded lifecycle state (`readPluginLifecycle`): what
    * install reads its dependencies' installs from, and an uninstall run
    * again reads how it was begun from.
@@ -549,6 +559,15 @@ async function executeUninstall(
     new SchemaOwnersRepository(deps.db, deps.dialect)
   );
 
+  // The tables the DOWNs were judged against, as they stand before the hook:
+  // what `assertHookLeftTables` compares them with once it has run. Read
+  // before the first change, so a database that cannot answer changes
+  // nothing.
+  const judged =
+    plan.finalState === "uninstalled"
+      ? await deps.tableIdentities(plan.tablesDropped)
+      : new Map<string, string | null>();
+
   // Before the first change, the hook included: an uninstall that stops part
   // way leaves this as the plugin's state, which the boot refuses and a run
   // of the command again finishes.
@@ -560,7 +579,7 @@ async function executeUninstall(
   await deps.runLifecycleHook(plugin, "onUninstall", {
     keepData: opts.keepData,
   });
-  await assertHookLeftTables(plugin, plan, deps);
+  await assertHookLeftTables(plugin, plan, judged, deps);
 
   // `runDown` names a module whose DOWN runs outside a transaction before
   // it runs, as `migrate:down` does, through the same executor.
@@ -651,31 +670,41 @@ function assertDownsDropTables(
 }
 
 /**
- * Refuse to run the DOWNs of a full uninstall once `onUninstall` has dropped
- * or renamed a table they were judged to drop.
+ * Refuse to run the DOWNs of a full uninstall once `onUninstall` has dropped,
+ * renamed or replaced a table they were judged to drop.
  *
  * The DOWNs were judged against the tables as they stood before the hook
  * (`assertDownsDropTables`). A hook can change them, through the raw SQL its
  * context may be granted: a table it renamed away keeps its rows under a name
  * the DOWNs do not drop, and the check after them reads only the old name.
- * Refused before the first DOWN, so every module is still recorded applied.
+ * Judged by each table's identity, not its name (`tableIdentities`): a hook
+ * that renames a table away and creates another under its name leaves the
+ * name in place, and the approved drop would take the replacement while the
+ * original and its rows survive under the other name. An identity either
+ * reading lacks counts as changed. Refused before the first DOWN, so every
+ * module is still recorded applied.
  */
 async function assertHookLeftTables(
   plugin: LifecyclePlugin,
   plan: UninstallPlan,
-  deps: Pick<PluginLifecycleDeps, "liveTables">
+  judged: ReadonlyMap<string, string | null>,
+  deps: Pick<PluginLifecycleDeps, "tableIdentities">
 ): Promise<void> {
   if (plan.finalState !== "uninstalled") return;
-  const live = await deps.liveTables(plan.tablesDropped);
-  const gone = plan.tablesDropped.filter(table => !live.has(table));
-  if (gone.length === 0) return;
+  const now = await deps.tableIdentities(plan.tablesDropped);
+  const changed = plan.tablesDropped.filter(table => {
+    const before = judged.get(table) ?? null;
+    return before === null || now.get(table) !== before;
+  });
+  if (changed.length === 0) return;
+  const one = changed.length === 1;
   throw new NextlyError({
     code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
-    publicMessage: `${plugin.name}'s onUninstall dropped or renamed ${gone.join(", ")}, which its DOWN migrations were to drop, so none of them was run. Put ${gone.length === 1 ? "that table" : "those tables"} back under ${gone.length === 1 ? "its name" : "their names"}, then run the uninstall again.`,
+    publicMessage: `${plugin.name}'s onUninstall dropped, renamed or replaced ${changed.join(", ")}, which its DOWN migrations were to drop, so none of them was run. Put the original ${one ? "table" : "tables"} back under ${one ? "its name" : "their names"}, in place of any table created there, then run the uninstall again.`,
     logContext: {
       plugin: plugin.name,
       reason: "tables-changed-by-hook",
-      tables: gone,
+      tables: changed,
     },
   });
 }

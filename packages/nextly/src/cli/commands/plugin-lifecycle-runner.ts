@@ -54,6 +54,7 @@ import {
   type PreparedModuleDown,
 } from "./plugin-lifecycle";
 import { pluginModuleDown } from "./plugin-module-rollback";
+import { readTableIdentities } from "./table-identity";
 
 interface RunnerOptions {
   config?: string;
@@ -517,6 +518,12 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     return new Set(present.filter(table => table !== undefined));
   };
 
+  /** Which table each of `tables` reaches now (`readTableIdentities`). */
+  const tableIdentities = (
+    tables: readonly string[]
+  ): Promise<ReadonlyMap<string, string | null>> =>
+    readTableIdentities(drizzleAdapter.getDrizzle(), dialect, tables);
+
   /**
    * Run one plugin's own `onInstall` / `onUninstall` against a real context.
    *
@@ -722,6 +729,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     refreshPlan,
     readAppliedModules,
     liveTables,
+    tableIdentities,
     runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,

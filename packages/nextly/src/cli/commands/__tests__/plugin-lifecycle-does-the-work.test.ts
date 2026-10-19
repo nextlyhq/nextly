@@ -65,6 +65,23 @@ function droppedByDowns(
 }
 
 function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
+  const given = depsWithout(over);
+  return {
+    // Each live table as its own, unchanged one: a test that changes a
+    // table's identity says so; one that drops or renames a table does it
+    // through `liveTables`, which this reads.
+    tableIdentities: async tables =>
+      new Map(
+        [...(await given.liveTables(tables))].map(table => [table, table])
+      ),
+    ...given,
+  };
+}
+
+function depsWithout(
+  over: Partial<PluginLifecycleDeps>
+): Omit<PluginLifecycleDeps, "tableIdentities"> &
+  Partial<Pick<PluginLifecycleDeps, "tableIdentities">> {
   return {
     adapter: {} as never,
     // The owner registry reads through this. `read()` awaits the builder
@@ -547,6 +564,75 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
       logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
     });
     expect(runDown).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A database in which onUninstall renames fx__notes away and creates a new
+   * fx__notes: the name is still there, but its table is another one.
+   */
+  function replacedByHook() {
+    let hookRan = false;
+    return {
+      runLifecycleHook: vi.fn(async () => {
+        hookRan = true;
+      }),
+      liveTables: vi.fn(async (tables: readonly string[]) => new Set(tables)),
+      tableIdentities: vi.fn(
+        async (tables: readonly string[]) =>
+          new Map(tables.map(table => [table, hookRan ? "t2" : "t1"]))
+      ),
+    };
+  }
+
+  it("refuses to run any DOWN once onUninstall has put another table under a name", async () => {
+    // Renamed away and replaced: a check of the name alone passes, and the
+    // approved drop then takes the replacement while the original and its
+    // rows survive under the other name.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      replacedByHook()
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("refuses when a table's identity cannot be read, running no DOWN", async () => {
+    // An identity the database does not report cannot show the table is the
+    // one the DOWNs were judged against, so it counts as changed.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        tableIdentities: vi.fn(
+          async (tables: readonly string[]) =>
+            new Map(tables.map(table => [table, null]))
+        ),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("runs the DOWNs when onUninstall leaves each table as it was (control)", async () => {
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        tableIdentities: vi.fn(
+          async (tables: readonly string[]) =>
+            new Map(tables.map(table => [table, "t1"]))
+        ),
+      }
+    );
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
   });
 
   it("counts two owned tables whose names differ only in case as left", async () => {

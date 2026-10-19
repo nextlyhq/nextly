@@ -430,6 +430,10 @@ const AMBIGUOUS = Symbol("ambiguous");
  * Every named field of an entity's schema, wherever it sits, by name: how a
  * field the transform moved to another group or tab finds what it was. A
  * name two fields share finds neither.
+ *
+ * Fields only (`isField`): an entity holds other named records, such as its
+ * indexes, and one named like a field made that field ambiguous, so a field
+ * moved beside such an index lost its access rule.
  */
 type NamedNodes = ReadonlyMap<
   string,
@@ -448,15 +452,26 @@ function collectNamed(
   into: Map<string, Record<string, unknown> | typeof AMBIGUOUS>
 ): void {
   for (const child of schemaChildren(value)) {
-    if (
-      Array.isArray(value) &&
-      isRecord(child) &&
-      typeof child.name === "string"
-    ) {
+    if (Array.isArray(value) && isField(child)) {
       into.set(child.name, into.has(child.name) ? AMBIGUOUS : child);
     }
     collectNamed(child, into);
   }
+}
+
+/**
+ * A field: a named record with a type, core's or a plugin's. An index entry
+ * (`{ name, fields, unique }`) has a name and no type, and so does any other
+ * named record that is not a field.
+ */
+function isField(
+  value: unknown
+): value is Record<string, unknown> & { name: string; type: string } {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.type === "string"
+  );
 }
 
 /**
