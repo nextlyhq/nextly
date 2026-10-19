@@ -18,7 +18,16 @@ import { env } from "./env";
  * (`${base}${path}`) without producing `//` in the result.
  */
 export function getBaseUrl(override?: string | null): string {
+  return getPublicOrigin(override) ?? "http://localhost:3000";
+}
+
+/**
+ * The public origin set for outbound links: `override`, else
+ * `env.NEXT_PUBLIC_APP_URL`, without a trailing slash; null when neither is
+ * set. For a caller that must not fall back to a guessed host, where
+ * {@link getBaseUrl} would answer `http://localhost:3000`.
+ */
+export function getPublicOrigin(override?: string | null): string | null {
   const raw = override?.trim() || env.NEXT_PUBLIC_APP_URL?.trim();
-  const url = raw || "http://localhost:3000";
-  return url.replace(/\/+$/, "");
+  return raw ? raw.replace(/\/+$/, "") : null;
 }

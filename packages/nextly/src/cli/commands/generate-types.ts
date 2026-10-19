@@ -14,7 +14,7 @@
  * nextly generate:types
  *
  * # Custom output path for types
- * nextly generate:types --output ./src/types/payload-types.ts
+ * nextly generate:types --output ./src/types/nextly-types.ts
  *
  * # Skip module declaration (for use in external projects)
  * nextly generate:types --no-declare
@@ -24,16 +24,12 @@
  * ```
  */
 
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { resolve, dirname, join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve, dirname } from "node:path";
 
 import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import {
-  TypeGenerator,
-  type TypeGeneratorOptions,
-} from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
@@ -41,24 +37,26 @@ import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
-import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
-import {
-  buildImportMapArtifact,
-  COMPONENT_IMPORT_MAP_FILENAME,
-} from "../../plugins/codegen/component-import-map";
+import { writeComponentMapFiles } from "../../plugins/codegen/write-component-map";
 // The option names the field identity would overwrite, refused here because a
 // code-defined user field never passes through the manifest schema.
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
+import {
+  generatedTypesFile,
+  generatedZodDir,
+} from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
+import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount } from "../utils/logger";
+import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
 import {
   applyBlockManifestState,
@@ -75,7 +73,8 @@ import {
 export interface GenerateTypesCommandOptions {
   /**
    * Custom output path for the generated types file.
-   * If not provided, uses the path from config or defaults to ./payload-types.ts
+   * If not provided, uses the path from config, whose default is
+   * ./src/types/generated/nextly-types.ts
    */
   output?: string;
 
@@ -135,38 +134,24 @@ interface GenerationResult {
 // ============================================================================
 
 /**
- * Write the admin component import map (D60) beside the types file when any
- * plugin contributes admin components, or remove a previous one when none
- * does. Importing the generated module from the app self-registers those
- * components, with no manual host imports, and sidesteps the dynamic
- * auto-registration race.
+ * Write the admin component import map (D60) and its strings-only path list
+ * beside the types file. Importing the map from the app self-registers every
+ * plugin admin component, with no manual host imports, and the admin's server
+ * layout reads the list to refuse a widget whose component the map lacks.
  *
- * Removal is how "nothing to register" is expressed. A map left behind is worse
- * than a stale data file: the app IMPORTS it, so it keeps importing a package
- * that is no longer installed and breaks the next build.
+ * Both are written even when nothing contributes a component: the app imports
+ * them, so removing them would break its build. An empty map imports nothing,
+ * so a package that is no longer installed is not imported either.
  *
- * @returns the map's path when one was written
+ * @returns the map's path
  */
 async function settleImportMap(
-  plugins: Parameters<typeof buildImportMapArtifact>[0],
+  plugins: Parameters<typeof writeComponentMapFiles>[0],
   typesOutputPath: string,
   cwd: string
 ): Promise<string | undefined> {
-  const importMap = buildImportMapArtifact(plugins, typesOutputPath);
-  if (importMap === null || importMap === undefined) {
-    await rm(
-      resolve(
-        cwd,
-        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
-      ),
-      { force: true }
-    );
-    return undefined;
-  }
-  const importMapPath = resolve(cwd, importMap.path);
-  await ensureDir(dirname(importMapPath));
-  await writeFile(importMapPath, importMap.code, "utf-8");
-  return importMapPath;
+  const written = await writeComponentMapFiles(plugins, typesOutputPath, cwd);
+  return written.paths[0];
 }
 
 /**
@@ -229,10 +214,16 @@ export async function runGenerateTypes(
   // belongs on disk. `expected === null` is expressed by REMOVING any previous
   // manifest: writing nothing would leave the last run's file still advertising
   // blocks the app no longer has.
+  // Fitted to the app's layout, as the types file it sits beside is below.
+  const manifestCwd = options.cwd ?? process.cwd();
+  const typesFileForLayout = generatedTypesFile(
+    manifestCwd,
+    options.output ?? configResult.config.typescript.outputFile
+  );
   const manifestState = await readBlockManifestState(
     configResult.config.plugins ?? [],
-    options.output ?? configResult.config.typescript.outputFile,
-    options.cwd ?? process.cwd()
+    typesFileForLayout,
+    manifestCwd
   );
   await applyBlockManifestState(manifestState);
   const writtenManifestPath =
@@ -245,11 +236,15 @@ export async function runGenerateTypes(
   // declares nothing in code, yet still renders plugin admin components — its
   // plugins' pages and settings, and a document view offered on a field type.
   // Without the map a bundled admin cannot resolve them and draws an empty
-  // slot.
+  // slot. Beside the CONFIGURED types file, fitted to the app's layout, and
+  // not beside an `--output` override: the admin page imports the map from one
+  // place, and the admin's check rewrites it in development and names it in
+  // production from the config, so a map written elsewhere would be one nothing
+  // reads.
   const writtenImportMapPath = await settleImportMap(
     configResult.config.plugins ?? [],
-    options.output ?? configResult.config.typescript.outputFile,
-    options.cwd ?? process.cwd()
+    generatedTypesFile(manifestCwd, configResult.config.typescript.outputFile),
+    manifestCwd
   );
   if (writtenImportMapPath) {
     logger.debug(`Written plugin admin import map to: ${writtenImportMapPath}`);
@@ -337,35 +332,20 @@ async function generateTypes(
 
   logger.debug(`Generating TypeScript types (declare: ${generateDeclare})`);
 
-  const typeGeneratorOptions: TypeGeneratorOptions = {
-    includeComments: true,
-    generateInputTypes: true,
-    generateConfig: true,
-    generateModuleAugmentation: generateDeclare,
-  };
-
-  // Permission slugs + event names for typed PermissionSlug/EventName (D47).
   // `config` is the already-merged config (plugin contributions folded by
   // loadConfig); `config.plugins` is the resolved plugin list.
-  const { permissionSlugs, eventNames } = collectCodegenNames(
+  const typesFilePath = await writeGeneratedTypesFile({
+    cwd,
+    outputFile: typesOutputPath,
     config,
-    config.plugins ?? []
-  );
-
-  const typeGenerator = new TypeGenerator(typeGeneratorOptions);
-  const typesFile = typeGenerator.generateTypesFile(
-    records,
-    singleRecords,
-    componentRecords,
-    userFieldRecords,
-    permissionSlugs,
-    eventNames
-  );
-
-  // Resolve and write types file
-  const typesFilePath = resolve(cwd, typesOutputPath);
-  await ensureDir(dirname(typesFilePath));
-  await writeFile(typesFilePath, typesFile.code, "utf-8");
+    plugins: config.plugins ?? [],
+    collections: records,
+    singles: singleRecords,
+    components: componentRecords,
+    userFields: userFieldRecords,
+    moduleAugmentation: generateDeclare,
+    warn: message => logger.warn(message),
+  });
 
   result.typesFile = typesFilePath;
   logger.debug(`Written types to: ${typesFilePath}`);
@@ -382,8 +362,8 @@ async function generateTypes(
     // Generate schemas for all collections
     const zodSchemas = zodGenerator.generateAllSchemas(records);
 
-    // Determine output directory for Zod schemas (use schemasDir/zod)
-    const zodOutputDir = resolve(cwd, config.db.schemasDir, "zod");
+    // Zod schemas go to schemasDir/zod, fitted to the app's layout.
+    const zodOutputDir = generatedZodDir(cwd, config.db.schemasDir);
     await ensureDir(zodOutputDir);
 
     // Write individual schema files
@@ -662,7 +642,12 @@ export function registerGenerateTypesCommand(program: Command): void {
     .description(
       "Generate TypeScript type definitions and Zod schemas from collections and singles"
     )
-    .option("-o, --output <path>", "Output file path for TypeScript types")
+    // The help names the default from the value the config falls back to, so
+    // the two cannot disagree.
+    .option(
+      "-o, --output <path>",
+      `Output file path for TypeScript types (default: typescript.outputFile, or ${DEFAULT_TYPESCRIPT_CONFIG.outputFile})`
+    )
     .option("--no-declare", "Skip module declaration/augmentation")
     .option("--no-zod", "Skip Zod schema generation")
     .action(async (cmdOptions: GenerateTypesCommandOptions, cmd: Command) => {

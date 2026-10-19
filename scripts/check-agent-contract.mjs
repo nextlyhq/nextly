@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 
 import { load } from "js-yaml";
 
-import { SKILLS_HOME, USER_SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, userSkillSeparation } from "./agent-skills.mjs";
+import { CLAUDE_COPY, SKILLS_HOME, USER_SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, skillTableNames, userSkillSeparation } from "./agent-skills.mjs";
 import { copies, copyDrift, repositoryFiles } from "./agent-instructions.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -523,11 +523,7 @@ export function routerDisagreements(routed, present) {
 
 /** Skill names the AGENTS.md router table names, read from its rows. */
 export function routedSkills(agentsMd) {
-  const names = new Set();
-  for (const row of agentsMd.matchAll(/^\|\s*`([a-z][a-z0-9-]*)`\s*\|/gm)) {
-    names.add(row[1]);
-  }
-  return names;
+  return skillTableNames(agentsMd);
 }
 
 /**
@@ -584,6 +580,37 @@ export function guidanceReferences(text) {
     found.add(match[1].replace(/[.,;:)]+$/, ""));
   }
   return found;
+}
+
+/** The project templates `create-nextly-app` scaffolds from. */
+export const PROJECT_TEMPLATES = "templates";
+
+/**
+ * The repository path a guidance citation resolves to, or null when nothing
+ * can answer it.
+ *
+ * A project template is guidance for the project scaffolded from it, not for
+ * this repository. That project's `.agents/skills/` and `.claude/skills/` hold
+ * the bundled user skills, each copied from `USER_SKILLS_HOME`, and nothing
+ * else. So a template's citation resolves against those skills; read against
+ * this repository's root, it would land among the contributor skills instead.
+ *
+ * @param {string} file the citing file, relative to the repository
+ * @param {string} reference the cited path
+ * @param {string[]} bundled the user skills a scaffold writes
+ */
+export function guidanceTarget(file, reference, bundled) {
+  return file.startsWith(`${PROJECT_TEMPLATES}/`) ? scaffoldedSkillPath(reference, bundled) : reference;
+}
+
+/** Where a scaffolded project's skills-folder path comes from here, or null when no scaffold writes it. */
+function scaffoldedSkillPath(reference, bundled) {
+  const home = [SKILLS_HOME, CLAUDE_COPY].find(dir => `${reference}/`.startsWith(`${dir}/`));
+  if (home === undefined) return null;
+  // What follows the skills folder: empty or "/" for the folder itself, else "/<skill>/...".
+  const rest = reference.slice(home.length);
+  const skill = rest.split("/")[1];
+  return !skill || bundled.includes(skill) ? `${USER_SKILLS_HOME}${rest}` : null;
 }
 
 /**
@@ -805,6 +832,7 @@ function main(base = root) {
   }
 
   // Every tracked file, for the narrow `.claude/...` scan above.
+  const bundled = userSkillSeparation(base).user;
   const guidanceMisses = new Map();
   for (const file of tracked) {
     if (GUIDANCE_SCAN_EXCLUDES.includes(file)) continue;
@@ -815,7 +843,8 @@ function main(base = root) {
       continue; // binary, or removed since `git ls-files` ran
     }
     for (const reference of guidanceReferences(text)) {
-      if (existsSync(join(base, reference))) continue;
+      const target = guidanceTarget(file, reference, bundled);
+      if (target !== null && existsSync(join(base, target))) continue;
       if (!guidanceMisses.has(reference)) guidanceMisses.set(reference, []);
       guidanceMisses.get(reference).push(file);
     }

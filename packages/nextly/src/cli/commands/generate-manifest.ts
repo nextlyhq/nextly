@@ -46,6 +46,7 @@ import {
   buildBlockManifestArtifact,
 } from "../../plugins/codegen/block-manifest";
 import type { PluginDefinition } from "../../plugins/plugin-context";
+import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig } from "../utils/config-loader";
 
@@ -167,9 +168,13 @@ export async function runGenerateManifest(
   });
 
   const cwd = options.cwd ?? process.cwd();
+  // Beside the types file, so fitted to the app's layout as that file is.
   const state = await readBlockManifestState(
     configResult.config.plugins ?? [],
-    options.output ?? configResult.config.typescript.outputFile,
+    generatedTypesFile(
+      cwd,
+      options.output ?? configResult.config.typescript.outputFile
+    ),
     cwd
   );
 

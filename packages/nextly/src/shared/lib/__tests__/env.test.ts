@@ -38,3 +38,33 @@ describe("env schema OAuth removal", () => {
     }
   });
 });
+
+// A production server refuses a secret it cannot sign with. The example env
+// files a new project gets carry an EMPTY NEXTLY_SECRET as their placeholder,
+// so a copied example file cannot start a deployment; an earlier placeholder
+// was 34 characters long and passed this check.
+describe("the production NEXTLY_SECRET check", () => {
+  const production = {
+    NODE_ENV: "production",
+    DB_DIALECT: "sqlite",
+    SQLITE_PATH: "./tmp.db",
+    NEXT_PUBLIC_APP_URL: "https://example.com",
+  };
+
+  it.each([
+    ["the empty placeholder of a new project's example env file", ""],
+    ["a secret shorter than 32 characters", "short-secret"],
+  ])("refuses %s", (_label, secret) => {
+    expect(() =>
+      validateEnvObject({ ...production, NEXTLY_SECRET: secret })
+    ).toThrow(/NEXTLY_SECRET of at least 32 characters/);
+  });
+
+  it("accepts a secret of 32 characters", () => {
+    // The control: the same environment with a usable secret parses, so the
+    // refusals above are about the secret and nothing else.
+    expect(() =>
+      validateEnvObject({ ...production, NEXTLY_SECRET: "s".repeat(32) })
+    ).not.toThrow();
+  });
+});

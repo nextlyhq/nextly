@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { ArrowRight, Loader2, Mail } from "@admin/components/icons";
 import { AuthFormCard } from "@admin/components/shared/auth/AuthFormCard";
+import { AuthRefusalNotice } from "@admin/components/shared/auth/AuthRefusalNotice";
 import { PasswordVisibilityToggle } from "@admin/components/shared/auth/PasswordVisibilityToggle";
 import { toast } from "@admin/components/ui";
 import {
@@ -21,6 +22,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
+import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, type ApiError } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
@@ -69,6 +71,9 @@ export function Login() {
 
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  // A refused submission is shown in the form, where it stays while the
+  // person acts on it; a toast is kept for every other failure.
+  const authRefusal = useAuthRefusal();
   const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [resendingVerification, setResendingVerification] = useState(false);
   // Auth-page UI contributed by plugins (provider buttons, slots, 2FA views) — D57.
@@ -101,6 +106,7 @@ export function Login() {
   // fallow-ignore-next-line complexity
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsLoading(true);
+    authRefusal.clear();
 
     try {
       const csrfToken = await getCsrfToken();
@@ -161,6 +167,12 @@ export function Login() {
       // which remounts PublicRoute, creating an infinite loop.
       window.location.href = ROUTES.DASHBOARD;
     } catch (error: unknown) {
+      // Its own answers first: an unverified email is a 403 too, and this form
+      // meets it with a resend action rather than a refusal.
+      if (authRefusal.take(error, ["EMAIL_NOT_VERIFIED", "ACCOUNT_LOCKED"])) {
+        setEmailNotVerified(false);
+        return;
+      }
       // The fetcher throws an `ApiError`, so the code and the message are read
       // off the parsed error. The server answers `EMAIL_NOT_VERIFIED` only
       // after the password was proven correct, which is what makes offering
@@ -241,29 +253,32 @@ export function Login() {
           onCredentialRejected={challengeFlow.abandonPasswordChange}
         />
       ) : challengeFlow.challenge && authUi.loaded ? (
-        <AuthChallenge
-          authUi={authUi}
-          challengeType={challengeFlow.challenge.challengeType}
-          pendingToken={challengeFlow.challenge.pendingToken}
-          // Answered and still no session — the account must replace its
-          // admin-set password first — is raised by the hook itself, so this
-          // passes the resolver straight through.
-          resolve={challengeFlow.resolve}
-          onResolved={next => {
-            // A challenge view calls this when it reads the answer as "done".
-            // A forced password change is accepted and NOT done: the host is
-            // already rendering that step, and navigating would land on a page
-            // with no session that bounces straight back to login. Checked
-            // here rather than trusted to the view, which may predate the
-            // `continues` field entirely.
-            if (challengeFlow.isContinuing()) return;
-            // The host has already sent the browser to the server's `next`;
-            // the view's own value cannot be that, and navigating on it
-            // replaced the destination with the dashboard.
-            if (challengeFlow.hasNavigated()) return;
-            window.location.href = next ?? ROUTES.DASHBOARD;
-          }}
-        />
+        <>
+          <AuthRefusalNotice refusal={challengeFlow.refusal} />
+          <AuthChallenge
+            authUi={authUi}
+            challengeType={challengeFlow.challenge.challengeType}
+            pendingToken={challengeFlow.challenge.pendingToken}
+            // Answered and still no session — the account must replace its
+            // admin-set password first — is raised by the hook itself, so this
+            // passes the resolver straight through.
+            resolve={challengeFlow.resolve}
+            onResolved={next => {
+              // A challenge view calls this when it reads the answer as "done".
+              // A forced password change is accepted and NOT done: the host is
+              // already rendering that step, and navigating would land on a page
+              // with no session that bounces straight back to login. Checked
+              // here rather than trusted to the view, which may predate the
+              // `continues` field entirely.
+              if (challengeFlow.isContinuing()) return;
+              // The host has already sent the browser to the server's `next`;
+              // the view's own value cannot be that, and navigating on it
+              // replaced the destination with the dashboard.
+              if (challengeFlow.hasNavigated()) return;
+              window.location.href = next ?? ROUTES.DASHBOARD;
+            }}
+          />
+        </>
       ) : challengeFlow.resuming || challengeFlow.challenge ? (
         // The outstanding step is still being looked up. Showing the password
         // form meanwhile swapped it out from under the person a moment later,
@@ -294,6 +309,7 @@ export function Login() {
               </AlertDescription>
             </Alert>
           )}
+          <AuthRefusalNotice refusal={authRefusal.refusal} />
           {challengeFlow.flowEnded && (
             <Alert
               variant="destructive"

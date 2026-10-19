@@ -57,7 +57,13 @@ describe("registerReleaseServices", () => {
     // would be green about a mechanism it never ran.
     const singletons = new Map<string, unknown>();
     vi.resetModules();
-    vi.doMock("../../services/lib/permissions", () => ({
+    // Only `hasPermission` is stubbed; the rest of the module stays real,
+    // because the registration also wires the release run and the target checks, whose
+    // identity and content reads reach this module too.
+    vi.doMock("../../services/lib/permissions", async importOriginal => ({
+      ...(await importOriginal<
+        typeof import("../../services/lib/permissions")
+      >()),
       hasPermission: async () => true,
     }));
     vi.doMock("../container", () => ({
@@ -124,7 +130,13 @@ describe("registerReleaseServices document authority", () => {
   async function withOwnerAllowed(scopePermissions: string[]) {
     const singletons = new Map<string, unknown>();
     vi.resetModules();
-    vi.doMock("../../services/lib/permissions", () => ({
+    // Only `hasPermission` is stubbed; the rest of the module stays real,
+    // because the registration also wires the release run and the target checks, whose
+    // identity and content reads reach this module too.
+    vi.doMock("../../services/lib/permissions", async importOriginal => ({
+      ...(await importOriginal<
+        typeof import("../../services/lib/permissions")
+      >()),
       hasPermission: async () => true,
     }));
     vi.doMock("../container", () => ({
@@ -212,7 +224,13 @@ describe("registerReleaseServices lifecycle grants", () => {
   }) {
     const singletons = new Map<string, unknown>();
     vi.resetModules();
-    vi.doMock("../../services/lib/permissions", () => ({
+    // Only `hasPermission` is stubbed; the rest of the module stays real,
+    // because the registration also wires the release run and the target checks, whose
+    // identity and content reads reach this module too.
+    vi.doMock("../../services/lib/permissions", async importOriginal => ({
+      ...(await importOriginal<
+        typeof import("../../services/lib/permissions")
+      >()),
       hasPermission: async () => true,
     }));
     vi.doMock("../container", () => ({
@@ -301,5 +319,71 @@ describe("registerReleaseServices lifecycle grants", () => {
     await expect(svc.addMember("r1", MEMBER, actor)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
+  });
+});
+
+describe("registerReleaseServices binds Publish now to its own registration", () => {
+  afterEach(() => {
+    vi.doUnmock("../container");
+    vi.doUnmock("../../domains/jobs/jobs-runner");
+    vi.resetModules();
+  });
+
+  it("runs the drain with the job registry of the registration that built it", async () => {
+    // Services can be cleared and registered again while a Publish now from
+    // the earlier registration is still in flight. Its drain must run with
+    // that registration's registry, not whichever one the container holds by
+    // then, whose drain closes over a different adapter.
+    const singletons = new Map<string, unknown>();
+    const ownRegistry = { name: "own registration" };
+    const laterRegistry = { name: "later registration" };
+    let registered: unknown = ownRegistry;
+    const runSweepNow = vi.fn(async () => ({
+      claimed: 0,
+      done: 0,
+      failed: 0,
+      retried: 0,
+      unrecorded: 0,
+    }));
+    vi.resetModules();
+    vi.doMock("../../domains/jobs/jobs-runner", async importOriginal => ({
+      ...(await importOriginal<
+        typeof import("../../domains/jobs/jobs-runner")
+      >()),
+      runSweepNow,
+    }));
+    vi.doMock("../container", () => ({
+      container: {
+        registerSingleton: (name: string, factory: () => unknown) => {
+          singletons.set(name, factory());
+        },
+        has: () => true,
+        get: (name: string) => (name === "jobRegistry" ? registered : {}),
+      },
+    }));
+
+    const { registerReleaseServices } = await import(
+      "../registrations/register-releases"
+    );
+    registerReleaseServices({
+      adapter: { select: async () => [], count: async () => 0 },
+    } as never);
+    // The container moves on to a later registration's registry.
+    registered = laterRegistry;
+
+    // The dependency the service runs Publish now's drain through, read from
+    // the service the registration built.
+    const svc = singletons.get("releasesService") as {
+      deps: { runDrainNow: (o: { maxDurationMs: number }) => Promise<unknown> };
+    };
+    await svc.deps.runDrainNow({ maxDurationMs: 1_000 });
+
+    expect(runSweepNow).toHaveBeenCalledTimes(1);
+    expect(runSweepNow).toHaveBeenCalledWith(
+      expect.anything(),
+      ownRegistry,
+      "releases:drain",
+      { maxDurationMs: 1_000 }
+    );
   });
 });

@@ -2,12 +2,12 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql } from "drizzle-orm";
 
 import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
 import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
 import type { CompanionSchema } from "../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
+import { applyMigrationWhole } from "../domains/schema/services/apply-migration-statements";
 import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
@@ -162,49 +162,25 @@ export class CollectionFileManager {
     await fs.writeFile(migrationPath, migrationSQL);
   }
 
+  /**
+   * Runs a collection's migration against this database, whole or not at all where the dialect
+   * allows it.
+   *
+   * PostgreSQL and SQLite change their schema inside a transaction, so every statement runs in one
+   * and a refusal part-way leaves the table as it was. MySQL commits each schema statement as it
+   * runs, so there a refusal says which statement it stopped at and how many ran before it, for
+   * the caller to report and for the next save to finish from the table as it now is.
+   *
+   * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the database refuses a statement
+   */
   async runMigration(migrationSQL: string): Promise<void> {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const dbInstance = this.db as any;
-
-      // The "--> statement-breakpoint" is used as a separator in Drizzle migrations
-      const statements = migrationSQL
-        .split("--> statement-breakpoint")
-        .map(s => s.trim())
-        .filter(s => s.length > 0);
-
-      for (const statement of statements) {
-        const cleanStatement = statement
-          .split("\n")
-          .filter(line => !line.trim().startsWith("--"))
-          .join("\n")
-          .trim();
-
-        if (!cleanStatement) continue;
-
-        // Check if this is a SQLite database (drizzle better-sqlite3 exposes $client)
-        // $client is the underlying better-sqlite3 Database instance
-        if (
-          dbInstance.$client &&
-          typeof dbInstance.$client.exec === "function"
-        ) {
-          // SQLite (better-sqlite3) - use $client.exec() for DDL statements
-          // exec() is synchronous and handles raw SQL directly
-          dbInstance.$client.exec(cleanStatement);
-        } else if (typeof dbInstance.execute === "function") {
-          // PostgreSQL/MySQL - async with sql.raw()
-          await dbInstance.execute(sql.raw(cleanStatement));
-        } else {
-          throw new Error(
-            "Database instance does not support execute or $client.exec methods"
-          );
-        }
-      }
-    } catch (error: unknown) {
-      throw new Error(
-        `Migration failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    // The runner the Single save uses too, so the two saves apply a migration the same way.
+    await applyMigrationWhole({
+      db: this.db,
+      dialect: this.adapter?.dialect,
+      migrationSQL,
+      entity: "collection",
+    });
   }
 
   async loadDynamicSchema(

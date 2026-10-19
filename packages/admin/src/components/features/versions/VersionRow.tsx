@@ -111,7 +111,11 @@ export function VersionRow({
     <div
       className={cn(
         "relative flex items-stretch border-b border-border last:border-b-0",
-        active && "bg-primary/5"
+        // The chosen version stays in the list beside what is on screen, so it
+        // is marked plainly in either scheme: the primary tint, and a primary
+        // bar on the leading edge.
+        active &&
+          "bg-primary/10 before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-primary"
       )}
     >
       <button

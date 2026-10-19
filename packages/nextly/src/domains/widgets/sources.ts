@@ -89,6 +89,25 @@ export interface WidgetSourceField {
    * simply says nothing here and the admin falls back to the name.
    */
   label?: string;
+  /**
+   * What each stored VALUE is called, for a field that stores one of a fixed set: the status
+   * column, a select, a radio.
+   *
+   * A person reads "Published", never `published`, and "Needs review", never `needs_review`. The
+   * stored value is what the read filters and groups on; this is what a heading, a row, a chart
+   * group or a text alternative shows for it. Carried from the field's own options, so the label
+   * is the one the entry form shows beside the same choice, rather than one guessed from the
+   * value.
+   *
+   * Absent for every other field, and for a choice field whose options carry no usable label.
+   */
+  choices?: readonly WidgetFieldChoice[];
+}
+
+/** One value a choice field stores, and what a person calls it. */
+export interface WidgetFieldChoice {
+  value: string;
+  label: string;
 }
 
 export interface WidgetSource {
@@ -349,6 +368,46 @@ function validateFieldAnnotations(
       `${sourceId}: field "${name}" has a bucketable flag that is not a boolean`
     );
   }
+  if (field.choices !== undefined)
+    validateChoices(sourceId, name, field.choices);
+}
+
+/**
+ * Refuses value labels a card could not draw: a list that is not one, a value that is not a
+ * string, a label that is empty (a cell or a bar would show nothing where the stored value
+ * belongs), or one value named twice (which label wins would be an accident of order).
+ */
+function validateChoices(
+  sourceId: string,
+  name: string,
+  choices: unknown
+): void {
+  if (!Array.isArray(choices)) {
+    fail(`${sourceId}: field "${name}" has choices that are not a list`);
+  }
+  const seen = new Set<string>();
+  for (const raw of choices as unknown[]) {
+    const { value, label } = (raw ?? {}) as {
+      value?: unknown;
+      label?: unknown;
+    };
+    if (typeof value !== "string") {
+      fail(
+        `${sourceId}: field "${name}" has a choice whose value is not a string`
+      );
+    }
+    if (typeof label !== "string" || label.trim() === "") {
+      fail(
+        `${sourceId}: field "${name}" has a choice whose label is empty or not a string`
+      );
+    }
+    if (seen.has(value)) {
+      fail(
+        `${sourceId}: field "${name}" names the choice "${String(value)}" twice`
+      );
+    }
+    seen.add(value);
+  }
 }
 
 /**
@@ -535,10 +594,36 @@ export function replaceSourcesOfKind(
  * closed.
  */
 export function failUnavailableSourceOrOp(detail: string): never {
-  throw NextlyError.invalidInput({
-    message: "Invalid widget query: unavailable source or unsupported op",
+  const refusal = NextlyError.invalidInput({
+    message: UNAVAILABLE_SOURCE_MESSAGE,
     logContext: { widgetQuery: detail },
   });
+  unavailableRefusals.add(refusal);
+  throw refusal;
+}
+
+/** The one public sentence every refusal above carries. */
+export const UNAVAILABLE_SOURCE_MESSAGE =
+  "Invalid widget query: unavailable source or unsupported op";
+
+/**
+ * Every refusal {@link failUnavailableSourceOrOp} threw, so the batch can answer its card with a
+ * typed `unavailable` code rather than by matching the sentence.
+ *
+ * ALL of them, deliberately, and not only the ones that mean "absent". A code given to an
+ * unknown id and withheld from an unsupported op would split the one answer back into two, and
+ * the pair would confirm that a `plugin:` or `system:` source exists -- the oracle the shared
+ * sentence closes. So the code is exactly as uninformative as the sentence.
+ *
+ * Kept in a set beside the errors rather than in anything the error carries, so the mark reaches
+ * no log, response or caller that catches the error: only `isUnavailableSourceRefusal` can see
+ * it.
+ */
+const unavailableRefusals = new WeakSet<NextlyError>();
+
+/** Whether `error` is a refusal {@link failUnavailableSourceOrOp} threw. */
+export function isUnavailableSourceRefusal(error: unknown): boolean {
+  return error instanceof NextlyError && unavailableRefusals.has(error);
 }
 
 /**

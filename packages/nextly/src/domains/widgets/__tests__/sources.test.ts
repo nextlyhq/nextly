@@ -45,6 +45,38 @@ describe("registerSource / getSource", () => {
     ).toThrow();
   });
 
+  it("refuses value labels a card could not draw", () => {
+    // A plugin's source is not shaped by the collection path, so a blank label would reach a cell
+    // or a bar and draw nothing where the stored value belongs; a value named twice would make
+    // which label wins an accident of order.
+    const withChoices = (choices: unknown) => ({
+      id: "acme:tickets",
+      label: "Tickets",
+      kind: "plugin" as const,
+      supports: ["count" as const],
+      fields: [{ name: "stage", type: "string" as const, choices }],
+    });
+    for (const choices of [
+      "draft",
+      [{ value: "draft", label: "" }],
+      [{ value: 3, label: "Three" }],
+      [
+        { value: "draft", label: "Draft" },
+        { value: "draft", label: "Rough" },
+      ],
+    ]) {
+      clearSources();
+      expect(() => registerSource(withChoices(choices) as never)).toThrow(
+        /choice/
+      );
+    }
+    // The control: well-formed labels register.
+    clearSources();
+    expect(() =>
+      registerSource(withChoices([{ value: "draft", label: "Draft" }]) as never)
+    ).not.toThrow();
+  });
+
   it("accepts a field that declares no label at all", () => {
     // The control: absent is ordinary, unusable is not.
     expect(() =>

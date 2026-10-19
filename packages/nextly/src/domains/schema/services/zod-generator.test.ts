@@ -778,3 +778,19 @@ describe("ZodGenerator — Schema Variants & Exports", () => {
     expect(results[1].collectionSlug).toBe("authors");
   });
 });
+
+describe("ZodGenerator — where the schema file gets Zod", () => {
+  // The schema files are written into the app, which depends on `nextly` but
+  // not necessarily on `zod`: under pnpm or Yarn Plug'n'Play a bare `zod` import
+  // does not resolve there. `nextly/zod` re-exports the Zod Nextly itself uses.
+  it("imports z from nextly/zod, never from zod directly", () => {
+    const { code } = new ZodGenerator({
+      includeComments: false,
+    }).generateSchema(
+      createCollection([{ name: "title", type: "text" } as FieldConfig])
+    );
+
+    expect(code).toContain('import { z } from "nextly/zod";');
+    expect(code).not.toMatch(/from ["']zod["']/);
+  });
+});

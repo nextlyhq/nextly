@@ -13,6 +13,8 @@ import type { ApiSingle } from "@admin/types/entities";
 
 import { CardEmpty, CardError, CardSkeleton } from "../widgets/frame/states";
 
+import { keptOffDashboard } from "./kept-off-dashboard";
+
 /**
  * Dashboard surface listing all configured Singles. Mirrors the grid +
  * heading style used by CollectionQuickLinks. Each card links to the
@@ -50,7 +52,12 @@ function SingleCard({ single }: { single: ApiSingle }) {
                 {single.label || single.slug}
               </span>
               {single.description && (
-                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                // Shortened to two lines, with the whole text on hover (`title`) and to assistive
+                // technology, which reads the element's full text.
+                <p
+                  className="text-xs text-muted-foreground line-clamp-2 leading-relaxed"
+                  title={single.description}
+                >
                   {single.description}
                 </p>
               )}
@@ -73,7 +80,10 @@ export const SinglesQuickLinks: React.FC = () => {
     refetch,
   } = useSingles({ pagination: { page: 0, pageSize: 100 } });
 
-  const singles = singlesData?.items ?? [];
+  // A Single kept off the dashboard (internal, or hidden from the navigation) is not listed.
+  const singles = (singlesData?.items ?? []).filter(
+    single => !keptOffDashboard(single)
+  );
 
   // Whether this card is offered at all is the HOST's decision, through the
   // `singles:present` condition on its declaration. It used to hide itself
@@ -96,6 +106,18 @@ export const SinglesQuickLinks: React.FC = () => {
   // Nothing to list: the frame's empty state, so the card says what will appear rather than
   // drawing a blank body under its title.
   if (singles.length === 0) {
+    // Only the first page is read, and the Singles it held may all be kept off the dashboard
+    // while later pages hold some that are not. "No Singles yet" would then be false, so the card
+    // says where they are instead.
+    if (singlesData?.meta?.hasNext === true) {
+      return (
+        <CardEmpty
+          title="Your Singles are in the full list"
+          detail="This card shows the first ones, and none of them belong here."
+          action={{ label: "Open Singles", href: ROUTES.SINGLES }}
+        />
+      );
+    }
     return (
       <CardEmpty
         title="No Singles yet"
@@ -104,7 +126,9 @@ export const SinglesQuickLinks: React.FC = () => {
     );
   }
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    // As many columns as the CARD's width fits, never the window's: a tile is at least 11rem,
+    // so a small card is one column and a wide one several.
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">
       {singles.map(single => (
         <SingleCard key={single.id} single={single} />
       ))}

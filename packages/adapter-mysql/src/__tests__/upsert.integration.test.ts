@@ -18,7 +18,8 @@ const KEYED = "int_upsert_mysql";
 const NULLABLE = "int_upsert_mysql_nullable";
 const PAIR = "int_upsert_mysql_pair";
 const MANY = "int_upsert_mysql_many";
-const TABLES = [KEYED, NULLABLE, PAIR, MANY];
+const SERIAL = "int_upsert_mysql_serial";
+const TABLES = [KEYED, NULLABLE, PAIR, MANY, SERIAL];
 const TEST_DB_URL = process.env.TEST_MYSQL_URL;
 
 const DEFINITIONS: TableDefinition[] = [
@@ -58,7 +59,16 @@ const DEFINITIONS: TableDefinition[] = [
   },
 ];
 
+// An auto-increment key is created by statement: the table definition helper
+// spells a primary key as a given value.
+const SERIAL_DDL = `CREATE TABLE ${SERIAL} (id INT AUTO_INCREMENT PRIMARY KEY, slug VARCHAR(64) UNIQUE, label VARCHAR(64))`;
+
 const models = {
+  [SERIAL]: mysqlTable(SERIAL, {
+    id: int("id").autoincrement().primaryKey(),
+    slug: varchar("slug", { length: 64 }).unique(),
+    label: varchar("label", { length: 64 }),
+  }),
   [KEYED]: mysqlTable(KEYED, {
     id: varchar("id", { length: 36 }).primaryKey(),
     key: varchar("key", { length: 64 }).notNull().unique(),
@@ -110,6 +120,8 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
       await adapter.executeQuery(`DROP TABLE IF EXISTS ${definition.name}`);
       await adapter.createTable(definition);
     }
+    await adapter.executeQuery(`DROP TABLE IF EXISTS ${SERIAL}`);
+    await adapter.executeQuery(SERIAL_DDL);
     // The composite key, created by statement because the table definition
     // helper does not create indexes everywhere.
     await adapter.executeQuery(
@@ -272,6 +284,29 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     expect(await rows()).toEqual([{ id: "b", key: "k1", label: "second" }]);
   });
 
+  it("returns the stored row when an update trigger rewrites the primary key", async () => {
+    // The key the update left is not the one the trigger wrote, so the row is
+    // found by the conflict value, which the trigger did not touch.
+    await adapter.upsert(
+      KEYED,
+      { id: "a", key: "k1", label: "first" },
+      { conflictColumns: ["key"] }
+    );
+    await adapter.executeQuery(
+      `CREATE TRIGGER int_upsert_reid BEFORE UPDATE ON ${KEYED} FOR EACH ROW SET NEW.id = CONCAT('t-', OLD.id)`
+    );
+    try {
+      const stored = await adapter.upsert<Row>(
+        KEYED,
+        { id: "b", key: "k1", label: "second" },
+        { conflictColumns: ["key"], updateColumns: ["label"] }
+      );
+      expect(stored).toMatchObject({ id: "t-a", key: "k1", label: "second" });
+    } finally {
+      await adapter.executeQuery("DROP TRIGGER IF EXISTS int_upsert_reid");
+    }
+  });
+
   it("returns the stored row when an update trigger rewrites the conflict key", async () => {
     // Read back by the row's primary key: by the conflict value the update was
     // keyed on, the row a trigger re-keyed is not found.
@@ -318,6 +353,18 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
       created[0]?.id,
     ]);
     expect(await rows()).toHaveLength(1);
+  });
+
+  it("returns the generated key when the caller passes it as undefined", async () => {
+    // The caller's undefined id must not hide the one MySQL generated, or the
+    // row could not be read back and the input would be returned instead.
+    const stored = await adapter.upsert<{ id: number; label: string }>(
+      SERIAL,
+      { id: undefined, slug: null, label: "first" },
+      { conflictColumns: ["slug"] }
+    );
+    expect(stored).toMatchObject({ label: "first" });
+    expect(typeof stored.id).toBe("number");
   });
 
   it("reads back the row matching every column of a composite key", async () => {

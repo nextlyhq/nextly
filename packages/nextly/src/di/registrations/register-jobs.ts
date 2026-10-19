@@ -41,6 +41,7 @@ import { collectJobs } from "../../plugins/jobs/collect-jobs";
 import type { Logger } from "../../services/shared";
 import { container } from "../container";
 
+import { releaseSettlementReads } from "./release-document-checks";
 import type { RegistrationContext } from "./types";
 
 /**
@@ -150,9 +151,10 @@ export function registerJobServices(ctx: RegistrationContext): void {
 
   // Collected EAGERLY, here, rather than inside the registry factory below.
   // `registerSingleton` stores a factory and runs it on first `get`, and the
-  // only production caller of `get("jobRegistry")` is a drain — so a duplicate
-  // slug or a reserved namespace would let boot and every enqueue succeed, and
-  // then fail every drain, instead of refusing to start. A collision is a
+  // production callers of `get("jobRegistry")` all run after boot — a drain,
+  // and the releases service when it is first built — so a duplicate slug or
+  // a reserved namespace would let boot and every enqueue succeed, and then
+  // fail every drain, instead of refusing to start. A collision is a
   // configuration error, and a configuration error should stop the boot that
   // introduced it.
   const declaredJobs = collectJobs(ctx.config, ctx.config.plugins ?? []);
@@ -182,6 +184,9 @@ export function registerJobServices(ctx: RegistrationContext): void {
         // handler binds each call to the member's own resolved identity.
         contentApi: nextly,
         runAs: databaseRunAs(adapter),
+        // The stored lifecycle and the author gate, so a document a killed
+        // pass already published is passed over rather than written again.
+        settlement: releaseSettlementReads(adapter, logger),
         onOutcome: result => reportReleasesOutcome(logger, result),
       })
     );

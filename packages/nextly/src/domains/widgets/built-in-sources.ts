@@ -17,12 +17,20 @@ import { classifyFieldKind } from "../schema/services/field-column-descriptor";
 import {
   replaceSourcesOfKind,
   sourceKindFromId,
+  type WidgetFieldChoice,
   type WidgetSource,
   type WidgetSourceField,
 } from "./sources";
 
 /** The primary key. Present whatever else the collection is configured with. */
-const IDENTITY_FIELD: WidgetSourceField = { name: "id", type: "string" };
+// Every system field carries the label a person reads above its column, in the admin's own
+// words for it, so a heading never prints the storage name ("createdAt"). A collection's own
+// fields bring their labels from its config; these columns have no config to bring one from.
+const IDENTITY_FIELD: WidgetSourceField = {
+  name: "id",
+  type: "string",
+  label: "ID",
+};
 
 /**
  * The columns `timestamps` creates, and the ones a recency widget sorts by.
@@ -34,8 +42,8 @@ const IDENTITY_FIELD: WidgetSourceField = { name: "id", type: "string" };
  * column -- a refusal about a field the source itself said was available.
  */
 const TIMESTAMP_FIELDS: readonly WidgetSourceField[] = [
-  { name: "createdAt", type: "date" },
-  { name: "updatedAt", type: "date" },
+  { name: "createdAt", type: "date", label: "Created" },
+  { name: "updatedAt", type: "date", label: "Updated" },
 ];
 
 /**
@@ -54,7 +62,16 @@ const TIMESTAMP_FIELDS: readonly WidgetSourceField[] = [
  * `WIDGET_SOURCE_FIELD_TYPES` has no enum member -- "draft"/"published" is
  * text, which is what the column stores.
  */
-const STATUS_FIELD: WidgetSourceField = { name: "status", type: "string" };
+const STATUS_FIELD: WidgetSourceField = {
+  name: "status",
+  type: "string",
+  label: "Status",
+  // The two values the column stores, named as the entry form names them.
+  choices: [
+    { value: "draft", label: "Draft" },
+    { value: "published", label: "Published" },
+  ],
+};
 
 /**
  * The other column the status lifecycle creates, and the one a "what went live
@@ -74,6 +91,7 @@ const STATUS_FIELD: WidgetSourceField = { name: "status", type: "string" };
 const FIRST_PUBLISHED_FIELD: WidgetSourceField = {
   name: "firstPublishedAt",
   type: "date",
+  label: "First published",
 };
 
 /**
@@ -254,6 +272,8 @@ function exposedFields(
     // timeline the read then refuses.
     ...(field.localized === true && { localized: true }),
     ...(field.label !== undefined && { label: field.label }),
+    // What each stored value is called, so a row or a chart group reads the label.
+    ...(field.choices !== undefined && { choices: field.choices }),
   }));
 }
 
@@ -273,6 +293,8 @@ export interface WidgetSourceCollection {
      * is a compile error instead of a flag that silently never arrives.
      */
     localized?: boolean;
+    /** What each stored value is called, for a select or radio field. */
+    choices?: readonly WidgetFieldChoice[];
   }>;
   /**
    * What a human calls this collection — the registry's plural label.

@@ -1,6 +1,5 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Alert,
   AlertDescription,
@@ -37,10 +36,10 @@ import { useLogout } from "@admin/hooks/useLogout";
 import { useRouter } from "@admin/hooks/useRouter";
 import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
-import { filterStringArray } from "@admin/lib/type-guards";
 import { validateUUID } from "@admin/lib/validation";
 import {
-  editUserFormSchema,
+  editUserFormSettings,
+  editUserUpdates,
   type EditUserFormValues,
 } from "@admin/types/userform";
 
@@ -123,7 +122,8 @@ export default function EditUserPage(): ReactElement {
 
   // React Hook Form
   const form = useForm<EditUserFormValues>({
-    resolver: zodResolver(editUserFormSchema),
+    // The resolver with every unmet rule kept, shared with the other user page.
+    ...editUserFormSettings,
     defaultValues: {
       fullName: "",
       email: "",
@@ -207,41 +207,9 @@ export default function EditUserPage(): ReactElement {
       return;
     }
 
-    // Type-safe roles handling (validated by Zod schema)
-    const roles = filterStringArray(values.roles);
-
-    /**
-     * Security Note: Password Handling
-     *
-     * The password is transmitted as plain text to the backend API, but this is acceptable
-     * under the following conditions (which MUST be verified in production):
-     *
-     * 1. ⚠️ HTTPS/TLS: All API requests MUST use HTTPS to encrypt data in transit
-     * 2. ⚠️ Backend Hashing: The backend MUST hash passwords using bcrypt/argon2 before storage
-     * 3. ⚠️ Never Store Plain Text: Passwords are NEVER stored in plain text in the database
-     * 4. ⚠️ Rate Limiting: The user update endpoint should have rate limiting to prevent abuse
-     * 5. ✅ Strong Validation: Password requirements enforced by Zod schema (8+ chars, complexity)
-     * 6. ✅ Optional Update: Password only sent if user explicitly provides a new one
-     *
-     * ⚠️ IMPORTANT: Items 1-4 require verification through backend code review or testing.
-     *
-     * @see packages/nextly/src/services/users/user-service.ts for backend password hashing implementation
-     */
-    // Extract custom fields from the customFields namespace and flatten to top-level
-    const customFields = (values as Record<string, unknown>).customFields as
-      | Record<string, unknown>
-      | undefined;
-
-    const updates = {
-      name: values.fullName,
-      email: values.email,
-      // Only send password if user explicitly entered a new one (trimmed to handle whitespace-only input)
-      password: values.password?.trim() || undefined,
-      roles, // filterStringArray always returns string[], no fallback needed
-      image: values.avatarUrl,
-      isActive: values.active,
-      ...customFields,
-    };
+    // What the request sends, from one tested mapping: the password goes
+    // as entered, other fields as the form holds them.
+    const updates = editUserUpdates(values);
     // Saving a new password or a deactivation for your OWN account ends
     // your own sessions with everyone else's, this one included.
     const signOutMessage = ownSessionEndingMessage({

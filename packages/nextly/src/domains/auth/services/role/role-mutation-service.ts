@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 import { invalidatePermissionCache } from "@nextly/services/lib/permissions";
 import type {
@@ -16,8 +16,30 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
+import { isUniqueViolation } from "../../../../shared/lib/unique-violation";
 
 import { toDialectBool, validateRoleId } from "./utils";
+
+/** How a caller of `createRole` handles its failures. */
+export interface CreateRoleOptions {
+  /**
+   * The caller expects the role may already exist and reports a name or slug
+   * conflict itself, so one is logged at debug rather than warn.
+   */
+  quietOnConflict?: boolean;
+}
+
+/**
+ * Whether a failure to create a role was its name or slug already being held:
+ * the check `createRole` makes before inserting, or the database's unique key
+ * when another writer got there between that check and the insert.
+ */
+export function isRoleConflict(error: unknown): boolean {
+  return (
+    (NextlyError.is(error) && error.code === "DUPLICATE") ||
+    isUniqueViolation(error)
+  );
+}
 
 /**
  * RoleMutationService handles all role create/update/delete operations.
@@ -83,12 +105,33 @@ export class RoleMutationService extends BaseService {
     const insert = (this.db as RBACDatabaseInstance)
       .insert(this.tables.roles)
       .values(roleData);
+    // Two callers can find no role and insert at once (two accounts
+    // provisioned together on an empty install), so the insert yields to the
+    // one already there on every dialect: MySQL has no ON CONFLICT DO
+    // NOTHING, and a plain insert there failed the second caller with a
+    // duplicate. MySQL's update fires on ANY unique key, the role name's
+    // included, so it writes the row's own id back and changes nothing: a
+    // role that merely holds the name keeps its slug, rather than becoming
+    // the administrator role for everyone who holds it, and the lookup below
+    // then finds no administrator role, as on the other dialects.
     if (typeof insert.onConflictDoNothing === "function") {
       await insert.onConflictDoNothing();
+    } else if (typeof insert.onDuplicateKeyUpdate === "function") {
+      await insert.onDuplicateKeyUpdate({
+        set: { id: sql`${this.tables.roles.id}` },
+      });
     } else {
       await insert;
     }
-    return { id, created: true };
+    // The stored row's id, not this call's: when another caller won the
+    // insert, the id generated here was never written.
+    const settled = await this.findRoleIdBySlug("super-admin");
+    if (!settled) {
+      throw NextlyError.internal({
+        logContext: { reason: "super-admin-role-missing-after-insert" },
+      });
+    }
+    return { id: settled.id, created: settled.id === id };
   }
 
   /**
@@ -111,15 +154,18 @@ export class RoleMutationService extends BaseService {
    * @param input - Role data including permissions and child roles
    * @returns Created role data
    */
-  async createRole(input: {
-    name: string;
-    slug: string;
-    description?: string;
-    level?: number;
-    isSystem?: boolean;
-    permissionIds: string[];
-    childRoleIds?: string[];
-  }): Promise<{
+  async createRole(
+    input: {
+      name: string;
+      slug: string;
+      description?: string;
+      level?: number;
+      isSystem?: boolean;
+      permissionIds: string[];
+      childRoleIds?: string[];
+    },
+    options: CreateRoleOptions = {}
+  ): Promise<{
     id: string;
     name: string;
     slug: string;
@@ -363,10 +409,7 @@ export class RoleMutationService extends BaseService {
         // role" undebuggable (no stack, no DB code, no SQL). Surface the
         // full error at WARN so it appears in dev terminals without needing
         // verbose logging turned on.
-        this.logger.warn(
-          `createRole transaction failed: ${e instanceof Error ? e.message : String(e)}`,
-          { error: e instanceof Error ? { name: e.name, stack: e.stack } : e }
-        );
+        this.logCreateFailure("createRole transaction failed", e, options);
         // Re-throw NextlyErrors unchanged (e.g. our validation/duplicate
         // throws above). Map raw DB errors via fromDatabaseError; the legacy
         // override "A role with this slug or name already exists" is dropped
@@ -382,13 +425,32 @@ export class RoleMutationService extends BaseService {
       // developer sees the actual cause (e.g. a validation query failing
       // because a referenced table is missing). The outer catch covers
       // errors thrown before the transaction begins.
-      this.logger.warn(
-        `createRole failed before transaction: ${e instanceof Error ? e.message : String(e)}`,
-        { error: e instanceof Error ? { name: e.name, stack: e.stack } : e }
-      );
+      this.logCreateFailure("createRole failed before transaction", e, options);
       if (NextlyError.is(e)) throw e;
       // Normalise raw driver errors so the kind is preserved.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, e));
+    }
+  }
+
+  /**
+   * Log why a role was not created: at warn, so the cause shows in a dev
+   * terminal, except a name or slug another role already holds when the
+   * caller said it expects one. That caller reports the conflict itself, and
+   * a warning here would announce a race the caller settles as success.
+   */
+  private logCreateFailure(
+    stage: string,
+    e: unknown,
+    options: CreateRoleOptions
+  ): void {
+    const message = `${stage}: ${e instanceof Error ? e.message : String(e)}`;
+    const context = {
+      error: e instanceof Error ? { name: e.name, stack: e.stack } : e,
+    };
+    if (options.quietOnConflict && isRoleConflict(e)) {
+      this.logger.debug(message, context);
+    } else {
+      this.logger.warn(message, context);
     }
   }
 

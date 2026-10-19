@@ -26,7 +26,7 @@
  *   collections: [Posts, Users, Media],
  *   singles: [SiteSettings],
  *   typescript: {
- *     outputFile: './src/types/payload-types.ts',
+ *     outputFile: './src/types/nextly-types.ts',
  *   },
  * });
  * ```
@@ -438,7 +438,7 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  * - `collections`: `[]`
  * - `singles`: `[]`
  * - `components`: `[]`
- * - `typescript.outputFile`: `'./src/types/generated/payload-types.ts'`
+ * - `typescript.outputFile`: `'./src/types/generated/nextly-types.ts'`
  * - `typescript.declare`: `true`
  * - `db.schemasDir`: `'./src/db/schemas/collections'`
  * - `db.migrationsDir`: `'./src/db/migrations'`

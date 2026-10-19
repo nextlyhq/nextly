@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DASHBOARD_HEADING_ID } from "@admin/components/features/dashboard/WelcomeHeader";
 import { protectedApi } from "@admin/lib/api/protectedApi";
@@ -22,6 +22,10 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { WidgetGrid } from "../../WidgetGrid";
+import {
+  stubDashboardWidth,
+  unstubDashboardWidth,
+} from "../../__tests__/dashboard-width";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
@@ -144,6 +148,8 @@ function live(): HTMLElement {
 }
 
 beforeEach(() => {
+  // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
+  stubDashboardWidth();
   vi.clearAllMocks();
   mockBranding = branding();
   layoutResponse = layout();
@@ -164,6 +170,10 @@ beforeEach(() => {
     };
     return Promise.resolve({ message: "ok", item: {} });
   });
+});
+
+afterEach(() => {
+  unstubDashboardWidth();
 });
 
 describe("the control a card carries itself", () => {

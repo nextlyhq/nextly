@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { createSeededRole } from "../../database/seeders/create-seeded-role";
 import { ServiceContainer } from "../../services/index";
 import type { Logger } from "../../services/shared";
 
@@ -48,14 +49,18 @@ export async function seedPluginRoles(
         permissionIds.push(id);
       }
 
-      await roleService.createRole({
-        name: role.name,
-        slug: role.slug,
-        description: role.description,
-        level: role.level,
-        isSystem: false,
-        permissionIds,
-      });
+      await createSeededRole(
+        roleService,
+        {
+          name: role.name,
+          slug: role.slug,
+          description: role.description,
+          level: role.level,
+          isSystem: false,
+          permissionIds,
+        },
+        logger
+      );
     } catch (error) {
       logger.warn?.(
         `Failed to seed role "${role.slug}" (${role.owner}): ${

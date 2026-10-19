@@ -33,7 +33,12 @@ import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
   buildAuthRouterDeps,
   challengeBudgetWarning,
+  readAuthRateLimit,
 } from "../auth/handlers/deps-bridge";
+import {
+  edgeProxyWarning,
+  unkeyedStrategyWarnings,
+} from "../auth/handlers/proxy-posture";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -66,10 +71,11 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
-import type { JobDefinition } from "../domains/jobs/job-registry";
+import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
+import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
@@ -178,7 +184,10 @@ import {
   collectPluginRoutes,
   type CollectedRoute,
 } from "../plugins/routes/collect-routes";
-import { rateLimitProxyWarning } from "../plugins/routes/route-options";
+import {
+  rateLimitProxyWarning,
+  unkeyedAuthRouteWarnings,
+} from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
@@ -260,6 +269,7 @@ import {
   loadBuilderEntities,
   loadDynamicTables,
 } from "./load-dynamic-tables";
+import { forgetRegisteredLocalization } from "./registered-localization";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -267,6 +277,7 @@ import {
   registerDashboardServices,
   registerEmailServices,
   registerJobServices,
+  registerNoticeServices,
   registerReleaseServices,
   registerMediaServices,
   registerMetaServices,
@@ -393,7 +404,7 @@ export interface NextlyServiceConfig {
    * Background job types this application declares itself, alongside any a
    * plugin contributes. Registered at boot; see `plugins/jobs/collect-jobs`.
    */
-  jobs?: JobDefinition[];
+  jobs?: AnyJobDefinition[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];
@@ -516,6 +527,8 @@ export interface ServiceMap {
   rbacAccessControlService: RBACAccessControlService;
   /** Content releases: the authorization boundary the Direct API namespace reaches. */
   releasesService: ReleasesService;
+  /** Each admin user's notices, recorded by other areas through `record`. */
+  noticesService: NoticesService;
   apiKeyService: ApiKeyService;
   /** Webhook endpoint management, resolved by the webhooks REST handlers. */
   webhookEndpointService: WebhookEndpointService;
@@ -645,6 +658,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // what this service schedules. Order is not load-bearing — both resolve their
   // dependencies from the container — but keeping them adjacent means a reader
   // meets the two halves of releases together.
+  // Before releases, so a feature that records notices (releases will, for a
+  // release that stops or runs late) can register its kinds against it.
+  registerNoticeServices(ctx);
   registerReleaseServices(ctx);
 }
 
@@ -808,6 +824,17 @@ async function registerServicesOnce(
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
 
+  // Said once per boot, whatever plugins are present: an app on an edge that
+  // reports the client, with security.trustProxy unset, rate-limits sign-in
+  // without client addresses and nothing else would tell its operator.
+  const edgeWarning = edgeProxyWarning(transformedConfig);
+  if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
+  // Likewise each configured auth strategy the sign-in limiter cannot ask
+  // which account a request names: its sign-ins are limited by email instead.
+  for (const warning of unkeyedStrategyWarnings(transformedConfig)) {
+    resolvedLogger.warn?.(warning);
+  }
+
   // ----------------------------------------
   // Layer 1: Create and Connect Adapter
   // ----------------------------------------
@@ -962,7 +989,11 @@ async function registerServicesOnce(
 
   registerDomainServices(ctx);
 
-  await syncCodeFirstEntities(adapter, resolvedLogger, transformedConfig);
+  const { databaseNotSetUp } = await syncCodeFirstEntities(
+    adapter,
+    resolvedLogger,
+    transformedConfig
+  );
 
   // Declared widgets' starting queries, against the content just synced: the
   // first point in boot where the collections, Singles and their fields exist.
@@ -971,6 +1002,7 @@ async function registerServicesOnce(
   await checkDeclaredWidgetReferences({
     collections: collectSlugs(transformedConfig.collections),
     singles: collectSlugs(transformedConfig.singles),
+    databaseNotSetUp,
   });
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
@@ -1010,8 +1042,16 @@ async function registerServicesOnce(
   // returns early when the config declares no plugins -- a record written after
   // that return is skipped exactly when the answer is "none", leaving the
   // previous registration's names in place for a reload to believe.
+  // A lifecycle command's boot initialises only its target: see
+  // `pluginsToInitialize`. Every other boot initialises every configured plugin.
+  const { pluginsToInitialize } = await import(
+    "../domains/schema/ownership/plugin-lifecycle-state"
+  );
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
-    transformedConfig,
+    {
+      ...transformedConfig,
+      plugins: pluginsToInitialize(transformedConfig.plugins ?? []),
+    },
     pluginGrants,
     pluginBootContributions,
     adapterDrizzleDb,
@@ -1976,12 +2016,12 @@ async function syncCodeFirstEntities(
   adapter: DrizzleAdapter,
   logger: Logger,
   transformedConfig: NextlyServiceConfig
-): Promise<void> {
+): Promise<{ databaseNotSetUp: boolean }> {
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
   // ----------------------------------------
   const bootTableWork = emptyBootTableWork();
-  await syncCodeFirstCollections(
+  const collectionsNotSetUp = await syncCodeFirstCollections(
     adapter,
     logger,
     transformedConfig,
@@ -2007,12 +2047,22 @@ async function syncCodeFirstEntities(
   // ----------------------------------------
   // Layer 6: Sync Code-First Singles
   // ----------------------------------------
-  await syncCodeFirstSingles(adapter, logger, transformedConfig, bootTableWork);
+  const singlesNotSetUp = await syncCodeFirstSingles(
+    adapter,
+    logger,
+    transformedConfig,
+    bootTableWork
+  );
 
   // ----------------------------------------
   // Layer 6.1: Create the missing code-first tables
   // ----------------------------------------
   await createMissingCodeFirstTables(adapter, logger, bootTableWork);
+
+  // Whether either sync found the registries not yet created: a fresh
+  // database, before migrations and `/setup` have run. Reported so a check
+  // that reads the registries can tell that apart from a read that failed.
+  return { databaseNotSetUp: collectionsNotSetUp || singlesNotSetUp };
 }
 
 /**
@@ -2898,14 +2948,21 @@ function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
  * or when a just-synced row hasn't been flushed yet.
  *
  * No-op for tables that are already registered (e.g. from the DB pass).
+ *
+ * Exported for its test.
  */
-async function registerConfigTablesInResolver(
+export async function registerConfigTablesInResolver(
   registry: SchemaRegistry,
   config: NextlyServiceConfig,
   adapter: DrizzleAdapter,
   logger: Partial<Logger>
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
+  // Loaded here, as the generators it calls were, so they stay out of this
+  // module's own load.
+  const { registerEntityRuntimeTables } = await import(
+    "./register-runtime-tables"
+  );
 
   // Collections: table name convention is `dc_<slug-with-underscores>`.
   for (const collection of config.collections ?? []) {
@@ -2918,45 +2975,20 @@ async function registerConfigTablesInResolver(
       const tableName = baseTableName.startsWith("dc_")
         ? baseTableName
         : `dc_${baseTableName}`;
-      // Why: forward the code-first `status: true` flag so the runtime
-      // Drizzle table includes the system status column. Without this,
-      // adapter CRUD on Draft/Published collections can't read or write
-      // the status column even though the physical table has it.
-      const hasStatus = (collection as { status?: boolean }).status === true;
-      const localized =
-        (collection as { localized?: boolean }).localized === true;
-      const { generateRuntimeSchema } = await import(
-        "../domains/schema/services/runtime-schema-generator"
-      );
-      const { table } = generateRuntimeSchema(
-        tableName,
-        fields as FieldDefinition[],
-        dialect,
-        { status: hasStatus, localized }
-      );
-      registry.registerDynamicSchema(tableName, table);
-      // Register the companion `_locales` table for a localized collection (M4 reads).
-      if (localized) {
-        const { buildCompanionRuntimeTable } = await import(
-          "../domains/i18n/runtime/companion-registration"
-        );
-        const companion = buildCompanionRuntimeTable({
+      // The status flag gives the runtime table its system status column,
+      // which Draft/Published CRUD reads and writes; the localized one leaves
+      // the translatable columns to the companion.
+      registerEntityRuntimeTables(
+        registry,
+        {
           slug,
           tableName,
-          fields: fields as { name: string; type: string }[],
-          dialect,
-          localized: true,
-          // Carry `_status` so a Draft/Published localized collection's
-          // DI-registered companion matches loadCompanionSchema.
-          status: hasStatus === true,
-        });
-        if (companion) {
-          registry.registerDynamicSchema(
-            companion.companionTableName,
-            companion.table
-          );
-        }
-      }
+          fields: fields as FieldDefinition[],
+          status: (collection as { status?: boolean }).status === true,
+          localized: (collection as { localized?: boolean }).localized === true,
+        },
+        dialect
+      );
     } catch (err) {
       logger.debug?.(
         `[registerServices] Failed to register collection "${(collection as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
@@ -2976,20 +3008,19 @@ async function registerConfigTablesInResolver(
       const fields = (single as { fields?: unknown[] }).fields ?? [];
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
       const tableName = resolveSingleTableName({ slug, dbName });
-      // Why: forward the code-first `status: true` flag for singles too —
-      // mirrors the collection branch above. Same Draft/Published runtime
-      // wiring needs the system status column on the Drizzle table.
-      const hasStatus = (single as { status?: boolean }).status === true;
-      const { generateRuntimeSchema } = await import(
-        "../domains/schema/services/runtime-schema-generator"
+      // The same registration as a collection's, so a localized single's
+      // main table leaves out the columns its migrations put on the companion.
+      registerEntityRuntimeTables(
+        registry,
+        {
+          slug,
+          tableName,
+          fields: fields as FieldDefinition[],
+          status: (single as { status?: boolean }).status === true,
+          localized: (single as { localized?: boolean }).localized === true,
+        },
+        dialect
       );
-      const { table } = generateRuntimeSchema(
-        tableName,
-        fields as FieldDefinition[],
-        dialect,
-        { status: hasStatus }
-      );
-      registry.registerDynamicSchema(tableName, table);
     } catch (err) {
       logger.debug?.(
         `[registerServices] Failed to register single "${(single as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
@@ -3079,13 +3110,17 @@ async function publishBootDeferrals(
   setDeferredEntities(kind, unwrittenSlugs(syncResult));
 }
 
+/**
+ * Answers whether the collections registry was found not yet created (every
+ * sync error a missing table), which boot tolerates so `/setup` can run.
+ */
 async function syncCodeFirstCollections(
   adapter: DrizzleAdapter,
   logger: Logger,
   transformedConfig: NextlyServiceConfig,
   /** Collects this kind's missing tables for `createMissingCodeFirstTables`. */
   work: BootTableWork
-): Promise<void> {
+): Promise<boolean> {
   if (
     !transformedConfig.collections ||
     transformedConfig.collections.length === 0
@@ -3095,7 +3130,7 @@ async function syncCodeFirstCollections(
     // would leave whatever an earlier registration in this process published
     // — an `allowIdOnCreate` a later collection of the same slug would inherit.
     publishCollectionDbOptions([]);
-    return;
+    return false;
   }
 
   const collectionRegistry = container.get<CollectionRegistryService>(
@@ -3171,6 +3206,7 @@ async function syncCodeFirstCollections(
       logger.warn?.(
         `Collections sync skipped (database tables not yet created — run migrations first). ${syncResult.errors.length} collection(s) deferred.`
       );
+      return true;
     } else {
       const errorDetails = syncResult.errors
         .map(e => `  - ${e.slug}: ${e.error}`)
@@ -3211,7 +3247,7 @@ async function syncCodeFirstCollections(
     }
   }
 
-  if (collectionsNeedingTableSync.length === 0) return;
+  if (collectionsNeedingTableSync.length === 0) return false;
 
   logger.info?.(
     `Auto-syncing ${collectionsNeedingTableSync.length} collection table(s)...`
@@ -3389,6 +3425,7 @@ async function syncCodeFirstCollections(
       },
     });
   }
+  return false;
 }
 
 /**
@@ -3606,7 +3643,8 @@ async function syncCodeFirstComponents(
 /**
  * Syncs code-first Singles to the `dynamic_singles` table so permission
  * seeding (in `runPostInitTasks`) can find them. Mirrors collection sync
- * at Layer 4.
+ * at Layer 4. Answers whether the Singles registry was found not yet created,
+ * as {@link syncCodeFirstCollections} does for collections.
  */
 async function syncCodeFirstSingles(
   adapter: DrizzleAdapter,
@@ -3614,9 +3652,9 @@ async function syncCodeFirstSingles(
   transformedConfig: NextlyServiceConfig,
   /** Collects this kind's missing tables for `createMissingCodeFirstTables`. */
   work: BootTableWork
-): Promise<void> {
+): Promise<boolean> {
   if (!transformedConfig.singles || transformedConfig.singles.length === 0) {
-    return;
+    return false;
   }
 
   const singleRegistry = container.get<SingleRegistryService>(
@@ -3685,7 +3723,7 @@ async function syncCodeFirstSingles(
     logger.warn?.(
       `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
     );
-    return;
+    return false;
   }
 
   // 🔴 The same reading the collections sync makes of its own errors, and for
@@ -3707,6 +3745,7 @@ async function syncCodeFirstSingles(
       logger.warn?.(
         `Singles sync skipped (database tables not yet created — run migrations first). ${singleSyncResult.errors.length} single(s) deferred.`
       );
+      return true;
     } else {
       // `NextlyError`, unlike the bare throw the collections path still
       // carries: the slugs and the driver's words are operator detail, so they
@@ -3735,6 +3774,7 @@ async function syncCodeFirstSingles(
   // dev-server boot path and the `nextly db:sync` CLI converge on the
   // same physical-table contract.
   await reconcileSingleTablesForBoot(adapter, logger, transformedConfig, work);
+  return false;
 }
 
 // physical `single_*` tables match `dynamic_singles`. Lives next to the
@@ -4096,6 +4136,12 @@ async function initializePlugins(
     readProxyTrustSettings(() => transformedConfig).trustProxy
   );
   if (proxyWarning) logger.warn?.(proxyWarning);
+  for (const warning of unkeyedAuthRouteWarnings(
+    collectedRoutes,
+    readAuthRateLimit(() => transformedConfig).requestsPerHour > 0
+  )) {
+    logger.warn?.(warning);
+  }
 
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 
@@ -4616,6 +4662,8 @@ async function releaseServices(opts: {
     // instance in the same process appends a fresh copy of every handler and
     // runs the dead instance's alongside the new one.
     clearActiveHookRegistry();
+    // The block these services were built from describes them alone.
+    forgetRegisteredLocalization();
     globalForReg.__nextly_isRegistered = false;
   }
 }

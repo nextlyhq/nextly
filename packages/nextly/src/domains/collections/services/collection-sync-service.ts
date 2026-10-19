@@ -33,7 +33,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -50,6 +50,11 @@ import type {
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import {
+  generatedTypesFile,
+  generatedZodDir,
+  retireOldDefaultTypesFile,
+} from "../../../shared/lib/generated-output-paths";
+import {
   toSingularLabel,
   toPluralLabel,
 } from "../../../shared/lib/pluralization";
@@ -60,6 +65,7 @@ import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
+import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 
@@ -81,7 +87,7 @@ export interface SyncOptions {
   generateZodSchemas?: boolean;
 
   /**
-   * Generate TypeScript types (payload-types.ts).
+   * Generate TypeScript types (to `typescript.outputFile`).
    * @default false (opt-in: only generate when explicitly requested)
    */
   generateTypes?: boolean;
@@ -584,7 +590,8 @@ export class CollectionSyncService extends BaseService {
       // dynamic_collections metadata via generateRuntimeSchema), so they
       // were orphan output. `result.generatedSchemas` stays an empty array
       // for backward compatibility with consumers that read it.
-      const zodDir = resolve(opts.cwd, config.db.schemasDir, "zod");
+      // The same folder generateZodSchemas writes to, fitted to the app's layout.
+      const zodDir = generatedZodDir(opts.cwd, config.db.schemasDir);
       const missingZodCollections = config.collections.filter(c => {
         const zodPath = join(zodDir, `${c.slug}.zod.ts`);
         return !existsSync(zodPath);
@@ -922,10 +929,12 @@ export class CollectionSyncService extends BaseService {
             });
 
             // Delete from registry directly via raw query to avoid
-            // re-fetch issues with getCollection/updateCollection
-            await this.adapter.delete(
-              "dynamic_collections",
-              this.whereEq("slug", slug)
+            // re-fetch issues with getCollection/updateCollection. The
+            // collection's autosaves and version pins go after it in the same
+            // transaction, as the registry's own delete does: see
+            // `deleteEntityRegistryRow`.
+            await this.adapter.transaction(tx =>
+              deleteEntityRegistryRow(tx, "collection", slug)
             );
 
             const capabilities = this.adapter.getCapabilities();
@@ -982,7 +991,8 @@ export class CollectionSyncService extends BaseService {
 
     const indexFile = generator.generateIndexFile(records);
 
-    const outputDir = resolve(opts.cwd, schemasDir, "zod");
+    // schemasDir/zod, fitted to the app's layout as every generator fits it.
+    const outputDir = generatedZodDir(opts.cwd, schemasDir);
 
     if (!opts.dryRun) {
       if (!existsSync(outputDir)) {
@@ -1029,7 +1039,8 @@ export class CollectionSyncService extends BaseService {
     const typesFile = generator.generateTypesFile(records);
 
     // Resolve output path
-    const outputPath = resolve(opts.cwd, outputFile);
+    // Fitted to the app's layout, as `generate:types` writes it.
+    const outputPath = generatedTypesFile(opts.cwd, outputFile);
 
     if (!opts.dryRun) {
       // Ensure directory exists
@@ -1041,6 +1052,13 @@ export class CollectionSyncService extends BaseService {
       // Write types file
       writeFileSync(outputPath, typesFile.code, "utf-8");
       this.logger.debug(`Generated types: ${outputPath}`);
+
+      // The same settling `generate:types` does, after the new file exists,
+      // so a sync in an app with the old default's file leaves one
+      // declaration of the generated types, not two that clash.
+      for (const notice of retireOldDefaultTypesFile(opts.cwd, outputFile)) {
+        this.logger.warn(notice);
+      }
     }
 
     return outputPath;

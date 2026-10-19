@@ -65,6 +65,35 @@ export const Posts = defineCollection({
 
 Fields inherit the collection's setting, so the common case is one flag.
 
+### When a field stops being translated
+
+Changing a translated field to shared keeps its content, for a collection, a Single or a field group, whether you change it in the Schema Builder or in code:
+
+- The default language's value becomes the field's shared value.
+- Every other language's value is copied to the localization archive (the `nextly_i18n_archive` table) before the translated column is removed.
+
+In code, set `localized: false` on the field and run `nextly migrate:create`. It writes three files that `nextly migrate` runs in order: one that writes the other languages to the archive, the migration that gives the main table the field's column, and one that copies the default language's value into it and removes the translated column. Rolling them back with `nextly migrate:down` puts the translated field back, every language included. `nextly migrate --dry-run` shows all three before anything runs.
+
+If the archive cannot be written, the change is refused and nothing is changed. A field marked Required or Unique cannot stop being translated in the same change: turn the setting off and save, make the field shared and save, then turn the setting back on. In code the steps are the same, with `migrate:create` after each.
+
+To bring those values back, make the field translated again, then restore that field:
+
+```bash
+npx nextly i18n:restore --collection posts --field title
+```
+
+`--collection` takes the slug of a collection, Single or field group, and `--field` takes the field's name or its column name. `--locale es` restores one language only. A field group can share its slug with a collection or a Single, and each one's archived values stay its own: when the slug names more than one, say which with `--kind collection`, `--kind single` or `--kind field-group`. The archive keeps the values until you remove them: add `--purge` to a restore to delete the rows it replayed. Deleting the collection, Single or field group also removes its archived values.
+
+Values archived by a version of Nextly from before the archive recorded which kind of entity they belong to are matched to their entity when the slug names only one, and only from the time that entity was created. Any the archive can't match are kept, never deleted, and a restore of that slug says how many there are. Restoring with `--kind` also brings those values back as that entity's.
+
+### When a shared field becomes translated
+
+Changing a shared field to translated keeps its value too, for a collection, a Single or a field group, in the Schema Builder or in code. The value becomes the default language's translation, and the other languages start empty, to be translated.
+
+In code, set `localized: true` on the field (or remove `localized: false` from a text field) and run `nextly migrate:create`. It writes one file, which adds the translated column, copies each entry's value into the default language, and removes the shared column. Rolling it back with `nextly migrate:down` makes the field shared again with the default language's value, and writes the other languages to the archive, as when a field stops being translated.
+
+A field whose type, length or precision changes in the same change is refused, because its value would be copied into a column of the new shape: save the new type with the field still shared, then make it translated.
+
 ## Fallback chains
 
 `fallback: true` means a missing translation falls back rather than rendering empty. A

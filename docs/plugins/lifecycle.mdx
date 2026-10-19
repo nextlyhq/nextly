@@ -3,8 +3,6 @@ title: Lifecycle, dependencies & order
 description: How and when a plugin runs — the setup/init/destroy lifecycle, load order, declaring dependencies on other plugins, version compatibility, and enabling/disabling.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** `contributes.transforms`, and `nextly plugins uninstall` (on 0.0.2-alpha.66, remove the plugin from the config, then run `nextly prune`).
-
 This page covers *when* a plugin's code runs, in *what order*, and how to express
 ordering and version constraints. For the errors these rules produce, see the
 [error reference](/docs/plugins/error-reference).
@@ -123,8 +121,6 @@ while it is still in the config, then remove it — see
 
 ## Install and uninstall hooks
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 `onInstall` and `onUninstall` (`@experimental`) are for work that belongs to installing
 or removing the plugin rather than to every start: seeding a row, registering with an
 external service, deregistering from it. They never run at boot.
@@ -155,7 +151,17 @@ they can run again: an install that failed part-way is repaired by running it ag
 which calls `onInstall` again, and an uninstall that stopped part-way is finished by
 running it again, which calls `onUninstall` again. A plugin counts as installed only
 once `nextly plugins install` has finished on that database: a production boot
-refuses it before then, and so does the install of a plugin that depends on it.
+refuses it before then while it is enabled, and so does the install of a plugin that depends on it.
+`nextly plugins install --all` installs every enabled plugin in your config, its
+dependencies first, and stops at the first that fails.
+
+A disabled plugin (`enabled: false`) is not installed, by `--all` or by name, and a
+production boot does not require it to be: you can keep a plugin disabled, never
+installed, and boot. Its tables exist, because its schema still applies, but its
+`onInstall` runs only when you enable it and run `nextly plugins install <name>`.
+Once you enable it, a production boot refuses it until that install has run. A
+disabled plugin that was uninstalled, or whose uninstall stopped part way, is still
+refused, as an enabled one is.
 
 ## Inspecting
 

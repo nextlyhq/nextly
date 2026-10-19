@@ -133,11 +133,21 @@ const record = (pid, extra = {}) => ({
  * The environment a run starts from. A test run under `pnpm test:scripts` is
  * itself bounded and passes on what that set — NEXTLY_BOUNDED would make every
  * run here a nested one, and the limits would read as this script's own — and
- * CI makes every run a pass-through.
+ * CI makes every run a pass-through. The limit overrides go too: a value the
+ * shell carries would pass for one the run derived.
  */
 function cleanEnv(extra = {}) {
   const env = { ...process.env };
-  for (const name of ["CI", "NEXTLY_BOUNDED", "NEXTLY_BOUNDED_PS", "TURBO_CONCURRENCY", "TURBO_UI"]) delete env[name];
+  for (const name of [
+    "CI",
+    "NEXTLY_BOUNDED",
+    "NEXTLY_BOUNDED_PS",
+    "NEXTLY_LOCAL_CONCURRENCY",
+    "NEXTLY_LOCAL_MAX_WORKERS",
+    "TURBO_CONCURRENCY",
+    "TURBO_UI",
+  ])
+    delete env[name];
   return { ...env, NEXTLY_HEAVY_SLOT_DIR: dir, ...extra };
 }
 
@@ -557,7 +567,7 @@ describe.runIf(POSIX)("running a command bounded", () => {
     const turbo = path.join(bin, "turbo");
     writeFileSync(
       turbo,
-      '#!/bin/sh\nprintf "%s\\n" "$@"\necho "TURBO_CONCURRENCY=$TURBO_CONCURRENCY"\necho "TURBO_UI=$TURBO_UI"\n'
+      '#!/bin/sh\nprintf "%s\\n" "$@"\necho "TURBO_CONCURRENCY=$TURBO_CONCURRENCY"\necho "TURBO_UI=$TURBO_UI"\necho "NEXTLY_LOCAL_MAX_WORKERS=$NEXTLY_LOCAL_MAX_WORKERS"\n'
     );
     chmodSync(turbo, 0o755);
     return turbo;
@@ -578,6 +588,18 @@ describe.runIf(POSIX)("running a command bounded", () => {
     expect(child.out.split("\n")).toEqual(
       expect.arrayContaining(["run", "test", "--", "--maxWorkers=3", "TURBO_CONCURRENCY=2", "TURBO_UI=false"])
     );
+  });
+
+  it("hands every task the worker limit it derived, not only Vitest", async () => {
+    // A tool with a worker pool of its own — Next.js collecting page data
+    // starts one worker per CPU — reads the machine's limit from this, so one
+    // limit governs every pool. Derived here, with no override set: the value
+    // must be the one Vitest was given.
+    const child = runBounded(["--vitest-workers", stubTurbo(), "run", "build"]);
+    expect((await child.done).code).toBe(0);
+    const cap = /^--maxWorkers=(\d+)$/m.exec(child.out)?.[1];
+    expect(cap).toBeDefined();
+    expect(child.out).toMatch(new RegExp(`^NEXTLY_LOCAL_MAX_WORKERS=${cap}$`, "m"));
   });
 
   it("is a pass-through in CI, which sizes its own runs", async () => {

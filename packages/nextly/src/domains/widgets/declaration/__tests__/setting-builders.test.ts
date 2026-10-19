@@ -14,6 +14,8 @@
  */
 import { describe, expect, it } from "vitest";
 
+import { MAX_WIDGET_ROWS } from "../../query-limits";
+
 import { validateWidgetSettings } from "../../settings";
 import { settings } from "../setting-builders";
 
@@ -43,7 +45,8 @@ describe("a built setting is core's setting definition", () => {
       type: "number",
       defaultValue: 5,
       min: 1,
-      max: 25,
+      // The most rows a card draws, the one limit both sides read.
+      max: MAX_WIDGET_ROWS,
     });
     expect(settings.toggle({ default: true })).toEqual({
       type: "checkbox",

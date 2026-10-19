@@ -486,6 +486,18 @@ describe("isIdempotencyError boundary (data-safety)", () => {
     );
   });
 
+  it("re-throws MySQL's duplicate foreign key name", async () => {
+    // Error 1826 says only that the name is taken somewhere in the schema, not
+    // that this foreign key exists: an unrelated or stale constraint holding
+    // the name would leave the intended one missing behind a "success".
+    const { isIdempotencyError } = await import("../sql-statement-utils");
+    expect(
+      isIdempotencyError(
+        new Error("Duplicate foreign key constraint name 'fk_posts_author'")
+      )
+    ).toBe(false);
+  });
+
   it("tolerates a drop of something already gone", async () => {
     const { isIdempotencyError } = await import("../sql-statement-utils");
     // Removing a MySQL foreign key emits `DROP CONSTRAINT` and then a

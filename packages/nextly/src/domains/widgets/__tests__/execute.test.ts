@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const find = vi.fn();
 const count = vi.fn();
+const group = vi.fn();
 
 vi.mock("../../../direct-api/nextly", () => ({
-  requireNextly: () => ({ find, count }),
+  requireNextly: () => ({ find, count, group }),
 }));
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -167,6 +168,91 @@ describe("executeWidgetQuery", () => {
     // columns and their sequence, and the admin renders what it is given.
     expect(result).toMatchObject({
       fields: [{ name: "status" }, { name: "title", label: "Title" }],
+    });
+  });
+
+  it("carries a choice column's value labels, so a row reads the label and not the value", async () => {
+    // A row holding `needs_review` must read "Needs review". The labels are the field's own
+    // options, carried on the column from the source's declaration; a column without them
+    // would leave the admin nothing to show but the stored value.
+    registerSource({
+      id: "collection:tickets",
+      label: "Tickets",
+      kind: "collection",
+      supports: ["list", "groupBy"],
+      fields: [
+        {
+          name: "stage",
+          type: "string",
+          label: "Stage",
+          choices: [
+            { value: "needs_review", label: "Needs review" },
+            { value: "done", label: "Done" },
+          ],
+        },
+      ],
+    });
+    find.mockResolvedValue({ items: [{ stage: "needs_review" }] });
+    const q = validateWidgetQuery({
+      source: "collection:tickets",
+      op: "list",
+      select: ["stage"],
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(result).toMatchObject({
+      fields: [
+        {
+          name: "stage",
+          label: "Stage",
+          choices: [
+            { value: "needs_review", label: "Needs review" },
+            { value: "done", label: "Done" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("names the grouped field and its values on a breakdown", async () => {
+    // The buckets of a breakdown are stored values too, so the result says what the grouped
+    // field is called and what each of its values is called -- the chart's axis and its bars.
+    registerSource({
+      id: "collection:tickets",
+      label: "Tickets",
+      kind: "collection",
+      supports: ["groupBy"],
+      fields: [
+        {
+          name: "stage",
+          type: "string",
+          label: "Stage",
+          choices: [{ value: "needs_review", label: "Needs review" }],
+        },
+      ],
+    });
+    group.mockResolvedValue({
+      buckets: [{ value: "needs_review", count: 3 }],
+      truncated: false,
+    });
+    const q = validateWidgetQuery({
+      source: "collection:tickets",
+      op: "groupBy",
+      groupBy: "stage",
+    });
+
+    const result = await executeWidgetQuery(q, caller);
+
+    expect(result).toEqual({
+      op: "groupBy",
+      buckets: [{ value: "needs_review", count: 3 }],
+      field: {
+        name: "stage",
+        label: "Stage",
+        type: "string",
+        choices: [{ value: "needs_review", label: "Needs review" }],
+      },
     });
   });
 

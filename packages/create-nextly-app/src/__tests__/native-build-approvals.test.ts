@@ -123,6 +123,9 @@ describe("approveNativeBuilds on pnpm 10.26 and later", () => {
       sharp: true,
     });
     expect(notes.join("\n")).toMatch(/esbuild@0\.28\.1/);
+    // Other versions stay unapproved, and the note says what to do if pnpm
+    // then stops on one.
+    expect(notes.join("\n")).toMatch(/ERR_PNPM_IGNORED_BUILDS/);
   });
 
   it("changes nothing and says nothing on a second run", async () => {

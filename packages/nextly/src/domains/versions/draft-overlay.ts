@@ -87,6 +87,8 @@ export interface DraftOverlayInput {
    * and must be confirmed with resolved schemas before a draft is exposed.
    */
   componentSchemas: ComponentSchemas | null;
+  /** The entity's kind, for the eligibility rule only a Single applies. */
+  entityKind?: "collection" | "single";
   /**
    * Whether the caller explicitly asked for the draft view.
    *
@@ -136,6 +138,8 @@ export function resolveDraftOverlay(
     draftsVersioningEnabled: input.draftsVersioningEnabled,
     fields: input.fields,
     componentSchemas: input.componentSchemas,
+    entityKind: input.entityKind,
+    documentLocalized: input.documentLocalized,
   });
 
   const overlay =

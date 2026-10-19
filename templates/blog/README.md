@@ -44,16 +44,15 @@ Three roles seeded on first run:
 
 - **Administrator** (`admin`) - full access to content, taxonomy, media, and users.
 - **Editor** (`editor`) - create, edit, and publish any post; manages categories, tags, and media.
-- **Author** (`author`) - draft and edit their own posts; read published content.
+- **Author** (`author`) - draft and edit posts, but not publish or delete them; read taxonomy.
 
-Fine-grained permissions are not pre-assigned by the template. The three roles exist as labeled buckets; configure their permission rules via `/admin/roles/<slug>` or programmatically with `nextly.roles.setPermissions({...})`. The `super-admin` role (seeded by Nextly core) bypasses all access checks.
+The seed gives each role its permissions; change them on the Roles screen at `/admin/roles/<slug>` or with `nextly.roles.setPermissions({...})`. The `super-admin` role (seeded by Nextly core) bypasses all access checks.
 
-Collection access policies in `src/access/` gate who can reach each CRUD operation:
+Collection access rules in `src/access/` decide by permission, never by a role's name, so a role you create and an API key are judged by what they hold:
 
-- Posts: public can read; any logged-in user can create a draft; `admin`/`editor`/`author` can update or delete.
-- Categories and Tags: public can read; `admin`/`editor`/`author` can edit.
+- Posts, Categories and Tags: public can read; creating, editing and deleting need the matching permission (`create-posts`, `update-tags`, ...). Publishing a post needs `publish-posts`.
 
-Row-level checks (authors only editing their own posts) live at the database permission layer, not in the access functions - the `AccessControlFunction` signature doesn't receive the target document.
+A rule cannot see the entry it is judging, so "authors edit only their own posts" is not something these rules can express. That is why the seeded author holds neither `delete-posts` nor `publish-posts`.
 
 ## Pages
 
@@ -198,7 +197,7 @@ On platforms other than Vercel, set a `Content-Type: application/wasm` header fo
 
 The homepage and footer newsletter forms submit to the `@nextlyhq/plugin-form-builder` plugin. Submissions are stored in the `form-submissions` collection and visible at `/admin/collections/form-submissions`.
 
-A production boot refuses a configured plugin that has not been installed on its database. Before the first production deploy, run `nextly migrate` and then `nextly plugins install @nextlyhq/plugin-form-builder` against the production database, once. Development only warns. See [Installing](https://nextlyhq.com/docs/guides/production-migrations#installing).
+A production boot refuses a configured plugin that has not been installed on its database; development only warns. The `build` script installs it for you, after migrating and against the database the build targets (`nextly migrate && nextly plugins install @nextlyhq/plugin-form-builder && next build`), so a deploy that builds against the production database needs no extra step. If you deploy without building against that database, run the same two `nextly` commands there before the first production boot. When you remove a plugin from `nextly.config.ts`, remove its `nextly plugins install` from your build script too, or the build fails. See [Installing](https://nextlyhq.com/docs/guides/production-migrations#installing).
 
 The seed creates a form with slug `newsletter` on first run. If the seed skipped it (or you removed it), create a new Form at `/admin/collections/forms` with slug `newsletter` and the plugin + frontend will start working.
 

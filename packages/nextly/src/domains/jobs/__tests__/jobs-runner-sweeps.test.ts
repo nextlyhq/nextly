@@ -15,7 +15,7 @@ import {
   SWEEP_KEY_PREFIX,
   defineJob,
 } from "../job-registry";
-import { runJobsPass, sweepDedupeKey } from "../jobs-runner";
+import { runJobsPass, runSweepNow, sweepDedupeKey } from "../jobs-runner";
 
 function registryWith(...defs: ReturnType<typeof defineJob>[]): JobRegistry {
   const registry = new JobRegistry();
@@ -154,5 +154,36 @@ describe("a pass keeps its sweeps queued", () => {
 
     expect(onSweepError).toHaveBeenCalledTimes(1);
     expect(result.claimed).toBe(0);
+  });
+});
+
+describe("running a sweep now", () => {
+  it.each([
+    ["a job type that is not a sweep", "test:noop"],
+    ["a slug nothing registered", "test:unknown"],
+  ])("refuses %s, and queues nothing", async (_case, slug) => {
+    // Queueing it would leave a row under a sweep's dedupe key that no pass
+    // keeps, or one no runner can perform: refused before any write.
+    const adapter = adapterSpy();
+
+    await expect(
+      runSweepNow(adapter as never, registryWith(noop, sweeper), slug)
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(adapter.inserted).toEqual([]);
+  });
+
+  it("queues a registered sweep under its dedupe key", async () => {
+    // The control: the refusal above is about the slug, not about every call.
+    const adapter = adapterSpy();
+
+    await runSweepNow(
+      adapter as never,
+      registryWith(noop, sweeper),
+      "test:sweep"
+    );
+
+    expect(adapter.inserted.map(row => row.dedupe_key)).toEqual([
+      sweepDedupeKey("test:sweep"),
+    ]);
   });
 });

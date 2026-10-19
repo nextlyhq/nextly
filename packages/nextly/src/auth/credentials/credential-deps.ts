@@ -16,6 +16,7 @@ import { getDialectTables } from "../../database/index";
 import { serializeOnSqlite } from "../../shared/lib/run-adapter-transaction";
 import type { DatabaseAdapter } from "../../shared/types/database-adapter";
 
+import { normalizeAccountEmail } from "./account-email";
 import type { CredentialDeps } from "./verify-credentials";
 
 /**
@@ -43,7 +44,7 @@ export function passwordCredentialDeps(
       const result = await db()
         .select()
         .from(schema.users)
-        .where(eq(schema.users.email, email.trim().toLowerCase()))
+        .where(eq(schema.users.email, normalizeAccountEmail(email)))
         .limit(1);
       return result[0] || null;
     },

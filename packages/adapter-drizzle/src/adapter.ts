@@ -1944,6 +1944,7 @@ export abstract class DrizzleAdapter {
         // whole transaction — so it is spelled as a conflict that changes
         // nothing, and the row that stands is read back below.
         const keepExisting = Object.keys(updateData).length === 0;
+        this.assertUpsertTarget(table, data, options, keepExisting);
 
         let query;
         if (caps.supportsOnConflict) {
@@ -2656,6 +2657,35 @@ export abstract class DrizzleAdapter {
    */
   protected bindUnmodeledStructuredAsJson(value: unknown): unknown {
     return bindStructuredAsJson(value);
+  }
+
+  /**
+   * Refuse an upsert target every dialect would not answer alike: a conflict
+   * column named twice, which SQLite rejects as no constraint's target and
+   * MySQL would accept; and, when nothing is to be updated, a conflict column
+   * left for the database to fill, since the row that stands is then read
+   * back by a value the caller never gave. Shared with the dialects that
+   * override `upsert`, so the refusals are one rule.
+   */
+  protected assertUpsertTarget(
+    table: string,
+    data: Record<string, unknown>,
+    options: UpsertOptions,
+    keepExisting: boolean
+  ): void {
+    const columns = options.conflictColumns;
+    if (new Set(columns).size !== columns.length) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table} names a conflict column more than once (${columns.join(", ")}).`,
+      });
+    }
+    if (keepExisting && columns.some(column => data[column] === undefined)) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table} needs a value for every conflict column (${columns.join(", ")}).`,
+      });
+    }
   }
 
   /**

@@ -13,6 +13,10 @@
  *
  * @module schemas/releases/sqlite
  */
+// The same tables in each dialect's Drizzle builders: each dialect's column
+// functions are distinct, so the declarations cannot be shared, and the
+// parity test is what holds them in step.
+// fallow-ignore-file code-duplication
 
 import {
   sqliteTable,
@@ -22,9 +26,13 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+import {
+  NEXTLY_RELEASES_INDEXES,
+  sqliteIndexes,
+} from "../_internal/core-indexes";
 import type { VersionScopeKind } from "../versions/types";
 
-import type { ReleaseMemberAction, ReleaseState } from "./types";
+import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";
 
 export const nextlyReleasesSqlite = sqliteTable(
   "nextly_releases",
@@ -43,6 +51,9 @@ export const nextlyReleasesSqlite = sqliteTable(
     timezone: text("timezone"),
 
     state: text("state").$type<ReleaseState>().notNull(),
+    // What the release is (`ReleaseKind`). The database default reads every
+    // release made before the column existed as an ordinary one.
+    kind: text("kind").$type<ReleaseKind>().default("release").notNull(),
     publishedAt: integer("published_at", { mode: "timestamp" }),
 
     createdBy: text("created_by"),
@@ -55,7 +66,8 @@ export const nextlyReleasesSqlite = sqliteTable(
 
     revision: integer("revision").default(0).notNull(),
   },
-  table => [index("nextly_releases_due_idx").on(table.state, table.scheduledAt)]
+  // Declared once for the three dialects; what each index serves is said there.
+  table => sqliteIndexes(NEXTLY_RELEASES_INDEXES, table)
 );
 
 export const nextlyReleaseMembersSqlite = sqliteTable(
@@ -77,6 +89,13 @@ export const nextlyReleaseMembersSqlite = sqliteTable(
 
     memberKey: text("member_key").notNull(),
 
+    // 1 for the member of a `single` release, NULL otherwise. Unique with
+    // `release_id`, so the DATABASE refuses a second member of a single
+    // release, however many adds race; NULLs never collide, so an ordinary
+    // release is unaffected. A count checked before the insert could not
+    // promise that: two adds can both count zero.
+    singleSlot: integer("single_slot"),
+
     createdBy: text("created_by"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())
@@ -84,6 +103,11 @@ export const nextlyReleaseMembersSqlite = sqliteTable(
   },
   table => [
     uniqueIndex("nextly_release_members_key_uidx").on(table.memberKey),
+    // The one-member rule of a single release; see `singleSlot`.
+    uniqueIndex("nextly_release_members_single_uidx").on(
+      table.releaseId,
+      table.singleSlot
+    ),
     index("nextly_release_members_doc_idx").on(
       table.scopeKind,
       table.scopeSlug,

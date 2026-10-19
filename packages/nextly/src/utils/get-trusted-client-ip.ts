@@ -79,6 +79,22 @@ interface ParsedCidr {
 }
 
 /**
+ * The headers a proxy names the client address in, and the only ones
+ * {@link getTrustedClientIp} reads. Exported so a check for "did this request
+ * come through a proxy?" asks about exactly the headers resolution would use.
+ */
+export const CLIENT_IP_HEADERS = [
+  "x-forwarded-for",
+  "cf-connecting-ip",
+  "x-real-ip",
+] as const;
+
+/** Whether `request` carries any header a proxy names the client in. */
+export function carriesClientIpHeader(request: Request): boolean {
+  return CLIENT_IP_HEADERS.some(name => request.headers.has(name));
+}
+
+/**
  * Resolve the client IP for a Web `Request`, applying the trust-proxy
  * gate described above. Returns `null` when no trusted IP can be
  * identified — callers should treat that as "unknown" rather than
@@ -97,7 +113,7 @@ export function getTrustedClientIp(
     .map(parseCidr)
     .filter((c): c is ParsedCidr => c !== null);
 
-  const xff = request.headers.get("x-forwarded-for");
+  const xff = request.headers.get(CLIENT_IP_HEADERS[0]);
   if (xff) {
     const hops = xff
       .split(",")
@@ -113,11 +129,11 @@ export function getTrustedClientIp(
     return null;
   }
 
-  const cfIp = request.headers.get("cf-connecting-ip")?.trim();
+  const cfIp = request.headers.get(CLIENT_IP_HEADERS[1])?.trim();
   if (cfIp && classifyIp(cfIp)) {
     return cfIp;
   }
-  const realIp = request.headers.get("x-real-ip")?.trim();
+  const realIp = request.headers.get(CLIENT_IP_HEADERS[2])?.trim();
   if (realIp && classifyIp(realIp)) {
     return realIp;
   }

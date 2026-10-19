@@ -6,17 +6,22 @@ import { classifyError } from "@nextlyhq/telemetry";
 import fs from "fs-extra";
 import pc from "picocolors";
 
-import { generateAdminPage } from "./generators/admin";
-import { generateConfig } from "./generators/config";
-import { generateEnv } from "./generators/env";
-import { generateMediaRoutes } from "./generators/media-routes";
 import {
-  nextConfigReport,
-  patchNextConfig,
-  type NextConfigPatch,
-} from "./generators/next-config";
-import { generateRoutes } from "./generators/routes";
-import { generateTypesDirectory } from "./generators/types";
+  type BundledSkill,
+  bundledSkillsVersion,
+  projectNextlyVersion,
+  readBundledSkills,
+  skillsVersionMismatch,
+  writeAgentSkills,
+} from "./generators/agent-skills";
+import { generateEnv } from "./generators/env";
+import { generateIntoExistingApp } from "./generators/existing-app";
+import type { GeneratedFiles } from "./generators/generated-files";
+import {
+  type MediaRouteTemplates,
+  readMediaRouteTemplates,
+} from "./generators/media-routes";
+import { reportGeneratedFiles } from "./generators/report";
 import { installDependencies } from "./installers/dependencies";
 import {
   resolveTemplateSource,
@@ -45,6 +50,8 @@ import type {
   CreateNextlyOptions,
   DatabaseConfig,
   DatabaseType,
+  EnvGenerationResult,
+  PackageManager,
   ProjectApproach,
   ProjectType,
 } from "./types";
@@ -55,7 +62,7 @@ import {
 } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
-import { copyTemplate } from "./utils/template";
+import { copyTemplate, resolveTemplatePath } from "./utils/template";
 
 /**
  * Pick a safe project name when the user has chosen "install in cwd".
@@ -75,15 +82,18 @@ function cwdProjectName(cwd: string): string {
 }
 
 /**
- * Tell the developer what adding Nextly did to their Next config: the
- * packages it added, or exactly what to add by hand when it could not change
- * the file safely. One place prints it, so the line can move into a combined
- * report without the patch knowing.
+ * Stop a run that failed while setting up the app's files: record where it
+ * failed, say why, and exit. One place for it, since both the check of the
+ * templates before anything is written and the writing itself end this way.
  */
-function printNextConfigPatch(patch: NextConfigPatch): void {
-  const report = nextConfigReport(patch);
-  if (report.level === "warn") p.log.warn(report.message);
-  else p.log.info(report.message);
+function stopAtConfig(error: unknown, startedAt: number): never {
+  telemetry.capture("scaffold_failed", {
+    stage: "config",
+    error_code: classifyError(error, "config"),
+    duration_ms: Date.now() - startedAt,
+  });
+  p.cancel((error as Error).message);
+  process.exit(1);
 }
 
 /**
@@ -373,7 +383,48 @@ export async function createNextly(
     databaseUrl = url?.trim() || database.connectionUrl;
   }
 
+  // --- Step 7: Skills for coding agents ---
+  //
+  // Asked for an app, new or existing; a plugin is a library and the skills
+  // are about building an app. Read now, before anything is installed or
+  // written, so a broken bundle stops the run while the project is untouched.
+
+  let agentSkills: BundledSkill[] = [];
+  // The release the bundled skills were checked against, from their own
+  // frontmatter; which projects get them is decided by it.
+  let agentSkillsVersion = "";
+  if (projectType !== "plugin" && options.skills !== false) {
+    let addSkills = true;
+    if (!defaults) {
+      const answer = await p.confirm({
+        message:
+          "Add Nextly skills for coding agents (Claude Code, Codex, Cursor)?",
+        initialValue: true,
+      });
+      if (p.isCancel(answer)) {
+        p.cancel("Cancelled.");
+        return;
+      }
+      addSkills = answer;
+    }
+    if (addSkills) {
+      try {
+        agentSkills = await readBundledSkills();
+        agentSkillsVersion = bundledSkillsVersion(agentSkills);
+      } catch (error) {
+        p.cancel((error as Error).message);
+        process.exit(1);
+      }
+    }
+  }
+
   // --- Scaffold project from template ---
+
+  // A new project's package manager, settled here before any file is written
+  // and kept by detection below: the scaffold writes pnpm-workspace.yaml for
+  // its build allowlist whatever manager installs it, so reading the files
+  // back would answer differently.
+  let scaffoldPackageManager: PackageManager | undefined;
 
   if (isFreshProject && projectName) {
     const targetDir = installInCwd ? cwd : path.join(cwd, projectName);
@@ -410,14 +461,13 @@ export async function createNextly(
       // agent of the command that invoked this CLI, which is the package
       // manager that will run the install a moment later; the target has no
       // lockfile yet, so nothing else could answer.
-      const scaffoldPackageManager = await detectPackageManager(targetDir);
+      scaffoldPackageManager = await detectPackageManager(targetDir);
 
       await copyTemplate({
         projectName,
         projectType,
         targetDir,
         database,
-        databaseUrl,
         useYalc,
         approach,
         templateSource,
@@ -479,10 +529,10 @@ export async function createNextly(
       if (projectType === "plugin") {
         // A plugin keeps its library in src/ and its Next.js app in dev/, a
         // layout the app detector rejects ("App Router not detected").
-        projectInfo = await detectPluginPackage(cwd);
+        projectInfo = await detectPluginPackage(cwd, scaffoldPackageManager);
         s.stop("Detected plugin package");
       } else {
-        projectInfo = await detectProject(cwd);
+        projectInfo = await detectProject(cwd, scaffoldPackageManager);
         s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
       }
     } catch (error) {
@@ -494,6 +544,23 @@ export async function createNextly(
       });
       p.cancel((error as Error).message);
       process.exit(1);
+    }
+  }
+
+  // --- Read what the existing-app path writes ---
+
+  // Every template the existing-app path writes from is read now, before the
+  // install and before any file: a missing or incomplete --local-template
+  // otherwise stopped the run part-way, with the config already written, so
+  // a retry failed on it.
+  let mediaRouteTemplates: MediaRouteTemplates | undefined;
+  if (!isFreshProject) {
+    try {
+      mediaRouteTemplates = await readMediaRouteTemplates(
+        resolveTemplatePath(options.localTemplatePath)
+      );
+    } catch (error) {
+      stopAtConfig(error, overallStartedAt);
     }
   }
 
@@ -535,41 +602,74 @@ export async function createNextly(
 
   // --- Generate configuration files ---
 
+  let envResult: EnvGenerationResult | undefined;
+
   {
     const s = p.spinner();
     s.start("Setting up environment...");
-    let nextConfigPatch: NextConfigPatch | null = null;
+    // What the existing-app steps did, for the one report printed below.
+    const reported: GeneratedFiles[] = [];
+    // Said once the spinner stops, after what was written and left alone.
+    const warnings: string[] = [];
     try {
       if (!isFreshProject) {
-        // Existing project: generate Nextly config files
-        await generateConfig(cwd, projectType);
-        await generateRoutes(cwd, projectInfo);
-        await generateAdminPage(cwd, projectInfo);
-        await generateMediaRoutes(cwd, projectInfo);
-        await generateTypesDirectory(cwd, projectInfo);
-        nextConfigPatch = await patchNextConfig(cwd, database);
+        // Existing project: Nextly's files, each written only where nothing
+        // is, and the Next config extended.
+        if (mediaRouteTemplates === undefined) {
+          throw new Error("The route templates were not read before writing.");
+        }
+        reported.push(
+          ...(await generateIntoExistingApp(
+            cwd,
+            projectType,
+            projectInfo,
+            database,
+            mediaRouteTemplates
+          ))
+        );
       }
 
       // App flows generate a root .env. A plugin is a library — its env lives
       // in the embedded dev/ playground (dev/.env.example), so skip it here.
+      // A URL the person typed goes to .env only; .env.example keeps the
+      // database's generic example, since a project commits that file and a
+      // typed URL carries its password.
       if (projectType !== "plugin") {
         const envDatabase = databaseUrl
-          ? { ...database, connectionUrl: databaseUrl, envExample: databaseUrl }
+          ? { ...database, connectionUrl: databaseUrl }
           : database;
-        await generateEnv(cwd, envDatabase);
+        envResult = await generateEnv(cwd, envDatabase);
+      }
+      if (agentSkills.length > 0) {
+        // Written only into a project on the release the skills were checked
+        // against; after the install, so the release read is the one
+        // installed.
+        const mismatch = skillsVersionMismatch(
+          await projectNextlyVersion(cwd),
+          agentSkillsVersion
+        );
+        if (mismatch === null) {
+          reported.push(
+            // The update command names this CLI's release, whose tag publishes
+            // this bundle; the release the skills were checked against may
+            // be an older one whose tag carries no user skills.
+            await writeAgentSkills(cwd, agentSkills, packageVersion())
+          );
+        } else {
+          warnings.push(mismatch);
+        }
       }
       s.stop("Environment configured");
-      // After the spinner stops, so the line is not drawn over.
-      if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
+      // One report for every step, the env files and the skills included,
+      // after the spinner stops so its lines are not drawn over. Paths, keys
+      // and packages only: nothing in it ever carries an env value.
+      reportGeneratedFiles(
+        envResult ? [...reported, envResult.files] : reported,
+        [...(envResult?.warnings ?? []), ...warnings]
+      );
     } catch (error) {
       s.stop("Failed to generate configuration");
-      telemetry.capture("scaffold_failed", {
-        stage: "config",
-        error_code: classifyError(error, "config"),
-        duration_ms: Date.now() - overallStartedAt,
-      });
-      p.cancel((error as Error).message);
-      process.exit(1);
+      stopAtConfig(error, overallStartedAt);
     }
   }
 

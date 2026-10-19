@@ -2,6 +2,14 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 
+import {
+  applyTheme,
+  DARK_QUERY,
+  readTheme,
+  STORAGE_KEY,
+  type Theme,
+} from "@/lib/theme";
+
 /**
  * ThemeToggle - three-state segmented control (Light / System / Dark).
  *
@@ -14,12 +22,6 @@ import { useEffect, useSyncExternalStore } from "react";
  * subscribe to its change event so OS-level dark-mode toggles are
  * reflected live without a refresh.
  */
-
-type Theme = "light" | "system" | "dark";
-
-const STORAGE_KEY = "nextly-theme";
-const THEMES: readonly Theme[] = ["light", "system", "dark"];
-const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 /**
  * Everything showing the theme in this tab. The browser's `storage` event
@@ -36,21 +38,9 @@ function subscribe(listener: () => void) {
   };
 }
 
-/** The saved choice, or "system" when there is none or it is not one of the three. */
-function readTheme(): Theme {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  return THEMES.find(theme => theme === saved) ?? "system";
-}
-
 function saveTheme(theme: Theme) {
   localStorage.setItem(STORAGE_KEY, theme);
   for (const listener of listeners) listener();
-}
-
-function applyTheme(theme: Theme) {
-  const prefersDark = window.matchMedia(DARK_QUERY).matches;
-  const isDark = theme === "dark" || (theme === "system" && prefersDark);
-  document.documentElement.dataset.theme = isDark ? "dark" : "light";
 }
 
 export function ThemeToggle() {

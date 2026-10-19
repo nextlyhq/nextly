@@ -40,7 +40,12 @@ const constraintOnly = mysqlTable(
   table => [unique("constraint_only_pair").on(table.grp, table.pos)]
 );
 
+const keyless = mysqlTable("keyless", {
+  key: varchar("key", { length: 64 }).notNull().unique(),
+});
+
 const tables: Record<string, unknown> = {
+  keyless,
   single_key: single,
   column_and_index: columnAndIndex,
   constraint_only: constraintOnly,
@@ -83,6 +88,24 @@ describe("MySQL upsert: the tables it accepts", () => {
         { conflictColumns: ["id"] }
       )
     ).rejects.toThrow(/other unique keys \(single_key_key_unique\)/);
+  });
+
+  it("refuses a table without a primary key to read rows back by", async () => {
+    await expect(
+      adapter().upsert("keyless", { key: "k1" }, { conflictColumns: ["key"] })
+    ).rejects.toThrow(/need a table with a primary key/);
+  });
+
+  it("refuses a conflict column named twice", async () => {
+    // SQLite rejects it as no constraint's target; MySQL must not accept it
+    // as the single-column key it collapses to.
+    await expect(
+      adapter().upsert(
+        "single_key",
+        { id: "a", key: "k1" },
+        { conflictColumns: ["key", "key"] }
+      )
+    ).rejects.toThrow(/more than once/);
   });
 
   it("refuses a target that is not a key at all", async () => {

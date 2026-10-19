@@ -14,7 +14,7 @@ export type Theme = "light" | "dark";
  * Open an admin page in a known theme.
  *
  * The theme is written to storage before the app boots rather than clicked
- * through the UI: `next-themes` reads `nextly-theme` on mount, so setting it
+ * through the UI: the admin reads `nextly-theme` before its first paint, so setting it
  * first means the first paint is already correct and nothing has to wait for a
  * menu. `defaultTheme` is "system", which on a CI machine is whatever the
  * container feels like — a test that did not pin this would assert against a

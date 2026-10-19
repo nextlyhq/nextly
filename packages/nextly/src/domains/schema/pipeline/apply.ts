@@ -39,6 +39,8 @@ export type ApplyResult =
       // diff-based summary. Undefined → admin falls back to a
       // generic "Schema updated" toast.
       summary?: ApplySummary;
+      /** Columns whose values the apply moved to a companion before dropping them. */
+      movedToCompanion?: readonly MovedToCompanion[];
     }
   | {
       success: false;
@@ -64,6 +66,15 @@ export interface PipelineCallResult {
   // notification fan-out; surfacing it here lets the dispatcher
   // build a toast summary without recomputing the diff.
   summary?: ApplySummary;
+  /** As `PipelineResult.movedToCompanion`. */
+  movedToCompanion?: readonly MovedToCompanion[];
+}
+
+/** A main-table column whose value an apply moved to its companion, and the field it belongs to. */
+export interface MovedToCompanion {
+  tableName: string;
+  columnName: string;
+  fieldName: string;
 }
 
 // What the pipeline asks of its environment. In production, callers
@@ -192,6 +203,23 @@ export function createApplyDesiredSchema(
       // can build a contextual toast. Undefined when the underlying
       // pipeline doesn't compute one.
       summary: pipelineResult.summary,
+      ...(pipelineResult.movedToCompanion
+        ? { movedToCompanion: pipelineResult.movedToCompanion }
+        : {}),
     };
   };
+}
+
+/**
+ * The fields whose values a successful apply moved onto `tableName`'s companion, for the companion
+ * reconcile that follows it, which then does not add their columns again.
+ */
+export function movedOnto(
+  result: { success: boolean; movedToCompanion?: readonly MovedToCompanion[] },
+  tableName: string
+): string[] {
+  if (!result.success) return [];
+  return (result.movedToCompanion ?? [])
+    .filter(m => m.tableName === tableName)
+    .map(m => m.fieldName);
 }

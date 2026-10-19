@@ -26,8 +26,13 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { applyDueReleases } from "../apply-due-releases";
+import { VersionsRepository } from "../../versions/versions-repository";
 import { createReleaseMutations } from "../release-mutations";
 import { ReleasesRepository } from "../releases-repository";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -148,23 +153,29 @@ async function scheduleMember(
 ): Promise<void> {
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({ title: "Go live" });
-  await repo.addMember({
-    releaseId: release.id,
-    scopeKind: member.scopeKind,
-    scopeSlug: member.slug,
-    entryId: member.entryId,
-    locale: member.locale ?? null,
-    action: member.action,
-    createdBy: AUTHOR,
-  });
-  await repo.scheduleRelease(release.id, PAST, "UTC");
+  await repo.addMember(
+    {
+      releaseId: release.id,
+      scopeKind: member.scopeKind,
+      scopeSlug: member.slug,
+      entryId: member.entryId,
+      locale: member.locale ?? null,
+      action: member.action,
+      createdBy: AUTHOR,
+    },
+    ANY_EDITABLE_STATE
+  );
+  await scheduleAsItStands(repo, release.id, PAST, "UTC");
 }
 
 /** One materialisation pass, as the drain job performs it. */
 async function materialise(t: TestNextly) {
   return applyDueReleases({
     repository: new ReleasesRepository(t.adapter),
-    mutations: createReleaseMutations({ contentApi: t.nextly }),
+    mutations: createReleaseMutations({
+      contentApi: t.nextly,
+      drafts: new VersionsRepository(t.adapter),
+    }),
     runAs: {
       findUser: async id => ({ id, isActive: true }),
       listRoleSlugs: async () => [],
