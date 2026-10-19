@@ -16,6 +16,8 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { AsyncResource } from "node:async_hooks";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../../database/index";
@@ -41,6 +43,16 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
 });
+
+/**
+ * Another request: a scope made here, outside the writer's transaction, so
+ * what runs in it has that request's async context and not the writer's,
+ * as a request arriving on another connection does.
+ */
+function anotherRequest() {
+  const scope = new AsyncResource("another-request");
+  return <T>(work: () => T): T => scope.runInAsyncScope(work);
+}
 
 /** The Drizzle handle's own transaction, as core's services open theirs. */
 interface Transactor {
@@ -94,19 +106,24 @@ describe.each(pooled)(
       // The answer every request served from memory until the change.
       expect(await accountIsActive(item.id)).toBe(true);
 
+      const elsewhere = anotherRequest();
       const db = t.adapter.getDrizzle() as unknown as Transactor;
       await db.transaction(async tx => {
         await updateUserEndingSessions(tx, getDialectTables(dialect), dialect, {
           userId: item.id,
           set: { isActive: false, deactivatedAt: new Date() },
         });
+        // The control: the writer's transaction is open in its own flow and
+        // not in the other request's, so the read below is that request's.
+        expect(t.adapter.transactionOpenInFlow()).toBe(true);
+        expect(elsewhere(() => t.adapter.transactionOpenInFlow())).toBe(false);
         // Held open past the lifetime before it commits.
         offset += SESSION_STANDING_TTL_MS + 1_000;
-        // Another connection still reads the committed row: active.
-        expect(await accountIsActive(item.id)).toBe(true);
+        // The other request still reads the committed row: active.
+        expect(await elsewhere(() => accountIsActive(item.id))).toBe(true);
       });
 
-      expect(await accountIsActive(item.id)).toBe(false);
+      expect(await elsewhere(() => accountIsActive(item.id))).toBe(false);
     });
 
     it("refuses the account once the change commits when no request had read it before", async () => {
@@ -139,6 +156,7 @@ describe.each(pooled)(
         now: () => performance.now() + offset,
       });
 
+      const elsewhere = anotherRequest();
       const db = t.adapter.getDrizzle() as unknown as Transactor;
       await db.transaction(async tx => {
         await updateUserEndingSessions(tx, getDialectTables(dialect), dialect, {
@@ -146,10 +164,10 @@ describe.each(pooled)(
           set: { isActive: false, deactivatedAt: new Date() },
         });
         offset += SESSION_STANDING_TTL_MS + 1_000;
-        expect(await accountIsActive(item.id)).toBe(true);
+        expect(await elsewhere(() => accountIsActive(item.id))).toBe(true);
       });
 
-      expect(await accountIsActive(item.id)).toBe(false);
+      expect(await elsewhere(() => accountIsActive(item.id))).toBe(false);
     });
   }
 );
