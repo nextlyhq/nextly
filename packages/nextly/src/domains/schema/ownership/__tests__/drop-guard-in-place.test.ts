@@ -528,3 +528,91 @@ describe("the review of the same-migration follow-up", () => {
     ).toThrow();
   });
 });
+
+describe("the review of the follow-up's credit for same-migration changes", () => {
+  it("does not credit a constraint whose kind differs from the index it unlocks", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE app_notes ADD CONSTRAINT idx_status CHECK (true)",
+            "ALTER INDEX idx_status SET (fillfactor = 80)",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
+  });
+
+  it("does not credit a quoted column name that differs in case from the plugin's column", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            'ALTER TABLE fx__notes ADD COLUMN "Body" int',
+            "ALTER TABLE fx__notes ALTER COLUMN body SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+
+  it("does not credit a change that comes before the addition", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes MODIFY body varchar(40)",
+            "ALTER TABLE fx__notes ADD COLUMN body int",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+
+  it("does not credit an addition once the list changes name resolution", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD COLUMN app_extra int",
+            "SET search_path TO scratch",
+            "ALTER TABLE fx__notes ALTER COLUMN app_extra SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "app_extra" });
+  });
+
+  it("does not credit an anonymous MySQL constraint as one named by its keyword", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE app_notes ADD CONSTRAINT CHECK (status <> '')",
+            "ALTER TABLE app_notes ALTER CHECK chk_status NOT ENFORCED",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ element: "chk_status", belongsTo: "plugin:fx" });
+  });
+
+  it("refuses a storage change through a schema-qualified name it cannot model", () => {
+    expect(() =>
+      guard(
+        ["ALTER TABLE plugin_schema.idx_status SET TABLESPACE other"],
+        "app",
+        "postgresql"
+      )
+    ).toThrow();
+  });
+});
