@@ -74,7 +74,6 @@ function router(counts: RateLimitStore, budget: number, windowMs = 3_600_000) {
     authRateLimit: { requestsPerHour: budget, windowMs, counts },
     auditLog: NULL_AUDIT_LOG_WRITER,
     findUserByEmail: async () => null,
-    getUserCount: async () => 1,
   };
   /** A sign-in from `address`; its status, 429 when the limit refused it. */
   return async (address: string): Promise<number> => {
