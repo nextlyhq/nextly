@@ -1,9 +1,4 @@
 {
-  "coverage": {
-    "pages": 81,
-    "samples": 461,
-    "compiled": 292
-  },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
       "samples": 7,
