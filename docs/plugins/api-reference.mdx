@@ -679,3 +679,11 @@ plugins uninstall` calls `onUninstall` before its DOWN migrations, with
 `{ keepData }`. Write both so they can run again: an install can be retried
 after a failure part-way through. Work that must happen on every start, rather
 than once per install, belongs in `init`.
+
+Before either command shuts the runtime down, it waits for the event handlers
+the hook set off, including those of the follow-up events they emit, for at
+most 30 seconds. A handler is waited for while the promise it returns is
+pending, so return the promise of work that must finish: work left to a timer,
+or to a promise the handler does not return, is not waited for. When that work
+is still running at the limit, the command stops; an uninstall stops before its
+DOWN migrations, and running it again finishes it.

@@ -27,6 +27,18 @@ export function companionHistoryKey(
   return `${entity}:${slug}`;
 }
 
+/** What the companion files say about each entity's companion, by `companionHistoryKey`. */
+export interface CompanionHistory {
+  /** Its columns, by column name, after every file. */
+  columns: Map<string, Map<string, LocalizedColumnSpec>>;
+  /**
+   * The entities whose companion table the files leave in place. A companion outlives its last
+   * column (a `shared` file drops the column and keeps the table), so an empty column map does not
+   * say the table is gone; only a `disable` drops it.
+   */
+  present: Set<string>;
+}
+
 /**
  * Each entity's companion columns, by column name, after every companion file in
  * `migrationsDir`, read in the order they run (by name). A file whose header cannot be read is
@@ -35,12 +47,24 @@ export function companionHistoryKey(
 export async function readCompanionColumnHistory(
   migrationsDir: string
 ): Promise<Map<string, Map<string, LocalizedColumnSpec>>> {
+  return (await readCompanionHistory(migrationsDir)).columns;
+}
+
+/**
+ * The companion files in `migrationsDir` replayed in the order they run (by name): each entity's
+ * columns, and whether its table is still there. A file whose header cannot be read is left out
+ * rather than guessed at.
+ */
+export async function readCompanionHistory(
+  migrationsDir: string
+): Promise<CompanionHistory> {
   const history = new Map<string, Map<string, LocalizedColumnSpec>>();
+  const present = new Set<string>();
   let names: string[];
   try {
     names = (await readdir(migrationsDir)).filter(f => f.endsWith(".sql"));
   } catch {
-    return history;
+    return { columns: history, present };
   }
   for (const name of names.sort()) {
     let intent;
@@ -58,12 +82,15 @@ export async function readCompanionColumnHistory(
     switch (intent.kind) {
       case "create-only":
       case "enable":
+      case "joins":
         for (const column of intent.spec.columns) {
           columns.set(column.name, column);
         }
+        present.add(key);
         break;
       case "disable":
         columns.clear();
+        present.delete(key);
         break;
       case "shared":
         for (const column of intent.spec.columns) columns.delete(column.name);
@@ -73,5 +100,5 @@ export async function readCompanionColumnHistory(
     }
     history.set(key, columns);
   }
-  return history;
+  return { columns: history, present };
 }

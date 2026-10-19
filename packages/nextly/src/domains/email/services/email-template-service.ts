@@ -21,6 +21,7 @@ import { and, eq, desc, isNull } from "drizzle-orm";
 import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import { maskingServiceLogger } from "../../../observability/mask-emails";
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
 import { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
 import { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
@@ -32,6 +33,7 @@ import type {
 } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import {
   changedTemplateFields,
   recordTemplateActivity,
@@ -113,7 +115,10 @@ export class EmailTemplateService extends BaseService {
   private readonly appName: string;
 
   constructor(adapter: DrizzleAdapter, logger: Logger, appName?: string) {
-    super(adapter, logger);
+    // Masked here whatever logger an app supplied: what this service logs,
+    // a provider error quoting a recipient included, never carries a full
+    // email address outside development and test.
+    super(adapter, maskingServiceLogger(logger));
 
     this.appName = appName ?? DEFAULT_APP_NAME;
 
@@ -524,16 +529,33 @@ export class EmailTemplateService extends BaseService {
         updatedAt: now,
       };
 
-      try {
-        await this.db.insert(this.emailTemplates).values(values);
-        this.logger.info(`Created built-in email template: ${template.slug}`);
-      } catch (error) {
-        // Ignore duplicate slug errors (race condition safety)
-        this.logger.warn(
-          `Failed to create built-in template "${template.slug}" — may already exist`,
-          { error }
+      await this.seedTemplate(values, "built-in");
+    }
+  }
+
+  /**
+   * Write one seeded template. Two first starts seed at once (several
+   * instances, or a dev server beside a build), and the one that loses the
+   * race hits the unique slug: the row it wanted is there, so that is logged
+   * at debug. Any other failure is warned of, and seeding goes on.
+   */
+  private async seedTemplate(
+    values: { slug: string } & Record<string, unknown>,
+    origin: "built-in" | "plugin"
+  ): Promise<void> {
+    try {
+      await this.db.insert(this.emailTemplates).values(values);
+      this.logger.info(`Created ${origin} email template: ${values.slug}`);
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        this.logger.debug(
+          `${origin} email template "${values.slug}" was created by another process`
         );
+        return;
       }
+      this.logger.warn(`Failed to create ${origin} template "${values.slug}"`, {
+        error,
+      });
     }
   }
 
@@ -565,15 +587,7 @@ export class EmailTemplateService extends BaseService {
         updatedAt: now,
       };
 
-      try {
-        await this.db.insert(this.emailTemplates).values(values);
-        this.logger.info(`Created plugin email template: ${template.slug}`);
-      } catch (error) {
-        this.logger.warn(
-          `Failed to create plugin template "${template.slug}" — may already exist`,
-          { error }
-        );
-      }
+      await this.seedTemplate(values, "plugin");
     }
   }
 

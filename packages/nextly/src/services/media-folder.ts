@@ -46,11 +46,13 @@ import {
   removeStoredFiles,
   storedPathForLog,
   warnUnlocated,
+  type StoredFileSearch,
 } from "../domains/media/remove-stored-files";
 import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
+import { StoredFileSearchReader } from "../domains/media/stored-file-search";
 import {
   storedFilesOf,
   type MediaFilesRecord,
@@ -216,6 +218,11 @@ function removalFrom(
 export class MediaFolderService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
+  }
+
+  /** How this service reads the media rows that may share a file (filesKeptByOthers). */
+  private get storedFileSearch(): StoredFileSearch {
+    return new StoredFileSearchReader(this.adapter, this.logger).search;
   }
 
   private hasFolderSchema(): boolean {
@@ -796,7 +803,10 @@ export class MediaFolderService extends BaseService {
         deletedFolders: deletedFoldersCount,
       };
     } catch (error) {
-      console.error("[MediaFolderService] Delete folder error:", error);
+      console.error(
+        "[MediaFolderService] Delete folder error:",
+        errorForLog(error)
+      );
       return {
         success: false,
         statusCode: 500,
@@ -868,9 +878,14 @@ export class MediaFolderService extends BaseService {
       // inside an enclosing SQLite transaction after that commits. The files
       // another item still refers to are asked for then (filesKeptByOthers).
       await this.afterCommit(() => revalidateMedia(chunk));
-      await this.afterCommit(async () =>
-        removeFiles(removed, await filesKeptByOthers(this.adapter, removed))
-      );
+      await this.afterCommit(async () => {
+        const kept = await filesKeptByOthers(
+          this.storedFileSearch,
+          removed.flatMap(record => storedFilesOf(record).paths),
+          removed.map(record => record.id)
+        );
+        if (kept) await removeFiles(removed, kept);
+      });
     }
   }
 

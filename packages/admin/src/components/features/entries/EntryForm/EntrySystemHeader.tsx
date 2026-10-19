@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
+import { useHistoryAddress } from "@admin/components/features/versions/history-address";
 import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   ChevronLeft,
@@ -342,7 +343,8 @@ export function EntrySystemHeader({
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  // Whether history is open lives in the address, so a reload or a shared link
+  // opens it again and the back button closes it.
   // True while the document area is showing a past version rather than the
   // live document.
   const { viewing: viewingVersion } = useDocumentHistory();
@@ -371,6 +373,18 @@ export function EntrySystemHeader({
     }
   }, [mode]);
 
+  // A document only has history once it has been saved, and rendering a
+  // snapshot needs the schema, so both are required to offer it. Read before
+  // anything returns early, and the address opens history only then, so a
+  // link naming it on a document without it opens nothing.
+  const historyOffered =
+    mode === "edit" &&
+    Boolean(entry?.id) &&
+    historyFields !== undefined &&
+    historyEnabled !== false;
+  const { open: historyOpen, setOpen: setHistoryOpen } =
+    useHistoryAddress(historyOffered);
+
   if (!form) {
     return null;
   }
@@ -396,8 +410,6 @@ export function EntrySystemHeader({
       },
       entryLocale.collectionLocalized
     );
-
-  const showEditMenuItems = mode === "edit" && entry?.id;
 
   // - hasStatus + create or hasStatus+edit+draft → Save Draft + Publish
   //   (the user is working on something not yet live).
@@ -598,12 +610,7 @@ export function EntrySystemHeader({
     isReadingHistory ? [] : contributedActions
   );
 
-  // A document only has history once it has been saved, and rendering a
-  // snapshot needs the schema, so both are required to offer it.
-  const showHistory =
-    showEditMenuItems &&
-    historyFields !== undefined &&
-    historyEnabled !== false;
+  const showHistory = historyOffered;
 
   // What the preview control is given, once: the control draws from it on a
   // wide screen, and the menu lists the same choices on a narrow one.
@@ -626,7 +633,7 @@ export function EntrySystemHeader({
       ? [
           {
             id: "history",
-            label: "Version history",
+            label: "History",
             onSelect: () => setHistoryOpen(true),
           },
         ]
@@ -695,14 +702,16 @@ export function EntrySystemHeader({
             {showHistory ? (
               <Button
                 type="button"
-                variant="outline"
+                variant={historyOpen ? "secondary" : "outline"}
                 size="sm"
-                className={cn("px-2", WIDE_ONLY)}
-                aria-label="Version history"
-                title="Version history"
+                className={cn("gap-1.5", WIDE_ONLY)}
+                // Pressed while history is open, so the control says which
+                // state the document is in as well as offering to change it.
+                aria-pressed={historyOpen}
                 onClick={() => setHistoryOpen(true)}
               >
                 <History className="h-4 w-4" aria-hidden="true" />
+                History
               </Button>
             ) : null}
             {toolbarSlot}
@@ -747,8 +756,9 @@ export function EntrySystemHeader({
             />
 
             {/* Rail toggle — far right, separated by a thin divider. Not on a
-              narrow screen, where the panel is a page rather than beside. */}
-            {onToggleRail && (
+              narrow screen, where the panel is a page rather than beside, and
+              not while history is open, which takes the panel's place. */}
+            {onToggleRail && !historyOpen && (
               <>
                 <span
                   className={cn("w-px h-5 bg-border mx-1", WIDE_ONLY)}

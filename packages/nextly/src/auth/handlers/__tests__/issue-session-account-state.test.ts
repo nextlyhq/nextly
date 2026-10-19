@@ -328,7 +328,7 @@ describe("mintSession against a revocation during the mint", () => {
 
     const minted = await mintSession(user, d, req, { strategy: "test" });
 
-    expect(decodeJwt(minted.body.accessToken).sev).toBe(3);
+    expect(decodeJwt(minted.body.accessToken).nx_sev).toBe(3);
     expect(d.rows.committed).toHaveLength(1);
   });
 

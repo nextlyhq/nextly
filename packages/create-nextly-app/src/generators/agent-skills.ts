@@ -113,7 +113,7 @@ async function filesIn(
 }
 
 /**
- * The release the bundled skills were checked against, from their own
+ * The release the bundled skills ship with, from their own
  * frontmatter. Read with the bundle, before anything is written, so a bundle
  * that declares none, or disagrees with itself, stops the run untouched.
  */
@@ -215,8 +215,8 @@ async function readJson(file: string): Promise<Record<string, unknown> | null> {
 
 /**
  * Why the bundled skills may not be written into a project with `nextly` at
- * `projectVersion`, or null when they may. They were checked against the
- * release this CLI belongs to, and a project on another release, or one
+ * `projectVersion`, or null when they may. They ship with the release this
+ * CLI belongs to, and a project on another release, or one
  * whose release cannot be told, could be handed instructions for APIs it does
  * not have. No install command is given: the right one depends on whether
  * that release publishes skills at all, which the docs page says.

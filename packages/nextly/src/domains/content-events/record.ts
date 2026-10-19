@@ -19,6 +19,10 @@ import {
 import { toJsonColumnValue } from "../../shared/lib/json-column-value";
 import { uuidV7 } from "../../utils/uuid-v7";
 import type { PrincipalDigests } from "../audit/principal-digest";
+import {
+  isMissingTable,
+  type MigrationDialect,
+} from "../field-groups/migration/session";
 import { isConfigurableLocaleCode } from "../i18n/config/validate";
 import type { VersionsDbApi } from "../versions/db-api";
 
@@ -269,6 +273,36 @@ async function storedActor(
   return { ...actor, id: principals.digest(subject), name: null };
 }
 
+const DIALECTS: readonly MigrationDialect[] = ["postgresql", "mysql", "sqlite"];
+
+/**
+ * Run one write to the record's `table`, refusing the change it belongs to
+ * with what to do when the table is not there: an install that has not run
+ * its migrations since the record arrived. Read from the failure itself, by
+ * each driver's own code, so no write pays for a check that is almost always
+ * answered yes. The change rolls back with it, as every change without its
+ * event must.
+ */
+async function intoRecord<T>(
+  table: string,
+  write: () => Promise<T>
+): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    if (DIALECTS.some(dialect => isMissingTable(error, dialect))) {
+      throw NextlyError.serviceUnavailable({
+        publicMessage:
+          "The database needs updating before content can be saved. Run `nextly migrate`.",
+        logMessage: "A content event was refused: its table is missing.",
+        cause: error instanceof Error ? error : undefined,
+        logContext: { reason: "content-events-table-missing", table },
+      });
+    }
+    throw error;
+  }
+}
+
 /**
  * Record one event and its parts on `tx`, the transaction of the change it
  * records. Returns the event's id, which is time-ordered.
@@ -304,40 +338,46 @@ export async function recordContentEvent(
     // Every event of the life this deletion ends is stamped with it, on the
     // deletion's own transaction, so retention later removes exactly those.
     // A subject recreated under the same id starts unstamped events of its own.
-    await tx.update(
-      CONTENT_EVENTS_TABLE,
-      { endedBy: id },
-      {
-        and: [
-          { column: "subjectKind", op: "=", value: subject.kind },
-          bounded.subjectSlug === null
-            ? { column: "subjectSlug", op: "IS NULL" }
-            : { column: "subjectSlug", op: "=", value: bounded.subjectSlug },
-          { column: "subjectId", op: "=", value: subject.id },
-          { column: "endedBy", op: "IS NULL" },
-        ],
-      }
+    await intoRecord(CONTENT_EVENTS_TABLE, () =>
+      tx.update(
+        CONTENT_EVENTS_TABLE,
+        { endedBy: id },
+        {
+          and: [
+            { column: "subjectKind", op: "=", value: subject.kind },
+            bounded.subjectSlug === null
+              ? { column: "subjectSlug", op: "IS NULL" }
+              : { column: "subjectSlug", op: "=", value: bounded.subjectSlug },
+            { column: "subjectId", op: "=", value: subject.id },
+            { column: "endedBy", op: "IS NULL" },
+          ],
+        }
+      )
     );
   }
-  await tx.insert(CONTENT_EVENTS_TABLE, {
-    id,
-    subjectKind: subject.kind,
-    kind: kind.name,
-    // Stored with the event, so retention never depends on which kinds are
-    // registered when it runs.
-    endsSubject,
-    // A deletion event belongs to the life it ends.
-    endedBy: endsSubject ? id : null,
-    actorKind: actor.kind,
-    occurredAt: new Date(),
-    versionNo,
-    // Encoded for the JSON column as every write path encodes one: a raw
-    // object reaches MySQL as text it rejects.
-    payload: toJsonColumnValue(payload),
-    ...bounded,
-  });
+  await intoRecord(CONTENT_EVENTS_TABLE, () =>
+    tx.insert(CONTENT_EVENTS_TABLE, {
+      id,
+      subjectKind: subject.kind,
+      kind: kind.name,
+      // Stored with the event, so retention never depends on which kinds are
+      // registered when it runs.
+      endsSubject,
+      // A deletion event belongs to the life it ends.
+      endedBy: endsSubject ? id : null,
+      actorKind: actor.kind,
+      occurredAt: new Date(),
+      versionNo,
+      // Encoded for the JSON column as every write path encodes one: a raw
+      // object reaches MySQL as text it rejects.
+      payload: toJsonColumnValue(payload),
+      ...bounded,
+    })
+  );
   for (const part of parts) {
-    await tx.insert(CONTENT_EVENT_PARTS_TABLE, { eventId: id, part });
+    await intoRecord(CONTENT_EVENT_PARTS_TABLE, () =>
+      tx.insert(CONTENT_EVENT_PARTS_TABLE, { eventId: id, part })
+    );
   }
   return { id };
 }
