@@ -5,7 +5,14 @@ import * as pg from "./postgres";
 import * as sl from "./sqlite";
 
 export { pg, my, sl };
-export { getI18nArchiveDdl, getI18nArchiveIndexRepairDdl } from "./ddl";
+export {
+  getI18nArchiveDdl,
+  getI18nArchiveIndexRepairDdl,
+  getI18nArchiveKindUpgradeDdl,
+  UNATTRIBUTED_ARCHIVE_KINDS,
+  UNKNOWN_ARCHIVE_KIND,
+  UNRESOLVED_ARCHIVE_KIND,
+} from "./ddl";
 
 /** Returns the `nextly_i18n_archive` table binding for the given dialect. */
 export function nextlyI18nArchiveTables(dialect: SupportedDialect) {

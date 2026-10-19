@@ -20,9 +20,8 @@
 import { BASE_BREAKPOINT } from "@nextlyhq/blocks-engine";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /** Props the recorders captured on the most recent render. */
 const seen: {
@@ -195,6 +194,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // No document around the field: the state every case here was written
   // against, and the one that offers every component.
   useDocumentIdentity: () => null,
+  navigateTo: vi.fn(),
   // Nor a language the field could know: the component read asks for the
   // app default.
   useDocumentLocale: () => null,
@@ -234,7 +234,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // Imported after the mocks, which is what makes them take effect: the module
 // resolves the shell at import time, and a specifier already bound to the real
 // module cannot be replaced afterwards.
-const { BlocksField } = await import("./BlocksField");
+const { PageBuilderView } = await import("./editor/PageBuilderView");
+
+/**
+ * The blocks field's declaration, as the admin hands it to the view. Typed at
+ * the boundary because `FieldConfig` is the closed union of the built-in
+ * shapes, and a contributed type such as `blocks` has no arm in it.
+ */
+const BODY_FIELD = { name: "body", type: "blocks" } as never;
 
 /*
  * The REAL class manager, which the shell mock above replaces with a recorder.
@@ -246,16 +253,27 @@ const { ClassManagerPanel: RealClassManagerPanel } = await vi.importActual<
   typeof import("@nextlyhq/builder/shell")
 >("@nextlyhq/builder/shell");
 
-/** A form around the field, since it reads its value through a form control. */
+/**
+ * The builder's document view around a form, since the editor reads the
+ * field's value through the form's control.
+ */
 function Host(): React.JSX.Element {
-  const { control } = useForm({ defaultValues: { body: undefined } });
-  return <BlocksField name="body" control={control} />;
+  const { control } = useForm<FieldValues>({
+    defaultValues: { body: undefined },
+  });
+  return (
+    <PageBuilderView
+      control={control}
+      field={BODY_FIELD}
+      readOnly={false}
+      exit={() => {}}
+    />
+  );
 }
 
-/** Mount the field and open the editor, which is where the two surfaces live. */
+/** Mount the builder's view, whose editor is where the two surfaces live. */
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
 beforeEach(() => {
@@ -530,13 +548,13 @@ describe("the shell mock keeps up with the shell", () => {
     /*
      * The stale-list failure, pinned. A `vi.mock` factory returning a closed
      * object literal answers `undefined` for every export it does not name — so
-     * a surface added to the shell and imported by `BlocksField` arrives here
+     * a surface added to the shell and imported by the editor arrives here
      * as `undefined`, and the component throws only once something renders it.
      * The break is then invisible in the builder's own suite, which passes, and
      * reads in this package as a fault in the subject rather than as a mock
      * that stopped covering it.
      *
-     * Asserted over the names `BlocksField` actually imports rather than over
+     * Asserted over the names the editor actually imports rather than over
      * the whole module, because the mock is entitled to omit what nothing here
      * uses.
      */

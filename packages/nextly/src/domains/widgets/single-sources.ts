@@ -23,6 +23,7 @@ import { getNextlyLogger } from "../../observability/logger";
 import { registerBuiltInSingleSources } from "./built-in-sources";
 import { readableFields, statusClaimsPresent } from "./collection-sources";
 import { deferredEntities } from "./deferred-entities";
+import { keptOffDashboard, recordKeptOffDashboard } from "./kept-off-dashboard";
 
 /**
  * The slice of a `dynamic_singles` row this needs. Structural, like the
@@ -36,6 +37,8 @@ interface RegisteredSingle {
   migrationStatus?: unknown;
   /** The Draft/Published `status` column, read for the reason the collection's is. */
   status?: unknown;
+  /** Admin options, read for `hidden`; see `keptOffDashboard`. Stored JSON, so `unknown`. */
+  admin?: unknown;
 }
 
 interface SingleRegistrySurface {
@@ -79,10 +82,12 @@ function labelOf(single: RegisteredSingle): string | undefined {
  * Withholds a single the reload declined DDL for, and one whose migration
  * label declines to claim its table -- the same two refusals the collection
  * half makes, decided from the same shared store and the same label reading.
+ * Answers whether the registry could be read; on `false` the previous sources
+ * stand.
  */
-export async function refreshSingleSources(): Promise<void> {
+export async function refreshSingleSources(): Promise<boolean> {
   const singles = await readRegisteredSingles();
-  if (!singles) return;
+  if (!singles) return false;
 
   const deferred = deferredEntities("single");
   const named = singles.filter(
@@ -90,7 +95,9 @@ export async function refreshSingleSources(): Promise<void> {
       typeof single.slug === "string" &&
       single.slug !== "" &&
       !deferred.has(single.slug) &&
-      statusClaimsPresent(single)
+      statusClaimsPresent(single) &&
+      // Kept off the dashboard: no source, no card, and a query naming it reads as unknown.
+      !keptOffDashboard(single)
   );
 
   registerBuiltInSingleSources(
@@ -103,4 +110,9 @@ export async function refreshSingleSources(): Promise<void> {
       status: single.status === true,
     }))
   );
+  // Recorded only once the sources above were replaced, from the same read: a rebuild the
+  // registry refuses keeps the previous sources AND the previous record, so the sources and the
+  // other surfaces that ask this record always describe one snapshot.
+  recordKeptOffDashboard("single", singles);
+  return true;
 }

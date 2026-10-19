@@ -377,7 +377,12 @@ export async function assertNotPartiallyApplied(
   dialect: SupportedDialect,
   repo: Pick<ReconcileRepo, "findFileApplies">,
   /** What the caller would otherwise do with the unit. */
-  refusing: keyof typeof PARTIAL_REFUSALS = "record"
+  refusing: keyof typeof PARTIAL_REFUSALS = "record",
+  /**
+   * How to recover this kind of file, where the caller knows better than the general advice: the
+   * one question that tells whether the attempt landed, and the step for each answer.
+   */
+  advice?: string
 ): Promise<void> {
   if (!failedAttemptMayBePartial(file, dialect)) return;
   const outsideTransaction = file.transaction === false;
@@ -394,7 +399,7 @@ export async function assertNotPartiallyApplied(
     : `${file.filename}'s last attempt ${unfinished ?? "failed"}, and MySQL commits each schema statement as it runs, even inside a transaction, so that attempt may have stopped part-way.`;
   throw new NextlyError({
     code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
-    publicMessage: `${why} ${PARTIAL_REFUSALS[refusing]} ${partiallyAppliedAdvice(file.filename)}`,
+    publicMessage: `${why} ${PARTIAL_REFUSALS[refusing]} ${advice ?? partiallyAppliedAdvice(file.filename)}`,
     logContext: { source: file.filename, reason: "partially-applied" },
   });
 }

@@ -30,7 +30,7 @@
 ---
 
 The adapter's where clauses gain `ICONTAINS`: a substring match that ignores
-case on PostgreSQL, MySQL and SQLite whatever the column's collation, with
+case on PostgreSQL, MySQL and SQLite even under a case-sensitive collation, with
 `%` and `_` in the value matched as characters. `ILIKE` now runs on MySQL and
 SQLite, where it failed with a syntax error (searching the admin's registries
 on those databases hit it), and on MySQL it no longer turns case-sensitive

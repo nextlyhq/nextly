@@ -127,7 +127,8 @@ async function runCount(
 async function runGroupBy(
   collection: string,
   query: WidgetQuery,
-  caller: ReadCaller
+  caller: ReadCaller,
+  source: WidgetSource
 ): Promise<WidgetResult> {
   // `validateWidgetQuery` refuses a `groupBy` op without a key, so by the time
   // a query reaches execution the key is present. The fallback keeps that
@@ -142,10 +143,34 @@ async function runGroupBy(
     bucketLimit: query.limit,
     ...sharedReadArgs(query, caller),
   });
+  const grouped = describeGroupedField(groupBy, source);
   return {
     op: "groupBy",
     buckets: result.buckets,
     ...(result.truncated ? { truncated: true } : {}),
+    ...(grouped && { field: grouped }),
+  };
+}
+
+/**
+ * The grouped field as the chart names it: its label for the axis and the label of each value a
+ * bucket holds, so a bar reads "Needs review" rather than `needs_review`.
+ *
+ * From the SOURCE's declaration, as a list's column headings are. The read has already run with
+ * this caller and grouped on the field, so describing it discloses nothing they could not see.
+ * Nothing is described for a field the source does not declare.
+ */
+function describeGroupedField(
+  name: string,
+  source: WidgetSource
+): WidgetResultField | undefined {
+  const field = source.fields.find(declared => declared.name === name);
+  if (!field) return undefined;
+  return {
+    name,
+    ...(field.label !== undefined && { label: field.label }),
+    type: field.type,
+    ...(field.choices !== undefined && { choices: field.choices }),
   };
 }
 
@@ -231,6 +256,8 @@ function describeSelectedFields(
       name,
       ...(field?.label !== undefined && { label: field.label }),
       ...(field?.type !== undefined && { type: field.type }),
+      // The value labels go with the column, so a row shows "Published", not `published`.
+      ...(field?.choices !== undefined && { choices: field.choices }),
     });
   }
 
@@ -419,7 +446,9 @@ export async function executeWidgetQuery(
 
   if (query.op === "count") return runCount(collection, query, caller);
   if (query.op === "list") return runList(collection, query, caller, source);
-  if (query.op === "groupBy") return runGroupBy(collection, query, caller);
+  if (query.op === "groupBy") {
+    return runGroupBy(collection, query, caller, source);
+  }
   if (query.op === "timeseries") {
     return runTimeseries(collection, query, caller);
   }

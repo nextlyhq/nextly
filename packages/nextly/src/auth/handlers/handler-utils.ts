@@ -6,7 +6,11 @@ import {
 import { NextlyError } from "../../errors/nextly-error";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
-import { validateCsrf } from "../csrf/validate";
+import {
+  acceptedOwnOrigin,
+  type CsrfResult,
+  validateCsrf,
+} from "../csrf/validate";
 
 /**
  * Create a JSON Response with the given status and body.
@@ -170,6 +174,36 @@ export function loginFailureResponse(
 }
 
 /**
+ * The error a CSRF refusal answers with, in the canonical envelope.
+ *
+ * Carries which half refused in `data.reason`. A refused origin also carries
+ * `data.appOrigin`, the origin this check accepts as the request's own, so the
+ * form can tell the person where the app answers. It is the server's own
+ * address, never anything the request sent, and a page on another site cannot
+ * read this answer.
+ */
+export function csrfFailure(
+  request: Request,
+  result: CsrfResult
+): {
+  code: "CSRF_FAILED";
+  message: string;
+  data?: { reason: "token" | "origin"; appOrigin?: string };
+} {
+  const message = result.error ?? "CSRF validation failed";
+  if (result.reason === "origin") {
+    return {
+      code: "CSRF_FAILED",
+      message,
+      data: { reason: "origin", appOrigin: acceptedOwnOrigin(request) },
+    };
+  }
+  return result.reason
+    ? { code: "CSRF_FAILED", message, data: { reason: result.reason } }
+    : { code: "CSRF_FAILED", message };
+}
+
+/**
  * The CSRF refusal a state-changing auth request answers with, or null when
  * the request is allowed to proceed.
  *
@@ -194,7 +228,7 @@ export function csrfRefusal(
     ? null
     : jsonResponse(
         403,
-        { error: { code: "CSRF_FAILED", message: result.error } },
+        { error: csrfFailure(request, result) },
         { "x-request-id": requestId }
       );
 }

@@ -234,6 +234,23 @@ describe("installDependencies (existing project, what reading the config needs)"
     await expect(run("pnpm")).rejects.toThrow(/pnpm add .*nextly/);
     await expect(run("pnpm")).rejects.toThrow(/run create-nextly-app again/i);
   });
+
+  // What the approvals changed or kept is printed after a successful install;
+  // a failed one must carry it, since a kept version-scoped rule is exactly
+  // what makes pnpm stop.
+  it("carries what the approvals said into a failed install's message", async () => {
+    approveNativeBuilds.mockResolvedValueOnce([
+      "Kept the app's own esbuild@0.28.1 rule.",
+    ]);
+    execa.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args[0] === "add") throw new Error("ERR_PNPM_IGNORED_BUILDS");
+      return { stdout: "" };
+    });
+
+    await expect(run("pnpm")).rejects.toThrow(
+      /Kept the app's own esbuild@0\.28\.1 rule\./
+    );
+  });
 });
 
 describe("installDependencies (fresh plugin scaffold)", () => {
@@ -256,6 +273,23 @@ describe("installDependencies (fresh plugin scaffold)", () => {
 
     expect(linkedViaYalc()).toContain("@nextlyhq/plugin-sdk");
     expect(linkedViaYalc()).toContain("nextly");
+  });
+
+  // The blog registers the form builder, whose peer @nextlyhq/plugin-sdk Yarn
+  // never installs on its own. A yalc scaffold omits both from package.json
+  // and relies on this install to link them, so both have to be linked here.
+  it("links the form builder and its plugin-sdk peer for the blog", async () => {
+    await installDependencies(
+      "/tmp/blog",
+      projectInfo,
+      database,
+      /* useYalc */ true,
+      /* isFreshProject */ true,
+      "blog"
+    );
+
+    expect(linkedViaYalc()).toContain("@nextlyhq/plugin-form-builder");
+    expect(linkedViaYalc()).toContain("@nextlyhq/plugin-sdk");
   });
 
   it("leaves the app scaffold's yalc set unchanged", async () => {

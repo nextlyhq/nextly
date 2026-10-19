@@ -1,4 +1,9 @@
+import { zodResolver } from "@hookform/resolvers/zod";
+import type { FieldError } from "react-hook-form";
 import { z } from "zod";
+
+import { filterStringArray } from "@admin/lib/type-guards";
+import { passwordSchema } from "@admin/lib/validation";
 
 export type RoleKey = string;
 
@@ -24,12 +29,33 @@ export const rolesSchema = z.array(z.string().min(1)).default([]);
 export const SIGN_IN_METHODS = ["invite", "password"] as const;
 export type SignInMethod = (typeof SIGN_IN_METHODS)[number];
 
-// Shared password rules so create and edit validate identically.
-const STRONG_PASSWORD =
-  /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&#.])[A-Za-z\d@$!%*?&#.]+$/;
-const STRONG_PASSWORD_MESSAGE =
-  "Password must be at least 8 characters and contain one uppercase letter, one lowercase letter, one number, and one special character (@$!%*?&#.)";
-const COMMON_PASSWORDS = ["password", "12345678", "qwerty", "admin123"];
+/** Both forms need at least one role, reported at `roles`. */
+function requireRoles(roles: string[] | undefined, ctx: z.RefinementCtx): void {
+  if (roles && roles.length > 0) return;
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: "Select at least one role",
+    path: ["roles"],
+  });
+}
+
+/**
+ * Adds an issue at `password` for each rule the password misses. Both forms
+ * use the admin's copy of the server's rule, the one every other password
+ * form uses, so an admin can set exactly the passwords the server accepts and
+ * sees each unmet rule as its own message.
+ */
+function addPasswordIssues(password: string, ctx: z.RefinementCtx): void {
+  const result = passwordSchema.safeParse(password);
+  if (result.success) return;
+  for (const issue of result.error.issues) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: issue.message,
+      path: ["password"],
+    });
+  }
+}
 
 const avatarUrlSchema = z
   .string()
@@ -60,24 +86,14 @@ export function getUserFormSchema(isEdit: boolean) {
     return z
       .object({
         ...base,
-        // Only validated when a value is supplied — an empty field means
-        // "keep the current password".
-        password: z
-          .string()
-          .optional()
-          .refine(
-            val => !val || (val.length >= 8 && STRONG_PASSWORD.test(val)),
-            { message: STRONG_PASSWORD_MESSAGE }
-          )
-          .refine(
-            val => !val || !COMMON_PASSWORDS.includes(val.toLowerCase()),
-            { message: "Password is too common" }
-          ),
+        password: z.string().optional(),
       })
       .passthrough()
-      .refine(data => data.roles && data.roles.length > 0, {
-        message: "Select at least one role",
-        path: ["roles"],
+      .superRefine((data, ctx) => {
+        requireRoles(data.roles, ctx);
+        // Only validated when a value is supplied — an empty field means
+        // "keep the current password".
+        if (data.password) addPasswordIssues(data.password, ctx);
       });
   }
 
@@ -92,29 +108,10 @@ export function getUserFormSchema(isEdit: boolean) {
     })
     .passthrough()
     .superRefine((data, ctx) => {
-      if (!data.roles || data.roles.length === 0) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "Select at least one role",
-          path: ["roles"],
-        });
-      }
+      requireRoles(data.roles, ctx);
 
       if (data.signInMethod === "password") {
-        const password = data.password ?? "";
-        if (password.length < 8 || !STRONG_PASSWORD.test(password)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: STRONG_PASSWORD_MESSAGE,
-            path: ["password"],
-          });
-        } else if (COMMON_PASSWORDS.includes(password.toLowerCase())) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: "Password is too common",
-            path: ["password"],
-          });
-        }
+        addPasswordIssues(data.password ?? "", ctx);
       }
     });
 }
@@ -122,6 +119,65 @@ export function getUserFormSchema(isEdit: boolean) {
 export const createUserFormSchema = getUserFormSchema(false);
 export const editUserFormSchema = getUserFormSchema(true);
 
+/**
+ * The react-hook-form settings the create and edit pages use. `criteriaMode:
+ * "all"` keeps every issue the schema reports for a field rather than the
+ * first, so the password field can list each rule a password misses.
+ */
+export const createUserFormSettings = {
+  resolver: zodResolver(createUserFormSchema),
+  criteriaMode: "all",
+} as const;
+export const editUserFormSettings = {
+  resolver: zodResolver(editUserFormSchema),
+  criteriaMode: "all",
+} as const;
+
+/**
+ * Every message react-hook-form holds for one field, in order and once each.
+ * Under `criteriaMode: "all"` they sit in `types`, keyed by issue code, each a
+ * message or a list of them; `message` alone holds only the first.
+ */
+export function fieldErrorMessages(error: FieldError | undefined): string[] {
+  if (!error) return [];
+  const fromTypes = Object.values(error.types ?? {}).flatMap(value =>
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : []
+  );
+  const messages =
+    fromTypes.length > 0 ? fromTypes : error.message ? [error.message] : [];
+  return [...new Set(messages)];
+}
+
 export type CreateUserFormValues = z.infer<typeof createUserFormSchema>;
 export type EditUserFormValues = z.infer<typeof editUserFormSchema>;
 export type UserFormValues = CreateUserFormValues;
+
+/**
+ * What the edit page sends to update a user, from what its form holds.
+ *
+ * The password goes exactly as entered: a space at either end can be its
+ * symbol, and the server hashes what it receives. An empty field sends no
+ * password, so the current one is kept; whitespace alone fails the rule and
+ * never reaches here. The server hashes the password before storing it, so
+ * the request carries it in plain text only over the app's own connection.
+ * Custom fields arrive under `customFields` and are sent at the top level.
+ */
+export function editUserUpdates(values: EditUserFormValues) {
+  const customFields = (values as Record<string, unknown>).customFields as
+    | Record<string, unknown>
+    | undefined;
+  return {
+    name: values.fullName,
+    email: values.email,
+    password: values.password || undefined,
+    // filterStringArray always returns string[], no fallback needed
+    roles: filterStringArray(values.roles),
+    image: values.avatarUrl,
+    isActive: values.active,
+    ...customFields,
+  };
+}

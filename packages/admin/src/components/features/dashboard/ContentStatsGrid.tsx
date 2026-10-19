@@ -67,15 +67,18 @@ export const ContentStatsGrid: React.FC = () => {
         trend="up"
         change={15}
       />
-      <StatsCard
-        title="Media Assets"
-        value={stats.content.totalMedia}
-        icon={<Image className="h-5 w-5" />}
-        sparklineData={[45, 48, 47, 52, 50, 55, 58]} // Mock trend
-        footer="+6 this week"
-        trend="up"
-        change={8}
-      />
+      {/* Left out, not drawn as 0, when the reader may not read media. */}
+      {stats.content.totalMedia !== undefined && (
+        <StatsCard
+          title="Media Assets"
+          value={stats.content.totalMedia}
+          icon={<Image className="h-5 w-5" />}
+          sparklineData={[45, 48, 47, 52, 50, 55, 58]} // Mock trend
+          footer="+6 this week"
+          trend="up"
+          change={8}
+        />
+      )}
       <StatsCard
         title="Content Types"
         value={stats.content.contentTypes}

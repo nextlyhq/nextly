@@ -222,6 +222,29 @@ describe.skipIf(!TEST_DB_URL)("PostgreSQL upsert", () => {
     expect(await rows()).toHaveLength(1);
   });
 
+  it("refuses a conflict column named twice", async () => {
+    await expect(
+      adapter.upsert(
+        TABLE,
+        { id: "a", key: "k1", label: "first" },
+        { conflictColumns: ["key", "key"] }
+      )
+    ).rejects.toThrow(/more than once/);
+    expect(await rows()).toEqual([]);
+  });
+
+  it("refuses to keep a row by a conflict column left for the database to fill", async () => {
+    // The row that stands is read back by the caller's conflict values; one
+    // the database would supply is not among them. MySQL refuses the same.
+    await expect(
+      adapter.upsert(
+        TABLE,
+        { id: "a", key: "k1", label: "first" },
+        { conflictColumns: ["slug"], updateColumns: [] }
+      )
+    ).rejects.toThrow(/needs a value for every conflict column/);
+  });
+
   it("reads back the row matching every column of a composite key", async () => {
     // Two rows share the key's first column, so a read-back by that column
     // alone could return the wrong one.

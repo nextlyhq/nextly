@@ -94,6 +94,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -132,6 +133,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -177,6 +179,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -208,6 +211,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -236,6 +240,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
     const enable = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -258,6 +263,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -316,6 +322,146 @@ describe("buildCompanionTransitionStatements — disable", () => {
 });
 
 /**
+ * A field that stops being translated while its entity stays translated.
+ *
+ * Its companion column is dropped, so before that happens the default language's value has to
+ * reach the shared column on main and every other language's value has to reach the archive,
+ * where `nextly i18n:restore` can bring it back. Dropping the column alone lost every language.
+ */
+describe("buildCompanionTransitionStatements — a field stops being translated", () => {
+  const SHARED_HEADING = [
+    { name: "heading", type: "text" as const, localized: false },
+    { name: "views", type: "number" as const },
+  ];
+
+  beforeEach(() => {
+    const enable = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
+      slug: "hero",
+      kind: "collection" as const,
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      ...NO_STATUS_HISTORY,
+      wasLocalized: false,
+      isLocalized: true,
+      oldFields: FIELDS,
+      newFields: FIELDS,
+      companionExists: false,
+    });
+    run(enable.statements);
+    const translate = sqlite.prepare(
+      `INSERT INTO "single_hero_locales" ("_parent","_locale","heading") VALUES (?,?,?)`
+    );
+    translate.run("h1", "de", "Hallo");
+    translate.run("h1", "fr", "Bonjour");
+    // The schema apply adds the newly shared field's main column before the companion
+    // transition runs, as the push pipeline does for a field the main table now carries.
+    sqlite.exec(`ALTER TABLE "single_hero" ADD COLUMN "heading" TEXT`);
+  });
+
+  function leaveTranslation() {
+    return buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
+      slug: "hero",
+      kind: "collection" as const,
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      ...NO_STATUS_HISTORY,
+      wasLocalized: true,
+      isLocalized: true,
+      oldFields: FIELDS,
+      newFields: SHARED_HEADING,
+      companionExists: true,
+    });
+  }
+
+  it("keeps the default language's value as the shared value and archives the others", () => {
+    const plan = leaveTranslation();
+
+    // It archives, so the caller ensures the archive table exists first.
+    expect(plan.needsArchive).toBe(true);
+    expect(plan.companionDropped).toBe(false);
+    run(getI18nArchiveDdl("sqlite"));
+    run(plan.statements);
+
+    const mainRow = sqlite
+      .prepare(`SELECT "heading" FROM "single_hero" WHERE "id" = 'h1'`)
+      .get() as { heading: string | null };
+    expect(mainRow.heading).toBe("Hello");
+
+    const archived = sqlite
+      .prepare(
+        `SELECT "collection","entry_id","locale","field","value" FROM "nextly_i18n_archive" ORDER BY "locale"`
+      )
+      .all();
+    expect(archived).toEqual([
+      {
+        collection: "hero",
+        entry_id: "h1",
+        locale: "de",
+        field: "heading",
+        value: "Hallo",
+      },
+      {
+        collection: "hero",
+        entry_id: "h1",
+        locale: "fr",
+        field: "heading",
+        value: "Bonjour",
+      },
+    ]);
+
+    // The column left the companion; the companion itself stays for the other fields.
+    const companionColumns = (
+      sqlite.prepare(`PRAGMA table_info("single_hero_locales")`).all() as {
+        name: string;
+      }[]
+    ).map(c => c.name);
+    expect(companionColumns).not.toContain("heading");
+  });
+
+  it("archives the other languages before it removes the column", () => {
+    // Without an archive table the archive write fails, and nothing may have been dropped
+    // by then: every language's value is still in the companion.
+    const plan = leaveTranslation();
+
+    expect(() => run(plan.statements)).toThrow(/nextly_i18n_archive/);
+    const kept = sqlite
+      .prepare(
+        `SELECT "_locale","heading" FROM "single_hero_locales" ORDER BY "_locale"`
+      )
+      .all();
+    expect(kept).toEqual([
+      { _locale: "de", heading: "Hallo" },
+      { _locale: "en", heading: "Hello" },
+      { _locale: "fr", heading: "Bonjour" },
+    ]);
+  });
+
+  it("archives nothing for a translated field that was deleted outright", () => {
+    const plan = buildCompanionTransitionStatements({
+      builtBy: "codeFirst" as const,
+      slug: "hero",
+      kind: "collection" as const,
+      tableName: "single_hero",
+      dialect: "sqlite",
+      defaultLocale: "en",
+      ...NO_STATUS_HISTORY,
+      wasLocalized: true,
+      isLocalized: true,
+      oldFields: FIELDS,
+      newFields: [{ name: "views", type: "number" as const }],
+      companionExists: true,
+    });
+
+    expect(plan.needsArchive).toBe(false);
+    expect(plan.statements.join("\n")).not.toContain("nextly_i18n_archive");
+  });
+});
+
+/**
  * Disabling localization must bring a row's publishing state back with its content.
  *
  * Publishing is per locale while an entity is localized, so a row published only under a
@@ -346,6 +492,7 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
   const withStatus = (over: StatusCase): CompanionTransitionArgs => ({
     builtBy: "codeFirst",
     slug: "hero",
+    kind: "collection" as const,
     tableName: "single_hero",
     dialect: "sqlite" as const,
     defaultLocale: "en",

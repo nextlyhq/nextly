@@ -131,10 +131,15 @@ formOverrides: {
   ],
   access: {
     read: () => true,
-    create: ({ user }) => !!user,
+    create: ({ permissions }) => permissions.includes('forms:create'),
   },
 }
 ```
+
+By default a visitor can read a form and create a submission. Everything else needs the
+matching permission on the Roles screen: `read-form-submissions` to read submissions,
+`update-forms` to edit a form, `delete-form-submissions` to delete one. An override narrows
+from there; check the permission in it rather than a role's name.
 
 **Function style** -- full control over the field list:
 

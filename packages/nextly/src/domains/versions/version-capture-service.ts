@@ -12,10 +12,17 @@
 
 import { NextlyError } from "../../errors";
 import type { VersionStatus } from "../../schemas/versions/types";
+import { markWriteIntegrityFailure } from "../../shared/write-integrity";
+import {
+  CORE_CONTENT_EVENT_KINDS,
+  ensureCoreContentEventKinds,
+} from "../content-events/core-kinds";
+import { recordContentEvent } from "../content-events/record";
 
 import type { VersionsDbApi } from "./db-api";
 import { selectVersionsToPrune } from "./retention";
 import { VersionConflictError, isUniqueViolation } from "./version-conflict";
+import { pinnedVersionNos } from "./version-pins";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
 /** Input to capture a durable version. */
@@ -120,14 +127,51 @@ export class VersionCaptureService {
           },
         });
       }
-      const staleIds = selectVersionsToPrune(durable, input.maxPerDoc, [
-        isRestore ? versionNo - 1 : null,
-        input.sourceVersionNo,
-      ]);
+      // Read on this transaction, after the save's document lock: a pin takes
+      // the same lock, so it either is read here or waits for this pass.
+      const pinned = await pinnedVersionNos(db, input.ref);
+      const staleIds = selectVersionsToPrune(
+        durable,
+        input.maxPerDoc,
+        [isRestore ? versionNo - 1 : null, input.sourceVersionNo],
+        pinned
+      );
       if (staleIds.length > 0) {
-        await repo.deletePrunedVersions(staleIds);
+        const removed = await repo.deletePrunedVersions(staleIds);
+        await recordRetentionRemoval(db, input.ref, removed);
       }
     }
     return { versionNo };
+  }
+}
+
+/**
+ * One event in the document's history for a retention pass that removed
+ * versions, on the capture's own transaction, so history shows where older
+ * versions went. The retention policy removed them, so the system is named
+ * as who did it. Collections and Singles keep a record of content events; a
+ * page's history keeps none yet.
+ *
+ * A failure is marked write-integrity: the pass has already removed versions,
+ * and a batch that softened it to one failed item would commit the removal
+ * with no record of it.
+ */
+async function recordRetentionRemoval(
+  db: VersionsDbApi,
+  ref: VersionRef,
+  count: number
+): Promise<void> {
+  if (count <= 0) return;
+  if (ref.scopeKind !== "collection" && ref.scopeKind !== "single") return;
+  ensureCoreContentEventKinds();
+  try {
+    await recordContentEvent(db, {
+      subject: { kind: ref.scopeKind, slug: ref.scopeSlug, id: ref.entryId },
+      kind: CORE_CONTENT_EVENT_KINDS.versionsRemoved.name,
+      actor: { kind: "system" },
+      payload: { count },
+    });
+  } catch (error) {
+    throw markWriteIntegrityFailure(error);
   }
 }

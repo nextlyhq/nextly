@@ -22,6 +22,7 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { ReactNode } from "react";
 
@@ -42,6 +43,17 @@ import { WidgetCard, type WidgetCardProps } from "./WidgetCard";
  * archetype will draw: a figure where a number goes, rows where a list goes. Matching the
  * shape is what keeps the card from jumping when the data lands.
  */
+/**
+ * The items setting a list or table card's skeleton holds the place of, from the query as asked;
+ * `null` for one that declared no limit, which draws the default number, and `undefined` for any
+ * other card, whose skeleton draws its default rows.
+ */
+function skeletonItemsFor(definition: DashboardWidget): unknown {
+  if (definition.archetype !== "list" && definition.archetype !== "table")
+    return undefined;
+  return definition.query?.limit ?? null;
+}
+
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
     case "metric":
@@ -156,6 +168,11 @@ export interface WidgetRendererProps {
    */
   isFetching?: boolean;
   /**
+   * The tier the answer in `slot` was fetched at, when the card has grown past it: a list then
+   * draws only the rows that answer was asked for. See `AnswerTierContext`.
+   */
+  answerTier?: SizeTier;
+  /**
    * Which CARD this render is, and what its reader configured.
    *
    * 🔴 Handed to a plugin's own component, because nothing else can reach it.
@@ -189,6 +206,7 @@ export function WidgetRenderer({
   onRetry,
   updatedAt = null,
   isFetching = false,
+  answerTier,
 }: WidgetRendererProps) {
   const shared = {
     title: definition.title,
@@ -201,6 +219,8 @@ export function WidgetRenderer({
     customizing,
     cardId: placement?.id ?? definition.id,
     skeleton: skeletonFor(definition.archetype),
+    skeletonItems: skeletonItemsFor(definition),
+    answerTier,
   };
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);

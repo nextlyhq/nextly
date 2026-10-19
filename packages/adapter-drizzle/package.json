@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/adapter-drizzle",
-  "version": "0.0.2-alpha.66",
+  "version": "0.0.2-alpha.68",
   "description": "Shared Drizzle ORM adapter logic for Nextly database adapters",
   "license": "MIT",
   "type": "module",
@@ -32,6 +32,11 @@
       "types": "./dist/schema-name.d.ts",
       "import": "./dist/schema-name.mjs",
       "require": "./dist/schema-name.cjs"
+    },
+    "./text-match": {
+      "types": "./dist/text-match.d.ts",
+      "import": "./dist/text-match.mjs",
+      "require": "./dist/text-match.cjs"
     },
     "./version-check": {
       "types": "./dist/version-check.d.ts",

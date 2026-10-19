@@ -15,6 +15,8 @@
  * @module api/versions-access
  */
 
+import { z } from "zod";
+
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { FieldConfig } from "../collections/fields/types";
@@ -27,14 +29,27 @@ import {
   singleDocumentReadable,
 } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
+import { resolveComparisonPair } from "../domains/versions/comparison-baselines";
+import {
+  applyComponentReadAccess,
+  fieldsCarryingReadRules,
+  nestedWithheldPaths,
+} from "../domains/versions/component-read-access";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
+import { HistoryDividers } from "../domains/versions/history-dividers";
+import { readPartIsLive } from "../domains/versions/part-liveness";
 import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import {
   resolveComponentFieldMap,
   stripPasswordsThroughComponents,
 } from "../domains/versions/tag-component-types";
+import {
+  lastLookedAtByPart,
+  markLastViewed,
+} from "../domains/versions/version-views";
+import type { VersionRef } from "../domains/versions/versions-repository";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -42,7 +57,10 @@ import type {
   VersionScopeKind,
 } from "../schemas/versions/types";
 import { resolveRoleSlugs } from "../services/lib/permissions";
-import { applyFieldReadAccess } from "../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  callerAccessGrants,
+} from "../shared/lib/field-level-registry";
 import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
@@ -340,16 +358,25 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * the surrounding gate has already established the caller may read the
  * document, and redaction is a narrowing pass on top of that.
  *
- * Returns the top-level keys the read rules removed, so a comparison can say a
- * field is hidden from this reader rather than leave it out unexplained.
- * Password values are stripped too, but are not reported: a comparison never
- * shows a password field at all.
+ * Every read rule applies, the entity's own and, through
+ * `applyComponentReadAccess`, each component's on the instances it holds, at
+ * any depth. A scoped API key is judged on its own grants, as the document
+ * read judges it.
+ *
+ * Returns what the read rules removed: top-level keys, and dotted paths below
+ * them (`banner.secret`), so a comparison can say a field is hidden from this
+ * reader rather than leave it out unexplained. Password values are stripped
+ * too, but are not reported: a comparison never shows a password field at all.
+ *
+ * Fails closed: if the rules cannot be evaluated, every field carrying a read
+ * rule is withheld rather than the snapshot returned as stored.
  */
 export async function redactSnapshotForUser(
   snapshot: unknown,
   scopeKind: VersionScopeKind,
   slug: string,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<ReadonlySet<string>> {
   const withheld = new Set<string>();
   if (typeof snapshot !== "object" || snapshot === null) return withheld;
@@ -376,22 +403,14 @@ export async function redactSnapshotForUser(
       },
     });
   }
+  // Through component REFERENCES as well. A `component` field carries only a
+  // slug, so a walker given the top-level list alone sees a leaf: a password
+  // declared inside a referenced component would be handed back even though
+  // the live read hides it. Same reasoning as the field converted to
+  // `password` after the fact -- the CURRENT schema decides, wherever the
+  // field is declared. The same map takes the read rules into components.
+  const componentFields = await currentComponentFields(fields);
   if (fields.length > 0) {
-    // Through component REFERENCES as well. A `component` field carries only a
-    // slug, so a walker given the top-level list alone sees a leaf: a password
-    // declared inside a referenced component would be handed back even though
-    // the live read hides it. Same reasoning as the field converted to
-    // `password` after the fact -- the CURRENT schema decides, wherever the
-    // field is declared.
-    const dataService = container.has("fieldGroupDataService")
-      ? container.get<FieldGroupDataService>("fieldGroupDataService")
-      : null;
-    const componentFields = dataService
-      ? await resolveComponentFieldMap(fields, componentSlug =>
-          dataService.getComponentFields(componentSlug)
-        )
-      : new Map<string, FieldConfig[]>();
-
     stripPasswordsThroughComponents(
       entry,
       fields,
@@ -400,18 +419,71 @@ export async function redactSnapshotForUser(
     );
   }
 
+  const before = structuredClone(entry);
   const readable = new Set(Object.keys(entry));
-  await applyFieldReadAccess({
-    kind: scopeKind,
-    slug,
-    entry,
+  const caller = {
     user,
-    overrideAccess: false,
-  });
+    authenticatedScope,
+    grants: callerAccessGrants(user, authenticatedScope),
+  };
+  try {
+    await applyFieldReadAccess({
+      kind: scopeKind,
+      slug,
+      entry,
+      user,
+      authenticatedScope,
+      grants: caller.grants,
+      overrideAccess: false,
+    });
+    await applyComponentReadAccess(entry, fields, componentFields, caller);
+  } catch (error) {
+    // Rules that could not be evaluated decide nothing, so nothing they guard
+    // is shown: every field carrying a read rule is withheld, and named.
+    for (const key of fieldsCarryingReadRules(
+      scopeKind,
+      fields,
+      componentFields,
+      slug
+    )) {
+      delete entry[key];
+    }
+    getService("logger").warn(
+      "Version redaction could not evaluate read rules",
+      {
+        scopeKind,
+        scopeSlug: slug,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+  }
   for (const key of readable) {
     if (!(key in entry)) withheld.add(key);
   }
+  for (const path of nestedWithheldPaths(
+    before,
+    entry,
+    fields,
+    componentFields
+  )) {
+    withheld.add(path);
+  }
   return withheld;
+}
+
+/** The current schemas of the components `fields` reach, by slug. */
+async function currentComponentFields(
+  fields: FieldConfig[]
+): Promise<Map<string, FieldConfig[]>> {
+  if (fields.length === 0) return new Map();
+  const dataService = container.has("fieldGroupDataService")
+    ? container.get<FieldGroupDataService>("fieldGroupDataService")
+    : null;
+  return dataService
+    ? resolveComponentFieldMap(fields, componentSlug =>
+        dataService.getComponentFields(componentSlug)
+      )
+    : new Map<string, FieldConfig[]>();
 }
 
 /**
@@ -588,6 +660,227 @@ export async function hydrateVersionSnapshot(
   );
 }
 
+/** A comparison request, as every surface that compares reads it. */
+export interface ComparisonQuery {
+  from?: number;
+  to?: number;
+  /** @experimental A registered comparison baseline's name. */
+  baseline?: string;
+  /** The part to open on when no `to` is named. */
+  locale?: string;
+  modifiedOnly: boolean;
+}
+
+const comparisonQuerySchema = z.object({
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+  baseline: z.string().trim().optional(),
+  locale: z.string().trim().optional(),
+  modifiedOnly: z.string().optional(),
+});
+
+/**
+ * Parse a comparison's query parameters, the same way for the REST routes,
+ * the dispatcher and the published handler, so the surfaces never answer one
+ * request differently. An absent or blank parameter is absent; a version
+ * number that is not a whole number is left for `assertComparisonRequest` to
+ * refuse with the parameter's name.
+ */
+export function parseComparisonQuery(
+  input: Record<string, unknown>
+): ComparisonQuery {
+  const text = (value: unknown) =>
+    typeof value === "string" ? value : undefined;
+  const query = comparisonQuerySchema.parse({
+    from: text(input.from),
+    to: text(input.to),
+    baseline: text(input.baseline),
+    locale: text(input.locale),
+    modifiedOnly: text(input.modifiedOnly),
+  });
+  const present = (value: string | undefined) =>
+    value === undefined || value === "" ? undefined : value;
+  const number = (value: string | undefined) => {
+    const raw = present(value);
+    return raw === undefined ? undefined : Number(raw);
+  };
+  return {
+    from: number(query.from),
+    to: number(query.to),
+    baseline: present(query.baseline),
+    locale: present(query.locale),
+    modifiedOnly: query.modifiedOnly === "1" || query.modifiedOnly === "true",
+  };
+}
+
+/**
+ * Validate a comparison request before anything is read, so malformed input
+ * fails as a validation error naming its parameter, whatever the document's
+ * history holds. Either an explicit pair (`from` and `to`) or a target and a
+ * baseline, each optional; not a `from` and a `baseline` together.
+ */
+export function assertComparisonRequest(query: ComparisonQuery): void {
+  if (query.from !== undefined) {
+    if (query.baseline !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "baseline",
+            code: "INVALID_VALUE",
+            message: "Name either `from` or `baseline`, not both.",
+          },
+        ],
+      });
+    }
+    assertDiffVersionPair(query.from, query.to ?? Number.NaN);
+    return;
+  }
+  if (query.to !== undefined && (!Number.isInteger(query.to) || query.to < 1)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "to",
+          code: "INVALID_VALUE",
+          message: "to must be a positive integer.",
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * The id of the person reading, or null for an API key, a principal or the
+ * system. One answer for every place that reads or records what a person last
+ * looked at, so a key never reaches its owner's marker on any of them.
+ */
+export function readingPersonId(
+  user: UserContext | undefined,
+  authenticatedScope?: AuthenticatedScope
+): string | null {
+  const actorType = authenticatedScope?.actorType ?? "user";
+  return actorType === "user" && user?.id ? String(user.id) : null;
+}
+
+/**
+ * A page of a document's history with each part's "You last looked here" row
+ * marked, for a person; anyone else's page comes back as it was. Reads only:
+ * looking at the history moves no marker.
+ */
+export async function withLastViewedMarks<
+  T extends { versionNo: number | null; locale: string | null },
+>(
+  rows: T[],
+  args: {
+    ref: VersionRef;
+    user: UserContext | undefined;
+    authenticatedScope?: AuthenticatedScope;
+  }
+): Promise<(T & { lastViewed?: true })[]> {
+  const personId = readingPersonId(args.user, args.authenticatedScope);
+  if (personId === null) return rows;
+  const adapter = getService("adapter");
+  const looked = await lastLookedAtByPart(adapter, personId, args.ref);
+  // Each part's divider, found in the database in one read: the version
+  // looked at, or the nearest older one kept, whichever page it falls on.
+  const dividers = await new HistoryDividers(
+    adapter,
+    getService("logger")
+  ).nearestKeptByPart(args.ref, looked);
+  return markLastViewed(rows, dividers);
+}
+
+/**
+ * Compare two versions of a document AFTER the caller's read access to it is
+ * confirmed: an explicit pair as given, or a target and baseline resolved from
+ * the document's own history (`resolveComparisonPair`), then diffed through
+ * `diffDocumentVersions`. Every surface that compares calls this, after its own
+ * read gate.
+ *
+ * A baseline is told who is comparing only when that is a person: an API key,
+ * a principal or the system compares with no user, so a baseline that reads a
+ * person's own records never reaches the key owner's.
+ */
+export async function compareDocumentVersions(args: {
+  scopeKind: VersionScopeKind;
+  slug: string;
+  entryId: string;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+  query: ComparisonQuery;
+}): Promise<VersionDiff> {
+  const { query } = args;
+  let pair: { from: number; to: number };
+  let baseline: VersionDiff["baseline"];
+  if (query.from !== undefined && query.to !== undefined) {
+    pair = { from: query.from, to: query.to };
+  } else {
+    const versions = getService("versionsService");
+    const ref = {
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    };
+
+    const [partVersions, workingDraftParts] = await Promise.all([
+      versions.listPartVersions(ref),
+      versions.listWorkingDraftParts(ref),
+    ]);
+    const resolved = await resolveComparisonPair(
+      {
+        ref,
+        to: query.to,
+        baseline: query.baseline,
+        locale: query.locale,
+        userId: readingPersonId(args.user, args.authenticatedScope),
+        workingDraftParts,
+        partIsLive: part =>
+          partIsLiveNow(args.scopeKind, args.slug, args.entryId, part),
+      },
+      partVersions
+    );
+    pair = { from: resolved.from, to: resolved.to };
+    baseline = resolved.baseline;
+  }
+  assertDiffVersionPair(pair.from, pair.to);
+
+  const diff = await diffDocumentVersions({
+    scopeKind: args.scopeKind,
+    slug: args.slug,
+    entryId: args.entryId,
+    user: args.user,
+    from: pair.from,
+    to: pair.to,
+    modifiedOnly: query.modifiedOnly,
+    authenticatedScope: args.authenticatedScope,
+  });
+  return baseline ? { ...diff, baseline } : diff;
+}
+
+/**
+ * Whether a part of the document is served now, read from the document's own
+ * rows. A document whose entity is gone is not served at all.
+ */
+async function partIsLiveNow(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  part: string | null
+): Promise<boolean> {
+  const entity =
+    scopeKind === "single"
+      ? await getService("singleRegistryService").getSingleBySlug(slug)
+      : await getService("collectionRegistryService").getCollectionBySlug(slug);
+  if (!entity) return false;
+  return readPartIsLive({
+    adapter: getService("adapter"),
+    scopeKind,
+    entity,
+    entryId,
+    part,
+    defaultLocale: getService("config").localization?.defaultLocale ?? null,
+  });
+}
+
 /**
  * Compute a diff of two versions AFTER the caller has confirmed read access to
  * the document. The dispatcher method and the standalone route both call this,
@@ -647,13 +940,15 @@ export async function diffDocumentVersions(args: {
     fromRow.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
   const withheldTo = await redactSnapshotForUser(
     toRow.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
 
   // Page scope has no HTTP diff surface; collection and single are the only
@@ -668,6 +963,8 @@ export async function diffDocumentVersions(args: {
     {
       modifiedOnly: args.modifiedOnly,
       withheld: new Set([...withheldFrom, ...withheldTo]),
+      // `redactSnapshotForUser` ran each component's own read rules.
+      componentRulesApplied: true,
       entity: lookupKind,
     }
   );

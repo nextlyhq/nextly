@@ -55,6 +55,7 @@ vi.mock("../pending-edit-visibility", async importOriginal => ({
 }));
 
 import { executeWidgetQuery } from "../../widgets/execute";
+import { recordKeptOffDashboard } from "../../widgets/kept-off-dashboard";
 import { clearSources } from "../../widgets/sources";
 import { clearSystemResolvers } from "../../widgets/system-sources";
 import {
@@ -91,6 +92,31 @@ beforeEach(() => {
   clearSources();
   clearSystemResolvers();
   registerVersionsWidgetSource();
+});
+
+describe("what the dashboard leaves out", () => {
+  it("counts no edits in a collection kept off the dashboard, even one the caller may read", async () => {
+    // The caller may read both, as a super-admin may read everything; the page builder's
+    // internal usage index is still not counted, because the dashboard does not show it.
+    readable.mockResolvedValue(new Set(["posts", "nx_pb_class_usage"]));
+    registeredSlugs.mockResolvedValue(["posts", "nx_pb_class_usage"]);
+    recordKeptOffDashboard("collection", [
+      { slug: "nx_pb_class_usage", admin: { hidden: true } },
+    ]);
+    try {
+      await executeWidgetQuery(
+        { source: VERSIONS_SOURCE_ID, op: "count" },
+        caller
+      );
+
+      expect(pendingEditRows).toHaveBeenCalledWith(
+        expect.objectContaining({ readableSlugs: ["posts"] })
+      );
+    } finally {
+      // The record is process-wide; leave none behind for the next case.
+      recordKeptOffDashboard("collection", []);
+    }
+  });
 });
 
 describe("who the numbers are for", () => {

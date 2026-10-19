@@ -3,7 +3,10 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 
-import { RoleMutationService } from "./role/role-mutation-service";
+import {
+  type CreateRoleOptions,
+  RoleMutationService,
+} from "./role/role-mutation-service";
 import { RoleQueryService } from "./role/role-query-service";
 
 /**
@@ -162,15 +165,18 @@ export class RoleService extends BaseService {
    *   child-role inputs.
    * @throws NextlyError(DUPLICATE) when name/slug collide with an existing role.
    */
-  createRole(input: {
-    name: string;
-    slug: string;
-    description?: string;
-    level?: number;
-    isSystem?: boolean;
-    permissionIds: string[];
-    childRoleIds?: string[];
-  }): Promise<{
+  createRole(
+    input: {
+      name: string;
+      slug: string;
+      description?: string;
+      level?: number;
+      isSystem?: boolean;
+      permissionIds: string[];
+      childRoleIds?: string[];
+    },
+    options?: CreateRoleOptions
+  ): Promise<{
     id: string;
     name: string;
     slug: string;
@@ -180,7 +186,7 @@ export class RoleService extends BaseService {
     permissionIds: string[];
     childRoleIds: string[];
   }> {
-    return this.mutationService.createRole(input);
+    return this.mutationService.createRole(input, options);
   }
 
   /**

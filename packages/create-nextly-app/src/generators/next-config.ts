@@ -19,6 +19,8 @@ import fs from "fs-extra";
 
 import type { DatabaseConfig } from "../types";
 
+import type { GeneratedFiles } from "./generated-files";
+
 /**
  * Packages that are always externalized by the scaffolded Next.js config.
  *
@@ -115,6 +117,11 @@ export type NextConfigPatch =
        * top-level `serverExternalPackages` of Next.js 15 and later.
        */
       spelling?: "legacy" | "either";
+      /**
+       * The app has no Next config yet, so `file` is the one to create and
+       * the advice is a whole file rather than a key to add.
+       */
+      create?: true;
     };
 
 /**
@@ -235,15 +242,23 @@ function declaredValue(name: string, body: Statement[]): Expression | null {
 function configObject(
   value: Expression,
   body: Statement[],
-  depth = 0
+  depth = 0,
+  throughCalls = true
 ): ObjectExpression | string {
   if (depth > 8) return "its config is built in a way this cannot follow";
   if (value.type === "ObjectExpression") return value;
   if (isTypeAssertion(value))
-    return configObject(value.expression, body, depth + 1);
+    return configObject(value.expression, body, depth + 1, throughCalls);
   if (value.type === "Identifier")
-    return followVariable(value.name, body, depth);
-  if (value.type === "CallExpression") return followCall(value, body, depth);
+    return followVariable(value.name, body, depth, throughCalls);
+  if (value.type === "CallExpression") {
+    // A wrapper hands Next.js what it returns, not the object it was given:
+    // followed for an edit to that object, never trusted to say what Next.js
+    // finally receives.
+    return throughCalls
+      ? followCall(value, body, depth)
+      : "its config is the result of a call, which may change any setting";
+  }
   return value.type === "ArrowFunctionExpression" ||
     value.type === "FunctionExpression"
     ? "it exports a function"
@@ -275,14 +290,15 @@ function isTypeAssertion(
 function followVariable(
   name: string,
   body: Statement[],
-  depth: number
+  depth: number,
+  throughCalls = true
 ): ObjectExpression | string {
   if (referenceCount(name, body) > 1) {
     return `its ${name} is used again after it is declared, where it may be changed`;
   }
   const declared = declaredValue(name, body);
   return declared
-    ? configObject(declared, body, depth + 1)
+    ? configObject(declared, body, depth + 1, throughCalls)
     : "its config is not declared in this file";
 }
 
@@ -687,9 +703,39 @@ function experimentalConflict(
 }
 
 /** The object literal the file exports as its config, or why there is none to edit. */
-function exportedConfig(body: Statement[]): ObjectExpression | string {
+function exportedConfig(
+  body: Statement[],
+  throughCalls = true
+): ObjectExpression | string {
   const exported = exportedValue(body);
-  return typeof exported === "string" ? exported : configObject(exported, body);
+  return typeof exported === "string"
+    ? exported
+    : configObject(exported, body, 0, throughCalls);
+}
+
+/**
+ * The strings the exported config lists under `key`, in order; `"absent"`
+ * when the config it exports does not set `key`; or null when that cannot be
+ * known: the file does not parse, its export cannot be followed or comes from
+ * a wrapper call, the value is not an array of strings written in place, or a
+ * spread, computed or accessor property may set it unseen. Every step that reads a setting from the app's config asks here,
+ * so a commented-out or nested occurrence is never taken for the real one.
+ */
+export function configStringList(
+  source: string,
+  file: string,
+  key: string
+): string[] | "absent" | null {
+  const body = parseBody(source, file);
+  if (!body) return null;
+  // What Next.js receives, so not through a wrapper, whose result may differ.
+  const object = exportedConfig(body, false);
+  if (typeof object === "string") return null;
+  if (hiddenSettings(object, [key], "the config") !== null) return null;
+  const value = propertyValue(object, key);
+  if (value === undefined) return "absent";
+  const names = literalNames(value);
+  return names ? [...names] : null;
 }
 
 /** The edits that put every required package in the config's list, or why it cannot be changed. */
@@ -779,7 +825,7 @@ const SINGLE_MAJOR = /^[\^~]?(\d+)(?:\.(?:\d+|[xX*])){0,2}(?:-[\w.]+)?$/;
  * that range admits a single major. Null when neither tells, as when
  * dependencies are not installed yet and the range is `latest`.
  */
-async function nextMajor(cwd: string): Promise<number | null> {
+export async function nextMajor(cwd: string): Promise<number | null> {
   const installed = stringAt(
     await readJsonOrNull(
       path.join(cwd, "node_modules", "next", "package.json")
@@ -810,14 +856,29 @@ function versionBlock(
     };
   return major < FIRST_TOP_LEVEL_MAJOR
     ? {
-        reason: `the app runs Next.js ${major}, which reads the list as experimental.serverComponentsExternalPackages`,
+        reason: `the app runs Next.js ${major}, which reads the list as experimental.serverComponentsExternalPackages and runs instrumentation.ts only with experimental.instrumentationHook`,
         spelling: "legacy",
       }
     : null;
 }
 
-/** The app's Next config file, by the name Next.js would read first. */
-async function findConfigFile(cwd: string): Promise<string | null> {
+/**
+ * The Next config file any advice about the app's config names: the one it
+ * has, or, when it has none, the one to create. `.mjs` is ESM whatever the
+ * package's own "type" says, so that file loads in any project. Every step
+ * that tells the developer to change the config asks here, so two steps never
+ * name two different files.
+ */
+export async function nextConfigFileToChange(cwd: string): Promise<string> {
+  return (await findConfigFile(cwd)) ?? "next.config.mjs";
+}
+
+/**
+ * The app's Next config file, by the name Next.js would read first. Every
+ * step that reads the app's config finds it here, so none reads a file that
+ * another step would pass over and replace.
+ */
+export async function findConfigFile(cwd: string): Promise<string | null> {
   for (const name of CONFIG_FILES) {
     if (await fs.pathExists(path.join(cwd, name))) return name;
   }
@@ -868,9 +929,10 @@ export async function patchNextConfig(
   if (blocked) {
     return {
       kind: "manual",
-      file: file ?? "next.config.js",
+      file: file ?? (await nextConfigFileToChange(cwd)),
       packages: required,
       ...blocked,
+      ...(file ? {} : { create: true as const }),
     };
   }
   if (!file) return createNextConfig(cwd, database);
@@ -883,45 +945,73 @@ export async function patchNextConfig(
   return { kind: "written", file, added: edited.added };
 }
 
-/** The option to add by hand, in the spelling the app's Next.js reads. */
+/**
+ * What to add by hand, in the spelling the app's Next.js reads.
+ *
+ * On Next.js 14 the package list and the instrumentation opt-in are keys of
+ * one `experimental` object, so they are given as one: two `experimental`
+ * properties, pasted as given, leave only the second. The instrumentation
+ * hook Nextly starts from needs the opt-in there, and no other step says so.
+ * `wrap` turns each spelling into what to paste: the key itself, or a whole
+ * config file when the app has none.
+ */
 function optionText(
   packages: string[],
-  spelling: "legacy" | "either" | undefined
+  spelling: "legacy" | "either" | undefined,
+  wrap: (option: string) => string = option => option
 ): string {
   const list = packages.map(name => JSON.stringify(name)).join(", ");
-  const current = `  ${PROPERTY}: [${list}],`;
-  const legacy = `  experimental: { serverComponentsExternalPackages: [${list}] },`;
+  const current = wrap(`  ${PROPERTY}: [${list}],`);
+  const legacy = wrap(
+    `  experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${list}] },`
+  );
   if (spelling === "legacy") return legacy;
   return spelling === "either"
     ? `On Next.js 15 or later:\n\n${current}\n\nOn Next.js 14:\n\n${legacy}`
     : current;
 }
 
-/** The line the CLI prints for a patch: what changed, or exactly what to add and where. */
-export function nextConfigReport(patch: NextConfigPatch): {
-  level: "info" | "warn";
-  message: string;
-} {
+/**
+ * A whole config holding `option`, for an app that has none. ESM in `.mjs`,
+ * which loads whatever the package's own "type" says.
+ */
+function wholeConfig(option: string): string {
+  return `/** @type {import('next').NextConfig} */\nexport default {\n${option}\n};\n`;
+}
+
+/**
+ * What a patch did, in the shape every existing-app step reports in: the
+ * packages added, or, when the file could not be changed safely, exactly what
+ * to add and where. Nothing is said for a config that already lists them all.
+ */
+export function nextConfigFiles(patch: NextConfigPatch): GeneratedFiles {
+  const files: GeneratedFiles = { written: [], changed: [], skipped: [] };
   switch (patch.kind) {
     case "written":
-      return {
-        level: "info",
-        message: `${patch.file}: added ${patch.added.join(", ")} to ${PROPERTY}`,
-      };
+      files.changed.push({
+        path: patch.file,
+        added: [`${PROPERTY}: ${patch.added.join(", ")}`],
+      });
+      break;
     case "created":
-      return {
-        level: "info",
-        message: `${patch.file}: created, with ${PROPERTY} listing ${patch.added.join(", ")}`,
-      };
+      files.written.push(patch.file);
+      break;
     case "unchanged":
-      return {
-        level: "info",
-        message: `${patch.file} already lists every package Nextly needs in ${PROPERTY}`,
-      };
+      break;
     case "manual":
-      return {
-        level: "warn",
-        message: `Nextly's packages were not added to ${patch.file}: ${patch.reason}. Add them to the config object it exports, keeping any packages already listed:\n\n${optionText(patch.packages, patch.spelling)}`,
-      };
+      files.skipped.push(
+        patch.create
+          ? {
+              path: patch.file,
+              why: `Nextly's packages were not added: ${patch.reason}, and the app has no Next.js config. Create ${patch.file} with:`,
+              toAdd: optionText(patch.packages, patch.spelling, wholeConfig),
+            }
+          : {
+              path: patch.file,
+              why: `Nextly's packages were not added: ${patch.reason}. Add them to the config object it exports, keeping any packages and experimental keys already there`,
+              toAdd: optionText(patch.packages, patch.spelling),
+            }
+      );
   }
+  return files;
 }

@@ -37,12 +37,16 @@ type Props = {
 
 /**
  * Whether a preview can be applied without asking the user to resolve
- * anything: additive, and with no rename the server wants a decision on.
+ * anything: additive, with no rename the server wants a decision on, and no
+ * field leaving translation. The short confirmation says the change does not
+ * affect existing data, which is untrue when a field's other languages move to
+ * the archive, so that change gets the full dialog and its notice.
  */
 export function isSafeChange(preview: SchemaPreviewResponse): boolean {
   return (
     preview.classification === "safe" &&
-    !(preview.renamed && preview.renamed.length > 0)
+    !(preview.renamed && preview.renamed.length > 0) &&
+    !(preview.leavingTranslation && preview.leavingTranslation.length > 0)
   );
 }
 
@@ -81,6 +85,7 @@ export function BuilderSchemaChangeDialogs({
       renamed={preview.renamed}
       warnings={preview.warnings}
       interactiveFields={preview.interactiveFields}
+      leavingTranslation={preview.leavingTranslation}
       onConfirm={onConfirm}
       isApplying={isApplying}
     />

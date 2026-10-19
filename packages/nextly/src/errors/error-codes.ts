@@ -118,6 +118,10 @@ export const NEXTLY_ERROR_STATUS = {
   // `/api/admin-meta/workspace` payload: a value `JSON.stringify` throws on
   // fails that request for every admin, not just the widget's own card.
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
+  // The admin is not served because a dashboard widget draws with a component
+  // the app's generated component map does not include. Refused when the
+  // admin's server layout renders, so the public site keeps serving.
+  NEXTLY_ADMIN_COMPONENT_MAP_STALE: 500,
   // A plugin's document view cannot be routed: a malformed or reserved path,
   // or one two declarations claim on the same document. Refused at boot.
   NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID: 500,
@@ -136,6 +140,7 @@ export const NEXTLY_ERROR_STATUS = {
   // A configured plugin `nextly plugins install` has not recorded as
   // installed, refused at a production boot.
   PLUGIN_NOT_INSTALLED: 409,
+  PLUGIN_DISABLED: 409,
   // An uninstall that began and did not finish: refused at boot, and when
   // run again the other way (with or without `--keep-data`).
   PLUGIN_UNINSTALL_UNFINISHED: 409,

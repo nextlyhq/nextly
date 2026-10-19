@@ -138,7 +138,7 @@ export const list = defineBlock<ListProps, PageContext>({
   baseStyles: LIST_BASE_STYLES,
   props: {
     kind: { type: "select", options: [...LIST_KINDS] },
-    items: { type: "array", of: "text" },
+    items: { role: "content", type: "array", of: "text" },
     start: { type: "number", min: 1 },
   },
   defaultProps: { kind: "unordered", items: [] },

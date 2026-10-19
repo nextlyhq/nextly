@@ -107,9 +107,15 @@
 - name: "ci-metadata-failure"
   color: "b60205"
   description: "Filed automatically when the scheduled repository-metadata check fails"
+- name: "ci-skills-installer-failure"
+  color: "b60205"
+  description: "Filed automatically when the weekly skills installer check fails"
 - name: "ci-release-health-failure"
   color: "b60205"
   description: "Filed automatically when a published release is missing its tag or GitHub Release"
+- name: "run-integration"
+  color: "0e8a16"
+  description: "Run the database Integration legs on this pull request (the merge queue runs them unless the change is docs-only)"
 
 # ── GitHub-native labels ── platform treats these specially in the UI
 - name: "good first issue"

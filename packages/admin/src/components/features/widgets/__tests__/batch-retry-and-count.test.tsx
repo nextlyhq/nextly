@@ -136,6 +136,52 @@ describe("Retry", () => {
   });
 });
 
+describe("Retry past the per-request cap", () => {
+  it("dates each card by its own answer when its request settles before another's", async () => {
+    // More retries in flight than one request may carry are split into requests that settle
+    // separately. A card whose request answered must be dated then, not when the last one does.
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const failed = { ok: false, error: "An unexpected error occurred." };
+      const ids = Array.from(
+        { length: 31 },
+        (_, i) => `c${String(i).padStart(2, "0")}`
+      );
+      const cards = ids.map(id => metric(id, `collection:${id}`));
+      vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
+        Promise.resolve({
+          results: (body as { queries: unknown[] }).queries.map(() => failed),
+        })
+      );
+      const { result } = renderHook(() => useWidgetBatch(cards), { wrapper });
+      await waitFor(() => expect(result.current.updatedAt).not.toBeNull());
+
+      // The retries: the full request answers, the one-card request is held.
+      now.mockReturnValue(5_000);
+      vi.mocked(protectedApi.post).mockImplementation((_url, body) => {
+        const queries = (body as { queries: unknown[] }).queries;
+        if (queries.length === 1) return new Promise(() => undefined);
+        return Promise.resolve({
+          results: queries.map(() => ({
+            ok: true,
+            result: { op: "count", total: 1 },
+          })),
+        });
+      });
+      act(() => {
+        for (const id of ids) result.current.retry(id);
+      });
+      await waitFor(() => expect(result.current.slots.c00?.ok).toBe(true));
+
+      // c00 rode the request that answered; c30 is still in flight.
+      expect(result.current.updatedAtFor("c00")?.getTime()).toBe(5_000);
+      expect(result.current.slots.c30).toBeUndefined();
+    } finally {
+      now.mockRestore();
+    }
+  });
+});
+
 describe("the announcement's count", () => {
   it("does not count a card that is not available as updated", async () => {
     vi.mocked(protectedApi.post).mockResolvedValue({

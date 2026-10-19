@@ -52,9 +52,9 @@ export default defineCollection({
   },
   access: {
     read: true,
-    create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-    update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-    delete: ({ roles }) => roles.includes("admin"),
+    create: ({ permissions }) => permissions.includes("posts:create"),
+    update: ({ permissions }) => permissions.includes("posts:update"),
+    delete: ({ permissions }) => permissions.includes("posts:delete"),
   },
   hooks: {
     beforeChange: [
@@ -232,8 +232,6 @@ When enabled, the global sanitization hook strips HTML tags from plain-text fiel
 
 ### `indexes`
 
-> **The rules below need the release after 0.0.2-alpha.66.** On 0.0.2-alpha.66, `indexes` is accepted and validated but never applied to the database.
-
 | | |
 |---|---|
 | **Type** | `IndexConfig[]` |
@@ -347,12 +345,14 @@ Available view overrides: `Edit`, `List`. Available injection points: `BeforeLis
 
 Each CRUD operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to the database role/permission system.
 
+A declared rule is the whole answer for a signed-in user: the role's permission is not checked beside it. So for staff and API keys a rule should check the permission for its operation itself, then narrow from there; a plugin-defined person, who holds no permissions, is admitted by a branch of its own. Don't decide by a role's name: a custom role holding the permission, and an API key whose roles carry none of the names, would be refused. See [Roles and Permissions](/docs/permissions#collection-access).
+
 ```typescript
 access: {
-  create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+  create: ({ permissions }) => permissions.includes("posts:create"),
   read: true,
-  update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-  delete: ({ roles }) => roles.includes("admin"),
+  update: ({ permissions }) => permissions.includes("posts:update"),
+  delete: ({ permissions }) => permissions.includes("posts:delete"),
 }
 ```
 
@@ -361,14 +361,14 @@ The `AccessControlContext` passed to functions has the following shape:
 | Property | Type | Description |
 |---|---|---|
 | `user` | `MinimalUser \| null` | The authenticated user (or `null` for unauthenticated requests). |
-| `roles` | `string[]` | The user's role slugs (resolved from DB, includes inherited roles). |
+| `roles` | `string[]` | The user's role slugs (resolved from DB, includes inherited roles). Don't decide by these: check `permissions`. |
 | `permissions` | `string[]` | Effective permissions in `"resource:action"` format. |
 | `operation` | `"create" \| "read" \| "update" \| "delete"` | The operation being checked. |
 | `collection` | `string` | The collection slug. |
 
 **Rules:**
 
-- Code-defined access always takes precedence over database role/permission checks.
+- Code-defined access is what a signed-in user is judged by when it is declared, so it includes the permission check itself.
 - Omitting an operation falls back to the database role/permission system.
 - Super-admin always bypasses all access checks.
 

@@ -30,6 +30,7 @@ import {
 } from "@admin/components/features/versions/viewed-version-host";
 import { CONTENT_MEASURE_LENGTH } from "@admin/components/layout/content-measure";
 import { toast } from "@admin/components/ui";
+import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { usePublishAllLocales } from "@admin/hooks/queries/usePublishAllLocales";
 import { useAutosaveRecovery } from "@admin/hooks/useAutosaveRecovery";
 import { useAutoSlug } from "@admin/hooks/useAutoSlug";
@@ -81,6 +82,7 @@ import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
 import { useDocumentLockSurface } from "./useDocumentLockSurface";
+import { useDocumentPanelCollapsed } from "./useDocumentPanelCollapsed";
 import {
   useEntryForm,
   getCollectionFields,
@@ -89,7 +91,6 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
-import { useRailCollapsed } from "./useRailCollapsed";
 
 // ============================================================================
 // Types
@@ -454,7 +455,10 @@ export function EntryForm({
   // Rail collapse state. Toggle lives in EntrySystemHeader; the rail itself
   // reads `railCollapsed` to decide whether to render. Persisted in
   // localStorage so the choice survives reloads.
-  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+  // Out of the way when the author collapsed it, and while history is open,
+  // which takes its place.
+  const { collapsed: railCollapsed, toggle: toggleRail } =
+    useDocumentPanelCollapsed(historyEnabledFrom(collection) !== false);
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
@@ -958,6 +962,17 @@ export function EntryForm({
                                 autosaveLastSavedAt={autosave.lastSavedAt}
                                 entry={entry}
                                 collectionSlug={collection.name}
+                                // Back to this collection's list, named as the
+                                // navigation names it.
+                                backLink={{
+                                  href: buildRoute(ROUTES.COLLECTION_ENTRIES, {
+                                    slug: collection.name,
+                                  }),
+                                  label:
+                                    collection.labels?.plural ||
+                                    collection.label ||
+                                    collection.name,
+                                }}
                                 historyFields={getCollectionFields(collection)}
                                 historyEnabled={historyEnabledFrom(collection)}
                                 locale={locale}

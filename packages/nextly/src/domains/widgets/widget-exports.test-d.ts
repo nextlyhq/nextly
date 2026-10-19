@@ -29,6 +29,7 @@ import type {
   WidgetArchetype,
   WidgetHeight,
   WidgetOp,
+  WidgetFieldChoice,
   WidgetSize,
   WidgetSourceField,
   WidgetSourceFieldType,
@@ -149,6 +150,10 @@ assertType<
 // is the whole reason a source declaration can be checked at all.
 assertType<Exact<WidgetSourceField["name"], string>>(true);
 assertType<Exact<WidgetSourceField["type"], WidgetSourceFieldType>>(true);
+// A field's value labels are nameable, so a plugin can type a choices list it builds once.
+assertType<
+  Exact<NonNullable<WidgetSourceField["choices"]>[number], WidgetFieldChoice>
+>(true);
 assertType<
   Exact<AssignableTo<{ name: string; type: "text" }, WidgetSourceField>, false>
 >(true);

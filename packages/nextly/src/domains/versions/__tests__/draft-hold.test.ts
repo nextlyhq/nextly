@@ -16,7 +16,11 @@ const base = (): DraftHoldInput => ({
 
 describe("resolveDraftHold", () => {
   it("holds a status-less edit to a published document", () => {
-    expect(resolveDraftHold(base())).toEqual({ hold: true, draftLocale: null });
+    expect(resolveDraftHold(base())).toEqual({
+      hold: true,
+      draftLocale: null,
+      eligible: true,
+    });
   });
 
   it("does not hold a write that names a status", () => {
@@ -50,7 +54,7 @@ describe("resolveDraftHold", () => {
         documentLocalized: true,
         requestLocale: "es",
       })
-    ).toEqual({ hold: true, draftLocale: "es" });
+    ).toEqual({ hold: true, draftLocale: "es", eligible: true });
   });
 
   it("refuses to hold a localized edit whose locale it cannot name", () => {
@@ -61,7 +65,12 @@ describe("resolveDraftHold", () => {
       ...base(),
       documentLocalized: true,
     });
-    expect(decision).toEqual({ hold: false, draftLocale: null });
+    // Eligible all the same: the document may hold drafts; this write cannot.
+    expect(decision).toEqual({
+      hold: false,
+      draftLocale: null,
+      eligible: true,
+    });
   });
 
   it("ignores a locale on an unlocalized document", () => {
@@ -70,6 +79,18 @@ describe("resolveDraftHold", () => {
     expect(resolveDraftHold({ ...base(), requestLocale: "es" })).toEqual({
       hold: true,
       draftLocale: null,
+      eligible: true,
     });
+  });
+
+  it("reports a document that may not hold drafts at all", () => {
+    // A publish promotes a stored draft only while this holds, so a draft left
+    // from before the document became ineligible is never published unseen.
+    expect(
+      resolveDraftHold({ ...base(), draftsVersioningEnabled: false })
+    ).toMatchObject({ hold: false, eligible: false });
+    expect(
+      resolveDraftHold({ ...base(), namedStatus: "published" })
+    ).toMatchObject({ hold: false, eligible: true });
   });
 });

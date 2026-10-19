@@ -10,11 +10,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../collection-sources", async importOriginal => ({
   ...(await importOriginal<typeof import("../../collection-sources")>()),
-  refreshCollectionSources: vi.fn(async () => {}),
+  refreshCollectionSources: vi.fn(async () => true),
 }));
 vi.mock("../../single-sources", async importOriginal => ({
   ...(await importOriginal<typeof import("../../single-sources")>()),
-  refreshSingleSources: vi.fn(async () => {}),
+  refreshSingleSources: vi.fn(async () => true),
 }));
 
 import { NextlyError } from "../../../../errors/nextly-error";
@@ -57,7 +57,11 @@ function listing(id: string, collection: string | undefined, sort: string) {
   });
 }
 
-const CODE = { collections: new Set(["orders"]), singles: new Set<string>() };
+const CODE = {
+  collections: new Set(["orders"]),
+  singles: new Set<string>(),
+  databaseNotSetUp: false,
+};
 const SHOP = 'plugin "@acme/shop"';
 
 let warn: ReturnType<typeof vi.fn>;
@@ -228,6 +232,54 @@ describe("a declared widget's starting query, once content is synced", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("stops startup when a set-up database's registry cannot be read", async () => {
+    // Read failed, so the sources stand as they were and `orders` has none:
+    // passing would admit a widget nothing checked.
+    vi.mocked(refreshCollectionSources).mockResolvedValueOnce(false);
+    clearSources();
+    let refused: unknown;
+    try {
+      await check(listing("acme/a", "orders", "missing"));
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect((refused as NextlyError).code).toBe("SERVICE_UNAVAILABLE");
+    expect((refused as NextlyError).logMessage).toContain(
+      "registry could not be read"
+    );
+  });
+
+  it("starts a site that defines no collections or Singles in code, whatever the registry", async () => {
+    // With nothing code-defined, boot's syncs have no table to find missing,
+    // so they cannot say the database is fresh; and there is nothing the
+    // refusal protects: every content query is the database's, warned about.
+    vi.mocked(refreshCollectionSources).mockResolvedValueOnce(false);
+    clearSources();
+    registerWidgetDeclarations([
+      { owner: SHOP, declarations: [listing("acme/a", "notes", "title")] },
+    ]);
+    await expect(
+      checkDeclaredWidgetReferences({
+        collections: new Set(),
+        singles: new Set(),
+        databaseNotSetUp: false,
+      })
+    ).resolves.toBe(undefined);
+  });
+
+  it("waits when the registry cannot be read because the database is not set up", async () => {
+    vi.mocked(refreshCollectionSources).mockResolvedValueOnce(false);
+    clearSources();
+    registerWidgetDeclarations([
+      { owner: SHOP, declarations: [listing("acme/a", "orders", "missing")] },
+    ]);
+    await expect(
+      checkDeclaredWidgetReferences({ ...CODE, databaseNotSetUp: true })
+    ).resolves.toBe(undefined);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("still refuses an operation a code-defined source cannot answer as unreadable", async () => {
     // A plain JavaScript query whose operation JSON cannot write: the fault
     // is reported with the others, not thrown while it is being described.
@@ -267,6 +319,7 @@ describe("a declared widget's starting query, once content is synced", () => {
       await checkDeclaredWidgetReferences({
         collections: new Set(["sales"]),
         singles: new Set(),
+        databaseNotSetUp: false,
       });
     } catch (error) {
       refused = error;

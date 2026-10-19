@@ -14,6 +14,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { NextlyError } from "../../../../errors";
+
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function quoteIdent(name: string, dialect: SupportedDialect): string {
@@ -117,4 +119,102 @@ export async function countRows(
   const dbTyped = db as PgMysqlExecute;
   const result = await dbTyped.execute(query);
   return extractCount(result, dialect);
+}
+
+/** One row of a grouped count: the language, then one count per column, as `n0`, `n1`, … */
+type GroupCountRow = { locale: string } & Record<string, string | number>;
+
+/** Every row of a query, from each dialect's result shape. */
+function extractRows<T>(raw: unknown, dialect: SupportedDialect): T[] {
+  if (dialect === "postgresql") {
+    const rows = (raw as { rows?: T[] }).rows;
+    if (!Array.isArray(rows)) {
+      throw NextlyError.internal({
+        logContext: { reason: "query returned no rows array", dialect },
+      });
+    }
+    return rows;
+  }
+  if (dialect === "mysql") {
+    if (Array.isArray(raw) && raw.length > 0 && Array.isArray(raw[0])) {
+      return (raw as [T[], unknown])[0];
+    }
+    if (Array.isArray(raw)) return raw as T[];
+    throw NextlyError.internal({
+      logContext: { reason: "query returned an unrecognized shape", dialect },
+    });
+  }
+  // SQLite reads its rows through `all`, so it never reaches here.
+  throw NextlyError.internal({
+    logContext: { reason: "no row reader for this dialect", dialect },
+  });
+}
+
+/**
+ * How many rows of a companion `<table>_locales` hold a value in each of `columns`, for each
+ * language except `excludeLocale`, in one grouped query. A language with no value in a column is
+ * absent from that column's answer.
+ *
+ * What fields leaving translation send to the archive, counted before it happens: every
+ * non-default language's non-null value. `COUNT(column)` counts exactly those, so every column is
+ * counted in the same pass over the table rather than one query each.
+ */
+export async function countValuesByLocale(
+  db: unknown,
+  dialect: SupportedDialect,
+  companionTable: string,
+  columns: readonly string[],
+  excludeLocale: string
+): Promise<Map<string, Record<string, number>>> {
+  const counts = new Map<string, Record<string, number>>(
+    columns.map(c => [c, {}])
+  );
+  if (columns.length === 0) return counts;
+  const tbl = quoteIdent(companionTable, dialect);
+  const locale = quoteIdent("_locale", dialect);
+  const perColumn = columns
+    .map((c, i) => `COUNT(${quoteIdent(c, dialect)}) AS n${i}`)
+    .join(", ");
+  const query = sql`${sql.raw(
+    `SELECT ${locale} AS locale, ${perColumn} FROM ${tbl} WHERE ${locale} <> `
+  )}${excludeLocale}${sql.raw(` GROUP BY ${locale}`)}`;
+  const rows =
+    dialect === "sqlite"
+      ? (db as { all(q: unknown): GroupCountRow[] }).all(query)
+      : extractRows<GroupCountRow>(
+          await (db as PgMysqlExecute).execute(query),
+          dialect
+        );
+  for (const row of rows) {
+    columns.forEach((column, i) => {
+      const n = asNumber(row[`n${i}`]);
+      const byLocale = counts.get(column);
+      if (byLocale && n > 0) byLocale[String(row.locale)] = n;
+    });
+  }
+  return counts;
+}
+
+/**
+ * How many entries of a companion `<table>_locales` have no row in `locale`. Such an entry's
+ * shared value comes from another language when a field leaves translation
+ * (`buildDefaultLocaleRestoreStatements`), so the preview names how many there are.
+ */
+export async function countParentsWithoutLocale(
+  db: unknown,
+  dialect: SupportedDialect,
+  companionTable: string,
+  locale: string
+): Promise<number> {
+  const tbl = quoteIdent(companionTable, dialect);
+  const parent = quoteIdent("_parent", dialect);
+  const loc = quoteIdent("_locale", dialect);
+  const query = sql`${sql.raw(
+    `SELECT COUNT(DISTINCT ${parent}) AS count FROM ${tbl} WHERE ${parent} NOT IN (SELECT ${parent} FROM ${tbl} WHERE ${loc} = `
+  )}${locale}${sql.raw(")")}`;
+  if (dialect === "sqlite") {
+    const [row] = (db as { all(q: unknown): { count: number }[] }).all(query);
+    return asNumber(row?.count);
+  }
+  return extractCount(await (db as PgMysqlExecute).execute(query), dialect);
 }

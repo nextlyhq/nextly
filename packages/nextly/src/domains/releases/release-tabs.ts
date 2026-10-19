@@ -20,8 +20,9 @@
  *   list redesign is complete.
  */
 import type { ReleaseState } from "../../schemas/releases/types";
-import type { VersionsWhere, VersionsWhereCondition } from "../versions/db-api";
+import type { VersionsWhereCondition } from "../versions/db-api";
 
+import { meetsCondition, type ReleaseCondition } from "./release-conditions";
 import type { ReleaseListOrder, ReleaseRow } from "./releases-repository";
 
 /**
@@ -96,7 +97,7 @@ export interface ReleaseTabOrder {
 }
 
 /** A condition on a release row, or a nested group of them. */
-export type ReleaseTabCondition = VersionsWhereCondition | VersionsWhere;
+export type ReleaseTabCondition = ReleaseCondition;
 
 /**
  * A tab as one query: the conditions a release must meet, and the order.
@@ -233,61 +234,20 @@ export function releaseTabQuery(
           // `updatedAt` is the instant a release finished: the move to
           // `published` sets it to the publish instant and the move to
           // `cancelled` to the cancel instant, and a finished release takes no
-          // other write. Anything that later writes to a finished release must
-          // keep that true or move this order to a column of its own.
+          // other write that moves it: a rename leaves `updatedAt` alone.
+          // Anything that later writes to a finished release must keep that
+          // true or move this order to a column of its own.
+          //
+          // Not served by an index: the release indexes cover `(state,
+          // scheduledAt)`, so a Done page sorts the finished releases it
+          // matches before taking its page. Releases are few — one per launch
+          // — so this is a sort of hundreds of rows, not millions; an index on
+          // `(state, updatedAt)` is the remedy if a history ever grows large.
           { column: "updatedAt", direction: "desc" },
           { column: "id", direction: "desc" },
         ],
       };
   }
-}
-
-/**
- * Whether one stored value meets one condition, as the database would judge it.
- *
- * Only the operators a tab uses are understood, and an unknown one answers
- * `false` rather than `true`: a release that matched every tab would be counted
- * several times, which is the failure this module exists to prevent.
- */
-function holds(row: ReleaseRow, condition: ReleaseTabCondition): boolean {
-  return "column" in condition
-    ? compares(row, condition)
-    : groupHolds(row, condition);
-}
-
-/**
- * A nested group: every `and` holds, and at least one `or` does when an `or`
- * is given — the reading the adapter gives the same shape.
- */
-function groupHolds(row: ReleaseRow, group: VersionsWhere): boolean {
-  const all = (group.and ?? []).every(c => holds(row, c));
-  return all && (group.or === undefined || group.or.some(c => holds(row, c)));
-}
-
-/** One column against one value. */
-function compares(row: ReleaseRow, condition: VersionsWhereCondition): boolean {
-  const actual = row[condition.column as keyof ReleaseRow];
-  // A missing instant compares as SQL NULL does: it meets no comparison.
-  if (actual === null || actual === undefined) return false;
-  const a = comparable(actual);
-  const expected = condition.value;
-  switch (condition.op) {
-    case "=":
-      return a === comparable(expected);
-    case "IN":
-      return Array.isArray(expected) && expected.some(v => comparable(v) === a);
-    case ">=":
-      return (a as number) >= (comparable(expected) as number);
-    case "<":
-      return (a as number) < (comparable(expected) as number);
-    default:
-      return false;
-  }
-}
-
-/** Instants compared as numbers, as the database compares them. */
-function comparable(value: unknown): unknown {
-  return value instanceof Date ? value.getTime() : value;
 }
 
 /**
@@ -302,7 +262,8 @@ function comparable(value: unknown): unknown {
  */
 export function releaseTabOf(row: ReleaseRow, now: Date): ReleaseTab | null {
   for (const tab of RELEASE_TABS) {
-    if (releaseTabQuery(tab, now).where.every(c => holds(row, c))) return tab;
+    if (releaseTabQuery(tab, now).where.every(c => meetsCondition(row, c)))
+      return tab;
   }
   return null;
 }

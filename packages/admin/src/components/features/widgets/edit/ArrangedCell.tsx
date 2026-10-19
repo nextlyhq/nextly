@@ -10,8 +10,9 @@
  * @module components/features/widgets/edit/ArrangedCell
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { resolveWidgetSettings } from "nextly/config";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 import type {
@@ -23,9 +24,15 @@ import type {
 import type { CellSlotLookup } from "../archetypes/types";
 import type { MoveDirection } from "../layout-editor";
 import { cardSpanClass, drawnWidth } from "../sizes";
+import { widgetAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardWidthLabel } from "./CardActionsMenu";
+import {
+  CardControlsOverlay,
+  CardControlsSpace,
+  CustomizingFence,
+} from "./CustomizingFence";
 import { DismissWidgetButton } from "./DismissWidgetButton";
 import { SortableWidgetCell } from "./SortableWidgetCell";
 import type { ArrangedWidget } from "./useDashboardArrangement";
@@ -64,6 +71,8 @@ export interface ArrangedCellProps {
     /** `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
+    /** The tier the answer shown was fetched at; see `WidgetRenderer`'s own. */
+    answerTier?: SizeTier;
     /** Reload this card's data on its own, offered in its error state. */
     onRetry?: () => void;
   };
@@ -132,6 +141,144 @@ function dismissAffordance(
     : { header: button(false) };
 }
 
+/** A card's width and its one menu, side by side, while customising. */
+function CardEditActions(props: {
+  row: ArrangedCellProps["row"];
+  width: WidgetWidth;
+  can: ArrangedCellProps["can"];
+  isWriting: boolean;
+  refs: ArrangedCellProps["refs"];
+  on: ArrangedCellProps["on"];
+  /** Present only when the widget offers settings. */
+  openSettings?: () => void;
+}) {
+  const { row, width, can, isWriting, refs, on, openSettings } = props;
+  return (
+    <span className="flex items-center gap-1" data-testid="card-edit-actions">
+      <CardWidthLabel width={width} />
+      <CardActionsMenu
+        title={row.widget.title}
+        width={width}
+        allowedWidths={row.allowedWidths}
+        can={can}
+        disabled={isWriting}
+        triggerRef={refs.menu}
+        on={{
+          move: on.move,
+          setWidth: on.setWidth,
+          remove: on.remove,
+          ...(openSettings ? { openSettings } : {}),
+        }}
+      />
+    </span>
+  );
+}
+
+/**
+ * The small header the cell gives an unframed widget while customising.
+ *
+ * An unframed widget draws no header of its own, so the cell draws one: the
+ * card's name and its controls. `pl-9` leaves room for the drag handle, which
+ * sits over its left end.
+ */
+function UnframedEditHeader(props: { title: string; children: ReactNode }) {
+  return (
+    <div
+      className="flex items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 py-1 pl-9 pr-2"
+      data-testid="widget-edit-header"
+    >
+      <span className="mr-auto truncate text-xs font-medium text-muted-foreground">
+        {props.title}
+      </span>
+      {props.children}
+    </div>
+  );
+}
+
+/** The widget itself, in the one of its three settings the cell is in. */
+function CardBody(props: {
+  widget: DashboardWidget;
+  placement: ComponentProps<typeof WidgetRenderer>["placement"];
+  headerAction: ReactNode;
+  data: ArrangedCellProps["data"];
+  isEditing: boolean;
+  /** Whether a floated dismiss control shares the cell. */
+  floated: boolean;
+}) {
+  const { widget, placement, headerAction, data, isEditing, floated } = props;
+  if (isEditing) {
+    // While customising: drawn, and out of reach. A different element from
+    // the resting cell's, so entering and leaving customise mode mounts the
+    // widget afresh, as the floated control's slot below already does for a
+    // dismissible card.
+    return (
+      <CustomizingFence framed={widget.chrome !== "none"}>
+        <WidgetRenderer
+          definition={widget}
+          placement={placement}
+          headerAction={headerAction}
+          {...data}
+        />
+      </CustomizingFence>
+    );
+  }
+  if (floated) {
+    // The body's own slot, so the cell can ask whether the widget drew
+    // anything. Present only where a floated control shares the cell.
+    return (
+      <div data-widget-body>
+        <WidgetRenderer definition={widget} placement={placement} {...data} />
+      </div>
+    );
+  }
+  // 🔴 A DIRECT child otherwise, because the cell's `empty:hidden` reads
+  // `:empty` -- which counts element children, not rendered output. An
+  // always-present wrapper made every cell non-empty.
+  return (
+    <WidgetRenderer
+      definition={widget}
+      placement={placement}
+      headerAction={headerAction}
+      {...data}
+    />
+  );
+}
+
+/** The cell's classes: its width, its collapse when empty, and its spacing. */
+function cellClassName(
+  row: ArrangedCellProps["row"],
+  unframed: boolean,
+  isEditing: boolean
+): string {
+  return cn(
+    // `relative` so the drag handle, which is absolutely positioned, lands
+    // on this cell rather than on the grid.
+    "relative",
+    // 🔴 The PLACEMENT's width, drawn at the nearest width its widget
+    // allows. The stored width IS the reader's arrangement, so it is never
+    // replaced by the declaration's default here.
+    cardSpanClass(row.width, row.allowedWidths),
+    // `empty:hidden` so a widget that drew NOTHING costs no grid row: an
+    // unframed widget whose component returned null, which core's
+    // conditional sections do. A framed widget always renders its card.
+    "empty:hidden",
+    // The same collapse, asked of the BODY, for a cell that also carries a
+    // floated dismiss control: that control comes from the declaration, so
+    // it is present even when the widget renders nothing. `:empty` on the
+    // body counts text nodes, which `:only-child` on the control would not.
+    "has-[>[data-widget-body]:empty]:hidden",
+    // An unframed widget is a SECTION, and sections on this page sit 48px
+    // apart: 24px of trailing margin plus the grid's 24px gap. Bottom only,
+    // so the first row is not pushed down from the welcome header.
+    unframed && "mb-6",
+    // Room above each control as it takes focus, so scrolling it into view
+    // stops below the customise bar stuck to the top rather than under
+    // it. On the controls rather than the cell, because the margin that
+    // counts is the focused element's own.
+    isEditing && "[&_button]:scroll-mt-40"
+  );
+}
+
 export function ArrangedCell(props: ArrangedCellProps) {
   const { row, isEditing, isWriting, can, data, refs, on } = props;
   /*
@@ -141,7 +288,11 @@ export function ArrangedCell(props: ArrangedCellProps) {
    */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
-  const widget = row.widget;
+  // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
+  const widget = useMemo(
+    () => widgetAsAsked(row.widget, row.config),
+    [row.widget, row.config]
+  );
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
    * config are both in scope. `resolveWidgetSettings` returns only DECLARED
@@ -159,29 +310,20 @@ export function ArrangedCell(props: ArrangedCellProps) {
   const width = drawnWidth(row.width, row.allowedWidths);
 
   // While customising, the card's width and its one menu, side by side. A
-  // framed card shows them in its own header; an unframed one in the small
-  // header the cell draws for it below.
+  // framed card shows them over its own header's right end; an unframed one
+  // in the small header the cell draws for it below. Both outside the fence
+  // that puts the card's own content out of reach.
   const editActions = isEditing ? (
-    <span className="flex items-center gap-1" data-testid="card-edit-actions">
-      <CardWidthLabel width={width} />
-      <CardActionsMenu
-        title={widget.title}
-        width={width}
-        allowedWidths={row.allowedWidths}
-        can={can}
-        disabled={isWriting}
-        triggerRef={refs.menu}
-        on={{
-          move: on.move,
-          setWidth: on.setWidth,
-          remove: on.remove,
-          ...(hasSettings ? { openSettings: () => setSettingsOpen(true) } : {}),
-        }}
-      />
-    </span>
+    <CardEditActions
+      {...{ row, width, can, isWriting, refs, on }}
+      {...(hasSettings ? { openSettings: () => setSettingsOpen(true) } : {})}
+    />
   ) : null;
   const unframed = widget.chrome === "none";
-  const headerAction = unframed ? undefined : (editActions ?? dismissControl);
+  // While customising, a framed card's header keeps the room its controls are
+  // drawn over; at rest it holds the dismiss control, if any.
+  const framedHeaderAction = isEditing ? <CardControlsSpace /> : dismissControl;
+  const headerAction = unframed ? undefined : framedHeaderAction;
 
   return (
     <SortableWidgetCell
@@ -189,42 +331,15 @@ export function ArrangedCell(props: ArrangedCellProps) {
       title={widget.title}
       isEditing={isEditing}
       data-testid={`widget-cell-${widget.id}`}
-      className={cn(
-        // `relative` so the drag handle, which is absolutely positioned, lands
-        // on this cell rather than on the grid.
-        "relative",
-        // 🔴 The PLACEMENT's width, drawn at the nearest width its widget
-        // allows. The stored width IS the reader's arrangement, so it is never
-        // replaced by the declaration's default here.
-        cardSpanClass(row.width, row.allowedWidths),
-        // `empty:hidden` so a widget that drew NOTHING costs no grid row: an
-        // unframed widget whose component returned null, which core's
-        // conditional sections do. A framed widget always renders its card.
-        "empty:hidden",
-        // The same collapse, asked of the BODY, for a cell that also carries a
-        // floated dismiss control: that control comes from the declaration, so
-        // it is present even when the widget renders nothing. `:empty` on the
-        // body counts text nodes, which `:only-child` on the control would not.
-        "has-[>[data-widget-body]:empty]:hidden",
-        // An unframed widget is a SECTION, and sections on this page sit 48px
-        // apart: 24px of trailing margin plus the grid's 24px gap. Bottom only,
-        // so the first row is not pushed down from the welcome header.
-        unframed && "mb-6"
-      )}
+      className={cellClassName(row, unframed, isEditing)}
     >
+      {!unframed && editActions ? (
+        <CardControlsOverlay>{editActions}</CardControlsOverlay>
+      ) : null}
       {unframed && editActions ? (
-        // An unframed widget draws no header of its own, so while customising
-        // the cell gives it a small one: the card's name and its controls.
-        // `pl-9` leaves room for the drag handle, which sits over its left end.
-        <div
-          className="flex items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 py-1 pl-9 pr-2"
-          data-testid="widget-edit-header"
-        >
-          <span className="mr-auto truncate text-xs font-medium text-muted-foreground">
-            {widget.title}
-          </span>
+        <UnframedEditHeader title={widget.title}>
           {editActions}
-        </div>
+        </UnframedEditHeader>
       ) : null}
       {floatingControl}
       {/* Mounted whenever the widget offers settings, not only while
@@ -241,24 +356,10 @@ export function ArrangedCell(props: ArrangedCellProps) {
           onSave={on.saveSettings}
         />
       ) : null}
-      {floatingControl !== undefined ? (
-        // The body's own slot, so the cell can ask whether the widget drew
-        // anything. Present only where a floated control shares the cell.
-        <div data-widget-body>
-          <WidgetRenderer definition={widget} placement={placement} {...data} />
-        </div>
-      ) : (
-        // 🔴 A DIRECT child otherwise, because the cell's `empty:hidden` reads
-        // `:empty` -- which counts element children, not rendered output. An
-        // always-present wrapper made every cell non-empty.
-        <WidgetRenderer
-          definition={widget}
-          placement={placement}
-          headerAction={headerAction}
-          customizing={isEditing}
-          {...data}
-        />
-      )}
+      <CardBody
+        {...{ widget, placement, headerAction, data, isEditing }}
+        floated={floatingControl !== undefined}
+      />
     </SortableWidgetCell>
   );
 }

@@ -11,6 +11,10 @@
  *
  * @module schemas/releases/postgres
  */
+// The same tables in each dialect's Drizzle builders: each dialect's column
+// functions are distinct, so the declarations cannot be shared, and the
+// parity test is what holds them in step.
+// fallow-ignore-file code-duplication
 
 import {
   pgTable,
@@ -21,9 +25,10 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
+import { NEXTLY_RELEASES_INDEXES, pgIndexes } from "../_internal/core-indexes";
 import type { VersionScopeKind } from "../versions/types";
 
-import type { ReleaseMemberAction, ReleaseState } from "./types";
+import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";
 
 export const nextlyReleasesPg = pgTable(
   "nextly_releases",
@@ -45,6 +50,9 @@ export const nextlyReleasesPg = pgTable(
     timezone: text("timezone"),
 
     state: text("state").$type<ReleaseState>().notNull(),
+    // What the release is (`ReleaseKind`). The database default reads every
+    // release made before the column existed as an ordinary one.
+    kind: text("kind").$type<ReleaseKind>().default("release").notNull(),
     // When materialisation completed, not when it was due. The two differ
     // whenever the reconciler ran late, and only the read rule cares about due.
     publishedAt: timestamp("published_at", { withTimezone: true }),
@@ -64,10 +72,8 @@ export const nextlyReleasesPg = pgTable(
     // serialize to the same value and become indistinguishable.
     revision: integer("revision").default(0).notNull(),
   },
-  table => [
-    // The due-release query reads exactly these two columns together.
-    index("nextly_releases_due_idx").on(table.state, table.scheduledAt),
-  ]
+  // Declared once for the three dialects; what each index serves is said there.
+  table => pgIndexes(NEXTLY_RELEASES_INDEXES, table)
 );
 
 export const nextlyReleaseMembersPg = pgTable(
@@ -96,6 +102,13 @@ export const nextlyReleaseMembersPg = pgTable(
     // same way.
     memberKey: text("member_key").notNull(),
 
+    // 1 for the member of a `single` release, NULL otherwise. Unique with
+    // `release_id`, so the DATABASE refuses a second member of a single
+    // release, however many adds race; NULLs never collide, so an ordinary
+    // release is unaffected. A count checked before the insert could not
+    // promise that: two adds can both count zero.
+    singleSlot: integer("single_slot"),
+
     // Materialisation acts AS this user, so the transition is subject to their
     // permissions and the audit trail names the person who scheduled it rather
     // than a system principal.
@@ -107,6 +120,11 @@ export const nextlyReleaseMembersPg = pgTable(
   table => [
     // One member per document per locale per release.
     uniqueIndex("nextly_release_members_key_uidx").on(table.memberKey),
+    // The one-member rule of a single release; see `singleSlot`.
+    uniqueIndex("nextly_release_members_single_uidx").on(
+      table.releaseId,
+      table.singleSlot
+    ),
     // The read-side lookup: given documents, which members mention them.
     index("nextly_release_members_doc_idx").on(
       table.scopeKind,

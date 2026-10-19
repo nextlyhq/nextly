@@ -114,6 +114,8 @@ export const GET = withErrorHandler(
       versions: single.versions,
       fields: single.fields,
       slug: (single as { slug?: string }).slug,
+      localized: (single as { localized?: boolean }).localized,
+      entityKind: "single",
     });
 
     return respondDoc({

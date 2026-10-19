@@ -286,7 +286,11 @@ export class ZodGenerator {
       "zodImports",
       emittedByField
     );
-    return [`import { z } from "zod";`, ...pluginImports].join("\n");
+    // Zod comes through `nextly/zod`, a re-export of the copy Nextly depends on:
+    // the file is written into the app, which depends on `nextly` but need not
+    // depend on `zod`, and under pnpm or Yarn Plug'n'Play a bare `zod` import
+    // resolves only for a package that declares it.
+    return [`import { z } from "nextly/zod";`, ...pluginImports].join("\n");
   }
 
   /**

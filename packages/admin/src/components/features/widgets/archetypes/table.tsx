@@ -17,17 +17,9 @@
  * @module components/features/widgets/archetypes/table
  */
 
-import { asPresentedText, selectsNothing } from "./cell-text";
+import { selectsNothing } from "./cell-text";
+import { TieredRows } from "./tiered-rows";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
-
-/**
- * How many rows a card of this size can show before it stops being a glance.
- *
- * Lower than a list's, because each row here is wider and a table that scrolls
- * inside a dashboard card is a table nobody reads. The footer link is how a
- * reader gets to the rest.
- */
-const MAX_ROWS = 5;
 
 /** A table is drawn from selected fields, exactly as a list is. */
 export const tableAccepts: ArchetypeAccepts = definition => {
@@ -70,79 +62,19 @@ export const tableBody: ArchetypeBody = (result, definition) => {
     };
   }
 
-  const rows = result.items.slice(0, MAX_ROWS);
-
   return {
     ok: true,
+    // A table is a list type: below the large tier it is drawn as a list, headed by its first
+    // column with the second as its line of detail, because a table narrower than 700 px is a
+    // table whose columns do not fit. At the large tier it is the table.
     node: (
-      // Scrolls in its own container rather than widening the card: a dashboard
-      // grid cell has a fixed span, and a table that pushes past it takes the
-      // whole row's layout with it.
-      <div className="min-w-0 overflow-x-auto">
-        <table data-testid="widget-table" className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-border">
-              {columns.map(column => (
-                <th
-                  key={column.name}
-                  scope="col"
-                  data-testid="widget-table-heading"
-                  className="whitespace-nowrap pb-1 pr-4 text-left text-xs font-medium text-muted-foreground last:pr-0"
-                >
-                  {/* The source's label when it has one. A field name is a
-                      poor heading, but it is true, which an invented one
-                      would not be. */}
-                  {column.label ?? column.name}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((item, index) => (
-              <tr
-                // The index, because a widget's rows have no identity core can
-                // rely on: `select` need not include a key, and two rows may be
-                // identical in the fields it did select. The body is replaced
-                // wholesale on every refetch and nothing in it is stateful, so
-                // there is no state for a wrong key to strand.
-                key={index}
-                data-testid="widget-table-row"
-                // Full-strength `border-border`, matching this table's own
-                // header rule above and the resting edge every other admin
-                // surface draws. The half-alpha variant measured 1.11:1 against
-                // the card, which is not a lighter separator but an absent one.
-                //
-                // NOT a 3:1 claim, and the earlier wording here saying a row
-                // rule "has to meet" that floor was wrong on this repository's
-                // own reading of the standard. `styles/contrast/pairings.ts`
-                // excludes this token deliberately: 1.4.11 scopes its 3:1
-                // minimum to information required to IDENTIFY a component, and
-                // a table whose rows are identified by their content and
-                // spacing needs no rule to be operable. Measured from
-                // `theme.css`, the token sits at ~1.27:1 light and ~1.28:1
-                // dark, so a comment promising 3:1 would send the next reader
-                // to darken one table out of step with all 189 files using it.
-                className="border-b border-border last:border-0"
-              >
-                {columns.map(column => (
-                  <td
-                    key={column.name}
-                    className="max-w-[12rem] truncate py-1 pr-4 text-foreground last:pr-0"
-                  >
-                    {/* An em dash rather than an empty cell, so the grid of
-                        cells stays legible and a missing value is visibly a
-                        missing value. */}
-                    {/* Presented by the column's declared kind, so a date
-                        column reads as a date rather than as the ISO string
-                        it crossed the wire as. */}
-                    {asPresentedText(item[column.name], column.type) ?? "—"}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <TieredRows
+        items={result.items}
+        columns={columns}
+        labelField={columns[0].name}
+        detailField={columns[1]?.name}
+        query={definition.query}
+      />
     ),
   };
 };

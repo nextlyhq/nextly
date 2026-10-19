@@ -49,6 +49,7 @@ export type UserValidationErrorCode =
   | "USER_FIELD_HAS_MANY_UNSUPPORTED"
   | "USER_FIELD_VIRTUAL_UNSUPPORTED"
   | "USER_FIELD_PLUGIN_OPTION_RESERVED"
+  | "USER_FIELD_UNIQUE_UNSUPPORTED"
   // Field name errors
   | "USER_FIELD_NAME_REQUIRED"
   | "USER_FIELD_NAME_INVALID_FORMAT"
@@ -185,6 +186,50 @@ export interface UserFieldNameRejection {
 }
 
 /**
+ * The `user_ext` column a field is stored in: its name in snake case. One
+ * mapping for validation and for the table's statements, so a check here sees
+ * the column the table will actually have.
+ */
+export function userFieldColumnName(name: string): string {
+  return name
+    .replace(/([A-Z])/g, "_$1")
+    .toLowerCase()
+    .replace(/^_/, "");
+}
+
+/** The columns `user_ext` keeps for itself, which no field may be stored in. */
+const USER_EXT_OWN_COLUMNS: ReadonlySet<string> = new Set([
+  "id",
+  "user_id",
+  "created_at",
+  "updated_at",
+]);
+
+/**
+ * Why a field's `unique` cannot be honoured, or null when it can (or is off).
+ *
+ * A textarea is TEXT on MySQL and a multi-value select is JSON, and neither
+ * takes a plain unique index on every dialect. One rule everywhere, rather
+ * than a field that works on SQLite and stops `nextly migrate` elsewhere.
+ * The table's statements ask the same question, for definitions stored before
+ * validation refused it.
+ */
+export function userFieldUniqueRejection(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  unique?: unknown;
+}): string | null {
+  if (field.unique !== true) return null;
+  if (field.type === "textarea") {
+    return "A textarea field cannot be unique: its column cannot carry a unique index on every database. Use a text field with a maxLength.";
+  }
+  if (field.type === "select" && field.hasMany === true) {
+    return "A select field holding several values cannot be unique: its values are stored together, in one JSON column.";
+  }
+  return null;
+}
+
+/**
  * Decide whether a single name may be used for a custom user field.
  *
  * Duplicate detection is deliberately excluded: it needs the set of sibling
@@ -214,6 +259,16 @@ export function checkUserFieldName(
     return {
       code: "USER_FIELD_NAME_RESERVED",
       message: `Field name '${name}' conflicts with a built-in user field. Reserved names: ${RESERVED_USER_FIELD_NAMES.join(", ")}`,
+    };
+  }
+
+  // `userId` is not a built-in name, but it is stored as `user_id`, the
+  // column that ties a row to its user: the table would hold it twice.
+  const column = userFieldColumnName(name);
+  if (USER_EXT_OWN_COLUMNS.has(column)) {
+    return {
+      code: "USER_FIELD_NAME_RESERVED",
+      message: `Field name '${name}' would be stored in the column '${column}', which the user fields' table keeps for itself`,
     };
   }
 
@@ -291,15 +346,23 @@ function validateUserFieldName(
   // checkUserFieldName has already reported it.
   if (typeof name !== "string") return;
 
+  // Two fields collide when their names differ only in case, and also when
+  // they are stored in one column (`fooBar` and `foo_bar`): the table could
+  // not hold both. Columns go in the same set under a prefix no name can have.
   const nameLower = name.toLowerCase();
-  if (seenNames.has(nameLower)) {
+  const column = userFieldColumnName(name);
+  const columnKey = `column:${column}`;
+  if (seenNames.has(nameLower) || seenNames.has(columnKey)) {
     errors.push({
       path: `${path}.name`,
-      message: `Duplicate field name '${name}'`,
+      message: seenNames.has(nameLower)
+        ? `Duplicate field name '${name}'`
+        : `Field '${name}' would be stored in the column '${column}', which another field already uses`,
       code: "USER_FIELD_NAME_DUPLICATE",
     });
   } else {
     seenNames.add(nameLower);
+    seenNames.add(columnKey);
   }
 }
 
@@ -401,6 +464,14 @@ function validateUserFields(
 
     validateUserFieldType(f, fieldPath, errors, configUsersTypes);
     validateUserFieldName(f.name, fieldPath, errors, seenNames);
+    const uniqueRejection = userFieldUniqueRejection(f);
+    if (uniqueRejection) {
+      errors.push({
+        path: `${fieldPath}.unique`,
+        message: uniqueRejection,
+        code: "USER_FIELD_UNIQUE_UNSUPPORTED",
+      });
+    }
 
     // Both routes a plugin type reaches this validator by: registered in the
     // live registry, and declared by a config whose plugins have not been

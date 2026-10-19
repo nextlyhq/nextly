@@ -11,6 +11,10 @@
  *      recreates the companion and seeds the DEFAULT locale from the main table.
  *   2. `nextly i18n:restore --collection <slug>` — brings the other languages back.
  *
+ * A single field that stopped being translated archives its other languages the same way.
+ * Make the field translated again, then `nextly i18n:restore --collection <slug> --field <name>`
+ * brings back just that field's values.
+ *
  * The restore itself is idempotent, so re-running is safe. The archive is kept unless `--purge`
  * is passed, so a restore can be repeated and the audit trail survives.
  *
@@ -20,7 +24,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { resolveEntityTable } from "../../domains/i18n/migration/resolve-entity-table";
+import {
+  chooseRestoreEntity,
+  kindOption,
+  resolveEntityTables,
+} from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { describeError } from "../../errors/index";
@@ -31,8 +39,15 @@ import { loadConfig } from "../utils/config-loader";
 export interface I18nRestoreCommandOptions {
   /** Entity slug to restore, as recorded in the archive's `collection` column. */
   collection?: string;
+  /**
+   * Which kind of entity the slug names: `collection`, `single` or `field-group`. Needed only when
+   * the slug names more than one, which a field group can share with a collection or a Single.
+   */
+  kind?: string;
   /** Restore only this language. Omit to restore every archived language. */
   locale?: string;
+  /** Restore only this field's archived values, by its name or its column name. */
+  field?: string;
   /** Delete the replayed rows from the archive once written. */
   purge?: boolean;
   config?: string;
@@ -70,47 +85,70 @@ export async function runI18nRestore(
     debug: options.verbose,
   });
 
-  // Resolve the slug from the code config first, then fall back to the UI-built
-  // entities in ui-schema.json. A Builder-created collection/single/component is
-  // not in nextly.config.ts, but its disable migration still archives rows under
-  // its slug — so restore must resolve its table name from the manifest too,
-  // mirroring how migrate:create folds the manifest. Without this fallback,
-  // `--collection <ui-slug>` exits before replaying anything. An absent manifest
-  // is an empty one, so a code-only project keeps the previous behavior.
-  let entity = resolveEntityTable(configResult.config, slug);
-  if (!entity) {
-    const manifest = await loadUiSchema({
-      projectRoot: options.cwd ?? process.cwd(),
-      uiSchemaFile: configResult.config.db.uiSchemaFile,
-    });
-    entity = resolveEntityTable(manifest, slug);
-  }
-  if (!entity) {
-    logger.error(
-      `No collection, single, or component named "${slug}" was found in your config or ui-schema.json.`
-    );
+  // Resolve the slug in the code config and in the UI-built entities in ui-schema.json. A
+  // Builder-created collection/single/field group is not in nextly.config.ts, but its disable
+  // migration still archives rows under its slug — so restore must resolve its table name from
+  // the manifest too, mirroring how migrate:create folds the manifest. An absent manifest is an
+  // empty one, so a code-only project keeps the previous behavior. The config wins for a kind both
+  // know; a kind only the manifest knows is added, since a field group may share the slug.
+  const manifest = await loadUiSchema({
+    projectRoot: options.cwd ?? process.cwd(),
+    uiSchemaFile: configResult.config.db.uiSchemaFile,
+  });
+  const fromConfig = resolveEntityTables(configResult.config, slug);
+  const matches = [
+    ...fromConfig,
+    ...resolveEntityTables(manifest, slug).filter(
+      m => !fromConfig.some(c => c.kind === m.kind)
+    ),
+  ];
+  const chosen = chooseRestoreEntity(slug, matches, options.kind);
+  if ("problem" in chosen) {
+    logger.error(`${chosen.problem} Looked in your config and ui-schema.json.`);
     process.exit(1);
   }
+  const { entity } = chosen;
 
   const { companionTableName } = entity;
   logger.keyValue("Entity", `${slug} (${entity.kind})`);
   logger.keyValue("Companion", companionTableName);
   if (options.locale) logger.keyValue("Locale", options.locale);
+  if (options.field) logger.keyValue("Field", options.field);
 
   await withAdapter(
     async adapter => {
       const result = await restoreI18nArchive({
         adapter: adapter as unknown as DrizzleAdapter,
         collection: slug,
+        kind: entity.kind,
+        // Naming the kind is what lets a restore take rows whose owner the archive does not know.
+        claimUnknown: options.kind !== undefined,
         companionTableName,
         locale: options.locale,
+        field: options.field,
         purge: options.purge,
       });
 
+      const reportUnattributed = () => {
+        if (result.rowsUnattributed === 0) return;
+        logger.warn(
+          `${result.rowsUnattributed} archived value(s) for "${slug}" were written before the archive ` +
+            "recorded which kind of entity they belong to, and could not be matched to one. " +
+            `They are kept. If they are this ${entity.kind === "fieldGroup" ? "field group" : entity.kind}'s, ` +
+            `restore them with --kind ${kindOption(entity.kind)}.`
+        );
+      };
+      if (result.rowsClaimed > 0) {
+        logger.info(
+          `Took ${result.rowsClaimed} archived value(s) of unknown kind as this entity's.`
+        );
+      }
+
       if (result.rowsRead === 0) {
         logger.warn(
-          `Nothing archived for "${slug}"${options.locale ? ` in ${options.locale}` : ""} — nothing to restore.`
+          `Nothing archived for "${slug}"${options.field ? ` field ${options.field}` : ""}${options.locale ? ` in ${options.locale}` : ""} — nothing to restore.`
         );
+        reportUnattributed();
         return;
       }
 
@@ -124,6 +162,7 @@ export async function runI18nRestore(
           "The archive was kept. Re-run with --purge to remove the replayed rows."
         );
       }
+      reportUnattributed();
     },
     { logger }
   );
@@ -137,11 +176,19 @@ export function registerI18nRestoreCommand(program: Command): void {
     )
     .requiredOption(
       "--collection <slug>",
-      "Collection, single, or component slug to restore"
+      "Collection, single, or field group slug to restore"
+    )
+    .option(
+      "--kind <kind>",
+      "collection, single or field-group: which entity the slug names, when more than one has it"
     )
     .option(
       "--locale <code>",
       "Restore only this language (default: every archived language)"
+    )
+    .option(
+      "--field <name>",
+      "Restore only this field's archived values (default: every archived field)"
     )
     .option(
       "--purge",

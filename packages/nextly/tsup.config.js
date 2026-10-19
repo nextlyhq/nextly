@@ -161,6 +161,9 @@ const clientEntries = [
   // The over-cap refusal, reachable by an adapter without the barrel for the
   // same reason as the helper above.
   "src/storage/read-errors.ts",
+  // `nextly/zod`: the Zod generated schema files import, so they compile in an
+  // app that depends on `nextly` and not on `zod`. Pure, so browser-safe.
+  "src/zod.ts",
 ];
 
 // Shared config options

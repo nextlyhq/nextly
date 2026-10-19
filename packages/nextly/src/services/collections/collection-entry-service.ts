@@ -25,6 +25,7 @@ import type { RichTextOutputFormat } from "@nextly/lib/rich-text-html";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import { assertWellFormedFilter } from "../../domains/collections/query/filter-shape";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { CollectionBulkService } from "../../domains/collections/services/collection-bulk-service";
 import { CollectionHookService } from "../../domains/collections/services/collection-hook-service";
@@ -43,10 +44,13 @@ import type { SanitizedLocalizationConfig } from "../../domains/i18n/config/type
 import { releaseVisibilityFor } from "../../domains/releases/release-visibility";
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
+import { errorEnvelopeFields } from "../../errors/from-service-envelope";
+import { NextlyError } from "../../errors/nextly-error";
 import type {
   CacheRevalidator,
   RevalidationIntent,
 } from "../../revalidation/types";
+import type { ValidationIssue } from "../../shared/lib/entry-validation";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -66,6 +70,39 @@ export {
   type BulkCreateOptions,
   type BulkUpdateEntry,
 } from "../../domains/collections/services/collection-types";
+
+/**
+ * The failure envelope for a filter that is not well formed, or `null` when
+ * it is.
+ *
+ * Judged here, on the whole filter as the caller gave it, before the read
+ * hooks run: they are ordinary user code that writes audit rows and spends
+ * rate-limit budget, and a request that was never going to be answered must
+ * not charge the caller for it. It is also the one point that sees the
+ * language filter (`_translated`) before the query service takes it out of
+ * the filter, and a malformed one used to be taken out and ignored, which
+ * dropped the filter. The translators downstream refuse everything else again
+ * for filters that do not pass through here, such as a read hook's.
+ */
+function refusedFilter<T>(where: unknown): CollectionServiceResult<T> | null {
+  try {
+    assertWellFormedFilter(where, { allowTranslated: true });
+    return null;
+  } catch (error: unknown) {
+    // The check throws only a NextlyError; anything else is a fault, not a
+    // refusal, and goes on as one.
+    if (!NextlyError.is(error)) throw error;
+    // Status and message come from the error, which carries its code's
+    // canonical status, so no second copy of the mapping lives here.
+    return {
+      success: false,
+      statusCode: error.statusCode,
+      message: error.publicMessage,
+      data: null,
+      ...errorEnvelopeFields(error),
+    };
+  }
+}
 
 /**
  * CollectionEntryService handles all entry-level CRUD operations for dynamic collections.
@@ -202,7 +239,7 @@ export class CollectionEntryService extends BaseService {
     /** Caller's authenticated scope; a scoped key is judged on its read grant. */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<CollectionServiceResult<PaginatedResponse<unknown>>> {
-    return this.queryService.listEntries(params);
+    return refusedFilter(params.where) ?? this.queryService.listEntries(params);
   }
 
   async countEntries(params: {
@@ -237,7 +274,9 @@ export class CollectionEntryService extends BaseService {
      */
     status?: "published" | "draft" | "all";
   }): Promise<CollectionServiceResult<{ totalDocs: number }>> {
-    return this.queryService.countEntries(params);
+    return (
+      refusedFilter(params.where) ?? this.queryService.countEntries(params)
+    );
   }
 
   /**
@@ -250,14 +289,18 @@ export class CollectionEntryService extends BaseService {
   async groupEntries(
     params: Parameters<CollectionQueryService["groupEntries"]>[0]
   ): ReturnType<CollectionQueryService["groupEntries"]> {
-    return this.queryService.groupEntries(params);
+    return (
+      refusedFilter(params.where) ?? this.queryService.groupEntries(params)
+    );
   }
 
   /** How many rows fall in each interval of a recent window. */
   async timeseriesEntries(
     params: Parameters<CollectionQueryService["timeseriesEntries"]>[0]
   ): ReturnType<CollectionQueryService["timeseriesEntries"]> {
-    return this.queryService.timeseriesEntries(params);
+    return (
+      refusedFilter(params.where) ?? this.queryService.timeseriesEntries(params)
+    );
   }
 
   async getEntry(params: {
@@ -556,6 +599,64 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
+  }
+
+  /**
+   * What a release's write of these entries, for its action, would be
+   * refused with by validation and field rules, judged without writing. See
+   * the mutation service.
+   *
+   * @experimental
+   */
+  async releasePublishIssues(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+    user: UserContext;
+    action: "publish" | "unpublish";
+  }): Promise<Map<string, ValidationIssue[]>> {
+    return this.mutationService.releasePublishIssues(params);
+  }
+
+  /**
+   * Whether a release's document-wide write of this collection would meet a
+   * translation table without its per-language status. See the mutation
+   * service.
+   *
+   * @experimental
+   */
+  async releaseCompanionLacksStatus(params: {
+    collectionName: string;
+  }): Promise<boolean> {
+    return this.mutationService.releaseCompanionLacksStatus(params);
+  }
+
+  /**
+   * One entry's lifecycle as stored, past every read hook: the main row's
+   * status and each translation's. See the mutation service.
+   *
+   * @experimental
+   */
+  async releaseStoredLifecycle(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<{
+    status: string | null;
+    languages: Map<string, string | null>;
+  } | null> {
+    return this.mutationService.releaseStoredLifecycle(params);
+  }
+
+  /**
+   * The languages whose unreleased work a release's document-wide write of
+   * these entries would be refused over.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+  }): Promise<Map<string, string[]>> {
+    return this.mutationService.releaseHeldDraftLocales(params);
   }
 
   async updateEntry(
@@ -907,6 +1008,9 @@ export class CollectionEntryService extends BaseService {
     },
     options?: BulkOperationOptions & { limit?: number }
   ): Promise<BulkOperationResult<Record<string, unknown>>> {
+    // Thrown, as the bulk service throws any request-level refusal: there are
+    // no items yet to report a partial failure on.
+    assertWellFormedFilter(params.where, { allowTranslated: true });
     const result = await this.bulkService.bulkUpdateByQuery(params, options);
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;
@@ -941,6 +1045,7 @@ export class CollectionEntryService extends BaseService {
     },
     options?: { limit?: number }
   ): Promise<BulkOperationResult<{ id: string }>> {
+    assertWellFormedFilter(params.where, { allowTranslated: true });
     const result = await this.bulkService.bulkDeleteByQuery(params, options);
     await this.afterWriteIfRecorded(result, params.disableRevalidate);
     return result;

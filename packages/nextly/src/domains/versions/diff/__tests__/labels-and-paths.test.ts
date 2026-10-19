@@ -312,3 +312,27 @@ describe("computeVersionDiff — fields the reader cannot see, and fields that a
     });
   });
 });
+
+describe("computeVersionDiff — framework keys by kind of document", () => {
+  it("leaves a collection's owner column out, and shows a Single's former createdBy field", () => {
+    // Undeclared on both: a collection's createdBy is its owner column; a
+    // Single has none, so the key is a field it declared and later removed.
+    const single = computeVersionDiff(
+      { createdBy: "Ana" },
+      { createdBy: "Ben" },
+      [],
+      { entity: "single" }
+    );
+    expect(find(single.fields, "createdBy")).toMatchObject({
+      kind: "unknown",
+      reason: "removed",
+    });
+    const collection = computeVersionDiff(
+      { createdBy: "u1" },
+      { createdBy: "u2" },
+      [],
+      { entity: "collection" }
+    );
+    expect(collection.fields.find(n => n.name === "createdBy")).toBeUndefined();
+  });
+});

@@ -221,7 +221,11 @@ export const blockManifestEntrySchema = z
      * props are; an array-shaped example could never become a valid node.
      */
     example: z.object({ props: z.record(z.string(), z.unknown()) }).loose(),
-    /** Prop schemas keyed by prop name. */
+    /**
+     * Prop schemas keyed by prop name. A prop's `role` is judged where the
+     * block is declared, since a schema can hold what JSON cannot and the file
+     * is judged after JSON has had its way.
+     */
     props: z.record(z.string(), z.unknown()).optional(),
     /** Style capabilities the block opts into. */
     supports: z.record(z.string(), z.unknown()).optional(),
@@ -252,8 +256,11 @@ export const blockManifestEntrySchema = z
      * generation DELETES the previous file, that trades a good artifact for a description of an
      * app that does not start.
      *
-     * Keys other than `allow` stay open for the same reason `props` does: they belong to whatever
-     * declares the slot, and core would only be guessing at them.
+     * A slot's `lock` is the engine's too, for the same reason: every save reads it to decide what
+     * the slot may hold, and registration refuses a value outside the four.
+     *
+     * Keys other than `allow` and `lock` stay open for the same reason `props` does: they belong
+     * to whatever declares the slot, and core would only be guessing at them.
      */
     slots: z
       .record(
@@ -267,6 +274,12 @@ export const blockManifestEntrySchema = z
                   .max(MAX_DECLARED_BLOCK_NAME_LENGTH)
                   .regex(ALLOW_ENTRY_RE)
               )
+              .optional(),
+            lock: z
+              .union([
+                z.enum(["all", "insert", "contentOnly"]),
+                z.literal(false),
+              ])
               .optional(),
           })
           .loose()
@@ -642,6 +655,16 @@ function declaredBlocks(value: unknown, source: string): DeclaredBlock[] {
         `Block "${definition.name}" from "${source}" declares no render function.`
       );
     }
+    // A prop's role decides what a `contentOnly` slot lets an author change,
+    // and the engine refuses any role but "content" at registration: a typo
+    // would otherwise leave the prop pinned where its author meant it editable.
+    for (const [prop, role] of propRoles(definition.props)) {
+      if (role !== "content") {
+        throw invalidDeclaration(
+          `Block "${definition.name}" from "${source}" declares prop "${prop}" with role ${describeRole(role)}; a prop's role must be "content", or left out.`
+        );
+      }
+    }
     // Rebuilt with the name spelled out so the checked type carries what was
     // just proved about it; returning `definition` would hand the caller a
     // record whose `name` is `unknown` again, and it sorts and dedupes on it.
@@ -735,6 +758,23 @@ function missingMigrationSteps(version: number, map: unknown): number[] {
 function describeKind(value: unknown): string {
   if (value === null) return "null";
   return Array.isArray(value) ? "an array" : `a ${typeof value}`;
+}
+
+/**
+ * Each declared prop's role, where its schema states one. Read as the engine
+ * reads it: only a prop schema that is an object carries a role.
+ */
+function propRoles(props: unknown): [string, unknown][] {
+  if (!isRecord(props)) return [];
+  return Object.entries(props).flatMap(([prop, schema]) =>
+    isRecord(schema) && schema.role !== undefined
+      ? [[prop, schema.role] as [string, unknown]]
+      : []
+  );
+}
+
+function describeRole(role: unknown): string {
+  return typeof role === "string" ? `"${role}"` : describeKind(role);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

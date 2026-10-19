@@ -47,6 +47,7 @@ import {
   type PlannedDown,
 } from "./migrate-down";
 import {
+  runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
   type LifecyclePlugin,
@@ -104,6 +105,14 @@ function pluginModules(
 ): PluginMigration[] {
   return orderedMigrations(plugin.contributes?.schema?.migrations ?? []);
 }
+
+/**
+ * How long the command waits, after a plugin's `onInstall` or `onUninstall`,
+ * for the event handlers it set off before shutting the runtime down: long
+ * enough for a deletion's follow-up work, short enough that one handler that
+ * never settles cannot hold the command open.
+ */
+const LIFECYCLE_HANDLER_WAIT_MS = 30_000;
 
 /**
  * The statements a module's DOWN runs on one dialect, one per driver call —
@@ -551,6 +560,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     );
     const { getImageProcessor } = await import("../../storage/image-processor");
     const { getHookRegistry } = await import("../../hooks/hook-registry");
+    const { getEventBus } = await import("../../events/event-bus");
 
     // A registration this command did not make is not this command's to tear
     // down. `registerServices` refuses when one exists, and the cleanup below
@@ -564,6 +574,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       });
     }
 
+    // What the hook sets off is traced to this, and whether it all finished
+    // in time decides, after the teardown, whether the command goes on.
+    const cause = Symbol(`${plugin.name} ${hook}`);
+    let handlersFinished = true;
     try {
       // Inside the `try`, so the cleanup covers a registration that fails
       // part way. Plugins initialize before registration finishes, so one
@@ -572,7 +586,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // `try` skipped the cleanup exactly then.
       // As the lifecycle command's boot: the install-state gate would refuse
       // the very plugin this command is installing or uninstalling.
-      await asLifecycleCommandBoot(() =>
+      await asLifecycleCommandBoot(plugin.name, () =>
         registerServices(
           buildServiceConfig({
             // The config as the app wrote it. The boot runs every `setup`
@@ -608,11 +622,13 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       }
       // Branched rather than called through `definition[hook]`: the two hooks
       // take different arguments, and a union of them accepts neither call.
-      if (hook === "onInstall") {
-        await definition.onInstall?.(pluginContext);
-      } else {
-        await definition.onUninstall?.(pluginContext, opts);
-      }
+      // Run under the hook's cause, so every event it sets off, and every one
+      // their handlers emit in turn, is waited for below.
+      await getEventBus().runCaused(cause, () =>
+        hook === "onInstall"
+          ? definition.onInstall?.(pluginContext)
+          : definition.onUninstall?.(pluginContext, opts)
+      );
     } finally {
       // `destroyRegisteredPlugins` + `clearServices`, NOT `shutdownServices`.
       //
@@ -634,8 +650,32 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // destroys only the plugins that registration recorded (none, if it
       // failed before initializing them), and `clearServices` resets whatever
       // was registered, however much that was.
+      //
+      // First, the handlers of the events the hook set off are let finish,
+      // their own follow-up events included. Emitting is fire-and-forget, so
+      // another plugin's handler (removing what it kept about each account an
+      // uninstall reports deleted, say) is still running when the hook
+      // returns; torn down under it, that work would stop part way. Only
+      // those traced to the hook: a producer a plugin started in `init()` and
+      // stops in `destroy()` never lets the bus empty. And for a bounded
+      // time, so a handler that never settles cannot hold the command open.
+      handlersFinished = await getEventBus().settleCaused(
+        cause,
+        LIFECYCLE_HANDLER_WAIT_MS
+      );
       await destroyRegisteredPlugins();
       clearServices();
+    }
+    // Failed after the teardown, never before it. The command goes no further
+    // with work still running that the hook set off: an uninstall's DOWNs
+    // would drop the tables that work was reading. Its state stays
+    // `uninstalling`, so running it again finishes it.
+    if (!handlersFinished) {
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage: `Event handlers that ${plugin.name}'s ${hook} set off were still running after ${LIFECYCLE_HANDLER_WAIT_MS / 1000}s, so the command stopped there. Run it again once what they do can finish.`,
+        logContext: { plugin: plugin.name, hook },
+      });
     }
   };
 
@@ -699,6 +739,19 @@ export async function runPluginInstall(
   const deps = await connect(options, context);
   try {
     await runPluginInstallCommand(name, deps);
+  } finally {
+    await deps.adapter.disconnect();
+  }
+}
+
+/** Install every configured plugin, in the config loader's dependency order. */
+export async function runPluginInstallAll(
+  options: RunnerOptions,
+  context: CommandContext
+): Promise<void> {
+  const deps = await connect(options, context);
+  try {
+    await runPluginInstallAllCommand(deps);
   } finally {
     await deps.adapter.disconnect();
   }

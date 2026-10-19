@@ -238,7 +238,7 @@ export function useCurrentUserPermissions() {
   // The `/me/permissions` endpoint returns the canonical
   // UserPermissionsResponse shape directly, so `data` here IS the
   // permissions payload.
-  const { data, isLoading, isPending, error } =
+  const { data, isLoading, isPending, error, refetch } =
     useQuery<UserPermissionsResponse>({
       queryKey: ["currentUserPermissions"],
       queryFn: () =>
@@ -285,6 +285,17 @@ export function useCurrentUserPermissions() {
     isSuperAdmin,
     isLoading: isLoading || isPending,
     error,
+    /**
+     * Whether any answer has arrived. A failed first request leaves the
+     * capabilities empty, which reads exactly like a user who holds nothing,
+     * so a guard must ask this before treating "no permission" as a refusal.
+     * A failed refresh keeps the last answer, which still counts.
+     */
+    hasAnswer: data !== undefined,
+    /** Ask for the permissions again, after a failure. */
+    retry: () => {
+      void refetch();
+    },
     hasPermission,
     canAccessCollection,
   };
