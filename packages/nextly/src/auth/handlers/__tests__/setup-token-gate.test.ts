@@ -230,7 +230,14 @@ describe("setup in production", () => {
         }),
         duplex: "half",
       } as RequestInit);
-    const hooks = { limitWithoutValidToken: async () => null };
+    // A limiter that reads the body it is handed, as the auth limit does for
+    // a client whose address is unknown: it must never wait on the client.
+    const hooks = {
+      limitWithoutValidToken: async (counted: Request) => {
+        await counted.text();
+        return null;
+      },
+    };
     vi.useFakeTimers();
     try {
       const slow = Array.from({ length: SETUP_READS_AT_ONCE }, () =>

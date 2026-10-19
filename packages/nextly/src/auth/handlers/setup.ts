@@ -196,6 +196,22 @@ export const SETUP_BODY_DEADLINE_MS = 10_000;
 let setupBodiesBeingRead = 0;
 
 /**
+ * The request as the limiter reads it: carrying the bytes setup already read,
+ * or none when that read was cut short. The limiter then never reads from the
+ * client itself, so the deadline on setup's own read bounds the whole request.
+ */
+function withBodyRead(request: Request, bytes: Uint8Array | null): Request {
+  const headers = new Headers(request.headers);
+  // The declared length was the client's; this body is what was read.
+  headers.delete("content-length");
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body: bytes ? new Uint8Array(bytes) : "",
+  });
+}
+
+/**
  * The setup request's JSON body (an empty one when it is not an object), and
  * the error a body that is too large or not JSON fails with once it has been
  * counted.
@@ -203,6 +219,8 @@ let setupBodiesBeingRead = 0;
 async function parseSetupBody(request: Request): Promise<{
   body: Awaited<ReturnType<Request["json"]>>;
   malformed?: Error;
+  /** The bytes read, or `null` when the read was cut short. */
+  bytes: Uint8Array | null;
 }> {
   // A body still arriving at the deadline is cancelled, so a client sending
   // it slowly gives its reading place back rather than holding it.
@@ -212,6 +230,7 @@ async function parseSetupBody(request: Request): Promise<{
     const bytes = await boundedBody(request, SETUP_BODY_BYTES, deadline.signal);
     if (bytes === null) {
       return {
+        bytes: null,
         body: {},
         malformed: deadline.signal.aborted
           ? NextlyError.validation({
@@ -232,9 +251,13 @@ async function parseSetupBody(request: Request): Promise<{
     const body: Awaited<ReturnType<Request["json"]>> = JSON.parse(
       new TextDecoder().decode(bytes)
     );
-    return { body: body !== null && typeof body === "object" ? body : {} };
+    return {
+      bytes,
+      body: body !== null && typeof body === "object" ? body : {},
+    };
   } catch (error) {
     return {
+      bytes: null,
       body: {},
       malformed:
         error instanceof Error
@@ -267,7 +290,6 @@ async function readSetupRequest(
   | { body: Awaited<ReturnType<Request["json"]>>; verdict: SetupVerdict }
   | Response
 > {
-  const forLimiter = request.clone();
   if (setupBodiesBeingRead >= SETUP_READS_AT_ONCE) {
     return buildAuthErrorResponse(
       NextlyError.rateLimited({ retryAfterSeconds: 1 }),
@@ -281,14 +303,14 @@ async function readSetupRequest(
   } finally {
     setupBodiesBeingRead--;
   }
-  const { body, malformed } = parsed;
+  const { body, malformed, bytes } = parsed;
   const verdict: SetupVerdict = setupToken.required
     ? await setupToken.verify(body.setupToken)
     : "not-required";
   // A setup that needs no token (outside production) has no token to judge,
   // so it is not held to the limit: it behaves as it always has.
   if (verdict === "invalid" || verdict === "closed") {
-    const limited = await limit(forLimiter);
+    const limited = await limit(withBodyRead(request, bytes));
     if (limited) return limited;
   }
   if (malformed !== undefined) throw malformed;
