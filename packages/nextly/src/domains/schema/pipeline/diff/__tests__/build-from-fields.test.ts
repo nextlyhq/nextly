@@ -833,3 +833,35 @@ describe("buildDesiredTableFromComponentFields - many-to-many column type on Pos
     expect(table.columns.find(c => c.name === "tags")?.type).toBe("jsonb");
   });
 });
+
+describe("buildDesiredTableFromComponentFields - which columns hold a reference list", () => {
+  // The flag marks a type change into the column as a reference-list conversion, which reads each
+  // stored value as a list. A single polymorphic reference is one JSON object, not a list, so an
+  // older column holding one keeps the ordinary conversion.
+  const hint = (field: Record<string, unknown>): boolean | undefined =>
+    buildDesiredTableFromComponentFields(
+      "comp_hero",
+      [{ name: "ref", ...field }] as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    ).columns.find(c => c.name === "ref")?.holdsReferenceList;
+
+  it("marks a many-to-many and a hasMany relationship", () => {
+    expect(
+      hint({
+        type: "relationship",
+        options: { target: "tags", relationType: "manyToMany" },
+      })
+    ).toBe(true);
+    expect(
+      hint({ type: "relationship", relationTo: "tags", hasMany: true })
+    ).toBe(true);
+  });
+
+  it("does not mark a single polymorphic or a single relationship", () => {
+    expect(
+      hint({ type: "relationship", relationTo: ["tags", "posts"] })
+    ).toBeUndefined();
+    expect(hint({ type: "relationship", relationTo: "tags" })).toBeUndefined();
+  });
+});

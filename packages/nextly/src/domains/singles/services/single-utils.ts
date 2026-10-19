@@ -28,7 +28,7 @@ import {
 } from "../../../shared/lib/plugin-storage";
 import type { Logger } from "../../../shared/types";
 import { getFieldType } from "../../schema/field-types/field-type-registry";
-import { relationshipStoresList } from "../../schema/services/field-column-descriptor";
+import { relationshipStoresJson } from "../../schema/services/field-column-descriptor";
 import type { SingleDocument, SingleResult } from "../types";
 
 // ============================================================
@@ -93,7 +93,7 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
 
   // A relationship or upload is JSON when it holds a list: hasMany, or several targets. The column
   // descriptor asks the same rule, so the Single's column and its serializer agree.
-  return relationshipStoresList(field);
+  return relationshipStoresJson(field);
 }
 
 /**

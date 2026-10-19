@@ -17,7 +17,7 @@ import type {
   DropTableOp,
   Operation,
 } from "../diff/types";
-import { referenceListConversionStatements } from "../reference-list-conversion";
+import { referenceConversionStatements } from "../reference-list-conversion";
 
 import { commonStatementSql, dropConstraintSql } from "./common-statements";
 import { createIndexSql } from "./create-index";
@@ -99,9 +99,9 @@ function generateDropTable(op: DropTableOp): string {
 // Acceptable trade-off for v1.
 function generateChangeColumnType(op: ChangeColumnTypeOp): string {
   // A column becoming a relation's list of references needs each bare value wrapped in a list
-  // before MySQL will accept the column as JSON.
-  if (op.conversion === "referenceList") {
-    return referenceListConversionStatements(op, "mysql").join("; ");
+  // before MySQL will accept the column as JSON; its DOWN unwraps them again.
+  if (op.conversion !== undefined) {
+    return referenceConversionStatements(op, "mysql").join("; ");
   }
   // MODIFY restates the WHOLE definition, so anything the caller knows about the column has to be
   // restated with it or MySQL drops it. A caller that knows neither gets the historical behaviour.

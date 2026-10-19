@@ -3,7 +3,7 @@ import { isVirtualField } from "../../../collections/fields/virtual";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import {
-  componentRelationshipStoresList,
+  componentRelationshipStoresJson,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
 import { isFieldGroupFieldType } from "../storage/field-group-field-type";
@@ -142,7 +142,7 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
   // A relation holding a list on the component row — hasMany, several targets, or a many-to-many,
   // which a component keeps on its row — is a JSON column. The creating SQL, the runtime table and
   // the desired schema ask the same rule.
-  return componentRelationshipStoresList(field);
+  return componentRelationshipStoresJson(field);
 }
 
 /**

@@ -278,10 +278,13 @@ export interface ChangeColumnTypeOp {
    * `pipeline/reference-list-conversion.ts`, and run by the pre-resolution executor before either
    * apply route, so neither the fast-path emitter nor drizzle-kit casts the column itself.
    *
-   * Absent for every other type change. Never carried into a generated DOWN, which is a plain type
-   * change back.
+   * `referenceScalar`: the generated DOWN of that conversion, the list column back to the scalar type
+   * it was. A one-item list becomes its id; a longer list cannot fit in one id, so the DOWN refuses
+   * rather than drop references. Only ever written into a migration file: an apply converts forward.
+   *
+   * Absent for every other type change.
    */
-  conversion?: "referenceList";
+  conversion?: "referenceList" | "referenceScalar";
   /**
    * The nullability and default the column must still have afterwards, when the caller knows them.
    *

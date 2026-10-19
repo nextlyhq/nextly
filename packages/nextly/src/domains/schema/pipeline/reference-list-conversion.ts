@@ -52,21 +52,50 @@ export function postgresReferenceListExpression(columnName: string): string {
     `WHEN ${value} = '' THEN '[]'::jsonb ` +
     `WHEN left(${value}, 1) = '{' THEN to_jsonb(${c}::text::text[]) ` +
     `WHEN left(${value}, 1) = '[' THEN ${c}::text::jsonb ` +
+    // A JSON string: one id the JSON serializer wrote into a column not converted yet. Read as JSON,
+    // so the id is wrapped without its quotes.
+    `WHEN left(${value}, 1) = '"' THEN jsonb_build_array(${c}::text::jsonb) ` +
     `ELSE jsonb_build_array(${c}::text) END`
   );
 }
 
 /**
- * The statements that convert `op`'s column, in order.
+ * The PostgreSQL expression reading a `jsonb` list back as the scalar `toType` held it, for the
+ * generated DOWN.
  *
- * A list rather than one string because MySQL needs three and its driver runs one statement per
+ * A one-item list becomes its id and an empty list NULL. A longer list is cast whole, as its JSON
+ * text: a `text` column keeps it, and a `uuid` column refuses it, failing the single statement so
+ * no reference is dropped.
+ */
+function postgresReferenceScalarExpression(
+  columnName: string,
+  toType: string
+): string {
+  const c = quoteIdent(columnName, "postgresql");
+  return (
+    `CASE WHEN ${c} IS NULL THEN NULL ` +
+    `WHEN jsonb_typeof(${c}) <> 'array' THEN (${c} #>> '{}')::${toType} ` +
+    `WHEN jsonb_array_length(${c}) = 0 THEN NULL ` +
+    `WHEN jsonb_array_length(${c}) = 1 THEN (${c} ->> 0)::${toType} ` +
+    `ELSE ${c}::text::${toType} END`
+  );
+}
+
+/**
+ * The statements that convert `op`'s column, in order: forward into the list column for a
+ * `referenceList` conversion, back to the scalar type for its `referenceScalar` DOWN.
+ *
+ * A list rather than one string because MySQL needs several and its driver runs one statement per
  * call (`multipleStatements` is off). A migration file joins them; the executor runs them one by
  * one.
  */
-export function referenceListConversionStatements(
+export function referenceConversionStatements(
   op: ChangeColumnTypeOp,
   dialect: SupportedDialect
 ): string[] {
+  if (op.conversion === "referenceScalar") {
+    return referenceScalarStatements(op, dialect);
+  }
   if (dialect === "postgresql") {
     return [
       `ALTER TABLE ${quoteIdent(op.tableName, dialect)} ` +
@@ -86,9 +115,11 @@ export function referenceListConversionStatements(
       `ALTER TABLE ${table} MODIFY COLUMN ${c} text ${nullability}`,
       // A JSON list stays as it is; any other value is one reference and becomes a one-item list.
       // Nested so JSON_TYPE only ever reads a value JSON_VALID has accepted.
+      // A JSON scalar (a single id the serializer wrote as a JSON string) is wrapped as JSON, so its
+      // quotes are not kept as part of the id.
       `UPDATE ${table} SET ${c} = CASE ` +
         `WHEN TRIM(${c}) = '' THEN JSON_ARRAY() ` +
-        `WHEN JSON_VALID(${c}) THEN CASE WHEN JSON_TYPE(${c}) = 'ARRAY' THEN ${c} ELSE JSON_ARRAY(${c}) END ` +
+        `WHEN JSON_VALID(${c}) THEN CASE WHEN JSON_TYPE(${c}) = 'ARRAY' THEN ${c} ELSE JSON_ARRAY(CAST(${c} AS JSON)) END ` +
         `ELSE JSON_ARRAY(${c}) END ` +
         `WHERE ${c} IS NOT NULL`,
       `ALTER TABLE ${table} MODIFY COLUMN ${c} ${op.toType} ${nullability}`,
@@ -96,6 +127,57 @@ export function referenceListConversionStatements(
   }
   // SQLite stores a JSON list as text, the type such a column already has, so the diff never plans
   // a type change for it; reaching here means a caller built the operation by hand.
+  throw NextlyError.internal({
+    logContext: {
+      reason: "a reference-list conversion has no SQLite form",
+      table: op.tableName,
+      column: op.columnName,
+    },
+  });
+}
+
+/**
+ * The generated DOWN: the list column back to the scalar type it was converted from.
+ *
+ * Lossless or refused, never lossy. Every row holding at most one id goes back as that id; a row
+ * holding more cannot fit in one, so the DOWN refuses before it changes anything. PostgreSQL does
+ * that in its single statement, whose cast fails on the longer list. MySQL commits each statement
+ * as it runs, and a server not in strict mode would truncate a value too long for the column rather
+ * than refuse it, so a CHECK the existing rows must satisfy is added, and dropped, before anything
+ * else runs: adding it fails when one row holds more than one id.
+ */
+function referenceScalarStatements(
+  op: ChangeColumnTypeOp,
+  dialect: SupportedDialect
+): string[] {
+  if (dialect === "postgresql") {
+    return [
+      `ALTER TABLE ${quoteIdent(op.tableName, dialect)} ` +
+        `ALTER COLUMN ${quoteIdent(op.columnName, dialect)} ` +
+        `SET DATA TYPE ${op.toType} ` +
+        `USING ${postgresReferenceScalarExpression(op.columnName, op.toType)}`,
+    ];
+  }
+  if (dialect === "mysql") {
+    const table = quoteIdent(op.tableName, dialect);
+    const c = quoteIdent(op.columnName, dialect);
+    const guard = quoteIdent(
+      `chk_one_ref_${op.tableName}_${op.columnName}`.slice(0, 64),
+      dialect
+    );
+    const nullability = op.nullable === false ? "NOT NULL" : "NULL";
+    return [
+      `ALTER TABLE ${table} ADD CONSTRAINT ${guard} CHECK (${c} IS NULL OR JSON_LENGTH(${c}) <= 1)`,
+      `ALTER TABLE ${table} DROP CHECK ${guard}`,
+      `ALTER TABLE ${table} MODIFY COLUMN ${c} text ${nullability}`,
+      `UPDATE ${table} SET ${c} = CASE ` +
+        `WHEN JSON_TYPE(${c}) <> 'ARRAY' THEN JSON_UNQUOTE(${c}) ` +
+        `WHEN JSON_LENGTH(${c}) = 0 THEN NULL ` +
+        `ELSE JSON_UNQUOTE(JSON_EXTRACT(${c}, '$[0]')) END ` +
+        `WHERE ${c} IS NOT NULL`,
+      `ALTER TABLE ${table} MODIFY COLUMN ${c} ${op.toType} ${nullability}`,
+    ];
+  }
   throw NextlyError.internal({
     logContext: {
       reason: "a reference-list conversion has no SQLite form",

@@ -37,7 +37,7 @@ import {
 // module (pipeline/sql-templates/) so both the apply pipeline (renames +
 // drops) and migrate:create (all op types) consume the same per-dialect
 // templates. Eliminates the byte-identical-SQL drift risk.
-import { referenceListConversionStatements } from "../reference-list-conversion";
+import { referenceConversionStatements } from "../reference-list-conversion";
 import { conversionForRename } from "../rename-conversion";
 import { generateSQL } from "../sql-templates/index";
 
@@ -308,7 +308,7 @@ function orderForExecution(ops: Operation[]): Operation[] {
 // the driver runs one per call, so the joined form a migration file carries would be refused.
 function statementsForOp(op: Operation, dialect: SupportedDialect): string[] {
   if (isReferenceListConversion(op)) {
-    return referenceListConversionStatements(op, dialect);
+    return referenceConversionStatements(op, dialect);
   }
   return [generateSQL(op, dialect)];
 }

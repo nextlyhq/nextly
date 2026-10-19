@@ -1,19 +1,22 @@
 /**
- * Which relationship columns hold a list of references, asked once for every consumer.
+ * Which relationship columns are JSON, and which of those hold a list of references, asked once for
+ * every consumer.
  *
- * A collection or Single row keeps a list when the field is `hasMany` or names several targets; its
- * many-to-many has no column there, because the links live in a junction table. A component row has
- * no junction table, so its many-to-many keeps the list on the row too. The creating SQL, the
- * runtime table, the row serializer and the desired schema all ask these two questions, so a
- * relation is stored and read as the same shape on every route.
+ * A collection or Single row stores a relation as JSON when it is `hasMany` (a list) or names
+ * several targets (one `{ relationTo, value }` object, or a list of them); its many-to-many has no
+ * column there, because the links live in a junction table. A component row has no junction table,
+ * so its many-to-many keeps a list on the row too. The creating SQL, the runtime table, the row
+ * serializer and the desired schema ask whether a column is JSON; converting an older scalar column
+ * asks whether it holds a list, which a single polymorphic reference does not.
  */
 import { describe, expect, it } from "vitest";
 
 import type { FieldDefinition } from "../../../../schemas/dynamic-collections";
 import {
-  componentRelationshipStoresList,
+  componentRelationshipHoldsReferenceList,
+  componentRelationshipStoresJson,
   getComponentRowColumnDescriptor,
-  relationshipStoresList,
+  relationshipStoresJson,
 } from "../field-column-descriptor";
 
 const single = { name: "author", type: "relationship", relationTo: "users" };
@@ -31,13 +34,13 @@ const manyToMany = {
 };
 const hasManyUpload = { name: "gallery", type: "upload", hasMany: true };
 
-describe("relationshipStoresList, for a collection or Single row", () => {
+describe("relationshipStoresJson, for a collection or Single row", () => {
   it.each([
     ["a hasMany relationship", hasMany],
     ["a polymorphic relationship", polymorphic],
     ["a hasMany upload", hasManyUpload],
   ])("is true for %s", (_label, field) => {
-    expect(relationshipStoresList(field)).toBe(true);
+    expect(relationshipStoresJson(field)).toBe(true);
   });
 
   it.each([
@@ -47,24 +50,24 @@ describe("relationshipStoresList, for a collection or Single row", () => {
     ["a many-to-many", manyToMany],
     ["a text field", { name: "title", type: "text", hasMany: true }],
   ])("is false for %s", (_label, field) => {
-    expect(relationshipStoresList(field)).toBe(false);
+    expect(relationshipStoresJson(field)).toBe(false);
   });
 });
 
-describe("componentRelationshipStoresList, for a component row", () => {
+describe("componentRelationshipStoresJson, for a component row", () => {
   it.each([
     ["a many-to-many", manyToMany],
     ["a hasMany relationship", hasMany],
     ["a polymorphic relationship", polymorphic],
   ])("is true for %s", (_label, field) => {
-    expect(componentRelationshipStoresList(field)).toBe(true);
+    expect(componentRelationshipStoresJson(field)).toBe(true);
   });
 
   it.each([
     ["a single relationship", single],
     ["a Builder single relationship", builderSingle],
   ])("is false for %s", (_label, field) => {
-    expect(componentRelationshipStoresList(field)).toBe(false);
+    expect(componentRelationshipStoresJson(field)).toBe(false);
   });
 });
 
@@ -98,3 +101,22 @@ describe.each([
     });
   }
 );
+
+describe("componentRelationshipHoldsReferenceList, for converting an older component column", () => {
+  it.each([
+    ["a many-to-many", manyToMany],
+    ["a hasMany relationship", hasMany],
+    ["a hasMany polymorphic relationship", { ...polymorphic, hasMany: true }],
+  ])("is true for %s", (_label, field) => {
+    expect(componentRelationshipHoldsReferenceList(field)).toBe(true);
+  });
+
+  it.each([
+    // One `{ relationTo, value }` object: JSON, but not a list.
+    ["a single polymorphic relationship", polymorphic],
+    ["a single relationship", single],
+    ["a Builder single relationship", builderSingle],
+  ])("is false for %s", (_label, field) => {
+    expect(componentRelationshipHoldsReferenceList(field)).toBe(false);
+  });
+});

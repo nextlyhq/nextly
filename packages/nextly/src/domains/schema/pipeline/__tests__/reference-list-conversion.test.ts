@@ -21,7 +21,7 @@ import { isPreResolutionOp } from "../diff/types";
 import { emitDdl } from "../ddl-emitter";
 import {
   isReferenceListConversion,
-  referenceListConversionStatements,
+  referenceConversionStatements,
 } from "../reference-list-conversion";
 import { generateSQL } from "../sql-templates";
 
@@ -98,7 +98,7 @@ const mysqlOp: ChangeColumnTypeOp = {
 
 describe("the statements a reference-list conversion runs", () => {
   it("is one statement on PostgreSQL, reading each stored shape as a list", () => {
-    const statements = referenceListConversionStatements(pgOp, "postgresql");
+    const statements = referenceConversionStatements(pgOp, "postgresql");
     expect(statements).toHaveLength(1);
     const [statement] = statements;
     expect(statement).toMatch(
@@ -108,23 +108,31 @@ describe("the statements a reference-list conversion runs", () => {
     expect(statement).toContain(`to_jsonb("tags"::text::text[])`);
     expect(statement).toContain(`"tags"::text::jsonb`);
     expect(statement).toContain(`jsonb_build_array("tags"::text)`);
+    // A single id the JSON serializer wrote into a column not yet converted is a JSON string, and
+    // is read as that string, not wrapped with its quotes.
+    expect(statement).toContain(
+      `WHEN left(btrim("tags"::text), 1) = '"' THEN jsonb_build_array("tags"::text::jsonb)`
+    );
   });
 
   it("widens, wraps each bare value in a list, then retypes on MySQL", () => {
-    const statements = referenceListConversionStatements(mysqlOp, "mysql");
+    const statements = referenceConversionStatements(mysqlOp, "mysql");
     expect(statements).toHaveLength(3);
     expect(statements[0]).toBe(
       "ALTER TABLE `comp_hero` MODIFY COLUMN `tags` text NULL"
     );
     expect(statements[1]).toMatch(/^UPDATE `comp_hero` SET `tags` = CASE/);
     expect(statements[1]).toContain("JSON_ARRAY(`tags`)");
+    // A JSON scalar (a single id the serializer wrote as a JSON string) is wrapped as JSON, so
+    // its quotes are not kept as part of the id.
+    expect(statements[1]).toContain("JSON_ARRAY(CAST(`tags` AS JSON))");
     expect(statements[2]).toBe(
       "ALTER TABLE `comp_hero` MODIFY COLUMN `tags` json NULL"
     );
   });
 
   it("restates NOT NULL on MySQL when the column keeps it", () => {
-    const statements = referenceListConversionStatements(
+    const statements = referenceConversionStatements(
       { ...mysqlOp, nullable: false },
       "mysql"
     );
@@ -134,10 +142,10 @@ describe("the statements a reference-list conversion runs", () => {
 
   it("is what a migration file gets, so a file and a live apply agree", () => {
     expect(generateSQL(pgOp, "postgresql")).toBe(
-      referenceListConversionStatements(pgOp, "postgresql").join("; ")
+      referenceConversionStatements(pgOp, "postgresql").join("; ")
     );
     expect(generateSQL(mysqlOp, "mysql")).toBe(
-      referenceListConversionStatements(mysqlOp, "mysql").join("; ")
+      referenceConversionStatements(mysqlOp, "mysql").join("; ")
     );
   });
 });
@@ -157,13 +165,55 @@ describe("where a reference-list conversion runs in an apply", () => {
 });
 
 describe("the generated DOWN of a reference-list conversion", () => {
-  it("is a plain type change back, not a second conversion", () => {
-    const [inverse] = buildInverseOperations([pgOp], { tables: [] });
-    expect(inverse).toMatchObject({
+  const [pgInverse] = buildInverseOperations([pgOp], {
+    tables: [],
+  }) as ChangeColumnTypeOp[];
+  const [mysqlInverse] = buildInverseOperations([mysqlOp], {
+    tables: [],
+  }) as ChangeColumnTypeOp[];
+
+  it("reads each list back as the scalar column held it", () => {
+    expect(pgInverse).toMatchObject({
       type: "change_column_type",
       fromType: "jsonb",
       toType: "uuid",
+      conversion: "referenceScalar",
     });
-    expect((inverse as ChangeColumnTypeOp).conversion).toBeUndefined();
+  });
+
+  it("is not run by an apply, which only ever converts forward", () => {
+    expect(isReferenceListConversion(pgInverse)).toBe(false);
+    expect(isPreResolutionOp(pgInverse)).toBe(false);
+  });
+
+  it("unwraps a one-item list on PostgreSQL, and casts any longer list so the old type refuses it", () => {
+    const [statement] = referenceConversionStatements(pgInverse, "postgresql");
+    expect(statement).toMatch(
+      /^ALTER TABLE "comp_hero" ALTER COLUMN "tags" SET DATA TYPE uuid USING CASE/
+    );
+    expect(statement).toContain(
+      `WHEN jsonb_array_length("tags") = 1 THEN ("tags" ->> 0)::uuid`
+    );
+    expect(statement).toContain(`ELSE "tags"::text::uuid END`);
+  });
+
+  it("refuses on MySQL before anything changes when a row holds more than one id", () => {
+    const statements = referenceConversionStatements(mysqlInverse, "mysql");
+    expect(statements[0]).toMatch(
+      /^ALTER TABLE `comp_hero` ADD CONSTRAINT `\S+` CHECK \(`tags` IS NULL OR JSON_LENGTH\(`tags`\) <= 1\)$/
+    );
+    expect(statements[1]).toMatch(/^ALTER TABLE `comp_hero` DROP CHECK `\S+`$/);
+    expect(statements.at(-1)).toBe(
+      "ALTER TABLE `comp_hero` MODIFY COLUMN `tags` varchar(36) NULL"
+    );
+  });
+
+  it("is what the DOWN file gets", () => {
+    expect(generateSQL(pgInverse, "postgresql")).toBe(
+      referenceConversionStatements(pgInverse, "postgresql").join("; ")
+    );
+    expect(generateSQL(mysqlInverse, "mysql")).toBe(
+      referenceConversionStatements(mysqlInverse, "mysql").join("; ")
+    );
   });
 });

@@ -68,7 +68,7 @@ import type { ExtensionColumn } from "../../schema/extension/types";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
-  componentRelationshipStoresList,
+  componentRelationshipStoresJson,
   usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
 import {
@@ -939,7 +939,7 @@ export class FieldGroupSchemaService {
       // A relation holding a list (hasMany, several targets, or a many-to-many, which a component
       // keeps on its row) is a JSON column; the runtime table and the desired schema ask the same
       // rule.
-      return componentRelationshipStoresList(field) ? types.json : types.uuid;
+      return componentRelationshipStoresJson(field) ? types.json : types.uuid;
     }
     if (isRepeaterField(field) || isGroupField(field)) {
       return types.json;
@@ -989,7 +989,7 @@ export class FieldGroupSchemaService {
     }
     if (isRelationshipField(field) || isUploadField(field)) {
       // A list of references is JSON, as the creating SQL and the desired schema store it.
-      return componentRelationshipStoresList(field)
+      return componentRelationshipStoresJson(field)
         ? pgJsonb(colName)
         : pgText(colName);
     }
@@ -1044,7 +1044,7 @@ export class FieldGroupSchemaService {
     }
     if (isRelationshipField(field) || isUploadField(field)) {
       // A list of references is JSON, as the creating SQL and the desired schema store it.
-      return componentRelationshipStoresList(field)
+      return componentRelationshipStoresJson(field)
         ? mysqlJson(colName)
         : mysqlVarchar(colName, { length: 36 });
     }

@@ -35,7 +35,7 @@ import {
   type WeighedColumn,
 } from "../../extension/naming";
 import {
-  componentRelationshipStoresList,
+  componentRelationshipHoldsReferenceList,
   getColumnDescriptor,
   getComponentRowColumnDescriptor,
   type ColumnOrigin,
@@ -708,9 +708,10 @@ export function buildDesiredTableFromComponentFields(
       type: desc.dialectType,
       nullable: desc.nullable,
       default: undefined,
-      // A relation keeping its list of references on the component row, which an older table may
-      // hold in a scalar column; a type change into it is then a reference-list conversion.
-      ...(componentRelationshipStoresList(field)
+      // A relation keeping a list of references on the component row, which an older table may hold
+      // in a scalar column; a type change into it is then a reference-list conversion. A single
+      // polymorphic reference is JSON but not a list, so it keeps the ordinary conversion.
+      ...(componentRelationshipHoldsReferenceList(field)
         ? { holdsReferenceList: true }
         : {}),
     });

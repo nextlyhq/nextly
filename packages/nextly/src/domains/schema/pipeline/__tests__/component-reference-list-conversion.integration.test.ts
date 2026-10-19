@@ -20,9 +20,12 @@ import {
   clearCachedSnapshot,
   clearLiveSnapshots,
 } from "../../../../init/schema-snapshot-cache";
+import { buildInverseOperations } from "../../migrate-create/down-generator";
 import { DrizzleStatementExecutor } from "../../services/drizzle-statement-executor";
+import type { ChangeColumnTypeOp } from "../diff/types";
 import { previewDesiredSchema } from "../preview";
 import { PushSchemaPipeline } from "../pushschema-pipeline";
+import { referenceConversionStatements } from "../reference-list-conversion";
 import {
   noopClassifier,
   noopMigrationJournal,
@@ -85,6 +88,32 @@ function makePipeline(
     migrationJournal: noopMigrationJournal,
     notifier: noopNotifier,
   });
+}
+
+/**
+ * The statements of the generated DOWN for this table's conversion from `fromType`, as a migration
+ * file carries them: the inverse operation `migrate:create` builds, rendered by the conversion.
+ */
+function downStatements(
+  dialect: "postgresql" | "mysql",
+  tableName: string,
+  fromType: string,
+  toType: string
+): string[] {
+  const forward: ChangeColumnTypeOp = {
+    type: "change_column_type",
+    tableName,
+    columnName: "tags",
+    fromType,
+    toType,
+    nullable: true,
+    fromNullable: true,
+    conversion: "referenceList",
+  };
+  const [inverse] = buildInverseOperations([forward], {
+    tables: [],
+  }) as ChangeColumnTypeOp[];
+  return referenceConversionStatements(inverse, dialect);
 }
 
 /** Rows of `id` and stored value, inserted with the component row's required system columns. */
@@ -197,6 +226,8 @@ describe.skipIf(!PG.url)(
         ["r3", `["${A}","${B}"]`],
         ["r4", ""],
         ["r5", null],
+        // One id the JSON serializer wrote into the column before it was converted.
+        ["r6", `"${A}"`],
       ]);
 
       const converted = await apply(desiredFor(tableName));
@@ -208,6 +239,7 @@ describe.skipIf(!PG.url)(
         r3: [A, B],
         r4: [],
         r5: null,
+        r6: [A],
       });
 
       expect(await plannedForTable(desiredFor(tableName))).toEqual([]);
@@ -240,6 +272,46 @@ describe.skipIf(!PG.url)(
       expect(JSON.stringify(refused.error)).toContain("COLUMN_NOT_CONVERTIBLE");
       expect(await columnType()).toBe("text");
       expect(await storedValues()).toEqual({ r1: A, r2: `{"${A}` });
+    });
+
+    it("rolls a converted uuid column back with its generated DOWN, keeping each id", async () => {
+      await oldTable("uuid", [
+        ["r1", A],
+        ["r2", null],
+      ]);
+      expect((await apply(desiredFor(tableName))).error).toBeUndefined();
+      await pool.query(
+        `UPDATE "${tableName}" SET "tags" = '[]'::jsonb WHERE "id" = 'r2'`
+      );
+
+      for (const statement of downStatements(
+        "postgresql",
+        tableName,
+        "uuid",
+        "jsonb"
+      )) {
+        await pool.query(statement);
+      }
+      expect(await columnType()).toBe("uuid");
+      expect(await storedValues()).toEqual({ r1: A, r2: null });
+    });
+
+    it("refuses the DOWN when a row holds more than one id, changing nothing", async () => {
+      await oldTable("uuid", [["r1", A]]);
+      expect((await apply(desiredFor(tableName))).error).toBeUndefined();
+      await pool.query(
+        `UPDATE "${tableName}" SET "tags" = '["${A}","${B}"]'::jsonb`
+      );
+
+      const [statement] = downStatements(
+        "postgresql",
+        tableName,
+        "uuid",
+        "jsonb"
+      );
+      await expect(pool.query(statement)).rejects.toThrow();
+      expect(await columnType()).toBe("jsonb");
+      expect(await storedValues()).toEqual({ r1: [A, B] });
     });
   }
 );
@@ -274,6 +346,87 @@ describe.skipIf(!MYSQL.url)(
         uiTargetKind: "component",
       });
     }
+
+    async function mysqlColumnType(): Promise<string | undefined> {
+      const [typeRows] = await pool
+        .promise()
+        .query(
+          `SELECT DATA_TYPE AS t FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'tags'`,
+          [tableName]
+        );
+      return (typeRows as { t: string }[])[0]?.t;
+    }
+
+    async function mysqlValues(): Promise<Record<string, unknown>> {
+      const [rows] = await pool
+        .promise()
+        .query(`SELECT id, tags FROM \`${tableName}\` ORDER BY id`);
+      return Object.fromEntries(
+        (rows as { id: string; tags: unknown }[]).map(row => [row.id, row.tags])
+      );
+    }
+
+    /** A pushed table whose `tags` column is put back to `oldType`, holding `rows`. */
+    async function mysqlOldTable(
+      oldType: string,
+      rows: readonly [string, string | null][]
+    ): Promise<void> {
+      await pool.promise().query(`DROP TABLE IF EXISTS \`${tableName}\``);
+      expect((await apply(desiredFor(tableName))).success).toBe(true);
+      await pool
+        .promise()
+        .query(
+          `ALTER TABLE \`${tableName}\` MODIFY COLUMN \`tags\` ${oldType} NULL`
+        );
+      await pool.promise().query(insertRows(tableName, "`", rows));
+    }
+
+    it("converts a text column holding a JSON-string id, without keeping its quotes", async () => {
+      // A text column is where a conversion stopped part-way leaves the column, and a single id the
+      // JSON serializer writes there is a JSON string.
+      await mysqlOldTable("text", [
+        ["r1", `"${A}"`],
+        ["r2", A],
+      ]);
+      expect((await apply(desiredFor(tableName))).error).toBeUndefined();
+      expect(await mysqlColumnType()).toBe("json");
+      expect(await mysqlValues()).toEqual({ r1: [A], r2: [A] });
+    });
+
+    it("rolls a converted varchar(36) column back with its generated DOWN, keeping each id", async () => {
+      await mysqlOldTable("varchar(36)", [
+        ["r1", A],
+        ["r2", ""],
+        ["r3", null],
+      ]);
+      expect((await apply(desiredFor(tableName))).error).toBeUndefined();
+
+      for (const statement of downStatements(
+        "mysql",
+        tableName,
+        "varchar(36)",
+        "json"
+      )) {
+        await pool.promise().query(statement);
+      }
+      expect(await mysqlColumnType()).toBe("varchar");
+      expect(await mysqlValues()).toEqual({ r1: A, r2: null, r3: null });
+    });
+
+    it("refuses the DOWN before anything changes when a row holds more than one id", async () => {
+      await mysqlOldTable("varchar(36)", [["r1", A]]);
+      expect((await apply(desiredFor(tableName))).error).toBeUndefined();
+      await pool
+        .promise()
+        .query(
+          `UPDATE \`${tableName}\` SET \`tags\` = JSON_ARRAY('${A}', '${B}')`
+        );
+
+      const [guard] = downStatements("mysql", tableName, "varchar(36)", "json");
+      await expect(pool.promise().query(guard)).rejects.toThrow();
+      expect(await mysqlColumnType()).toBe("json");
+      expect(await mysqlValues()).toEqual({ r1: [A, B] });
+    });
 
     it("converts a varchar(36) column, keeping each id as a one-item list", async () => {
       await pool.promise().query(`DROP TABLE IF EXISTS \`${tableName}\``);
