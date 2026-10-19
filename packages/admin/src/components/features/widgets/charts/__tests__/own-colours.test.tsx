@@ -29,8 +29,11 @@ function coloursIn(root: HTMLElement): string[] {
   return found;
 }
 
-/** A shared chart slot, or the inherited colour a slot or a token class sets. */
-const ALLOWED = /^(var\(--nx-chart-[1-5]\)|currentColor)$/;
+/**
+ * A shared chart slot, the border token axes and gridlines are drawn in, or the inherited colour
+ * a slot or a token class sets.
+ */
+const ALLOWED = /^(var\(--nx-chart-[1-5]\)|var\(--nx-border\)|currentColor)$/;
 
 /** A palette class naming a hue directly, rather than a token. */
 const PALETTE_CLASS =

@@ -59,7 +59,13 @@ describe("the value axis", () => {
 
   it("draws its gridlines in the border token, never a chart colour", () => {
     drawAt("medium", [series("Posts", [2, 9, 4])]);
-    expect(screen.getByTestId("chart-gridlines")).toHaveClass("text-border");
+    const lines = screen
+      .getByTestId("chart-gridlines")
+      .querySelectorAll("line");
+    expect([...lines].map(line => line.getAttribute("stroke"))).toEqual([
+      "var(--nx-border)",
+      "var(--nx-border)",
+    ]);
   });
 });
 

@@ -211,12 +211,15 @@ function SeriesLine({
   );
 }
 
-/** The zero and highest gridlines, in the border token, at medium and large. */
+/**
+ * The zero and highest gridlines, at medium and large: drawn in the border token itself rather
+ * than through a text colour class, since a line is not text and is not held to a text minimum.
+ */
 function Gridlines() {
   const top = BOX.padding;
   const bottom = BOX.height - BOX.padding;
   return (
-    <g data-testid="chart-gridlines" className="text-border">
+    <g data-testid="chart-gridlines">
       {[top, bottom].map(y => (
         <line
           key={y}
@@ -224,7 +227,7 @@ function Gridlines() {
           x2={BOX.width}
           y1={y}
           y2={y}
-          stroke="currentColor"
+          stroke="var(--nx-border)"
           strokeWidth="1"
           vectorEffect="non-scaling-stroke"
         />
@@ -278,7 +281,7 @@ function LatestPoint({
       <span
         aria-hidden="true"
         data-testid="chart-latest-point"
-        className="absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-card"
+        className="absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
         // design-lint-ok: the position is the datum, and the colour is the series' chart slot.
         style={{ left, top, backgroundColor: chartColour(slot) }}
       />
