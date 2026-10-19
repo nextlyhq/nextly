@@ -15,6 +15,8 @@
  * @module events/event-bus
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { GeneratedTypes } from "../direct-api/types/shared";
 
 /** Minimal logger shape used for isolated-failure diagnostics. */
@@ -79,6 +81,14 @@ export class EventBus {
   private handlers: Map<EventName, Set<EventHandler>> = new Map();
   private declaredEvents: Set<EventName> = new Set();
   private inFlight: Set<Promise<void>> = new Set();
+  /**
+   * The cause each in-flight handler is traced to, for those that have one:
+   * the work run under {@link runCaused} emitted its event, directly or
+   * through the handlers of events it emitted.
+   */
+  private readonly caused = new Map<Promise<void>, symbol>();
+  /** The cause the calling async context runs under, when it has one. */
+  private readonly causes = new AsyncLocalStorage<symbol>();
   private logger: EventLogger | undefined;
 
   /**
@@ -137,6 +147,10 @@ export class EventBus {
     if (!set || set.size === 0) return;
 
     const envelope: EventEnvelope<P> = { name, payload };
+    // The emitter's cause, if it runs under one. Each handler is called here,
+    // in the emitter's async context, so its own work inherits that cause,
+    // and what it emits in turn, however late, is traced to it too.
+    const cause = this.causes.getStore();
     // Snapshot so handlers that (un)subscribe during dispatch don't mutate the
     // set we're iterating.
     for (const handler of [...set]) {
@@ -150,8 +164,10 @@ export class EventBus {
             this.logError(name, err);
           });
           this.inFlight.add(tracked);
+          if (cause !== undefined) this.caused.set(tracked, cause);
           void tracked.finally(() => {
             this.inFlight.delete(tracked);
+            this.caused.delete(tracked);
           });
         }
       } catch (err) {
@@ -161,24 +177,44 @@ export class EventBus {
   }
 
   /**
-   * Await the async handlers running at this moment, for at most
+   * Run `work` so that every event it emits, and every event the handlers of
+   * those emit in turn, is traced to `cause`, for {@link settleCaused}.
+   */
+  runCaused<T>(cause: symbol, work: () => T): T {
+    return this.causes.run(cause, work);
+  }
+
+  /**
+   * Await the handlers traced to `cause` until none is running, for at most
    * `timeoutMs`, for a caller about to tear the runtime down under them: the
    * plugin lifecycle command, after a plugin's `onInstall` or `onUninstall`.
-   * Only those already running, not those they or anything else start
-   * after, since a producer that its plugin stops only in `destroy()` would
-   * otherwise never let the bus empty. Resolves true when every one of them
-   * settled in time.
+   * A handler chain the work set off is drained however long it is, while a
+   * producer started anywhere else, such as a plugin's `init()`, is not
+   * waited for, since one its plugin stops only in `destroy()` would never let
+   * the bus empty. Resolves true when every traced handler finished in time.
    */
-  async settleRunning(timeoutMs: number): Promise<boolean> {
-    const running = Promise.allSettled([...this.inFlight]).then(() => true);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<false>(resolve => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
-    });
-    try {
-      return await Promise.race([running, late]);
-    } finally {
-      clearTimeout(timer);
+  async settleCaused(cause: symbol, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const pending = [...this.caused]
+        .filter(([, traced]) => traced === cause)
+        .map(([promise]) => promise);
+      if (pending.length === 0) return true;
+      const left = deadline - Date.now();
+      if (left <= 0) return false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<false>(resolve => {
+        timer = setTimeout(() => resolve(false), left);
+      });
+      try {
+        const finished = await Promise.race([
+          Promise.allSettled(pending).then(() => true),
+          late,
+        ]);
+        if (!finished) return false;
+      } finally {
+        clearTimeout(timer);
+      }
     }
   }
 
@@ -198,6 +234,7 @@ export class EventBus {
     this.handlers.clear();
     this.declaredEvents.clear();
     this.inFlight.clear();
+    this.caused.clear();
   }
 
   private isKnownName(name: EventName): boolean {
