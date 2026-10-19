@@ -592,3 +592,35 @@ describe("readSessionStanding before services are registered", () => {
     );
   });
 });
+
+describe("readSessionStanding on SQLite", () => {
+  afterEach(() => {
+    resetSessionStandingForTests();
+    container.clear();
+    ready.registered = false;
+  });
+
+  it("reads through the adapter's transaction, so it queues behind an open one", async () => {
+    // On SQLite every request shares one connection. A read issued while
+    // another request's transaction is open would see the epoch that
+    // transaction raised, and if that transaction then rolls back, the cache
+    // would keep an epoch that never committed and refuse the live session.
+    // The read has to go through the adapter's own transaction, which waits
+    // for the open one. A fixture that declared PostgreSQL would skip that.
+    const base = adapterHolding({ isActive: true, sessionEpoch: 4 });
+    const transaction = vi.fn(<R>(work: () => Promise<R>) => work());
+    const adapter = {
+      ...base,
+      getCapabilities: () => ({ dialect: "sqlite" }),
+      transaction,
+    };
+    ready.registered = true;
+    container.registerSingleton("adapter", () => adapter);
+
+    expect(await readSessionStanding("u1")).toEqual({
+      isActive: true,
+      sessionEpoch: 4,
+    });
+    expect(transaction).toHaveBeenCalledTimes(1);
+  });
+});
