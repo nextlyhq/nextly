@@ -24,7 +24,7 @@ describe.each(getConfiguredTestDialects())(
     let handle: TestNextly;
 
     const identities = (tables: readonly string[]) =>
-      readTableIdentities(handle.adapter.getDrizzle(), dialect, tables);
+      readTableIdentities(handle.adapter, dialect, tables);
     const run = (statement: string) => handle.adapter.executeQuery(statement);
 
     beforeEach(async () => {

@@ -24,147 +24,69 @@
  *
  * @module cli/commands/table-identity
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
-interface PgMysqlExecute {
-  execute(query: unknown): Promise<unknown>;
-}
+import { PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT } from "../../domains/schema/pipeline/pg-visible-relation";
 
-interface SqliteAll {
-  all(query: unknown): unknown[] | Promise<unknown[]>;
-}
+/** What the reader needs of the adapter: one statement, its rows. */
+type RowReader = Pick<DrizzleAdapter, "queryStatement">;
 
 /**
- * Each of `tables` that exists, with its identity token; null where the
- * catalog reports the table but no identity for it. A table that does not
- * exist is absent. Names are matched without regard to case, as the uninstall
- * checks read them.
+ * Each of `tables` that exists as a table, with its identity token; null
+ * where the catalog reports the table but no identity for it. A name no
+ * table holds is absent, and so is one a view holds: a view is not the table
+ * that was there. Names are matched as stored, as `tableExists` matches them.
  */
 export async function readTableIdentities(
-  db: unknown,
+  adapter: RowReader,
   dialect: SupportedDialect,
   tables: readonly string[]
 ): Promise<ReadonlyMap<string, string | null>> {
   const names = [...new Set(tables)];
   if (names.length === 0) return new Map();
-  const found = await identitiesByLoweredName(db, dialect, names);
+  const namesIn = sql.join(
+    names.map(name => sql`${name}`),
+    sql`, `
+  );
+  const rows = await adapter.queryStatement<Record<string, unknown>>(
+    dialect === "postgresql"
+      ? // The relation an unqualified statement resolves the name to,
+        // wherever on the search path that is; ordinary and partitioned
+        // tables only.
+        sql`SELECT t.relname AS name, t.oid::text AS identity
+            FROM pg_class t
+            WHERE t.relkind IN ('r', 'p')
+              AND t.relname IN (${namesIn})
+              AND ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}`
+      : dialect === "mysql"
+        ? sql`SELECT TABLE_NAME AS name, CREATE_TIME AS identity
+              FROM information_schema.TABLES
+              WHERE TABLE_SCHEMA = DATABASE()
+                AND TABLE_TYPE = 'BASE TABLE'
+                AND TABLE_NAME IN (${namesIn})`
+        : sql`SELECT name, rootpage AS identity FROM sqlite_master
+              WHERE type = 'table' AND name IN (${namesIn})`
+  );
   const out = new Map<string, string | null>();
-  for (const table of names) {
-    const identity = found.get(table.toLowerCase());
-    if (identity !== undefined) out.set(table, identity);
+  for (const { name, identity } of rows) {
+    if (typeof name === "string" && names.includes(name)) {
+      out.set(name, identityToken(identity));
+    }
   }
   return out;
 }
 
-/** The catalog's rows for `names`, keyed by lower-cased table name. */
-async function identitiesByLoweredName(
-  db: unknown,
-  dialect: SupportedDialect,
-  names: readonly string[]
-): Promise<Map<string, string | null>> {
-  const rows =
-    dialect === "postgresql"
-      ? await postgresRows(db, names)
-      : dialect === "mysql"
-        ? await mysqlRows(db, names)
-        : await sqliteRows(db, names);
-  return new Map(rows.map(row => [row.name.toLowerCase(), row.identity]));
-}
-
-interface IdentityRow {
-  name: string;
-  identity: string | null;
-}
-
 /**
- * The oid each name resolves to, as an unqualified statement resolves it,
- * wherever on the search path that is. Only ordinary and partitioned tables:
- * a view or sequence of the name is not a table a DOWN drops.
+ * A catalog value as a comparable token: an oid as text, a creation time as
+ * a Date or text (the driver decides), a root page as a number. Null for a
+ * value the catalog did not give, which a caller counts as changed.
  */
-async function postgresRows(
-  db: unknown,
-  names: readonly string[]
-): Promise<IdentityRow[]> {
-  const values = sql.join(
-    names.map(name => sql`(${name}::text)`),
-    sql`, `
-  );
-  const result = (await (db as PgMysqlExecute).execute(
-    sql`SELECT n.name, c.oid::text AS identity
-        FROM (VALUES ${values}) AS n(name)
-        JOIN pg_class c ON c.oid = to_regclass(quote_ident(n.name))
-        WHERE c.relkind IN ('r', 'p')`
-  )) as { rows: Array<{ name: string; identity: string | null }> };
-  return result.rows.map(row => ({
-    name: row.name,
-    identity: row.identity ?? null,
-  }));
-}
-
-/** Each base table's creation time in the current database. */
-async function mysqlRows(
-  db: unknown,
-  names: readonly string[]
-): Promise<IdentityRow[]> {
-  const namesIn = sql.join(
-    names.map(name => sql`${name.toLowerCase()}`),
-    sql`, `
-  );
-  const result = await (db as PgMysqlExecute).execute(
-    sql`SELECT TABLE_NAME AS name, CREATE_TIME AS created
-        FROM information_schema.TABLES
-        WHERE TABLE_SCHEMA = DATABASE()
-          AND TABLE_TYPE = 'BASE TABLE'
-          AND LOWER(TABLE_NAME) IN (${namesIn})`
-  );
-  // mysql2 answers `[rows, fieldPackets]`; a wrapper may hand the rows alone.
-  const rows: unknown[] = Array.isArray(result)
-    ? Array.isArray(result[0])
-      ? (result[0] as unknown[])
-      : result
-    : [];
-  return rows.flatMap(row => {
-    const { name, created } = (row ?? {}) as Record<string, unknown>;
-    if (typeof name !== "string") return [];
-    return [{ name, identity: timeToken(created) }];
-  });
-}
-
-/** A creation time as a comparable token: the driver may give a Date or text. */
-function timeToken(value: unknown): string | null {
+function identityToken(value: unknown): string | null {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value.toISOString();
   }
+  if (typeof value === "number") return value > 0 ? String(value) : null;
   return typeof value === "string" && value !== "" ? value : null;
-}
-
-/** Each table's root page. */
-async function sqliteRows(
-  db: unknown,
-  names: readonly string[]
-): Promise<IdentityRow[]> {
-  const namesIn = sql.join(
-    names.map(name => sql`${name.toLowerCase()}`),
-    sql`, `
-  );
-  const rows: unknown = await Promise.resolve(
-    (db as SqliteAll).all(
-      sql`SELECT name, rootpage FROM sqlite_master
-          WHERE type = 'table' AND lower(name) IN (${namesIn})`
-    )
-  );
-  return (Array.isArray(rows) ? rows : []).flatMap((row: unknown) => {
-    const { name, rootpage } = (row ?? {}) as Record<string, unknown>;
-    if (typeof name !== "string") return [];
-    return [
-      {
-        name,
-        identity:
-          typeof rootpage === "number" && rootpage > 0
-            ? String(rootpage)
-            : null,
-      },
-    ];
-  });
 }

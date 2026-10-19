@@ -522,7 +522,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   const tableIdentities = (
     tables: readonly string[]
   ): Promise<ReadonlyMap<string, string | null>> =>
-    readTableIdentities(drizzleAdapter.getDrizzle(), dialect, tables);
+    readTableIdentities(drizzleAdapter, dialect, tables);
 
   /**
    * Run one plugin's own `onInstall` / `onUninstall` against a real context.

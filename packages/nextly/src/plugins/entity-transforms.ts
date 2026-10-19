@@ -495,11 +495,7 @@ const CORE_FIELD_TYPES: ReadonlySet<string> = new Set(ALL_FIELD_TYPES);
  * data, so only the field's own `access` is an access rule there.
  */
 function isPluginField(value: Record<string, unknown>): boolean {
-  return (
-    typeof value.name === "string" &&
-    typeof value.type === "string" &&
-    !CORE_FIELD_TYPES.has(value.type)
-  );
+  return isField(value) && !CORE_FIELD_TYPES.has(value.type);
 }
 
 function mergeBehaviour(
