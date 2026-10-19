@@ -100,6 +100,7 @@ interface LinkDb {
   insert(table: unknown): {
     values(row: Record<string, unknown>): Promise<unknown>;
   };
+  delete(table: unknown): { where(condition: SQL): Promise<unknown> };
   update(table: unknown): {
     set(values: Record<string, unknown>): { where(condition: SQL): unknown };
   };
@@ -205,6 +206,8 @@ export async function recordPreviewLink(input: {
   createdAt: Date;
   expiresAt: Date;
   generation: number;
+  /** When the mint began, before its token was signed. */
+  mintStartedAt: Date;
 }): Promise<void> {
   const db = adapter();
   const table = linksTable(dialectOf(db));
@@ -227,6 +230,27 @@ export async function recordPreviewLink(input: {
         openCount: 0,
       })
   );
+  // A revoke-all of this document that began after this mint did may have
+  // revoked the document's rows before this one existed, leaving it working
+  // after the editor was told every link had stopped. The mint is the side
+  // that can still back out, since its token has not left the process: the
+  // row goes and no link is handed out.
+  const cutoff = await getService("metaService").get<string>(
+    cutoffKey(document)
+  );
+  if (
+    typeof cutoff === "string" &&
+    new Date(cutoff).getTime() >= input.mintStartedAt.getTime()
+  ) {
+    await linkDb(db).delete(table).where(eq(table.id, input.id));
+    throw NextlyError.conflict({
+      reason: "state",
+      message:
+        "This page's links were revoked while the link was being made, so it was not created. Make it again.",
+      logContext: { reason: "preview-link-mint-crossed-revoke-all" },
+    });
+  }
+
   // After the row, so a mint that failed to record never starts the window.
   await recordedSince(input.createdAt, input.generation);
 }
@@ -337,7 +361,6 @@ export async function listLiveLinks(
         createdBy: table.createdBy,
         makerId: users.id,
         makerName: users.name,
-        makerEmail: users.email,
         createdAt: table.createdAt,
         expiresAt: table.expiresAt,
         openCount: table.openCount,
@@ -358,12 +381,9 @@ export async function listLiveLinks(
         ? null
         : {
             id: row.makerId,
-            // Their name, else their address: a maker is shown as someone the
-            // editor can recognise.
-            name:
-              (row.makerName as string | null) ??
-              (row.makerEmail as string | null) ??
-              null,
+            // The name only, never the address: a person who may share this
+            // document need not be one who may read user accounts.
+            name: (row.makerName as string | null) ?? null,
           },
     createdAt: toDate(row.createdAt),
     expiresAt: toDate(row.expiresAt),
@@ -479,6 +499,32 @@ export async function revokeDocumentLinks(
     // A database not yet updated has no table, so no recorded link: the
     // cutoff above has ended every link there is, and that is the answer.
     if (tableMissing(error)) return 0;
+    throw error;
+  }
+}
+
+/**
+ * Mark every recorded link revoked, at the moment of a site-wide revoke.
+ *
+ * The generation already ends them; this records WHEN, so retention keeps
+ * them for its window from that moment rather than from their scheduled end,
+ * and the rows say what happened to them. A database not yet updated has no
+ * rows to mark.
+ */
+export async function revokeAllRecordedLinks(
+  revokedBy: string,
+  now: Date
+): Promise<void> {
+  const db = adapter();
+  const table = linksTable(dialectOf(db));
+  const at = new Date(Math.floor(now.getTime() / 1000) * 1000);
+  try {
+    await linkDb(db)
+      .update(table)
+      .set({ revokedAt: at, revokedBy })
+      .where(isNull(table.revokedAt));
+  } catch (error) {
+    if (tableMissing(error)) return;
     throw error;
   }
 }

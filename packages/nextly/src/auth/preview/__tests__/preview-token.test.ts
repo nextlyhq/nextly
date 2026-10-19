@@ -409,6 +409,33 @@ describe("tokens minted before the scope gained a kind", () => {
 });
 
 describe("recorded links", () => {
+  it("are refused by a verifier that knows only links without a record", async () => {
+    // A runtime from before links were recorded checks the audience and
+    // nothing about rows. It must refuse a recorded link, which it cannot
+    // check for revocation, rather than honour it until it expires.
+    const key = new Uint8Array(
+      hkdfSync("sha256", TEST_SECRET, "", "nextly:preview-token:v1", 32)
+    );
+    const { token: recorded } = await signPreviewToken(SCOPE, TEST_SECRET, {
+      generation: GENERATION,
+      minter: "minter-1",
+      recorded: true,
+    });
+    const { token: older } = await signPreviewToken(SCOPE, TEST_SECRET, {
+      generation: GENERATION,
+      minter: "minter-1",
+    });
+    const { jwtVerify } = await import("jose");
+    await expect(
+      jwtVerify(recorded, key, { audience: "nextly:preview" })
+    ).rejects.toThrow();
+    // Positive control: the older verifier still accepts a link without a
+    // record, so the refusal above is about the audience.
+    await expect(
+      jwtVerify(older, key, { audience: "nextly:preview" })
+    ).resolves.toBeDefined();
+  });
+
   it("names its row by the token's id when it is recorded", async () => {
     const { token, linkId, issuedAt } = await signPreviewToken(
       SCOPE,
@@ -439,49 +466,45 @@ describe("recorded links", () => {
     expect(result.issuedAt).toBeInstanceOf(Date);
   });
 
-  it("refuses a record claim it cannot read, rather than judging the link as older", async () => {
+  it("refuses a record claim it cannot read, or one its audience contradicts", async () => {
     // Read as absent, `rec: "yes"` would make a recorded link one no
-    // revoke-one can reach. Signed with the real derived key, so the refusal
-    // is about the claim and nothing else.
+    // revoke-one can reach; a claim and an audience that disagree are not
+    // what this signer makes. Signed with the real derived key, so each
+    // refusal is about the claims and nothing else.
     const key = new Uint8Array(
       hkdfSync("sha256", TEST_SECRET, "", "nextly:preview-token:v1", 32)
     );
     const now = Math.floor(Date.now() / 1000);
-    const forged = await new SignJWT({
-      col: SCOPE.collection,
-      eid: SCOPE.entryId,
-      mnt: "minter-1",
-      gen: GENERATION,
-      rec: "yes",
-    })
-      .setProtectedHeader({ alg: "HS256" })
-      .setAudience("nextly:preview")
-      .setJti("0123456789abcdef0123456789abcdef")
-      .setIssuedAt(now)
-      .setExpirationTime(now + 60)
-      .sign(key);
-    const control = await new SignJWT({
-      col: SCOPE.collection,
-      eid: SCOPE.entryId,
-      mnt: "minter-1",
-      gen: GENERATION,
-      rec: 1,
-    })
-      .setProtectedHeader({ alg: "HS256" })
-      .setAudience("nextly:preview")
-      .setJti("0123456789abcdef0123456789abcdef")
-      .setIssuedAt(now)
-      .setExpirationTime(now + 60)
-      .sign(key);
-
-    expect(
-      await verifyPreviewToken(forged, TEST_SECRET, { generation: GENERATION })
-    ).toEqual({ valid: false, reason: "invalid" });
-    // Positive control: the same token with a readable claim verifies.
-    expect(
-      await verifyPreviewToken(control, TEST_SECRET, {
-        generation: GENERATION,
+    const build = (claims: Record<string, unknown>, audience: string) =>
+      new SignJWT({
+        col: SCOPE.collection,
+        eid: SCOPE.entryId,
+        mnt: "minter-1",
+        gen: GENERATION,
+        ...claims,
       })
+        .setProtectedHeader({ alg: "HS256" })
+        .setAudience(audience)
+        .setJti("0123456789abcdef0123456789abcdef")
+        .setIssuedAt(now)
+        .setExpirationTime(now + 60)
+        .sign(key);
+    const verify = async (token: string) =>
+      verifyPreviewToken(token, TEST_SECRET, { generation: GENERATION });
+
+    for (const [claims, audience] of [
+      [{ rec: "yes" }, "nextly:preview:recorded"],
+      [{ rec: 1 }, "nextly:preview"],
+      [{}, "nextly:preview:recorded"],
+    ] as const) {
+      expect(
+        await verify(await build(claims, audience)),
+        `${JSON.stringify(claims)} with ${audience}`
+      ).toEqual({ valid: false, reason: "invalid" });
+    }
+    // Positive control: a readable claim with its own audience verifies.
+    expect(
+      await verify(await build({ rec: 1 }, "nextly:preview:recorded"))
     ).toMatchObject({
       valid: true,
       linkId: "0123456789abcdef0123456789abcdef",

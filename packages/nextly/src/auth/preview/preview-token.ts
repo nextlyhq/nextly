@@ -25,6 +25,17 @@ const ALGORITHM = "HS256";
 const PREVIEW_AUDIENCE = "nextly:preview";
 
 /**
+ * The audience a RECORDED link carries instead.
+ *
+ * Its own audience, so a runtime from before links were recorded, which
+ * accepts only {@link PREVIEW_AUDIENCE}, refuses a recorded link outright. That
+ * runtime cannot read the link's row, so honouring the token would keep a link
+ * working there after it was revoked by id, for as long as an upgrade has both
+ * versions serving. Refused, it fails closed.
+ */
+const RECORDED_PREVIEW_AUDIENCE = "nextly:preview:recorded";
+
+/**
  * Domain-separation label for the preview signing key.
  *
  * Preview tokens are derived from the same `NEXTLY_SECRET` as sessions but MUST
@@ -304,7 +315,9 @@ export async function signPreviewToken(
     ...(options.recorded === true ? { rec: 1 } : {}),
   })
     .setProtectedHeader({ alg: ALGORITHM })
-    .setAudience(PREVIEW_AUDIENCE)
+    .setAudience(
+      options.recorded === true ? RECORDED_PREVIEW_AUDIENCE : PREVIEW_AUDIENCE
+    )
     // `sub` names the document rather than a user: nobody is authenticated by
     // this token, and reading it as a user id is the mistake worth preventing.
     .setSubject(
@@ -378,9 +391,18 @@ function decodeLink(
   if (typeof payload.iat !== "number") return null;
   const issuedAt = new Date(payload.iat * 1000);
 
+  // The claim and the audience must agree: a recorded link carries both, a
+  // link without a record neither. A token saying one and not the other is
+  // not one this signer made.
+  const recordedAudience =
+    payload.aud === RECORDED_PREVIEW_AUDIENCE ||
+    (Array.isArray(payload.aud) &&
+      payload.aud.includes(RECORDED_PREVIEW_AUDIENCE));
   const recordClaim = payload.rec;
-  if (recordClaim === undefined) return { issuedAt };
-  if (recordClaim !== 1) return null;
+  if (recordClaim === undefined) {
+    return recordedAudience ? null : { issuedAt };
+  }
+  if (recordClaim !== 1 || !recordedAudience) return null;
   const linkId = readString(payload.jti);
   return linkId === null ? null : { issuedAt, linkId };
 }
@@ -399,7 +421,7 @@ export async function verifyPreviewToken(
   let payload: Record<string, unknown>;
   try {
     const verified = await jwtVerify(token, previewKey(secret), {
-      audience: PREVIEW_AUDIENCE,
+      audience: [PREVIEW_AUDIENCE, RECORDED_PREVIEW_AUDIENCE],
     });
     payload = verified.payload;
   } catch (error) {

@@ -27,7 +27,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
-import { prunePreviewLinks } from "../../auth/preview/preview-link-records";
+import {
+  prunePreviewLinks,
+  recordPreviewLink,
+  revokeDocumentLinks,
+} from "../../auth/preview/preview-link-records";
 import { signPreviewToken } from "../../auth/preview/preview-token";
 import { defineCollection, defineSingle, text } from "../../config";
 import { getDialectTables } from "../../database/index";
@@ -593,6 +597,30 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("names a maker by name only, never by address", async () => {
+        const install = await boot(dialect);
+        const link = await mint(install.colleague, install.post);
+        // A maker with no name: the list must not fall back to their address,
+        // which a sharer without user access may not read.
+        const { users } = getDialectTables();
+        await (
+          install.t.adapter.getDrizzle() as unknown as {
+            update: (t: unknown) => {
+              set: (v: unknown) => { where: (w: unknown) => Promise<unknown> };
+            };
+          }
+        )
+          .update(users)
+          .set({ name: null })
+          .where(eq(users.id, install.colleague));
+
+        const [listedLink] = links(await listed(install.editor, install.post));
+        expect(listedLink.id).toBe(link.id);
+        expect(listedLink.createdBy?.id).toBe(install.colleague);
+        expect(listedLink.createdBy?.name ?? null).toBeNull();
+        expect(JSON.stringify(listedLink)).not.toContain("@example.com");
+      });
+
       it("does not count an opening of a revoked link", async () => {
         const install = await boot(dialect);
         const link = await mint(install.editor, install.post);
@@ -793,6 +821,45 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a link made while its document's links are revoked", () => {
+      it("is not recorded, so it never opens, when the revoke-all lands mid-mint", async () => {
+        const install = await boot(dialect);
+        // The mint began, and signed, just before the revoke-all; its row
+        // would land just after the revoke-all had already revoked the rest.
+        const mintStartedAt = new Date(Date.now() - 1000);
+        await revokeDocumentLinks(
+          {
+            kind: "entry",
+            ...(install.post as { collection: string; entryId: string }),
+          },
+          install.editor,
+          new Date()
+        );
+
+        await expect(
+          recordPreviewLink({
+            id: "0123456789abcdef0123456789abcdef",
+            scope: install.post as { collection: string; entryId: string },
+            createdBy: install.editor,
+            createdAt: new Date(
+              Math.floor(mintStartedAt.getTime() / 1000) * 1000
+            ),
+            expiresAt: new Date(Date.now() + DAY * 1000),
+            generation: 0,
+            mintStartedAt,
+          })
+        ).rejects.toMatchObject({ statusCode: 409 });
+        expect(await storedRows(install)).toHaveLength(0);
+      });
+
+      it("is recorded when the mint began after the revoke-all", async () => {
+        const install = await boot(dialect);
+        await revokeDocument({ session: install.editor }, install.post);
+        const link = await mint(install.editor, install.post);
+        expect(await opens(link.token)).toBe(true);
+      });
+    });
+
     describe("revoking a link twice", () => {
       it("records one revocation, and tells the second when it happened", async () => {
         const install = await boot(dialect);
@@ -911,6 +978,27 @@ describe.each(getConfiguredTestDialects())(
 
         expect(await opens(late)).toBe(false);
         expect(await renders(late)).toBe(false);
+      });
+
+      it("marks every recorded link revoked at the moment of a site-wide revoke", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const start = new Date("2030-07-01T09:00:00Z");
+        vi.setSystemTime(start);
+        const install = await boot(dialect);
+        await mint(install.editor, install.post, 7 * DAY);
+        await call({ session: await adminId(install) }, "POST", [
+          "preview-links",
+          "revoke",
+        ]);
+        const [row] = await storedRows(install);
+        expect(row.revokedAt).not.toBeNull();
+
+        // So its thirty days run from the revoke, not its scheduled end.
+        const { removed } = await prunePreviewLinks(
+          install.t.adapter,
+          new Date(start.getTime() + 31 * DAY * 1000)
+        );
+        expect(removed).toBe(1);
       });
 
       it("shows no earlier-links row on any document after a site-wide revoke", async () => {

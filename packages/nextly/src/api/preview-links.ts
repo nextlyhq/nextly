@@ -36,6 +36,7 @@ import {
   olderLinksEnd,
   previewLinkDocument,
   recordPreviewLink,
+  revokeAllRecordedLinks,
   revokeDocumentLinks,
   revokeRecordedLink,
   type PreviewLinkDocument,
@@ -504,6 +505,9 @@ async function respondWithPreviewLink(
     await settingsService()
   ).getPreviewTokenGeneration();
 
+  // Before signing: a revoke-all of this document that begins after this
+  // moment has to be able to stop the link.
+  const mintStartedAt = new Date();
   const { token, expiresAt, issuedAt, linkId } = await signPreviewToken(
     scope,
     previewSigningSecret(),
@@ -532,6 +536,7 @@ async function respondWithPreviewLink(
     createdAt: issuedAt,
     expiresAt,
     generation,
+    mintStartedAt,
   });
 
   const settings = await (await settingsService()).getSettings();
@@ -1167,6 +1172,8 @@ export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
 
   const auth = await requireRoutePermission(req, "manage", "settings");
   const generation = await (await settingsService()).revokeAllPreviewTokens();
+  // The generation has ended every link; the rows also record when.
+  await revokeAllRecordedLinks(auth.userId, new Date());
 
   /*
    * The counterpart to the mint row, and the one an incident actually starts

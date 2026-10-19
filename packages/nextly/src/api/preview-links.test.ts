@@ -117,6 +117,7 @@ vi.mock("../domains/audit/audit-log-writer", () => ({
 const records = vi.hoisted(() => ({
   recordPreviewLink: vi.fn(),
   revokeDocumentLinks: vi.fn(),
+  revokeAllRecordedLinks: vi.fn(),
 }));
 vi.mock("../auth/preview/preview-link-records", async importOriginal => ({
   ...(await importOriginal<
@@ -124,6 +125,7 @@ vi.mock("../auth/preview/preview-link-records", async importOriginal => ({
   >()),
   recordPreviewLink: records.recordPreviewLink,
   revokeDocumentLinks: records.revokeDocumentLinks,
+  revokeAllRecordedLinks: records.revokeAllRecordedLinks,
 }));
 
 vi.mock("../lib/env", () => ({
@@ -200,6 +202,7 @@ beforeEach(() => {
   revokeAll.mockResolvedValue(1);
   records.recordPreviewLink.mockResolvedValue(undefined);
   records.revokeDocumentLinks.mockResolvedValue(2);
+  records.revokeAllRecordedLinks.mockResolvedValue(undefined);
   getSettings.mockResolvedValue({ siteUrl: "https://site.example" });
   previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
   previewConfig = undefined;
@@ -1673,7 +1676,16 @@ describe("mintPreviewLink records the link it hands out", () => {
       createdAt: verified.issuedAt,
       expiresAt: verified.expiresAt,
       generation: 0,
+      // Taken before signing, so a revoke-all that starts after it can stop
+      // the link.
+      mintStartedAt: expect.any(Date),
     });
+    const { mintStartedAt } = records.recordPreviewLink.mock.calls[0]![0] as {
+      mintStartedAt: Date;
+    };
+    expect(mintStartedAt.getTime()).toBeLessThanOrEqual(
+      verified.issuedAt.getTime() + 1000
+    );
   });
 
   it("hands out no token when the link cannot be recorded", async () => {
