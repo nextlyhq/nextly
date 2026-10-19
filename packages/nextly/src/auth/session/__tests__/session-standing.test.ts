@@ -252,6 +252,57 @@ describe("createSessionStandingCache", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it("does not hand a caller inside a transaction a read queued behind it", async () => {
+    // On SQLite a read started outside a transaction queues behind the one
+    // that is open. A plugin reading a session inside that transaction and
+    // joining the queued read would wait for it, while it waits for the
+    // transaction to finish: neither would ever settle.
+    let inTransaction = false;
+    const read = vi
+      .fn<(userId: string) => Promise<SessionStanding | null>>()
+      .mockImplementationOnce(() => new Promise<SessionStanding>(() => {}))
+      .mockResolvedValue(ACTIVE);
+    const cache = createSessionStandingCache({
+      read,
+      shared: () => !inTransaction,
+    });
+
+    void cache.standing("u1", 0);
+    inTransaction = true;
+    let inside: SessionStanding | null | "pending" = "pending";
+    void cache.standing("u1", 0).then(standing => {
+      inside = standing;
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(inside).toEqual(ACTIVE);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares and keeps nothing a caller inside a transaction read", async () => {
+    // Read inside a transaction, the row may hold that transaction's
+    // uncommitted change. Another request must neither join that read nor be
+    // answered from it once it is done.
+    let inTransaction = true;
+    const read = vi
+      .fn<(userId: string) => Promise<SessionStanding | null>>()
+      .mockResolvedValueOnce({ isActive: true, sessionEpoch: 5 })
+      .mockResolvedValue(ACTIVE);
+    const cache = createSessionStandingCache({
+      read,
+      shared: () => !inTransaction,
+    });
+
+    expect(await cache.standing("u1", 0)).toEqual({
+      isActive: true,
+      sessionEpoch: 5,
+    });
+    inTransaction = false;
+
+    expect(await cache.standing("u1", 0)).toEqual(ACTIVE);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps no answer from a read that failed", async () => {
     // A failure to read is not an answer. Cached, it would refuse every
     // request for the lifetime, or worse, hold an earlier answer past it.
