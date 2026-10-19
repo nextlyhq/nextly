@@ -124,12 +124,21 @@ interface Reading {
  * its answer goes to the callers already waiting and is not kept. The mark
  * lives on the read and goes with it, so nothing is held for an account once
  * its reads are done.
+ *
+ * A caller for whom `shared` answers false reads alone. It may take a held
+ * answer, which was read and committed before it, but it neither joins a read
+ * that is running nor lets another caller join or keep its own. On SQLite that
+ * is a caller inside an open transaction: a read started elsewhere is queued
+ * behind that transaction, so joining it would wait on the transaction that is
+ * waiting for it, and its own read runs inside the transaction, where the row
+ * may hold a change that has not committed.
  */
 export function createSessionStandingCache(options: {
   read: ReadSessionStanding;
   ttlMs?: number;
   maxEntries?: number;
   now?: () => number;
+  shared?: () => boolean;
 }): SessionStandingCache {
   const ttlMs = options.ttlMs ?? SESSION_STANDING_TTL_MS;
   const maxEntries = options.maxEntries ?? MAX_ENTRIES;
@@ -204,6 +213,7 @@ export function createSessionStandingCache(options: {
       ) {
         return Promise.resolve(entry.standing);
       }
+      if (options.shared?.() === false) return options.read(userId);
       const joined = reading.has(userId);
       const read = readRow(userId);
       if (!joined) return read;
@@ -411,6 +421,9 @@ function cacheFor(adapter: DrizzleAdapter): SessionStandingCache {
     held = {
       cache: createSessionStandingCache({
         read: userId => readSessionStanding(userId, adapter),
+        // Inside an open transaction a read nests in it rather than queueing,
+        // so it must not be shared across that boundary in either direction.
+        shared: () => !adapter.inTransaction(),
         ...(cacheClock ? { now: cacheClock } : {}),
       }),
       adapter,

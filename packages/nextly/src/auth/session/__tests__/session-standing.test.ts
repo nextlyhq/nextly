@@ -517,6 +517,7 @@ describe("standingAdmits", () => {
 function adapterHolding(standing: SessionStanding) {
   return {
     getCapabilities: () => ({ dialect: "postgresql" }),
+    inTransaction: () => false,
     getDrizzle: () => ({
       select: () => ({
         from: () => ({
