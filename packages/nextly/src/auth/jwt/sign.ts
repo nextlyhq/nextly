@@ -18,6 +18,15 @@ export const TOKEN_TYP = {
 export type TokenPurpose = keyof typeof TOKEN_TYP;
 
 /**
+ * A protected-header parameter that says the token was minted with the session
+ * epoch claim. The header is signed, so only Nextly's own signing can set it.
+ * Tokens minted before the claim existed have no such header, and the verifier
+ * ignores their `nx_sev` claim, which an application's own field may carry.
+ */
+export const EPOCH_CLAIM_HEADER = "nxe";
+export const EPOCH_CLAIM_HEADER_VALUE = 1;
+
+/**
  * Convert a string secret to a Uint8Array key for jose.
  * Uses the raw bytes of the secret (UTF-8 encoded).
  */
@@ -95,7 +104,11 @@ export async function signAccessTokenWithExpiry(
       : Math.min(issuedAt + ttlSeconds, Math.floor(notAfter / 1000));
 
   const jwt = new SignJWT(claims)
-    .setProtectedHeader({ alg: ALGORITHM, typ: TOKEN_TYP[purpose] })
+    .setProtectedHeader({
+      alg: ALGORITHM,
+      typ: TOKEN_TYP[purpose],
+      [EPOCH_CLAIM_HEADER]: EPOCH_CLAIM_HEADER_VALUE,
+    })
     .setIssuedAt(issuedAt)
     .setExpirationTime(expiresAt)
     .setJti(jti);

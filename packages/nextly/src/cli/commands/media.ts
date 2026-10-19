@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
@@ -10,14 +10,22 @@ import {
   findOrphanThumbnails,
   mediaPlaceIsExclusive,
   type MediaReferences,
+  type ReferencedNow,
   ORPHAN_MIN_AGE_MS,
   removeOrphanThumbnails,
   type OrphanRemoval,
 } from "../../domains/media/orphan-thumbnails";
 import {
+  errorForLog,
+  filesKeptByOthers,
+  storedPathForLog,
+} from "../../domains/media/remove-stored-files";
+import { StoredFileSearchReader } from "../../domains/media/stored-file-search";
+import {
   storedFilesOf,
   type MediaFilesRecord,
 } from "../../domains/media/stored-files";
+import { consoleLogger } from "../../shared/types";
 import {
   initializeMediaStorage,
   type MediaStorage,
@@ -73,6 +81,16 @@ export async function referencedStoredPaths(
 }
 
 /**
+ * Which of a batch of files a media item refers to now, asked of the media
+ * table for those files, by the search every delete keeps files by
+ * (`filesKeptByOthers`), and `null` when the table cannot be read.
+ */
+function referencedNowIn(adapter: DrizzleAdapter): ReferencedNow {
+  const { search } = new StoredFileSearchReader(adapter, consoleLogger);
+  return paths => filesKeptByOthers(search, paths, []);
+}
+
+/**
  * Lists the media storage's left-behind upload-time thumbnails and, with
  * `apply`, removes them, naming each one removed and each one not. Says what
  * it did through `say`, and returns the exit code: 0, or 1 when the storage
@@ -86,6 +104,8 @@ export async function mediaOrphans(options: {
   /** The collections that keep media's place from being its own. */
   sharedWith?: readonly string[];
   referenced: () => Promise<MediaReferences>;
+  /** Whether an item refers to a listed file now, asked just before its removal. */
+  referencedNow: ReferencedNow;
   apply: boolean;
   say: (line: string) => void;
   now?: Date;
@@ -127,16 +147,14 @@ export async function mediaOrphans(options: {
     say(
       `${search.orphans.length} left-behind thumbnail(s), which no media item refers to:`
     );
-    for (const path of search.orphans) say(`  ${path}`);
-    say(
-      "Nothing was changed. Check each and remove them by hand: removal by this command follows in a later release."
-    );
+    for (const path of search.orphans) say(`  ${storedPathForLog(path)}`);
+    say("Nothing was changed. Run again with --apply to remove them.");
     return 0;
   }
   const result = await removeOrphanThumbnails(
     storage,
     search.orphans,
-    options.referenced
+    options.referencedNow
   );
   sayRemoval(result, say);
   return result.failed.length > 0 || result.stopped.length > 0 ? 1 : 0;
@@ -155,7 +173,7 @@ function sayUnlistable(
 
 /**
  * The unreferenced thumbnails nothing shows are media's, listed for the site
- * to check: by key, which tells apart
+ * to check and left as they are even with --apply: by key, which tells apart
  * files uploaded under one name, and by that name where there is one.
  */
 function sayUnconfirmed(
@@ -165,11 +183,13 @@ function sayUnconfirmed(
   if (unconfirmed.length === 0) return;
   const named = unconfirmed.some(file => file.name !== undefined);
   context.say(
-    `${unconfirmed.length} unreferenced thumbnail(s) that nothing shows are media's. ${whyUnconfirmed(named, context)} Check each, and remove the ones that are media's by hand:`
+    `${unconfirmed.length} unreferenced thumbnail(s) that nothing shows are media's. ${whyUnconfirmed(named, context)} They are left as they are, even with --apply; check each and remove the ones that are media's by hand:`
   );
   for (const { path, name } of unconfirmed) {
     context.say(
-      name === undefined ? `  ${path}` : `  ${path} (uploaded as ${name})`
+      name === undefined
+        ? `  ${storedPathForLog(path)}`
+        : `  ${storedPathForLog(path)} (uploaded as ${name})`
     );
   }
 }
@@ -196,23 +216,26 @@ function whyUnconfirmed(
   }
   if (sharedWith.length > 0) {
     const one = sharedWith.length === 1;
-    return `Media's storage place is not its own: ${sharedWith.join(", ")} also use${one ? "s" : ""} it, or ha${one ? "s" : "ve"} no prefix, so a file of the same form there may not be media's. Give each of them a \`prefix\` of its own in the storage config, so that media's files can be told apart.`;
+    return `Media's storage place is not its own: ${sharedWith.join(", ")} also use${one ? "s" : ""} it, or ha${one ? "s" : "ve"} no prefix, so a file of the same form there may not be media's. Give each of them a \`prefix\` of its own in the storage config to have later runs remove them.`;
   }
-  return "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config, so that its files can be told apart.";
+  return "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config to have later runs remove them.";
 }
 
 /** What --apply did with each listed thumbnail. */
 function sayRemoval(result: OrphanRemoval, say: (line: string) => void): void {
-  for (const path of result.removed) say(`Removed ${path}`);
+  // A listed path can be a signed URL: printed without what can carry its
+  // secret, as every path here is.
+  for (const path of result.removed) say(`Removed ${storedPathForLog(path)}`);
   for (const path of result.kept) {
-    say(`Kept ${path}: a media item refers to it now.`);
+    say(`Kept ${storedPathForLog(path)}: a media item refers to it now.`);
   }
-  for (const { path, reason } of result.failed) {
-    say(`Could not remove ${path}: ${reason}`);
+  for (const { path, error } of result.failed) {
+    // What the storage said can quote a signed URL or a token.
+    say(`Could not remove ${storedPathForLog(path)}: ${errorForLog(error)}`);
   }
   if (result.stopped.length > 0) {
     say(
-      `Stopped before ${result.stopped.length} file(s): a media item now has a thumbnail whose stored location cannot be worked out from the record, so any of them may be one in use. They are left as they are; run again to list them.`
+      `Stopped before ${result.stopped.length} file(s): whether a media item refers to them could not be checked just before their removal. They are left as they are; run again to list them.`
     );
   }
   say(
@@ -226,31 +249,91 @@ function sayRemoval(result: OrphanRemoval, say: (line: string) => void): void {
  * config, such as a local-disk plugin given a relative path, resolves that
  * path when the config loads, against the process's directory.
  *
- * The CLI read `.env` from where it was run, before --cwd, and a database
- * named there may be another project's: a file in use in this project's
- * storage would read as left behind against it. So with another `.env` there
- * --apply is refused, and a listing warns; the project's own `.env` sets what
- * nothing has set yet.
+ * The database settings were read before --cwd: from `.env` where the CLI
+ * was run, from the shell or from a parent process, and may be another
+ * project's, against which a file in use in this project's storage would
+ * read as left behind. So from another directory --apply is refused, and a
+ * listing warns when that directory has its own `.env`; the project's own
+ * `.env` sets what nothing has set yet.
  */
 function enterProject(cwd: string, apply: boolean, logger: Logger): boolean {
   const ranIn = process.cwd();
   if (cwd !== ranIn) {
+    // The database settings may come from another project's `.env`, from
+    // the shell or from a parent process, none of which a `.env` loaded now
+    // replaces: nothing ties them to this project, so nothing is removed.
+    if (apply) {
+      logger.error(
+        `The database settings were read before --cwd named ${cwd}, so they may be another project's. Nothing was changed. Run the command from ${cwd} to remove files.`
+      );
+      return false;
+    }
     const loaded = path.join(ranIn, ".env");
     if (existsSync(loaded)) {
-      const warning = `The environment was read from ${loaded}, not from ${cwd}, so the database it names may be another project's.`;
-      if (apply) {
-        logger.error(
-          `${warning} Nothing was changed. Run the command from ${cwd} to remove files.`
-        );
-        return false;
-      }
-      logger.warn(warning);
+      logger.warn(
+        `The environment was read from ${loaded}, not from ${cwd}, so the database it names may be another project's.`
+      );
     }
     const projectEnv = path.join(cwd, ".env");
     if (existsSync(projectEnv)) loadEnvFile({ path: projectEnv });
   }
   process.chdir(cwd);
   return true;
+}
+
+/**
+ * The project's config, loaded from inside it (`enterProject`), or `null`
+ * when --apply cannot go on: with a config, given or discovered, that is not
+ * the project's own (`configIsInside`), or from another directory.
+ */
+async function projectConfig(
+  cwd: string,
+  configPath: string | undefined,
+  apply: boolean,
+  logger: Logger
+): Promise<Awaited<ReturnType<typeof loadConfig>>["config"] | null> {
+  if (apply && !configIsInside(cwd, configPath, logger)) return null;
+  if (!enterProject(cwd, apply, logger)) return null;
+  // The loader discovers the config from the project; a path is passed
+  // only when one was given.
+  const { config, configPath: loaded } = await loadConfig({ configPath, cwd });
+  // The file the loader read, as discovery found it too: a project's own
+  // config can be a link to another project's.
+  if (apply && !configIsInside(cwd, loaded, logger)) return null;
+  return config;
+}
+
+/**
+ * Whether the config --apply would read is the project's own: a `--config`
+ * outside `cwd` is another project's storage, which this project's database
+ * settings would be compared against. Says why when it is not.
+ */
+function configIsInside(
+  cwd: string,
+  configPath: string | undefined,
+  logger: Logger
+): boolean {
+  if (configPath === undefined) return true;
+  // Compared as the loader reads them, through any link: a link inside the
+  // project to another project's config is that config.
+  const relative = path.relative(
+    realPathOf(cwd),
+    realPathOf(path.resolve(cwd, configPath))
+  );
+  if (!relative.startsWith("..") && !path.isAbsolute(relative)) return true;
+  logger.error(
+    `The config ${configPath} is outside ${cwd}, whose database settings would be read, so its storage may be another project's. Nothing was changed. Run the command from that config's project to remove files.`
+  );
+  return false;
+}
+
+/** `target` with its links followed, or as given when it does not exist. */
+function realPathOf(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch {
+    return target;
+  }
 }
 
 /**
@@ -281,10 +364,9 @@ function otherUploaders(
 }
 
 /**
- * `nextly media orphans`: lists the upload-time thumbnails deletes before
- * this release left in the media storage, still publicly served, for the
- * site to remove by hand. Changes nothing; `--apply` is refused until
- * removal is offered.
+ * `nextly media orphans [--apply]`: finds, and with --apply removes, the
+ * upload-time thumbnails deletes before this release left in the media
+ * storage, still publicly served. A dry run by default.
  */
 export function createMediaCommand(): Command {
   const media = new Command("media").description(
@@ -292,39 +374,27 @@ export function createMediaCommand(): Command {
   );
   media
     .command("orphans")
-    .description("List upload-time thumbnails no media item refers to")
-    .option(
-      "--apply",
-      "Not available yet: removal follows in a later release",
-      false
+    .description(
+      "List upload-time thumbnails no media item refers to; remove them with --apply"
     )
+    .option("--apply", "Remove the thumbnails listed", false)
     .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
       const context = createContext(cmd.optsWithGlobals());
-      // Removal is not offered yet: the command lists, changing nothing,
-      // and the site removes what it lists by hand. Refused before anything
-      // is read or connected.
-      if (cmdOptions.apply === true) {
-        context.logger.error(
-          "Removal is not available yet: run `nextly media orphans` to list the left-behind thumbnails, and remove them by hand."
-        );
-        process.exit(1);
-        return;
-      }
       let adapter: CLIDatabaseAdapter | null = null;
       try {
         // Resolved once, from where the command was run: a relative --cwd
         // read again after the change would name a folder inside itself.
         const cwd = path.resolve(context.cwd);
-        if (!enterProject(cwd, false, context.logger)) {
+        const config = await projectConfig(
+          cwd,
+          context.configPath,
+          cmdOptions.apply === true,
+          context.logger
+        );
+        if (!config) {
           process.exit(1);
           return;
         }
-        // The loader discovers the config from the project; a path is
-        // passed only when one was given.
-        const { config } = await loadConfig({
-          configPath: context.configPath,
-          cwd,
-        });
         const db = validateDatabaseEnv();
         adapter = await createCliAdapter({
           dialect: db.dialect,
@@ -351,7 +421,8 @@ export function createMediaCommand(): Command {
           ),
           sharedWith: collectionsSharingMediaPlace(prefix, others),
           referenced: () => referencedStoredPaths(drizzle),
-          apply: false,
+          referencedNow: referencedNowIn(drizzle),
+          apply: cmdOptions.apply === true,
           say: line => console.log(line),
         });
         await adapter.disconnect();

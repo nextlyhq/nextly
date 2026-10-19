@@ -18,6 +18,7 @@ import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { getDialectTables } from "../../database/index";
+import { makeAdministrator } from "../../domains/users/__tests__/administrator-fixture";
 import { UserMutationService } from "../../domains/users/services/user-mutation-service";
 import {
   createTestNextly,
@@ -116,7 +117,10 @@ describe.each(getConfiguredTestDialects())(
 
     beforeAll(async () => {
       handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
-      // A sentinel user, so createLocalUser never takes its first-user branch.
+      // An administrator already, so no account this suite creates is made the
+      // install's first one: deleting it would then be refused as removing the
+      // last administrator. A user row alone does not settle that; holding the
+      // role does.
       const now = new Date();
       await db().insert(tables.users).values({
         id: "sentinel",
@@ -126,6 +130,7 @@ describe.each(getConfiguredTestDialects())(
         createdAt: now,
         updatedAt: now,
       });
+      await makeAdministrator(handle.adapter, "sentinel");
       users = new UserMutationService(handle.adapter, silentLogger);
     });
 

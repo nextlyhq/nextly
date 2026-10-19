@@ -1,7 +1,18 @@
 import { jwtVerify, errors as joseErrors } from "jose";
 
-import { PENDING_AUTH_TYP, type NextlyJwtPayload } from "./claims";
-import { ALGORITHM, secretToKey, TOKEN_TYP, type TokenPurpose } from "./sign";
+import {
+  PENDING_AUTH_TYP,
+  SESSION_EPOCH_CLAIM,
+  type NextlyJwtPayload,
+} from "./claims";
+import {
+  ALGORITHM,
+  EPOCH_CLAIM_HEADER,
+  EPOCH_CLAIM_HEADER_VALUE,
+  secretToKey,
+  TOKEN_TYP,
+  type TokenPurpose,
+} from "./sign";
 
 export type VerifyResult =
   | { valid: true; payload: NextlyJwtPayload }
@@ -39,7 +50,13 @@ export async function verifyToken(
     if (purpose === "session" && payload.typ === PENDING_AUTH_TYP) {
       return { valid: false, reason: "invalid" };
     }
-    return { valid: true, payload: payload as unknown as NextlyJwtPayload };
+    // The epoch claim counts only on a token Nextly signed with it. Any other
+    // token's `nx_sev` is an application's own value, read as absent.
+    const claims: Record<string, unknown> = { ...payload };
+    if (protectedHeader[EPOCH_CLAIM_HEADER] !== EPOCH_CLAIM_HEADER_VALUE) {
+      delete claims[SESSION_EPOCH_CLAIM];
+    }
+    return { valid: true, payload: claims as unknown as NextlyJwtPayload };
   } catch (error) {
     if (error instanceof joseErrors.JWTExpired) {
       return { valid: false, reason: "expired" };
@@ -54,6 +71,12 @@ export async function verifyToken(
  *
  * A thin wrapper over {@link verifyToken} for the session purpose, so every
  * existing caller gets the typed-token rules without being edited.
+ *
+ * Checks the signature and the token's purpose only: it does not ask whether
+ * the account may still use the token. A token issued before its account was
+ * deactivated, or before an administrator set its password, still verifies
+ * here. To read a session, use `getSession` or `requireAuth`, which also make
+ * that check (`auth/session/session-standing`).
  *
  * @param token - The JWT string from the cookie
  * @param secret - The NEXTLY_SECRET string

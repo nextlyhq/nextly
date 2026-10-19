@@ -33,6 +33,7 @@ import type {
   UploadOptions,
 } from "../../../storage/types";
 import { mediaPlaceIsExclusive } from "../../../domains/media/orphan-thumbnails";
+import type { ReferencedNow } from "../../../domains/media/orphan-thumbnails";
 import { mediaOrphans, type MediaReferences } from "../media";
 
 const NOW = new Date("2026-10-18T12:00:00Z");
@@ -40,6 +41,19 @@ const TWO_HOURS_AGO = new Date(NOW.getTime() - 2 * 3_600_000);
 const A_MINUTE_AGO = new Date(NOW.getTime() - 60_000);
 const key = (name: string, folder = "") =>
   `${folder}2026/10/${randomUUID()}-${name}`;
+
+/**
+ * `referencedNow` as the listing's references answer it, asked afresh for
+ * each file: `null` while one of them cannot be located.
+ */
+const askedOf =
+  (referenced: () => Promise<MediaReferences>): ReferencedNow =>
+  async files => {
+    const now = await referenced();
+    return now.unlocated.length > 0
+      ? null
+      : new Set(files.filter(file => now.paths.has(file)));
+  };
 
 /** What the media table refers to: these stored paths, all located. */
 const refs = (...paths: string[]): MediaReferences => ({
@@ -188,6 +202,7 @@ async function run(
     storage: layout.storage,
     ...place,
     referenced: referenced ?? (async () => refs(layout.referenced)),
+    referencedNow: askedOf(referenced ?? (async () => refs(layout.referenced))),
     apply,
     say: line => said.push(line),
     now: NOW,
@@ -290,6 +305,7 @@ describe("nextly media orphans", () => {
       exclusive: false,
       sharedWith: ["docs", "invoices"],
       referenced: async () => refs(layout.referenced),
+      referencedNow: askedOf(async () => refs(layout.referenced)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -322,6 +338,7 @@ describe("nextly media orphans", () => {
       prefix: "media/",
       exclusive: true,
       referenced: async () => refs(referenced),
+      referencedNow: askedOf(async () => refs(referenced)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -342,6 +359,7 @@ describe("nextly media orphans", () => {
       prefix: "media/",
       exclusive: true,
       referenced: async () => refs(recorded),
+      referencedNow: askedOf(async () => refs(recorded)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -351,6 +369,65 @@ describe("nextly media orphans", () => {
     const stored = await layout.stored();
     expect(stored).toContain(layout.referenced);
     expect(stored).not.toContain(layout.orphan);
+  });
+
+  // S3 keeps a key as written: `/media/...` and `media//...` are other keys
+  // than the `media/...` uploads under a `media` prefix make, and may be
+  // anything's.
+  it("leaves S3 keys spelled otherwise than media's prefix makes them", async () => {
+    const bucket = new Bucket("s3");
+    const outside = [
+      key("thumb_a.png", "/media/"),
+      key("thumb_b.png", "media//"),
+    ];
+    for (const path of outside)
+      bucket.put({ path, lastModified: TWO_HOURS_AGO });
+    const said: string[] = [];
+
+    const code = await mediaOrphans({
+      storage: bucket,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => refs(),
+      referencedNow: async () => new Set(),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    expect([...bucket.files.keys()].sort()).toEqual([...outside].sort());
+  });
+
+  // A storage of another kind may keep keys as written too; only local disk
+  // is known to read every spelling as one.
+  it("leaves keys spelled otherwise on a storage of a kind it does not know", async () => {
+    const bucket = new Bucket("s3");
+    // The same files, under a kind of storage this does not know.
+    const custom: IStorageAdapter = Object.assign(
+      Object.create(Object.getPrototypeOf(bucket)),
+      bucket,
+      { getType: () => "custom-store" }
+    );
+    const outside = [
+      key("thumb_a.png", "/media/"),
+      key("thumb_b.png", "media//"),
+    ];
+    for (const path of outside)
+      bucket.put({ path, lastModified: TWO_HOURS_AGO });
+
+    await mediaOrphans({
+      storage: custom,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => refs(),
+      referencedNow: async () => new Set(),
+      apply: true,
+      say: () => {},
+      now: NOW,
+    });
+
+    expect([...bucket.files.keys()].sort()).toEqual([...outside].sort());
   });
 
   // A prefix written with a leading slash, `/media`, is recorded as
@@ -366,6 +443,7 @@ describe("nextly media orphans", () => {
       prefix: "/media",
       exclusive: true,
       referenced: async () => refs(recorded),
+      referencedNow: askedOf(async () => refs(recorded)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -393,6 +471,7 @@ describe("nextly media orphans", () => {
       prefix: "/media",
       exclusive: true,
       referenced: async () => refs(referenced),
+      referencedNow: askedOf(async () => refs(referenced)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -441,12 +520,12 @@ describe("nextly media orphans", () => {
     expect(code).toBe(1);
     expect(await layout.stored()).toContain(layout.orphan);
     expect(said).not.toContain("Removed");
-    expect(said).toMatch(/stored location cannot be worked out/);
+    expect(said).toMatch(/could not be checked just before their removal/);
   });
 
-  // The recheck before removals reads the media table; doing it once per
-  // listed file would read the whole table once per leftover.
-  it("rechecks references in a bounded number of passes", async () => {
+  // An item can come to refer to a listed file while earlier ones go: each
+  // batch is asked about just before its own removals, in one search.
+  it("asks about each batch of files just before removing it", async () => {
     const bucket = new Bucket("s3");
     for (let i = 0; i < 120; i++) {
       bucket.put({
@@ -454,26 +533,118 @@ describe("nextly media orphans", () => {
         lastModified: TWO_HOURS_AGO,
       });
     }
-    let reads = 0;
-    const said: string[] = [];
+    const events: Array<{ ask: string[] } | { remove: string }> = [];
+    const remove = bucket.delete.bind(bucket);
+    bucket.delete = async (file: string) => {
+      events.push({ remove: file });
+      return remove(file);
+    };
 
     const code = await mediaOrphans({
       storage: bucket,
       prefix: "media",
       exclusive: true,
-      referenced: async () => {
-        reads++;
-        return refs();
+      referenced: async () => refs(),
+      referencedNow: async files => {
+        events.push({ ask: [...files] });
+        return new Set();
       },
       apply: true,
-      say: line => said.push(line),
+      say: () => {},
       now: NOW,
     });
 
     expect(code).toBe(0);
     expect(bucket.files.size).toBe(0);
-    // One read for the listing, and one per batch of removals.
-    expect(reads).toBeLessThanOrEqual(1 + Math.ceil(120 / 50));
+    const asks = events.filter(event => "ask" in event);
+    expect(asks).toHaveLength(Math.ceil(120 / 50));
+    // Each file goes after the ask that named it, and before the next ask.
+    let asked = new Set<string>();
+    for (const event of events) {
+      if ("ask" in event) asked = new Set(event.ask);
+      else expect(asked.has(event.remove)).toBe(true);
+    }
+  });
+
+  // An adapter can list a file by a signed URL.
+  it("prints the files it lists and removes without their URLs' secrets", async () => {
+    const bucket = new Bucket("vercel-blob");
+    const signed =
+      "https://abc.public.blob.vercel-storage.com/media/thumb_x.png?token=token-secret";
+    bucket.put({ path: signed, lastModified: TWO_HOURS_AGO });
+    const said: string[] = [];
+
+    await mediaOrphans({
+      storage: bucket,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => refs(),
+      referencedNow: async () => new Set(),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    const text = said.join("\n");
+    expect(text).toContain(
+      "https://abc.public.blob.vercel-storage.com/media/thumb_x.png"
+    );
+    expect(text).not.toMatch(/secret/);
+  });
+
+  // A listing can name a file by a signed URL, which a record names
+  // without its query: the same file.
+  it("keeps a referenced file the storage lists by a signed URL", async () => {
+    const bucket = new Bucket("vercel-blob");
+    const url = "https://abc.public.blob.vercel-storage.com/media/thumb_x.png";
+    bucket.put({ path: `${url}?token=t1`, lastModified: TWO_HOURS_AGO });
+    const said: string[] = [];
+
+    await mediaOrphans({
+      storage: bucket,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => refs(url),
+      referencedNow: askedOf(async () => refs(url)),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(bucket.files.size).toBe(1);
+    expect(said.join("\n")).not.toMatch(/Removed/);
+  });
+
+  // A time the storage could not read is no time: the file may belong to an
+  // upload still in progress.
+  it("leaves a file whose stored time is not a date", async () => {
+    const layout = inBucket("s3");
+    (layout.storage as Bucket).put({
+      path: layout.orphan,
+      lastModified: new Date(Number.NaN),
+    });
+
+    const { said } = await run(layout, true);
+
+    expect(await layout.stored()).toContain(layout.orphan);
+    expect(said).not.toContain(`Removed ${layout.orphan}`);
+  });
+
+  // What the storage said can quote a signed URL.
+  it("names a failed removal without the secrets in the storage's error", async () => {
+    const layout = inBucket("s3");
+    (layout.storage as Bucket).delete = async () => {
+      throw new Error(
+        "refused https://bucket.example/x.png?X-Amz-Signature=signed-secret"
+      );
+    };
+
+    const { code, said } = await run(layout, true);
+
+    expect(code).toBe(1);
+    expect(said).toContain(`Could not remove ${layout.orphan}`);
+    expect(said).toContain("https://bucket.example/x.png");
+    expect(said).not.toMatch(/secret/);
   });
 
   // Between the listing and the removal an item can come to refer to it.
