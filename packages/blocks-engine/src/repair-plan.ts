@@ -25,10 +25,10 @@ import {
 } from "./lock-breaks";
 import { placementVerdict, type PlacementTarget } from "./nesting";
 import { isPlainRecord } from "./plain-record";
-import { boundedOwnKeys, ownEntry } from "./safe-record";
 import { contentPropsOf, designChanges, withStartingDesign } from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
 import { newId } from "./tree";
+import { walkNodeForest } from "./validation";
 
 /** A locked slot, by the block holding it. */
 export interface SlotPlace {
@@ -119,7 +119,8 @@ export function planRepair(
   sources: LockSources,
   rules: readonly RepairRule[] = [lockRepairRule]
 ): RepairPlan {
-  if (!withinLimits(document, sources.limits ?? DEFAULT_LIMITS)) {
+  const limits = sources.limits ?? DEFAULT_LIMITS;
+  if (!withinLimits(document, limits)) {
     return {
       steps: [],
       result: document,
@@ -132,6 +133,16 @@ export function planRepair(
     const applied = rule.apply(result, { sources });
     result = applied.document;
     steps.push(...applied.steps);
+  }
+  // Starting blocks a repair adds can take a document past its limits, and a
+  // result a save would refuse is no repair: nothing is planned then, and the
+  // breaks are named as before.
+  if (!withinLimits(result, limits)) {
+    return {
+      steps: [],
+      result: document,
+      remaining: lockBreaksIn(document, sources),
+    };
   }
   return { steps, result, remaining: lockBreaksIn(result, sources) };
 }
@@ -288,6 +299,7 @@ function refillSlot(
   if (!placeable(extras, outermost, sources)) return [];
   const place = { holderId: found.holderId, slot: found.slot };
   const steps: RepairStep[] = [];
+  const moves: RepairStep[] = [];
 
   const filled = starting.map((start, k) => {
     const index = matched[k];
@@ -324,7 +336,7 @@ function refillSlot(
   // Each after the one before it, so the steps in order give this order.
   let after = outermost.node.id;
   for (const extra of extras) {
-    steps.push({
+    moves.push({
       kind: "move",
       nodeId: extra.id,
       type: extra.type,
@@ -333,7 +345,10 @@ function refillSlot(
     });
     after = extra.id;
   }
-  return steps;
+  // The moves first: once the blocks the slot may not hold are out, each add's
+  // index and the reorder's order name only what the slot then holds, so the
+  // steps applied in order give the result.
+  return [...moves, ...steps];
 }
 
 /** Whether every block may sit beside `at`, by the site's nesting rules. */
@@ -400,45 +415,34 @@ interface Place {
   readonly slot: string | undefined;
 }
 
-/** A list of siblings, and the block and slot holding it. */
-type SiblingList = Omit<Place, "node">;
-
 /**
- * Every node of the document by id, with where it sits: breadth-first and
- * iterative, and bounded by the document's node cap, so a document too large
- * or too deep to store is indexed as far as the cap and no further.
+ * Every node of the document by id, with where it sits, read off
+ * validation's own walk (`walkNodeForest`), so the repair finds every block
+ * `lockBreaksIn` reports, under the same bounds.
  */
 function placesOf(
   document: BlockDocument,
   maxNodes: number
 ): Map<string, Place> {
   const places = new Map<string, Place>();
-  const lists: SiblingList[] = [
-    { siblings: document.nodes, parent: undefined, slot: undefined },
-  ];
-  for (let head = 0; head < lists.length && places.size < maxNodes; head++) {
-    const at = lists[head];
-    for (const node of at.siblings) {
-      if (places.size >= maxNodes) break;
-      if (!isPlainRecord(node) || typeof node.id !== "string") continue;
-      places.set(node.id, { node, ...at });
-      lists.push(...slotListsOf(node, maxNodes));
+  walkNodeForest(
+    document.nodes,
+    maxNodes,
+    { definitions: undefined, stored: undefined },
+    at => {
+      const node: unknown = at.node;
+      if (isPlainRecord(node) && typeof node.id === "string") {
+        places.set(node.id, {
+          node: at.node,
+          siblings: at.siblings as BlockNode[],
+          parent: at.parent,
+          slot: at.slot,
+        });
+      }
+      return false;
     }
-  }
+  );
   return places;
-}
-
-/** A node's slots, each as a list of siblings it holds. */
-function slotListsOf(node: BlockNode, maxNodes: number): SiblingList[] {
-  if (!isPlainRecord(node.slots)) return [];
-  const lists: SiblingList[] = [];
-  for (const slot of boundedOwnKeys(node.slots, maxNodes) ?? []) {
-    const children = ownEntry(node.slots, slot);
-    if (Array.isArray(children)) {
-      lists.push({ siblings: children, parent: node, slot });
-    }
-  }
-  return lists;
 }
 
 /**

@@ -340,8 +340,10 @@ function copyOrRemove(
   from: Record<string, unknown>,
   key: string
 ): void {
+  // A copy, so two blocks put back from one starting block share no value
+  // an edit to one of them could change in both.
   if (from[key] === undefined) delete into[key];
-  else into[key] = from[key];
+  else into[key] = structuredClone(from[key]);
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {

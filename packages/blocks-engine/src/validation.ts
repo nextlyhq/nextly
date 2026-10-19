@@ -719,6 +719,14 @@ export interface QueuedNode {
    * down the queue for the reason `lock` is.
    */
   counterparts: readonly Readonly<Record<string, unknown>>[];
+  /**
+   * Where the node is stored: the list holding it, and the container and slot
+   * that list belongs to (none at the top level). Read by a walk that moves
+   * nodes, the repair planner, so it finds them where validation does.
+   */
+  siblings: unknown[];
+  parent: BlockNode | undefined;
+  slot: string | undefined;
 }
 
 /**
@@ -796,6 +804,9 @@ export function walkNodeForest(
       // A top-level node sits in no slot, so no lock reaches it.
       lock: undefined,
       counterparts: counterpartsOf(nodes[i], undefined, stored),
+      siblings: nodes,
+      parent: undefined,
+      slot: undefined,
     });
   }
   for (let i = 0; i < queue.length && i < maxNodes; i++) {
@@ -879,6 +890,9 @@ function enqueueChildren(
           },
           stored
         ),
+        siblings: children,
+        parent: node,
+        slot,
       });
     }
   }

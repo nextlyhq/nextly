@@ -51,7 +51,13 @@ import type {
   ResolvedComposition,
 } from "./resolve-instances";
 import { boundedOwnKeys, ownEntry } from "./safe-record";
-import { slotLockBreaks, slotLockOf, type ActiveSlotLock } from "./slot-lock";
+import {
+  slotLockBreaks,
+  slotLockOf,
+  typeOfChild,
+  type ActiveSlotLock,
+  type LockBreak,
+} from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
 import {
   counterpartsOf,
@@ -102,6 +108,14 @@ export interface ComposedLockBreak {
   readonly childType?: string;
   /** For a `"contentOnly"` break, what about it changed; empty otherwise. */
   readonly changes: readonly string[];
+  /**
+   * For a membership break, the type of each block the slot holds in the
+   * composed tree, in order, as far as the node cap, and how many it holds;
+   * empty and 0 otherwise. What tells a further change to a slot already
+   * broken from leaving it as it was.
+   */
+  readonly held: readonly (string | undefined)[];
+  readonly heldCount: number;
 }
 
 /** What the judgement is measured against. */
@@ -339,14 +353,7 @@ function reportLockBreaks(
     visit.counterparts
   );
   for (const found of breaks) {
-    const lockBreak: ComposedLockBreak = {
-      holderId: node.id,
-      holderType: node.type,
-      slot: found.slot,
-      lock: found.kind === "membership" ? found.lock : "contentOnly",
-      ...(found.kind === "content" ? { childType: found.childType } : {}),
-      changes: found.kind === "content" ? found.changes : [],
-    };
+    const lockBreak = composedBreakOf(node, found, judge.limits.maxNodes);
     judge.report(
       found.kind === "membership"
         ? "locked-slot-altered"
@@ -363,6 +370,38 @@ function reportLockBreaks(
       }
     );
   }
+}
+
+/**
+ * A break in the composed tree as a fault carries it. The blocks a slot holds
+ * are read as far as the node cap, beside how many it holds.
+ */
+function composedBreakOf(
+  node: ResolvedBlockNode,
+  found: LockBreak,
+  maxNodes: number
+): ComposedLockBreak {
+  if (found.kind === "content") {
+    return {
+      holderId: node.id,
+      holderType: node.type,
+      slot: found.slot,
+      lock: "contentOnly",
+      childType: found.childType,
+      changes: found.changes,
+      held: [],
+      heldCount: 0,
+    };
+  }
+  return {
+    holderId: node.id,
+    holderType: node.type,
+    slot: found.slot,
+    lock: found.lock,
+    changes: [],
+    held: found.held.slice(0, maxNodes).map(typeOfChild),
+    heldCount: found.held.length,
+  };
 }
 
 /** Queue a node's slot children, each with where it sits. */

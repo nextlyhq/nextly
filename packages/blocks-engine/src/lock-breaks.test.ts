@@ -337,6 +337,16 @@ describe("lockRefusal", () => {
     expect(lockRefusal(before, swapped, sources())).toBeDefined();
   });
 
+  it("reads a slot's blocks only as far as the node cap", () => {
+    const row = placed("acme/fixed-row", "row");
+    for (let i = 0; i < 50; i += 1)
+      row.slots!.items!.push(placed("acme/divider"));
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 3 };
+    const [found] = lockBreaksIn(page(row), { ...sources(), limits });
+    expect(found!.held.length).toBeLessThanOrEqual(3);
+    expect(found!.heldCount).toBe(52);
+  });
+
   it("allows reordering an already broken slot locked insert, whose order is the author's", () => {
     const row = placed("acme/loose-row", "row");
     row.slots!.items!.push(placed("acme/divider"));

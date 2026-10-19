@@ -417,6 +417,8 @@ describe("what a lock fault says about the break, for an editor to word", () => 
         lock: "contentOnly",
         childType: "acme/headline",
         changes: ['prop "align"'],
+        held: [],
+        heldCount: 0,
       },
     ]);
     // The same placement composed again names the same holder, so a break
@@ -444,7 +446,24 @@ describe("what a lock fault says about the break, for an editor to word", () => 
         slot: "items",
         lock: "all",
         changes: [],
+        held: ["acme/headline", "acme/headline"],
+        heldCount: 2,
       },
     ]);
+  });
+
+  it("tells a slot already broken from the same slot given another block", () => {
+    const giving = (count: number) =>
+      judge(
+        placement({
+          slots: {
+            extra: Array.from({ length: count }, () =>
+              makeNode("acme/headline", 1, {})
+            ),
+          },
+        })
+      )[0]!.lock!;
+    expect(giving(3).heldCount).toBe(3);
+    expect(giving(3)).not.toEqual(giving(2));
   });
 });

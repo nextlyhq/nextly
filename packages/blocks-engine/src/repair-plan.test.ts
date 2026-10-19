@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DOCUMENT_FORMAT_VERSION } from "./document";
 import type { BlockDocument, BlockNode } from "./document";
+import { DEFAULT_LIMITS } from "./limits";
 import { lockBreaksIn } from "./lock-breaks";
 import { lockRepairRule, planRepair, type RepairRule } from "./repair-plan";
 import {
@@ -74,6 +75,23 @@ beforeEach(() => {
           items: {
             defaultBlock: [{ type: "acme/headline" }, { type: "acme/divider" }],
             lock: "insert",
+          },
+        },
+      },
+      // An object-valued design prop, two of them in a contentOnly slot.
+      {
+        ...base,
+        name: "acme/framed",
+        props: { frame: { type: "object" } },
+        defaultProps: { frame: { width: 1 } },
+      },
+      {
+        ...base,
+        name: "acme/framed-pair",
+        slots: {
+          body: {
+            defaultBlock: [{ type: "acme/framed" }, { type: "acme/framed" }],
+            lock: "contentOnly",
           },
         },
       },
@@ -375,6 +393,56 @@ describe("planRepair", () => {
     const plan = planRepair(page(top), sources());
     expect(plan.steps).toEqual([]);
     expect(plan.result.nodes[0]).toBe(top);
+  });
+
+  it("finds a holder beneath a node storing more slot names than the node cap", () => {
+    // Four nodes, within a cap of four, but the card stores five slot names.
+    // The repair finds the row where validation's walk does.
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.reverse();
+    const card = placed("acme/card", "card");
+    card.slots = { a: [], b: [], c: [], d: [], body: [row] };
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 4 };
+    const plan = planRepair(page(card), { ...sources(), limits });
+    expect(plan.steps.map(step => step.kind)).toEqual(["reorder"]);
+    expect(plan.remaining).toEqual([]);
+  });
+
+  it("plans nothing when the blocks it would add take the page past its limits", () => {
+    // One row missing both its starting blocks: within a cap of two nodes as
+    // it is, three once repaired, which a save would refuse.
+    const row = placed("acme/fixed-row", "row");
+    delete row.slots;
+    const limits = { ...DEFAULT_LIMITS, maxNodes: 2 };
+    const plan = planRepair(page(row), { ...sources(), limits });
+    expect(plan.steps).toEqual([]);
+    expect(plan.remaining).not.toEqual([]);
+  });
+
+  it("lists a slot's moves before its reorder, so the steps applied in order give the result", () => {
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.reverse();
+    row.slots!.items!.push({ ...placed("acme/divider"), id: "extra" });
+    const plan = repaired(page(row));
+    expect(plan.steps.map(step => step.kind)).toEqual(["move", "reorder"]);
+  });
+
+  it("gives each block it puts back a design value of its own", () => {
+    // Two holders of one type, each child reset from the starting blocks the
+    // plan expands once for that type: an edit to one must not change the
+    // other.
+    const pairs = [
+      placed("acme/framed-pair", "a"),
+      placed("acme/framed-pair", "b"),
+    ];
+    for (const pair of pairs) {
+      for (const child of pair.slots!.body!) child.props.frame = { width: 9 };
+    }
+    const plan = repaired(page(...pairs));
+    const first = plan.result.nodes[0]!.slots!.body![0]!;
+    const second = plan.result.nodes[1]!.slots!.body![0]!;
+    expect(first.props.frame).toEqual(second.props.frame);
+    expect(first.props.frame).not.toBe(second.props.frame);
   });
 
   it("repairs several breaks in one plan", () => {

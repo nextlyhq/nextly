@@ -59,10 +59,13 @@ export interface LocatedLockBreak {
   /** For a membership break, the block types the slot starts with. */
   readonly starting: readonly string[];
   /**
-   * For a membership break, the type of each block the slot holds, in order;
-   * undefined for a block whose type cannot be read. Empty otherwise.
+   * For a membership break, the type of each block the slot holds, in order,
+   * as far as the document's node cap; undefined for a block whose type
+   * cannot be read. Empty otherwise.
    */
   readonly held: readonly (string | undefined)[];
+  /** For a membership break, how many blocks the slot holds; 0 otherwise. */
+  readonly heldCount: number;
   /** For a `"contentOnly"` break, the child and what about it changed. */
   readonly index?: number;
   readonly childType?: string;
@@ -99,7 +102,9 @@ export function lockBreaksIn(
         startingChildren,
         visit.counterparts
       );
-      for (const lockBreak of breaks) found.push(locate(visit, lockBreak));
+      for (const lockBreak of breaks) {
+        found.push(locate(visit, lockBreak, maxNodes));
+      }
       // Gating decides nothing a lock does.
       return false;
     }
@@ -108,7 +113,11 @@ export function lockBreaksIn(
 }
 
 /** A break as the walk found it, placed where a save reports it. */
-function locate(visit: QueuedNode, found: LockBreak): LocatedLockBreak {
+function locate(
+  visit: QueuedNode,
+  found: LockBreak,
+  maxNodes: number
+): LocatedLockBreak {
   const node = visit.node as unknown as Record<string, unknown>;
   const slotPath = pointer(pointer(visit.path, "slots"), found.slot);
   const holder = {
@@ -125,7 +134,10 @@ function locate(visit: QueuedNode, found: LockBreak): LocatedLockBreak {
       // pointer has to resolve against the document it reports on.
       path: found.stored ? slotPath : visit.path,
       starting: found.starting,
-      held: found.held.map(typeOfChild),
+      // Read as far as the node cap: a slot holding more is a document no save
+      // stores, and its count still tells it from one that holds fewer.
+      held: found.held.slice(0, maxNodes).map(typeOfChild),
+      heldCount: found.held.length,
       changes: [],
     };
   }
@@ -136,6 +148,7 @@ function locate(visit: QueuedNode, found: LockBreak): LocatedLockBreak {
     path: pointer(slotPath, found.index),
     starting: [],
     held: [],
+    heldCount: 0,
     index: found.index,
     childType: found.childType,
     changes: found.changes,
@@ -179,6 +192,7 @@ function breakIdentity(found: LocatedLockBreak): string {
     found.holderId,
     found.slot,
     found.index ?? "",
+    found.heldCount,
     held.join("\u0002"),
   ].join("\u0000");
 }
