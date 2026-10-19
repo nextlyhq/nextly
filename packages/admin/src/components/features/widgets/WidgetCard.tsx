@@ -136,6 +136,12 @@ export interface WidgetCardProps {
   error?: string | null;
   /** When this widget's data landed, for the footer's freshness line. */
   updatedAt?: Date | null;
+  /**
+   * The card asked for data, so a freshness line will come once its answer has a time. Until it
+   * does, the footer holds the line's place: a card can settle before its time is known (its
+   * request in a batch that landed before the others), and the line arriving then would grow it.
+   */
+  awaitsFreshness?: boolean;
   /** At most ONE. A footer is not a row of buttons. */
   link?: { label: string; href: string };
   /**
@@ -297,7 +303,12 @@ export function WidgetCard(props: WidgetCardProps) {
             inert={view.customizing}
             // A loading card holds its freshness line's place: the line arrives with the
             // answer, and a footer that appeared then would push everything below the card down.
-            holdFreshness={view.shown === "loading"}
+            holdFreshness={
+              view.shown === "loading" ||
+              (props.awaitsFreshness === true &&
+                view.freshness === null &&
+                (view.shown === "ready" || view.shown === "empty"))
+            }
           />
         </Card>
       </AnswerTierContext.Provider>

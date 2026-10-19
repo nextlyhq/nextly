@@ -312,6 +312,8 @@ export function WidgetRenderer({
         // never replaced, so no `error` is passed and the footer's `settled`
         // gate never sees one.
         updatedAt={slot?.ok === false ? null : updatedAt}
+        // A refused slot never gets a time, so its card holds no line for one.
+        awaitsFreshness={definition.query !== undefined && slot?.ok !== false}
         isLoading={isFetching}
       >
         <PluginSlot path={definition.component} props={componentProps} />
@@ -321,7 +323,11 @@ export function WidgetRenderer({
 
   const drawn = cardForOutcome(outcome, { updatedAt, isFetching, onRetry });
   return (
-    <WidgetCard {...shared} {...drawn.props}>
+    <WidgetCard
+      {...shared}
+      {...drawn.props}
+      awaitsFreshness={definition.query !== undefined}
+    >
       {drawn.body}
     </WidgetCard>
   );

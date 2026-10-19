@@ -96,6 +96,32 @@ describe("the Collections card's tiles", () => {
     expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
 
+  it("draws no placeholder tile for a collection kept off the dashboard", () => {
+    // 🔴 Drawn from the list first, a hidden collection showed until its count never came.
+    given({
+      list: [
+        ...LIST,
+        { name: "audit", label: "Audit", admin: { hidden: true } } as never,
+      ],
+    });
+    expect(tileLabels()).toEqual(["Authors", "Posts", "Tags"]);
+  });
+
+  it("names a placeholder tile with the plural, as its count will", () => {
+    // 🔴 The list's `label` and the count's plural differ, so the tile's text changed (and
+    // could rewrap) when its count landed.
+    given({
+      list: [
+        {
+          name: "posts",
+          label: "Post",
+          labels: { singular: "Post", plural: "Posts" },
+        } as never,
+      ],
+    });
+    expect(tileLabels()).toEqual(["Posts"]);
+  });
+
   it("asks for the collections list the sidebar asks for, so the two share one answer", () => {
     // 🔴 It asked with arguments of its own, a second request the shell had not made, so the
     // list was never there when the card was drawn.

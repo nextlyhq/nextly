@@ -206,6 +206,19 @@ describe("the footer's freshness line", () => {
     expect(held).toHaveAttribute("aria-hidden", "true");
   });
 
+  it("is still held by a card that has settled before its time is known", () => {
+    // 🔴 A card whose answer came in an early batch settled with no time yet; the held line
+    // went with the loading state, and the footer grew the card once the time arrived.
+    render(
+      <WidgetCard title="Recent" awaitsFreshness>
+        body
+      </WidgetCard>
+    );
+    expect(screen.getByTestId("widget-card-freshness-held")).toHaveClass(
+      "invisible"
+    );
+  });
+
   it("gives way to the real line once the answer lands, and is never drawn beside it", () => {
     render(
       <WidgetCard title="Recent" updatedAt={new Date("2026-10-19T00:00:00Z")}>

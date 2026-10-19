@@ -20,6 +20,8 @@ import type { ApiCollection } from "@admin/types/entities";
 import { CardFigure } from "../widgets/frame/figure";
 import { CardError, CardSkeleton } from "../widgets/frame/states";
 
+import { keptOffDashboard } from "./kept-off-dashboard";
+
 /**
  * One tile: a collection and its count, or `null` while the counts are on their way. The tile is
  * drawn either way, so the counts landing fill tiles already in place rather than inserting them.
@@ -68,11 +70,15 @@ function collectionTiles(
   if (list === undefined && listPending) return undefined;
   if (list === undefined || list.length === 0) return counts?.slice();
   const counted = new Map(counts?.map(count => [count.slug, count]));
-  return list.flatMap(collection => {
-    const count = counted.get(collection.name);
-    if (counts !== undefined && count === undefined) return [];
-    return [tileOf(collection, count)];
-  });
+  // Kept off the dashboard by the admin's one rule for it, as the counts already are: drawn
+  // first, a hidden collection's tile would show until the counts took it away again.
+  return list
+    .filter(collection => !keptOffDashboard(collection))
+    .flatMap(collection => {
+      const count = counted.get(collection.name);
+      if (counts !== undefined && count === undefined) return [];
+      return [tileOf(collection, count)];
+    });
 }
 
 /**
@@ -86,7 +92,9 @@ function tileOf(
   if (count !== undefined) return count;
   return {
     slug: collection.name,
-    label: collection.label,
+    // The plural, as the count names it and the sidebar does, so the tile's text does not change
+    // (and rewrap) when its count lands.
+    label: collection.labels?.plural ?? collection.label,
     group: collection.admin?.group ?? null,
     count: null,
   };
