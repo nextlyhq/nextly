@@ -94,6 +94,14 @@ export interface Release {
    * the member count, which can change.
    */
   kind?: ReleaseKind;
+  /**
+   * How many documents it holds, and how many it puts live and takes down.
+   *
+   * Sent on the release list only, read for the whole page at once. Optional
+   * because a release read anywhere else does not carry it, and a screen has
+   * to say "unknown" rather than read an absent count as none.
+   */
+  memberCounts?: ReleaseMemberCounts;
   publishedAt: string | null;
   createdBy: string | null;
   createdAt: string;
@@ -233,6 +241,15 @@ export interface ReleaseListParams {
   containing?: ReleaseDocumentRef;
 }
 
+/** How many documents a release holds, and what it does with them. */
+export interface ReleaseMemberCounts {
+  total: number;
+  /** Documents the release puts live. */
+  goLive: number;
+  /** Documents the release takes down. */
+  comeDown: number;
+}
+
 /**
  * One problem the checks found with one document of a release.
  *
@@ -262,3 +279,14 @@ export interface ReleaseReadiness {
   hard: ReleaseReadinessFinding[];
   soft: ReleaseReadinessFinding[];
 }
+
+/**
+ * One release's readiness, as the batch read answers it for a page.
+ *
+ * `checked: false` for a release holding more documents than a release may
+ * now hold: the batch leaves those to the release's own page, which checks
+ * them in full.
+ */
+export type ReleaseReadinessEntry =
+  | (ReleaseReadiness & { checked: true })
+  | { releaseId: string; checked: false; reason: "over-member-limit" };

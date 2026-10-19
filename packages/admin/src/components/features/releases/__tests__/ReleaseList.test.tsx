@@ -17,7 +17,6 @@ import { render, screen, within } from "@admin/__tests__/utils";
 const mocks = vi.hoisted(() => ({
   listPage: vi.fn(),
   tabCounts: vi.fn(),
-  members: vi.fn(),
   readiness: vi.fn(),
   navigateTo: vi.fn(),
   setSearchParams: vi.fn(),
@@ -36,9 +35,7 @@ const idleMutation = {
 vi.mock("@admin/hooks/queries/useReleases", () => ({
   useReleaseListPage: (...args: unknown[]) => mocks.listPage(...args),
   useReleaseTabCounts: (...args: unknown[]) => mocks.tabCounts(...args),
-  useReleaseMembers: (id: string) => mocks.members(id),
-  useReleaseReadiness: (id: string, enabled: boolean) =>
-    mocks.readiness(id, enabled),
+  useReleasesReadiness: (ids: readonly string[]) => mocks.readiness(ids),
   useReleaseBlockers: () => ({ data: { items: [] }, isFetching: false }),
   useScheduleRelease: () => idleMutation,
   useCancelRelease: () => idleMutation,
@@ -99,6 +96,7 @@ function release(over: Record<string, unknown> = {}) {
     createdAt: "2026-10-01T09:00:00.000Z",
     updatedAt: "2026-10-01T09:00:00.000Z",
     can: NO_CAPABILITIES,
+    memberCounts: { total: 6, goLive: 5, comeDown: 1 },
     ...over,
   };
 }
@@ -122,15 +120,23 @@ function counts(
   };
 }
 
-function members(actions: Array<"publish" | "unpublish">) {
-  return {
-    isPending: false,
+/** The page's readiness read, answering each id asked with these problems. */
+function readinessAnswering(
+  entry: (releaseId: string) => Record<string, unknown>
+) {
+  return (ids: readonly string[]) => ({
     isError: false,
-    data: {
-      items: actions.map((action, i) => ({ id: `m${i + 1}`, action })),
-    },
-  };
+    data: { items: ids.map(entry) },
+  });
 }
+
+const ONE_DOCUMENT_TO_FIX = (releaseId: string) => ({
+  releaseId,
+  checked: true,
+  // One document with two problems is one document to fix.
+  hard: [{ memberId: "m2" }, { memberId: "m2" }],
+  soft: [],
+});
 
 /** The desktop table; the narrow card view renders the same rows beside it. */
 function table() {
@@ -145,21 +151,7 @@ beforeEach(() => {
   mocks.tabCounts.mockReturnValue(
     counts({ upcoming: 3, attention: 1, drafts: 2, done: 12 })
   );
-  mocks.members.mockReturnValue(
-    members([
-      "publish",
-      "publish",
-      "publish",
-      "publish",
-      "publish",
-      "unpublish",
-    ])
-  );
-  mocks.readiness.mockReturnValue({
-    isPending: false,
-    isError: false,
-    data: { hard: [{ memberId: "m2" }, { memberId: "m2" }], soft: [] },
-  });
+  mocks.readiness.mockImplementation(readinessAnswering(ONE_DOCUMENT_TO_FIX));
 });
 
 describe("the release list's tabs", () => {
@@ -183,7 +175,7 @@ describe("the release list's tabs", () => {
     expect(mocks.listPage).toHaveBeenLastCalledWith({
       tab: "upcoming",
       page: 1,
-      limit: 20,
+      limit: 25,
     });
   });
 
@@ -193,7 +185,7 @@ describe("the release list's tabs", () => {
     expect(mocks.listPage).toHaveBeenLastCalledWith({
       tab: "attention",
       page: 1,
-      limit: 20,
+      limit: 25,
       reason: "overdue",
     });
     expect(screen.getByText(/Showing only overdue releases/)).toBeTruthy();
@@ -205,7 +197,7 @@ describe("the release list's tabs", () => {
     expect(mocks.listPage).toHaveBeenLastCalledWith({
       tab: "drafts",
       page: 1,
-      limit: 20,
+      limit: 25,
     });
   });
 
@@ -257,12 +249,17 @@ describe("a release's row", () => {
   });
 
   it("describes a release that only takes documents down", () => {
-    mocks.members.mockReturnValue(members(["unpublish", "unpublish"]));
-    mocks.readiness.mockReturnValue({
-      isPending: false,
-      isError: false,
-      data: { hard: [], soft: [] },
-    });
+    mocks.listPage.mockReturnValue(
+      page([release({ memberCounts: { total: 2, goLive: 0, comeDown: 2 } })])
+    );
+    mocks.readiness.mockImplementation(
+      readinessAnswering(releaseId => ({
+        releaseId,
+        checked: true,
+        hard: [],
+        soft: [],
+      }))
+    );
     render(<ReleaseList />);
     expect(table().getByText(/come down/)).toBeTruthy();
     expect(table().getByText(/2 documents/)).toBeTruthy();
@@ -278,14 +275,37 @@ describe("a release's row", () => {
     expect(table().getByText("Single document")).toBeTruthy();
   });
 
-  it("sends the reader to an oversized release instead of checking it from the list", () => {
-    mocks.members.mockReturnValue(
-      members(Array.from({ length: 201 }, () => "publish" as const))
+  it("sends the reader to a release the page's read left unchecked", () => {
+    mocks.readiness.mockImplementation(
+      readinessAnswering(releaseId => ({
+        releaseId,
+        checked: false,
+        reason: "over-member-limit",
+      }))
     );
     render(<ReleaseList />);
     expect(table().getByText("Open to check")).toBeTruthy();
-    expect(mocks.readiness).toHaveBeenCalledWith("r1", false);
-    expect(mocks.readiness).not.toHaveBeenCalledWith("r1", true);
+  });
+
+  it("asks the readiness of the whole page in one read, for the rows with documents", () => {
+    mocks.listPage.mockReturnValue(
+      page([
+        release({ id: "r1" }),
+        release({
+          id: "r2",
+          title: "Empty one",
+          memberCounts: { total: 0, goLive: 0, comeDown: 0 },
+        }),
+        release({ id: "r3", title: "Third" }),
+      ])
+    );
+    render(<ReleaseList />);
+    // Every render asks the same one question; never one per row.
+    for (const [ids] of mocks.readiness.mock.calls) {
+      expect(ids).toEqual(["r1", "r3"]);
+    }
+    expect(table().getAllByText("5 of 6 ready")).toHaveLength(2);
+    expect(table().getByText("No documents yet")).toBeTruthy();
   });
 
   it("does not ask a finished release whether it is ready", () => {
@@ -300,7 +320,7 @@ describe("a release's row", () => {
     );
     render(<ReleaseList />);
     expect(table().getByText(/5 went live, 1 came down/)).toBeTruthy();
-    expect(mocks.readiness).not.toHaveBeenCalledWith("r1", true);
+    expect(mocks.readiness).toHaveBeenLastCalledWith([]);
   });
 
   it("names another person's release from the users list", () => {
@@ -435,7 +455,7 @@ describe("the single-document filter", () => {
     expect(mocks.listPage).toHaveBeenLastCalledWith({
       tab: "upcoming",
       page: 1,
-      limit: 20,
+      limit: 25,
       kind: "release",
     });
     expect(mocks.tabCounts).toHaveBeenLastCalledWith({

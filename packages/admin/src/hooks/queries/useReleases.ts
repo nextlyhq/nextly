@@ -37,7 +37,7 @@ import {
   fetchRelease,
   fetchReleaseBlockers,
   fetchReleaseMembers,
-  fetchReleaseReadiness,
+  fetchReleasesReadiness,
   fetchReleases,
   publishReleaseNow,
   removeReleaseMember,
@@ -60,7 +60,8 @@ export const releaseKeys = {
   detail: (id: string) => ["releases", "detail", id] as const,
   members: (id: string) => ["releases", "members", id] as const,
   blockers: (id: string) => ["releases", "blockers", id] as const,
-  readiness: (id: string) => ["releases", "readiness", id] as const,
+  readiness: (ids: readonly string[]) =>
+    ["releases", "readiness", [...ids]] as const,
 };
 
 export function useReleases(params: ReleaseListParams = {}, enabled = true) {
@@ -158,18 +159,19 @@ export function useReleaseTabCounts(filters: {
 }
 
 /**
- * What the checks say about one release's documents now.
+ * What the checks say about each release on a page, in one request.
  *
- * Kept for half a minute, and not polled: a list holds a page of these, and
- * each one is worked out over every document its release holds. Its own key
- * rather than the blockers', because the schedule dialog's preflight must
- * never be answered from a cache, and this one may be.
+ * Keyed by the ids asked about, so a new page or tab asks again and the same
+ * page does not. Kept for half a minute and not polled: each answer is worked
+ * out over every document of every release named. Its own key rather than the
+ * blockers', because the schedule dialog's preflight must never be answered
+ * from a cache, and this may be.
  */
-export function useReleaseReadiness(id: string | undefined, enabled = true) {
+export function useReleasesReadiness(releaseIds: readonly string[]) {
   return useQuery({
-    queryKey: releaseKeys.readiness(id ?? ""),
-    queryFn: () => fetchReleaseReadiness(id as string),
-    enabled: enabled && Boolean(id),
+    queryKey: releaseKeys.readiness(releaseIds),
+    queryFn: () => fetchReleasesReadiness(releaseIds),
+    enabled: releaseIds.length > 0,
     staleTime: 30_000,
   });
 }

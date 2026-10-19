@@ -19,7 +19,7 @@ import type {
   ReleaseBlocker,
   ReleaseListParams,
   ReleaseMember,
-  ReleaseReadiness,
+  ReleaseReadinessEntry,
   ScheduleReleasePayload,
 } from "../types/releases";
 
@@ -131,16 +131,26 @@ export const fetchReleaseBlockers = (
 ): Promise<BlockerListResponse> =>
   fetcher<BlockerListResponse>(`/releases/${releaseId}/blockers`, {}, true);
 
+/** The batch readiness read's envelope. */
+export interface ReleaseReadinessListResponse {
+  items: ReleaseReadinessEntry[];
+  meta: { total: number };
+}
+
 /**
- * Every problem the checks find with a release's documents now.
+ * What the checks say about each of a page of releases, in one request.
  *
- * Worked out on each call, over every document the release holds, so it is
- * asked only where it is shown.
+ * The server checks every document of each release named, so this is asked
+ * only for the releases a screen is showing, and never for more than a page.
  */
-export const fetchReleaseReadiness = (
-  releaseId: string
-): Promise<ReleaseReadiness> =>
-  fetcher<ReleaseReadiness>(`/releases/${releaseId}/readiness`, {}, true);
+export const fetchReleasesReadiness = (
+  releaseIds: readonly string[]
+): Promise<ReleaseReadinessListResponse> =>
+  fetcher<ReleaseReadinessListResponse>(
+    `/releases/readiness?ids=${releaseIds.map(encodeURIComponent).join(",")}`,
+    {},
+    true
+  );
 
 export const createRelease = (
   payload: CreateReleasePayload

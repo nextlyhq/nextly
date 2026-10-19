@@ -7,7 +7,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  countMemberActions,
   describeDocuments,
   describeMemberActions,
   describeNeedFix,
@@ -76,55 +75,45 @@ describe("releaseWhenInstant", () => {
 
 describe("describeMemberActions", () => {
   it("says what goes live and what comes down, with agreement", () => {
-    expect(describeMemberActions({ publish: 5, unpublish: 1 }, "ahead")).toBe(
+    expect(describeMemberActions({ goLive: 5, comeDown: 1 }, "ahead")).toBe(
       "5 go live, 1 comes down"
     );
-    expect(describeMemberActions({ publish: 1, unpublish: 0 }, "ahead")).toBe(
+    expect(describeMemberActions({ goLive: 1, comeDown: 0 }, "ahead")).toBe(
       "1 goes live"
     );
   });
 
   it("describes a release that only takes documents down without mentioning going live", () => {
-    expect(describeMemberActions({ publish: 0, unpublish: 2 }, "ahead")).toBe(
+    expect(describeMemberActions({ goLive: 0, comeDown: 2 }, "ahead")).toBe(
       "2 come down"
     );
   });
 
   it("puts a release that ran in the past tense", () => {
-    expect(describeMemberActions({ publish: 3, unpublish: 1 }, "ran")).toBe(
+    expect(describeMemberActions({ goLive: 3, comeDown: 1 }, "ran")).toBe(
       "3 went live, 1 came down"
     );
-  });
-
-  it("counts members by their action", () => {
-    expect(
-      countMemberActions([
-        { action: "publish" },
-        { action: "unpublish" },
-        { action: "publish" },
-      ])
-    ).toEqual({ publish: 2, unpublish: 1 });
   });
 });
 
 describe("describeDocuments", () => {
   it("reads the action straight on from the count when every document does the same thing", () => {
-    expect(describeDocuments({ publish: 3, unpublish: 0 }, "ahead")).toEqual({
+    expect(describeDocuments({ goLive: 3, comeDown: 0 }, "ahead")).toEqual({
       count: "3 documents",
       tail: " go live",
     });
-    expect(describeDocuments({ publish: 1, unpublish: 0 }, "ahead")).toEqual({
+    expect(describeDocuments({ goLive: 1, comeDown: 0 }, "ahead")).toEqual({
       count: "1 document",
       tail: " goes live",
     });
-    expect(describeDocuments({ publish: 0, unpublish: 2 }, "ran")).toEqual({
+    expect(describeDocuments({ goLive: 0, comeDown: 2 }, "ran")).toEqual({
       count: "2 documents",
       tail: " came down",
     });
   });
 
   it("breaks a mixed release down", () => {
-    expect(describeDocuments({ publish: 5, unpublish: 1 }, "ahead")).toEqual({
+    expect(describeDocuments({ goLive: 5, comeDown: 1 }, "ahead")).toEqual({
       count: "6 documents",
       tail: " · 5 go live, 1 comes down",
     });

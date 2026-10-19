@@ -49,9 +49,11 @@ import {
   type ListEmpty,
   type ListSlots,
 } from "@admin/components/ui/table/list-view";
+import { PAGINATION } from "@admin/constants/pagination";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
   useReleaseListPage,
+  useReleasesReadiness,
   useReleaseTabCounts,
 } from "@admin/hooks/queries/useReleases";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
@@ -73,6 +75,7 @@ import {
 import { readerZone } from "./release-timezone";
 import {
   ReleaseDocumentsCell,
+  type ReleaseRowReadiness,
   ReleaseOwnerCell,
   ReleaseStatusBadge,
   ReleaseTitleCell,
@@ -83,16 +86,15 @@ import {
   type ReleaseRowAction,
 } from "./ReleaseRowActionDialog";
 import { ScheduleReleaseDialog } from "./ScheduleReleaseDialog";
+import { useTabStripOverflow } from "./useTabStripOverflow";
 
 /**
- * Rows per page, and the sizes offered.
- *
- * Twenty to start, as the list was designed: enough to see a busy week of
- * launches without scrolling past the pager. The choices bracket it rather
- * than the 10/25/50 most tables offer, which has no 20 in it.
+ * Rows per page: the sizes every admin table offers, starting at the middle
+ * one, which holds a busy month of launches without scrolling past the pager.
+ * The largest is also the most releases one readiness read answers for.
  */
-const RELEASE_PAGE_SIZE = 20;
-const RELEASE_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+const RELEASE_PAGE_SIZE: number = PAGINATION.TABLE_PAGE_SIZE_OPTIONS[1];
+const RELEASE_PAGE_SIZE_OPTIONS = PAGINATION.TABLE_PAGE_SIZE_OPTIONS;
 
 /** How often relative times ("in 3 minutes") are brought up to date. */
 const CLOCK_TICK_MS = 60_000;
@@ -194,7 +196,8 @@ function rowActionsFor(
 function releaseColumns(
   tab: ReleaseListTab,
   zone: string,
-  now: number
+  now: number,
+  readinessOf: (releaseId: string) => ReleaseRowReadiness
 ): NextlyColumn<Release>[] {
   return [
     {
@@ -213,7 +216,13 @@ function releaseColumns(
     {
       name: "documents",
       header: "Documents",
-      cell: ({ row }) => <ReleaseDocumentsCell release={row} tab={tab} />,
+      cell: ({ row }) => (
+        <ReleaseDocumentsCell
+          release={row}
+          tab={tab}
+          readiness={readinessOf(row.id)}
+        />
+      ),
     },
     {
       name: "state",
@@ -562,6 +571,40 @@ function ReleaseRowDialogs({
   );
 }
 
+/**
+ * What the checks say about each release on the page, from ONE read.
+ *
+ * Asked only for the rows that have something to check: a release with no
+ * documents has nothing to be ready, and in Done nothing is left to get
+ * ready. The answer is looked up per row by id.
+ */
+function usePageReadiness(
+  tab: ReleaseListTab,
+  rows: readonly Release[] | undefined
+): (releaseId: string) => ReleaseRowReadiness {
+  const ids = useMemo(
+    () =>
+      tab === "done"
+        ? []
+        : (rows ?? [])
+            .filter(row => (row.memberCounts?.total ?? 0) > 0)
+            .map(row => row.id),
+    [tab, rows]
+  );
+  const read = useReleasesReadiness(ids);
+  return useMemo(() => {
+    if (read.isError) return () => ({ status: "failed" });
+    if (read.data === undefined) return () => ({ status: "pending" });
+    const byId = new Map(
+      read.data.items.map(entry => [entry.releaseId, entry])
+    );
+    return (releaseId: string) => ({
+      status: "known",
+      entry: byId.get(releaseId),
+    });
+  }, [read.isError, read.data]);
+}
+
 export interface ReleaseListProps {
   /** Offered only to a caller who may assemble a release. */
   onCreate?: () => void;
@@ -579,12 +622,14 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
     ...(q.kind ? { kind: q.kind } : {}),
   });
 
+  const readiness = usePageReadiness(q.tab, list.data?.items);
   const zone = useMemo(() => readerZone(), []);
   const now = useMinuteClock();
   const columns = useMemo(
-    () => releaseColumns(q.tab, zone, now),
-    [q.tab, zone, now]
+    () => releaseColumns(q.tab, zone, now, readiness),
+    [q.tab, zone, now, readiness]
   );
+  const strip = useTabStripOverflow(q.tab);
 
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -663,21 +708,38 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
         value={q.tab}
         onValueChange={next => isListTab(next) && goToTab(next)}
       >
-        <TabsList
-          scrollable
-          aria-label="Releases by state"
-          className="justify-start"
-        >
-          {RELEASE_LIST_TABS.map(t => (
-            <TabsTrigger
-              key={t}
-              value={t}
-              aria-label={tabName(t, counts.counts[t])}
-            >
-              <TabLabel tab={t} count={counts.counts[t]} />
-            </TabsTrigger>
-          ))}
-        </TabsList>
+        <div ref={strip.ref} className="relative">
+          <TabsList
+            scrollable
+            aria-label="Releases by state"
+            className="justify-start"
+          >
+            {RELEASE_LIST_TABS.map(t => (
+              <TabsTrigger
+                key={t}
+                value={t}
+                aria-label={tabName(t, counts.counts[t])}
+              >
+                <TabLabel tab={t} count={counts.counts[t]} />
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          {/* A fade where tabs run past the edge, so a cut-off tab reads as
+              more to scroll to rather than as the end of the strip. Stops a
+              pixel short of the rail, which stays drawn the full width. */}
+          {strip.edges.start ? (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 bottom-px left-0 w-10 bg-gradient-to-r from-background to-transparent"
+            />
+          ) : null}
+          {strip.edges.end ? (
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 bottom-px right-0 w-10 bg-gradient-to-l from-background to-transparent"
+            />
+          ) : null}
+        </div>
         {/* One panel per tab for the tablist's own wiring; only the open
             tab's panel holds the list. */}
         {RELEASE_LIST_TABS.map(t => (

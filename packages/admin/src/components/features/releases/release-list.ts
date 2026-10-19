@@ -9,7 +9,7 @@
 import type {
   Release,
   ReleaseListTab,
-  ReleaseMember,
+  ReleaseMemberCounts,
   ReleaseReadiness,
 } from "@admin/types/releases";
 
@@ -119,22 +119,10 @@ export function releaseWhenInstant(
 }
 
 /** How many of a release's documents go live, and how many come down. */
-export interface ReleaseActionCounts {
-  publish: number;
-  unpublish: number;
-}
-
-export function countMemberActions(
-  members: ReadonlyArray<Pick<ReleaseMember, "action">>
-): ReleaseActionCounts {
-  let publish = 0;
-  let unpublish = 0;
-  for (const member of members) {
-    if (member.action === "unpublish") unpublish += 1;
-    else publish += 1;
-  }
-  return { publish, unpublish };
-}
+export type ReleaseActionCounts = Pick<
+  ReleaseMemberCounts,
+  "goLive" | "comeDown"
+>;
 
 /**
  * What a release does, in words: "5 go live, 1 comes down".
@@ -147,18 +135,18 @@ export function describeMemberActions(
   tense: "ahead" | "ran"
 ): string {
   const parts: string[] = [];
-  if (counts.publish > 0) {
+  if (counts.goLive > 0) {
     parts.push(
       tense === "ran"
-        ? `${counts.publish} went live`
-        : `${counts.publish} ${counts.publish === 1 ? "goes" : "go"} live`
+        ? `${counts.goLive} went live`
+        : `${counts.goLive} ${counts.goLive === 1 ? "goes" : "go"} live`
     );
   }
-  if (counts.unpublish > 0) {
+  if (counts.comeDown > 0) {
     parts.push(
       tense === "ran"
-        ? `${counts.unpublish} came down`
-        : `${counts.unpublish} ${counts.unpublish === 1 ? "comes" : "come"} down`
+        ? `${counts.comeDown} came down`
+        : `${counts.comeDown} ${counts.comeDown === 1 ? "comes" : "come"} down`
     );
   }
   return parts.join(", ");
@@ -182,19 +170,19 @@ export function describeDocuments(
   counts: ReleaseActionCounts,
   tense: "ahead" | "ran"
 ): { count: string; tail: string } {
-  const total = counts.publish + counts.unpublish;
+  const total = counts.goLive + counts.comeDown;
   const count = documentCount(total);
-  if (counts.publish > 0 && counts.unpublish > 0) {
+  if (counts.goLive > 0 && counts.comeDown > 0) {
     return { count, tail: ` · ${describeMemberActions(counts, tense)}` };
   }
   const one = total === 1;
-  if (counts.publish > 0) {
+  if (counts.goLive > 0) {
     return {
       count,
       tail: tense === "ran" ? " went live" : one ? " goes live" : " go live",
     };
   }
-  if (counts.unpublish > 0) {
+  if (counts.comeDown > 0) {
     return {
       count,
       tail: tense === "ran" ? " came down" : one ? " comes down" : " come down",

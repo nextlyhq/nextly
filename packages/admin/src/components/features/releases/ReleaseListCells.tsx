@@ -5,9 +5,9 @@
  *
  * Each one lays out what `release-list` and `release-time` say, so the wording
  * rules stay in functions a test can hold and these stay about arrangement.
- * The documents and owner cells ask for their own data: the list route returns
- * releases, not their documents or their owners' names, so a row fills in as
- * those answers arrive rather than holding the whole table back for them.
+ * The documents cell is handed what the list read for the whole page; the
+ * owner cell asks for the owner's name, which the list does not carry, and is
+ * answered from the users cache for every row that owner has.
  *
  * The shared table draws these cells twice: in its table, and in a card per
  * row on a narrow screen, where each value sits right-aligned beside its
@@ -18,8 +18,6 @@
  *
  * @module components/features/releases/ReleaseListCells
  */
-
-import type { RELEASE_MEMBER_LIMIT as SERVER_RELEASE_MEMBER_LIMIT } from "nextly/schemas";
 
 import {
   AlertCircle,
@@ -39,21 +37,20 @@ import {
   Progress,
   Skeleton,
 } from "@admin/components/ui";
-import {
-  useReleaseMembers,
-  useReleaseReadiness,
-} from "@admin/hooks/queries/useReleases";
 import { useUser } from "@admin/hooks/queries/useUsers";
 import { useCan } from "@admin/hooks/useCan";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { cn } from "@admin/lib/utils";
-import type { Release, ReleaseListTab } from "@admin/types/releases";
+import type {
+  Release,
+  ReleaseListTab,
+  ReleaseReadinessEntry,
+} from "@admin/types/releases";
 
 import {
   ownerIdToLookUp,
   releaseOwnerView,
   type ReleaseOwnerView,
-  countMemberActions,
   describeDocuments,
   describeNeedFix,
   describeReadiness,
@@ -63,15 +60,6 @@ import {
   type ReleaseRowStatus,
 } from "./release-list";
 import { releaseTimeSentence, releaseTimeText } from "./release-time";
-
-/**
- * The most documents a release holds, held to the server's own number.
- *
- * Typed as the server constant's literal type, so this file stops compiling
- * the day that number changes, without importing `nextly/schemas` at runtime
- * into a browser bundle for one integer.
- */
-const RELEASE_MEMBER_LIMIT: typeof SERVER_RELEASE_MEMBER_LIMIT = 200;
 
 const STATUS_ICON: Record<ReleaseRowStatus, typeof Clock> = {
   scheduled: Clock,
@@ -175,56 +163,50 @@ export function ReleaseWhenCell({
 }
 
 /**
+ * What the page's one readiness read says about one row.
+ *
+ * Handed in rather than asked for here: the list reads the readiness of the
+ * whole page in one request, and a cell that asked for its own would put a
+ * request per row back.
+ */
+export type ReleaseRowReadiness =
+  | { status: "pending" }
+  | { status: "failed" }
+  | { status: "known"; entry: ReleaseReadinessEntry | undefined };
+
+/**
  * How many documents a release holds, what it does with them, and, until it
  * has run, how many are ready.
  *
- * Readiness is asked only where it means something: a release that ran or was
- * cancelled has nothing left to get ready, and one holding more than a release
- * may now hold is a release made before the limit, whose check would be the
- * whole release's worth of reads for one row, so the row sends the reader to
- * its page instead.
+ * The counts come on the row from the list itself. Readiness is shown only
+ * where it means something: a release that ran or was cancelled has nothing
+ * left to get ready.
  */
 export function ReleaseDocumentsCell({
   release,
   tab,
+  readiness,
 }: {
   release: Release;
   tab: ReleaseListTab;
+  readiness: ReleaseRowReadiness;
 }) {
-  const members = useReleaseMembers(release.id);
-  const items = members.data?.items;
-  const total = items?.length ?? 0;
-  const oversized = total > RELEASE_MEMBER_LIMIT;
-  const wantsReadiness =
-    tab !== "done" && items !== undefined && total > 0 && !oversized;
-  const readiness = useReleaseReadiness(release.id, wantsReadiness);
-
-  if (members.isPending) {
-    return (
-      <span
-        className="flex flex-col items-end gap-1.5 @md/table:min-w-[11rem] @md/table:items-start"
-        aria-busy="true"
-      >
-        <Skeleton className="h-3.5 w-28" />
-        <Skeleton className="h-2.5 w-20" />
-      </span>
-    );
-  }
-  if (members.isError || items === undefined) {
+  const counts = release.memberCounts;
+  if (counts === undefined) {
     return (
       <span className="text-sm text-muted-foreground">
         Documents unavailable
       </span>
     );
   }
-  if (total === 0) {
+  if (counts.total === 0) {
     return (
       <span className="text-sm text-muted-foreground">No documents yet</span>
     );
   }
 
   const { count, tail } = describeDocuments(
-    countMemberActions(items),
+    counts,
     release.state === "published" ? "ran" : "ahead"
   );
 
@@ -238,15 +220,8 @@ export function ReleaseDocumentsCell({
           <span className="text-muted-foreground">{tail}</span>
         )}
       </span>
-      {tab === "done" ? null : oversized ? (
-        <span className="text-xs text-muted-foreground">Open to check</span>
-      ) : (
-        <ReadinessLine
-          total={total}
-          pending={readiness.isPending}
-          failed={readiness.isError}
-          hard={readiness.data?.hard}
-        />
+      {tab === "done" ? null : (
+        <ReadinessLine total={counts.total} readiness={readiness} />
       )}
     </span>
   );
@@ -254,22 +229,26 @@ export function ReleaseDocumentsCell({
 
 function ReadinessLine({
   total,
-  pending,
-  failed,
-  hard,
+  readiness,
 }: {
   total: number;
-  pending: boolean;
-  failed: boolean;
-  hard: Parameters<typeof summariseReadiness>[1]["hard"] | undefined;
+  readiness: ReleaseRowReadiness;
 }) {
-  if (pending) return <Skeleton className="h-2.5 w-24" aria-busy="true" />;
-  if (failed || !hard) {
+  if (readiness.status === "pending") {
+    return <Skeleton className="h-2.5 w-24" aria-busy="true" />;
+  }
+  const entry = readiness.status === "known" ? readiness.entry : undefined;
+  if (entry === undefined) {
     return (
       <span className="text-xs text-muted-foreground">Could not check</span>
     );
   }
-  const summary = summariseReadiness(total, { hard });
+  // A release holding more documents than a release may now hold is left
+  // unchecked by the page's read, and checked in full on its own page.
+  if (!entry.checked) {
+    return <span className="text-xs text-muted-foreground">Open to check</span>;
+  }
+  const summary = summariseReadiness(total, entry);
   const label = describeReadiness(summary);
   return (
     <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs @md/table:flex-nowrap @md/table:justify-start @md/table:whitespace-nowrap">
