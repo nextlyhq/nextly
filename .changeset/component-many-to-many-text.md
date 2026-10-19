@@ -29,4 +29,6 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A component's many-to-many column is created as uuid on PostgreSQL by the drizzle-kit creation route too, so the schema planner no longer proposes a text-to-uuid conversion on a component table created in a push that also adds a foreign key.
+A component's many-to-many column is text on PostgreSQL on every creation route, so the schema planner proposes no type change between them.
+
+Compatibility: a Postgres component table already created with uuid gets a one-time uuid-to-text change on its next preview. Converting existing data is a follow-up for Mobeen; this release does not convert it.
