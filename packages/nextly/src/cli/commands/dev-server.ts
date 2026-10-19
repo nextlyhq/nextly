@@ -675,6 +675,8 @@ export async function performAutoSync(
         source: sourceArg,
         promptChannel: channelArg,
         databaseName,
+        // A field the config makes translated keeps its value as this language's.
+        defaultLocale: config.localization?.defaultLocale ?? "en",
       });
     },
     // db-sync runs before any UI version-conflict-relevant state — these

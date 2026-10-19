@@ -167,6 +167,42 @@ function signInKey(
  */
 const LIMITER_BODY_BYTES = 32 * 1024;
 
+/** What the limiter made of a request's body. */
+interface LimiterBodyRead {
+  /** The JSON object it carries, or an empty one. */
+  body: Record<string, unknown>;
+  /**
+   * Whether the body is larger than the limiter reads, so it stopped with
+   * the rest unread: the handler that runs next still reads all of it, at
+   * whatever pace the client sends it.
+   */
+  overLimit: boolean;
+}
+
+/** The limiter's one read of a body, for every caller that judges by it. */
+async function readBodyForLimiter(request: Request): Promise<LimiterBodyRead> {
+  let bytes: Uint8Array | null;
+  try {
+    bytes = await boundedBody(request, LIMITER_BODY_BYTES);
+  } catch {
+    // An aborted or failed read: the body is gone, so nothing is left to send.
+    return { body: {}, overLimit: false };
+  }
+  if (bytes === null) return { body: {}, overLimit: true };
+  try {
+    const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    return {
+      body:
+        body !== null && typeof body === "object" && !Array.isArray(body)
+          ? (body as Record<string, unknown>)
+          : {},
+      overLimit: false,
+    };
+  } catch {
+    return { body: {}, overLimit: false };
+  }
+}
+
 /**
  * The JSON object a request carries, or an empty one when it carries none or
  * one too large to be worth reading.
@@ -174,16 +210,7 @@ const LIMITER_BODY_BYTES = 32 * 1024;
 export async function readLimiterBody(
   request: Request
 ): Promise<Record<string, unknown>> {
-  try {
-    const bytes = await boundedBody(request, LIMITER_BODY_BYTES);
-    if (bytes === null) return {};
-    const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
-    return body !== null && typeof body === "object" && !Array.isArray(body)
-      ? (body as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
+  return (await readBodyForLimiter(request)).body;
 }
 
 /**
@@ -210,14 +237,16 @@ const READING_PLACE_RETRY_MS = 1_000;
  * hold any number of bodies open below the ceiling, none counted until it
  * completed. Counting the reads themselves bounds that without spending: a
  * refused request reads nothing, and spends no budget and no ceiling place.
- * The place is given back once the read ends, completed, aborted or over the
- * byte limit, and only then.
+ * The place is given back once the read ends, completed or aborted. A body
+ * over the byte limit is not done when the limiter stops: its handler reads
+ * the rest, which the client can hold open, so its place comes back with it,
+ * as {@link ReadingPlace}, to be given back once that handler has answered.
  */
 async function readWithinReadingBound(
   request: Request,
   limits: UnknownSourceLimits
 ): Promise<
-  | { body: Record<string, unknown> }
+  | { body: Record<string, unknown>; place?: ReadingPlace }
   | Extract<UnknownSourceVerdict, { allowed: false }>
 > {
   if (bodiesBeingRead >= limits.ceiling) {
@@ -228,11 +257,33 @@ async function readWithinReadingBound(
     };
   }
   bodiesBeingRead++;
+  let place: ReadingPlace | undefined;
   try {
-    return { body: await readLimiterBody(request) };
+    const read = await readBodyForLimiter(request);
+    if (read.overLimit) place = heldReadingPlace();
+    return { body: read.body, place };
   } finally {
-    bodiesBeingRead--;
+    if (place === undefined) bodiesBeingRead--;
   }
+}
+
+/**
+ * A reading place still held once the limiter is done with a request, for a
+ * body its handler is still to read. Giving it back twice gives back one.
+ */
+export interface ReadingPlace {
+  release(): void;
+}
+
+function heldReadingPlace(): ReadingPlace {
+  let held = true;
+  return {
+    release() {
+      if (!held) return;
+      held = false;
+      bodiesBeingRead--;
+    },
+  };
 }
 
 function stringField(body: Record<string, unknown>, name: string): string {
@@ -272,6 +323,16 @@ function counterFor(deps: AuthRouterDeps): UnknownSourceCounter {
 }
 
 /**
+ * The limiter's answer for an unknown-source auth request: its verdict, and
+ * for an admitted request whose body is still to be read past the limiter's
+ * bound, the reading place its handler gives back once it has answered.
+ */
+export interface UnknownSourceAdmission {
+  verdict: UnknownSourceVerdict;
+  place?: ReadingPlace;
+}
+
+/**
  * Admit or refuse an auth request whose client address cannot be resolved.
  * The caller has already established that the limiter is enabled.
  */
@@ -279,7 +340,7 @@ export async function admitUnknownSource(
   request: Request,
   authPath: string,
   deps: AuthRouterDeps
-): Promise<UnknownSourceVerdict> {
+): Promise<UnknownSourceAdmission> {
   const budget = deps.authRateLimit.requestsPerHour;
   const limits: UnknownSourceLimits = {
     budget,
@@ -290,11 +351,41 @@ export async function admitUnknownSource(
   // A met ceiling refuses every request it would, so it refuses before the
   // body is read: past the ceiling, a request costs no reading and no parse.
   const met = await counter.ceilingMet(limits);
-  if (met) return met;
+  if (met) return { verdict: met };
   const read = await readWithinReadingBound(request, limits);
-  if ("allowed" in read) return read;
-  const { body } = read;
+  if ("allowed" in read) return { verdict: read };
+  let verdict: UnknownSourceVerdict;
+  try {
+    verdict = await judgeByBody(
+      request,
+      authPath,
+      deps,
+      counter,
+      limits,
+      read.body
+    );
+  } catch (error) {
+    read.place?.release();
+    throw error;
+  }
+  // A refused request never reaches its handler, so a held place is given
+  // back now; an admitted one keeps it until the handler has answered.
+  if (!verdict.allowed) {
+    read.place?.release();
+    return { verdict };
+  }
+  return { verdict, place: read.place };
+}
 
+/** The verdict for a request whose body the limiter has read. */
+async function judgeByBody(
+  request: Request,
+  authPath: string,
+  deps: AuthRouterDeps,
+  counter: UnknownSourceCounter,
+  limits: UnknownSourceLimits,
+  body: Record<string, unknown>
+): Promise<UnknownSourceVerdict> {
   const strategies = deps.authStrategies ?? [];
   if (authPath === "login" && strategiesNameTheKey(strategies)) {
     // Asking the strategies is the work the ceiling bounds, so the ceiling is
@@ -321,7 +412,18 @@ export async function admitUnknownSource(
       limits
     );
   }
+  return judgeTokenRequest(request, tokenKind, deps, counter, limits, body);
+}
 
+/** The verdict for a request that names its account through a token. */
+async function judgeTokenRequest(
+  request: Request,
+  tokenKind: StoredTokenKind | "pending",
+  deps: AuthRouterDeps,
+  counter: UnknownSourceCounter,
+  limits: UnknownSourceLimits,
+  body: Record<string, unknown>
+): Promise<UnknownSourceVerdict> {
   const token =
     tokenKind === "pending"
       ? presentedPendingToken(body, request)

@@ -1,5 +1,6 @@
 /**
- * Which fields cannot stop being translated in the change that asks for it, and why.
+ * Which fields cannot stop being translated, or become translated, in the change that asks for
+ * it, and why.
  *
  * One answer for every surface that can make the change: the Schema Builder's paths
  * (`archiveFieldsLeavingTranslation`) and `nextly migrate:create`. Each surface words the way out
@@ -29,8 +30,9 @@ export interface LeavingTranslationRefusal {
   path: string;
   code:
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
-    | "CONSTRAINED_FIELD_LEAVES_TRANSLATION";
-  /** Why the field cannot leave translation in this change, as one sentence. */
+    | "CONSTRAINED_FIELD_LEAVES_TRANSLATION"
+    | "RESHAPED_FIELD_JOINS_TRANSLATION";
+  /** Why the field cannot leave or join translation in this change, as one sentence. */
   reason: string;
   /** The changes that get there instead, in order, each one sentence. */
   steps: string[];
@@ -53,6 +55,22 @@ function refusal(
 
 type Surface = "builder" | "code";
 type Constraint = "required" | "unique";
+
+/**
+ * Whether a field's storage differs between two descriptions of its column: its kind, or its
+ * bounds (length, precision, scale). No description of the column before is no difference, since
+ * there is nothing to judge.
+ */
+export function storageDiffers(
+  before: LocalizedColumnSpec | null | undefined,
+  after: LocalizedColumnSpec | null | undefined
+): boolean {
+  const shape = (spec: LocalizedColumnSpec | null | undefined) =>
+    spec
+      ? [spec.kind, spec.length, spec.precision, spec.scale].join("|")
+      : undefined;
+  return before !== undefined && shape(before) !== shape(after);
+}
 
 /**
  * The settings a field cannot carry while it stops being translated: its own flags, and
@@ -141,10 +159,6 @@ export function refusalsForFieldsLeavingTranslation(args: {
   const refusals: LeavingTranslationRefusal[] = [];
   const columnOf = (field: LeavingFieldLike) =>
     fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy);
-  const shape = (spec: LocalizedColumnSpec | null | undefined) =>
-    spec
-      ? [spec.kind, spec.length, spec.precision, spec.scale].join("|")
-      : undefined;
   const before = new Map((args.oldFields ?? []).map(f => [f.name, f]));
   /** The column the field's values sit in now, when anything describes it. */
   const previousColumnOf = (field: LeavingFieldLike) => {
@@ -156,8 +170,7 @@ export function refusalsForFieldsLeavingTranslation(args: {
 
   for (const field of args.newFields) {
     if (!args.leaving.has(field.name)) continue;
-    const previous = previousColumnOf(field);
-    if (previous !== undefined && shape(previous) !== shape(columnOf(field))) {
+    if (storageDiffers(previousColumnOf(field), columnOf(field))) {
       refusals.push(reshapedRefusal(field.name, args.surface));
       continue;
     }
@@ -188,4 +201,47 @@ function codeConstraintSteps(constraints: readonly Constraint[]): string[] {
     "Set `localized: false` and run it again.",
     `Put ${flags} back and run it once more.`,
   ];
+}
+
+function reshapedJoiningRefusal(
+  name: string,
+  surface: Surface
+): LeavingTranslationRefusal {
+  return refusal(
+    `fields.${name}`,
+    "RESHAPED_FIELD_JOINS_TRANSLATION",
+    surface === "builder"
+      ? "Its type, length or precision changes in the same change that makes it translated."
+      : `"${name}" changes how it is stored (its type, length or precision) in the same change ` +
+          `that makes it translated.`,
+    // The first step keeps the new storage and takes the field back to shared, so it is a change
+    // of its own, with its own conversion and confirmation; the move to translated then copies
+    // values that already fit.
+    surface === "builder"
+      ? [
+          "Turn off Localized, keep the new type, length or precision, and save.",
+          "Turn on Localized and save.",
+        ]
+      : [
+          "Set `localized: false`, keep the new type, length or precision, and run `nextly migrate:create`.",
+          "Set `localized: true` and run it again.",
+        ]
+  );
+}
+
+/**
+ * The refusals for fields that become translated: each one in `reshaped`, whose storage changes
+ * in the same change. Its shared value is copied as it is into a companion column of the new
+ * shape, without the conversion and confirmation such a change goes through on its own:
+ * PostgreSQL refuses the copy part-way, and MySQL converts or cuts the value to fit.
+ *
+ * Which fields are reshaped is judged by the caller, against the column the value sits in now
+ * (`storageDiffers`), since only it knows how that column is described.
+ */
+export function refusalsForFieldsJoiningTranslation(args: {
+  /** The joining fields whose storage changes, in field order. */
+  reshaped: readonly string[];
+  surface: Surface;
+}): LeavingTranslationRefusal[] {
+  return args.reshaped.map(name => reshapedJoiningRefusal(name, args.surface));
 }

@@ -8,7 +8,7 @@ description: >-
   Also use when a deployed Nextly app has missing tables, refuses to start,
   or loses uploaded files.
 metadata:
-  nextly-version: 0.0.2-alpha.67
+  nextly-version: 0.0.2-alpha.69
 ---
 
 # Deploy a Nextly project

@@ -34,7 +34,11 @@ import { handleSession } from "./session";
 import type { WithSessionRowTransaction } from "./session-row";
 import { handleSetInitialPassword } from "./set-initial-password";
 import { handleSetupStatus, handleSetup, type SetupHandlerDeps } from "./setup";
-import { admitUnknownSource, type StoredTokenKind } from "./unknown-source";
+import {
+  admitUnknownSource,
+  type ReadingPlace,
+  type StoredTokenKind,
+} from "./unknown-source";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
 /**
@@ -395,46 +399,21 @@ async function dispatchAuthRequest(
   }
 
   if (method === "POST") {
+    let place: ReadingPlace | undefined;
     // Only the paths limited before handling; setup limits itself.
     if (RATE_LIMITED_AUTH_PATHS.has(authPath)) {
       const limited = await checkAuthIpRateLimit(request, authPath, deps);
-      if (limited) return limited;
+      if (limited.refused) return limited.refused;
+      place = limited.place;
     }
-    return auditCsrfFailure(request, authPath, deps, () => {
-      switch (authPath) {
-        case "login":
-          return handleLogin(request, deps);
-        case "challenge/resolve":
-          return handleChallengeResolve(request, deps);
-        case "logout":
-          return handleLogout(request, deps);
-        case "refresh":
-          return handleRefresh(request, deps);
-        case "setup":
-          // Setup is not on the limited paths: a valid token must open it
-          // whatever the budgets hold. Only a wrong token is counted.
-          return handleSetup(request, withSetupToken(deps), {
-            limitWithoutValidToken: wrong =>
-              checkAuthIpRateLimit(wrong, "setup", deps),
-          });
-        case "register":
-          return handleRegister(request, deps);
-        case "forgot-password":
-          return handleForgotPassword(request, deps);
-        case "reset-password":
-          return handleResetPassword(request, deps);
-        case "accept-invite":
-          return handleAcceptInvite(request, deps);
-        case "set-initial-password":
-          return handleSetInitialPassword(request, deps);
-        case "verify-email":
-          return handleVerifyEmail(request, deps);
-        case "verify-email/resend":
-          return handleResendVerification(request, deps);
-        default:
-          return Promise.resolve(null);
-      }
-    });
+    // A body the limiter stopped reading is read to its end by the handler,
+    // at the client's pace, so its reading place is held until the handler
+    // has answered, however it ends.
+    try {
+      return await handleAuthPost(request, authPath, deps);
+    } finally {
+      place?.release();
+    }
   }
 
   if (method === "PATCH") {
@@ -449,6 +428,55 @@ async function dispatchAuthRequest(
   }
 
   return null;
+}
+
+/** The handler for an auth POST the limit has admitted. */
+function handleAuthPost(
+  request: Request,
+  authPath: string,
+  deps: AuthRouterDeps
+): Promise<Response | null> {
+  return auditCsrfFailure(request, authPath, deps, () => {
+    switch (authPath) {
+      case "login":
+        return handleLogin(request, deps);
+      case "challenge/resolve":
+        return handleChallengeResolve(request, deps);
+      case "logout":
+        return handleLogout(request, deps);
+      case "refresh":
+        return handleRefresh(request, deps);
+      case "setup":
+        // Setup is not on the limited paths: a valid token must open it
+        // whatever the budgets hold. Only a wrong token is counted.
+        return handleSetup(request, withSetupToken(deps), {
+          limitWithoutValidToken: async wrong => {
+            const limited = await checkAuthIpRateLimit(wrong, "setup", deps);
+            // Setup has already read its whole body and hands the limiter
+            // those bytes, so nothing is left to read from the client: a
+            // place the limiter held for the rest is given back at once.
+            limited.place?.release();
+            return limited.refused;
+          },
+        });
+      case "register":
+        return handleRegister(request, deps);
+      case "forgot-password":
+        return handleForgotPassword(request, deps);
+      case "reset-password":
+        return handleResetPassword(request, deps);
+      case "accept-invite":
+        return handleAcceptInvite(request, deps);
+      case "set-initial-password":
+        return handleSetInitialPassword(request, deps);
+      case "verify-email":
+        return handleVerifyEmail(request, deps);
+      case "verify-email/resend":
+        return handleResendVerification(request, deps);
+      default:
+        return Promise.resolve(null);
+    }
+  });
 }
 
 /**
@@ -509,8 +537,10 @@ async function auditCsrfFailure(
 /**
  * Rate limit on auth write endpoints.
  *
- * Returns a 429 `Response` when the request's budget is spent for the current
- * window, or `null` when the request should proceed. A request whose client
+ * Returns a 429 `Response` as `refused` when the request's budget is spent for
+ * the current window, or `refused: null` when the request should proceed,
+ * with the reading place an admitted request still holds (`ReadingPlace`),
+ * which the caller gives back once the handler has answered. A request whose client
  * address resolves through the trusted-proxy settings counts in that
  * address's bucket of the shared sliding-window `rateLimiter` (the one the
  * API-key middleware uses). One whose address cannot be resolved (every
@@ -524,9 +554,9 @@ async function checkAuthIpRateLimit(
   request: Request,
   authPath: string,
   deps: AuthRouterDeps
-): Promise<Response | null> {
+): Promise<{ refused: Response | null; place?: ReadingPlace }> {
   const limit = deps.authRateLimit.requestsPerHour;
-  if (limit <= 0) return null; // explicitly disabled
+  if (limit <= 0) return { refused: null }; // explicitly disabled
 
   const ip = getTrustedClientIp(request, {
     trustProxy: deps.trustProxy,
@@ -534,17 +564,18 @@ async function checkAuthIpRateLimit(
   });
 
   if (ip === null) noteUnresolvedAuthRequest(request);
-  const result =
+  const admission =
     ip === null
       ? await admitUnknownSource(request, authPath, deps)
-      : await admitAddress(ip, deps);
-  if (result.allowed) return null;
+      : { verdict: await admitAddress(ip, deps) };
+  const result = admission.verdict;
+  if (result.allowed) return { refused: null, place: admission.place };
 
   const retryAfter = Math.max(
     1,
     Math.ceil((result.resetAt - Date.now()) / 1000)
   );
-  return new Response(
+  const refused = new Response(
     JSON.stringify({
       error: {
         code: "RATE_LIMIT_EXCEEDED",
@@ -563,6 +594,7 @@ async function checkAuthIpRateLimit(
       },
     }
   );
+  return { refused };
 }
 
 /**
