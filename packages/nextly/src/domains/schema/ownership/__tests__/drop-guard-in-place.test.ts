@@ -63,6 +63,12 @@ const elementOwners: OwnerRecord[] = [
     elementKind: "check",
     elementName: "chk_status",
   }),
+  // A plugin index named pk_idx on the plugin's table.
+  record({
+    tableName: "fx__notes",
+    elementKind: "index",
+    elementName: "pk_idx",
+  }),
   // A check the plugin named `check`, on the app's table.
   record({
     tableName: "app_notes",
@@ -626,5 +632,37 @@ describe("the review of the follow-up's credit for same-migration changes", () =
         "postgresql"
       )
     ).toThrow();
+  });
+});
+
+describe("the review of d78f25b1a: credit that the database would not give", () => {
+  it("does not credit a MariaDB PRIMARY KEY whose symbol the database ignores", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD CONSTRAINT pk_idx PRIMARY KEY (id)",
+            "ALTER TABLE fx__notes ALTER KEY pk_idx IGNORED",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ element: "pk_idx", belongsTo: "plugin:fx" });
+  });
+
+  it("does not credit an addition inside a dollar-quoted body that may not run", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "DO $$ BEGIN ALTER TABLE fx__notes ADD COLUMN body int; EXCEPTION WHEN duplicate_column THEN NULL; END $$",
+            "ALTER TABLE fx__notes ALTER COLUMN body SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
   });
 });

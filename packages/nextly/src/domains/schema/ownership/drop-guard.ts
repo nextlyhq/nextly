@@ -1985,6 +1985,9 @@ class StatementWalk {
 
   private readAddedClause(table: TableRef | undefined, at: number): void {
     if (table === undefined || this.word(at) !== "ADD") return;
+    // An addition inside a dollar-quoted body may not run: a branch not taken,
+    // an exception swallowed, or a routine never called. It is not credited.
+    if (this.bodyDepth > 0) return;
     const first = this.word(at + 1) ?? "";
     if (first === "CONSTRAINT") {
       this.readAddedConstraint(table, at + 2);
@@ -2008,6 +2011,9 @@ class StatementWalk {
    */
   private readAddedConstraint(table: TableRef, at: number): void {
     if (ANONYMOUS_CONSTRAINT_WORDS.has(this.word(at) ?? "")) return;
+    // MySQL and MariaDB ignore a primary key's symbol and name the index
+    // PRIMARY, so the name given does not identify the added index.
+    if (this.word(at + 1) === "PRIMARY") return;
     const name = this.nameAt(at);
     if (name === undefined) return;
     this.reader.addElement(
@@ -4915,7 +4921,7 @@ function refuseIndexNamed(
   if (args.liveIndexTables?.has(table.toLowerCase()) !== true) return;
   throw new NextlyError({
     code: "DROP_OF_FOREIGN_TABLE",
-    publicMessage: `A migration runs ALTER TABLE on ${table}, which is an index. The schema guard refuses this form, and it has been refused, and nothing was applied. Rewrite the statement as ALTER INDEX.`,
+    publicMessage: `A migration runs ALTER TABLE on ${table}, which is an index. The schema guard does not accept this form, so the migration has been refused and nothing was applied. Rewrite the statement as ALTER INDEX.`,
     logContext: {
       table,
       changedBy: args.stream,
