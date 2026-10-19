@@ -9,6 +9,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  getNextlyLogger,
+  setNextlyLogger,
+  type NextlyLogger,
+} from "../../../observability/logger";
+import {
   clearNoticeKindsForTests,
   registerNoticeKind,
 } from "../../notices/notice-kinds";
@@ -18,7 +23,7 @@ import { ReleasesRepository, type ReleasesDbApi } from "../releases-repository";
 afterEach(() => clearNoticeKindsForTests());
 
 /** A database whose pool refuses every question while a transaction is open. */
-function oneConnection() {
+function oneConnection(tablePresent = true) {
   let inTransaction = false;
   const poolAskedInside = vi.fn();
   const tx = {
@@ -44,7 +49,7 @@ function oneConnection() {
     dialect: "postgresql",
     tableExists: async () => {
       if (inTransaction) poolAskedInside();
-      return true;
+      return tablePresent;
     },
     transaction: async <T>(work: (handle: typeof tx) => Promise<T>) => {
       inTransaction = true;
@@ -76,5 +81,36 @@ describe("stopping a release tells its owner", () => {
       subjectId: "r1",
       occurrence: "4",
     });
+  });
+});
+
+describe("stopping a release before the notices table is migrated", () => {
+  const saved = getNextlyLogger();
+  afterEach(() => setNextlyLogger(saved));
+
+  it("still stops it, and says once, in the runtime's log, that the table is missing", async () => {
+    registerNoticeKind(RELEASE_STOPPED_NOTICE);
+    const warn = vi.fn();
+    const logger: NextlyLogger = {
+      error: () => {},
+      warn,
+      info: () => {},
+      debug: () => {},
+    };
+    setNextlyLogger(logger);
+    const { db, tx } = oneConnection(false);
+    const repository = new ReleasesRepository(db);
+
+    for (const id of ["r1", "r2"]) {
+      expect(
+        await repository.blockReleases([
+          { id, scheduledAt: new Date("2020-01-01T00:00:00Z") },
+        ])
+      ).toEqual([id]);
+    }
+
+    expect(tx.upsert).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warn.mock.calls[0][0])).toContain("nextly migrate");
   });
 });

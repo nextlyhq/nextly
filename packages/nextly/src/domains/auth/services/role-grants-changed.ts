@@ -4,11 +4,13 @@
  * One place for every change to a role's grants (its permissions, the roles
  * it inherits, the slug a code-defined rule reads, the role itself deleted),
  * so none of them can do one half and forget the other: the cached answers
- * built from the old grants are retired,
- * and the scheduled releases are checked again for a member whose author may
- * no longer publish or unpublish it, and stopped now rather than at their
- * instant. Every scheduled release is checked, because the users a role
+ * built from the old grants are retired, and the scheduled releases are
+ * checked again for a member whose author may no longer publish or unpublish
+ * it, and stopped now rather than at their instant. Every scheduled release is checked, because the users a role
  * reaches through inheritance are not recorded anywhere this could ask.
+ *
+ * A permission whose action, resource or slug is edited changes what every
+ * role holding it grants, so it takes the same re-check.
  *
  * @module domains/auth/services/role-grants-changed
  */
@@ -19,5 +21,14 @@ import { stopReleasesHolding } from "../../releases/early-stop";
 export async function afterRoleGrantsChanged(roleId: string): Promise<void> {
   // The cache first, so the checks below judge the grants as they now are.
   await invalidatePermissionCache({ roleId });
+  await afterGrantsChanged();
+}
+
+/**
+ * Call once a change to what some role grants has committed and the cached
+ * answers built from it are retired: every scheduled release is checked again.
+ * Never throws (`stopReleasesHolding`).
+ */
+export async function afterGrantsChanged(): Promise<void> {
   await stopReleasesHolding({ everyScheduled: true });
 }

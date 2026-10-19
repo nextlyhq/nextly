@@ -14,6 +14,7 @@
  * @module domains/releases/releases-repository
  */
 import { NextlyError } from "../../errors";
+import { getNextlyLogger } from "../../observability/logger";
 import type { CacheRevalidator } from "../../revalidation/types";
 import {
   RELEASE_CANCELLABLE_FROM,
@@ -442,6 +443,24 @@ function releaseMovedConflict(
 }
 
 /**
+ * The most ids one lookup binds. SQLite binds at most 999 parameters a
+ * statement by default, the fewest of the three dialects, so a list of ids is
+ * read in runs of this many, leaving room for the statement's other
+ * parameters.
+ */
+const IDS_PER_LOOKUP = 500;
+
+/** These ids, once each, in runs of at most {@link IDS_PER_LOOKUP}. */
+function idBatches(ids: readonly string[]): string[][] {
+  const unique = [...new Set(ids)];
+  const runs: string[][] = [];
+  for (let start = 0; start < unique.length; start += IDS_PER_LOOKUP) {
+    runs.push(unique.slice(start, start + IDS_PER_LOOKUP));
+  }
+  return runs;
+}
+
+/**
  * The members naming any of these documents, or any document of these
  * scopes, as one condition over the member index's leading columns: one
  * branch per scope, each narrowed to its documents when they are named.
@@ -592,7 +611,19 @@ export class ReleasesRepository {
     private readonly db: ReleasesDbApi,
     private readonly revalidator?: CacheRevalidator
   ) {
-    this.notices = new NoticesService({ db });
+    this.notices = new NoticesService({
+      db,
+      // The runtime's own log, so a notices table not migrated yet is said
+      // once rather than skipped in silence.
+      logger: {
+        warn: (message, context) =>
+          getNextlyLogger().warn({
+            kind: "notices-table-missing",
+            message,
+            ...context,
+          }),
+      },
+    });
   }
 
   /**
@@ -1528,7 +1559,8 @@ export class ReleasesRepository {
    * and their releases by id. Authors are found from the scheduled releases
    * (the state index) and their members (the release index), since a member's
    * author is not indexed. Two queries either way, and none when nothing is
-   * named.
+   * named. A list of ids too long for one statement is read in runs
+   * ({@link IDS_PER_LOOKUP}).
    *
    * @experimental
    */
@@ -1537,10 +1569,15 @@ export class ReleasesRepository {
   ): Promise<Array<{ release: ReleaseRow; members: ReleaseMemberRow[] }>> {
     const members = await this.membersNamedBy(target);
     if (members.length === 0) return [];
-    const releases = await this.findReleases({
-      ids: members.map(member => member.releaseId),
-      state: "scheduled" satisfies ReleaseState,
-    });
+    const releases: ReleaseRow[] = [];
+    for (const ids of idBatches(members.map(member => member.releaseId))) {
+      releases.push(
+        ...(await this.findReleases({
+          ids,
+          state: "scheduled" satisfies ReleaseState,
+        }))
+      );
+    }
     return releases.map(release => ({
       release,
       members: members.filter(member => member.releaseId === release.id),
@@ -1572,24 +1609,32 @@ export class ReleasesRepository {
         and: [{ column: "state", op: "=", value: "scheduled" }],
       },
     });
-    if (scheduled.length === 0) return [];
-    return this.db.select<ReleaseMemberRow>(MEMBERS, {
-      where: {
-        and: [
-          ...membersOf(scheduled.map(row => row.id)).and,
-          ...("authors" in target
-            ? [
-                {
-                  column: "createdBy",
-                  op: "IN" as const,
-                  value: [...new Set(target.authors)],
-                },
-              ]
-            : []),
-        ],
-      },
-      orderBy: inOrder,
-    });
+    // A run of releases at a time: every scheduled release can be more ids
+    // than one statement may bind. Each run holds whole releases, so each
+    // release's members still come in the order they were added.
+    const members: ReleaseMemberRow[] = [];
+    for (const ids of idBatches(scheduled.map(row => row.id))) {
+      members.push(
+        ...(await this.db.select<ReleaseMemberRow>(MEMBERS, {
+          where: {
+            and: [
+              ...membersOf(ids).and,
+              ...("authors" in target
+                ? [
+                    {
+                      column: "createdBy",
+                      op: "IN" as const,
+                      value: [...new Set(target.authors)],
+                    },
+                  ]
+                : []),
+            ],
+          },
+          orderBy: inOrder,
+        }))
+      );
+    }
+    return members;
   }
 
   /**

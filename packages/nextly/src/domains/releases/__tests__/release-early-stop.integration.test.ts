@@ -468,6 +468,31 @@ describe.each(getConfiguredTestDialects())(
       expect(await stoppedNotices(t, arranged)).toBe(1);
     });
 
+    it("stops it when the permission the author's role grants is edited to mean something else", async () => {
+      const t = await boot(dialect);
+      const arranged = await memoTakedown(t);
+      const permission = await t.adapter.selectOne<{ id: string }>(
+        "permissions",
+        {
+          where: {
+            and: [{ column: "slug", op: "=", value: "unpublish-memos" }],
+          },
+        }
+      );
+      if (permission === null || permission === undefined) {
+        throw new Error("unpublish-memos is not seeded");
+      }
+
+      await new ServiceContainer(t.adapter).permissions.updatePermission(
+        permission.id,
+        { action: "archive" }
+      );
+
+      expect(await visibleIds(t, "memos")).toContain(arranged.memo);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
     it("stops it when the author of its documents is deactivated", async () => {
       // A visitor is shown nothing of it either way: the read path already
       // passes over a due document whose author cannot act. What the event
