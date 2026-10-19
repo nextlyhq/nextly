@@ -1058,12 +1058,23 @@ const COLLECTIONS_METHODS: Record<
 
       // The settings the first push left off, now that the shared columns hold the default
       // language's values. Whether those values can take them was asked before anything ran.
+      // A new desired schema rather than an edit of the first: the pipeline keeps the last one it
+      // applied, by reference, to skip a push that changes nothing.
       if (settingsDeferred) {
-        desired.collections[p.collectionName] = {
-          ...desired.collections[p.collectionName],
-          fields: fields as DesiredCollection["fields"],
-        };
-        const settled = await apply(desired, "ui", { promptChannel: "auto" });
+        const settled = await apply(
+          {
+            ...desired,
+            collections: {
+              ...desired.collections,
+              [p.collectionName]: {
+                ...desired.collections[p.collectionName],
+                fields: fields as DesiredCollection["fields"],
+              },
+            },
+          },
+          "ui",
+          { promptChannel: "auto" }
+        );
         if (!settled.success) throw new Error(settled.error.message);
       }
 
