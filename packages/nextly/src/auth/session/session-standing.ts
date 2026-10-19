@@ -44,6 +44,8 @@
  *
  * @module auth/session/session-standing
  */
+import { AsyncResource } from "node:async_hooks";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq } from "drizzle-orm";
 
@@ -97,8 +99,14 @@ export interface SessionStandingCache {
    * just signed.
    */
   standing(userId: string, tokenEpoch: number): Promise<SessionStanding | null>;
-  /** Drop what is held for the account, so its next request reads the row. */
-  forget(userId: string): void;
+  /**
+   * Drop what is held for the account, so its next request reads the row.
+   *
+   * `writing` answers whether the change that made this call is still
+   * uncommitted. While it answers true nothing read for the account is kept,
+   * however long that takes; without it, nothing is kept for one lifetime.
+   */
+  forget(userId: string, writing?: () => boolean): void;
 }
 
 /** A read of one account's row, and whether a `forget` has overtaken it. */
@@ -152,21 +160,24 @@ export function createSessionStandingCache(options: {
   const now = options.now ?? (() => performance.now());
   const held = new Map<string, { standing: SessionStanding; readAt: number }>();
   const reading = new Map<string, Reading>();
-  // When each account was last forgotten. A writer forgets inside its
-  // transaction, and on PostgreSQL and MySQL a read on another connection
-  // before the commit still sees the old row, so no read that began within a
-  // lifetime of the forget is kept: it is answered, and the next request
-  // reads again. Past that lifetime the mark goes, and so does the cost.
-  const forgottenAt = new Map<string, number>();
+  // When each account was last forgotten, and whether the change that forgot
+  // it is still being written. A writer forgets inside its transaction, and
+  // on PostgreSQL and MySQL a read on another connection before the commit
+  // still sees the old row, so no read that BEGINS while that transaction is
+  // open, or within a lifetime of the forget, is kept: it is answered, and
+  // the next request reads again. The lifetime is the floor for a writer that
+  // cannot say when it commits. Past both the mark goes, and so does the cost.
+  const forgotten = new Map<string, { at: number; writing?: () => boolean }>();
 
   function recentlyForgotten(userId: string, readAt: number): boolean {
-    const at = forgottenAt.get(userId);
-    if (at === undefined) return false;
+    const mark = forgotten.get(userId);
+    if (mark === undefined) return false;
+    if (mark.writing?.() === true) return true;
     // A negative age is a clock that moved backward, which proves nothing
     // about the change having committed, so it still counts as recent.
-    const age = readAt - at;
+    const age = readAt - mark.at;
     if (age >= 0 && age >= ttlMs) {
-      forgottenAt.delete(userId);
+      forgotten.delete(userId);
       return false;
     }
     return true;
@@ -193,6 +204,9 @@ export function createSessionStandingCache(options: {
     // it answers with may be from before a change made while it was slow, and
     // the bound is counted from that change.
     const startedAt = now();
+    // Judged as the read begins: one sent before the change committed answers
+    // with the old row even if it returns after the commit.
+    const keepable = !recentlyForgotten(userId, startedAt);
     const entry: Reading = {
       superseded: false,
       promise: options
@@ -210,11 +224,7 @@ export function createSessionStandingCache(options: {
                 "standing cache's lifetime, so its answer was not used",
             });
           }
-          if (
-            !entry.superseded &&
-            standing?.isActive === true &&
-            !recentlyForgotten(userId, startedAt)
-          ) {
+          if (!entry.superseded && standing?.isActive === true && keepable) {
             keep(userId, standing, startedAt);
           }
           return standing;
@@ -257,15 +267,15 @@ export function createSessionStandingCache(options: {
       );
     },
 
-    forget(userId) {
+    forget(userId, writing) {
       held.delete(userId);
-      forgottenAt.delete(userId);
-      if (forgottenAt.size >= maxEntries) {
+      forgotten.delete(userId);
+      if (forgotten.size >= maxEntries) {
         // Insertion order again: the oldest mark is the nearest to lapsing.
-        const oldest = forgottenAt.keys().next();
-        if (!oldest.done) forgottenAt.delete(oldest.value);
+        const oldest = forgotten.keys().next();
+        if (!oldest.done) forgotten.delete(oldest.value);
       }
-      forgottenAt.set(userId, now());
+      forgotten.set(userId, { at: now(), ...(writing ? { writing } : {}) });
       const running = reading.get(userId);
       if (running) {
         running.superseded = true;
@@ -509,7 +519,20 @@ export async function accountIsActive(userId: string): Promise<boolean> {
  * without waiting out the cache.
  */
 export function forgetSessionStanding(userId: string | number): void {
-  held?.cache.forget(String(userId));
+  // The cache is made here when no request has made it yet, so a read while
+  // the change is still uncommitted finds the mark rather than keeping the
+  // old row in a cache that never heard of the change.
+  const adapter =
+    held?.adapter ??
+    (adapterIsRegistered()
+      ? container.get<DrizzleAdapter>("adapter")
+      : undefined);
+  if (adapter === undefined) return;
+  // Asked later, from other requests, but bound to the writer's own async
+  // context: whether a transaction THIS flow is inside is still open, which
+  // is whether the change has committed. Every dialect answers it.
+  const writing = AsyncResource.bind(() => adapter.transactionOpenInFlow());
+  cacheFor(adapter).forget(String(userId), writing);
 }
 
 /**

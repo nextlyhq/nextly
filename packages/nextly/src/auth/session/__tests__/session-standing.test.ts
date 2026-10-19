@@ -397,6 +397,45 @@ describe("createSessionStandingCache", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps nothing read while the change that forgot it has not committed, however long it takes", async () => {
+    // A writer that holds its transaction open past the lifetime, waiting on
+    // a lock say, must not let a read of the old row be kept: that answer
+    // would outlive the commit by a whole lifetime.
+    const { rows, read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({ read, now: c.now });
+    let writing = true;
+
+    await cache.standing("u1", 0);
+    cache.forget("u1", () => writing);
+    c.advance(SESSION_STANDING_TTL_MS + 1_000);
+    // Not committed yet: the row still reads as it was.
+    expect(await cache.standing("u1", 0)).toEqual(ACTIVE);
+    rows.u1 = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await cache.standing("u1", 0)).toEqual({
+      isActive: false,
+      sessionEpoch: 1,
+    });
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps answers again once the forgetting change has committed and a lifetime has passed", async () => {
+    const { read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({ read, now: c.now });
+    let writing = true;
+
+    cache.forget("u1", () => writing);
+    writing = false;
+    c.advance(SESSION_STANDING_TTL_MS);
+    await cache.standing("u1", 0);
+    await cache.standing("u1", 0);
+
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("reads an account that no longer exists again on its next request", async () => {
     // Only an active account's answer is kept. A refusal kept for the
     // lifetime would refuse the account's next session too, had it come back.
