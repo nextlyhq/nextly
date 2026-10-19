@@ -424,6 +424,32 @@ describe("createSessionStandingCache", () => {
     expect(read).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps a mark whose change is still uncommitted when the marks are full", async () => {
+    // A writer held open while more accounts are forgotten than the cache
+    // keeps marks for: the open writer's mark is the one that must stay.
+    const { rows, read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({
+      read,
+      now: c.now,
+      maxEntries: 2,
+    });
+    let writing = true;
+
+    cache.forget("u1", () => writing);
+    cache.forget("u2");
+    cache.forget("u3");
+    c.advance(SESSION_STANDING_TTL_MS + 1_000);
+    expect(await cache.standing("u1", 0)).toEqual(ACTIVE);
+    rows.u1 = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await cache.standing("u1", 0)).toEqual({
+      isActive: false,
+      sessionEpoch: 1,
+    });
+  });
+
   it("keeps answers again once the forgetting change has committed and a lifetime has passed", async () => {
     const { read } = table({ u1: ACTIVE });
     const c = clock();
@@ -667,6 +693,52 @@ describe("forgetSessionStanding across a change of database", () => {
 
     forgetSessionStanding("u1");
     // Read before the change commits: the row is still as it was.
+    expect(await accountIsActive("u1")).toBe(true);
+    row = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await accountIsActive("u1")).toBe(false);
+  });
+});
+
+describe("forgetSessionStanding while the writer's adapter is being replaced", () => {
+  afterEach(() => {
+    resetSessionStandingForTests();
+    container.clear();
+    ready.registered = false;
+  });
+
+  it("asks the adapter that holds the write whether it has committed", async () => {
+    // Services registered again while a write on the old adapter is still
+    // open: the mark goes to the new adapter's cache, but only the old one
+    // can say whether the write has committed.
+    const c = clock();
+    resetSessionStandingForTests({ now: c.now });
+    let writing = true;
+    ready.registered = true;
+    container.registerSingleton("adapter", () => ({
+      ...adapterHolding(ACTIVE),
+      transactionOpenInFlow: () => writing,
+    }));
+    expect(await accountIsActive("u1")).toBe(true);
+
+    let row: SessionStanding = ACTIVE;
+    container.clear();
+    container.registerSingleton("adapter", () => ({
+      ...adapterHolding(ACTIVE),
+      transactionOpenInFlow: () => false,
+      getDrizzle: () => ({
+        select: () => ({
+          from: () => ({
+            where: () => ({ limit: async () => [row] }),
+          }),
+        }),
+      }),
+    }));
+
+    forgetSessionStanding("u1");
+    c.advance(SESSION_STANDING_TTL_MS + 1_000);
+    // Still uncommitted, past the lifetime: the row reads as it was.
     expect(await accountIsActive("u1")).toBe(true);
     row = { isActive: false, sessionEpoch: 1 };
     writing = false;

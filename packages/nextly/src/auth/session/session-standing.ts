@@ -270,8 +270,16 @@ export function createSessionStandingCache(options: {
       forgotten.delete(userId);
       if (forgotten.size >= maxEntries) {
         // Insertion order again: the oldest mark is the nearest to lapsing.
-        const oldest = forgotten.keys().next();
-        if (!oldest.done) forgotten.delete(oldest.value);
+        // A mark whose change is still uncommitted is never the one to go:
+        // it is the only thing keeping that change's old row out of the
+        // cache. With every mark still open, which takes that many writers
+        // open at once, the marks grow rather than drop one.
+        for (const [id, mark] of forgotten) {
+          if (mark.writing?.() !== true) {
+            forgotten.delete(id);
+            break;
+          }
+        }
       }
       forgotten.set(userId, { at: now(), ...(writing ? { writing } : {}) });
       const running = reading.get(userId);
@@ -522,13 +530,20 @@ export function forgetSessionStanding(userId: string | number): void {
   // through the new one, and a mark left there is one the next read never
   // sees. The cache is made here when no request has made it yet, for the
   // same reason.
+  const previous = held?.adapter;
   const adapter = adapterIsRegistered()
     ? container.get<DrizzleAdapter>("adapter")
-    : held?.adapter;
+    : previous;
   if (adapter === undefined) return;
   // Whether the change that made this call has committed: a transaction this
-  // flow is inside is still open, which every dialect answers.
-  const writing = watchTransaction(() => adapter.transactionOpenInFlow());
+  // flow is inside is still open, which every dialect answers. Asked of the
+  // cache's previous adapter too: while services are registered again, the
+  // write can be open on the one they replaced, and only that adapter knows.
+  const writers =
+    previous && previous !== adapter ? [adapter, previous] : [adapter];
+  const writing = watchTransaction(() =>
+    writers.some(writer => writer.transactionOpenInFlow())
+  );
   cacheFor(adapter).forget(String(userId), writing);
 }
 
