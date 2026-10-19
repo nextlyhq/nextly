@@ -256,6 +256,27 @@ async function previewLocation(
   return target === null ? null : siteRelativeTarget(target, requestUrl);
 }
 
+/**
+ * The link a preview request carries, verified: its token and what the token
+ * says, or `null` when there is no token or it does not verify.
+ */
+async function linkInRequest(
+  request: Request,
+  config: PreviewRouteConfig
+): Promise<{
+  token: string;
+  verified: Extract<
+    Awaited<ReturnType<typeof verifyPreviewToken>>,
+    { valid: true }
+  >;
+} | null> {
+  const token = new URL(request.url).searchParams.get("token");
+  if (token === null || token.length === 0) return null;
+  const { secret, generation } = await verificationInputs(config);
+  const verified = await verifyPreviewToken(token, secret, { generation });
+  return verified.valid ? { token, verified } : null;
+}
+
 export function createPreviewRoute(config: PreviewRouteConfig = {}): {
   GET: (request: Request) => Promise<Response>;
 } {
@@ -268,15 +289,17 @@ export function createPreviewRoute(config: PreviewRouteConfig = {}): {
 
   return {
     async GET(request: Request): Promise<Response> {
-      const token = new URL(request.url).searchParams.get("token");
-      if (token === null || token.length === 0) return refuse();
+      const opened = await linkInRequest(request, config);
+      if (opened === null) return refuse();
+      const { token, verified } = opened;
 
-      const { secret, generation } = await verificationInputs(config);
-
-      const verified = await verifyPreviewToken(token, secret, {
-        generation,
-      });
-      if (!verified.valid) return refuse();
+      // A revoked link stops here, before its target is resolved: resolving is
+      // a trusted read of the draft that may run the application's preview
+      // callback and read hooks, and a revoked link must not keep setting that
+      // work off. Not counted; the count is taken last, below.
+      const links = config.links ?? (await loadDefaults()).defaultLinkChecks;
+      const link = verifiedLink(verified);
+      if (!(await links.live(link))) return refuse();
 
       // Everything that can fail happens before draft mode is enabled, so the
       // request is never given a session it is then refused.
@@ -290,11 +313,10 @@ export function createPreviewRoute(config: PreviewRouteConfig = {}): {
       if (location === null) return refuse();
 
       // Last of the checks, so a link refused for any other reason is not
-      // counted as opened. The record is asked only now that the signature,
-      // the generation and the target have all checked out: a revoked link is
-      // refused the same 404 as every other failure.
-      const links = config.links ?? (await loadDefaults()).defaultLinkChecks;
-      if (!(await links.opened(verifiedLink(verified)))) return refuse();
+      // counted as opened. Asked again rather than trusted from the check
+      // above: the count and its check are one statement, so a revocation
+      // landing in between is not missed.
+      if (!(await links.opened(link))) return refuse();
 
       const response = new Response(null, {
         status: 307,

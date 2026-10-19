@@ -465,8 +465,8 @@ export async function revokeDocumentLinks(
 
   await getService("metaService").set(cutoffKey(document), now.toISOString());
 
-  return managing(async () =>
-    affectedRowCount(
+  try {
+    return affectedRowCount(
       await linkDb(db)
         .update(table)
         .set({ revokedAt: now, revokedBy })
@@ -474,8 +474,13 @@ export async function revokeDocumentLinks(
           and(documentIs(table, document), isNull(table.revokedAt)) as SQL
         ),
       dialect
-    )
-  );
+    );
+  } catch (error) {
+    // A database not yet updated has no table, so no recorded link: the
+    // cutoff above has ended every link there is, and that is the answer.
+    if (tableMissing(error)) return 0;
+    throw error;
+  }
 }
 
 /**
@@ -572,7 +577,8 @@ export type PreviewLinksPruneAdapter = Pick<
 /**
  * Remove rows that ended long ago, so the table does not grow one row per link
  * for ever. A row is kept for {@link PREVIEW_LINK_RETENTION_MS} after its end,
- * long enough to answer what happened to a link someone asks about.
+ * its expiry or its revocation, whichever came first: long enough to answer
+ * what happened to a link someone asks about.
  */
 export async function prunePreviewLinks(
   db: PreviewLinksPruneAdapter,
@@ -600,16 +606,24 @@ export async function prunePreviewLinks(
   for (let batch = 0; batch < maxBatches; batch++) {
     if (limits.deadline !== undefined && clock() >= limits.deadline) break;
     started = true;
+    // A link ends at whichever comes first, its expiry or its revocation,
+    // and is kept for the retention window from that end.
+    const ended = {
+      or: [
+        { column: "expiresAt", op: "<" as const, value: cutoff },
+        { column: "revokedAt", op: "<" as const, value: cutoff },
+      ],
+    };
     const rows = await db.select<{ id: string }>(PREVIEW_LINKS_TABLE, {
       columns: ["id"],
-      where: { and: [{ column: "expiresAt", op: "<", value: cutoff }] },
+      where: ended,
       limit: PRUNE_BATCH,
     });
     if (rows.length === 0) break;
     const where = {
       and: [
         { column: "id", op: "IN" as const, value: rows.map(row => row.id) },
-        { column: "expiresAt", op: "<" as const, value: cutoff },
+        ended,
       ],
     };
     removed += db.transaction

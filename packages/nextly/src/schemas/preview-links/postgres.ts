@@ -84,5 +84,9 @@ export const nextlyPreviewLinksPg = pgTable(
     index("nextly_preview_links_expires_idx").on(table.expiresAt),
     // A deleted user's rows, found by the foreign key's own lookup.
     index("nextly_preview_links_created_by_idx").on(table.createdBy),
+    // And the rows a deleted user revoked, which the revoker's key clears.
+    index("nextly_preview_links_revoked_by_idx").on(table.revokedBy),
+    // Retention removes rows long past their revocation too.
+    index("nextly_preview_links_revoked_idx").on(table.revokedAt),
   ]
 );

@@ -488,7 +488,9 @@ describe("the link's own record", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(enable).not.toHaveBeenCalled();
-    expect(links.opened).toHaveBeenCalledTimes(1);
+    // Refused at the first ask, before anything is counted.
+    expect(links.live).toHaveBeenCalledTimes(1);
+    expect(links.opened).not.toHaveBeenCalled();
   });
 
   it("asks the record about a recorded link by its id, and an older one without", async () => {
@@ -509,6 +511,20 @@ describe("the link's own record", () => {
     expect(first.issuedAt).toBeInstanceOf(Date);
     expect(second.linkId).toBeUndefined();
     expect(second.issuedAt).toBeInstanceOf(Date);
+  });
+
+  it("refuses a revoked link before resolving where it would have gone", async () => {
+    // Resolving the target is a trusted read of the draft, and it may run the
+    // application's preview callback and read hooks: a revoked link must not
+    // keep setting that work off.
+    const { token } = await recordedToken();
+    const links = checks(false);
+    const redirectTo = vi.fn(() => "/pages/entry-1");
+    const { route } = routeFor({ links, redirectTo });
+
+    expect((await route.GET(request(token))).status).toBe(404);
+    expect(redirectTo).not.toHaveBeenCalled();
+    expect(links.opened).not.toHaveBeenCalled();
   });
 
   it("does not count an opening that is refused for another reason", async () => {

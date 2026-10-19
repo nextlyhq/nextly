@@ -501,6 +501,10 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_preview_links" ("expires_at")`,
     `CREATE INDEX IF NOT EXISTS "nextly_preview_links_created_by_idx"
       ON "nextly_preview_links" ("created_by")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_revoked_by_idx"
+      ON "nextly_preview_links" ("revoked_by")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_revoked_idx"
+      ON "nextly_preview_links" ("revoked_at")`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,

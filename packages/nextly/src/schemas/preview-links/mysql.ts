@@ -55,5 +55,7 @@ export const nextlyPreviewLinksMysql = mysqlTable(
     ),
     index("nextly_preview_links_expires_idx").on(table.expiresAt),
     index("nextly_preview_links_created_by_idx").on(table.createdBy),
+    index("nextly_preview_links_revoked_by_idx").on(table.revokedBy),
+    index("nextly_preview_links_revoked_idx").on(table.revokedAt),
   ]
 );

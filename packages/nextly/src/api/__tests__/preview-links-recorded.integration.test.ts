@@ -603,6 +603,21 @@ describe.each(getConfiguredTestDialects())(
         expect(Number(row.openCount)).toBe(1);
       });
 
+      it("is private to the session that asked for it", async () => {
+        const install = await boot(dialect);
+        await mint(install.editor, install.post);
+        const res = await list({ session: install.editor }, install.post);
+        expect(res.status).toBe(200);
+        // A list of who shared which credentials, never kept by a shared
+        // cache and replayed to another caller.
+        expect(res.headers.get("cache-control") ?? "").toMatch(/private/);
+        expect(res.headers.get("cache-control") ?? "").toMatch(/no-store/);
+        // A refusal is just as private.
+        const refused = await list({ session: install.reader }, install.post);
+        expect(refused.status).toBe(403);
+        expect(refused.headers.get("cache-control") ?? "").toMatch(/no-store/);
+      });
+
       it("lists one document's links only", async () => {
         const install = await boot(dialect);
         const mine = await mint(install.editor, install.post);
@@ -941,6 +956,29 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("revoking all of a document's links before the database is updated", () => {
+      it("still ends its earlier links, says so, and records it", async () => {
+        const install = await boot(dialect);
+        const older = await olderLink(install, install.post);
+        await install.t.adapter.executeQuery("DROP TABLE nextly_preview_links");
+
+        const res = await revokeDocument(
+          { session: install.editor },
+          install.post
+        );
+        const text = await res.text();
+        expect(res.status, text).toBe(200);
+        // No recorded link can exist without the table.
+        expect(JSON.parse(text)).toMatchObject({ item: { revoked: 0 } });
+        expect(await opens(older)).toBe(false);
+        expect(
+          (await auditRows(install, "preview-links-revoked")).filter(
+            r => r.metadata.scope !== undefined
+          )
+        ).toHaveLength(1);
+      });
+    });
+
     describe("the audit trail", () => {
       it("records the mint, revoking one, and revoking all, by whom", async () => {
         const install = await boot(dialect);
@@ -980,6 +1018,25 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("retention", () => {
+      it("measures a revoked link's thirty days from its revocation", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const start = new Date("2030-06-01T09:00:00Z");
+        vi.setSystemTime(start);
+        const install = await boot(dialect);
+        // Made for seven days and revoked at once: its end is the revocation.
+        const revoked = await mint(install.editor, install.post, 7 * DAY);
+        await revokeOne({ session: install.editor }, revoked.id, install.post);
+        const kept = await mint(install.editor, install.post, 7 * DAY);
+
+        // Thirty-one days on: past thirty from the revocation, not yet thirty
+        // from either link's scheduled end.
+        const now = new Date(start.getTime() + 31 * DAY * 1000);
+        const { removed } = await prunePreviewLinks(install.t.adapter, now);
+
+        expect(removed).toBe(1);
+        expect((await storedRows(install)).map(r => r.id)).toEqual([kept.id]);
+      });
+
       it("removes a link ended over thirty days ago and keeps a recent one", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         const start = new Date("2030-04-01T09:00:00Z");

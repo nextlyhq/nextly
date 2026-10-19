@@ -81,7 +81,11 @@ import {
   previewDeclarationFor,
   singlePreviewDeclarationFor,
 } from "./preview-url";
-import { respondList, respondMutation } from "./response-shapes";
+import {
+  privateToSession,
+  respondList,
+  respondMutation,
+} from "./response-shapes";
 import { requireRoutePermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
@@ -962,72 +966,77 @@ interface OlderPreviewLinks {
  * links were recorded may still be alive, one more item of `kind: "older"`
  * says so. Auth: the person may share a preview of that document.
  */
-export const listPreviewLinks = withErrorHandler(async (req: Request) => {
-  const params = new URL(req.url).searchParams;
-  const document = parseDocument(
-    Object.fromEntries(
-      ["collection", "entryId", "single", "locale"]
-        .map(key => [key, params.get(key)] as const)
-        .filter((pair): pair is readonly [string, string] => pair[1] !== null)
-    )
-  );
-  const paging = pagingSchema.safeParse({
-    page: params.get("page") ?? undefined,
-    limit: params.get("limit") ?? undefined,
-  });
-  if (!paging.success) throw nextlyValidationFromZod(paging.error);
-  const { page, limit } = paging.data;
-  // A read that changes nothing: a Single with no row yet is not created to
-  // answer it, and no read hook runs.
-  await authorizePreviewSharer(req, document, "manage");
+// Private to the session that asked, refusals included: the answer is who
+// shared which credentials, and a shared cache must never hand it to another
+// caller or keep a refusal over a later answer.
+export const listPreviewLinks = privateToSession(
+  withErrorHandler(async (req: Request) => {
+    const params = new URL(req.url).searchParams;
+    const document = parseDocument(
+      Object.fromEntries(
+        ["collection", "entryId", "single", "locale"]
+          .map(key => [key, params.get(key)] as const)
+          .filter((pair): pair is readonly [string, string] => pair[1] !== null)
+      )
+    );
+    const paging = pagingSchema.safeParse({
+      page: params.get("page") ?? undefined,
+      limit: params.get("limit") ?? undefined,
+    });
+    if (!paging.success) throw nextlyValidationFromZod(paging.error);
+    const { page, limit } = paging.data;
+    // A read that changes nothing: a Single with no row yet is not created to
+    // answer it, and no read hook runs.
+    await authorizePreviewSharer(req, document, "manage");
 
-  const now = new Date();
-  const generation = await (
-    await settingsService()
-  ).getPreviewTokenGeneration();
-  const { links: live, total } = await listLiveLinks(
-    recordDocument(document),
-    generation,
-    now,
-    { limit, offset: (page - 1) * limit }
-  );
-  const olderEnd = await olderLinksEnd(
-    recordDocument(document),
-    now,
-    generation
-  );
+    const now = new Date();
+    const generation = await (
+      await settingsService()
+    ).getPreviewTokenGeneration();
+    const { links: live, total } = await listLiveLinks(
+      recordDocument(document),
+      generation,
+      now,
+      { limit, offset: (page - 1) * limit }
+    );
+    const olderEnd = await olderLinksEnd(
+      recordDocument(document),
+      now,
+      generation
+    );
 
-  const items: Array<ListedPreviewLink | OlderPreviewLinks> = [
-    ...live.map(
-      (link): ListedPreviewLink => ({
-        kind: "link",
-        id: link.id,
-        locale: link.locale,
-        createdBy: link.createdBy,
-        createdAt: link.createdAt.toISOString(),
-        expiresAt: link.expiresAt.toISOString(),
-        openCount: link.openCount,
-        lastOpenedAt: link.lastOpenedAt?.toISOString() ?? null,
-      })
-    ),
-    // On the first page only: it stands for no link of its own, so it is
-    // neither counted nor paged.
-    ...(olderEnd === null || page !== 1
-      ? []
-      : [{ kind: "older" as const, latestEnd: olderEnd.toISOString() }]),
-  ];
+    const items: Array<ListedPreviewLink | OlderPreviewLinks> = [
+      ...live.map(
+        (link): ListedPreviewLink => ({
+          kind: "link",
+          id: link.id,
+          locale: link.locale,
+          createdBy: link.createdBy,
+          createdAt: link.createdAt.toISOString(),
+          expiresAt: link.expiresAt.toISOString(),
+          openCount: link.openCount,
+          lastOpenedAt: link.lastOpenedAt?.toISOString() ?? null,
+        })
+      ),
+      // On the first page only: it stands for no link of its own, so it is
+      // neither counted nor paged.
+      ...(olderEnd === null || page !== 1
+        ? []
+        : [{ kind: "older" as const, latestEnd: olderEnd.toISOString() }]),
+    ];
 
-  // Paged by the live links; `total` counts them, not the older-links row.
-  const totalPages = Math.max(1, Math.ceil(total / limit));
-  return respondList(items, {
-    total,
-    page,
-    limit,
-    totalPages,
-    hasNext: page < totalPages,
-    hasPrev: page > 1,
-  });
-});
+    // Paged by the live links; `total` counts them, not the older-links row.
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    return respondList(items, {
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    });
+  })
+);
 
 /**
  * POST /api/nextly/preview-links/:id/revoke  with the document in the body
