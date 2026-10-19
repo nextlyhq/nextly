@@ -83,6 +83,7 @@ import { ServiceContainer } from "../../../services/index";
 import type { Logger } from "../../../services/shared";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
 import {
@@ -1523,6 +1524,12 @@ export class UserMutationService extends BaseService {
           await recordCreatedEvent(txDb);
         });
       } catch (txErr) {
+        // A unique custom field's value already held by another user: refuse
+        // the account. It is not a missing table, and retrying without the
+        // custom fields would create the user without them, in silence.
+        if (userExtInsertFailed && isUniqueViolation(txErr)) {
+          throw takenUserFieldValue(txErr);
+        }
         // Self-healing is scoped to a genuine user_ext insert failure (typical on
         // a fresh DB before the user_ext table exists): disable user_ext for this
         // process and retry the user insert alone so the caller still gets a
@@ -2021,6 +2028,11 @@ export class UserMutationService extends BaseService {
               });
             }
           } catch (err) {
+            // A unique custom field's value already held by another user is
+            // refused, not taken for a missing table: skipping would drop the
+            // change and turn custom fields off. The account's other fields
+            // were written above, in their own transaction.
+            if (isUniqueViolation(err)) throw takenUserFieldValue(err);
             // user_ext table may not exist on this dialect — disable and skip
             const cause = err instanceof Error ? err.message : String(err);
             this.logger.warn(
@@ -3086,4 +3098,19 @@ export class UserMutationService extends BaseService {
       if (userDeletedRecorded) this.fastDrainScheduler?.offer();
     });
   }
+}
+
+/**
+ * The refusal for a unique custom field's value another user already holds.
+ * Generic in public, as an existing email is: naming the field would say that
+ * some account holds that value. The database's own message, which names the
+ * constraint or column, goes to the log.
+ */
+function takenUserFieldValue(error: unknown): NextlyError {
+  return NextlyError.duplicate({
+    logContext: {
+      reason: "user-field-value-taken",
+      detail: error instanceof Error ? error.message : String(error),
+    },
+  });
 }

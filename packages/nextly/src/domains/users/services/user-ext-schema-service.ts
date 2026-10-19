@@ -409,6 +409,20 @@ export class UserExtSchemaService {
   }
 
   /**
+   * Whether a column of this type takes a plain unique index on this dialect.
+   * A JSON column takes none anywhere; MySQL indexes a TEXT column only with a
+   * key length, which a unique field's index has not, so a plugin type stored
+   * as text with no `maxLength` gets no index there. PostgreSQL and SQLite
+   * index text columns as they are.
+   */
+  private canCarryUniqueIndex(columnType: string): boolean {
+    if (/json/i.test(columnType)) return false;
+    return !(
+      this.dialect === "mysql" && columnType === SQL_COLUMN_TYPES.mysql.text
+    );
+  }
+
+  /**
    * Run one schema statement. A table, index, constraint or column that
    * already exists is what a re-run expects, and is ignored. Any other failure
    * is thrown when `strict`, and ignored otherwise.
@@ -682,7 +696,7 @@ export class UserExtSchemaService {
       // the table being made.
       if (
         userFieldUniqueRejection(field) ||
-        /json/i.test(this.getColumnType(field) ?? "")
+        !this.canCarryUniqueIndex(this.getColumnType(field) ?? "")
       ) {
         this.logger?.warn(
           "[UserExtSchemaService] Leaving out a unique index its column cannot carry",
