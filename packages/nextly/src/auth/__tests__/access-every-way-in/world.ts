@@ -46,6 +46,15 @@ export const ORIGIN = "http://localhost";
 /** The slug of the collection, and of the Single, declaring `rule`. */
 export const collectionOf = (rule: Rule) => `c_${rule.replace(/-/g, "_")}`;
 export const singleOf = (rule: Rule) => `s_${rule.replace(/-/g, "_")}`;
+/** The slug of the Single with a status that declares `rule`. */
+export const pubSingleOf = (rule: Rule) => `s_pub_${rule.replace(/-/g, "_")}`;
+
+/**
+ * The filter a `list` and a `count` ask with: it matches the one published
+ * row of a rule collection every read asks for, so the answer says whether
+ * that row was returned.
+ */
+export const PROBE_WHERE = { slug: { equals: "probe" } };
 /** The relationship on `refs` that points at `rule`'s collection. */
 export const relationOf = (rule: Rule) => `to_${rule.replace(/-/g, "_")}`;
 
@@ -70,6 +79,7 @@ const PEOPLE = {
 const MEMBER_KIND = PEOPLE.principal.kind;
 
 type RuleContext = {
+  user?: { id?: unknown } | null;
   roles?: readonly string[];
   permissions?: readonly string[];
   principal?: { kind?: string } | null;
@@ -100,6 +110,7 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "permission-spelling": ({ permissions, collection, operation }) =>
     (permissions ?? []).includes(`${collection}:${operation}`),
   "principal-kind": ({ principal }) => principal?.kind === MEMBER_KIND,
+  "user-present": ({ user }) => user?.id !== undefined && user?.id !== null,
 };
 
 const ruleBody = (rule: Rule) => RULE_BODIES[rule];
@@ -147,6 +158,12 @@ const COLLECTION_OPERATIONS = [
   "unpublish",
 ] as const;
 const SINGLE_OPERATIONS = ["read", "update"] as const;
+const PUB_SINGLE_OPERATIONS = [
+  "read",
+  "update",
+  "publish",
+  "unpublish",
+] as const;
 
 function ruleCollections() {
   return RULES.map(rule => {
@@ -162,7 +179,7 @@ function ruleCollections() {
 }
 
 function ruleSingles() {
-  return RULES.map(rule => {
+  const plain = RULES.map(rule => {
     const config = defineSingle({
       slug: singleOf(rule),
       access: accessFor(rule, SINGLE_OPERATIONS) as never,
@@ -171,6 +188,19 @@ function ruleSingles() {
     restoreBooleans(config, rule, SINGLE_OPERATIONS);
     return config;
   });
+  // The same rules on Singles with a draft and a published status, so a
+  // publish and an unpublish each meet the rule for its own operation.
+  const publishing = RULES.map(rule => {
+    const config = defineSingle({
+      slug: pubSingleOf(rule),
+      status: true,
+      access: accessFor(rule, PUB_SINGLE_OPERATIONS) as never,
+      fields: [text({ name: "headline" })],
+    });
+    restoreBooleans(config, rule, PUB_SINGLE_OPERATIONS);
+    return config;
+  });
+  return [...plain, ...publishing];
 }
 
 /** Points at one row of every rule collection, one media row and one user. */
@@ -192,8 +222,11 @@ function refsCollection() {
 /** What a probe route returns, so the outcome survives the HTTP round trip. */
 async function outcome(work: () => Promise<unknown>): Promise<Response> {
   try {
-    await work();
-    return Response.json({ ok: true });
+    const result = await work();
+    // A list or a count answers whether the probe row was among what it read.
+    return Response.json(
+      typeof result === "boolean" ? { ok: true, found: result } : { ok: true }
+    );
   } catch (error) {
     const status = (error as { statusCode?: unknown }).statusCode;
     return Response.json({
@@ -242,6 +275,12 @@ const SERVICE_CALLS: Record<
     c.updateEntry(slug, id, { status: "published" }, opts),
   unpublish: (c, slug, id, opts) =>
     c.updateEntry(slug, id, { status: "draft" }, opts),
+  list: async (c, slug, _id, opts) =>
+    (await c.listEntries(slug, { where: PROBE_WHERE }, opts)).data.some(
+      entry => entry.slug === "probe"
+    ),
+  count: async (c, slug, _id, opts) =>
+    (await c.count(slug, { where: PROBE_WHERE }, opts)) > 0,
 };
 
 /**
@@ -266,13 +305,23 @@ function serviceCall(
 }
 
 function probePlugin() {
+  // A gate names one permission on one entry, so none is a list or a count.
+  const entryActions = ACTIONS.filter(
+    action => action !== "list" && action !== "count"
+  );
   const gates = [
     ...RULES.flatMap(rule =>
-      ACTIONS.map(action => ({ slug: collectionOf(rule), action }))
+      entryActions.map(action => ({ slug: collectionOf(rule), action }))
     ),
     ...RULES.flatMap(rule =>
       (["read", "update"] as const).map(action => ({
         slug: singleOf(rule),
+        action,
+      }))
+    ),
+    ...RULES.flatMap(rule =>
+      (["publish", "unpublish"] as const).map(action => ({
+        slug: pubSingleOf(rule),
         action,
       }))
     ),
@@ -541,6 +590,11 @@ async function seedCollections(
     await t.nextly.updateSingle({
       slug: singleOf(rule),
       data: { headline: "probe" },
+    });
+    // Its status is set before each publish or unpublish is asked.
+    await t.nextly.updateSingle({
+      slug: pubSingleOf(rule),
+      data: { headline: "probe", status: "draft" },
     });
   }
   return seeded;

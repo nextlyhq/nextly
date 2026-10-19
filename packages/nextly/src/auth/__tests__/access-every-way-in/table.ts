@@ -78,6 +78,10 @@ const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
  * hands a rule the stored `<operation>-<collection>` spelling refuses it.
  * `principal-kind` admits only a person of the `principal` caller's kind,
  * so a door that drops the person from the rule's context refuses it too.
+ * `user-present` admits a caller the rule is handed a `user` for: a signed-in
+ * user, and an API key, which acts as the user who made it. A visitor and a
+ * plugin's person have none, so a door that hands a rule the wrong `user`, or
+ * none, answers it differently.
  */
 export const RULES = [
   "none",
@@ -95,9 +99,15 @@ export const RULES = [
   "role-name",
   "permission-spelling",
   "principal-kind",
+  "user-present",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
+/**
+ * What a caller asks to do. `list` and `count` read a collection's entries
+ * through the list and count paths, which a door judges apart from the read
+ * of one entry by its id.
+ */
 export const ACTIONS = [
   "read",
   "create",
@@ -105,13 +115,21 @@ export const ACTIONS = [
   "delete",
   "publish",
   "unpublish",
+  "list",
+  "count",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
+
+/** The actions that name one entry, which every collection door can ask. */
+const ENTRY_ACTIONS = ACTIONS.filter(
+  action => action !== "list" && action !== "count"
+);
 
 /**
  * What is asked about. A `related` target is a rule collection reached through
  * a relationship on another collection; `media` and `users` are the system
- * resources, which declare no code rule.
+ * resources, which declare no code rule. A `single-pub` target is a Single
+ * with a draft and a published status, asked to publish and unpublish.
  */
 export const TARGETS = [
   "collection",
@@ -119,6 +137,7 @@ export const TARGETS = [
   "related",
   "media",
   "users",
+  "single-pub",
 ] as const;
 export type Target = (typeof TARGETS)[number];
 
@@ -174,6 +193,7 @@ interface Reach {
 
 const READ: readonly Action[] = ["read"];
 const READ_UPDATE: readonly Action[] = ["read", "update"];
+const PUBLISHING: readonly Action[] = ["publish", "unpublish"];
 const NOT_PRINCIPAL = CALLERS.filter(caller => !PRINCIPALS.includes(caller));
 const NOT_VISITOR = CALLERS.filter(caller => caller !== "visitor");
 
@@ -183,7 +203,9 @@ const NOT_VISITOR = CALLERS.filter(caller => caller !== "visitor");
  * A principal is read only by routes that declare one, so the staff routes,
  * the readers behind them and the schema list never see it. Only a resolved
  * caller reaches `entity` and `can`: every route in front of them has already
- * refused a visitor. `website` names a user or nobody, never a key.
+ * refused a visitor. `website` names a user or nobody, never a key. A
+ * plugin route's gate and `can` name one permission for one entry, so they are
+ * asked no `list` or `count`.
  */
 const REACH: Record<Door, Reach> = {
   rest: {
@@ -193,24 +215,34 @@ const REACH: Record<Door, Reach> = {
       single: READ_UPDATE,
       media: READ,
       users: READ,
+      "single-pub": PUBLISHING,
     },
   },
   direct: {
     callers: CALLERS,
-    targets: { collection: ACTIONS, single: READ_UPDATE },
+    targets: {
+      collection: ACTIONS,
+      single: READ_UPDATE,
+      "single-pub": PUBLISHING,
+    },
   },
   website: { callers: ["visitor", ...USERS], targets: { collection: READ } },
   route: {
     callers: NOT_PRINCIPAL,
-    targets: { collection: ACTIONS, single: READ_UPDATE },
+    targets: {
+      collection: ENTRY_ACTIONS,
+      single: READ_UPDATE,
+      "single-pub": PUBLISHING,
+    },
   },
   can: {
     callers: STAFF,
     targets: {
-      collection: ACTIONS,
+      collection: ENTRY_ACTIONS,
       single: READ_UPDATE,
       media: READ,
       users: READ,
+      "single-pub": PUBLISHING,
     },
   },
   service: { callers: CALLERS, targets: { collection: ACTIONS } },
@@ -339,6 +371,8 @@ const RULE_SAYS: Record<Rule, RuleAnswer> = {
   "permission-spelling": (action, caller) =>
     STAFF.includes(caller) && holdsPermission(caller, action, "collection"),
   "principal-kind": (_action, caller) => caller === "principal",
+  "user-present": (_action, caller) =>
+    USERS.includes(caller) || KEYS.includes(caller),
 };
 
 /** The callers whose roles, as a rule sees them, include one named `editor`. */
@@ -375,6 +409,24 @@ function holdsPermission(caller: Caller, action: Action, target: Target) {
   return GRANTS[caller]?.(action) ?? false;
 }
 
+/** A list and a count are reads; every other action is judged as itself. */
+const judgedAs = (action: Action): Action =>
+  action === "list" || action === "count" ? "read" : action;
+
+const isLifecycle = (action: Action) =>
+  action === "publish" || action === "unpublish";
+
+/**
+ * Whether the target's rules let the action through: its own rule, where the
+ * target declares one, answers exactly `true`, and for a publish or an
+ * unpublish the update rule does not refuse.
+ */
+function rulesAllow(rule: Rule, action: Action, caller: Caller): boolean {
+  const says = RULE_SAYS[rule](action, caller);
+  if (says !== null && says !== true) return false;
+  return !(isLifecycle(action) && RULE_SAYS[rule]("update", caller) === false);
+}
+
 /**
  * The answer the composition in the access design gives a row, the same for
  * every way in and with or without the access-control service:
@@ -390,24 +442,23 @@ function holdsPermission(caller: Caller, action: Action, target: Target) {
  *   for the action, a rule that answers exactly `true`. A publish or an
  *   unpublish is judged on top of update (`shared/types/access.ts`), so where
  *   the target declares an update rule, it must allow the change as well.
+ *   A `list` and a `count` are reads, judged by the read permission and rule.
  */
 export function oneAnswer(row: Row): Verdict {
-  const { caller, action, target, rule } = row;
-  const says = RULE_SAYS[rule](action, caller);
-  const lifecycle = action === "publish" || action === "unpublish";
-  const updateRefuses =
-    lifecycle && RULE_SAYS[rule]("update", caller) === false;
+  const { caller, target, rule } = row;
+  const action = judgedAs(row.action);
   if (PRINCIPALS.includes(caller)) {
-    if (action === "publish" || action === "unpublish") return "refuse";
-    return says === true ? "allow" : "refuse";
+    const allowed =
+      !isLifecycle(action) && RULE_SAYS[rule](action, caller) === true;
+    return allowed ? "allow" : "refuse";
   }
   if (caller === "visitor") return "refuse";
   if (caller === "super-admin" || caller === "super-admin-inherited") {
     return "allow";
   }
-  if (!holdsPermission(caller, action, target)) return "refuse";
-  if (updateRefuses) return "refuse";
-  return says === null || says === true ? "allow" : "refuse";
+  const allowed =
+    holdsPermission(caller, action, target) && rulesAllow(rule, action, caller);
+  return allowed ? "allow" : "refuse";
 }
 
 // ---------------------------------------------------------------------------
