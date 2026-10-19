@@ -68,6 +68,20 @@ let entryQuery: Record<string, unknown> = {};
 vi.mock("@admin/hooks/queries/useEntry", () => ({
   useEntry: () => entryQuery,
 }));
+// The merge with the stored links is useStoredReferences.test.tsx's concern;
+// here the page is handed the entry exactly as the populated read gives it.
+vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
+  useStoredEntry: () => ({ data: undefined, isLoading: false, error: null }),
+  useWithStoredReferences: ({
+    populated,
+  }: {
+    populated: { data: unknown; isLoading: boolean; error: unknown };
+  }) => ({
+    document: populated.data,
+    isLoading: populated.isLoading,
+    error: populated.error,
+  }),
+}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
 }));

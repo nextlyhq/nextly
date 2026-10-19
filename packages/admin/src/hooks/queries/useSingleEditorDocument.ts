@@ -12,9 +12,15 @@
  * @module hooks/queries/useSingleEditorDocument
  */
 
+import type { FieldConfig } from "nextly/config";
+
 import type { SingleDocument } from "@admin/services/singleApi";
 
 import { useSingleDocument } from "./useSingles";
+import {
+  useStoredSingleDocument,
+  useWithStoredReferences,
+} from "./useStoredReferences";
 
 export interface UseSingleEditorDocumentArgs {
   slug?: string;
@@ -33,6 +39,11 @@ export interface UseSingleEditorDocumentArgs {
   draftsEnabled: boolean;
   /** The language translation mode is translating FROM, if it named one. */
   translateFrom?: string;
+  /**
+   * The Single's fields, once its schema has loaded. The document is merged
+   * with its stored links against them, so it stays loading until they arrive.
+   */
+  fields: FieldConfig[] | undefined;
 }
 
 export interface UseSingleEditorDocumentResult {
@@ -52,19 +63,32 @@ export function useSingleEditorDocument({
   localizationEnabled,
   draftsEnabled,
   translateFrom,
+  fields,
 }: UseSingleEditorDocumentArgs): UseSingleEditorDocumentResult {
-  const {
-    data: document,
-    isLoading,
-    error,
-  } = useSingleDocument(slug, {
+  // Edit the ACTUAL per-locale values — no fallback, so an untranslated field
+  // shows empty rather than the default language's text, which would bleed the
+  // source into the field and risk saving it as this language's translation.
+  const fallbackLocale = localizationEnabled ? "none" : undefined;
+  const populated = useSingleDocument(slug, {
     locale,
-    // Edit the ACTUAL per-locale values — no fallback, so an untranslated field
-    // shows empty rather than the default language's text, which would bleed the
-    // source into the field and risk saving it as this language's translation.
-    fallbackLocale: localizationEnabled ? "none" : undefined,
+    fallbackLocale,
     translationStatus: localizationEnabled,
     draft: draftsEnabled,
+  });
+  // The same document as stored. The populated read leaves out a related item
+  // the editor may not read, and the form saves the whole Single back, so the
+  // editor edits the two merged: such an item stays in the form as a
+  // placeholder, and a save keeps it unless the editor removes it.
+  const stored = useStoredSingleDocument(slug, {
+    locale,
+    fallbackLocale,
+    draft: draftsEnabled,
+  });
+  const { document, isLoading, error } = useWithStoredReferences({
+    fields,
+    populated,
+    stored,
+    scope: JSON.stringify([slug, locale]),
   });
 
   const isNonDefaultLocale =

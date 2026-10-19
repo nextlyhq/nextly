@@ -93,6 +93,11 @@ export interface UploadedFile {
    * Folder ID the media belongs to.
    */
   folderId?: string | null;
+  /**
+   * A stored upload the editor cannot see: media they may not read, or that no
+   * longer exists. Shown as a placeholder and kept when the form is saved.
+   */
+  restricted?: boolean;
 }
 
 export interface UploadPreviewProps {

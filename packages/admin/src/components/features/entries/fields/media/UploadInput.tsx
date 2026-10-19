@@ -24,8 +24,14 @@ import { MediaEditDialog } from "@admin/components/features/media-library/MediaE
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import { Image } from "@admin/components/icons";
 import * as useMediaHooks from "@admin/hooks/queries/useMedia";
+import {
+  RESTRICTED_REFERENCE,
+  isRestrictedReference,
+} from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
+
+import { RestrictedReference } from "../RestrictedReference";
 
 import { UploadPreview, type UploadedFile } from "./UploadPreview";
 
@@ -173,6 +179,11 @@ function normalizeItem(item: unknown): UploadedFile | null {
   if (typeof item === "object" && item !== null) {
     const obj = item as Record<string, unknown>;
 
+    // A stored upload the editor cannot see: it has an id and nothing else.
+    if (isRestrictedReference(obj) && typeof obj.id === "string") {
+      return { id: obj.id, filename: obj.id, restricted: true };
+    }
+
     // Polymorphic value { relationTo, value }
     if ("relationTo" in obj && "value" in obj) {
       const innerValue = obj.value;
@@ -244,6 +255,16 @@ function normalizeItem(item: unknown): UploadedFile | null {
   }
 
   return null;
+}
+
+/**
+ * The form value for a file: its id, or a placeholder for one the editor
+ * cannot see, which must stay one so it is still recognised after an edit.
+ */
+function toFormValue(file: UploadedFile): unknown {
+  return file.restricted
+    ? { id: file.id, [RESTRICTED_REFERENCE]: true }
+    : file.id;
 }
 
 /**
@@ -371,28 +392,40 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
    */
   const handleMediaSelect = useCallback(
     (selectedMedia: Media[]) => {
+      // The picker lists only media the editor can see, so it never returns a
+      // placeholder; those stay where they are whatever is picked.
+      const restricted = files.filter(f => f.restricted);
+
       if (selectedMedia.length === 0) {
         // User deselected everything in multi-mode, or cancelled
         if (field.hasMany) {
-          onChange([] as TFieldValues[Path<TFieldValues>]);
+          onChange(restricted.map(toFormValue));
+          setDisplayFiles(restricted);
         }
         setIsPickerOpen(false);
         return;
       }
 
       if (field.hasMany) {
-        // For hasMany, store array of media IDs
+        // Files already in the field keep their places, placeholders among
+        // them, and newly picked media follow in the order picked.
+        const picked = new Set(selectedMedia.map(m => m.id));
+        const kept = files.filter(f => f.restricted || picked.has(f.id));
+        const keptIds = new Set(kept.map(f => f.id));
+        const next = [
+          ...kept,
+          ...selectedMedia
+            .filter(m => !keptIds.has(m.id))
+            .map(mediaToUploadedFile),
+        ];
         // Respect maxRows limit
-        const limitedMedia = field.maxRows
-          ? selectedMedia.slice(0, field.maxRows)
-          : selectedMedia;
+        const limited = field.maxRows ? next.slice(0, field.maxRows) : next;
 
         // Store only IDs in the form (this is what gets saved to DB)
-        const ids = limitedMedia.map(m => m.id);
-        onChange(ids);
+        onChange(limited.map(toFormValue));
 
         // Update local display cache with full media objects for immediate preview
-        setDisplayFiles(limitedMedia.map(mediaToUploadedFile));
+        setDisplayFiles(limited);
       } else {
         // For single selection, store just the ID
         const mediaId = selectedMedia[0].id;
@@ -404,7 +437,7 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
 
       setIsPickerOpen(false);
     },
-    [field.hasMany, field.maxRows, onChange]
+    [field.hasMany, field.maxRows, files, onChange]
   );
 
   /**
@@ -416,9 +449,8 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
       if (field.hasMany) {
         // Filter out the removed file
         const updatedFiles = files.filter(f => f.id !== fileId);
-        // Store only IDs in form
-        const ids = updatedFiles.map(f => f.id);
-        onChange(ids);
+        // Store only IDs in form, and placeholders as placeholders
+        onChange(updatedFiles.map(toFormValue));
         // Update display cache
         setDisplayFiles(updatedFiles);
       } else {
@@ -497,15 +529,27 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
               : "grid-cols-1 max-w-[200px]"
           )}
         >
-          {files.map(file => (
-            <UploadPreview
-              key={file.id}
-              file={file}
-              onRemove={() => handleRemove(file.id)}
-              onEdit={() => handleEdit(file)}
-              disabled={disabled || readOnly}
-            />
-          ))}
+          {files.map(file =>
+            // A stored upload the editor cannot see: kept, removable, never
+            // opened or edited.
+            file.restricted ? (
+              <RestrictedReference
+                key={file.id}
+                id={file.id}
+                variant="tile"
+                onRemove={() => handleRemove(file.id)}
+                disabled={disabled || readOnly}
+              />
+            ) : (
+              <UploadPreview
+                key={file.id}
+                file={file}
+                onRemove={() => handleRemove(file.id)}
+                onEdit={() => handleEdit(file)}
+                disabled={disabled || readOnly}
+              />
+            )
+          )}
         </div>
       )}
 

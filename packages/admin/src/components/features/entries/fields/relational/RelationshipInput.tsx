@@ -23,9 +23,14 @@ import {
 
 import { Plus } from "@admin/components/icons";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import {
+  RESTRICTED_REFERENCE,
+  isRestrictedReference,
+} from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 
 import type { EntryData } from "../../EntryForm/useEntryForm";
+import { RestrictedReference } from "../RestrictedReference";
 
 import { RelationshipCard, type RelatedItem } from "./RelationshipCard";
 import {
@@ -143,7 +148,10 @@ function polymorphicEntryToItem(entry: {
 }): RelatedItem {
   const { relationTo, value } = entry;
   if (typeof value === "string") {
-    return { id: value, relationTo };
+    // A placeholder stays one once it is read as an item.
+    return isRestrictedReference(entry)
+      ? { id: value, relationTo, [RESTRICTED_REFERENCE]: true }
+      : { id: value, relationTo };
   }
   return { ...value, relationTo };
 }
@@ -521,6 +529,17 @@ export function RelationshipInput<
       {selectedItems.length > 0 && (
         <div className="space-y-2">
           {selectedItems.map(item => {
+            // A link the editor cannot see: kept, removable, never opened.
+            if (isRestrictedReference(item)) {
+              return (
+                <RestrictedReference
+                  key={`${item.relationTo ?? ""}:${item.id}`}
+                  id={item.id}
+                  onRemove={() => handleRemove(item.id)}
+                  disabled={isDisabled}
+                />
+              );
+            }
             // The `users` core collection lives on its own admin pages
             // (`/admin/users/edit/[id]`) — opening RelationshipQuickEdit
             // for a user would hit `/admin/api/collections/users` (404,
