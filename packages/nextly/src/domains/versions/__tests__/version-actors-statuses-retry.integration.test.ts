@@ -36,7 +36,10 @@ import {
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
-import { VersionCaptureService } from "../version-capture-service";
+import {
+  VersionCaptureService,
+  type CaptureInput,
+} from "../version-capture-service";
 
 let current: TestNextly | undefined;
 let services: PluginContext["services"] | undefined;
@@ -186,6 +189,54 @@ async function historyOf(
 
 const idOf = (result: { item?: unknown }) => (result.item as { id: string }).id;
 
+/** The version reference of a note. */
+function notesRef(entryId: string) {
+  return {
+    scopeKind: "collection" as const,
+    scopeSlug: "notes",
+    entryId,
+  };
+}
+
+/**
+ * Two transactions capturing at once: the first takes the next number and
+ * holds it uncommitted while the second reads the same newest number, so the
+ * second's insert clashes once the first commits.
+ */
+async function captureConcurrently(t: TestNextly, input: CaptureInput) {
+  const capture = new VersionCaptureService();
+  let inserted!: () => void;
+  const firstInserted = new Promise<void>(resolve => (inserted = resolve));
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => (release = resolve));
+
+  const first = t.adapter.transaction(async tx => {
+    const result = await capture.capture(tx, input);
+    inserted();
+    await gate;
+    return result;
+  });
+  await firstInserted;
+  const second = t.adapter.transaction(tx => capture.capture(tx, input));
+  await new Promise(resolve => setTimeout(resolve, 300));
+  release();
+  return Promise.all([first, second]);
+}
+
+/** A document's durable version numbers, ascending. */
+async function versionNumbersOf(t: TestNextly, id: string): Promise<number[]> {
+  return (
+    await t.adapter.select<{ entryId: string; versionNo: number | null }>(
+      "nextly_versions",
+      {}
+    )
+  )
+    .flatMap(row =>
+      row.entryId === id && row.versionNo !== null ? [row.versionNo] : []
+    )
+    .sort((x, y) => x - y);
+}
+
 describe.each(getConfiguredTestDialects())(
   "version actors, statuses and number clashes (integration, %s)",
   dialect => {
@@ -318,46 +369,32 @@ describe.each(getConfiguredTestDialects())(
       const id = idOf(
         await t.nextly.create({ collection: "notes", data: { title: "x" } })
       );
-      const capture = new VersionCaptureService();
-      const ref = {
-        scopeKind: "collection" as const,
-        scopeSlug: "notes",
-        entryId: id,
-      };
-      const input = { ref, status: "draft" as const, snapshot: { title: "x" } };
-
-      let inserted!: () => void;
-      const firstInserted = new Promise<void>(resolve => (inserted = resolve));
-      let release!: () => void;
-      const gate = new Promise<void>(resolve => (release = resolve));
-
-      // The first transaction takes the next number and holds it, uncommitted.
-      const first = t.adapter.transaction(async tx => {
-        const result = await capture.capture(tx, input);
-        inserted();
-        await gate;
-        return result;
+      const [a, b] = await captureConcurrently(t, {
+        ref: notesRef(id),
+        status: "draft",
+        snapshot: { title: "x" },
       });
-      await firstInserted;
-      // The second reads the same newest number, so its insert clashes once
-      // the first commits.
-      const second = t.adapter.transaction(tx => capture.capture(tx, input));
-      await new Promise(resolve => setTimeout(resolve, 300));
-      release();
-
-      const [a, b] = await Promise.all([first, second]);
       expect(a.versionNo).not.toBe(b.versionNo);
-      const numbers = (
-        await t.adapter.select<{ entryId: string; versionNo: number | null }>(
-          "nextly_versions",
-          {}
-        )
-      )
-        .filter(row => row.entryId === id && row.versionNo !== null)
-        .map(row => row.versionNo)
-        .sort();
+      const numbers = await versionNumbersOf(t, id);
       expect(new Set(numbers).size).toBe(numbers.length);
       expect(numbers).toHaveLength(3);
+    }, 120_000);
+
+    it("counts the version that won the race when the retried write trims history to its cap", async () => {
+      const t = await boot(dialect);
+      const id = idOf(
+        await t.nextly.create({ collection: "notes", data: { title: "x" } })
+      );
+      // Two captures over the first version, kept to two: the write that lost
+      // the race inserts third and must see the winner's version to remove
+      // the first.
+      await captureConcurrently(t, {
+        ref: notesRef(id),
+        status: "published",
+        snapshot: { title: "x" },
+        maxPerDoc: 2,
+      });
+      expect(await versionNumbersOf(t, id)).toEqual([2, 3]);
     }, 120_000);
   }
 );

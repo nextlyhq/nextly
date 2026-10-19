@@ -4,9 +4,12 @@
  * Under the draft/published lifecycle a document's status is "draft" or
  * "published". Without it, `status` is an ordinary field the developer
  * declared, and it holds whatever they chose ("archived", "in review"). A
- * version records that value as it is: calling an archived document
- * "published" would make history, retention and the "currently published"
- * comparison all treat as live something that never was.
+ * version records that value as it is, so history says what the document said
+ * of itself rather than calling it "published".
+ *
+ * Whether a version's content was served is a different question, answered by
+ * {@link recordsServedContent}: with no lifecycle, what is saved is what
+ * readers get, whatever the document calls itself.
  *
  * A document with no status at all records "published": with no lifecycle,
  * what is saved is what is live.
@@ -21,7 +24,10 @@
  * @module domains/versions/recorded-status
  */
 
-import type { VersionStatus } from "../../schemas/versions/types";
+import {
+  isVersionStatus,
+  type VersionStatus,
+} from "../../schemas/versions/types";
 
 import type { VersionRef } from "./versions-repository";
 
@@ -30,6 +36,19 @@ import type { VersionRef } from "./versions-repository";
  * value where there is no lifecycle.
  */
 export type RecordedVersionStatus = VersionStatus | (string & {});
+
+/**
+ * Whether a version holds content its readers were served: the question
+ * retention and the "currently published" comparison ask, never the bare
+ * status.
+ *
+ * Under the lifecycle that is a published version. A status the lifecycle
+ * does not name is recorded only by a document without one, and that document
+ * is live whatever it calls itself, so its version was served too.
+ */
+export function recordsServedContent(status: RecordedVersionStatus): boolean {
+  return status === "published" || !isVersionStatus(status);
+}
 
 /** The width of the versions table's `status` column (MySQL's `varchar`). */
 export const STATUS_COLUMN_LENGTH = 32;

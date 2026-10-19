@@ -99,6 +99,25 @@ describe("comparison baselines", () => {
     ).resolves.toBeNull();
   });
 
+  it("finds the published version of a document without the lifecycle, whatever its status", async () => {
+    // Without the lifecycle a version records the document's own status, and
+    // what was saved is what readers were served.
+    const history: PartVersion[] = [
+      { versionNo: 9, status: "archived", locale: "en" },
+      { versionNo: 5, status: "in review", locale: "en" },
+    ];
+    await expect(
+      resolveComparisonBaseline("published", {
+        ref,
+        part: "en",
+        target: 9,
+        userId: null,
+        live: true,
+        versions: history,
+      })
+    ).resolves.toBe(9);
+  });
+
   it("only offers versions of the part being compared", async () => {
     // A German version is never another language's "previous".
     await expect(

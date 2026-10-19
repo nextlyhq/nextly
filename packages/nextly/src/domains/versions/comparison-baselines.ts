@@ -22,15 +22,18 @@
 
 import { getService } from "../../di";
 import { NextlyError } from "../../errors";
-import type { VersionStatus } from "../../schemas/versions/types";
 
+import {
+  recordsServedContent,
+  type RecordedVersionStatus,
+} from "./recorded-status";
 import { readLastLookedAt } from "./version-views";
 import type { VersionRef } from "./versions-repository";
 
 /** One durable version, as a baseline sees it. */
 export interface PartVersion {
   versionNo: number;
-  status: VersionStatus;
+  status: RecordedVersionStatus;
   /** The part the version belongs to: its language, or null. */
   locale: string | null;
 }
@@ -201,13 +204,14 @@ function requireBaseline(name: string): ComparisonBaseline {
 }
 
 /**
- * The part's latest published version. What its readers are served only while
- * the part is live; see `BaselineContext.live`.
+ * The part's latest published version: content its readers were served, which
+ * without the lifecycle is every version whatever its status. What its readers
+ * are served only while the part is live; see `BaselineContext.live`.
  */
 export function latestPublished(
   versions: readonly PartVersion[]
 ): PartVersion | undefined {
-  return versions.find(v => v.status === "published");
+  return versions.find(v => recordsServedContent(v.status));
 }
 
 /**

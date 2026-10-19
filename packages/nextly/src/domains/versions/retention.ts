@@ -8,13 +8,16 @@
  * @module domains/versions/retention
  */
 
-import type { VersionStatus } from "../../schemas/versions/types";
+import {
+  recordsServedContent,
+  type RecordedVersionStatus,
+} from "./recorded-status";
 
 /** The minimum shape retention needs from a durable version row. */
 export interface PrunableVersion {
   id: string;
   versionNo: number | null;
-  status: VersionStatus;
+  status: RecordedVersionStatus;
   /**
    * The language the version holds, or null. On today's rows null means a
    * document with no languages, a snapshot of every language at once (a
@@ -113,12 +116,13 @@ function protectedVersionIds(
 /**
  * The id of the latest published row of each language, null (no language)
  * keyed like any code. Rows arrive newest-first, so the first published row
- * seen for a language is its latest.
+ * seen for a language is its latest. "Published" is content readers were
+ * served, which without the lifecycle is every version whatever its status.
  */
 function latestPublishedPerLocale(rows: PrunableVersion[]): string[] {
   const latest = new Map<string | null, string>();
   for (const row of rows) {
-    if (row.status === "published" && !latest.has(row.locale)) {
+    if (recordsServedContent(row.status) && !latest.has(row.locale)) {
       latest.set(row.locale, row.id);
     }
   }

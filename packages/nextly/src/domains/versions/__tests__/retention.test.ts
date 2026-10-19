@@ -49,6 +49,30 @@ describe("selectVersionsToPrune", () => {
     expect(selectVersionsToPrune(input, false)).toEqual([]);
   });
 
+  it("keeps each language's latest version when the document has no lifecycle, whatever its status", () => {
+    // Without the lifecycle a version records the document's own status, and
+    // every version was what that language's readers were served. Saves in
+    // one language must not remove the other's only copy of it.
+    const served = (
+      id: string,
+      versionNo: number,
+      locale: string
+    ): PrunableVersion => ({
+      id,
+      versionNo,
+      status: "archived",
+      locale,
+      label: null,
+      sourceVersionNo: null,
+    });
+    const history = [
+      served("en-3", 3, "en"),
+      served("en-2", 2, "en"),
+      served("fr-1", 1, "fr"),
+    ];
+    expect(selectVersionsToPrune(history, 1)).toEqual(["en-2"]);
+  });
+
   it("returns nothing when the row count is at or under the cap", () => {
     const input = rows(["c", 3, "draft"], ["b", 2, "draft"], ["a", 1, "draft"]);
     expect(selectVersionsToPrune(input, 3)).toEqual([]);

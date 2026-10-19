@@ -70,12 +70,18 @@ export class VersionCaptureService {
     input: CaptureInput
   ): Promise<CaptureResult> {
     const repo = new VersionsRepository(db);
-    const versionNo = await insertWithRetry(db, repo, input);
+    const { versionNo, retried } = await insertWithRetry(db, repo, input);
     // Trim history to the configured cap inside the caller's transaction. What
     // is always kept (the newest version, each language's latest published one,
     // named versions and restore lineage) is decided by selectVersionsToPrune.
     if (typeof input.maxPerDoc === "number") {
-      const durable = await repo.listDurableForPrune(input.ref);
+      // After a lost race the scan reads with a lock too: on MySQL a plain read
+      // answers from the snapshot the first allocation took, which lacks the
+      // version that won, so retention would count, protect and check restore
+      // lineage against a history that is no longer the document's.
+      const durable = await repo.listDurableForPrune(input.ref, {
+        latest: retried,
+      });
       // A restore's own capture additionally protects two versions. The one
       // holding the content it just replaced — the one the editor is told they
       // can go back to — is `versionNo - 1`: this insert took the next number,
@@ -177,7 +183,7 @@ async function insertWithRetry(
   db: VersionsDbApi,
   repo: VersionsRepository,
   input: CaptureInput
-): Promise<number> {
+): Promise<{ versionNo: number; retried: boolean }> {
   for (let attempt = 1; ; attempt += 1) {
     const versionNo =
       (await repo.getMaxVersionNo(input.ref, { latest: attempt > 1 })) + 1;
@@ -195,7 +201,7 @@ async function insertWithRetry(
           createdBy: input.createdBy ?? null,
         })
       );
-      return versionNo;
+      return { versionNo, retried: attempt > 1 };
     } catch (err) {
       // The only unique index on nextly_versions is the version_no sequence,
       // so a unique violation is a lost allocation race. The insert throws the

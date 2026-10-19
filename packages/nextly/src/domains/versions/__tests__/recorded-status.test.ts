@@ -5,7 +5,11 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { recordedStatus, STATUS_COLUMN_LENGTH } from "../recorded-status";
+import {
+  recordedStatus,
+  recordsServedContent,
+  STATUS_COLUMN_LENGTH,
+} from "../recorded-status";
 
 const ref = (slug: string) => ({
   scopeKind: "collection" as const,
@@ -61,5 +65,18 @@ describe("recordedStatus", () => {
     const report = vi.fn();
     expect(recordedStatus(exact, ref("posts"), report)).toBe(exact);
     expect(report).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordsServedContent", () => {
+  it("is true of a published version and of any status the lifecycle does not name", () => {
+    expect(recordsServedContent("published")).toBe(true);
+    // Recorded only by a document without the lifecycle, which is always live.
+    expect(recordsServedContent("archived")).toBe(true);
+  });
+
+  it("is false of a draft and of a withdrawn version", () => {
+    expect(recordsServedContent("draft")).toBe(false);
+    expect(recordsServedContent("unpublished")).toBe(false);
   });
 });

@@ -956,8 +956,13 @@ export class VersionsRepository {
    * always kept, and the snapshot is never read. Autosave rows are excluded
    * because they never count toward the cap.
    */
-  async listDurableForPrune(ref: VersionRef): Promise<PrunableVersion[]> {
+  async listDurableForPrune(
+    ref: VersionRef,
+    // A locking read, after a lost allocation race: see `getMaxVersionNo`.
+    options: { latest?: boolean } = {}
+  ): Promise<PrunableVersion[]> {
     return this.db.select<PrunableVersion>(TABLE, {
+      ...(options.latest ? { forUpdate: true } : {}),
       columns: [
         "id",
         "versionNo",
