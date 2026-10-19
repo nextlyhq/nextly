@@ -226,15 +226,14 @@ export function useWithStoredReferences<T extends Doc>({
     void refetchStored();
   }, [disagree, refetchPopulated, refetchStored]);
 
-  const document =
-    last.current?.scope === scope ? last.current.document : undefined;
   // Still apart after every retry: the document keeps changing under the
-  // editor. Saying so beats a form that never opens, or one merged from two
-  // versions.
-  const gaveUp =
-    document === undefined &&
-    disagree &&
-    attempts.current >= MAX_RECONCILE_ATTEMPTS;
+  // editor. Saying so beats a form merged from two versions, and beats the
+  // previous merge, which a save would write back over the newer document.
+  const gaveUp = disagree && attempts.current >= MAX_RECONCILE_ATTEMPTS;
+  const document =
+    !gaveUp && last.current?.scope === scope
+      ? last.current.document
+      : undefined;
   const error =
     populated.error ??
     stored.error ??

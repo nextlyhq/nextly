@@ -535,6 +535,13 @@ export default function EditEntryPage({
   // Cast entry to Record<string, unknown> for getEntryTitle helper
   const entryData = entry as unknown as Record<string, unknown>;
   const entryTitle = getEntryTitle(entryData, id, collection.admin?.useAsTitle);
+  // What a plugin is handed: the entry as the API populated it. A placeholder
+  // for a link the editor cannot see is the default form's own representation,
+  // not part of what a custom view or an injection slot is given.
+  const apiEntryData = (populatedEntry.data ?? entry) as unknown as Record<
+    string,
+    unknown
+  >;
 
   // Shared callbacks for both default and custom views
   const handleSuccess = () => {
@@ -557,7 +564,7 @@ export default function EditEntryPage({
       collectionSlug: slug,
       entryId: id,
       isCreating: false,
-      initialData: entryData,
+      initialData: apiEntryData,
       onSuccess: handleSuccess,
       onDelete: handleDelete,
       onCancel: handleCancel,
@@ -627,7 +634,7 @@ export default function EditEntryPage({
     collectionSlug: slug,
     entryId: id,
     collection: collection,
-    entry: entryData,
+    entry: apiEntryData,
   };
 
   return (

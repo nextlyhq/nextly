@@ -391,14 +391,18 @@ export function RelationshipInput<
   );
 
   /**
-   * Handles removal of a selected relationship.
+   * Handles removal of a selected relationship, by its position.
+   *
+   * By position rather than by id: a field naming several collections can
+   * hold the same id from two of them, and a link can be stored twice, so an
+   * id names more than the one row that was clicked. The displayed items are
+   * the value's entries in order, so a position names exactly one.
    */
   const handleRemove = useCallback(
-    (itemId: string) => {
+    (index: number) => {
       if (hasMany) {
         const currentValues = Array.isArray(value) ? (value as unknown[]) : [];
-        const filtered = currentValues.filter(v => referenceIdOf(v) !== itemId);
-        onChange(filtered);
+        onChange(currentValues.filter((_, at) => at !== index));
       } else {
         onChange(null);
       }
@@ -528,14 +532,16 @@ export function RelationshipInput<
       {/* Selected items */}
       {selectedItems.length > 0 && (
         <div className="space-y-2">
-          {selectedItems.map(item => {
+          {selectedItems.map((item, index) => {
             // A link the editor cannot see: kept, removable, never opened.
             if (isRestrictedReference(item)) {
               return (
                 <RestrictedReference
-                  key={`${item.relationTo ?? ""}:${item.id}`}
+                  // A link can be stored twice, so its position keeps the key
+                  // unique.
+                  key={`${index}:${item.relationTo ?? ""}:${item.id}`}
                   id={item.id}
-                  onRemove={() => handleRemove(item.id)}
+                  onRemove={() => handleRemove(index)}
                   disabled={isDisabled}
                 />
               );
@@ -562,7 +568,7 @@ export function RelationshipInput<
               <RelationshipCard
                 key={item.id}
                 item={item}
-                onRemove={() => handleRemove(item.id)}
+                onRemove={() => handleRemove(index)}
                 onEdit={allowEdit && !isDisabled ? handleEdit : undefined}
                 disabled={isDisabled}
                 collectionSlug={

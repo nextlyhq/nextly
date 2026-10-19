@@ -22,6 +22,7 @@
 import { fetcher } from "../lib/api/fetcher";
 import { protectedApi } from "../lib/api/protectedApi";
 import type { BulkResponse, ListResponse } from "../lib/api/response-types";
+import { withoutPlaceholders } from "../lib/form/stored-references";
 import type { HookWarning, MutationResult } from "../lib/mutation-warnings";
 import type { Entry, EntryValue, FieldDefinition } from "../types/collection";
 
@@ -648,7 +649,8 @@ export const entryApi = {
     const qs = query.toString();
     const result = await protectedApi.patch<MutationResponse<Entry>>(
       `/collections/${collectionSlug}/entries/${id}${qs ? `?${qs}` : ""}`,
-      data
+      // A link the editor cannot see is held in the form as a placeholder.
+      withoutPlaceholders(data)
     );
     return { item: result.item, warnings: result.warnings };
   },

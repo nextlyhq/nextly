@@ -184,6 +184,37 @@ function mergeFields(fields: FieldConfig[], populated: Doc, stored: Doc): Doc {
   return merged;
 }
 
+/** An object literal's shape: a value the form built, not a Date or a File. */
+function isPlainObject(value: unknown): value is Doc {
+  if (!isRecord(value)) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * A value to write, with every placeholder turned back into the reference it
+ * stands for: the bare id, or the `{ relationTo, value }` pair. The marker is
+ * the admin's own and never reaches the server, at any depth: the server
+ * reduces a related object to its id at the top level, but not an upload
+ * inside a group or a repeater.
+ */
+export function withoutPlaceholders<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map(item => withoutPlaceholders(item)) as T;
+  }
+  if (!isPlainObject(value)) return value;
+  if (isRestrictedReference(value)) {
+    return (
+      typeof value.relationTo === "string"
+        ? { relationTo: value.relationTo, value: value.value }
+        : value.id
+    ) as T;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, withoutPlaceholders(item)])
+  ) as T;
+}
+
 /**
  * The populated document with every stored link kept: a link the populated
  * read gave no row for becomes a placeholder, at its stored position.

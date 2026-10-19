@@ -21,6 +21,7 @@ import type {
   ActionResponse,
   MutationResponse,
 } from "../lib/api/response-types";
+import { withoutPlaceholders } from "../lib/form/stored-references";
 
 import type {
   FieldResolution,
@@ -274,7 +275,8 @@ export const singleApi = {
     const qs = query.toString();
     const result = await protectedApi.patch<MutationResponse<SingleDocument>>(
       `/singles/${slug}${qs ? `?${qs}` : ""}`,
-      data
+      // A link the editor cannot see is held in the form as a placeholder.
+      withoutPlaceholders(data)
     );
     return result.item;
   },

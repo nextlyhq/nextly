@@ -30,6 +30,7 @@ import type {
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type { ListResponse } from "@admin/lib/api/response-types";
+import { withoutPlaceholders } from "@admin/lib/form/stored-references";
 
 // The diff wire types live in core (the engine produces them); re-exported here
 // so admin components import them from the same place as the other version types.
@@ -303,7 +304,9 @@ export const versionApi = {
 
     return protectedApi.put<AutosaveWriteResponse>(
       `${basePath(scope)}/autosave${query ? `?${query}` : ""}`,
-      snapshot
+      // The form's values, which hold a link the editor cannot see as a
+      // placeholder; a recovery point stores it as the reference it is.
+      withoutPlaceholders(snapshot)
     );
   },
 

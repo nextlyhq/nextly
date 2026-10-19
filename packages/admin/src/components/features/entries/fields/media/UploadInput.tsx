@@ -179,9 +179,15 @@ function normalizeItem(item: unknown): UploadedFile | null {
   if (typeof item === "object" && item !== null) {
     const obj = item as Record<string, unknown>;
 
-    // A stored upload the editor cannot see: it has an id and nothing else.
-    if (isRestrictedReference(obj) && typeof obj.id === "string") {
-      return { id: obj.id, filename: obj.id, restricted: true };
+    // A stored upload the editor cannot see: an id and nothing else, or the
+    // pair a field naming several collections stores, whose collection is
+    // kept so it is saved against the same one.
+    if (isRestrictedReference(obj)) {
+      const id = typeof obj.relationTo === "string" ? obj.value : obj.id;
+      if (typeof id !== "string") return null;
+      return typeof obj.relationTo === "string"
+        ? { id, filename: id, restricted: true, relationTo: obj.relationTo }
+        : { id, filename: id, restricted: true };
     }
 
     // Polymorphic value { relationTo, value }
@@ -262,9 +268,14 @@ function normalizeItem(item: unknown): UploadedFile | null {
  * cannot see, which must stay one so it is still recognised after an edit.
  */
 function toFormValue(file: UploadedFile): unknown {
-  return file.restricted
+  if (!file.restricted) return file.id;
+  return file.relationTo === undefined
     ? { id: file.id, [RESTRICTED_REFERENCE]: true }
-    : file.id;
+    : {
+        relationTo: file.relationTo,
+        value: file.id,
+        [RESTRICTED_REFERENCE]: true,
+      };
 }
 
 /**

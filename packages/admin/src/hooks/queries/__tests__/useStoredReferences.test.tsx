@@ -147,6 +147,36 @@ describe("useWithStoredReferences", () => {
     expect(refetchStored).toHaveBeenCalledTimes(1);
   });
 
+  it("stops handing over an earlier merge once reads stay apart after every retry", () => {
+    // A save, or someone else's, leaves the two reads on different versions
+    // and refetching never brings them together. The earlier merge would be
+    // written back over the newer document, so the editor is told instead.
+    const { result, rerender } = renderHook(
+      (props: { populated: never; stored: never }) =>
+        useWithStoredReferences({ fields: FIELDS, ...props, scope: "e" }),
+      {
+        initialProps: {
+          populated: read(populatedV1),
+          stored: read(storedV1),
+        },
+      }
+    );
+    expect(result.current.document).toBeDefined();
+
+    const newer = { ...populatedV1, updatedAt: "v2" };
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      rerender({ populated: read(newer), stored: read(storedV1) });
+      rerender({
+        populated: read(newer, { isFetching: true }),
+        stored: read(storedV1, { isFetching: true }),
+      });
+    }
+    rerender({ populated: read(newer), stored: read(storedV1) });
+    expect(result.current.document).toBeUndefined();
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.error?.message).toMatch(/kept changing/);
+  });
+
   it("does not hand over a merge made for another language", () => {
     const { result, rerender } = renderHook(
       (props: { scope: string; populated: never; stored: never }) =>
