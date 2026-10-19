@@ -203,6 +203,17 @@ describe("withStoredReferences", () => {
     expect(merged).toEqual({ title: "Hello", shallow: "a" });
   });
 
+  it("reads a field the API returned under its column name, as the form does", () => {
+    // The form reads `featuredImage` or, failing that, `featured_image`; a
+    // merge that looked only for the first would leave the link out.
+    const merged = withStoredReferences(
+      [f({ name: "featuredImage", type: "upload", relationTo: "media" })],
+      { featured_image: null } as Record<string, unknown>,
+      { featured_image: "m1" }
+    );
+    expect(merged.featuredImage).toEqual(placeholder("m1"));
+  });
+
   it("keeps an empty link empty", () => {
     const merged = withStoredReferences(
       [

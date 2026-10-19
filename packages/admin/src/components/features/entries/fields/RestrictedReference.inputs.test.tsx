@@ -7,7 +7,7 @@
  * of its collection. The form's value is read back after the click.
  */
 import { TooltipProvider } from "@nextlyhq/ui";
-import { fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 import { useForm } from "react-hook-form";
 import { describe, expect, it, vi } from "vitest";
 
@@ -81,11 +81,15 @@ function RelationshipHarness({ initial }: { initial: unknown[] }) {
   );
 }
 
+/** The upload harness's form, so a case can reset it as a refetch would. */
+let uploadForm: { reset: (values: { gallery: unknown[] }) => void } | undefined;
+
 function UploadHarness({ initial }: { initial: unknown[] }) {
   const form = useForm<{ gallery: unknown[] }>({
     defaultValues: { gallery: initial },
   });
   latest = form.watch("gallery");
+  uploadForm = form;
   return (
     <UploadInput
       name="gallery"
@@ -171,5 +175,24 @@ describe("removing a restricted link", () => {
       title: "Page X, edited",
     });
     expect(value[1]).toEqual(hiddenPair("notes", "x"));
+  });
+
+  it("in an upload, shows a file that became restricted as a placeholder, not as the cached file", () => {
+    renderWithProviders(
+      <UploadHarness
+        initial={[{ id: "m1", filename: "one.png", url: "/one.png" }, "m2"]}
+      />
+    );
+    // A removal fills the input's own cache with the readable file.
+    fireEvent.click(screen.getByRole("button", { name: "Remove m2" }));
+    // A refetch then hands the form the same id as a placeholder.
+    act(() => {
+      uploadForm?.reset({
+        gallery: [{ id: "m1", [RESTRICTED_REFERENCE]: true }],
+      });
+    });
+    expect(
+      screen.getByRole("group", { name: "Restricted or missing item m1" })
+    ).toBeTruthy();
   });
 });

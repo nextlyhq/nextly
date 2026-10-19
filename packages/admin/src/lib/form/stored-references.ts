@@ -23,6 +23,8 @@
 
 import type { FieldConfig } from "nextly/config";
 
+import { storedValueOf } from "./default-values";
+
 /** The key that marks a reference value as a placeholder. */
 export const RESTRICTED_REFERENCE = "__restrictedReference";
 
@@ -175,11 +177,19 @@ function mergeFields(fields: FieldConfig[], populated: Doc, stored: Doc): Doc {
   const merged: Doc = { ...populated };
   for (const field of fields) {
     const name = (field as { name?: unknown }).name;
-    if (typeof name !== "string" || !(name in stored)) continue;
-    const value = mergeField(field, populated[name], stored[name]);
+    if (typeof name !== "string") continue;
+    // Read as the form reads them, under the field's name or its column name,
+    // and written under the name, which the form reads first.
+    const storedValue = storedValueOf(stored, name);
+    if (storedValue === undefined) continue;
+    const value = mergeField(
+      field,
+      storedValueOf(populated, name),
+      storedValue
+    );
     // Only a field that took a value is written, so one absent from the
     // populated read stays absent rather than appearing as undefined.
-    if (value !== undefined || name in populated) merged[name] = value;
+    if (value !== undefined) merged[name] = value;
   }
   return merged;
 }
@@ -255,9 +265,13 @@ export function populatedAmongStored(
 ): boolean {
   return fields.every(field => {
     const name = (field as { name?: unknown }).name;
-    if (typeof name !== "string" || !(name in stored)) return true;
+    if (typeof name !== "string") return true;
+    const storedValue = storedValueOf(stored, name);
+    if (storedValue === undefined) return true;
     const check = AMONG_STORED[field.type as string];
-    return check ? check(field, populated[name], stored[name]) : true;
+    return check
+      ? check(field, storedValueOf(populated, name), storedValue)
+      : true;
   });
 }
 

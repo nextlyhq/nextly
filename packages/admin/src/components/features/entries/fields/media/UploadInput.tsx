@@ -372,12 +372,19 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
 
   // Use displayFiles if available and IDs match, otherwise use normalized value
   // This ensures we show full media info immediately after selection
+  // A cached file stands for the value's only while it is the same link: a
+  // file the editor could read can come back as a placeholder for one they no
+  // longer can, under the same id.
   const files =
     displayFiles.length > 0 &&
     displayFiles.every(
       df =>
-        normalizedFromValue.some(nf => nf.id === df.id) ||
-        (Array.isArray(value) ? value.includes(df.id) : value === df.id)
+        normalizedFromValue.some(
+          nf =>
+            nf.id === df.id &&
+            Boolean(nf.restricted) === Boolean(df.restricted) &&
+            nf.relationTo === df.relationTo
+        ) || (Array.isArray(value) ? value.includes(df.id) : value === df.id)
     )
       ? displayFiles
       : normalizedFromValue;
