@@ -37,26 +37,17 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { companionRenameFromResolutions } from "../../domains/i18n/migration/companion-rename";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
-import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
-import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import {
-  BrowserPromptDispatcher,
-  type BrowserRenameResolution,
-} from "../../domains/schema/pipeline/prompt-dispatcher/browser";
-import { PushSchemaPipeline } from "../../domains/schema/pipeline/pushschema-pipeline";
-import {
-  noopMigrationJournal,
-  noopPreRenameExecutor,
-} from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
+import type { BrowserRenameResolution } from "../../domains/schema/pipeline/prompt-dispatcher/browser";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
-import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldResolution } from "../../domains/schema/services/schema-change-types";
 import { calculateSchemaHash } from "../../domains/schema/services/schema-hash";
@@ -78,7 +69,6 @@ import { NextlyError } from "../../errors";
 import { transformRichTextFields } from "../../lib/field-transform";
 import { resolveBuilderRevalidate } from "../../revalidation/builder-revalidate";
 import { withSessionCacheHeaders } from "../../routeHandler";
-import { getProductionNotifier } from "../../runtime/notifications/index";
 import { isReservedResourceSlug } from "../../schemas/_zod/rbac";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -91,12 +81,12 @@ import {
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
+import { builderSchemaPush } from "../helpers/builder-schema-push";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
   getConfigFromDI,
-  getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
   getSingleMetadataServiceFromDI,
@@ -1241,11 +1231,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           ? extractDatabaseNameFromUrl(process.env.DATABASE_URL)
           : undefined;
 
+      // A Required or Unique field leaving translation is pushed without its setting first, and
+      // the setting is pushed once the companion reconcile has copied its values in.
+      const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+      });
+
       const desired = await buildFullDesiredSchema();
       desired.singles[slug] = {
         slug,
         tableName,
-        fields: fields as DesiredSingle["fields"],
+        fields: (settingsDeferred ?? fields) as DesiredSingle["fields"],
         // Mirror previewSingleSchemaChanges so apply diffs against the
         // same desired schema.
         status: single.status === true,
@@ -1257,40 +1256,19 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         builderOwned: true,
       };
 
-      const promptDispatcher = new BrowserPromptDispatcher(
-        renameResolutions ?? [],
-        eventResolutions ?? [],
-        legacyBundle
-      );
-
-      const migrationJournal =
-        getMigrationJournalFromDI() ?? noopMigrationJournal;
-      const pipeline = new PushSchemaPipeline({
-        executor: new DrizzleStatementExecutor(dialect, db),
-        renameDetector: new RegexRenameDetector(),
-        classifier: new RealClassifier(),
-        promptDispatcher,
-        preRenameExecutor: noopPreRenameExecutor,
-        preCleanupExecutor: new RealPreCleanupExecutor(),
-        migrationJournal,
-        notifier: getProductionNotifier(),
-      });
-
-      const result = await pipeline.apply({
-        desired,
-        db,
+      const push = builderSchemaPush({
         dialect,
-        source: "ui",
-        promptChannel: "browser",
+        db,
         databaseName,
-        uiTargetSlug: slug,
-        // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
-        // kind is invisible to every history query filtered by its own.
-        uiTargetKind: "single" as const,
-        // A field becoming translated keeps its value as this language's; the apply moves it after
-        // its prompts and refusals, before it drops the main column.
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        slug,
+        kind: "single",
+        resolutions: [
+          renameResolutions ?? [],
+          eventResolutions ?? [],
+          legacyBundle,
+        ],
       });
+      const result = await push(desired);
 
       if (!result.success) {
         throw new Error(
@@ -1334,6 +1312,28 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           cause: err instanceof Error ? err : undefined,
           logContext: { op: "singleCompanionReconcile", slug, detail: msg },
         });
+      }
+
+      // The settings the first push left off, now that the shared columns hold the default
+      // language's values. Whether those values can take them was asked before anything ran.
+      // A new desired schema rather than an edit of the first: the pipeline keeps the last one it
+      // applied, by reference, to skip a push that changes nothing.
+      if (settingsDeferred) {
+        const settled = await push({
+          ...desired,
+          singles: {
+            ...desired.singles,
+            [slug]: {
+              ...desired.singles[slug],
+              fields: fields as DesiredSingle["fields"],
+            },
+          },
+        });
+        if (!settled.success) {
+          throw new Error(
+            settled.error?.message ?? "Failed to apply schema changes"
+          );
+        }
       }
 
       const newSchemaVersion = currentVersion + 1;
