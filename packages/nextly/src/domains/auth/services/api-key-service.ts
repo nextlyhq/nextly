@@ -37,7 +37,7 @@
 import { createHash, randomBytes, randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { accountIsActive } from "../../../auth/session/session-standing";
@@ -590,6 +590,29 @@ export class ApiKeyService extends BaseService {
         ],
         logContext: { tokenType: tokenType },
       });
+    }
+
+    // A role that does not exist names nothing a key could act as. Refused
+    // here, before the ceiling (which lets a super-admin through without
+    // reading the role), so a summary and a creation refuse it alike.
+    if (tokenType === "role-based" && roleId) {
+      const found = await this.db
+        .select({ id: this.rolesTable.id })
+        .from(this.rolesTable)
+        .where(eq(this.rolesTable.id, roleId))
+        .limit(1);
+      if ((found as Array<{ id: string }>).length === 0) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "roleId",
+              code: "INVALID",
+              message: "roleId does not name a role.",
+            },
+          ],
+          logContext: { tokenType },
+        });
+      }
     }
 
     await this.checkPermissionCeiling(userId, tokenType, roleId);
@@ -1162,10 +1185,21 @@ export class ApiKeyService extends BaseService {
           : null;
     if (last !== null && at - last < LAST_USE_RESOLUTION_MS) return;
     try {
+      // Only forward: two requests with one key at once each read the old
+      // record, and the older one's write, landing last, must not replace
+      // the newer use.
       await this.db
         .update(this.apiKeysTable)
         .set({ lastUsedAt: new Date(at) })
-        .where(eq(this.apiKeysTable.id, keyId));
+        .where(
+          and(
+            eq(this.apiKeysTable.id, keyId),
+            or(
+              isNull(this.apiKeysTable.lastUsedAt),
+              lt(this.apiKeysTable.lastUsedAt, new Date(at))
+            )
+          )
+        );
     } catch (error) {
       this.logger.warn("API key last use could not be recorded", {
         keyId,

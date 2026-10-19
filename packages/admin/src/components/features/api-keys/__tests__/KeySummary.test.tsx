@@ -72,6 +72,11 @@ describe("KeySummary", () => {
     expect(screen.getByText("Email Providers")).toBeTruthy();
     expect(screen.getByText("Nx Pb Class Usage")).toBeTruthy();
     expect(answer.asked).toContainEqual({ tokenType: "full-access" });
+    expect(
+      screen.getByText(
+        /access rule written in code .* can still allow this key less/
+      )
+    ).toBeTruthy();
   });
 
   it("asks for the chosen role, and for a role before it can answer", () => {

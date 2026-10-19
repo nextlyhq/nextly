@@ -213,8 +213,12 @@ const ApiKeyAbilitiesQuerySchema = z.object({
  *
  * `GET /api/api-keys/abilities?tokenType=…&roleId=…`
  *
- * Answered by the resolution a key's own requests use, so the summary is what
- * the key gets. Session-only and behind the permission to create keys, as
+ * Answered by the resolution a key's own requests use, so the summary is the
+ * permissions the key gets. An access rule written in code for a collection
+ * or Single can still refuse a request they allow, and may depend on the
+ * entry, so it is not judged here.
+ *
+ * Session-only and behind the permission to create keys, as
  * creation is: a summary is that creation's preview, and a key asking it
  * about another key is refused.
  *

@@ -86,29 +86,38 @@ export function KeySummary({ tokenType, roleId }: KeySummaryProps) {
   }
 
   return (
-    <ul className="space-y-2" data-testid="api-key-summary">
-      {[...byResource(data).entries()].map(([resource, actions]) => (
-        <li
-          key={resource}
-          data-resource={resource}
-          className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5 text-sm"
-        >
-          <span className="min-w-32 font-medium text-foreground">
-            {humaniseResource(resource)}
-          </span>
-          <span className="flex flex-wrap gap-1.5">
-            {actions.map(action => (
-              <span
-                key={action}
-                data-action={action}
-                className="inline-flex items-center rounded-sm border border-input bg-background px-2 py-0.5 text-xs font-medium text-foreground capitalize"
-              >
-                {action}
-              </span>
-            ))}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <div className="space-y-3">
+      <ul className="space-y-2" data-testid="api-key-summary">
+        {[...byResource(data).entries()].map(([resource, actions]) => (
+          <li
+            key={resource}
+            data-resource={resource}
+            className="flex flex-wrap items-baseline gap-x-3 gap-y-1.5 text-sm"
+          >
+            <span className="min-w-32 font-medium text-foreground">
+              {humaniseResource(resource)}
+            </span>
+            <span className="flex flex-wrap gap-1.5">
+              {actions.map(action => (
+                <span
+                  key={action}
+                  data-action={action}
+                  className="inline-flex items-center rounded-sm border border-input bg-background px-2 py-0.5 text-xs font-medium text-foreground capitalize"
+                >
+                  {action}
+                </span>
+              ))}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {/* The list is the key's granted permissions. A collection's or Single's
+        access rule written in code can still refuse a request, and may
+        depend on the entry itself, so it cannot be listed ahead of time. */}
+      <p className="text-xs text-muted-foreground">
+        An access rule written in code for a collection or Single can still
+        allow this key less.
+      </p>
+    </div>
   );
 }

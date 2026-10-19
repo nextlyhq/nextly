@@ -300,6 +300,24 @@ describe.each(getConfiguredTestDialects())(
         expect((await abilities(headers, "?tokenType=admin")).status).toBe(400);
       });
 
+      it("refuses a role that does not exist, as creating the key would", async () => {
+        const headers = await session(editorId, [editorRoleId]);
+        const missing = "00000000-0000-4000-8000-000000000000";
+
+        expect(
+          (await abilities(headers, `?tokenType=role-based&roleId=${missing}`))
+            .status
+        ).toBe(400);
+        await expect(
+          keys.createApiKey(editorId, {
+            name: "no such role",
+            tokenType: "role-based",
+            roleId: missing,
+            expiresIn: "unlimited",
+          })
+        ).rejects.toMatchObject({ statusCode: 400 });
+      });
+
       it("is private to the session that asked, refusals included", async () => {
         const headers = await session(editorId, [editorRoleId]);
         for (const query of [

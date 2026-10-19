@@ -150,6 +150,26 @@ describe("ApiKeyService records a key's last use", () => {
     expect(held.state.updates).toBe(2);
   });
 
+  it("never moves the last use back to an older request's time", async () => {
+    // Two requests with one key at once: the older one's write is held while
+    // the newer one's lands, and must not replace it when it is let go.
+    const auth = service.authenticateApiKey(key);
+    await vi.waitFor(() => expect(held.state.updates).toBe(1));
+    const newer = new Date(Date.now() + 5_000);
+    await testDb.db
+      .update(testDb.schema.apiKeys)
+      .set({ lastUsedAt: newer })
+      .where(eq(testDb.schema.apiKeys.id, keyId));
+
+    held.release();
+    await auth;
+
+    const recorded = await lastUsedAt();
+    expect(
+      recorded instanceof Date ? recorded.getTime() : Number(recorded)
+    ).toBeGreaterThanOrEqual(Math.floor(newer.getTime() / 1000) * 1000);
+  });
+
   it("admits the key when the write fails", async () => {
     held.state.failing = true;
     held.release();
