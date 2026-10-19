@@ -539,6 +539,31 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 120_000);
 
+    it("judges a Direct API caller whose call forwards no access override, as the document's read does", async () => {
+      const t = await boot(dialect);
+      const post = await postWithFourEvents(t);
+      const outsider = await personHolding(t, ["read-content-releases"]);
+      const subject = { kind: "collection" as const, slug: "posts", id: post };
+      // A wrapper spreading its own options forwards the key with no value,
+      // which replaces the instance's setting in the merged config.
+      const forwarded = { user: { id: outsider }, overrideAccess: undefined };
+
+      const documentRead = await t.nextly
+        .findByID({ collection: "posts", id: post, ...forwarded })
+        .then(
+          () => "readable",
+          () => "refused"
+        );
+      const eventsRead = await t.nextly.contentEvents
+        .list({ subject, ...forwarded })
+        .then(
+          () => "readable",
+          () => "refused"
+        );
+      expect(documentRead).toBe("refused");
+      expect(eventsRead).toBe(documentRead);
+    }, 120_000);
+
     it("hands the document's hooks the context a Direct API or plugin caller passed", async () => {
       const t = await boot(dialect);
       const reader = await personHolding(t, ["read-contextual"]);

@@ -69,7 +69,10 @@ function queryOf(args: ContentEventsListArgs): SubjectEventsQuery {
 function callerOf(config: DirectAPIConfig): SubjectEventsCaller {
   const access = accessOptions(config);
   return {
-    overrideAccess: access.overrideAccess ?? true,
+    // Trusted only when the merged config says so, as a collection read is: a
+    // call forwarding `overrideAccess: undefined` replaces the instance's
+    // setting, and is then judged rather than trusted, never the reverse.
+    overrideAccess: access.overrideAccess === true,
     ...(access.user === undefined ? {} : { user: access.user }),
     ...(access.authenticatedScope === undefined
       ? {}
