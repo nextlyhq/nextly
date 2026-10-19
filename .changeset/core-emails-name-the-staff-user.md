@@ -29,14 +29,4 @@
 "@nextlyhq/ui": patch
 ---
 
-Core's own emails to a staff user now name that user on their delivery
-records, by kind and id (`staff` and the user's id): the welcome email, the
-password reset and the email verification. A record that names the user can
-be found and erased with them whatever address it went to.
-
-`person` on `nextly.email.send`, `nextly.email.sendWithTemplate` and a
-plugin's `ctx.services.email` accepts a staff user as `{ kind: "staff", id }`
-as well as a plugin-defined person, and the Direct API now forwards `person`,
-which it dropped before. A send naming a staff user who does not exist is
-refused with `VALIDATION_ERROR` before any provider is contacted. `person`
-remains `@experimental`. Every send that names nobody is unchanged.
+Core's welcome, password-reset and email-verification emails now name the staff user on their delivery records, so deleting the user can erase them under any address. `person` on `nextly.email.send`, `sendWithTemplate` and a plugin's `ctx.services.email` accepts a staff user as `{ kind: "staff", id }` (experimental).

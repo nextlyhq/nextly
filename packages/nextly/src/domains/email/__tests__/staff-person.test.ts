@@ -169,8 +169,9 @@ describe("a send naming a staff user", () => {
 
     const result = await service.sendPasswordResetEmail(
       "ada@example.com",
-      { id, name: "Ada", email: "ada@example.com" },
-      "tok"
+      { name: "Ada", email: "ada@example.com" },
+      "tok",
+      { staffUserId: id }
     );
 
     expect(result.success).toBe(true);
@@ -190,5 +191,40 @@ describe("a send naming a staff user", () => {
     );
     expect(NextlyError.is(failure)).toBe(true);
     expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("names nobody when a caller's user object only happens to carry an id", async () => {
+    // The helpers are open to plugins, whose user objects may carry an id
+    // that is no staff user's: only an explicit staffUserId names one.
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const { service, lookup } = makeService(adapter, undefined);
+    const member = { id: "member-1", name: "Ada", email: "ada@example.com" };
+
+    const result = await service.sendPasswordResetEmail(
+      member.email,
+      member,
+      "tok"
+    );
+
+    expect(result.success).toBe(true);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("names a staff user by the id as stored, not as the caller spelled it", async () => {
+    // MySQL's usual collation matches `U-1` to a row stored as `u-1`; the
+    // record and the deletion's digest must name one spelling.
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const { service } = makeService(adapter, { id: "u-1" });
+    const named = await (
+      service as unknown as {
+        personToRecord(value: unknown): Promise<unknown>;
+      }
+    ).personToRecord({ kind: "staff", id: "U-1" });
+
+    expect(named).toEqual({ kind: "staff", id: "u-1" });
   });
 });

@@ -1060,9 +1060,17 @@ export class EmailService extends BaseService {
    */
   async sendPasswordResetEmail(
     to: string,
-    user: { id?: string; name: string | null; email: string },
+    user: { name: string | null; email: string },
     token: string,
-    options?: { path?: string }
+    options?: {
+      path?: string;
+      /**
+       * The staff user the email goes to, by id, so its delivery records name
+       * them. Named explicitly, never read off `user`: a caller's user object
+       * may carry an id of its own that is no staff user's.
+       */
+      staffUserId?: string;
+    }
   ): Promise<{ success: boolean; messageId?: string }> {
     const baseUrl = this.getBaseUrl();
     const path =
@@ -1083,7 +1091,7 @@ export class EmailService extends BaseService {
         token,
         year: new Date().getFullYear().toString(),
       },
-      staffRecipient(user)
+      staffRecipient(options?.staffUserId)
     );
   }
 
@@ -1106,9 +1114,17 @@ export class EmailService extends BaseService {
    */
   async sendEmailVerificationEmail(
     to: string,
-    user: { id?: string; name: string | null; email: string },
+    user: { name: string | null; email: string },
     token: string,
-    options?: { path?: string }
+    options?: {
+      path?: string;
+      /**
+       * The staff user the email goes to, by id, so its delivery records name
+       * them. Named explicitly, never read off `user`: a caller's user object
+       * may carry an id of its own that is no staff user's.
+       */
+      staffUserId?: string;
+    }
   ): Promise<{ success: boolean; messageId?: string }> {
     const baseUrl = this.getBaseUrl();
     const path =
@@ -1129,7 +1145,7 @@ export class EmailService extends BaseService {
         token,
         year: new Date().getFullYear().toString(),
       },
-      staffRecipient(user)
+      staffRecipient(options?.staffUserId)
     );
   }
 
@@ -1148,8 +1164,16 @@ export class EmailService extends BaseService {
    */
   async sendWelcomeEmail(
     to: string,
-    user: { id?: string; name: string | null; email: string },
-    options?: { verifyLink?: string }
+    user: { name: string | null; email: string },
+    options?: {
+      verifyLink?: string;
+      /**
+       * The staff user the email goes to, by id, so its delivery records name
+       * them. Named explicitly, never read off `user`: a caller's user object
+       * may carry an id of its own that is no staff user's.
+       */
+      staffUserId?: string;
+    }
   ): Promise<{ success: boolean; messageId?: string }> {
     return this.sendWithTemplate(
       "welcome",
@@ -1162,7 +1186,7 @@ export class EmailService extends BaseService {
         expiresIn: "24 hours",
         year: new Date().getFullYear().toString(),
       },
-      staffRecipient(user)
+      staffRecipient(options?.staffUserId)
     );
   }
 
@@ -1454,7 +1478,10 @@ export class EmailService extends BaseService {
         logContext: { operation: "email.send" },
       });
     }
-    return staff;
+    // The id as stored, not as the caller spelled it: on MySQL's usual
+    // case-insensitive collation the two can differ, and the record, the
+    // deleted-people digest and the deletion must all name one spelling.
+    return staffPerson(String(user.id));
   }
 
   /**
@@ -1469,15 +1496,15 @@ export class EmailService extends BaseService {
 /**
  * The send options that name the staff user a core email goes to, so its
  * delivery records name them and their deletion erases those records; none
- * for a caller that gave no id.
+ * for a caller that named no staff user.
  */
-function staffRecipient(user: {
-  id?: string;
-}): { person: PrincipalRef } | undefined {
+function staffRecipient(
+  staffUserId: string | undefined
+): { person: PrincipalRef } | undefined {
   // An id longer than a record can hold is sent naming nobody, as every core
   // email was before staff users were named, rather than refused.
-  return isStaffPersonId(user.id)
-    ? { person: staffPerson(user.id) }
+  return isStaffPersonId(staffUserId)
+    ? { person: staffPerson(staffUserId) }
     : undefined;
 }
 
