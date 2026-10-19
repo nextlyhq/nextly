@@ -149,16 +149,29 @@ function mayReferTo(search: StoredFileSearch, names: readonly string[]): SQL {
  * Of `paths`, the ones `rows` refer to, compared as stored paths are
  * (`canonicalStoredPath`): the one answer to "does an item refer to this
  * file" that the search for left-behind thumbnails also gives.
+ *
+ * A row's thumbnail whose stored location its record does not show (an
+ * original spelled otherwise than its URL, say) cannot be compared by path;
+ * a file whose name it ends in is taken as referred to, since nothing shows
+ * it is not.
  */
 export function pathsReferencedAmong(
   paths: readonly string[],
   rows: readonly MediaFilesRecord[]
 ): Set<string> {
-  const referenced = new Set(
-    rows.flatMap(row => storedFilesOf(row).paths.map(canonicalStoredPath))
-  );
+  const referenced = new Set<string>();
+  const unlocatedNames = new Set<string>();
+  for (const row of rows) {
+    const files = storedFilesOf(row);
+    for (const path of files.paths) referenced.add(canonicalStoredPath(path));
+    for (const url of files.unlocated) unlocatedNames.add(lastSegment(url));
+  }
   return new Set(
-    paths.filter(path => referenced.has(canonicalStoredPath(path)))
+    paths.filter(
+      path =>
+        referenced.has(canonicalStoredPath(path)) ||
+        unlocatedNames.has(lastSegment(path))
+    )
   );
 }
 

@@ -421,6 +421,14 @@ describe("a file another item also refers to", () => {
       }),
     ],
     [
+      "as its thumbnail, where its own original's spelling hides where that is",
+      (size: { path: string; url: string }) => ({
+        filename: "/2026//10/elsewhere-z.png",
+        url: "/uploads/2026/10/elsewhere-z.png",
+        thumbnailUrl: size.url,
+      }),
+    ],
+    [
       "under another spelling of the same file",
       (size: { path: string; url: string }) => ({
         filename: `/${size.path.replace("/", "//")}`,
