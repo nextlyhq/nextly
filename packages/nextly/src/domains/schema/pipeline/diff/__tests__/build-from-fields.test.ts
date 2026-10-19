@@ -744,7 +744,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       expect(columnNamed(table.columns, "tags")).toBeDefined();
     });
 
-    it("gives it the column the creating SQL writes", () => {
+    it("gives it the same column a plain single relationship gets", () => {
       const withManyToMany = buildDesiredTableFromComponentFields(
         "comp_hero",
         [{ name: "tags", ...manyToMany }] as never,
@@ -757,13 +757,9 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         dialect,
         { builtBy: "codeFirst" }
       );
-      // On PostgreSQL the creating SQL writes UUID, while a plain relationship's desired column stays
-      // text (the runtime mapper's type, a recorded follow-up). MySQL and SQLite agree.
-      const expected =
-        dialect === "postgresql"
-          ? { ...columnNamed(plain.columns, "tags"), type: "uuid" }
-          : columnNamed(plain.columns, "tags");
-      expect(columnNamed(withManyToMany.columns, "tags")).toEqual(expected);
+      expect(columnNamed(withManyToMany.columns, "tags")).toEqual(
+        columnNamed(plain.columns, "tags")
+      );
     });
   }
 );
@@ -812,26 +808,6 @@ describe("buildDesiredTableFromComponentFields - many-to-many index", () => {
       { builtBy: "codeFirst" }
     );
     expect(table.indexes?.map(i => i.name)).not.toContain("idx_comp_hero_tags");
-  });
-});
-
-describe("buildDesiredTableFromComponentFields - many-to-many column type", () => {
-  // The creating SQL writes a relationship as UUID on PostgreSQL. The desired column must name the
-  // same type, or an existing install plans a type change on a column nobody touched.
-  it("declares the many-to-many column as uuid on PostgreSQL, as the creating SQL does", () => {
-    const table = buildDesiredTableFromComponentFields(
-      "comp_hero",
-      [
-        {
-          name: "tags",
-          type: "relationship",
-          options: { target: "tags", relationType: "manyToMany" },
-        },
-      ] as never,
-      "postgresql",
-      { builtBy: "codeFirst" }
-    );
-    expect(table.columns.find(c => c.name === "tags")?.type).toBe("uuid");
   });
 });
 
