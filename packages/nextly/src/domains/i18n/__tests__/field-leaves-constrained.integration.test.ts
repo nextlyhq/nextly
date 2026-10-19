@@ -480,13 +480,36 @@ describeEachDialect(
         );
 
         expect(reported(refusal)).toMatch(
-          /2 entries share an English value for code, which must be unique/
+          /2 entries would share a value for code, which must be unique/
         );
         expect(reported(refusal)).not.toContain("same@example.com");
         expect(await englishCodes(path.table)).toEqual([
           "same@example.com",
           "same@example.com",
         ]);
+        expect(await columnsOf(path.table)).not.toContain("code");
+      }
+    );
+
+    // The move gives an entry with no row in English another language's value, so the check is
+    // made on the values the move writes, not on the English rows alone.
+    it.each(PATHS.filter(p => p.entity !== "single"))(
+      "refuses a Unique field when an entry without English would take another entry's value from its other language, when $path",
+      async path => {
+        await seedConstrained(path, {}, ["a1@example.com", undefined]);
+        // The second entry's only row is in Spanish, holding the first entry's English value.
+        await query(
+          `UPDATE ${q(`${path.table}_locales`)} SET ${q("_locale")} = 'es', ${q("code")} = 'a1@example.com' ` +
+            `WHERE ${q("_locale")} = 'en' AND ${q("code")} IS NULL`
+        );
+
+        const refusal = await attempt(
+          path.change([{ ...CODE, localized: false, unique: true }, VIEWS])
+        );
+
+        expect(reported(refusal)).toMatch(
+          /2 entries would share a value for code, which must be unique/
+        );
         expect(await columnsOf(path.table)).not.toContain("code");
       }
     );

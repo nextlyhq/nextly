@@ -103,17 +103,12 @@ export function buildDefaultLocaleRestoreStatements(
   options: { restoreStatus?: boolean } = {}
 ): string[] {
   if (columnNames.length === 0 && options.restoreStatus !== true) return [];
-  const { dialect, mainTable, companionTable, defaultLocale } = spec;
+  const { dialect, mainTable, companionTable } = spec;
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
   const parent = `${comp}.${q("_parent", dialect)} = ${main}.${q("id", dialect)}`;
-  // One row per parent, chosen by rank. Every column reads from the SAME row, so a parent whose
-  // preferred translation leaves one field empty cannot take that field from another language.
-  const ordering =
-    `ORDER BY (${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}) DESC, ` +
-    `${comp}.${q("_locale", dialect)} ASC LIMIT 1`;
   const fromChosenRow = (target: string, source: string) =>
-    `${target} = (SELECT ${source} FROM ${comp} WHERE ${parent} ${ordering})`;
+    `${target} = ${restoredValue(spec, source)}`;
   const assignments = [
     ...columnNames.map(name => {
       const col = q(name, dialect);
@@ -132,6 +127,26 @@ export function buildDefaultLocaleRestoreStatements(
     `UPDATE ${main} SET ${assignments} ` +
       `WHERE EXISTS (SELECT 1 FROM ${comp} WHERE ${parent})`,
   ];
+}
+
+/**
+ * The value a main row takes from the companion's `source` expression when it is restored: from
+ * the row in the default language, else the parent's first row by language code. One row per
+ * parent, chosen by rank, so every column read this way reads from the SAME row and a parent whose
+ * preferred translation leaves one field empty cannot take that field from another language.
+ *
+ * A correlated subquery over `spec.mainTable`, for the restore above and for a precondition that
+ * has to judge the values the restore will write before it runs.
+ */
+export function restoredValue(spec: CompanionCopyRef, source: string): string {
+  const { dialect, mainTable, companionTable, defaultLocale } = spec;
+  const comp = q(companionTable, dialect);
+  const parent = `${comp}.${q("_parent", dialect)} = ${q(mainTable, dialect)}.${q("id", dialect)}`;
+  return (
+    `(SELECT ${source} FROM ${comp} WHERE ${parent} ` +
+    `ORDER BY (${comp}.${q("_locale", dialect)} = ${lit(defaultLocale)}) DESC, ` +
+    `${comp}.${q("_locale", dialect)} ASC LIMIT 1)`
+  );
 }
 
 /**
