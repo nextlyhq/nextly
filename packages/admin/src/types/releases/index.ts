@@ -12,6 +12,7 @@
 import type {
   ReleaseBlockerReason,
   ReleaseCapabilities,
+  ReleaseKind,
   ReleaseMemberAction,
   ReleaseState,
 } from "nextly/schemas";
@@ -30,7 +31,12 @@ import type {
  * answer to is a UI that eventually lies. Deriving from the engine is what makes
  * inventing one impossible rather than merely discouraged.
  */
-export type { ReleaseBlockerReason, ReleaseMemberAction, ReleaseState };
+export type {
+  ReleaseBlockerReason,
+  ReleaseKind,
+  ReleaseMemberAction,
+  ReleaseState,
+};
 
 /**
  * What the server says THIS reader may do to a release.
@@ -78,6 +84,16 @@ export interface Release {
    */
   timezone: string | null;
   state: ReleaseState;
+  /**
+   * `single` for a document scheduled on its own, a release that holds that
+   * one document and nothing else.
+   *
+   * Optional because a release read from somewhere other than the list or
+   * detail route may not carry it; a screen marks only an explicit `single`,
+   * so an absent kind reads as an ordinary release rather than guessing from
+   * the member count, which can change.
+   */
+  kind?: ReleaseKind;
   publishedAt: string | null;
   createdBy: string | null;
   createdAt: string;
@@ -166,12 +182,46 @@ export interface ReleaseDocumentRef {
   entryId: string;
 }
 
+/**
+ * The four views of the release list, in the order the list shows them.
+ *
+ * The server's `?tab=` vocabulary. Spelled here because the server keeps it in
+ * its releases domain rather than in `nextly/schemas`, so there is no type to
+ * import; a tab the server stopped knowing is refused there with a 400 rather
+ * than answered with an empty list, so a drift here surfaces as an error on the
+ * screen and never as a tab that silently shows nothing.
+ */
+export const RELEASE_LIST_TABS = [
+  "upcoming",
+  "attention",
+  "drafts",
+  "done",
+] as const;
+
+export type ReleaseListTab = (typeof RELEASE_LIST_TABS)[number];
+
+/** Why a release is in Needs attention: it stopped, or it is overdue. */
+export type ReleaseAttentionReason = "stopped" | "overdue";
+
 /** The window a release list may be narrowed to. */
 export interface ReleaseListParams {
   state?: ReleaseState;
   scheduledAfter?: string;
   scheduledBefore?: string;
   limit?: number;
+  /** 1-based, as the route counts pages. */
+  page?: number;
+  /** One of the list's tabs, ordered as that tab is. */
+  tab?: ReleaseListTab;
+  /** Narrows Needs attention to one of its two parts. */
+  reason?: ReleaseAttentionReason;
+  /** Matched against title and description, on the server, before paging. */
+  search?: string;
+  /**
+   * Only releases of this kind. `release` is how the list hides
+   * single-document releases.
+   */
+  kind?: ReleaseKind;
   /**
    * Only the SCHEDULED releases holding this document.
    *
@@ -181,4 +231,34 @@ export interface ReleaseListParams {
    * eleven launches.
    */
   containing?: ReleaseDocumentRef;
+}
+
+/**
+ * One problem the checks found with one document of a release.
+ *
+ * `memberId` is what the list counts by: a document can carry several
+ * findings, and it is one document that needs fixing, not several.
+ */
+export interface ReleaseReadinessFinding {
+  memberId: string;
+  code: string;
+  source: string;
+  action: ReleaseMemberAction;
+  scopeKind: "collection" | "single" | "page";
+  scopeSlug: string;
+  entryId: string;
+  detail?: Readonly<Record<string, string | null | readonly string[]>>;
+}
+
+/**
+ * What the checks say about a release's documents right now.
+ *
+ * `hard` problems stop it from being scheduled or published now; `soft` ones
+ * are notes. Worked out by the server on each read, so a problem somebody
+ * fixed reads as fixed on the next one.
+ */
+export interface ReleaseReadiness {
+  releaseId: string;
+  hard: ReleaseReadinessFinding[];
+  soft: ReleaseReadinessFinding[];
 }

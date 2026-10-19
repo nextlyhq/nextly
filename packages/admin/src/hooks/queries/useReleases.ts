@@ -20,26 +20,38 @@
  * @module hooks/queries/useReleases
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import {
   addReleaseMember,
   cancelRelease,
   createRelease,
+  deleteRelease,
   fetchRelease,
   fetchReleaseBlockers,
   fetchReleaseMembers,
+  fetchReleaseReadiness,
   fetchReleases,
+  publishReleaseNow,
   removeReleaseMember,
   scheduleRelease,
 } from "@admin/services/releaseApi";
-import type {
-  AddReleaseMemberPayload,
-  CreateReleasePayload,
-  ReleaseDocumentRef,
-  ReleaseListParams,
-  ScheduleReleasePayload,
+import {
+  RELEASE_LIST_TABS,
+  type AddReleaseMemberPayload,
+  type CreateReleasePayload,
+  type ReleaseDocumentRef,
+  type ReleaseKind,
+  type ReleaseListParams,
+  type ReleaseListTab,
+  type ScheduleReleasePayload,
 } from "@admin/types/releases";
 
 export const releaseKeys = {
@@ -48,6 +60,7 @@ export const releaseKeys = {
   detail: (id: string) => ["releases", "detail", id] as const,
   members: (id: string) => ["releases", "members", id] as const,
   blockers: (id: string) => ["releases", "blockers", id] as const,
+  readiness: (id: string) => ["releases", "readiness", id] as const,
 };
 
 export function useReleases(params: ReleaseListParams = {}, enabled = true) {
@@ -74,6 +87,90 @@ export function useReleases(params: ReleaseListParams = {}, enabled = true) {
         ? PENDING_RELEASE_POLL_MS
         : NO_RELEASE_POLL_MS,
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * One page of one tab of the release list.
+ *
+ * The list's own read rather than {@link useReleases}, for one reason: while
+ * the next page, tab or search is being fetched it keeps showing the rows it
+ * has, so the table and its pager hold still instead of collapsing to a
+ * loading row on every page turn. Polled on the same two speeds as the rest of
+ * the releases screens, and for the same reason.
+ */
+export function useReleaseListPage(params: ReleaseListParams) {
+  return useQuery({
+    queryKey: releaseKeys.list(params),
+    queryFn: () => fetchReleases(params),
+    placeholderData: keepPreviousData,
+    refetchInterval: data =>
+      hasPendingRelease(data.state.data)
+        ? PENDING_RELEASE_POLL_MS
+        : NO_RELEASE_POLL_MS,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * How many releases each tab holds, under the same search and filter as the
+ * list.
+ *
+ * Read from each tab's own list total, asked for one row, so a count is
+ * always the number the tab would page through: the server applies the same
+ * rule to both, and there is no second way of counting here to disagree with
+ * it. The current tab's count is a separate request from its page for the
+ * same reason the page is polled: a count shown beside a tab must not depend
+ * on which tab happens to be open.
+ */
+export function useReleaseTabCounts(filters: {
+  search?: string;
+  kind?: ReleaseKind;
+}) {
+  const results = useQueries({
+    queries: RELEASE_LIST_TABS.map(tab => {
+      const params: ReleaseListParams = {
+        tab,
+        limit: 1,
+        ...(filters.search ? { search: filters.search } : {}),
+        ...(filters.kind ? { kind: filters.kind } : {}),
+      };
+      return {
+        queryKey: releaseKeys.list(params),
+        queryFn: () => fetchReleases(params),
+        placeholderData: keepPreviousData,
+        // A release moves between tabs on its own when its instant passes,
+        // so the counts are re-asked on the list's pending speed.
+        refetchInterval: PENDING_RELEASE_POLL_MS,
+        refetchOnWindowFocus: true,
+      };
+    }),
+  });
+  const counts = {} as Record<ReleaseListTab, number | undefined>;
+  RELEASE_LIST_TABS.forEach((tab, index) => {
+    counts[tab] = results[index]?.data?.meta.total;
+  });
+  return {
+    counts,
+    isPending: results.some(result => result.isPending),
+    isError: results.some(result => result.isError),
+  };
+}
+
+/**
+ * What the checks say about one release's documents now.
+ *
+ * Kept for half a minute, and not polled: a list holds a page of these, and
+ * each one is worked out over every document its release holds. Its own key
+ * rather than the blockers', because the schedule dialog's preflight must
+ * never be answered from a cache, and this one may be.
+ */
+export function useReleaseReadiness(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: releaseKeys.readiness(id ?? ""),
+    queryFn: () => fetchReleaseReadiness(id as string),
+    enabled: enabled && Boolean(id),
+    staleTime: 30_000,
   });
 }
 
@@ -318,6 +415,36 @@ export function useRemoveReleaseMember(releaseId: string) {
     onSuccess: () => {
       refresh(releaseId);
       toast.success("Removed from release.");
+    },
+  });
+}
+
+export function usePublishReleaseNow(id: string) {
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: () => publishReleaseNow(id),
+    onSuccess: result => {
+      refresh(id);
+      // The server's own sentence: a run can publish everything, stop
+      // part-way, or leave the rest to the runner, and only it knows which.
+      toast.success(result.message ?? "Release published.");
+    },
+  });
+}
+
+export function useDeleteRelease(id: string) {
+  const queryClient = useQueryClient();
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: () => deleteRelease(id),
+    onSuccess: () => {
+      // Removed rather than refetched: the release is gone, and asking for it
+      // again would only answer 404.
+      queryClient.removeQueries({ queryKey: releaseKeys.detail(id) });
+      refresh();
+      toast.success("Release deleted.");
     },
   });
 }

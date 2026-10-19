@@ -1,312 +1,564 @@
 "use client";
 
 /**
- * Every release, newest instant first.
+ * The release list: one table, four tabs.
  *
- * The list answers one question — what is going live, and when — so it shows
- * the state, the instant in the author's zone, and nothing else that would
- * compete with it. Membership counts live on the detail page, where the
- * documents themselves are.
+ * Upcoming, Needs attention, Drafts and Done, each with its count, and every
+ * release in exactly one of them. Which tab a release is in is the server's
+ * rule (`?tab=`), applied with the search and the single-document filter
+ * before paging and counting, so each count is the number its tab pages
+ * through and every page is a true page of it.
+ *
+ * Built from the admin's shared list parts — the tab strip, `ListView` with
+ * its toolbar, empty states and pager, and the table's row menu — so it reads
+ * and behaves like every other list in the admin.
+ *
+ * The tab lives in the address (`?tab=attention`), and so does an optional
+ * narrowing of Needs attention to one of its parts (`?reason=overdue`), so a
+ * count shown elsewhere can link to exactly the releases it counted.
  *
  * @module components/features/releases/ReleaseList
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-import { CalendarClock } from "@admin/components/icons";
 import {
-  Badge,
+  CalendarClock,
+  CheckCircle2,
+  History,
+  Pencil,
+  Plus,
+  Search,
+} from "@admin/components/icons";
+import type { PaginationProps } from "@admin/components/shared/pagination/types";
+import {
   Button,
-  Card,
-  Input,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Label,
+  Switch,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
 } from "@admin/components/ui";
-import { DataTableView } from "@admin/components/ui/table/data-table";
-import type { NextlyColumn } from "@admin/components/ui/table/data-table";
+import type {
+  NextlyColumn,
+  RowAction,
+} from "@admin/components/ui/table/data-table";
+import {
+  ListView,
+  type ListEmpty,
+  type ListSlots,
+} from "@admin/components/ui/table/list-view";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
-import { useReleases } from "@admin/hooks/queries/useReleases";
-import type { Release, ReleaseState } from "@admin/types/releases";
+import {
+  useReleaseListPage,
+  useReleaseTabCounts,
+} from "@admin/hooks/queries/useReleases";
+import { useSearchParams } from "@admin/hooks/useSearchParams";
+import { navigateTo, setSearchParams } from "@admin/lib/navigation";
+import { getSearchParam } from "@admin/lib/search-params";
+import { cn } from "@admin/lib/utils";
+import {
+  RELEASE_LIST_TABS,
+  type Release,
+  type ReleaseAttentionReason,
+  type ReleaseListTab,
+} from "@admin/types/releases";
 
-import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
+import {
+  RELEASE_TAB_LABEL,
+  RELEASE_WHEN_HEADER,
+  releaseRowStatus,
+} from "./release-list";
+import { readerZone } from "./release-timezone";
+import {
+  ReleaseDocumentsCell,
+  ReleaseOwnerCell,
+  ReleaseStatusBadge,
+  ReleaseTitleCell,
+  ReleaseWhenCell,
+} from "./ReleaseListCells";
+import {
+  ReleaseRowActionDialog,
+  type ReleaseRowAction,
+} from "./ReleaseRowActionDialog";
+import { ScheduleReleaseDialog } from "./ScheduleReleaseDialog";
 
 /**
- * How each state reads at a glance.
+ * Rows per page, and the sizes offered.
  *
- * `scheduled` is the only one given emphasis: it is the state with a
- * consequence still ahead of it, and the one an editor is scanning for.
+ * Twenty to start, as the list was designed: enough to see a busy week of
+ * launches without scrolling past the pager. The choices bracket it rather
+ * than the 10/25/50 most tables offer, which has no 20 in it.
  */
-const STATE_VARIANT: Record<
-  ReleaseState,
-  "default" | "outline" | "success" | "warning" | "destructive"
-> = {
-  draft: "outline",
-  scheduled: "warning",
-  published: "success",
-  cancelled: "outline",
-  // The only state that needs someone to DO something. `cancelled` is quiet
-  // because it is a decision somebody made; this is a launch that will not
-  // happen and nobody has noticed.
-  blocked: "destructive",
-};
+const RELEASE_PAGE_SIZE = 20;
+const RELEASE_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 
-/**
- * The states offered as a filter, derived from the labels rather than listed.
- *
- * A second list would compile after the engine gained a state and quietly leave
- * it unfilterable — the one release nobody could find would be the one in the
- * new state.
- */
-const FILTERABLE_STATES = Object.keys(RELEASE_STATE_LABEL) as ReleaseState[];
+/** How often relative times ("in 3 minutes") are brought up to date. */
+const CLOCK_TICK_MS = 60_000;
 
-/**
- * The bounds a date input MEANS, as instants.
- *
- * `new Date("2026-09-01")` is midnight UTC, and the server compares
- * `scheduledAt <=` it — so a release at 09:00 on the chosen day falls outside a
- * range the editor believes includes it. A date picker names a DAY; the window
- * it implies runs from that day's first instant to its last.
- *
- * Resolved in UTC rather than the reader's zone, matching the instants being
- * compared. A local-zone boundary would make the same filter select different
- * releases for two editors looking at one list, which is harder to explain than
- * an edge that is off by a few hours for someone far from UTC.
- */
-function startOfDay(day: string): string {
-  return new Date(`${day}T00:00:00.000Z`).toISOString();
+function isListTab(value: string | null): value is ReleaseListTab {
+  return (
+    value !== null && (RELEASE_LIST_TABS as readonly string[]).includes(value)
+  );
 }
 
-function endOfDay(day: string): string {
-  return new Date(`${day}T23:59:59.999Z`).toISOString();
+function isAttentionReason(
+  value: string | null
+): value is ReleaseAttentionReason {
+  return value === "stopped" || value === "overdue";
 }
 
-/** The sentinel for "every state", which is not itself a state. */
-const ANY_STATE = "all";
+/** The current time, moved on once a minute so relative times stay true. */
+function useMinuteClock(): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    return () => window.clearInterval(id);
+  }, []);
+  return now;
+}
+
+/** The dialog a row's menu opened, and for which release. */
+interface OpenDialog {
+  release: Release;
+  action: ReleaseRowAction | "schedule";
+}
+
+/** One entry of the row menu: when it is offered, and what it is called. */
+interface RowMenuEntry {
+  id: ReleaseRowAction | "schedule";
+  offered: (release: Release) => boolean;
+  label: (release: Release) => string;
+  destructive?: boolean;
+}
+
+const isDraft = (release: Release) => release.state === "draft";
 
 /**
- * How many rows a window asks for, and how far it can be widened.
- *
- * The route's own default is 50 and its ceiling 200. Widening in one step
- * rather than paging is deliberate: the read port behind this exposes `where`,
- * `orderBy` and `limit` and no offset, and an offset over a list whose rows move
- * would skip and repeat releases rather than page through them. Narrowing by
- * state is what makes the far end reachable; the wider window is what makes the
- * near end complete.
+ * The row menu's entries after "Open", in order, each offered from the
+ * capabilities the server sent with the release. Nothing here decides what is
+ * permitted; it decides only what to call each action and when two would
+ * offer the same thing.
  */
-const PAGE = 50;
-const MAX_PAGE = 200;
+const ROW_MENU: readonly RowMenuEntry[] = [
+  {
+    id: "schedule",
+    offered: release => release.can?.schedule === true,
+    label: release => (isDraft(release) ? "Schedule…" : "Reschedule…"),
+  },
+  {
+    id: "publish",
+    offered: release => release.can?.publishNow === true,
+    label: () => "Publish now…",
+  },
+  {
+    // A draft that may be deleted is offered Delete and not Discard: both end
+    // with nothing going live, and two ways of getting rid of one draft is a
+    // choice with no difference the reader can see from here.
+    id: "cancel",
+    offered: release =>
+      release.can?.cancel === true && !(isDraft(release) && release.can.delete),
+    label: release => (isDraft(release) ? "Discard…" : "Cancel release…"),
+  },
+  {
+    id: "delete",
+    offered: release => release.can?.delete === true,
+    label: () => "Delete…",
+    destructive: true,
+  },
+];
 
-/**
- * What a release row shows, in the order it is read.
- *
- * State first, because it is what decides whether the rest of the row matters:
- * a cancelled launch and a scheduled one are different KINDS of thing, and
- * putting the title first makes them look like the same thing with a label.
- */
-/**
- * NOT sortable, and that is a property of the route rather than a gap here.
- *
- * `DataTableView` sorts SERVER-SIDE — it reports a header click and expects the
- * caller to re-query — and `/api/releases` accepts a state and a window and no
- * ordering. Marking these headers sortable would offer a control that reorders
- * nothing, which is worse than the plain headers webhooks, media and api keys
- * also render. The list's own order is `scheduledAt` descending, chosen so the
- * next thing to happen is the first thing read.
- */
-function releaseColumns(): NextlyColumn<Release>[] {
+/** The actions a reader may take on a release, for its row menu. */
+function rowActionsFor(
+  release: Release,
+  open: (dialog: OpenDialog) => void
+): RowAction<Release>[] {
+  const openRelease: RowAction<Release> = {
+    id: "open",
+    label: "Open",
+    onSelect: () =>
+      navigateTo(buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })),
+  };
+  const offered = ROW_MENU.filter(entry => entry.offered(release)).map(
+    (entry): RowAction<Release> => ({
+      id: entry.id,
+      label: entry.label(release),
+      destructive: entry.destructive,
+      onSelect: () => open({ release, action: entry.id }),
+    })
+  );
+  return [openRelease, ...offered];
+}
+
+function releaseColumns(
+  tab: ReleaseListTab,
+  zone: string,
+  now: number
+): NextlyColumn<Release>[] {
   return [
+    {
+      name: "title",
+      header: "Release",
+      hideLabelOnMobile: true,
+      cell: ({ row }) => <ReleaseTitleCell release={row} />,
+    },
+    {
+      name: "when",
+      header: RELEASE_WHEN_HEADER[tab],
+      cell: ({ row }) => (
+        <ReleaseWhenCell release={row} tab={tab} readerZone={zone} now={now} />
+      ),
+    },
+    {
+      name: "documents",
+      header: "Documents",
+      cell: ({ row }) => <ReleaseDocumentsCell release={row} tab={tab} />,
+    },
     {
       name: "state",
       header: "State",
       cell: ({ row }) => (
-        <Badge variant={STATE_VARIANT[row.state]}>
-          {RELEASE_STATE_LABEL[row.state]}
-        </Badge>
+        <ReleaseStatusBadge status={releaseRowStatus(row, tab)} />
       ),
     },
     {
-      name: "title",
-      header: "Release",
-      cell: ({ row }) => (
-        <span className="font-medium text-foreground">{row.title}</span>
-      ),
-    },
-    {
-      name: "when",
-      header: "When",
-      // The same sentence the row carried before, which says what will happen
-      // and when rather than printing a bare timestamp the reader has to
-      // interpret against the state beside it.
-      cell: ({ row }) => (
-        <span className="text-muted-foreground">{describeRelease(row)}</span>
-      ),
+      name: "owner",
+      header: "Owner",
+      cell: ({ row }) => <ReleaseOwnerCell release={row} />,
     },
   ];
 }
 
 /**
- * The controls that narrow the window.
+ * What an empty tab says, and the next step it offers.
  *
- * Separated from the list because they are a control surface rather than a
- * view of the data, and because the list already had three states to render
- * before any of this was added. Every change resets the page size: a narrower
- * question deserves a fresh window.
+ * With no release anywhere, every tab explains what a release is instead:
+ * "nothing is scheduled" tells someone who has never made one nothing they can
+ * act on.
  */
-function ReleaseFilters({
-  state,
-  after,
-  before,
-  onState,
-  onAfter,
-  onBefore,
-}: {
-  state: ReleaseState | typeof ANY_STATE;
-  after: string;
-  before: string;
-  onState: (next: ReleaseState | typeof ANY_STATE) => void;
-  onAfter: (next: string) => void;
-  onBefore: (next: string) => void;
-}) {
-  return (
-    <div className="mb-4 flex flex-wrap items-center gap-2">
-      <label
-        htmlFor="release-state-filter"
-        className="text-sm text-muted-foreground"
-      >
-        State
-      </label>
-      <Select
-        value={state}
-        onValueChange={next => onState(next as ReleaseState | typeof ANY_STATE)}
-      >
-        <SelectTrigger id="release-state-filter" className="w-44">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ANY_STATE}>All releases</SelectItem>
-          {FILTERABLE_STATES.map(value => (
-            <SelectItem key={value} value={value}>
-              {RELEASE_STATE_LABEL[value]}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+function emptyStateFor(
+  tab: ReleaseListTab,
+  {
+    anyRelease,
+    drafts,
+    onCreate,
+    onShowDrafts,
+  }: {
+    anyRelease: boolean;
+    drafts: number;
+    onCreate?: () => void;
+    onShowDrafts: () => void;
+  }
+): ListEmpty {
+  const create = onCreate ? (
+    <Button onClick={onCreate}>
+      <Plus className="size-4" aria-hidden />
+      New release
+    </Button>
+  ) : undefined;
 
-      <label htmlFor="release-after" className="text-sm text-muted-foreground">
-        From
-      </label>
-      <Input
-        id="release-after"
-        type="date"
-        className="w-40"
-        value={after}
-        onChange={event => onAfter(event.target.value)}
-      />
-      <label htmlFor="release-before" className="text-sm text-muted-foreground">
-        To
-      </label>
-      <Input
-        id="release-before"
-        type="date"
-        className="w-40"
-        value={before}
-        onChange={event => onBefore(event.target.value)}
-      />
-    </div>
-  );
+  if (!anyRelease) {
+    return {
+      icon: <CalendarClock className="size-5" aria-hidden />,
+      title: "Plan your first release",
+      description:
+        "A release groups documents that should change together at one moment: a launch, an embargo lifting, a price change. Add the documents, pick the time, and they all go live at once.",
+      action: create,
+    };
+  }
+  switch (tab) {
+    case "upcoming":
+      return {
+        icon: <CalendarClock className="size-5" aria-hidden />,
+        title: "Nothing is scheduled",
+        description:
+          drafts > 0
+            ? "Scheduled releases appear here, the next to go live first. Schedule a draft to put it here."
+            : "Scheduled releases appear here, the next to go live first.",
+        action:
+          drafts > 0 ? (
+            <Button variant="outline" onClick={onShowDrafts}>
+              View drafts
+            </Button>
+          ) : (
+            create
+          ),
+      };
+    case "attention":
+      return {
+        icon: <CheckCircle2 className="size-5" aria-hidden />,
+        title: "Nothing needs attention",
+        description:
+          "A release that stops on a problem, or is still waiting ten minutes after its time, appears here so someone can act on it.",
+      };
+    case "drafts":
+      return {
+        icon: <Pencil className="size-5" aria-hidden />,
+        title: "No drafts",
+        description:
+          "A new release starts here, and stays here until it is scheduled.",
+        action: create,
+      };
+    case "done":
+      return {
+        icon: <History className="size-5" aria-hidden />,
+        title: "Nothing has run yet",
+        description:
+          "Releases that went live or were cancelled are kept here, the most recent first.",
+      };
+  }
 }
 
 /**
- * What an editor sees before they have ever made a release.
+ * What a tab says when the search or a filter left nothing in it.
  *
- * Most sites will never schedule anything, so this is the FIRST and often only
- * thing anyone sees here. It therefore explains what a release is rather than
- * reporting that a list is empty — "No releases" tells someone who does not
- * know the concept nothing they can act on.
+ * It names what narrowed the list, so the reader knows the releases are not
+ * gone, and offers to undo exactly that.
  */
-function NoReleasesYet({ onCreate }: { onCreate?: () => void }) {
-  return (
-    <Card className="flex flex-col items-center gap-3 px-6 py-12 text-center">
-      <CalendarClock className="size-8 text-muted-foreground" aria-hidden />
-      <h2 className="text-lg font-medium">Nothing is scheduled</h2>
-      <p className="max-w-md text-sm text-muted-foreground">
-        A release groups documents that should go live together at one moment —
-        a launch, an embargo lifting, a price change. Add documents to it, pick
-        the instant, and Nextly publishes them all at once.
-      </p>
-      {onCreate ? (
-        <Button className="mt-1" onClick={onCreate}>
-          Create a release
-        </Button>
-      ) : null}
-    </Card>
-  );
-}
-
-/**
- * The empty result of a FILTER, which is a different fact from having none.
- *
- * Showing the teaching empty state here would tell an editor who has fifty
- * releases that they have never made one.
- */
-function NoneInThisState({ onClear }: { onClear: () => void }) {
-  return (
-    <Card className="flex flex-col items-center gap-3 px-6 py-10 text-center">
-      {/* Names the FILTERS rather than the state: a date-only window reaches
-          this too, and "no releases in this state" is then simply untrue. */}
-      <p className="text-sm text-muted-foreground">
-        No releases match these filters.
-      </p>
-      <Button variant="outline" size="sm" onClick={onClear}>
-        Show all releases
+function filteredEmptyFor(
+  tab: ReleaseListTab,
+  {
+    search,
+    reason,
+    onClear,
+  }: {
+    search: string;
+    reason: ReleaseAttentionReason | undefined;
+    onClear: () => void;
+  }
+): ListEmpty {
+  const label = RELEASE_TAB_LABEL[tab];
+  let description: string;
+  let clear: string;
+  if (search) {
+    description = `Nothing in ${label} has “${search}” in its title or description.`;
+    clear = "Clear search";
+  } else if (reason) {
+    description = `No release in ${label} is ${reason} right now.`;
+    clear = "Show everything that needs attention";
+  } else {
+    description =
+      "Single-document releases are hidden, and there is nothing else here.";
+    clear = "Show single documents";
+  }
+  return {
+    icon: <Search className="size-5" aria-hidden />,
+    title: `No ${label.toLowerCase()} releases match`,
+    description,
+    action: (
+      <Button variant="outline" onClick={onClear}>
+        {clear}
       </Button>
-    </Card>
-  );
+    ),
+  };
 }
 
 /**
- * What to say when the window did not hold everything that matched.
- *
- * Truncation is stated rather than implied — the server over-fetches one row to
- * know it, precisely so a partial schedule is never presented as the whole one.
- * At the ceiling there is no larger window to offer, so the only honest
- * instruction is a narrower QUESTION, and it must not be one the editor has
- * already asked: telling someone who has filtered to filter reads as the UI not
- * knowing what it is showing.
+ * A tab's label with its count drawn as a pill. The pill is hidden from
+ * assistive technology, which reads the trigger's own name instead, so the
+ * count is announced as "Drafts (2)" rather than run into the word.
  */
-function TruncationNotice({
-  truncated,
-  canWiden,
-  filtering,
-  onWiden,
+function TabLabel({
+  tab,
+  count,
 }: {
-  truncated: boolean;
-  canWiden: boolean;
-  filtering: boolean;
-  onWiden: () => void;
+  tab: ReleaseListTab;
+  count: number | undefined;
 }) {
-  if (!truncated) return null;
-
+  // Needs attention draws its count in the warning tone only while there is
+  // something in it: an alarm-coloured zero would ask for attention it does
+  // not need.
+  const urgent = tab === "attention" && (count ?? 0) > 0;
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-3">
-      <p className="text-sm text-muted-foreground">
-        More releases match than are shown here.
-      </p>
-      {canWiden ? (
-        <Button variant="outline" size="sm" onClick={onWiden}>
-          Show more
-        </Button>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          {filtering
-            ? "Narrow the dates to see releases before these."
-            : "Filter by state, or narrow the dates, to see more."}
-        </p>
+    <>
+      {RELEASE_TAB_LABEL[tab]}
+      {count === undefined ? null : (
+        <>
+          <span
+            aria-hidden
+            className={cn(
+              "ml-2 inline-flex min-w-5 justify-center rounded-full px-1.5 text-xs font-medium tabular-nums leading-5",
+              urgent
+                ? "bg-destructive/10 text-destructive"
+                : "bg-muted text-muted-foreground"
+            )}
+          >
+            {count}
+          </span>
+        </>
       )}
+    </>
+  );
+}
+
+/** A tab's accessible name: its label, and its count once known. */
+function tabName(tab: ReleaseListTab, count: number | undefined): string {
+  return count === undefined
+    ? RELEASE_TAB_LABEL[tab]
+    : `${RELEASE_TAB_LABEL[tab]} (${count})`;
+}
+
+/** The note above a Needs attention list narrowed to one of its parts. */
+function reasonNotice(
+  reason: ReleaseAttentionReason | undefined
+): ListSlots | undefined {
+  if (!reason) return undefined;
+  return {
+    beforeTable: (
+      <p className="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
+        Showing only {reason} releases.
+        <Button
+          variant="link"
+          size="sm"
+          className="h-auto px-0"
+          onClick={() => setSearchParams({ reason: null })}
+        >
+          Show everything that needs attention
+        </Button>
+      </p>
+    ),
+  };
+}
+
+/** The pager under a tab, or none for a tab with nothing in it. */
+function pagerFor({
+  total,
+  page,
+  pageSize,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  total: number;
+  page: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: number) => void;
+}): PaginationProps | undefined {
+  if (total === 0) return undefined;
+  return {
+    currentPage: page,
+    totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    totalItems: total,
+    pageSize,
+    pageSizeOptions: RELEASE_PAGE_SIZE_OPTIONS,
+    onPageChange,
+    onPageSizeChange,
+    itemLabel: total === 1 ? "release" : "releases",
+    ariaLabel: "Release pages",
+  };
+}
+
+/**
+ * What the list is being asked, held in one place: the tab and its narrowing
+ * from the address, the search, the single-document filter, and the page.
+ *
+ * The page belongs to one question. Held with the question it was chosen for,
+ * so a new tab, search, filter or page size starts on its first page in the
+ * same render, rather than fetching the old page number of a different list
+ * first and resetting after.
+ */
+function useReleaseListQuestion() {
+  const params = useSearchParams();
+  const linkedTab = getSearchParam(params, "tab");
+  const linkedReason = getSearchParam(params, "reason");
+  const tab: ReleaseListTab = isListTab(linkedTab) ? linkedTab : "upcoming";
+  // Only Needs attention has parts to narrow to, so a reason carried onto any
+  // other tab is ignored rather than sent and refused.
+  const reason =
+    tab === "attention" && isAttentionReason(linkedReason)
+      ? linkedReason
+      : undefined;
+
+  const [search, setSearch] = useState("");
+  const [hideSingles, setHideSingles] = useState(false);
+  const [pageSize, setPageSize] = useState(RELEASE_PAGE_SIZE);
+  const kind = hideSingles ? ("release" as const) : undefined;
+
+  const question = [tab, reason, search, kind, pageSize].join("|");
+  const [paging, setPaging] = useState({ question, page: 0 });
+  const page = paging.question === question ? paging.page : 0;
+
+  return {
+    tab,
+    reason,
+    search,
+    setSearch,
+    hideSingles,
+    setHideSingles,
+    kind,
+    pageSize,
+    setPageSize,
+    page,
+    setPage: (next: number) => setPaging({ question, page: next }),
+    clearFilters: () => {
+      setSearch("");
+      setHideSingles(false);
+      if (reason) setSearchParams({ reason: null });
+    },
+  };
+}
+
+function goToTab(next: ReleaseListTab) {
+  setSearchParams({ tab: next === "upcoming" ? null : next, reason: null });
+}
+
+/** The switch that hides single-document releases. */
+function HideSinglesSwitch({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Switch
+        id="release-hide-singles"
+        checked={checked}
+        onCheckedChange={onChange}
+      />
+      <Label
+        htmlFor="release-hide-singles"
+        className="cursor-pointer whitespace-nowrap text-sm font-normal text-muted-foreground"
+      >
+        Hide single documents
+      </Label>
     </div>
+  );
+}
+
+/** The dialog the row menu opened, if any. */
+function ReleaseRowDialogs({
+  dialog,
+  open,
+  onOpenChange,
+}: {
+  dialog: OpenDialog | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  if (!dialog) return null;
+  if (dialog.action === "schedule") {
+    return (
+      <ScheduleReleaseDialog
+        // Keyed by release: the dialog seeds its zone from the release it
+        // opens on, and must not carry one release's choice to the next.
+        key={dialog.release.id}
+        release={dialog.release}
+        open={open}
+        onOpenChange={onOpenChange}
+      />
+    );
+  }
+  return (
+    <ReleaseRowActionDialog
+      key={`${dialog.release.id}:${dialog.action}`}
+      release={dialog.release}
+      action={dialog.action}
+      open={open}
+      onOpenChange={onOpenChange}
+    />
   );
 }
 
@@ -316,134 +568,129 @@ export interface ReleaseListProps {
 }
 
 export function ReleaseList({ onCreate }: ReleaseListProps) {
-  const [state, setState] = useState<ReleaseState | typeof ANY_STATE>(
-    ANY_STATE
-  );
-  const [limit, setLimit] = useState(PAGE);
-  // The window's own bounds, so a release past the server's 200-row ceiling is
-  // still reachable: moving the range is the only narrowing that partitions a
-  // single state. Both filter the INSTANT, so they cannot reach a draft, which
-  // has none — that limit is stated where the editor can see it rather than
-  // left to be discovered.
-  const [after, setAfter] = useState("");
-  const [before, setBefore] = useState("");
-
-  const { data, isPending, isError } = useReleases({
-    ...(state === ANY_STATE ? {} : { state }),
-    ...(before ? { scheduledBefore: endOfDay(before) } : {}),
-    ...(after ? { scheduledAfter: startOfDay(after) } : {}),
-    limit,
+  const q = useReleaseListQuestion();
+  const counts = useReleaseTabCounts({ search: q.search, kind: q.kind });
+  const list = useReleaseListPage({
+    tab: q.tab,
+    page: q.page + 1,
+    limit: q.pageSize,
+    ...(q.reason ? { reason: q.reason } : {}),
+    ...(q.search ? { search: q.search } : {}),
+    ...(q.kind ? { kind: q.kind } : {}),
   });
 
-  const filtering = state !== ANY_STATE || Boolean(after) || Boolean(before);
-  const columns = useMemo(() => releaseColumns(), []);
+  const zone = useMemo(() => readerZone(), []);
+  const now = useMinuteClock();
+  const columns = useMemo(
+    () => releaseColumns(q.tab, zone, now),
+    [q.tab, zone, now]
+  );
 
-  // ALL of them. Clearing only the state leaves a date window narrowing the
-  // list, so "Show all releases" can render the same empty result it was
-  // offered to escape.
-  const clearFilters = () => {
-    setState(ANY_STATE);
-    setAfter("");
-    setBefore("");
-    setLimit(PAGE);
+  const [dialog, setDialog] = useState<OpenDialog | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const openDialog = (next: OpenDialog) => {
+    setDialog(next);
+    setDialogOpen(true);
   };
 
-  const filter = (
-    <ReleaseFilters
-      state={state}
-      after={after}
-      before={before}
-      onState={next => {
-        setState(next);
-        // A narrower question deserves a fresh window. Carrying a widened limit
-        // across filters asks the server for 200 rows of a state that may have
-        // three.
-        setLimit(PAGE);
-      }}
-      onAfter={next => {
-        setAfter(next);
-        setLimit(PAGE);
-      }}
-      onBefore={next => {
-        setBefore(next);
-        setLimit(PAGE);
-      }}
+  // Known only once every count has answered with no search or filter in
+  // force; until then the tabs' own empty states are the honest ones.
+  const anyRelease =
+    Boolean(q.search) ||
+    q.hideSingles ||
+    counts.isPending ||
+    RELEASE_LIST_TABS.some(t => (counts.counts[t] ?? 0) > 0);
+  const total = list.data?.meta.total ?? 0;
+
+  const panel = (
+    <ListView<Release>
+      search={
+        anyRelease
+          ? {
+              value: q.search,
+              onChange: q.setSearch,
+              placeholder: "Search by title or description",
+              isLoading: list.isFetching && Boolean(q.search),
+            }
+          : undefined
+      }
+      inlineFilters={
+        anyRelease ? (
+          <HideSinglesSwitch
+            checked={q.hideSingles}
+            onChange={q.setHideSingles}
+          />
+        ) : undefined
+      }
+      hasActiveFilters={q.hideSingles || Boolean(q.reason)}
+      columns={columns}
+      rows={list.data?.items ?? []}
+      getRowId={release => release.id}
+      rowHref={release =>
+        buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })
+      }
+      primaryColumn="title"
+      rowActions={release => rowActionsFor(release, openDialog)}
+      registryKey="releases"
+      ariaLabel={`${RELEASE_TAB_LABEL[q.tab]} releases`}
+      loading={list.isPending}
+      error={list.isError ? "Releases could not be loaded." : null}
+      empty={emptyStateFor(q.tab, {
+        anyRelease,
+        drafts: counts.counts.drafts ?? 0,
+        onCreate,
+        onShowDrafts: () => goToTab("drafts"),
+      })}
+      emptyFiltered={filteredEmptyFor(q.tab, {
+        search: q.search,
+        reason: q.reason,
+        onClear: q.clearFilters,
+      })}
+      slots={reasonNotice(q.reason)}
+      pagination={pagerFor({
+        total,
+        page: q.page,
+        pageSize: q.pageSize,
+        onPageChange: q.setPage,
+        onPageSizeChange: q.setPageSize,
+      })}
     />
   );
 
-  if (isPending) {
-    return (
-      <>
-        {filter}
-        <p className="text-sm text-muted-foreground" role="status">
-          Loading releases…
-        </p>
-      </>
-    );
-  }
-
-  if (isError) {
-    // The list failing and the list being empty are different facts, and an
-    // editor who cannot tell them apart concludes nothing is scheduled.
-    return (
-      <>
-        {filter}
-        <p className="text-sm text-destructive" role="alert">
-          Releases could not be loaded.
-        </p>
-      </>
-    );
-  }
-
-  const releases = data?.items ?? [];
-  if (releases.length === 0) {
-    return (
-      <>
-        {filter}
-        {filtering ? (
-          <NoneInThisState onClear={clearFilters} />
-        ) : (
-          <NoReleasesYet onCreate={onCreate} />
-        )}
-      </>
-    );
-  }
-
-  const truncated = data?.meta.hasNext ?? false;
-  const canWiden = truncated && limit < MAX_PAGE;
-
   return (
     <>
-      {filter}
-      {/* The SAME table every other list surface uses — entries, media, api
-          keys, webhooks, deliveries. Releases was the last one hand-built from
-          cards, which cost it column alignment, the shared empty and loading
-          states, and the row semantics a reader has already learned everywhere
-          else in the admin. */}
-      <DataTableView<Release>
-        columns={columns}
-        rows={releases}
-        loading={isPending}
-        getRowId={release => release.id}
-        // An HREF, not a click handler. The hand-built rows were deliberately
-        // links — "the whole row is the link… it cannot be middle-clicked or
-        // opened in a new tab, which is how anyone compares two releases" — and
-        // navigating as a side effect of a click throws that away while looking
-        // identical. `rowHref` also makes the primary column a real anchor.
-        rowHref={release =>
-          buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })
-        }
-        primaryColumn="title"
-        registryKey="releases"
-        ariaLabel="Releases"
-        emptyMessage="No releases match these filters yet."
-      />
+      <Tabs
+        value={q.tab}
+        onValueChange={next => isListTab(next) && goToTab(next)}
+      >
+        <TabsList
+          scrollable
+          aria-label="Releases by state"
+          className="justify-start"
+        >
+          {RELEASE_LIST_TABS.map(t => (
+            <TabsTrigger
+              key={t}
+              value={t}
+              aria-label={tabName(t, counts.counts[t])}
+            >
+              <TabLabel tab={t} count={counts.counts[t]} />
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {/* One panel per tab for the tablist's own wiring; only the open
+            tab's panel holds the list. */}
+        {RELEASE_LIST_TABS.map(t => (
+          <TabsContent key={t} value={t} className="mt-6">
+            {t === q.tab ? panel : null}
+          </TabsContent>
+        ))}
+      </Tabs>
 
-      <TruncationNotice
-        truncated={truncated}
-        canWiden={canWiden}
-        filtering={filtering}
-        onWiden={() => setLimit(MAX_PAGE)}
+      <ReleaseRowDialogs
+        dialog={dialog}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
       />
     </>
   );
