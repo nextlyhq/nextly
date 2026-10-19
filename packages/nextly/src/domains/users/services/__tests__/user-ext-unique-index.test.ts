@@ -1,9 +1,10 @@
 /**
- * A unique custom user field gets its unique index only where its column can
- * carry one. A plugin type stored as text, with no `maxLength`, is a TEXT
- * column on MySQL, which takes no index without a key length: the index is
- * left out there (with a warning) rather than stop `nextly migrate`, and kept
- * on PostgreSQL and SQLite, where a text column can be indexed.
+ * A unique custom user field gets its unique index on every dialect. A plugin
+ * type stored as text, with no `maxLength`, would be a TEXT column on MySQL,
+ * which takes no index without a key length, so there it is a varchar, as a
+ * built-in text field is. A type stored as long text cannot be unique
+ * (validation refuses it); a definition stored before that is left without
+ * the index, with a warning, rather than stop `nextly migrate`.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -40,20 +41,29 @@ const silent = {
 };
 
 describe("a unique plugin field stored as text", () => {
-  it.each(["text", "longText"] as const)(
-    "has no unique index on MySQL when stored as %s",
-    storage => {
-      registerHandleType(storage);
-      const sql = new UserExtSchemaService(
-        "mysql",
-        undefined,
-        silent
-      ).generateMigrationSQL([field]);
+  it("is a varchar carrying its unique index on MySQL", () => {
+    registerHandleType("text");
+    const sql = new UserExtSchemaService(
+      "mysql",
+      undefined,
+      silent
+    ).generateMigrationSQL([field]);
 
-      expect(sql).toContain("`handle` TEXT");
-      expect(sql).not.toContain("uq_user_ext_handle");
-    }
-  );
+    expect(sql).toContain("`handle` VARCHAR(255)");
+    expect(sql).toContain("uq_user_ext_handle");
+  });
+
+  it("has no unique index on MySQL when stored as long text", () => {
+    registerHandleType("longText");
+    const sql = new UserExtSchemaService(
+      "mysql",
+      undefined,
+      silent
+    ).generateMigrationSQL([field]);
+
+    expect(sql).toContain("`handle` TEXT");
+    expect(sql).not.toContain("uq_user_ext_handle");
+  });
 
   it.each(["postgresql", "sqlite"] as const)(
     "keeps its unique index on %s",

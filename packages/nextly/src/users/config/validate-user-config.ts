@@ -30,7 +30,10 @@
 
 import { SQL_RESERVED_KEYWORDS } from "../../collections/config/validate-config";
 import { isVirtualField } from "../../collections/fields/virtual";
-import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import {
+  getFieldType,
+  isPluginFieldTypeOnSurface,
+} from "../../domains/schema/field-types/field-type-registry";
 import { RESERVED_PLUGIN_OPTION_KEYS } from "../../plugins/plugin-options";
 
 import type { UserConfig } from "./types";
@@ -209,8 +212,9 @@ const USER_EXT_OWN_COLUMNS: ReadonlySet<string> = new Set([
  * Why a field's `unique` cannot be honoured, or null when it can (or is off).
  *
  * A textarea is TEXT on MySQL and a multi-value select is JSON, and neither
- * takes a plain unique index on every dialect. One rule everywhere, rather
- * than a field that works on SQLite and stops `nextly migrate` elsewhere.
+ * takes a plain unique index on every dialect; nor does a plugin type stored
+ * as long text or JSON. One rule everywhere, rather than a field that works
+ * on SQLite and goes without its index, or stops `nextly migrate`, elsewhere.
  * The table's statements ask the same question, for definitions stored before
  * validation refused it.
  */
@@ -225,6 +229,20 @@ export function userFieldUniqueRejection(field: {
   }
   if (field.type === "select" && field.hasMany === true) {
     return "A select field holding several values cannot be unique: its values are stored together, in one JSON column.";
+  }
+  // A plugin type registered on the users surface is stored as its declared
+  // primitive, so the primitive decides whether its column can be unique.
+  const pluginType =
+    typeof field.type === "string" &&
+    isPluginFieldTypeOnSurface(field.type, "users")
+      ? field.type
+      : undefined;
+  const storage = pluginType ? getFieldType(pluginType)?.storage : undefined;
+  if (storage === "longText") {
+    return `A '${pluginType}' field cannot be unique: it is stored as long text, whose column cannot carry a unique index on every database.`;
+  }
+  if (storage === "json") {
+    return `A '${pluginType}' field cannot be unique: it is stored as JSON, whose column cannot carry a unique index.`;
   }
   return null;
 }

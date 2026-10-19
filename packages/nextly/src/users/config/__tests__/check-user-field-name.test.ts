@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { select, text, textarea } from "../../../collections/fields/helpers";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../../domains/schema/field-types/field-type-registry";
 import {
   checkUserFieldName,
   checkUserFieldType,
@@ -105,6 +109,47 @@ describe("validateUserConfig: unique only where a column can carry it", () => {
     });
 
     expect(result.errors).toEqual([]);
+  });
+
+  describe("a plugin field type", () => {
+    afterEach(() => {
+      clearFieldTypes();
+    });
+
+    function registerHandleType(storage: "text" | "longText" | "json") {
+      registerFieldType({
+        type: "handle",
+        storage,
+        component: "@acme/handles/admin#Handle",
+        surfaces: ["users"],
+      });
+    }
+
+    it.each(["longText", "json"] as const)(
+      "refuses unique when it is stored as %s",
+      storage => {
+        registerHandleType(storage);
+        const result = validateUserConfig({
+          fields: [{ name: "handle", type: "handle", unique: true }],
+        } as unknown as Parameters<typeof validateUserConfig>[0]);
+
+        const rejection = result.errors.find(
+          e => e.code === "USER_FIELD_UNIQUE_UNSUPPORTED"
+        );
+        expect(rejection?.path).toBe("fields[0].unique");
+      }
+    );
+
+    it("accepts unique when it is stored as text", () => {
+      registerHandleType("text");
+      const result = validateUserConfig({
+        fields: [{ name: "handle", type: "handle", unique: true }],
+      } as unknown as Parameters<typeof validateUserConfig>[0]);
+
+      expect(result.errors.map(e => e.code)).not.toContain(
+        "USER_FIELD_UNIQUE_UNSUPPORTED"
+      );
+    });
   });
 });
 

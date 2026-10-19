@@ -14,6 +14,10 @@ import { createLogger } from "../../../cli/utils/logger";
 import { provisionUserFieldTables } from "../../../cli/commands/migrate";
 import { text } from "../../../collections/fields/helpers";
 import { getDialectTables } from "../../../database/index";
+import {
+  clearFieldTypes,
+  registerFieldType,
+} from "../../schema/field-types/field-type-registry";
 import { NextlyError } from "../../../errors";
 import {
   createTestNextly,
@@ -177,6 +181,63 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(account?.name).toBe("other@test.local");
       expect(await stored(other.id)).toMatchObject({ employee: "E2" });
+    });
+
+    describe("a plugin field already stored as TEXT, made unique", () => {
+      afterEach(() => {
+        clearFieldTypes();
+      });
+
+      it("keeps every stored value whole, and on MySQL refuses naming the field", async () => {
+        registerFieldType({
+          type: "handle",
+          storage: "text",
+          component: "@acme/handles/admin#Handle",
+          surfaces: ["users"],
+        });
+        const logger = createLogger({ quiet: true });
+        // An install from before: the field without `unique`, so its column
+        // is TEXT on every dialect, holding a value longer than a VARCHAR(255).
+        await provisionUserFieldTables(
+          {
+            fields: [...FIELDS, { name: "handle", type: "handle" }],
+          } as Parameters<typeof provisionUserFieldTables>[0],
+          handle.adapter,
+          logger
+        );
+        const user = await create("long@test.local", "E9", "red");
+        const long = "h".repeat(300);
+        await handle.adapter.executeQuery(
+          `UPDATE ${q}user_ext${q} SET ${q}handle${q} = '${long}' WHERE ${q}user_id${q} = '${String(user.id)}'`
+        );
+
+        const result = await provisionUserFieldTables(
+          {
+            fields: [
+              ...FIELDS,
+              { name: "handle", type: "handle", unique: true },
+            ],
+          } as Parameters<typeof provisionUserFieldTables>[0],
+          handle.adapter,
+          logger
+        ).catch((e: unknown) => e);
+
+        if (dialect === "mysql") {
+          // MySQL cannot index the TEXT column, and the upgrade never
+          // rewrites it: `nextly migrate` stops, saying which field and why.
+          expect(NextlyError.is(result)).toBe(true);
+          expect((result as NextlyError).code).toBe("VALIDATION_ERROR");
+          expect(JSON.stringify((result as NextlyError).logContext)).toContain(
+            "handle"
+          );
+        } else {
+          expect(result).toBeTypeOf("number");
+        }
+        const [row] = await handle.adapter.executeQuery<{ handle: string }>(
+          `SELECT ${q}handle${q} AS handle FROM ${q}user_ext${q} WHERE ${q}user_id${q} = '${String(user.id)}'`
+        );
+        expect(row?.handle).toBe(long);
+      });
     });
   }
 );
