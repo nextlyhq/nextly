@@ -25,6 +25,7 @@ import { jsonOnly, unserializableKeys } from "../../plugins/json-round-trip";
 
 import type { WidgetDefinition } from "./definition";
 import { listWidgets } from "./registry";
+import { getSource, type WidgetSourceField } from "./sources";
 
 /**
  * Every registered widget that survives the trip to the browser unchanged, in
@@ -51,4 +52,60 @@ export function publishableWidgets(): WidgetDefinition[] {
   }
 
   return publishable;
+}
+
+/**
+ * A collection a card's content settings may name, with the fields they may
+ * offer to filter, sort or group by.
+ *
+ * @experimental The shape may still change while the settings sheet's
+ * content controls are built on it.
+ */
+export interface PublishedContentSource {
+  collection: string;
+  label: string;
+  fields: Pick<WidgetSourceField, "name" | "label" | "type" | "choices">[];
+}
+
+/**
+ * The collections, and their fields, a card's content settings may offer this
+ * reader.
+ *
+ * 🔴 Derived from the cards the reader may see, never decided again here. A
+ * collection's own card is shown only when the reader may read the collection
+ * (`readableEntities`, the gate the list routes use, asked once per request in
+ * `widgetAudience`), so its source is offered on exactly the same answer. A
+ * collection with no card of its own is not offered: there is no answer to
+ * read for it, and offering it would be a second, hand-made check.
+ *
+ * Only fields the source does not mark `offered: false`: a field a read rule
+ * could refuse, or a read hook transforms, is never offered as a choice.
+ */
+export function publishableContentSources(
+  visible: readonly { generated?: boolean; collection?: string }[]
+): PublishedContentSource[] {
+  const slugs = new Set<string>();
+  for (const card of visible) {
+    if (card.generated === true && card.collection !== undefined) {
+      slugs.add(card.collection);
+    }
+  }
+  const published: PublishedContentSource[] = [];
+  for (const slug of slugs) {
+    const source = getSource(`collection:${slug}`);
+    if (source === undefined) continue;
+    published.push({
+      collection: slug,
+      label: source.label,
+      fields: source.fields
+        .filter(field => field.offered !== false)
+        .map(({ name, label, type, choices }) => ({
+          name,
+          type,
+          ...(label === undefined ? {} : { label }),
+          ...(choices === undefined ? {} : { choices }),
+        })),
+    });
+  }
+  return published;
 }

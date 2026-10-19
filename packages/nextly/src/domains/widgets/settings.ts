@@ -117,6 +117,9 @@ export type WidgetSetting =
  * (`CONTENT_SETTING_NOT_DRAWN`) and only a declared widget, which nothing
  * offers to the admin yet, may hold one. The sheet gaining these controls is
  * what widens the published type.
+ *
+ * @experimental The shape may still change while the settings sheet's
+ * content controls are built.
  */
 export type ContentSetting =
   | (WidgetSettingBase & { type: "collection"; defaultValue?: string })
@@ -132,7 +135,11 @@ export type ContentSetting =
       defaultValue?: string;
     });
 
-/** Every setting core's rules judge and its reader reads. */
+/**
+ * Every setting core's rules judge and its reader reads.
+ *
+ * @experimental As {@link ContentSetting}, which it includes.
+ */
 export type AnyWidgetSetting = WidgetSetting | ContentSetting;
 
 /**

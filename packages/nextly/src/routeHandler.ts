@@ -116,7 +116,10 @@ import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
-import { publishableWidgets } from "./domains/widgets/publish";
+import {
+  publishableContentSources,
+  publishableWidgets,
+} from "./domains/widgets/publish";
 import {
   widgetAudience,
   type WidgetAudience,
@@ -2006,6 +2009,12 @@ async function buildAdminMeta(
   ];
   if (widgets.length > 0) {
     workspace.widgets = widgets;
+  }
+  // What a card's content settings may offer this reader, derived from the
+  // cards above: a collection is offered exactly when its own card is.
+  const widgetSources = publishableContentSources(audience.visible);
+  if (widgetSources.length > 0) {
+    workspace.widgetSources = widgetSources;
   }
   // The audience both widget channels above were filtered for, as the layout
   // read also reports it: the admin compares the two to learn that a payload

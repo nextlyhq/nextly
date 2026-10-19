@@ -74,6 +74,13 @@ export interface WidgetSourceField {
    */
   bucketable?: boolean;
   /**
+   * `false` when a card's settings may not offer this field to filter, sort
+   * or group by: a read rule could refuse it, or a read hook transforms it, so
+   * what a card would show is not what the caller may read. Absent means it
+   * may be offered. Only the refusal is stated, as `bucketable` states its own.
+   */
+  offered?: false;
+  /**
    * What a human calls this field, when the source knows.
    *
    * A widget that draws a TABLE needs a column heading, and the only honest
