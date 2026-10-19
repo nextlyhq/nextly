@@ -23,7 +23,6 @@ import {
   upload,
 } from "../../../config";
 import { getDialectTables } from "../../../database/index";
-import { clearServices } from "../../../di/register";
 import { seedBuilderCollection } from "../../../plugins/__tests__/seed-builder-entity";
 import {
   createTestNextly,
@@ -449,26 +448,22 @@ describe.each(getConfiguredTestDialects())(
     /**
      * A junction-backed many-to-many field exists only in the Schema Builder's
      * older shape, `options.target`, which the typed helper cannot express. So
-     * the parent is seeded as the Builder stored it, and the target stays
-     * code-first, where a rule can refuse a caller.
+     * both collections are seeded as the Builder stores them, and the target
+     * is given a read rule that refuses every caller but `permitted`.
      */
     async function bootJunction(): Promise<{
       handler: CollectionsHandler;
       postId: string;
       tagIds: string[];
     }> {
-      const tags = defineCollection({
+      current = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
+      // Both sides as the Builder stores them, in the one boot: a re-boot on
+      // a server dialect drops the database the first boot provisioned.
+      await seedBuilderCollection(current.adapter, {
         slug: "tags",
-        access: { read: readableByPermitted },
-        fields: [text({ name: "name" })],
+        fields: [{ name: "name", type: "text" }],
       });
-      const dialectOption = dialect === "sqlite" ? {} : { dialect };
-      current = await createTestNextly({
-        ...dialectOption,
-        collections: [tags],
-      });
-      const adapter = current.adapter;
-      await seedBuilderCollection(adapter, {
+      await seedBuilderCollection(current.adapter, {
         slug: "posts",
         fields: [
           { name: "name", type: "text" },
@@ -479,12 +474,11 @@ describe.each(getConfiguredTestDialects())(
           },
         ],
       });
-      clearServices();
-      current = await createTestNextly({
-        ...dialectOption,
-        adapter,
-        collections: [tags],
-      });
+      // The rule a code-first target would declare, registered as boot
+      // registers it, so a caller can be refused the target.
+      current
+        .getService("rbacAccessControlService")
+        .registerCollectionAccess("tags", { read: readableByPermitted });
       const handler =
         current.getService<CollectionsHandler>("collectionsHandler");
       const make = async (
