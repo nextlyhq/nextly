@@ -46,6 +46,11 @@ let services: PluginContext["services"] | undefined;
 let founder: string | undefined;
 /** The one person the function rule below lets read a "secret". */
 let ruleAllows: string | undefined;
+/**
+ * A "relived" document the next read of deletes and makes again under its id,
+ * between that read's authorization and its events.
+ */
+let relive: { id: string; t: TestNextly } | undefined;
 
 afterEach(async () => {
   await current?.destroy();
@@ -53,6 +58,7 @@ afterEach(async () => {
   services = undefined;
   founder = undefined;
   ruleAllows = undefined;
+  relive = undefined;
 });
 
 interface Page {
@@ -97,6 +103,49 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               ) {
                 throw new Error("This tenant may not read here.");
               }
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
+      // A hook that refuses by the context its caller passed, as a hook
+      // trusting a verified request header does.
+      defineCollection({
+        slug: "contextual",
+        hooks: {
+          beforeOperation: [
+            ({ context }) => {
+              if (context?.tenant === "blocked") {
+                throw new Error("This tenant may not read here.");
+              }
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
+      // A second life no person may read, made by a read of the first: the
+      // document is deleted and created again under its id after the read
+      // passed its hooks, before its events are read.
+      defineCollection({
+        slug: "relived",
+        db: { allowIdOnCreate: true },
+        hooks: {
+          afterRead: [
+            async ({ data, user }) => {
+              const doc = data as { id?: string; title?: string } | undefined;
+              if (doc?.title === "second" && user !== undefined) {
+                throw new Error("No person may read the second life.");
+              }
+              if (relive !== undefined && doc?.id === relive.id) {
+                const { id, t } = relive;
+                relive = undefined;
+                await t.nextly.delete({ collection: "relived", id });
+                await t.nextly.create({
+                  collection: "relived",
+                  data: { id, title: "second" },
+                });
+              }
+              return data;
             },
           ],
         },
@@ -488,6 +537,86 @@ describe.each(getConfiguredTestDialects())(
       expect((await restGet(outsider, ["content-events"], query)).status).toBe(
         404
       );
+    }, 120_000);
+
+    it("hands the document's hooks the context a Direct API or plugin caller passed", async () => {
+      const t = await boot(dialect);
+      const reader = await personHolding(t, ["read-contextual"]);
+      const doc = await documentIn(t, "contextual");
+      const subject = {
+        kind: "collection" as const,
+        slug: "contextual",
+        id: doc,
+      };
+      const outcome = (read: Promise<unknown>) =>
+        read.then(
+          () => "readable",
+          () => "refused"
+        );
+
+      const answers = [];
+      for (const tenant of ["open", "blocked"]) {
+        const context = { tenant };
+        const documentRead = await outcome(
+          t.nextly.findByID({
+            collection: "contextual",
+            id: doc,
+            context,
+            ...asPerson(reader),
+          })
+        );
+        const direct = await outcome(
+          t.nextly.contentEvents.list({ subject, context, ...asPerson(reader) })
+        );
+        const plugin = await outcome(
+          services!.versions.listEvents(
+            subject,
+            {},
+            {
+              as: "user",
+              user: {
+                id: reader as AuthUserId,
+                email: `${reader}@example.com`,
+              },
+              context,
+            }
+          )
+        );
+        expect({ direct, plugin }, tenant).toEqual({
+          direct: documentRead,
+          plugin: documentRead,
+        });
+        answers.push(documentRead);
+      }
+      // The context decided: one tenant reads and the other is refused.
+      expect(answers).toEqual(["readable", "refused"]);
+    }, 120_000);
+
+    it("never reads a life the caller was not judged against", async () => {
+      const t = await boot(dialect);
+      const reader = await personHolding(t, ["read-relived"]);
+      const id = randomUUID();
+      await t.nextly.create({
+        collection: "relived",
+        data: { id, title: "first" },
+      });
+      const subject = { kind: "collection" as const, slug: "relived", id };
+      const read = () =>
+        t.nextly.contentEvents.list({ subject, ...asPerson(reader) }).then(
+          page => page.items.map(e => e.kind),
+          () => "refused"
+        );
+
+      expect(await read()).toEqual(["created"]);
+      // Deleted and made again while this read runs: the life now current is
+      // one this person may not read, so they get none of it.
+      relive = { id, t };
+      expect(await read()).toBe("refused");
+      // The race ran, and the second life is refused as a document too.
+      expect(relive).toBeUndefined();
+      await expect(
+        t.nextly.findByID({ collection: "relived", id, ...asPerson(reader) })
+      ).rejects.toBeDefined();
     }, 120_000);
 
     it("shows one life of a document id at a time", async () => {

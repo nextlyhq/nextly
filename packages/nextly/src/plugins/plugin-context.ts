@@ -480,6 +480,10 @@ async function readEventsForPlugin(
     ...(caller.authenticatedScope === undefined
       ? {}
       : { authenticatedScope: caller.authenticatedScope }),
+    // What the plugin handed its hooks, so a hook that narrows reads by them
+    // answers here as it would through `services.collections`.
+    ...(caller.request === undefined ? {} : { request: caller.request }),
+    ...(caller.context === undefined ? {} : { context: caller.context }),
   });
 }
 

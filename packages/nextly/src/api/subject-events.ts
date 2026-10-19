@@ -54,6 +54,10 @@ export interface SubjectEventsCaller {
   user?: UserContext;
   /** A scoped API key's own grants, when the caller is one. */
   authenticatedScope?: AuthenticatedScope;
+  /** The request behind the read, handed to the document's read hooks. */
+  request?: Request;
+  /** The caller's hook context, handed to the document's read hooks. */
+  context?: Record<string, unknown>;
 }
 
 /** What to read of a subject's events. */
@@ -179,12 +183,12 @@ export async function readSubjectEvents(
     container.get<DrizzleAdapter>("adapter"),
     getService("logger")
   );
-  const life = await authorizeSubject(subject, caller, repository);
-  const page = await repository.listForSubject(subject, {
-    ...query,
-    limit,
-    ...(life === undefined ? {} : { life }),
-  });
+  const page = await readAuthorizedLife(
+    subject,
+    { ...query, limit },
+    caller,
+    repository
+  );
   return {
     items: page.items,
     // A cursor walk: page and total describe the window returned, and the
@@ -200,19 +204,52 @@ export async function readSubjectEvents(
   };
 }
 
+/** How many times a read is authorized again when a life ends under it. */
+const LIFE_ATTEMPTS = 3;
+
+/**
+ * A page from the life the caller was authorized for.
+ *
+ * A document can be deleted and made again under the same id between the
+ * authorization and the read, and its current life is then one this caller
+ * was never judged against. A deletion always records a new end, so a latest
+ * end unchanged after the read proves the life read is the life authorized.
+ * A changed one means it may not be, so the caller is authorized again, and
+ * refused if lives keep ending faster than they can be read.
+ */
+async function readAuthorizedLife(
+  subject: ContentEventSubject,
+  query: ContentEventQuery,
+  caller: SubjectEventsCaller,
+  repository: ContentEventsRepository
+): Promise<Awaited<ReturnType<ContentEventsRepository["listForSubject"]>>> {
+  for (let attempt = 1; attempt <= LIFE_ATTEMPTS; attempt += 1) {
+    const { life, ended } = await authorizeSubject(subject, caller, repository);
+    const page = await repository.listForSubject(subject, {
+      ...query,
+      ...(life === undefined ? {} : { life }),
+    });
+    // Only the current life can change under a read: an ended one is named by
+    // its end, and a release has one life.
+    if (life !== "current") return page;
+    if ((await repository.latestEnd(subject)) === ended) return page;
+  }
+  throw refused(subject, "document-life-ended-during-read");
+}
+
 /**
  * Refuse a caller who may not read this subject's events, and say which life
- * of it to read.
+ * of it to read, with the subject's latest end as it stood before deciding.
  */
 async function authorizeSubject(
   subject: ContentEventSubject,
   caller: SubjectEventsCaller,
   repository: ContentEventsRepository
-): Promise<ContentEventQuery["life"]> {
+): Promise<{ life: ContentEventQuery["life"]; ended: string | null }> {
   if (subject.kind === "release") {
     await authorizeRelease(subject.id, caller);
     // A release id is never reused, so it has one life.
-    return undefined;
+    return { life: undefined, ended: null };
   }
   const ended = await repository.latestEnd(subject);
   if (ended !== null && !(await documentExists(subject))) {
@@ -222,10 +259,10 @@ async function authorizeSubject(
         throw refused(subject, "deleted-document-not-readable");
       }
     }
-    return { endedBy: ended };
+    return { life: { endedBy: ended }, ended };
   }
   if (!caller.overrideAccess) await authorizeLiveDocument(subject, caller);
-  return "current";
+  return { life: "current", ended };
 }
 
 /**
@@ -247,7 +284,12 @@ async function authorizeLiveDocument(
     subject.slug,
     subject.id,
     user,
-    caller.authenticatedScope
+    caller.authenticatedScope,
+    // The hooks see what they would on the caller's own read of the document.
+    {
+      ...(caller.request === undefined ? {} : { request: caller.request }),
+      ...(caller.context === undefined ? {} : { context: caller.context }),
+    }
   );
 }
 
