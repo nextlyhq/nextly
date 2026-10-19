@@ -764,7 +764,7 @@ describe("EmailTemplateService", () => {
     }
 
     it("seeds each built-in once, with no warning or error, when workers race", async () => {
-      const { sqlite: shared, db } = createInMemoryDb();
+      const { sqlite: shared, db } = await createInMemoryDb();
       const loggers = Array.from({ length: 4 }, spyLogger);
       const workers = loggers.map(
         l =>
@@ -793,7 +793,7 @@ describe("EmailTemplateService", () => {
     });
 
     it("still reports an insert failure that isn't another worker's write", async () => {
-      const { sqlite: failing, db } = createInMemoryDb();
+      const { sqlite: failing, db } = await createInMemoryDb();
       // Every insert fails, and not for a duplicate key.
       failing.exec(
         "CREATE TRIGGER refuse_inserts BEFORE INSERT ON email_templates BEGIN SELECT RAISE(ABORT, 'disk full'); END;"

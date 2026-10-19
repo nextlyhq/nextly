@@ -1140,11 +1140,18 @@ export class EmailTemplateService extends BaseService {
       });
       this.logger.info(`Created email template: ${t.slug}`);
     } catch (error) {
-      // Two boots racing to create the same template: the other one won.
-      this.logger.warn(
-        `Failed to create email template "${t.slug}" — may already exist`,
-        { error }
-      );
+      // Two first starts seed at once (several instances, or a dev server
+      // beside a build): the one that loses hits the unique slug, and the row
+      // it wanted is there. Any other failure is warned of, and seeding goes on.
+      if (isUniqueViolation(error)) {
+        this.logger.debug(
+          `Email template "${t.slug}" was created by another process`
+        );
+        return;
+      }
+      this.logger.warn(`Failed to create email template "${t.slug}"`, {
+        error,
+      });
     }
   }
 
