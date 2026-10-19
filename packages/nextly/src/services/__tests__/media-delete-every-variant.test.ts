@@ -296,7 +296,7 @@ describe("a file another item also refers to", () => {
     const id = await uploadPhoto();
     await copyOf(id);
     const transaction = db.adapter.transaction.bind(db.adapter);
-    const select = db.adapter.select.bind(db.adapter);
+    const getDrizzle = db.adapter.getDrizzle.bind(db.adapter);
     let committed = false;
     const lookedAfterCommit: boolean[] = [];
     vi.spyOn(db.adapter, "transaction").mockImplementation(
@@ -306,14 +306,26 @@ describe("a file another item also refers to", () => {
         return result;
       }
     );
-    vi.spyOn(db.adapter, "select").mockImplementation(
-      async (table, options) => {
-        if (table === "media" && options?.where && "or" in options.where) {
-          lookedAfterCommit.push(committed);
-        }
-        return select(table, options);
-      }
-    );
+    // The search reads exactly the columns `storedFilesOf` needs.
+    vi.spyOn(db.adapter, "getDrizzle").mockImplementation(relations => {
+      const drizzle = getDrizzle(relations);
+      return new Proxy(drizzle, {
+        get(target, property, receiver) {
+          if (property !== "select") {
+            return Reflect.get(target, property, receiver) as unknown;
+          }
+          return (fields?: Record<string, unknown>) => {
+            const read = Object.keys(fields ?? {})
+              .sort()
+              .join(",");
+            if (read === "filename,sizes,thumbnailUrl,url") {
+              lookedAfterCommit.push(committed);
+            }
+            return target.select(fields as never);
+          };
+        },
+      });
+    });
 
     expect((await service.deleteMedia(id)).success).toBe(true);
 
@@ -341,6 +353,123 @@ describe("a file another item also refers to", () => {
 
     const stored = await onDisk();
     for (const file of before) expect(stored).toContain(file);
+  });
+
+  /** Another item, with the stored files `fields` give it, and no folder. */
+  async function anotherItem(fields: {
+    filename: string;
+    url: string;
+    thumbnailUrl?: string | null;
+    sizes?: string | null;
+  }): Promise<void> {
+    await db.db.insert(db.schema.media).values({
+      id: `other-${randomUUID()}`,
+      originalFilename: "other.png",
+      mimeType: "image/png",
+      size: 1,
+      width: 1,
+      height: 1,
+      duration: null,
+      thumbnailUrl: null,
+      sizes: null,
+      altText: null,
+      caption: null,
+      tags: null,
+      uploadedBy: "user-1",
+      uploadedAt: new Date(),
+      updatedAt: new Date(),
+      ...fields,
+    });
+  }
+
+  /** One of the item's sizes, by its stored path and URL. */
+  async function aSizeOf(id: string): Promise<{ path: string; url: string }> {
+    const [row] = await db.db
+      .select()
+      .from(db.schema.media)
+      .where(eq(db.schema.media.id, id));
+    const sizes = (
+      typeof row.sizes === "string" ? JSON.parse(row.sizes) : row.sizes
+    ) as Record<string, { path: string; url: string }>;
+    return Object.values(sizes)[0];
+  }
+
+  // Each shape another item can refer to a file by, alone: a control for
+  // one says nothing of another.
+  it.each([
+    [
+      "as its original",
+      (size: { path: string; url: string }) => ({
+        filename: size.path,
+        url: size.url,
+      }),
+    ],
+    [
+      "only through one of its sizes",
+      (size: { path: string; url: string }) => ({
+        filename: "2026/10/elsewhere-x.png",
+        url: "/uploads/2026/10/elsewhere-x.png",
+        sizes: JSON.stringify({ small: size }),
+      }),
+    ],
+    [
+      "as its thumbnail, by the size's URL",
+      (size: { path: string; url: string }) => ({
+        filename: "2026/10/elsewhere-y.png",
+        url: "/uploads/2026/10/elsewhere-y.png",
+        thumbnailUrl: size.url,
+      }),
+    ],
+    [
+      "under another spelling of the same file",
+      (size: { path: string; url: string }) => ({
+        filename: `/${size.path.replace("/", "//")}`,
+        url: size.url,
+      }),
+    ],
+  ])("stays when another item refers to a size %s", async (_shape, refer) => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const size = await aSizeOf(id);
+    await anotherItem(refer(size));
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    const stored = await onDisk();
+    expect(stored).toContain(size.path);
+    expect(stored).toHaveLength(1);
+  });
+
+  // Nothing shows a file is unreferenced while the table cannot be read.
+  it("keeps every file, and the delete still succeeds, when references cannot be read", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+    const getDrizzle = db.adapter.getDrizzle.bind(db.adapter);
+    vi.spyOn(db.adapter, "getDrizzle").mockImplementation(relations => {
+      const drizzle = getDrizzle(relations);
+      return new Proxy(drizzle, {
+        get(target, property, receiver) {
+          if (property !== "select") {
+            return Reflect.get(target, property, receiver) as unknown;
+          }
+          return (fields?: Record<string, unknown>) => {
+            if ("sizes" in (fields ?? {}) && !("id" in (fields ?? {}))) {
+              throw new Error("the connection was lost");
+            }
+            return target.select(fields as never);
+          };
+        },
+      });
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    expect(await onDisk()).toEqual(before);
+    expect(
+      warn.mock.calls.map(args => args.map(String).join(" ")).join("\n")
+    ).toMatch(/could not check whether another item refers to them/);
   });
 
   it("stays when a folder holding one of the items is deleted", async () => {
