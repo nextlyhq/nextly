@@ -105,6 +105,8 @@ interface Kind {
   table: (tables: Tables) => Tables["passwordResetTokens"];
   issue: (auth: AuthService, email: string) => Promise<{ token?: string }>;
   redeem: (auth: AuthService, token: string) => Promise<unknown>;
+  /** The address the limiter charges a request carrying the token to. */
+  owner: (auth: AuthService, token: string) => Promise<string | null>;
   /** Whether the link's effect is on the account: a new password, or a verified address. */
   applied: (row: Record<string, unknown>) => boolean;
 }
@@ -116,6 +118,7 @@ const KINDS: Kind[] = [
     issue: (auth, email) =>
       auth.generatePasswordResetToken(email, { disableEmail: true }),
     redeem: (auth, token) => auth.resetPasswordWithToken(token, NEW_PASSWORD),
+    owner: (auth, token) => auth.resetTokenOwner(token),
     applied: row => row.passwordHash !== OLD_HASH,
   },
   {
@@ -126,6 +129,7 @@ const KINDS: Kind[] = [
     issue: (auth, email) =>
       auth.generateEmailVerificationToken(email, { disableEmail: true }),
     redeem: (auth, token) => auth.verifyEmail(token),
+    owner: (auth, token) => auth.verificationTokenOwner(token),
     applied: row =>
       row.emailVerified !== null && row.emailVerified !== undefined,
   },
@@ -300,6 +304,7 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
 
       const [row] = await tokensFor(kind, token);
       expect(row.userId).toBe(id);
+      expect(await kind.owner(auth, token)).toBe(email);
 
       await kind.redeem(auth, token);
       expect(kind.applied(await userRow(id))).toBe(true);
@@ -565,6 +570,8 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
           code: "VALIDATION_ERROR",
         });
         expect(kind.applied(await userRow(id))).toBe(false);
+        // Nor does it name an owner for the limiter to charge.
+        expect(await kind.owner(auth, raw)).toBeNull();
       });
 
       it("is removed when the account at its address is deleted", async () => {

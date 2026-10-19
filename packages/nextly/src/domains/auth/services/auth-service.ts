@@ -1387,7 +1387,11 @@ export class AuthService extends BaseService {
    */
   async resetTokenOwner(token: string): Promise<string | null> {
     const row = await this.findUnusedResetToken(token);
-    return row && !tokenExpired(row) ? row.identifier : null;
+    // Only a token redemption would honour names an owner: one with no
+    // account is refused there until the core reconcile binds it.
+    return row && row.userId !== null && !tokenExpired(row)
+      ? row.identifier
+      : null;
   }
 
   /**
@@ -1396,7 +1400,11 @@ export class AuthService extends BaseService {
    */
   async verificationTokenOwner(token: string): Promise<string | null> {
     const row = await this.findVerificationToken(token);
-    return row && !tokenExpired(row) ? row.identifier : null;
+    // Only a token redemption would honour names an owner: one with no
+    // account is refused there until the core reconcile binds it.
+    return row && row.userId !== null && !tokenExpired(row)
+      ? row.identifier
+      : null;
   }
 
   /**
