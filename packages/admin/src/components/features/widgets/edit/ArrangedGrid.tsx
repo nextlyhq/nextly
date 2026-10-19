@@ -8,8 +8,8 @@
  *
  * ## Sized by the dashboard, not the window
  *
- * The tracks sit inside an `@container/dashboard` wrapper, and each card's
- * span answers to that container (`sizes.ts`). A dashboard squeezed by an open
+ * The tracks sit inside the `@container/dashboard` wrapper `WidgetGrid` draws,
+ * and each card's span answers to that container (`sizes.ts`). A dashboard squeezed by an open
  * sidebar therefore draws the band that fits the space it actually has. The
  * wrapper is a separate element because a container query cannot be answered
  * by the element it styles.
@@ -20,6 +20,7 @@
  * @module components/features/widgets/edit/ArrangedGrid
  */
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
@@ -53,9 +54,14 @@ export interface ArrangedGridProps {
   slots: Record<string, WidgetSlot>;
   cellSlots: CellSlots;
   requested: ReadonlySet<string>;
-  updatedAt: Date | null;
+  /** When the answer one card shows arrived: its own retry's, or the batch's. */
+  updatedAtFor: (placementId: string) => Date | null;
+  /** The tier the answer one card shows was fetched at. */
+  fetchedTierFor: (placementId: string) => SizeTier | undefined;
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
+  /** Reload one card's data on its own, from its error state's Retry. */
+  retry: (placementId: string) => void;
   announcement: string;
   focus: Pick<DashboardFocus, "menuRef" | "dismissRef">;
   /** The region's own ref: where focus lands when nothing nearer can take it. */
@@ -116,15 +122,19 @@ export function ArrangedGrid({
   slots,
   cellSlots,
   requested,
-  updatedAt,
+  updatedAtFor,
+  fetchedTierFor,
   fetchingPlacementIds,
+  retry,
   announcement,
   focus,
   gridRef,
   on,
 }: ArrangedGridProps) {
   return (
-    <div className="@container/dashboard">
+    // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
+    // this, the one element the dashboard's width is measured from.
+    <div>
       <section
         ref={gridRef}
         aria-label="Dashboard widgets"
@@ -132,7 +142,8 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        className="grid grid-cols-12 gap-6"
+        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
+        className="grid grid-cols-12 gap-[24px]"
       >
         <span
           role="status"
@@ -165,10 +176,18 @@ export function ArrangedGrid({
                 // This card's own answers, by cell key.
                 slotFor: key => cellSlots[row.placementId]?.[key],
                 // Only a card that actually ASKED can be waiting on an answer.
-                updatedAt: requested.has(row.placementId) ? updatedAt : null,
+                updatedAt: requested.has(row.placementId)
+                  ? updatedAtFor(row.placementId)
+                  : null,
                 // 🔴 This card's own request, not the batch's: partitions
                 // settle independently, and a settled card must not dim.
                 isFetching: fetchingPlacementIds.has(row.placementId),
+                answerTier: fetchedTierFor(row.placementId),
+                // Retry only for a card in the batch: one rejected before it was asked has no
+                // question to ask again, so the button could change nothing.
+                onRetry: requested.has(row.placementId)
+                  ? () => retry(row.placementId)
+                  : undefined,
               }}
               refs={{
                 menu: focus.menuRef(row.placementId),

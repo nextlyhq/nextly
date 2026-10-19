@@ -1,7 +1,7 @@
 "use client";
 
-import { Card, CardContent, Skeleton } from "@nextlyhq/ui";
-import { AlertCircle, Database, FileCheck, Layout, Puzzle } from "lucide-react";
+import { Card, CardContent } from "@nextlyhq/ui";
+import { Database, FileCheck, Layout, Puzzle } from "lucide-react";
 import type React from "react";
 import { useMemo } from "react";
 
@@ -12,6 +12,9 @@ import { useCollections, useDashboardStats } from "@admin/hooks/queries";
 import { cn } from "@admin/lib/utils";
 import type { CollectionCount } from "@admin/types/dashboard/stats";
 import type { ApiCollection } from "@admin/types/entities";
+
+import { CardFigure } from "../widgets/frame/figure";
+import { CardError, CardSkeleton } from "../widgets/frame/states";
 
 interface CollectionGroup {
   name: string | null;
@@ -96,14 +99,19 @@ function CollectionCard({
         )}
       >
         <CardContent className="p-5 relative z-10">
-          <div className="flex items-start justify-between">
-            <div className="space-y-1">
-              <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground leading-none transition-colors">
-                {item.count}
+          <div className="flex items-start justify-between gap-4">
+            {/* `min-w-0` so a long name can wrap: a flex item is otherwise as wide as its
+                longest word, and a long collection name would push past the tile. */}
+            <div className="min-w-0 space-y-1">
+              {/* The card type ramp's big number, through the one card formatter. */}
+              <span className="text-2xl font-semibold tabular-nums tracking-tight text-foreground leading-none transition-colors">
+                <CardFigure value={item.count} />
               </span>
-              <h5 className="font-semibold text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
+              {/* A label, not a heading, and wrapped rather than clipped: the frame's title is
+                  the card's one heading, and a collection's name is read in full. */}
+              <span className="block break-words font-medium text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
                 {item.label}
-              </h5>
+              </span>
             </div>
             <div className="text-muted-foreground group-hover:text-foreground transition-colors pt-1">
               <Icon className="h-5 w-5 shrink-0" />
@@ -115,24 +123,12 @@ function CollectionCard({
   );
 }
 
-function LoadingSkeleton() {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-      {Array.from({ length: 4 }, (_, i) => (
-        <Skeleton
-          key={i}
-          className="h-32 rounded-lg bg-muted/30  border border-border"
-        />
-      ))}
-    </div>
-  );
-}
-
 export const CollectionQuickLinks: React.FC = () => {
   const {
     data: statsData,
     isLoading: statsLoading,
     error: statsError,
+    refetch: refetchStats,
   } = useDashboardStats();
   const { data: collectionsData, isLoading: collectionsLoading } =
     useCollections({
@@ -159,44 +155,46 @@ export const CollectionQuickLinks: React.FC = () => {
 
   const isLoading = statsLoading || collectionsLoading;
 
+  // The card's frame draws its title, so this is only its body: the collections, grouped,
+  // or the frame's own skeleton and error while they are not there.
+  if (isLoading) return <CardSkeleton shape="rows" rows={4} />;
+  if (statsError) {
+    return (
+      <CardError
+        title="Collections"
+        message="The collection counts couldn't be loaded."
+        onRetry={() => void refetchStats()}
+      />
+    );
+  }
+  // One group needs no heading of its own: the card's title already names it. Several are
+  // told apart by an h3, one level under the card's title.
+  const headed = groups.length > 1;
   return (
-    <div className="space-y-12">
-      {isLoading ? (
-        <LoadingSkeleton />
-      ) : statsError ? (
-        <div className="flex items-center gap-2 py-8 text-xs font-bold uppercase tracking-widest text-destructive justify-center bg-destructive/5 rounded-md  border border-border border-destructive">
-          <AlertCircle className="h-4 w-4" />
-          <span>Connection Error</span>
+    <div className="space-y-8">
+      {groups.map(group => (
+        <div key={group.name ?? "__ungrouped"} className="space-y-4">
+          {headed && (
+            <h3 className="flex items-baseline gap-2 text-xs font-medium text-muted-foreground">
+              {group.name || "Collections"}
+              <span className="tabular-nums">
+                <CardFigure value={group.collections.length} />
+              </span>
+            </h3>
+          )}
+          {/* As many columns as the CARD's width fits, never the window's: a tile is at least
+              11rem, so a small card is one column and a wide one several. */}
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">
+            {group.collections.map(item => (
+              <CollectionCard
+                key={item.slug}
+                item={item}
+                collectionConfig={collectionsMap.get(item.slug)}
+              />
+            ))}
+          </div>
         </div>
-      ) : (
-        <div className="space-y-12">
-          {groups.map(group => (
-            <div key={group.name ?? "__ungrouped"} className="space-y-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4 flex-1">
-                  <h4 className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap">
-                    {group.name || "Collections"}
-                  </h4>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
-                <span className="ml-4 text-xs font-medium tabular-nums text-muted-foreground">
-                  {group.collections.length}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                {group.collections.map(item => (
-                  <CollectionCard
-                    key={item.slug}
-                    item={item}
-                    collectionConfig={collectionsMap.get(item.slug)}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      ))}
     </div>
   );
 };

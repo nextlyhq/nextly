@@ -7,7 +7,7 @@
  * which to enforce them. This is that service, and it is the layer that makes
  * the feature safe to expose.
  *
- * ## Three authorities, not a CRUD set
+ * ## Five authorities, each its own power
  *
  * `permission-seed-service` states the split and this honours it rather than
  * restating it: assembling a release changes nothing a reader can see, while
@@ -16,12 +16,12 @@
  *     read     → view releases and their members
  *     create   → create a release and choose what goes in it
  *     publish  → schedule or cancel, which is what makes content go live
+ *     update   → rename a release and change its description
+ *     delete   → delete a draft or cancelled release
  *
- * `update` and `delete` are deliberately NOT seeded, and so are deliberately
- * absent here. Renaming is filed under `create` because it is part of assembling
- * a release; destroying one is a different power and waits for its own
- * permission to arrive with the surface that checks it. Inventing either here
- * would teach the admin a vocabulary the server ignores.
+ * `update` and `delete` arrived after the other three, and the seed grants
+ * them on an upgrade to the roles that held the power each splits off:
+ * `update` to holders of `create`, `delete` to holders of `publish`.
  *
  * ## Why adding a member asks TWO questions
  *
@@ -49,37 +49,91 @@ import {
   apiKeyScopeAllows,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
+import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
+import type { ReleaseNotDeletablePublicData } from "../../../errors/public-data";
 import {
   RELEASE_ASSEMBLABLE_FROM,
   RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
+  RELEASE_MEMBER_LIMIT,
   RELEASE_CANCELLABLE_FROM,
+  RELEASE_DELETABLE_FROM,
+  RELEASE_FINAL_STATES,
+  RELEASE_PUBLISHABLE_NOW_FROM,
   RELEASE_SCHEDULABLE_FROM,
   RELEASE_SCHEDULABLE_FROM_BLOCKED,
   RELEASE_SCHEDULABLE_FROM_UNBLOCKED,
+  RELEASE_KINDS,
+  RELEASE_STATES,
   RELEASE_STATES_SHOWN_ON_A_DOCUMENT,
   isReleaseMemberAction,
   type ReleaseBlockerReason,
+  type ReleaseKind,
   type ReleaseMemberAction,
   type ReleaseState,
+  type ReleaseCapabilities,
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
+import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import {
+  type ReleaseCheckReads,
+  type ReleaseCheckSource,
+} from "../readiness/check-sources";
+import {
+  CORE_AUTHOR_SOURCE,
+  registeredReleaseCheckSources,
+} from "../readiness/core-sources";
+import {
+  evaluateReadiness,
+  type ReadinessFinding,
+  type ReleaseReadiness,
+} from "../readiness/evaluate-readiness";
+import type { ReleaseActivityEntry } from "../release-activity";
+import {
+  RELEASE_CALENDAR_RELEASES_PER_DAY,
+  zonedDay,
+  zonedDays,
+  type ReleaseCalendar,
+} from "../release-calendar";
+import { isDueAt } from "../release-due";
+import { releaseMemberKey } from "../release-member-key";
+import {
+  RELEASE_ATTENTION_REASONS,
+  RELEASE_TABS,
+  type ReleaseAttentionReason,
+  type ReleaseTab,
+} from "../release-tabs";
+import {
+  resolveReleaseTarget,
+  type ReleaseTargetReader,
+} from "../release-targets";
 import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
   DocumentRef,
   NewRelease,
   ReleaseListOrder,
   ReleaseMemberRow,
+  ReleasePageQuery,
   ReleaseRow,
   ReleasesRepository,
 } from "../releases-repository";
+import { RELEASES_RESOURCE } from "../releases-resource";
 
 /** The system-resource authorities a release operation can require. */
-export type ReleaseAuthority = "read" | "create" | "publish";
+export type ReleaseAuthority =
+  | "read"
+  | "create"
+  | "publish"
+  | "update"
+  | "delete";
 
-/** The system resource the three permissions are seeded under. */
-export const RELEASES_RESOURCE = "content-releases";
+/**
+ * The system resource the release permissions are seeded under. Declared in
+ * `releases-resource` and exported here as well, where every caller of the
+ * service has always found it.
+ */
+export { RELEASES_RESOURCE };
 
 /**
  * The longest title every supported dialect can store.
@@ -99,27 +153,6 @@ export const MAX_RELEASE_TITLE_LENGTH = 255;
  * than constraining a real caller.
  */
 export const MAX_RELEASE_TIMEZONE_LENGTH = 64;
-
-/**
- * How many documents one release may hold.
- *
- * A bound rather than a policy. Nothing about the model stops a release growing
- * without limit, and three things degrade together as it does: `listMembers` is
- * unpaged and the detail page renders all of it, the drain performs members one
- * at a time inside a wall-clock budget, and a blocked release derives its
- * reasons over every member on every read.
- *
- * A thousand is chosen to sit well above any release somebody assembles
- * deliberately — a site relaunch is tens of documents, not hundreds — while
- * still catching the case this exists for: a script adding in a loop, which
- * otherwise builds a release nothing can display and no single pass can settle.
- *
- * NOT an atomic invariant, and the code says so rather than implying otherwise:
- * two concurrent adds can both read a count below the cap. That is acceptable
- * because the failure it prevents is unbounded growth, not the thousand-and-
- * first row.
- */
-export const MAX_RELEASE_MEMBERS = 1000;
 
 /**
  * Who is asking, and whether to ask at all.
@@ -151,27 +184,24 @@ export interface ReleaseActor {
 }
 
 /**
- * What a caller may do to one release, as the server sees it.
+ * The reads a readiness check needs from outside the releases domain; the
+ * rest of {@link ReleaseCheckReads} the service answers from its repository.
  *
- * Sent WITH the release rather than derived by the reader. Payload computes the
- * same thing per document for its edit view, and Sanity gates each release
- * action by its own permission id so scheduling can be granted without
- * publishing — in both, the answer depends on authority the client does not
- * hold, so a client that computed it would be guessing.
+ * @experimental
  */
-export interface ReleaseCapabilities {
-  /** Set or move this release's instant. */
-  schedule: boolean;
-  /** Call it off — which is also how an unwanted draft is abandoned. */
-  cancel: boolean;
-  /** Put a document in it. Necessary, not sufficient: see `capabilities`. */
-  addMember: boolean;
-  /** Take a document out of it. Necessary, not sufficient. */
-  removeMember: boolean;
-}
+export type ReleaseDocumentChecks = Omit<
+  ReleaseCheckReads,
+  "liveAuthors" | "scheduledMemberships" | "declaresLifecycle"
+>;
 
 export interface ReleasesServiceDeps {
   repository: ReleasesRepository;
+  /**
+   * What a document must be to join a release: there for the caller, in a
+   * collection or Single with a draft/published lifecycle. Injected because
+   * the content API and the schema registries are the wiring's to hold.
+   */
+  targets: ReleaseTargetReader;
   /**
    * Whether this user holds one of the three release authorities.
    *
@@ -205,6 +235,85 @@ export interface ReleasesServiceDeps {
     authenticatedScope?: AuthenticatedScope;
     userRoles?: string[];
   }) => Promise<boolean>;
+  /**
+   * Run the releases drain job now, through the jobs runner, if no runner
+   * already holds it.
+   *
+   * The runner's own job, claimed under its lease exactly as a scheduled pass
+   * claims it, so a run started here can never overlap the scheduled drain or
+   * another one started here: every run of the release engine goes through
+   * that one claim. When another runner holds it, nothing runs and this
+   * resolves anyway; that runner, or the next pass, sends out what is due.
+   * `maxDurationMs` is the pass's budget, as for any pass.
+   *
+   * Injected because the runner, its registry and the identity reads the drain
+   * writes with are wiring the domain does not hold.
+   */
+  runDrainNow: (options: { maxDurationMs: number }) => Promise<unknown>;
+  /**
+   * What the readiness checks ask about a member's document and author, as
+   * the release's run would answer it. Injected because the access gate, the
+   * content validation and the identity reads are the wiring's to hold.
+   */
+  checks: ReleaseDocumentChecks;
+  /**
+   * Where Publish now reports a drain it could not start, and a rename or
+   * delete reports an activity entry it could not record. Optional: without
+   * one the failure goes unreported, and the operation still answers as it
+   * stands.
+   */
+  logger?: Pick<Logger, "warn">;
+  /**
+   * Record a rename or a deletion in the activity log (`release-activity`),
+   * after the write has committed.
+   *
+   * Injected, as the permission questions are, because the log is reached
+   * through the container the wiring holds. Optional: a service built without
+   * one records nothing, which is what a test that is not about the log
+   * wants.
+   */
+  recordActivity?: (entry: ReleaseActivityEntry) => Promise<void>;
+}
+
+/**
+ * How long Publish now may spend running the drain before it answers.
+ *
+ * A request has a time limit the runner's pass does not, and a release past
+ * this budget is not lost: it is already due, so the runner finishes it on its
+ * next pass, and the answer says it is still going out.
+ */
+const PUBLISH_NOW_BUDGET_MS = 15_000;
+
+/**
+ * The refusal for a change to a release that has finished, saying what to do
+ * instead.
+ *
+ * A published or cancelled release is the record of a launch, and it takes no
+ * further change. The person meant to do something real, so the message names
+ * the way to do it: a new release.
+ */
+function finishedReleaseRefusal(
+  release: { id: string; state: ReleaseState },
+  attempted: string
+): NextlyError {
+  // Each state named, rather than "not published means cancelled": a caller
+  // reaching here with a state that is not final would otherwise be told a
+  // release it can still fix is cancelled.
+  const message =
+    release.state === "published"
+      ? "This release has already been published, so it cannot be changed or run again. Create a new release to schedule these documents again."
+      : release.state === "cancelled"
+        ? "This release is cancelled; create a new release to schedule these documents again."
+        : "This release cannot be changed in its current state.";
+  return NextlyError.conflict({
+    message,
+    logContext: {
+      reason: "release-is-final",
+      releaseId: release.id,
+      state: release.state,
+      attempted,
+    },
+  });
 }
 
 /**
@@ -252,32 +361,233 @@ function assertUsableSchedule(id: string, at: Date, timezone: string): void {
   }
 }
 
+/** The authorities `capabilities` answers from, each asked once a page. */
+interface HeldAuthorities {
+  mayPublish: boolean;
+  mayCreate: boolean;
+  mayUpdate: boolean;
+  mayDelete: boolean;
+}
+
 /**
- * Why this member cannot be applied, or `null` if it can.
- *
- * The order matters and is the drain's: a member that is BOTH locale-scoped and
- * authorless is reported as the one the drain would actually stop on, rather
- * than whichever a loop noticed first.
+ * Whether the release may be scheduled, cancelled or run now, by the same
+ * fences those writes take. `held` is how many documents it holds.
  */
-function blockerReasonFor(
-  member: ReleaseMemberRow,
-  liveAuthors: ReadonlySet<string>
-): ReleaseBlockerReason | null {
-  if (member.locale !== null) return "LOCALE_SCOPED";
-  if (member.createdBy === null) return "NO_AUTHOR";
-  if (!liveAuthors.has(member.createdBy)) return "AUTHOR_GONE";
+function runCapabilities(
+  release: ReleaseRow,
+  held: number,
+  may: HeldAuthorities
+): Pick<ReleaseCapabilities, "schedule" | "cancel" | "publishNow"> {
+  const { mayRun } = oneDocumentRule(release.kind, held);
+  return {
+    schedule:
+      may.mayPublish &&
+      RELEASE_SCHEDULABLE_FROM.includes(release.state) &&
+      mayRun,
+    cancel: may.mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
+    publishNow:
+      may.mayPublish &&
+      RELEASE_PUBLISHABLE_NOW_FROM.includes(release.state) &&
+      mayRun,
+  };
+}
+
+/**
+ * Whether the release's documents, title or the release itself may be
+ * changed, by the same rules those writes take.
+ */
+function editCapabilities(
+  release: ReleaseRow,
+  held: number,
+  may: HeldAuthorities
+): Pick<
+  ReleaseCapabilities,
+  "addMember" | "removeMember" | "update" | "delete"
+> {
+  // Membership is editable freely in some states and only by a publisher in
+  // others, because the drain reads membership AT the instant — so editing a
+  // scheduled release changes what a publisher committed to.
+  const mayChange = (change: MembershipChange): boolean =>
+    may.mayCreate &&
+    membershipFence(release.kind, change, may.mayPublish).includes(
+      release.state
+    );
+  return {
+    addMember: mayChange("add") && takesAnother(release.kind, held),
+    removeMember: mayChange("remove"),
+    // Any state, as `update` writes it: the title is a label.
+    update: may.mayUpdate,
+    delete: may.mayDelete && whyNotDeletable(release) === null,
+  };
+}
+
+/**
+ * Refuse a title the narrowest dialect could not store.
+ *
+ * ONE limit, applied before the write, because the column is not one shape:
+ * `nextly_releases.title` is `varchar(255)` on MySQL and unbounded `text` on
+ * PostgreSQL and SQLite. Left to the database, the same call succeeds on two
+ * engines and either errors or silently TRUNCATES on the third — and a
+ * truncating write returns a row that disagrees with what is stored. Creating
+ * and renaming ask this one question.
+ */
+function assertTitleFits(title: string): void {
+  if (title.length > MAX_RELEASE_TITLE_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`,
+      logContext: { reason: "title-too-long", length: title.length },
+    });
+  }
+}
+
+/**
+ * What a rename may change: the title, the description, or both.
+ *
+ * @experimental
+ */
+export interface ReleaseDetailsChange {
+  /** A new title: not empty, and at most {@link MAX_RELEASE_TITLE_LENGTH}. */
+  title?: string;
+  /** A new description, or `null` to clear it. */
+  description?: string | null;
+}
+
+/**
+ * Refuse a change that is not one, before anything is read.
+ *
+ * Checked here and not only at the HTTP boundary, because the Direct API is
+ * reachable from JavaScript: `title: 42` would otherwise reach the database,
+ * and `{}` would be a rename that renames nothing and still moves the release.
+ * An empty title is refused as REST's create refuses it, since a release with
+ * no name cannot be told from another in any list.
+ */
+function assertDetailsChange(change: ReleaseDetailsChange): void {
+  if (change.title === undefined && change.description === undefined) {
+    throw NextlyError.invalidInput({
+      message: "Give a `title`, a `description`, or both.",
+      logContext: { reason: "empty-release-details-change" },
+    });
+  }
+  if (change.title !== undefined) {
+    if (typeof change.title !== "string" || change.title.length === 0) {
+      throw NextlyError.invalidInput({
+        message: "`title` must be a non-empty string.",
+        logContext: { reason: "invalid-title", type: typeof change.title },
+      });
+    }
+    assertTitleFits(change.title);
+  }
+  if (
+    change.description !== undefined &&
+    change.description !== null &&
+    typeof change.description !== "string"
+  ) {
+    throw NextlyError.invalidInput({
+      message: "`description` must be a string or null.",
+      logContext: {
+        reason: "invalid-description",
+        type: typeof change.description,
+      },
+    });
+  }
+}
+
+/**
+ * Why this release may not be deleted, or `null` when it may.
+ *
+ * Only a release that never ran: a draft, or a release cancelled before it
+ * was ever scheduled. A cancelled release that WAS scheduled is kept, because
+ * nothing stored says whether it began to run: one that stopped part-way and
+ * was then cancelled has put content live, and reads like any other cancelled
+ * release. `scheduledAt` is the evidence that survives a cancel, so a release
+ * that ever had one is kept as the record. A release goes from draft only to
+ * scheduled or cancelled, so a draft never carries one.
+ *
+ * The one answer for the write and for the `delete` capability; the
+ * repository's fence states the same rule in its transaction.
+ */
+function whyNotDeletable(
+  release: Pick<ReleaseRow, "state" | "scheduledAt">
+): ReleaseNotDeletablePublicData["reason"] | null {
+  if (release.state === "published") return "published";
+  if (!RELEASE_DELETABLE_FROM.includes(release.state)) return "committed";
+  if (release.scheduledAt !== null && release.scheduledAt !== undefined) {
+    return "was-scheduled";
+  }
   return null;
 }
 
-/** Whether a row satisfies the qualifiers a list query carries beside `containing`. */
-function matchesListQuery(row: ReleaseRow, query: FindReleasesQuery): boolean {
-  if (query.state !== undefined && row.state !== query.state) return false;
-  const at = row.scheduledAt?.getTime();
-  if (query.scheduledAfter !== undefined) {
-    if (at === undefined || at < query.scheduledAfter.getTime()) return false;
+/** What each refusal tells the person, by reason. */
+const NOT_DELETABLE_MESSAGES: Record<
+  ReleaseNotDeletablePublicData["reason"],
+  string
+> = {
+  published:
+    "This release has been published. It stays as the record of what went live, and cannot be deleted.",
+  committed:
+    "This release is scheduled or stopped, so it can't be deleted. Cancelling it calls it off, and it's then kept as a record.",
+  "was-scheduled":
+    "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
+};
+
+/**
+ * The refusal for deleting a release that may not be deleted: a CONFLICT
+ * saying why, with the reason in its data for a client to name.
+ */
+function notDeletableRefusal(
+  release: ReleaseRow,
+  reason: ReleaseNotDeletablePublicData["reason"]
+): NextlyError {
+  return NextlyError.conflict({
+    message: NOT_DELETABLE_MESSAGES[reason],
+    data: { reason },
+    logContext: {
+      reason: "release-not-deletable",
+      why: reason,
+      releaseId: release.id,
+      state: release.state,
+    },
+  });
+}
+
+/**
+ * Who a rename or deletion is recorded as.
+ *
+ * An API key is named as a key and never as the person who owns it: the
+ * release actor carries the owner's id so the key can be authorized, and a
+ * person's name against a change they did not make is a worse record than
+ * none. The key's own id is not on the actor, so the entry names the kind
+ * alone, which the trail records nothing for (`recordableActor`) — the same
+ * answer the Direct API gives a key's content write (`directApiActor`).
+ */
+function activityActor(actor: ReleaseActor): RequestActor | null {
+  if (actor.authenticatedScope?.actorType === "apiKey") {
+    return { type: "apiKey" };
   }
-  if (query.scheduledBefore !== undefined) {
-    if (at === undefined || at > query.scheduledBefore.getTime()) return false;
+  return actor.userId === null ? null : { type: "user", id: actor.userId };
+}
+
+/** Whether a row satisfies the qualifiers a list query carries beside `containing`. */
+function matchesListQuery(
+  row: ReleaseRow,
+  query: FindReleasesFilters
+): boolean {
+  if (query.state !== undefined && row.state !== query.state) return false;
+  if (query.kind !== undefined && row.kind !== query.kind) return false;
+  return isWithinWindow(row.scheduledAt, query);
+}
+
+/** Whether a scheduled instant falls inside a listing's window, if it has one. */
+function isWithinWindow(
+  scheduledAt: Date | null,
+  window: Pick<FindReleasesFilters, "scheduledAfter" | "scheduledBefore">
+): boolean {
+  const at = scheduledAt?.getTime();
+  if (window.scheduledAfter !== undefined) {
+    if (at === undefined || at < window.scheduledAfter.getTime()) return false;
+  }
+  if (window.scheduledBefore !== undefined) {
+    if (at === undefined || at > window.scheduledBefore.getTime()) return false;
   }
   return true;
 }
@@ -322,6 +632,14 @@ interface FindReleasesFilters {
    */
   state?: ReleaseState;
   /**
+   * Restrict to one kind of release: `release` leaves out single-document
+   * releases, `single` lists only them. Filtered on the stored kind, never on
+   * how many documents a release holds.
+   *
+   * @experimental
+   */
+  kind?: ReleaseKind;
+  /**
    * Window on the scheduled instant, both bounds optional and independent.
    *
    * A caller supplies the window rather than receiving a fixed one: an index
@@ -331,16 +649,397 @@ interface FindReleasesFilters {
   scheduledAfter?: Date;
   scheduledBefore?: Date;
   /**
-   * How many rows at most. Must be a non-negative integer when given.
-   *
-   * There is no `offset`: the select port this reads through exposes `where`,
-   * `orderBy` and `limit` and nothing else, so offset paging would mean widening
-   * it for a caller that does not exist yet. The index page brings its own
-   * paging question when it is built, and keyset paging over `scheduledAt` is
-   * the shape that will suit it — an offset would drift under a list whose rows
-   * move as releases publish.
+   * Rows per page: {@link DEFAULT_RELEASE_PAGE_SIZE} when not given, and at
+   * most {@link MAX_RELEASE_PAGE_SIZE}.
    */
   limit?: number;
+  /**
+   * Which page, counting from 1.
+   *
+   * @experimental
+   */
+  page?: number;
+}
+
+/**
+ * The page size a listing gets when it asks for none, and the most it may ask
+ * for. Declared once here so the REST route and the Direct API page alike.
+ *
+ * @experimental
+ */
+export const DEFAULT_RELEASE_PAGE_SIZE = 50;
+/** @experimental */
+export const MAX_RELEASE_PAGE_SIZE = 200;
+
+/**
+ * The longest search accepted. Well above any title a person types, and a
+ * bound on the pattern a caller can hand the database to match against every
+ * release.
+ *
+ * @experimental
+ */
+export const MAX_RELEASE_SEARCH_LENGTH = 200;
+
+/**
+ * One day in a named time zone, as the list's day filter takes it.
+ *
+ * @experimental
+ */
+export interface ReleaseDayFilter {
+  /** The day, written `YYYY-MM-DD`. */
+  date: string;
+  /** The IANA zone the day is in, such as `Europe/Berlin`. */
+  timezone: string;
+}
+
+/**
+ * What a calendar read asks for: a window of days in a zone.
+ *
+ * @experimental
+ */
+export interface ReleaseCalendarQuery {
+  /** The first day, written `YYYY-MM-DD`. */
+  from: string;
+  /** The last day, included. At most six weeks after `from`. */
+  to: string;
+  /** The IANA zone the days are in, such as `Europe/Berlin`. */
+  timezone: string;
+  /** Only releases of this kind: `release` leaves out single-document ones. */
+  kind?: ReleaseKind;
+}
+
+/**
+ * What {@link ReleasesService.count} narrows by: the list's filters, without
+ * a page or an order.
+ *
+ * @experimental
+ */
+export interface ReleaseCountQuery {
+  /**
+   * Only the releases placed on this day in this zone, whatever their state:
+   * the releases a calendar shows on that day. A published release is placed
+   * where it went out, any other where it is scheduled.
+   *
+   * @experimental
+   */
+  day?: ReleaseDayFilter;
+  tab?: ReleaseTab;
+  /** With `tab: "attention"`: only its stopped, or only its overdue, releases. */
+  reason?: ReleaseAttentionReason;
+  state?: ReleaseState;
+  kind?: ReleaseKind;
+  scheduledAfter?: Date;
+  scheduledBefore?: Date;
+  search?: string;
+}
+
+/**
+ * One page of a release listing, and the size of the whole of it.
+ *
+ * @experimental
+ */
+export interface ReleaseListPage {
+  /** Carries `memberAction` when the listing was filtered by `containing`. */
+  rows: Array<ReleaseRow & { memberAction?: ReleaseMemberAction }>;
+  /** Every release the query matches, across all pages. */
+  total: number;
+  page: number;
+  limit: number;
+}
+
+/**
+ * The order a listing takes when the caller chose none.
+ *
+ * Soonest first for the scheduled releases — the Upcoming tab, or a plain
+ * listing filtered to `scheduled` — because the question asked of them is
+ * "what ships next", and latest first answers it with the release furthest
+ * out. Latest first otherwise, the order every other listing has always had.
+ * One rule, so a REST caller and a Direct API caller cannot disagree.
+ */
+function defaultOrderFor(query: {
+  tab?: ReleaseTab;
+  state?: ReleaseState;
+  day?: ReleaseDayFilter;
+  order?: ReleaseListOrder;
+}): ReleaseListOrder {
+  if (query.order !== undefined) return query.order;
+  // A day's releases read in the order of that day, as the calendar shows
+  // them, so the ones it shows on the day are the first of this list.
+  return query.tab === "upcoming" ||
+    query.state === "scheduled" ||
+    query.day !== undefined
+    ? "soonest"
+    : "latest";
+}
+
+/**
+ * Refuse a value outside its vocabulary, naming the ones that are inside it.
+ *
+ * Each would otherwise answer with rows that look right: an unknown tab or
+ * state matches nothing and reads as "no releases", and an unknown order falls
+ * through to the default end of the timeline.
+ */
+function assertKnown(
+  name: string,
+  value: string | undefined,
+  allowed: readonly string[]
+): void {
+  if (value === undefined || allowed.includes(value)) return;
+  throw NextlyError.invalidInput({
+    message: `\`${name}\` must be one of: ${allowed.join(", ")}.`,
+    logContext: { reason: `invalid-${name}`, [name]: value },
+  });
+}
+
+/**
+ * Refuse a window bound that is not a real instant.
+ *
+ * The Direct API is reachable from JavaScript, where `scheduledAfter:
+ * "tomorrow"` or an invalid `Date` would otherwise reach the timestamp
+ * comparison and fail there as a database error, or compare differently per
+ * dialect.
+ */
+function assertInstant(name: string, value: unknown): void {
+  if (value === undefined) return;
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw NextlyError.invalidInput({
+      message: `\`${name}\` must be a valid Date.`,
+      logContext: { reason: `invalid-${name}` },
+    });
+  }
+}
+
+/**
+ * Refuse filters that are each valid but ask two questions at once.
+ *
+ * A tab is already a set of states, so a tab with a state is a second way of
+ * saying which releases to show; and only Upcoming has two meaningful orders,
+ * so an `order` on another tab would be silently ignored.
+ */
+function assertListCombination(query: {
+  tab?: ReleaseTab;
+  reason?: ReleaseAttentionReason;
+  state?: ReleaseState;
+  order?: ReleaseListOrder;
+}): void {
+  if (query.reason !== undefined && query.tab !== "attention") {
+    throw NextlyError.invalidInput({
+      message:
+        '`reason` needs `tab: "attention"`: it names one part of that tab.',
+      logContext: { reason: "reason-without-attention-tab", tab: query.tab },
+    });
+  }
+  if (query.tab !== undefined && query.state !== undefined) {
+    throw NextlyError.invalidInput({
+      message:
+        "`tab` and `state` cannot be combined: a tab is already a set of states.",
+      logContext: { reason: "tab-with-state", tab: query.tab },
+    });
+  }
+  if (
+    query.order !== undefined &&
+    query.tab !== undefined &&
+    query.tab !== "upcoming"
+  ) {
+    throw NextlyError.invalidInput({
+      message: `\`order\` is only available with the upcoming tab; ${query.tab} has an order of its own.`,
+      logContext: { reason: "order-with-tab", tab: query.tab },
+    });
+  }
+}
+
+/**
+ * The instants a day filter covers, or `undefined` for none.
+ *
+ * Checked to be an object first: the Direct API is reachable from JavaScript,
+ * where `day: "2026-03-29"` would otherwise read as a day with no date.
+ */
+function dayWindow(day: unknown): { start: Date; end: Date } | undefined {
+  if (day === undefined) return undefined;
+  if (day === null || typeof day !== "object") {
+    throw NextlyError.invalidInput({
+      message:
+        "`day` must be an object with a `date` (YYYY-MM-DD) and a `timezone`.",
+      logContext: { reason: "invalid-day" },
+    });
+  }
+  const { start, end } = zonedDay({
+    date: Reflect.get(day, "date"),
+    timezone: Reflect.get(day, "timezone"),
+  });
+  return { start, end };
+}
+
+/**
+ * The search as the database should see it, or `undefined` for none.
+ *
+ * Trimmed, so a stray space typed into the box does not narrow the list to
+ * releases containing a space; empty after trimming is no search at all.
+ */
+function searchText(search: unknown): string | undefined {
+  if (search === undefined) return undefined;
+  // Checked before it is used as a string: the Direct API is reachable from
+  // JavaScript, where `search: 42` would otherwise fail on `.trim()` as a raw
+  // TypeError rather than as the refusal every other field gets.
+  if (typeof search !== "string") {
+    throw NextlyError.invalidInput({
+      message: "`search` must be a string.",
+      logContext: { reason: "invalid-search", type: typeof search },
+    });
+  }
+  const text = search.trim();
+  if (text === undefined || text === "") return undefined;
+  if (text.length > MAX_RELEASE_SEARCH_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `\`search\` must be ${MAX_RELEASE_SEARCH_LENGTH} characters or fewer.`,
+      logContext: { reason: "search-too-long", length: text.length },
+    });
+  }
+  return text;
+}
+
+/**
+ * A whole number at least `min`, or a refusal naming the field.
+ *
+ * Checked here and not only at the HTTP boundary, because the Direct API is
+ * reachable from JavaScript and a cast: on SQLite `LIMIT -1` means no limit,
+ * so an unchecked negative turns a bounded read into a full table scan.
+ */
+/**
+ * A single-document release refusing a second document, saying what to do
+ * instead: a single release is one document scheduled on its own, and several
+ * documents going out together are an ordinary release.
+ */
+function singleReleaseHoldsOne(releaseId: string): NextlyError {
+  return NextlyError.conflict({
+    message:
+      'A single-document release holds one document. To release several documents together, put them in an ordinary release (kind "release").',
+    logContext: { reason: "single-release-holds-one", releaseId },
+  });
+}
+
+/**
+ * The id a member is checked under before it is written, and named by in a
+ * refusal as `null`: it has no id of its own until the write gives it one.
+ */
+const UNWRITTEN_MEMBER_ID = "";
+
+/** A hard finding as a refusal names it: its code and the member it is about. */
+function problemOf(finding: ReadinessFinding): {
+  memberId: string | null;
+  code: string;
+} {
+  return {
+    memberId:
+      finding.memberId === UNWRITTEN_MEMBER_ID ? null : finding.memberId,
+    code: finding.code,
+  };
+}
+
+/**
+ * Which way a membership change moves a release's contents: a document in, a
+ * document out, or a document's action switched between going live and
+ * coming down.
+ */
+type MembershipChange = "add" | "remove" | "switch";
+
+/**
+ * The release states a membership change may land on.
+ *
+ * The ONE answer, for the write and for the control that offers it: the write
+ * hands this list to the repository as its fence, and `capabilities` asks
+ * whether the release's state is in it.
+ *
+ * The assembling states for anyone who may assemble. The committed ones as
+ * well only for a caller who may publish, because the drain reads membership
+ * at the instant and editing a committed release changes what a publisher
+ * committed to. And never for taking the document out of a single release:
+ * it holds at most one, so removing from a committed one leaves a launch that
+ * runs with nothing and reads as published.
+ */
+function membershipFence(
+  kind: ReleaseKind,
+  change: MembershipChange,
+  mayChangeCommitted: boolean
+): readonly ReleaseState[] {
+  if (!mayChangeCommitted) return RELEASE_ASSEMBLABLE_FROM;
+  if (kind === "single" && change === "remove") return RELEASE_ASSEMBLABLE_FROM;
+  return [
+    ...RELEASE_ASSEMBLABLE_FROM,
+    ...RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
+  ];
+}
+
+/**
+ * What the one-document rule allows a release holding `held` documents.
+ *
+ * Every kind but `single` is unconstrained. A single release runs only with
+ * its document — with none it would publish nothing and read as done — and
+ * takes another only while it holds none. The write paths and `capabilities`
+ * both ask this, so a control cannot offer what the write refuses.
+ */
+function oneDocumentRule(
+  kind: ReleaseKind,
+  held: number
+): { mayRun: boolean; mayTakeAnother: boolean } {
+  if (kind !== "single") return { mayRun: true, mayTakeAnother: true };
+  return { mayRun: held > 0, mayTakeAnother: held === 0 };
+}
+
+/**
+ * How many more documents a release holding `held` may take: none once it
+ * holds the limit, or more than the limit (a release made before it). The
+ * write asks this under the release-row lock, in the insert's transaction, so
+ * adds racing for the last place are judged one after another and the limit
+ * holds however many arrive at once. The add refusal and `capabilities` both
+ * ask this.
+ */
+function roomFor(held: number): number {
+  return Math.max(0, RELEASE_MEMBER_LIMIT - held);
+}
+
+/**
+ * The refusal for adding to a release holding `held` documents, or null when
+ * one more fits. It says how many fit, which is none here; a release made
+ * before the limit and over it is told it can still shrink and still runs.
+ */
+function memberLimitRefusal(
+  releaseId: string,
+  held: number
+): NextlyError | null {
+  if (roomFor(held) > 0) return null;
+  return NextlyError.conflict({
+    message:
+      held > RELEASE_MEMBER_LIMIT
+        ? `This release holds ${held} documents, more than the ${RELEASE_MEMBER_LIMIT} a release can hold now, so no more fit. Documents can still be removed, and it still runs as scheduled.`
+        : `This release holds ${RELEASE_MEMBER_LIMIT} documents, the most a release can hold, so no more fit. Remove one, or start another release.`,
+    logContext: {
+      reason: "release-member-limit",
+      releaseId,
+      held,
+      limit: RELEASE_MEMBER_LIMIT,
+    },
+  });
+}
+
+/**
+ * Whether a release holding `held` documents may take one more: the
+ * one-document rule for a single release, and the limit for every release.
+ */
+function takesAnother(kind: ReleaseKind, held: number): boolean {
+  return oneDocumentRule(kind, held).mayTakeAnother && roomFor(held) > 0;
+}
+
+function assertWholeNumber(name: string, value: number, min: number): void {
+  // A SAFE integer, not merely an integer: `1e308` is an integer to
+  // `Number.isInteger`, and the offset worked out from it is `Infinity`, which
+  // reaches the database as a driver error rather than a refusal.
+  if (!Number.isSafeInteger(value) || value < min) {
+    throw NextlyError.invalidInput({
+      message: `\`${name}\` must be a whole number of at least ${min}.`,
+      logContext: { reason: `invalid-${name}`, [name]: value },
+    });
+  }
 }
 
 /**
@@ -377,17 +1076,56 @@ export type FindReleasesQuery = FindReleasesFilters &
         containing?: DocumentRef;
         /** Always soonest-first; see above. */
         order?: never;
+        /** The document's own releases are not a tab of the list. */
+        tab?: never;
+        reason?: never;
+        /** Nor are they searched: a document is in a handful at most. */
+        search?: never;
+        /** Nor narrowed to a day: they are read in the order they apply. */
+        day?: never;
       }
     | {
         containing?: undefined;
         /**
-         * Which end of the timeline a `limit` keeps.
+         * One of the list's four views (`release-tabs`). Not combined with
+         * `state`: a tab is already a set of states, and the two together
+         * would be a second way of saying which releases to show.
          *
-         * Defaults to `"latest"`, the recent-first order every caller before the
-         * dashboard wanted. `"soonest"` exists because the two are not the same
-         * question narrowed differently: asking for the next five releases under the
-         * recent-first order returns the five FURTHEST OUT, and answers with real
-         * rows in a plausible order, so nothing about the result says it is wrong.
+         * @experimental
+         */
+        tab?: ReleaseTab;
+        /**
+         * With `tab: "attention"`, only its `"stopped"` or only its
+         * `"overdue"` releases — for example, to count overdue releases alone.
+         *
+         * @experimental
+         */
+        reason?: ReleaseAttentionReason;
+        /**
+         * Text in the title or the description, without regard to case, matched
+         * as written. Applied in the database, before the page and the total.
+         *
+         * @experimental
+         */
+        search?: string;
+        /**
+         * Only the releases placed on this day in this zone, in every state,
+         * soonest first unless `order` says otherwise: the day a calendar in
+         * that zone shows, read in full and paged. A published release is
+         * placed where it went out, any other where it is scheduled.
+         *
+         * @experimental
+         */
+        day?: ReleaseDayFilter;
+        /**
+         * Which end of the timeline comes first.
+         *
+         * When not given: soonest first for the scheduled releases — the
+         * upcoming tab, or `state: "scheduled"` — and latest first otherwise.
+         * Asking for the next five releases latest first returns the five
+         * FURTHEST OUT, with real rows in a plausible order, so nothing about the
+         * result says it is wrong. The other tabs have an order of their own and
+         * refuse this.
          */
         order?: ReleaseListOrder;
       }
@@ -497,17 +1235,11 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseRow> {
     await this.authorize(actor, "create");
-    // ONE limit, applied before the write, because the column is not one shape:
-    // `nextly_releases.title` is `varchar(255)` on MySQL and unbounded `text` on
-    // PostgreSQL and SQLite. Left to the database, the same call succeeds on two
-    // engines and either errors or silently TRUNCATES on the third — and a
-    // truncating write returns a row that disagrees with what is stored.
-    if (input.title.length > MAX_RELEASE_TITLE_LENGTH) {
-      throw NextlyError.invalidInput({
-        message: `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`,
-        logContext: { reason: "title-too-long", length: input.title.length },
-      });
-    }
+    assertTitleFits(input.title);
+    // Checked here as well as typed: the Direct API is reachable from
+    // JavaScript, and an unknown kind stored would be a release no filter and
+    // no rule recognises.
+    assertKnown("kind", input.kind, RELEASE_KINDS);
     // `createdBy` comes from the ACTOR, never from the input. Materialisation
     // performs each member as its recorded author, so an author a caller could
     // name would be an identity they could borrow at a future instant.
@@ -544,6 +1276,11 @@ export class ReleasesService {
    * publish/unpublish authority, which depends on which document it is and is
    * therefore checked at the write. A client uses these to decide what to OFFER;
    * the write is still the boundary.
+   *
+   * A single-document release answers from what it holds as well, by the same
+   * rules its writes enforce: no schedule while it is empty, no second
+   * document, and no removal once committed. Its members are read in ONE query
+   * for every single release on the page, and not at all for a page with none.
    */
   async capabilities(
     releases: readonly ReleaseRow[],
@@ -554,31 +1291,52 @@ export class ReleasesService {
 
     const mayPublish = await this.holds(actor, "publish");
     const mayCreate = await this.holds(actor, "create");
+    const mayUpdate = await this.holds(actor, "update");
+    const mayDelete = await this.holds(actor, "delete");
+    const held = await this.heldBy(releases, mayCreate, mayPublish);
 
+    const may = { mayPublish, mayCreate, mayUpdate, mayDelete };
     return new Map(
       releases.map(release => {
-        // Membership is editable freely in some states and only by a publisher
-        // in others, because the drain reads membership AT the instant — so
-        // editing a scheduled release changes what a publisher committed to.
-        const editable =
-          (mayCreate && RELEASE_ASSEMBLABLE_FROM.includes(release.state)) ||
-          (mayCreate &&
-            mayPublish &&
-            RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state));
-
+        const count = held.get(release.id) ?? 0;
         return [
           release.id,
           {
-            schedule:
-              mayPublish && RELEASE_SCHEDULABLE_FROM.includes(release.state),
-            cancel:
-              mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
-            addMember: editable,
-            removeMember: editable,
+            ...runCapabilities(release, count, may),
+            ...editCapabilities(release, count, may),
           },
         ];
       })
     );
+  }
+
+  /**
+   * How many documents each release among these holds, keyed by release id,
+   * for the ones whose controls depend on it: a single-document release, and
+   * any release this caller could still add a document to, which the limit
+   * may have filled. One query for all of them, and none when there are none:
+   * a release that ran is final and takes nothing whatever it holds.
+   */
+  private async heldBy(
+    releases: readonly ReleaseRow[],
+    mayCreate: boolean,
+    mayPublish: boolean
+  ): Promise<Map<string, number>> {
+    // Only where the count can change an answer: a single release's run and
+    // add controls, and an ordinary release this caller could add to. A
+    // caller who may not add learns `addMember: false` without reading what
+    // any release holds.
+    const counted = releases
+      .filter(
+        release =>
+          release.kind === "single" ||
+          (mayCreate &&
+            membershipFence(release.kind, "add", mayPublish).includes(
+              release.state
+            ))
+      )
+      .map(release => release.id);
+    return this.deps.repository.memberCountsOf(counted);
   }
 
   /**
@@ -599,7 +1357,7 @@ export class ReleasesService {
    * saying it that way avoids a second implementation of that ordering.
    */
   private async findContaining(
-    query: FindReleasesQuery & { containing: DocumentRef },
+    query: FindReleasesFilters & { containing: DocumentRef },
     now: Date
   ): Promise<Array<ReleaseRow & { memberAction: ReleaseMemberAction }>> {
     const ref = query.containing;
@@ -677,70 +1435,188 @@ export class ReleasesService {
         void member;
         return row;
       })
-      .filter(row => matchesListQuery(row, query))
-      .slice(0, query.limit ?? rows.length);
+      .filter(row => matchesListQuery(row, query));
   }
 
+  /**
+   * One page of releases, and how many match in all.
+   *
+   * A tab or the plain filters, a search and a page, all applied in the
+   * database, so the total and every page cover every release that matches —
+   * not only the ones one page happened to hold. Filtered by `containing`, the
+   * document's own releases instead, in the order they will be applied to it.
+   */
   async find(
     query: FindReleasesQuery,
     actor: ReleaseActor
-  ): Promise<ReleaseRow[]> {
+  ): Promise<ReleaseListPage> {
     await this.authorize(actor, "read");
-    // A negative limit is not a smaller page — on SQLite `LIMIT -1` means NO
-    // limit, so a query documented as returning "at most" N would return every
-    // release and turn a bounded dashboard read into a full table scan.
-    if (
-      query.limit !== undefined &&
-      (!Number.isInteger(query.limit) || query.limit < 0)
-    ) {
+    // Defaulted only when ABSENT. `??` would also turn a JavaScript caller's
+    // `null` into page 1 or the default size, answering a malformed call with
+    // a plausible page; given here, null is checked and refused like any other
+    // value that is not a whole number.
+    const page = query.page === undefined ? 1 : query.page;
+    const limit =
+      query.limit === undefined ? DEFAULT_RELEASE_PAGE_SIZE : query.limit;
+    assertWholeNumber("page", page, 1);
+    assertWholeNumber("limit", limit, 1);
+    // The offset too: a page that is a safe integer on its own can still put
+    // the offset past the range the database is handed exactly.
+    assertWholeNumber("page", (page - 1) * limit, 0);
+    if (limit > MAX_RELEASE_PAGE_SIZE) {
       throw NextlyError.invalidInput({
-        message: "`limit` must be a non-negative integer.",
-        logContext: { reason: "invalid-limit", limit: query.limit },
+        message: `\`limit\` may be at most ${MAX_RELEASE_PAGE_SIZE}.`,
+        logContext: { reason: "limit-too-large", limit },
       });
     }
-    // Read through a widened view, deliberately: the type above makes this
-    // combination unrepresentable, and a type binds neither a JavaScript caller
+    // Read through a widened view, deliberately: the type above makes these
+    // combinations unrepresentable, and a type binds neither a JavaScript caller
     // nor a cast. Refused rather than honoured, because `findContaining`'s
     // soonest-first order is its contract -- `resolveReleaseEffect` takes the
     // LAST row as the final state -- so applying a caller's order there would
     // hand the winner's place to the loser. Refused rather than ignored,
-    // because accepting an ordering and not applying it answers a different
+    // because accepting a filter and not applying it answers a different
     // question than the one asked, with rows that look right.
     const asked: FindReleasesFilters & {
       containing?: DocumentRef;
       order?: ReleaseListOrder;
+      tab?: ReleaseTab;
+      reason?: ReleaseAttentionReason;
+      search?: string;
+      day?: ReleaseDayFilter;
     } = query;
-    // 🔴 An unrecognised order is not a smaller mistake than an unrecognised
-    // state. `state` reaches a WHERE clause, so a typo answers with an empty
-    // list -- wrong, but visibly so. `order` reaches a ternary, so a typo
-    // selects the DEFAULT end and answers with real rows in the exact reverse
-    // of what was asked. Checked against the vocabulary's runtime form rather
-    // than trusted from the type, because the public Direct API is reachable
-    // from JavaScript and from a cast.
-    if (
-      asked.order !== undefined &&
-      !RELEASE_LIST_ORDERS.includes(asked.order)
-    ) {
-      throw NextlyError.invalidInput({
-        message: `\`order\` must be one of: ${RELEASE_LIST_ORDERS.join(", ")}.`,
-        logContext: { reason: "invalid-order", order: asked.order },
+    if (asked.containing !== undefined) {
+      for (const key of ["order", "tab", "reason", "search", "day"] as const) {
+        if (asked[key] !== undefined) {
+          throw NextlyError.invalidInput({
+            message:
+              `\`${key}\` is not available with \`containing\`: that listing is a ` +
+              "document's own releases, soonest first, the order they will be applied to it.",
+            logContext: { reason: `${key}-with-containing` },
+          });
+        }
+      }
+      // Validated as the list's are — the state and the window bounds — so a
+      // typo or a bound that is not a Date is refused here too, rather than
+      // failing or silently not filtering in the in-memory pass below.
+      this.listFilters({
+        state: asked.state,
+        kind: asked.kind,
+        scheduledAfter: asked.scheduledAfter,
+        scheduledBefore: asked.scheduledBefore,
       });
-    }
-    if (asked.containing !== undefined && asked.order !== undefined) {
-      throw NextlyError.invalidInput({
-        message:
-          "`order` is not available with `containing`: that listing is always " +
-          "soonest first, the order the releases will be applied to the document.",
-        logContext: { reason: "order-with-containing", order: asked.order },
-      });
-    }
-    if (query.containing !== undefined) {
-      return this.findContaining(
-        { ...query, containing: query.containing },
+      // Every release holding one document, which is a handful, so paged in
+      // memory after the engine's order is applied rather than in the query.
+      const all = await this.findContaining(
+        {
+          state: asked.state,
+          kind: asked.kind,
+          scheduledAfter: asked.scheduledAfter,
+          scheduledBefore: asked.scheduledBefore,
+          containing: asked.containing,
+        },
         new Date()
       );
+      const offset = (page - 1) * limit;
+      return {
+        rows: all.slice(offset, offset + limit),
+        total: all.length,
+        page,
+        limit,
+      };
     }
-    return this.deps.repository.findReleases(query);
+    const found = await this.deps.repository.findReleasePage({
+      ...this.listFilters(asked),
+      order: defaultOrderFor(asked),
+      offset: (page - 1) * limit,
+      limit,
+    });
+    return { rows: found.rows, total: found.total, page, limit };
+  }
+
+  /**
+   * How many releases a listing holds, without reading them.
+   *
+   * What a page outside Releases asks — "how many need attention?" — answered
+   * by the list's own rules, so a count shown elsewhere is always the count the
+   * list would show.
+   *
+   * @experimental
+   */
+  async count(query: ReleaseCountQuery, actor: ReleaseActor): Promise<number> {
+    await this.authorize(actor, "read");
+    return this.deps.repository.countReleases(this.listFilters(query));
+  }
+
+  /**
+   * The list's filters, checked, as the repository takes them.
+   *
+   * Each refusal is one a caller can act on, and each guards against an answer
+   * that would look right while being wrong: an unknown tab or state would
+   * otherwise match nothing and read as "no releases", and an `order` on a tab
+   * that has its own would be silently ignored.
+   */
+  private listFilters(
+    query: ReleaseCountQuery & { order?: ReleaseListOrder }
+  ): Omit<ReleasePageQuery, "offset" | "limit"> {
+    assertKnown("tab", query.tab, RELEASE_TABS);
+    assertKnown("state", query.state, RELEASE_STATES);
+    assertKnown("kind", query.kind, RELEASE_KINDS);
+    assertKnown("order", query.order, RELEASE_LIST_ORDERS);
+    assertKnown("reason", query.reason, RELEASE_ATTENTION_REASONS);
+    assertInstant("scheduledAfter", query.scheduledAfter);
+    assertInstant("scheduledBefore", query.scheduledBefore);
+    assertListCombination(query);
+    return {
+      tab: query.tab,
+      reason: query.reason,
+      state: query.state,
+      kind: query.kind,
+      scheduledAfter: query.scheduledAfter,
+      scheduledBefore: query.scheduledBefore,
+      placedWithin: dayWindow(query.day),
+      search: searchText(query.search),
+      // One clock reading per request, so a release cannot be judged overdue
+      // for the count and not for the page it is on.
+      now: new Date(),
+    };
+  }
+
+  /**
+   * A calendar of the releases in a window of days in a zone.
+   *
+   * Every day of the window, in order, empty ones included, each with its
+   * complete count of releases by state and its first releases in time order.
+   * A release is on the day, in `timezone`, of the instant that says when it
+   * happens: a published release on the day it went out (`publishedAt`), so
+   * one the runner reached late is on the day it really went live; every
+   * other state on the day of its scheduled instant, so a stopped one is on
+   * the day it was due and a cancelled one that had been scheduled on the day
+   * it would have run. A draft has no instant and is on no day.
+   *
+   * The days and their instants are worked out before the read, so a window
+   * that is inverted, longer than six weeks, or in an unknown zone is refused
+   * without touching the database.
+   *
+   * @experimental
+   */
+  async calendar(
+    query: ReleaseCalendarQuery,
+    actor: ReleaseActor
+  ): Promise<ReleaseCalendar> {
+    await this.authorize(actor, "read");
+    assertKnown("kind", query.kind, RELEASE_KINDS);
+    const days = zonedDays(query);
+    return {
+      timezone: query.timezone,
+      from: query.from,
+      to: query.to,
+      days: await this.deps.repository.findReleaseCalendar({
+        days,
+        kind: query.kind,
+        perDay: RELEASE_CALENDAR_RELEASES_PER_DAY,
+      }),
+    };
   }
 
   /**
@@ -754,67 +1630,142 @@ export class ReleasesService {
    * deleted user would still be told the author is missing, and the only way
    * out would be to reschedule and watch it block again.
    *
-   * Answered for any release, not only a blocked one. The same predicate over a
-   * DRAFT is a preview of what would block it, which is the cheaper place to
-   * learn it — and having one implementation means the preview and the verdict
-   * cannot disagree.
-   *
-   * `liveAuthors` is asked ONCE for every author in the release rather than per
-   * member, so a release of fifty documents costs one lookup.
+   * A narrower view of {@link readiness}: the findings of its `core.author`
+   * source, which are exactly these three reasons, so the two cannot disagree
+   * about them.
    */
   async blockingReasons(
     releaseId: string,
     actor: ReleaseActor
   ): Promise<ReleaseBlocker[]> {
     await this.authorize(actor, "read");
-    return this.derivedBlockers(releaseId);
+    const release = await this.requireRelease(releaseId);
+    const members = await this.deps.repository.listMembers(release.id);
+    const { hard } = await this.checkMembers(release, members, [
+      CORE_AUTHOR_SOURCE,
+    ]);
+    return hard.map(finding => ({
+      memberId: finding.memberId,
+      reason: finding.code,
+      // Carried so a reader is not left with an opaque id and a sentence
+      // that assumes a publish: a blocked takedown is not a failed publish.
+      action: finding.action,
+      scopeKind: finding.scopeKind,
+      scopeSlug: finding.scopeSlug,
+      entryId: finding.entryId,
+    }));
   }
 
   /**
-   * The same verdict, for a caller that has ALREADY established its authority.
+   * Every problem the release's documents have now, hard ones (which stop it
+   * from being scheduled or published now) apart from soft ones (notes), each
+   * in the order its documents were added.
    *
-   * Split from {@link blockingReasons} because the read grant belongs to the
-   * public surface and not to the derivation. `schedule` authorizes `publish`
-   * and then needs this answer; routing it through the public method demanded
-   * `read` as well, and an API key scoped to `publish-content-releases` alone
-   * has no such grant — the exact-grant lookup answers before the service's
-   * create-or-publish-implies-read fallback. Such a key could schedule every
-   * release on the site except a repaired one, which is the single case the
-   * check exists for.
+   * Every member is checked, however many the release holds, and the answer is
+   * given only once all of them are: a problem in the last document of a large
+   * release is reported like one in the first. Worked out on each call, so a
+   * problem somebody fixed reads as fixed on the next one.
+   *
+   * @experimental
+   */
+  async readiness(
+    releaseId: string,
+    actor: ReleaseActor
+  ): Promise<ReleaseReadiness> {
+    await this.authorize(actor, "read");
+    const release = await this.requireRelease(releaseId);
+    const members = await this.deps.repository.listMembers(release.id);
+    const found = await this.checkMembers(
+      release,
+      members,
+      registeredReleaseCheckSources()
+    );
+    return { releaseId: release.id, ...found };
+  }
+
+  /**
+   * Run these sources over these members of this release.
    *
    * Private, and reachable only after an authorization: the caller has to have
-   * decided already, because nothing here checks.
+   * decided already, because nothing here checks. Scheduling authorizes
+   * `publish` and then needs this answer; demanding `read` as well would refuse
+   * an API key scoped to `publish-content-releases` alone.
    */
-  private async derivedBlockers(releaseId: string): Promise<ReleaseBlocker[]> {
-    const members = await this.deps.repository.listMembers(releaseId);
-    if (members.length === 0) return [];
-
-    const authors = members
-      .map(member => member.createdBy)
-      .filter((id): id is string => id !== null);
-    const live =
-      authors.length === 0
-        ? new Set<string>()
-        : await this.deps.repository.liveAuthors(authors);
-
-    return members.flatMap<ReleaseBlocker>(member => {
-      // Ordered as the drain checks them, so the reason reported is the one it
-      // would actually stop on rather than whichever this loop noticed first.
-      const reason = blockerReasonFor(member, live);
-      if (reason === null) return [];
-      return [
-        {
-          memberId: member.id,
-          reason,
-          // Carried so a reader is not left with an opaque id and a sentence
-          // that assumes a publish: a blocked takedown is not a failed publish.
-          action: member.action,
-          scopeKind: member.scopeKind,
-          scopeSlug: member.scopeSlug,
-          entryId: member.entryId,
-        },
-      ];
+  private checkMembers<Code extends string>(
+    release: ReleaseRow,
+    members: readonly ReleaseMemberRow[],
+    sources: readonly ReleaseCheckSource<Code>[]
+  ): Promise<Omit<ReleaseReadiness<Code>, "releaseId">> {
+    const now = new Date();
+    const repository = this.deps.repository;
+    return evaluateReadiness({
+      release,
+      members,
+      sources,
+      now,
+      reads: {
+        ...this.deps.checks,
+        liveAuthors: ids => repository.liveAuthors([...ids]),
+        // The condition a document met to join (`resolveReleaseTarget`),
+        // asked of the same reader.
+        declaresLifecycle: scope =>
+          this.deps.targets.declaresLifecycle(
+            scope.scopeKind === "single" ? "single" : "collection",
+            scope.scopeSlug
+          ),
+        scheduledMemberships: refs =>
+          repository.findDueMembersFor([...refs], now),
+      },
     });
+  }
+
+  /**
+   * Refuse while any of these members has a hard problem, naming each as a
+   * code and the member it is about. One refusal for every door — scheduling,
+   * Publish now, adding to a scheduled release and switching an action — so
+   * REST and the Direct API answer alike.
+   */
+  private async assertNoHardProblems(
+    release: ReleaseRow,
+    members: readonly ReleaseMemberRow[],
+    refusal: { message: string; reason: string }
+  ): Promise<void> {
+    const hardSources = registeredReleaseCheckSources().filter(
+      source => source.severity === "hard"
+    );
+    const { hard } = await this.checkMembers(release, members, hardSources);
+    if (hard.length === 0) return;
+    throw NextlyError.conflict({
+      message: refusal.message,
+      data: { problems: hard.map(problemOf) },
+      logContext: {
+        reason: refusal.reason,
+        releaseId: release.id,
+        problems: hard.length,
+        state: release.state,
+      },
+    });
+  }
+
+  /**
+   * The release this id names, or a refusal.
+   *
+   * Its members and its problems are both empty lists when it does not exist,
+   * and an empty list is also the honest answer for a release with no members —
+   * so without this a typo or a deleted release reads as "nothing in it, nothing
+   * wrong". Asked after authorization, so a caller who may not read releases
+   * learns nothing about which ids exist.
+   */
+  private async requireRelease(releaseId: string): Promise<ReleaseRow> {
+    const [release] = await this.deps.repository.findReleases({
+      ids: [releaseId],
+    });
+    if (release === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId },
+      });
+    }
+    return release;
   }
 
   async listMembers(
@@ -822,6 +1773,7 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseMemberRow[]> {
     await this.authorize(actor, "read");
+    await this.requireRelease(releaseId);
     return this.deps.repository.listMembers(releaseId);
   }
 
@@ -840,55 +1792,114 @@ export class ReleasesService {
     await this.authorize(actor, "create");
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
     requireRunnableMember(input, actor);
+    // The target checks, for every caller: REST, the Direct API and the admin
+    // alike. A precondition, so before anything is written; for a Single it
+    // also replaces the id the caller sent with the row's own.
+    const entryId = await resolveReleaseTarget(
+      this.deps.targets,
+      {
+        scopeKind: input.scopeKind,
+        scopeSlug: input.scopeSlug,
+        entryId: input.entryId,
+      },
+      {
+        userId: actor.userId,
+        trusted: actor.overrideAccess === true,
+        authenticatedScope: actor.authenticatedScope,
+        userRoles: actor.userRoles,
+      }
+    );
 
-    // BEFORE the claim, which is itself a write: `touchIfAssemblable` updates
-    // the release's `updatedAt`, so a refusal ordered after it would still have
-    // changed the row — and "refused before the write" would be false for the
-    // one path that says it loudest.
-    await this.assertRoomForOneMore(releaseId);
+    // Every refusal below is answered BEFORE the write, which is the only
+    // statement that changes the release. Keyed by the RESOLVED id: for a
+    // Single that is the row's own, whatever the caller sent, so the same
+    // Single again is the duplicate it is.
+    const memberKey = releaseMemberKey(releaseId, { ...input, entryId });
+    const [release] = await this.deps.repository.findReleases({
+      ids: [releaseId],
+    });
+    // A committed release is a publisher's to change. Asked before anything
+    // about its contents is answered, so a caller without that authority
+    // learns nothing of what the release holds.
+    if (
+      release !== undefined &&
+      RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
+    ) {
+      await this.authorize(actor, "publish");
+    }
+    // The early answer for the common case. The guarantee is the database's:
+    // two adds racing past this both reach the insert, and the single-slot
+    // index refuses the second (translated below).
+    if (await this.singleReleaseHoldsAnother(release, memberKey)) {
+      throw singleReleaseHoldsOne(releaseId);
+    }
 
-    // Claimed ATOMICALLY, and the author checked, before the member is written.
-    await this.claimAssemblable(releaseId, actor);
+    // The states this add may land on, judged from the read above, and the
+    // author checked, before the member is written.
+    const allowedStates = await this.judgeMembershipChange(
+      release,
+      releaseId,
+      "add",
+      actor
+    );
     await this.requireLiveAuthor(actor.userId);
+    // A document joining a release already committed to an instant is checked
+    // first, as scheduling checked the rest: otherwise one with a hard problem
+    // joins and stops the release at its instant. Refused, the release stays
+    // scheduled as it was. A release judged still assembling is not checked
+    // here, and the fence below keeps this add off one scheduled since.
+    await this.assertCommittedChangeReady(release, {
+      id: UNWRITTEN_MEMBER_ID,
+      releaseId,
+      scopeKind: input.scopeKind,
+      scopeSlug: input.scopeSlug,
+      entryId,
+      locale: input.locale ?? null,
+      action: input.action,
+      memberKey,
+      singleSlot: null,
+      createdBy: actor.userId,
+      createdAt: new Date(),
+    });
 
     try {
-      const member = await this.deps.repository.addMember({
-        ...input,
-        releaseId,
-        // Never a caller-supplied author. Materialisation performs each member
-        // as its recorded author, so an author a caller could name would be an
-        // identity they could borrow at a future instant.
-        createdBy: actor.userId,
-      });
-
-      // The window the claim above cannot cover on its own: a publisher may
-      // schedule the release between the claim and this insert, and the drain
-      // reads membership at the instant, so the member would join a committed
-      // launch. Re-checked after the write and COMPENSATED, because a member
-      // that should not be there is removable while a publish that already
-      // happened is not.
-      //
-      // Skipped for a caller who holds `publish`: for them, adding to a
-      // scheduled release is allowed, so there is nothing to undo.
-      if (!(await this.holds(actor, "publish"))) {
-        if (!(await this.deps.repository.touchIfAssemblable(releaseId))) {
-          await this.deps.repository.removeMember(member.id);
-          throw NextlyError.conflict({
-            logContext: {
-              reason: "release-scheduled-during-add",
-              releaseId,
-              memberId: member.id,
-            },
-          });
-        }
-      }
-      return member;
+      // FENCED on the judgement: the member and a bump of the release's
+      // revision are one transaction that lands only while the release is in
+      // `allowedStates`. A publisher scheduling between the judgement and this
+      // write makes it refuse rather than add to a committed launch without
+      // the publish gate, and a schedule judged before it misses on the
+      // revision instead. Refused as a CONFLICT, with nothing written.
+      return await this.deps.repository.addMember(
+        {
+          ...input,
+          entryId,
+          releaseId,
+          // Never a caller-supplied author. Materialisation performs each
+          // member as its recorded author, so an author a caller could name
+          // would be an identity they could borrow at a future instant.
+          createdBy: actor.userId,
+        },
+        allowedStates,
+        // The member limit, judged under the release lock and after every
+        // other refusal: a final release says it is final, not how much it
+        // holds, and adds racing for the last place are judged one by one.
+        held => memberLimitRefusal(releaseId, held)
+      );
     } catch (error) {
       // The `memberKey` unique index is what stops one document being scheduled
-      // twice in one release. Translated here so callers meet this package's
-      // stable error contract rather than the adapter's DatabaseError — and
-      // narrowly, so an unexpected database failure still propagates.
+      // twice in one release; its refusal rolls the revision bump back with
+      // the insert, so nothing is written. Translated here so callers meet
+      // this package's stable error contract rather than the adapter's
+      // DatabaseError — and narrowly, so an unexpected database failure still
+      // propagates. A fence miss is a CONFLICT already, and passes through.
       if (isUniqueViolation(error)) {
+        // Two unique indexes can refuse this insert: the single-slot one, when
+        // a single release already holds another document, and the member key,
+        // when this document is already in the release. Told apart by what the
+        // release holds now, not by the error, whose wording is the driver's.
+        if (await this.singleReleaseHoldsAnother(release, memberKey)) {
+          throw singleReleaseHoldsOne(releaseId);
+        }
         throw NextlyError.duplicate({
           logContext: {
             reason: "member-already-in-release",
@@ -940,56 +1951,119 @@ export class ReleasesService {
       });
     }
 
-    await this.claimAssemblable(member.releaseId, actor);
-    await this.deps.repository.removeMember(memberId);
-
-    // The same window the member ADD closes, and it matters more here: removing
-    // an `unpublish` member cancels a committed takedown, so a publisher
-    // scheduling between the claim and the delete would have their decision
-    // undone by a caller who never passed the publish gate.
-    //
-    // Compensated by restoring the ORIGINAL row — same id, same author, same
-    // timestamp — so the undo is invisible to anything holding that id.
-    if (!(await this.holds(actor, "publish"))) {
-      if (!(await this.deps.repository.touchIfAssemblable(member.releaseId))) {
-        await this.deps.repository.restoreMember(member);
-        throw NextlyError.conflict({
-          logContext: {
-            reason: "release-scheduled-during-remove",
-            releaseId: member.releaseId,
-            memberId,
-          },
-        });
-      }
-    }
+    const [release] = await this.deps.repository.findReleases({
+      ids: [member.releaseId],
+    });
+    await this.assertNotEmptyingCommittedSingle(release, actor);
+    const allowedStates = await this.judgeMembershipChange(
+      release,
+      member.releaseId,
+      "remove",
+      actor
+    );
+    // FENCED on the judgement, as the add is, and it matters more here:
+    // removing an `unpublish` member cancels a committed takedown, so a
+    // publisher scheduling between the judgement and the delete would have
+    // their decision undone by a caller who never passed the publish gate.
+    // The delete and a bump of the release's revision are one transaction
+    // that lands only while the release is in `allowedStates`; otherwise it is
+    // refused as a CONFLICT and the member stays.
+    await this.deps.repository.removeMember(member, allowedStates);
   }
 
   /**
-   * Take the release as assemblable, or require the authority to change a
-   * committed one.
+   * Switch a document in a release between going live and coming down.
    *
-   * The claim is a single conditional statement, so it cannot be overtaken
-   * between deciding and acting the way a read-then-write can. Only when it
-   * fails is the row read, and only to say WHY: a release that does not exist,
-   * one that will never run again, or one a publisher has already committed.
+   * Asked as adding it under the new action is: `create` to assemble the
+   * release, the caller's own authority for the new action, and `publish` for
+   * a release committed to an instant. The member's author does not change —
+   * the run still acts as whoever added it — so in a committed release the new
+   * action is checked as that author, and a switch that would leave a hard
+   * problem, such as an author who may publish the document but not unpublish
+   * it, is refused with the release left as it was.
+   *
+   * @experimental
    */
-  private async claimAssemblable(
-    releaseId: string,
-    actor: ReleaseActor
-  ): Promise<void> {
-    if (await this.deps.repository.touchIfAssemblable(releaseId)) return;
-
-    const [parent] = await this.deps.repository.findReleases({
-      ids: [releaseId],
+  async changeMemberAction(
+    memberId: string,
+    action: ReleaseMemberAction,
+    actor: ReleaseActor,
+    /** The release the caller believes this member belongs to, when it knows. */
+    expectedReleaseId?: string
+  ): Promise<ReleaseMemberRow> {
+    await this.authorize(actor, "create");
+    assertKnownAction(action);
+    const member = await this.deps.repository.findMember(memberId);
+    // A member that is not there, or that belongs to a release the caller did
+    // not name, is not followed: there is nothing to switch, and a stale
+    // client URL would otherwise edit a release it never addressed.
+    if (
+      member === undefined ||
+      (expectedReleaseId !== undefined &&
+        member.releaseId !== expectedReleaseId)
+    ) {
+      throw NextlyError.notFound({
+        logContext: {
+          reason: "release-member-not-found",
+          memberId,
+          expectedReleaseId,
+        },
+      });
+    }
+    await this.authorizeDocumentAction(actor, member.scopeSlug, action);
+    const [release] = await this.deps.repository.findReleases({
+      ids: [member.releaseId],
     });
+    const allowedStates = await this.judgeMembershipChange(
+      release,
+      member.releaseId,
+      "switch",
+      actor
+    );
+    // Checked for the action asked, whatever the member held when it was read:
+    // another switch may commit before this one, and what this one leaves is
+    // the member under the action asked.
+    await this.assertCommittedChangeReady(release, { ...member, action });
+    // FENCED on the judgement, as an add and a removal are: a release
+    // committed after it was judged refuses the switch rather than take one
+    // its publisher never approved, and nothing is written then. A member
+    // already under the action, as stored, is answered without a write.
+    return this.deps.repository.changeMemberAction(
+      member,
+      action,
+      allowedStates
+    );
+  }
+
+  /**
+   * The release states a membership change may land on, judged from a read of
+   * the release — or the refusal, when it may not happen at all.
+   *
+   * A judgement, not a guarantee: the release can move after it is read, so
+   * the answer is handed to the repository write as its fence, and a release
+   * that moved makes the write refuse. Asked after every other precondition
+   * the caller has, and before the write.
+   */
+  private async judgeMembershipChange(
+    release: ReleaseRow | undefined,
+    releaseId: string,
+    change: MembershipChange,
+    actor: ReleaseActor
+  ): Promise<readonly ReleaseState[]> {
     // No dialect declares a foreign key from a member to its release, so a
     // mistyped id would otherwise insert a row no drain will ever find.
-    if (parent === undefined) {
+    if (release === undefined) {
       throw NextlyError.notFound({
         logContext: { reason: "release-not-found", releaseId },
       });
     }
-    if (RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(parent.state)) {
+    if (RELEASE_ASSEMBLABLE_FROM.includes(release.state)) {
+      // The assembling states only, whatever else the caller may do: they
+      // were not asked for the publish authority, so a release committed
+      // since must refuse this change rather than take it.
+      return membershipFence(release.kind, change, false);
+    }
+    if (RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)) {
       // Changing what is in a scheduled release changes what goes live at an
       // instant a publisher committed to. The drain reads membership at the
       // instant, not at scheduling time.
@@ -999,16 +2073,33 @@ export class ReleasesService {
       // state added to that list must authorize the same way here, or the UI
       // offers an edit the write refuses.
       await this.authorize(actor, "publish");
+      return membershipFence(release.kind, change, true);
+    }
+    // Published or cancelled: final, so this is work that cannot happen
+    // rather than work someone is not allowed to do — and the refusal says
+    // what to do instead.
+    throw finishedReleaseRefusal(release, "change-members");
+  }
+
+  /**
+   * Refuse a membership change to a committed release that would leave this
+   * member with a hard problem. A release still being assembled is not
+   * checked: scheduling it checks every member.
+   */
+  private async assertCommittedChangeReady(
+    release: ReleaseRow | undefined,
+    member: ReleaseMemberRow
+  ): Promise<void> {
+    if (
+      release === undefined ||
+      !RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
+    ) {
       return;
     }
-    // Published or cancelled: never materialised again, so this is work that
-    // cannot happen rather than work someone is not allowed to do.
-    throw NextlyError.conflict({
-      logContext: {
-        reason: "release-not-mutable",
-        releaseId,
-        state: parent.state,
-      },
+    await this.assertNoHardProblems(release, [member], {
+      message:
+        "This document cannot go into the scheduled release until its problems are fixed. The release is still scheduled.",
+      reason: "release-member-not-ready",
     });
   }
 
@@ -1055,16 +2146,55 @@ export class ReleasesService {
    * member is removed by another route, and a cap enforced from a stale number
    * refuses a release that has room.
    */
-  private async assertRoomForOneMore(releaseId: string): Promise<void> {
-    const held = await this.deps.repository.listMembers(releaseId);
-    if (held.length < MAX_RELEASE_MEMBERS) return;
+  /**
+   * Whether this is a single-document release already holding a document
+   * other than the one named by `memberKey`. The same document again is not
+   * this refusal but the duplicate one.
+   */
+  private async singleReleaseHoldsAnother(
+    release: ReleaseRow | undefined,
+    memberKey: string
+  ): Promise<boolean> {
+    if (release?.kind !== "single") return false;
+    const held = await this.deps.repository.listMembers(release.id);
+    // Counted WITHOUT this document, so the same document again is left for
+    // the duplicate refusal to name.
+    const others = held.filter(member => member.memberKey !== memberKey);
+    return !oneDocumentRule(release.kind, others.length).mayTakeAnother;
+  }
+
+  /**
+   * Refuse taking the only document out of a committed single-document
+   * release: it would run with nothing and read as published. Cancelling is
+   * the way to call it off.
+   *
+   * The early answer, with the sentence that says so. The guarantee is the
+   * removal's fence, which for a single release never admits a committed
+   * state (`membershipFence`) — this asks that same rule, so the two cannot
+   * disagree about which releases it covers.
+   */
+  private async assertNotEmptyingCommittedSingle(
+    release: ReleaseRow | undefined,
+    actor: ReleaseActor
+  ): Promise<void> {
+    if (
+      release === undefined ||
+      !RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
+    ) {
+      return;
+    }
+    // A committed release is a publisher's to change, and that is asked
+    // first, so a caller without the authority learns nothing of its kind.
+    await this.authorize(actor, "publish");
+    if (membershipFence(release.kind, "remove", true).includes(release.state)) {
+      return;
+    }
     throw NextlyError.conflict({
-      message: `A release can hold at most ${MAX_RELEASE_MEMBERS} documents. Remove something, or schedule this release and start another.`,
+      message:
+        "This single-document release is scheduled with this one document. Cancel the release instead of removing it.",
       logContext: {
-        reason: "release-member-limit",
-        releaseId,
-        held: held.length,
-        limit: MAX_RELEASE_MEMBERS,
+        reason: "single-release-would-empty",
+        releaseId: release.id,
       },
     });
   }
@@ -1105,9 +2235,17 @@ export class ReleasesService {
     // one query for the members, and a second for their authors only when
     // there are any. Scheduling is not a hot path, and the alternative is
     // spending it at the instant instead, when nobody is watching.
+    //
+    // Read FIRST, before the membership is: the revision it carries is what
+    // the write below is fenced on, so a membership change landing after this
+    // read — even one between the membership check and the write — makes the
+    // write miss.
     const [current] = await this.deps.repository.findReleases({ ids: [id] });
+    if (current !== undefined && RELEASE_FINAL_STATES.includes(current.state)) {
+      throw finishedReleaseRefusal(current, "schedule");
+    }
     const wasBlocked = current?.state === "blocked";
-    await this.assertNothingBlocks(id, current?.state);
+    await this.assertReadyToRun(id, current);
 
     // FENCED ON THE STATE THE VERDICT ABOVE WAS FORMED AGAINST, which is what
     // makes the check and the write one decision rather than two.
@@ -1128,6 +2266,13 @@ export class ReleasesService {
     // Either way the caller is told, and a retry re-derives against what is
     // now true.
     //
+    // AND FENCED ON THE REVISION THE READ CARRIED, for what the state cannot
+    // show. A member removed after the checks above leaves a draft a draft,
+    // and a state-only fence would then schedule a single release with
+    // nothing in it. Every membership change bumps the revision in the same
+    // transaction as its write, so this update matches nothing once one has
+    // landed since the read.
+    //
     // A compare-and-set rather than a transaction, and that is now a choice
     // rather than a constraint — the port gained one for the drain's blocking
     // pass. It is the right choice here: a transaction would have to span the
@@ -1142,10 +2287,21 @@ export class ReleasesService {
 
     // The fence answers `false` for a release whose current state forbids the
     // move — a published one, most importantly, because re-scheduling it makes
-    // the drain re-apply members against documents that have changed since.
+    // the drain re-apply members against documents that have changed since —
+    // and for one that changed since the read. A release that is not there has
+    // no revision to fence on, and gets the same answer without a write.
     // Reported as a CONFLICT rather than swallowed: a caller told nothing would
     // read a no-op as a schedule that took.
-    if (!(await this.deps.repository.scheduleRelease(id, at, timezone, from))) {
+    if (
+      current === undefined ||
+      !(await this.deps.repository.scheduleRelease(
+        id,
+        at,
+        timezone,
+        from,
+        current.revision
+      ))
+    ) {
       throw NextlyError.conflict({
         logContext: { reason: "release-not-schedulable", releaseId: id },
       });
@@ -1153,11 +2309,43 @@ export class ReleasesService {
   }
 
   /**
-   * Refuse a release whose members carry something nothing can run.
+   * Refuse a release that could not run as it stands: one whose documents have
+   * a hard problem, or a single-document release with no document.
+   *
+   * The one precondition scheduling and Publish now both make before they
+   * write, so a release either may run at its instant or may run now, never
+   * one and not the other.
+   */
+  private async assertReadyToRun(
+    id: string,
+    current: ReleaseRow | undefined
+  ): Promise<void> {
+    await this.assertNothingBlocks(current);
+    // A single-document release is one document scheduled on its own: with
+    // none it would run and publish nothing, and read as done. The rule is the
+    // one capabilities answer from, and its members are read only for that
+    // kind, so an ordinary release pays nothing for it.
+    if (
+      current?.kind === "single" &&
+      !oneDocumentRule(
+        current.kind,
+        (await this.deps.repository.listMembers(id)).length
+      ).mayRun
+    ) {
+      throw NextlyError.conflict({
+        message:
+          "A single-document release needs its document before it can be scheduled. Add it, then schedule.",
+        logContext: { reason: "single-release-empty", releaseId: id },
+      });
+    }
+  }
+
+  /**
+   * Refuse a release whose documents have a hard problem.
    *
    * Only for a state the fence could actually accept. A terminal state —
    * `published` above all — is refused by the fence whatever its members look
-   * like, and deriving blockers first would answer with the wrong sentence:
+   * like, and checking them first would answer with the wrong sentence:
    * "fix or remove the documents blocking it" describes a recovery that does
    * not exist there, because `RELEASE_ASSEMBLABLE_FROM` excludes `published`
    * and `removeMember` refuses. An operator would be sent to do something the
@@ -1165,31 +2353,153 @@ export class ReleasesService {
    * already happened.
    *
    * A release that is not there at all takes the same path: there is nothing
-   * to derive blockers from, and the fence reports it as unschedulable.
-   *
-   * `derivedBlockers`, not `blockingReasons`: the caller has authorized
-   * `publish` already, and the public method would demand `read` as well — a
-   * grant a publish-scoped API key need not hold.
+   * to check, and the fence reports it as unschedulable.
    */
   private async assertNothingBlocks(
-    id: string,
-    state: ReleaseState | undefined
+    current: ReleaseRow | undefined
   ): Promise<void> {
-    if (state === undefined || !RELEASE_SCHEDULABLE_FROM.includes(state)) {
+    if (
+      current === undefined ||
+      !RELEASE_SCHEDULABLE_FROM.includes(current.state)
+    ) {
       return;
     }
-    const blockers = await this.derivedBlockers(id);
-    if (blockers.length === 0) return;
-    throw NextlyError.conflict({
-      message:
-        "This release cannot be scheduled until the documents blocking it are fixed or removed.",
-      logContext: {
+    await this.assertNoHardProblems(
+      current,
+      await this.deps.repository.listMembers(current.id),
+      {
+        message:
+          "This release cannot be scheduled until the documents blocking it are fixed or removed.",
         reason: "release-still-blocked",
-        releaseId: id,
-        blockers: blockers.length,
-        state,
-      },
-    });
+      }
+    );
+  }
+
+  /**
+   * Run a release now, with the same checks and the same all-together run as
+   * at a scheduled time.
+   *
+   * Publish now is a scheduled run that does not wait, not a second way of
+   * publishing: the release is scheduled for this moment, and then the
+   * runner's own releases drain job is run at once, under the same claim a
+   * scheduled pass takes. Like any pass, it sends out every release that is
+   * due, this one among them, and settles releases sharing a document
+   * together. A release already scheduled at or before now is due as it
+   * stands, so it is not moved: the drain's claim is what keeps two runs
+   * apart, and moving a due release again would make a drain already running
+   * it leave it unfinished for the next pass.
+   *
+   * Answers the release as it stands afterwards: `published`; `blocked` when
+   * a document stopped it part-way; or still `scheduled` when the budget ran
+   * out, a document could not be written yet, another runner was already
+   * running the drain (or it is waiting to retry), or the drain could not be
+   * started. A `scheduled` release is due, so that runner or the next pass
+   * finishes it.
+   *
+   * @experimental
+   */
+  async publishNow(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
+    await this.authorize(actor, "publish");
+    const current = await this.publishableNow(id);
+    // The same refusal scheduling makes, before anything is written, so a
+    // release that would stop part-way, or a single-document release with no
+    // document, sends nothing out and is not marked published.
+    await this.assertReadyToRun(id, current);
+    await this.moveToNowUnlessDue(current);
+    await this.runDrainForPublishNow(id);
+    const [after] = await this.deps.repository.findReleases({ ids: [id] });
+    return after ?? current;
+  }
+
+  /**
+   * The release Publish now may run, read once, or the refusal saying why
+   * not: absent, final, or stopped.
+   */
+  private async publishableNow(id: string): Promise<ReleaseRow> {
+    const [current] = await this.deps.repository.findReleases({ ids: [id] });
+    if (current === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId: id },
+      });
+    }
+    if (RELEASE_FINAL_STATES.includes(current.state)) {
+      throw finishedReleaseRefusal(current, "publish-now");
+    }
+    if (!RELEASE_PUBLISHABLE_NOW_FROM.includes(current.state)) {
+      // Stopped. It is fixed and scheduled again, so the fix is checked before
+      // it goes out, rather than run as it is.
+      throw NextlyError.conflict({
+        message:
+          "This release is stopped. Fix or remove the documents blocking it, then schedule it again.",
+        logContext: {
+          reason: "release-stopped",
+          releaseId: id,
+          state: current.state,
+        },
+      });
+    }
+    return current;
+  }
+
+  /**
+   * Make the release due for Publish now: move it to this moment, unless its
+   * instant has already come.
+   *
+   * A scheduled release whose instant has come is already due, and is not
+   * moved. Moving it would change the instant a drain that is running it
+   * checks before marking it published, and that drain would then leave it
+   * for the next pass; the drain's claim, not the move, keeps two runs apart.
+   * Due by the same rule the drain selects releases with (`isDueAt`), so a
+   * release left unmoved here is one the drain will pick up.
+   */
+  private async moveToNowUnlessDue(current: ReleaseRow): Promise<void> {
+    const now = new Date();
+    const alreadyDue =
+      current.state === "scheduled" &&
+      current.scheduledAt instanceof Date &&
+      isDueAt(current.scheduledAt, now);
+    if (alreadyDue) return;
+    // Fenced on the state the checks were made against, so a release
+    // cancelled or stopped in between is not run — and on its revision, so of
+    // two overlapping requests (a double click, a retry) only one moves it;
+    // the other is refused before anything is written.
+    const moved = await this.deps.repository.scheduleRelease(
+      current.id,
+      now,
+      // The zone the author chose stays part of the record.
+      current.timezone ?? "UTC",
+      [current.state],
+      current.revision
+    );
+    if (!moved) {
+      throw NextlyError.conflict({
+        logContext: {
+          reason: "release-moved-during-publish-now",
+          releaseId: current.id,
+        },
+      });
+    }
+  }
+
+  /**
+   * Run the releases drain for Publish now, never failing the request.
+   *
+   * The drain is the one runner of releases; running it here rather than a
+   * pass of our own is what keeps this from overlapping the scheduled drain
+   * or another Publish now on a shared document. The release is due by now,
+   * so the runner sends it whether or not this run started: a drain that
+   * could not be started is logged, and the release is answered as it
+   * stands, as when another runner holds the drain.
+   */
+  private async runDrainForPublishNow(releaseId: string): Promise<void> {
+    try {
+      await this.deps.runDrainNow({ maxDurationMs: PUBLISH_NOW_BUDGET_MS });
+    } catch (error) {
+      this.deps.logger?.warn("Publish now could not run the releases drain", {
+        releaseId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async cancel(id: string, actor: ReleaseActor): Promise<void> {
@@ -1200,6 +2510,106 @@ export class ReleasesService {
     if (!(await this.deps.repository.cancelRelease(id))) {
       throw NextlyError.conflict({
         logContext: { reason: "release-not-cancellable", releaseId: id },
+      });
+    }
+  }
+
+  /**
+   * Rename a release, change its description, or both, and answer it as it
+   * now reads.
+   *
+   * Under `update-content-releases`, in any state. A change that alters
+   * nothing writes nothing and records nothing, and answers the release as it
+   * is: a form that submits both fields after one edit must not move the
+   * release, since every move sends a schedule judged before it round again.
+   *
+   * @experimental
+   */
+  async update(
+    id: string,
+    change: ReleaseDetailsChange,
+    actor: ReleaseActor
+  ): Promise<ReleaseRow> {
+    await this.authorize(actor, "update");
+    assertDetailsChange(change);
+    // Whether anything changes is decided in the repository's transaction,
+    // under the release's lock, and the row it answers is the one that
+    // transaction wrote: see `updateReleaseDetails`.
+    const written = await this.deps.repository.updateReleaseDetails(id, {
+      ...(change.title === undefined ? {} : { title: change.title }),
+      ...(change.description === undefined
+        ? {}
+        : { description: change.description }),
+    });
+    if (written === null) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId: id },
+      });
+    }
+    if (written.changed.length > 0) {
+      await this.recordActivity(
+        {
+          action: "update",
+          release: written.row,
+          changedFields: written.changed,
+        },
+        actor
+      );
+    }
+    return written.row;
+  }
+
+  /**
+   * Delete a release that never ran, and its documents with it: a draft, or
+   * a release cancelled before it was ever scheduled.
+   *
+   * Under `delete-content-releases`. Every other release is kept, and each
+   * refusal is a CONFLICT whose data names why (`whyNotDeletable`): a
+   * scheduled or stopped one is committed to a launch (cancelling calls it
+   * off and keeps it), a published one is the record of what went live, and
+   * a cancelled one that was ever scheduled may have begun to run. A release
+   * that is not there is NOT_FOUND. Answers the release as the delete found
+   * it under its lock.
+   *
+   * @experimental
+   */
+  async delete(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
+    await this.authorize(actor, "delete");
+    const current = await this.requireRelease(id);
+    const refused = whyNotDeletable(current);
+    if (refused !== null) throw notDeletableRefusal(current, refused);
+    // FENCED on the same rule, so a release scheduled since the read above is
+    // not deleted, and neither are its documents. A retry judges it as it now
+    // is, and is told why.
+    // The row the delete found under its lock, recorded and answered: one
+    // renamed since the read above is the release that was deleted.
+    const deleted = await this.deps.repository.deleteRelease(id);
+    if (deleted === null) {
+      throw NextlyError.conflict({
+        logContext: { reason: "release-moved-before-delete", releaseId: id },
+      });
+    }
+    await this.recordActivity({ action: "delete", release: deleted }, actor);
+    return deleted;
+  }
+
+  /**
+   * Record a rename or deletion, never failing the operation it describes:
+   * the write has committed, and a failure here is reported to the logger
+   * instead of to the caller.
+   */
+  private async recordActivity(
+    entry: Omit<ReleaseActivityEntry, "actor">,
+    actor: ReleaseActor
+  ): Promise<void> {
+    if (this.deps.recordActivity === undefined) return;
+    try {
+      await this.deps.recordActivity({ ...entry, actor: activityActor(actor) });
+    } catch (error) {
+      this.deps.logger?.warn("A release change could not be recorded", {
+        releaseId: entry.release.id,
+        action: entry.action,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -1263,16 +2673,7 @@ function requireRunnableMember(
   // scheduling would become a way to act as the system. So a member added by a
   // trusted call that named nobody produces a release that can never publish,
   // and the default Direct API path is exactly that call.
-  // An action outside the union is DANGEROUS, not merely invalid. The Drizzle
-  // `$type` annotation is compile-time only, and the applier treats every effect
-  // that is not exactly `"publish"` as an unpublish — so `"publsih"` from an
-  // untyped caller WITHDRAWS the document at the scheduled instant.
-  if (!isReleaseMemberAction(input.action)) {
-    throw NextlyError.invalidInput({
-      message: "`action` must be `publish` or `unpublish`.",
-      logContext: { reason: "unknown-member-action", action: input.action },
-    });
-  }
+  assertKnownAction(input.action);
 
   if (actor.userId === null) {
     throw NextlyError.invalidInput({
@@ -1300,4 +2701,20 @@ function requireRunnableMember(
       },
     });
   }
+}
+
+/**
+ * Refuse an action outside the union.
+ *
+ * DANGEROUS, not merely invalid. The Drizzle `$type` annotation is compile-time
+ * only, and the applier treats every effect that is not exactly `"publish"` as
+ * an unpublish — so `"publsih"` from an untyped caller WITHDRAWS the document
+ * at the scheduled instant.
+ */
+function assertKnownAction(action: unknown): void {
+  if (isReleaseMemberAction(action)) return;
+  throw NextlyError.invalidInput({
+    message: "`action` must be `publish` or `unpublish`.",
+    logContext: { reason: "unknown-member-action", action },
+  });
 }

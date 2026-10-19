@@ -93,7 +93,15 @@ export interface VersionMeta {
 }
 
 /** One version including the stored document. */
-export type VersionDetail = VersionMeta & { snapshot: unknown };
+export type VersionDetail = VersionMeta & {
+  snapshot: unknown;
+  /**
+   * What the read rules held back from this reader: top-level field names, and
+   * dotted paths below them (`banner.secret`). A field named here was withheld,
+   * not absent from the version.
+   */
+  withheld: string[];
+};
 
 export type VersionListResponse = ListResponse<VersionMeta>;
 
@@ -106,6 +114,12 @@ export interface ListVersionsParams {
   cursor?: number;
   /** Scope the listing to one locale's versions. Absent lists every locale. */
   locale?: string;
+}
+
+/** What marking a version as seen reports back: the version and its part. */
+export interface MarkVersionSeenResponse {
+  message: string;
+  item: { versionNo: number; locale: string | null };
 }
 
 /** Base path for a scope's history. */
@@ -209,6 +223,22 @@ export const versionApi = {
    * idempotent: sending the same name twice leaves the same state. The server
    * trims and bounds the value, so the client's own trim is a courtesy.
    */
+  /**
+   * Record that the signed-in person was shown this version, which moves where
+   * a later comparison "since you last looked" starts from.
+   *
+   * Sent once for each version shown, never for the history list: reading a
+   * list of versions is not reading any one of them.
+   */
+  markSeen: (
+    scope: VersionScope,
+    versionNo: number
+  ): Promise<MarkVersionSeenResponse> =>
+    protectedApi.put<MarkVersionSeenResponse>(
+      `${basePath(scope)}/${versionNo}/seen`,
+      {}
+    ),
+
   setLabel: (
     scope: VersionScope,
     versionNo: number,

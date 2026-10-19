@@ -36,8 +36,31 @@ export type SingleAbsentPublicData = {
   single: string;
 };
 
+/**
+ * Why a content release cannot be deleted, for a client to say so in its own
+ * words: `published` (the record of what went live), `committed` (scheduled
+ * or stopped; cancel it first) or `was-scheduled` (cancelled after it was
+ * scheduled, so it may have run and is kept).
+ *
+ * @experimental
+ */
+export type ReleaseNotDeletablePublicData = {
+  reason: "published" | "committed" | "was-scheduled";
+};
+
+/**
+ * The problems a release refusal names: each a code a client renders, and the
+ * member it is about — `null` for a document the refused change had not yet
+ * written. Codes and member ids only, never the documents' content.
+ */
+export type ReleaseProblemsPublicData = {
+  problems: Array<{ memberId: string | null; code: string }>;
+};
+
 export type PublicData =
   | ValidationPublicData
+  | ReleaseNotDeletablePublicData
   | RateLimitPublicData
   | SingleAbsentPublicData
+  | ReleaseProblemsPublicData
   | undefined;

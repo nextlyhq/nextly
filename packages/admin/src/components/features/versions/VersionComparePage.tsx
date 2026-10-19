@@ -46,6 +46,13 @@ export interface VersionComparePageProps {
   /** The pair from the URL. Either may be absent on a link that names none. */
   from?: number;
   to?: number;
+  /**
+   * The language the address names. The page then lists that language's
+   * versions (and the shared ones), as the history panel's language filter
+   * does, so a link shared from a German history opens on German history.
+   * Absent lists every language.
+   */
+  locale?: string;
 }
 
 /**
@@ -141,8 +148,9 @@ export function VersionComparePage({
   documentTitle,
   from,
   to,
+  locale,
 }: VersionComparePageProps) {
-  const list = useVersions({ scope });
+  const list = useVersions({ scope, locale });
   // `useCan` answers false while permissions load, which is the right default
   // here: the read-only destination is reachable by everyone who can reach this
   // page, so an unresolved permission costs a less specific target rather than

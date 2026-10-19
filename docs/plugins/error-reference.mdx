@@ -27,8 +27,6 @@ Nextly validates plugins **fail-fast at boot** (D7): a bad plugin config stops s
 
 ## Transforms
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 A refused `contributes.transforms` change is a `VALIDATION_ERROR`. Each entry in its
 `errors` names the transform in `path` (`plugin:<name>.transform[<index>]`) and the rule
 in `code`:
@@ -46,16 +44,16 @@ and its message names the plugin.
 
 ## Schema lifecycle
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 | Code                                      | Status | Cause                                                                                                                                                                                                                                        | Fix                                                                                                                                                            |
 | ----------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PLUGIN_DEPENDENCY_NOT_INSTALLED`         | 409    | `nextly plugins install` was run for a plugin whose dependency has unapplied migration modules, was uninstalled, or is not configured. Nothing is changed.                                                                                   | Install each dependency the message lists, in the order it lists them, then install the plugin again.                                                          |
+| `PLUGIN_DEPENDENCY_NOT_INSTALLED`         | 409    | `nextly plugins install` was run for a plugin whose dependency has unapplied migration modules, was never installed by the install command, was uninstalled, has an uninstall that did not finish, or is not configured. Nothing is changed. | Install each dependency the message lists, in the order it lists them, then install the plugin again. |
 | `PLUGIN_HAS_DEPENDENTS`                   | 409    | `nextly plugins uninstall` was run for a plugin that another enabled plugin depends on.                                                                                                                                                      | Uninstall or disable the dependents first.                                                                                                                     |
 | `PLUGIN_UNINSTALL_IRREVERSIBLE`           | 409    | A full uninstall needs a migration module that has no DOWN statements for this database's dialect, the plugin's tables were created by a development push and no applied module can undo them (`logContext.reason` is `no-applied-module`), an applied module is one the configured version no longer ships (`module-not-shipped`), or the DOWNs leave one of the plugin's tables in place (`down-leaves-tables`). Nothing is changed. | Uninstall with `--keep-data`, or ship a DOWN for that module. For a development push, drop the tables with a migration or reset the development database.      |
 | `PLUGIN_UNINSTALL_UNCONFIRMED`            | 409    | `nextly plugins uninstall` would drop tables, or run a DOWN that drops a column, and was run without `--yes`. What it would drop is listed before the error. Nothing is changed.                                                             | Re-run with `--yes` to drop them, or with `--keep-data` to keep them.                                                                                          |
 | `PLUGIN_SCHEMA_BEHIND`                    | 409    | At boot, a plugin declares a newer `schemaVersion` than its applied migrations reach.                                                                                                                                                        | Run `nextly migrate`, or `nextly plugins install <name>`.                                                                                                      |
-| `PLUGIN_SCHEMA_UNINSTALLED`               | 409    | At boot, a plugin that was fully uninstalled is still listed in the config. Refused in every environment.                                                                                                                                    | Run `nextly plugins install <name>` to reinstate it, or remove it from the config.                                                                             |
+| `PLUGIN_NOT_INSTALLED`                    | 409    | At a production boot, an enabled plugin that `nextly plugins install` has not installed on this database, whether or not migrations run at boot. A disabled plugin is not required to be installed. Development only warns. | Run `nextly plugins install <name>` for each plugin the message names. |
+| `PLUGIN_SCHEMA_UNINSTALLED`               | 409    | At boot, a plugin that was uninstalled, with or without `--keep-data`, is still listed in the config. Refused in every environment. | Run `nextly plugins install <name>` to reinstate it, or remove it from the config. |
+| `PLUGIN_UNINSTALL_UNFINISHED`             | 409    | At boot, a plugin whose uninstall began and did not finish is still listed in the config, refused in every environment; or `nextly plugins uninstall` was run again the other way, with or without `--keep-data`, from how it began. Nothing is changed. | Run the uninstall again the way it began (the message names it) to finish it, or `nextly plugins install <name>` to reinstate the plugin. |
 | `PLUGIN_MIGRATIONS_UNAVAILABLE`           | 409    | `nextly migrate` found tables, or columns and indexes added to another plugin's table, from a plugin that ships no migration modules, so production has no way to create them.                                                               | Generate the plugin's modules with `nextly migrate:create --plugin <name>`.                                                                                    |
 | `PLUGIN_SCHEMA_VERSION_NOT_ADVANCED`      | 409    | `nextly migrate:create --plugin` found schema changes, and the plugin's `schemaVersion` is not past its last module's.                                                                                                                       | Raise `schemaVersion`, then generate again.                                                                                                                    |
 | `PLUGIN_MIGRATION_DROPS_CREATED_SCHEMA`   | 409    | `nextly migrate:create --plugin` would drop a table or column that the plugin's earlier migrations created, which loses its rows. A rename comes out as a drop and an add. The message names each; nothing is written and the command fails. | Write the rename, or the deliberate drop, by hand in a module from `nextly migrate:create --plugin <entry> --blank`, which records the change for your SQL.    |
@@ -63,8 +61,6 @@ and its message names the plugin.
 | `PLUGIN_MIGRATION_SQL_MISSING`            | 409    | `nextly migrate` reached a plugin module that changes the schema on this dialect but has no statements for it: a module written for its author's SQL that was never filled in. Nothing is applied.                                           | Write the module's `up` and `down` for that dialect, then run `nextly migrate` again.                                                                          |
 
 ## Migrations
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 These come from `nextly migrate`, `migrate:down`, and the boot's migrations. See [Production migrations](/docs/guides/production-migrations#what-a-migration-file-may-contain).
 
@@ -76,8 +72,6 @@ These come from `nextly migrate`, `migrate:down`, and the boot's migrations. See
 | `NEXTLY_MIGRATION_CONCURRENT_RUN`        | 409    | Another run recorded the same migration applied, or rolled it back, while this one was running it. Where the transaction can undo the work, this run's statements were rolled back with its ledger write, and the ledger keeps the other run's record. For a unit marked to run outside a transaction, or on MySQL, the statements may have stayed applied, and the attempt is recorded as failed. `logContext.reason` is `concurrent-run`.                                                                                                                                                                                                                                                                  | Run `nextly migrate:status`: the migration is already applied, or rolled back, by the other run. Where the message says the statements may have stayed applied, check what the migration changes before going on, then record it as for `NEXTLY_MIGRATION_PARTIALLY_APPLIED`.                                                                                                                                                                                                                                                                                                                                               |
 
 ## Plugin data access
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 These are thrown to the plugin code that made the call, not at boot.
 
@@ -101,8 +95,6 @@ These are thrown to the plugin code that made the call, not at boot.
 | `NEXTLY_ROUTE_INVALID_PATH` | 400    | A route `path` does not start with `/`.                                                    | Start the path with `/` (e.g. `/export`). |
 
 ## Requests
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 | Code               | Status | Cause                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Fix                                           |
 | ------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |

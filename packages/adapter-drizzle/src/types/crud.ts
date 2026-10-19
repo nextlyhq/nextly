@@ -147,7 +147,16 @@ export interface UpsertOptions {
   /** Columns that define uniqueness for conflict detection */
   conflictColumns: string[];
 
-  /** Columns to update if conflict occurs (default: all provided columns) */
+  /**
+   * Columns to update if conflict occurs (default: all provided columns).
+   *
+   * Empty means "insert, or keep the row that stands". The kept row is read
+   * back after the statement, so on PostgreSQL and SQLite a row another
+   * writer deletes between the two cannot be returned, and the call resolves
+   * to `null`. Whether THIS call created the row is told by the id it
+   * returns: send a fresh id, and only a call whose own insert ran gets it
+   * back — a read-back can only return another writer's row.
+   */
   updateColumns?: string[];
 
   /** Columns to return after upsert (use "*" for all columns) */

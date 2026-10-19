@@ -31,18 +31,18 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import {
-  assertDiffVersionPair,
+  assertComparisonRequest,
   resolveSingleDocumentId,
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
+import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -52,7 +52,6 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
@@ -90,10 +89,12 @@ import {
 } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
+  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
@@ -125,9 +126,11 @@ import {
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
+  markVersionSeenForDocument,
   setVersionLabelForDocument,
-  listVersionsForDocument,
+  respondVersionPage,
   userFromParams,
+  readComparisonParams,
 } from "./versions-methods";
 
 // ============================================================
@@ -236,17 +239,7 @@ export const SINGLE_VERSION_METHODS: Record<
     execute: async (_svc, p) => {
       const slug = String(p.slug ?? "");
       const entryId = await requireLiveSingleId(slug);
-      const result = await listVersionsForDocument({
-        scopeKind: "single",
-        slug,
-        entryId,
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
-        limit: p.limit !== undefined ? Number(p.limit) : undefined,
-        cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
-        locale: p.locale !== undefined ? String(p.locale) : undefined,
-      });
-      return respondList(result.items, result.meta);
+      return respondVersionPage({ scopeKind: "single", slug, entryId }, p);
     },
   },
   restoreSingleVersion: {
@@ -288,12 +281,11 @@ export const SINGLE_VERSION_METHODS: Record<
   getSingleVersionDiff: {
     execute: async (_svc, p) => {
       const slug = String(p.slug ?? "");
-      const from = Number(p.from);
-      const to = Number(p.to);
-      // Validate the version pair before resolving the live Single, so a
-      // malformed comparison fails as a validation error whether or not the
-      // Single has been materialized.
-      assertDiffVersionPair(from, to);
+      const comparison = readComparisonParams(p);
+      // Validate the request before resolving the live Single, so a malformed
+      // comparison fails as a validation error whether or not the Single has
+      // been materialized.
+      assertComparisonRequest(comparison);
       const entryId = await requireLiveSingleId(slug);
       const diff = await getVersionDiffForDocument({
         scopeKind: "single",
@@ -301,11 +293,28 @@ export const SINGLE_VERSION_METHODS: Record<
         entryId,
         user: userFromParams(p),
         authenticatedScope: readAuthenticatedScope(p),
-        from,
-        to,
-        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+        ...comparison,
       });
-      return respondDoc(diff);
+      // Private to the caller: a comparison from where this person last
+      // looked differs from one person to the next.
+      return withSessionCacheHeaders(respondDoc(diff));
+    },
+  },
+  markSingleVersionSeen: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      // The live id comes from the server, never the request, as for every
+      // version operation on a Single.
+      const entryId = await requireLiveSingleId(slug);
+      const seen = await markVersionSeenForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondMutation("Marked as seen.", seen);
     },
   },
   setSingleVersionLabel: {
@@ -914,6 +923,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         versions: single.versions,
         fields: single.fields,
         slug: (single as { slug?: string }).slug,
+        localized: (single as { localized?: boolean }).localized,
+        entityKind: "single",
       });
 
       // The schema record IS the doc here, so the admin Schema Builder
@@ -1121,31 +1132,24 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         builderOwned: true,
       };
 
-      const pipelinePreview = await previewDesiredSchema({
-        desired,
-        db,
-        dialect,
-      });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(
-        pipelinePreview,
-        {
-          tableName,
-          currentFields,
-          newFields: fields as FieldDefinition[],
+      return respondData(
+        await builderSchemaPreviewBody({
+          desired,
           db,
           dialect,
-        }
+          slug: slug,
+          tableName,
+          builtBy: "collection",
+          entity: single,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          requestedLocalized: readRequestLocalized(body),
+          // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
+          // version to echo back on Apply; JSON omits an undefined one and the guard would reject
+          // the first save as version-less.
+          schemaVersion: single.schemaVersion ?? 1,
+        })
       );
-
-      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
-
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
-      return respondData({
-        ...legacyAsRecord,
-        renamed,
-        schemaVersion: single.schemaVersion ?? 1,
-      });
     },
   },
 
@@ -1214,6 +1218,21 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       const adapter = getAdapterFromDI();
       if (!adapter) throw new Error("Database adapter not initialized");
+      // A field leaving translation has preconditions of its own, asked before the push alters
+      // anything.
+      await archiveFieldsLeavingTranslation({
+        // This builder made the table, which decides the column bounds compared.
+        builtBy: "collection",
+        tableName: single.tableName,
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        adapter,
+        entity: slug,
+        kind: "single",
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+      });
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
       const databaseName =
@@ -1267,6 +1286,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
         // kind is invisible to every history query filtered by its own.
         uiTargetKind: "single" as const,
+        // A field becoming translated keeps its value as this language's; the apply moves it after
+        // its prompts and refusals, before it drops the main column.
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
       });
 
       if (!result.success) {
@@ -1293,6 +1315,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // before this apply.
           wasStatus: single.status === true,
           adapter,
+          // Added to the companion, with their values, by the apply before its drop.
+          joinedBefore: movedOnto(result, tableName),
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

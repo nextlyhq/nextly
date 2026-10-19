@@ -37,7 +37,9 @@
  * @since 1.0.0
  */
 
+import type { FieldConfig } from "nextly/config";
 import type { ComponentType } from "react";
+import type { Control, FieldValues } from "react-hook-form";
 
 import type { DocumentLockGates } from "@admin/components/features/entries/EntryForm/document-lock-affordances";
 
@@ -90,6 +92,50 @@ export interface CustomEditViewProps {
    * Absent while creating, which has no document to claim.
    */
   documentLock?: DocumentLockGates;
+}
+
+/**
+ * @experimental Props passed to a plugin's document view: the full-screen
+ * screen a plugin contributes under a document's address.
+ *
+ * The admin keeps the document's own machinery around the view — it loads the
+ * document, holds its lock, offers recovered work, guards leaving and answers
+ * the save shortcut — so these props are the document's facts and the form's
+ * state, not a second way to save.
+ *
+ * Restoring recovered work unmounts the view, replaces the form's values, then
+ * mounts the view afresh, so a view may keep a working copy of the document
+ * read when it mounts, and anything it writes into the form as it unmounts is
+ * replaced by the restore.
+ */
+export interface DocumentViewProps {
+  /** The collection's slug, when the document is an entry. */
+  collectionSlug?: string;
+  /** The Single's slug, when the document is a Single. */
+  singleSlug?: string;
+  /** The entry's id, when the document is an entry. */
+  entryId?: string;
+  /**
+   * The document form's control. Values written through it are what the
+   * admin's save sends, and what its unsaved-changes guard and recovery
+   * points read.
+   */
+  control: Control<FieldValues>;
+  /**
+   * True while a colleague holds the document: the view shows it and takes
+   * no edits, matching the banner the admin draws above it.
+   */
+  readOnly: boolean;
+  /** Return to the document's own edit screen, keeping unsaved work. */
+  exit: () => void;
+  /**
+   * For a view offered on a field type: the declaration of the top-level field
+   * it edits — the same `FieldConfig` a plugin field editor receives as its
+   * `field` prop, carrying `name`. The only field of that type, or the one the
+   * address names (`?field=`); where the document has several and the address
+   * names none of them, the admin asks the author before the view is drawn.
+   */
+  field?: FieldConfig;
 }
 
 /**

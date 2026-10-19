@@ -16,10 +16,16 @@ import {
   clearRegistry,
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
+import {
+  clearDocumentViews,
+  registerDocumentViews,
+} from "@admin/lib/plugins/document-view-registry";
 
 import { renderWithProviders } from "../../../../../__tests__/utils";
 
 const useDocumentLock = vi.fn();
+/** What the page last handed the (replaced) default editor. */
+let entryFormProps: Record<string, unknown> | undefined;
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({
   useDocumentLock: (options: unknown) => useDocumentLock(options) as unknown,
 }));
@@ -33,7 +39,13 @@ vi.mock(
       await importOriginal<
         typeof import("@admin/components/features/entries/EntryForm")
       >();
-    return { ...actual, EntryForm: () => <div>default entry form</div> };
+    return {
+      ...actual,
+      EntryForm: (props: Record<string, unknown>) => {
+        entryFormProps = props;
+        return <div>default entry form</div>;
+      },
+    };
   }
 );
 
@@ -106,6 +118,7 @@ beforeEach(() => {
   };
   // Cleared, so a case reading these cannot pass on the previous case's render.
   customViewProps = undefined;
+  entryFormProps = undefined;
 });
 
 /** Registers a custom view and points the collection at it. */
@@ -122,6 +135,7 @@ function withCustomView(body = "bespoke product editor") {
 
 afterEach(() => {
   clearRegistry();
+  clearDocumentViews();
 });
 
 describe("a custom collection edit view", () => {
@@ -246,5 +260,113 @@ describe("a custom collection edit view", () => {
 
     expect(screen.getByText("default entry form")).toBeInTheDocument();
     expect(claimRequest()).toMatchObject({ enabled: false });
+  });
+});
+
+describe("a routed document view", () => {
+  const VIEW = "@acme/pb/admin#Builder";
+
+  it("is drawn by the form in place of the custom edit view, and leaves to the entry's edit address", () => {
+    registerDocumentViews([
+      { slug: "posts", path: "builder", component: VIEW },
+    ]);
+    withCustomView();
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    // The form hosts the view, so the form's claim is the one taken.
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(screen.queryByText("bespoke product editor")).toBeNull();
+    expect(claimRequest()).toMatchObject({ enabled: false });
+    const documentView = entryFormProps?.documentView as
+      | { component: string; onExit: () => void }
+      | undefined;
+    expect(documentView?.component).toBe(VIEW);
+
+    documentView?.onExit();
+    expect(window.location.pathname).toBe("/admin/collections/posts/42");
+  });
+
+  it("opens a field-type view on a collection with a top-level field of its type", () => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: VIEW },
+    ]);
+    collectionSchema = {
+      ...collectionSchema,
+      fields: [
+        { name: "title", type: "text" },
+        { name: "body", type: "blocks" },
+      ],
+    };
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(
+      (entryFormProps?.documentView as { component: string } | undefined)
+        ?.component
+    ).toBe(VIEW);
+  });
+
+  it("answers not found for a field-type view on a collection without the field", () => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: VIEW },
+    ]);
+    // Only nested inside a group, which does not count.
+    collectionSchema = {
+      ...collectionSchema,
+      fields: [
+        { name: "title", type: "text" },
+        {
+          name: "extra",
+          type: "group",
+          fields: [{ name: "body", type: "blocks" }],
+        },
+      ],
+    };
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    expect(screen.queryByText("default entry form")).toBeNull();
+    expect(screen.getByText(/This page doesn.t exist/)).toBeInTheDocument();
+  });
+
+  it("keeps the address's language when leaving the view, dropping only its field", () => {
+    // The language is the document being edited: losing it on the way out
+    // reloads another translation over unsaved edits.
+    registerDocumentViews([
+      { slug: "posts", path: "builder", component: VIEW },
+    ]);
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/posts/42/builder?locale=fr&field=body"
+    );
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    (entryFormProps?.documentView as { onExit: () => void }).onExit();
+
+    expect(window.location.pathname).toBe("/admin/collections/posts/42");
+    expect(window.location.search).toBe("?locale=fr");
+  });
+
+  it("hands the form no view on the plain edit address", () => {
+    // The control: the same registry, the address without the segment.
+    registerDocumentViews([
+      { slug: "posts", path: "builder", component: VIEW },
+    ]);
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(entryFormProps).toBeDefined();
+    expect(entryFormProps?.documentView).toBeUndefined();
   });
 });

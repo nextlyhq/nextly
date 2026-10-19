@@ -150,6 +150,11 @@ export interface PopulateComponentDataManyParams {
   fallbackLocale?: string | false;
   /** See PopulateComponentDataParams.access. */
   access?: ComponentReadAccess;
+  /**
+   * When true, a component read failure propagates instead of every entry
+   * taking the field's default: see PopulateComponentDataParams.strict.
+   */
+  strict?: boolean;
 }
 
 // Duplicated here (and in the mutation service) to avoid a cross-domain
@@ -534,6 +539,7 @@ export class FieldGroupQueryService extends BaseService {
       locale,
       fallbackLocale,
       access = { trusted: TRUSTS_EVERY_COLLECTION },
+      strict = false,
     } = params;
     if (entries.length === 0) return entries;
 
@@ -604,6 +610,9 @@ export class FieldGroupQueryService extends BaseService {
           }
         }
       } catch (error) {
+        // A caller judging a document by what it holds cannot take a default
+        // for a field it failed to read.
+        if (strict) throw error;
         this.logger.debug("Could not batch populate component field", {
           fieldName: field.name,
           error: error instanceof Error ? error.message : String(error),

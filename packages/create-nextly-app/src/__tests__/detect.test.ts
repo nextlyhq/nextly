@@ -93,12 +93,38 @@ describe("detectPackageManager", () => {
     expect(result).toBe("pnpm");
   });
 
-  it("prefers npm_config_user_agent over lockfile detection", async () => {
-    // pnpm-lock.yaml exists in cwd, but UA says yarn — UA wins.
+  // A lockfile says which manager installs this project; the user agent only
+  // says which one launched the generator. Installing with the launcher instead
+  // ran `npm install` in a pnpm app, and npm crashed on pnpm's node_modules.
+  it("prefers the project's lockfile over npm_config_user_agent", async () => {
     process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v22.10.0";
     mockPathExists.mockImplementation(async path => {
       return posix(path).endsWith("pnpm-lock.yaml");
     });
+    expect(await detectPackageManager("/test/project")).toBe("pnpm");
+  });
+
+  it("keeps an npm project on npm when the generator is started through pnpm dlx", async () => {
+    process.env.npm_config_user_agent = "pnpm/12.5.1 npm/? node/v24.21.0";
+    mockPathExists.mockImplementation(async path => {
+      return posix(path).endsWith("package-lock.json");
+    });
+    expect(await detectPackageManager("/test/project")).toBe("npm");
+  });
+
+  it("detects bun from the text lockfile Bun writes by default", async () => {
+    mockPathExists.mockImplementation(async path => {
+      return posix(path).endsWith("bun.lock");
+    });
+    expect(await detectPackageManager("/test/project")).toBe("bun");
+  });
+
+  // Whether an app inside a workspace takes the workspace's manager is tested
+  // against real directories in workspace-root.test.ts: it depends on the
+  // workspace listing the app, which these mocks cannot model.
+
+  it("uses npm_config_user_agent when the directory has no lockfile", async () => {
+    process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v22.10.0";
     expect(await detectPackageManager("/test/project")).toBe("yarn");
   });
 

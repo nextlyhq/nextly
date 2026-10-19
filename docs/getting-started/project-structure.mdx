@@ -44,6 +44,8 @@ my-nextly-app/
 ├── public/                           # Static files; uploads land in public/uploads/
 ├── nextly.config.ts                  # Nextly configuration
 ├── next.config.ts                    # Next.js configuration
+├── .agents/skills/                   # Skills for coding agents (see Coding agents)
+├── .claude/skills/                   # The same skills, where Claude Code reads them
 ├── AGENTS.md                         # Instructions for coding agents (CLAUDE.md points to it)
 ├── CLAUDE.md
 ├── eslint.config.mjs
@@ -159,6 +161,24 @@ Generated TypeScript types for your content schema. The output path is configure
 pnpm types:generate
 ```
 
+If your app keeps its code at the root rather than under `src/`, the generated files follow it: types go to `types/generated/` and schemas to `db/schemas/collections/zod/`, with no `src/` folder created. That holds while `typescript.outputFile` and `db.schemasDir` are left at their defaults; a path you set is used as written.
+
+### Generated Zod schemas
+
+`generate:types` also writes a Zod schema for each collection, in `zod/` under `db.schemasDir` (`src/db/schemas/collections/zod/` by default). They import Zod from `nextly/zod`, a re-export of the Zod Nextly itself uses, so they compile whether or not your app depends on `zod`, with npm, pnpm, Yarn (Plug'n'Play too) or Bun.
+
+To combine them with your own Zod code, import `z` from `nextly/zod` as well, so both use one Zod instance:
+
+```ts title="src/lib/post-form.ts"
+import { z } from "nextly/zod";
+
+import { PostsCreateInputSchema } from "../db/schemas/collections/zod";
+
+export const PostFormSchema = PostsCreateInputSchema.extend({
+  acceptTerms: z.literal(true),
+});
+```
+
 ### Schema files (Visual Schema Builder)
 
 Collections you create through the Visual Schema Builder are stored in the database, and no TypeScript file is generated for them. In development the admin also writes every change to `ui-schema.json` (the file `db.uiSchemaFile` names), which `nextly migrate:create` reads: commit it with the migration (see [Production migrations](/docs/guides/production-migrations#commit-ui-schemajson)). To move a collection into code, run `nextly db:sync --promote <slug>`. Code-first collections live in `nextly.config.ts` (or wherever you import them from); the two approaches coexist freely.
@@ -170,7 +190,7 @@ Collections you create through the Visual Schema Builder are stored in the datab
 | **Code-First** | `nextly.config.ts` (or files you import from it) | Auto-synced on save in development; in production, a migration you create with `nextly migrate:create` and apply with `nextly migrate` |
 | **Visual Schema Builder** | Admin panel at `/admin/builder/collections` | Stored in the database, and written to `ui-schema.json` in development for `migrate:create` |
 
-Both feed the same core runtime for the supported field set: database tables, admin UI, REST endpoints, and Direct API access. Two differences remain. A collection made in the Visual Schema Builder cannot carry access functions, field rules or hooks, because a function cannot be stored in the database; and `nextly generate:types` writes types only for what your config defines. You can mix them -- define some collections in config and create others through the Visual Schema Builder.
+Both feed the same core runtime for the supported field set: database tables, admin UI, REST endpoints, and Direct API access. Two differences remain. A collection made in the Visual Schema Builder cannot carry access functions, field rules or hooks written as functions, because a function cannot be stored in the database (it can carry Nextly's pre-built hooks, such as auto-slug, which run on every write); and `nextly generate:types` writes types only for what your config defines. You can mix them -- define some collections in config and create others through the Visual Schema Builder.
 
 ## Next Steps
 

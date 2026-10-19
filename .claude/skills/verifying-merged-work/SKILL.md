@@ -5,6 +5,8 @@ description: >-
   landed on main: whether a squash carried every commit, whether main is
   healthy afterwards, whether a red run is flake, or when a package stops
   resolving after a rebase.
+metadata:
+  internal: true
 ---
 
 ## The decisions in this file are also code
@@ -45,8 +47,9 @@ queued, in progress, or completed as `success` or `failure`
 (`.github/actions/superseded-on-main`). A newer run that was cancelled or timed
 out does not count, and this run then does its own work. A run is inert when
 every file changed since the last commit that workflow tested matches its inert
-paths: no run tested it, and none needed to. `skipped` passes the gate either
-way, so the gate cannot tell them apart for you.
+paths: no run tested it, and none needed to. `CI gate` tells them apart: an
+inert commit's gate passes, and a superseded one's fails with "a newer push to
+main superseded this run before its tests ran", because nothing tested it.
 
 For a superseded commit, read the verdict from the first later run of that
 workflow on `main` whose substantive jobs (`Lint / Typecheck / Test / Build`,
@@ -54,7 +57,9 @@ or the three `Integration (...)` legs) concluded `success` or `failure`. Not
 simply the newest run: that one may itself be skipped, queued or cancelled. It
 is a pass only at `success`. Until a later run reaches a verdict, nothing has
 tested the commit, and a covering run cancelled after this one skipped leaves
-it untested until the next push to `main`. Nothing is cancelled by skipping: on
+it untested until a later run tests it. `.github/workflows/main-catch-up.yml` makes sure one does:
+every two hours it starts CI and Integration on `main`'s newest commit when no
+run has tested it. Nothing is cancelled by skipping: on
 `main` each commit has a concurrency group of its own, so a `cancelled` job
 still means what it says and still blocks.
 

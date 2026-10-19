@@ -3,9 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 
 import { ROUTES } from "@admin/constants/routes";
+import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { publicApi } from "@admin/lib/api/publicApi";
+import type { AuthRefusal } from "@admin/lib/auth/auth-refusal";
 
 /** What an interrupted sign-in left outstanding, once the page has asked. */
 export interface ResumedLogin {
@@ -234,6 +236,13 @@ export interface ChallengeFlow {
   start: (challenge: ActiveChallenge) => void;
   /** Post an answer. Navigates on success; returns the message on failure. */
   resolve: (response: Record<string, unknown>) => Promise<ChallengeAnswer>;
+  /**
+   * The refusal the last answer met, if it was one: the same notice the
+   * sign-in form shows, since a challenge resumed on an address the app does
+   * not accept is refused for the same reason, and the challenge view only
+   * gets a message to show.
+   */
+  refusal: AuthRefusal | null;
   /** Whether a provider redirect reported a generic sign-in failure. */
   signInFailed: boolean;
   /** Whether the outstanding challenge is still being looked up. */
@@ -309,6 +318,7 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
   // `onResolved` cannot replace that navigation with its own.
   const navigatedRef = useRef(false);
   const [flowEnded, setFlowEnded] = useState(false);
+  const authRefusal = useAuthRefusal();
   // Read ONCE: the parameter is removed from the URL after it is shown, so
   // reading it on each render would hide the message on the next one.
   const [signInFailed] = useState(() => hasSignInError(search));
@@ -359,6 +369,7 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
   async function resolve(
     response: Record<string, unknown>
   ): Promise<ChallengeAnswer> {
+    authRefusal.clear();
     try {
       const csrfToken = await getCsrfToken();
       const result = await publicApi.post<{
@@ -388,6 +399,8 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       window.location.href = next;
       return { ok: true, next };
     } catch (error: unknown) {
+      // Kept for the page to show; the view still gets its message below.
+      authRefusal.take(error);
       const advanced = retryTokenIn(error);
       if (advanced) {
         setChallenge(current =>
@@ -433,6 +446,7 @@ export function useChallengeFlow(search?: string): ChallengeFlow {
       setChallenge(started);
     },
     resolve,
+    refusal: authRefusal.refusal,
     signInFailed,
     resuming: resume.status === "loading",
     flowEnded,

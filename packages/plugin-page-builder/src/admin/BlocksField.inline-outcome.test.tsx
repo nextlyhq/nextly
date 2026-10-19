@@ -20,12 +20,16 @@
 import { ShortcutProvider } from "@nextlyhq/ui";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
-import { useForm, useWatch, type Control } from "react-hook-form";
+import {
+  useForm,
+  useWatch,
+  type Control,
+  type FieldValues,
+} from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import type { InlineEditOutcome } from "@nextlyhq/builder/shell";
-import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /** What the inline surface answers when this test's editor is finished. */
 let outcome: InlineEditOutcome = { status: "unchanged" };
@@ -202,6 +206,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // No document around the field: the state every case here was written
   // against, and the one that offers every component.
   useDocumentIdentity: () => null,
+  navigateTo: vi.fn(),
   // Nor a language the field could know: the component read asks for the
   // app default.
   useDocumentLocale: () => null,
@@ -276,42 +281,56 @@ vi.mock("./SavePatternPrompt", () => ({
   },
 }));
 
-const { BlocksField } = await import("./BlocksField");
+const { PageBuilderView } = await import("./editor/PageBuilderView");
+
+/**
+ * The blocks field's declaration, as the admin hands it to the view. Typed at
+ * the boundary because `FieldConfig` is the closed union of the built-in
+ * shapes, and a contributed type such as `blocks` has no arm in it.
+ */
+const BODY_FIELD = { name: "body", type: "blocks" } as never;
+
+/**
+ * The view's way back to the edit form. Leaving is what unmounts the editor
+ * and the author's words with it, so a call here is the editor closing.
+ */
+const exit = vi.fn();
 
 /** Watches what the field writes back, which is what a save actually persists. */
 function Saved({
   control,
 }: {
-  control: Control<{ body: unknown }>;
+  control: Control<FieldValues>;
 }): React.JSX.Element | null {
   saved = useWatch({ control, name: "body" });
   return null;
 }
 
+/** The builder's document view, open on the form's `body` field. */
 function Host(): React.JSX.Element {
-  const { control } = useForm<{ body: unknown }>({
+  const { control } = useForm<FieldValues>({
     defaultValues: { body: undefined },
   });
   return (
     <>
-      <BlocksField name="body" control={control} />
+      <PageBuilderView
+        control={control}
+        field={BODY_FIELD}
+        readOnly={false}
+        exit={exit}
+      />
       <Saved control={control} />
     </>
   );
 }
 
-/** Mount the field and open the editor. */
+/** Mount the builder's view, which opens the editor. */
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
-}
-
-/** Whether the editor is still up, which is what holds the author's words. */
-function editorIsOpen(): boolean {
-  return screen.queryByRole("button", { name: "Leave editor" }) !== null;
 }
 
 beforeEach(() => {
+  exit.mockClear();
   outcome = { status: "unchanged" };
   errors.length = 0;
   saved = undefined;
@@ -334,10 +353,10 @@ describe("leaving the editor with an inline edit that could not be written", () 
     // Closing unmounts the canvas and the editor attached to it, and the typed
     // passage exists nowhere else — so this is the difference between the
     // author keeping their paragraph and losing it without being asked.
-    expect(editorIsOpen()).toBe(true);
-    expect(
-      screen.queryByRole("button", { name: OPEN_BUILDER_ACTION })
-    ).toBeNull();
+    expect(exit).not.toHaveBeenCalled();
+    // Nor is the document handed back: a refused passage declines the whole
+    // way out, the commit included, not only the step that unmounts.
+    expect(saved).toBeUndefined();
   });
 
   it("tells the author why leaving did nothing", () => {
@@ -358,7 +377,7 @@ describe("leaving the editor with an inline edit that could not be written", () 
     openEditor();
     fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
 
-    expect(editorIsOpen()).toBe(true);
+    expect(exit).not.toHaveBeenCalled();
     expect(errors[0]).toContain("Shortening");
   });
 
@@ -370,7 +389,7 @@ describe("leaving the editor with an inline edit that could not be written", () 
     openEditor();
     fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
 
-    expect(editorIsOpen()).toBe(false);
+    expect(exit).toHaveBeenCalledTimes(1);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("not saved");
   });
@@ -387,7 +406,7 @@ describe("leaving the editor with an inline edit that could not be written", () 
     expect(errors).toHaveLength(1);
     expect(errors[0]).toContain("has not been saved");
     // Nothing is being held HERE, so leaving is not blocked.
-    expect(editorIsOpen()).toBe(false);
+    expect(exit).toHaveBeenCalledTimes(1);
   });
 
   it("closes silently when the edit finished normally", () => {
@@ -398,7 +417,7 @@ describe("leaving the editor with an inline edit that could not be written", () 
     openEditor();
     fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
 
-    expect(editorIsOpen()).toBe(false);
+    expect(exit).toHaveBeenCalledTimes(1);
     expect(errors).toEqual([]);
   });
 });
@@ -428,7 +447,7 @@ describe("the save shortcut with an inline edit that could not be written", () =
     pressSave();
 
     expect(saved).toMatchObject({ kind: "page" });
-    expect(editorIsOpen()).toBe(true);
+    expect(exit).not.toHaveBeenCalled();
     expect(errors).toHaveLength(1);
   });
 

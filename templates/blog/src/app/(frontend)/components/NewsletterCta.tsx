@@ -154,7 +154,7 @@ export function NewsletterCta({
                   className="mt-4 text-xs font-bold uppercase tracking-widest"
                   style={{ color: "var(--color-accent)" }}
                 >
-                  Thanks! You're subscribed.
+                  Thanks! You&rsquo;re subscribed.
                 </p>
               )}
             </div>

@@ -3,7 +3,7 @@
  * much it says out loud.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,10 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 
 import { coreDraws } from "../outcome";
+import { GRID_GAP_PX } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
+
+import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
 
 let mockBranding: AdminBranding | undefined;
 let mockBrandingStatus: {
@@ -106,12 +109,15 @@ function brandingWithRegistered(widgets: unknown[]): AdminBranding {
 }
 
 beforeEach(() => {
+  // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
+  stubDashboardWidth();
   granted = [];
   vi.clearAllMocks();
   vi.mocked(protectedApi.post).mockResolvedValue({ results: [] });
 });
 
 afterEach(() => {
+  unstubDashboardWidth();
   clearRegistry();
   mockBranding = undefined;
   vi.restoreAllMocks();
@@ -171,8 +177,10 @@ describe("WidgetGrid — collection and gating", () => {
     mockBranding = {
       plugins: [{ name: "@acme", collections: [] }],
     } as unknown as AdminBranding;
-    const { container } = renderGrid();
-    expect(container).toBeEmptyDOMElement();
+    renderGrid();
+    // Only the dashboard's measured container, holding nothing: it is drawn in every case, so the
+    // width measured on it survives the first declarations arriving.
+    expect(screen.getByTestId("dashboard-container")).toBeEmptyDOMElement();
   });
 
   it("renders nothing when every contributed widget is denied", () => {
@@ -184,8 +192,10 @@ describe("WidgetGrid — collection and gating", () => {
         requiredPermission: "manage-secret",
       },
     ]);
-    const { container } = renderGrid();
-    expect(container).toBeEmptyDOMElement();
+    renderGrid();
+    // Only the dashboard's measured container, holding nothing: it is drawn in every case, so the
+    // width measured on it survives the first declarations arriving.
+    expect(screen.getByTestId("dashboard-container")).toBeEmptyDOMElement();
   });
 
   it("shows a permitted widget and hides a denied one", () => {
@@ -423,6 +433,28 @@ describe("WidgetGrid — collection and gating", () => {
     expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
+  it("offers no Retry on a card refused before it was asked", async () => {
+    // The card never entered the batch, so there is no question to ask again: a Retry there
+    // would do nothing at all when pressed.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        query: { source: "collection:posts", op: "list" },
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
+    );
+    // The control: the card IS in its error state, so the absence below is about Retry.
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("card-retry")).not.toBeInTheDocument();
+  });
+
   it("keeps a contributed component when the registered list is under-declared", async () => {
     // A widget declared through BOTH channels. The registration names `list`
     // and omits `select`, so core cannot draw it -- and the contributed
@@ -508,7 +540,9 @@ describe("WidgetGrid — collection and gating", () => {
           source: "collection:posts",
           op: "list",
           select: ["title", "slug"],
-          limit: 5,
+          // The five rows the card draws, and one more: the extra row is how a list learns that
+          // more exist, since its answer carries no total.
+          limit: 6,
         },
       ],
     });
@@ -541,7 +575,14 @@ describe("WidgetGrid — collection and gating", () => {
         screen.getByTestId("widget-cell-core/shortcuts")
       ).toBeInTheDocument()
     );
-    expect(screen.getByTestId("widget-actions-empty")).toBeInTheDocument();
+    // The frame's empty state, and the frame says so: a bespoke "nothing here" node inside a
+    // card marked ready would keep its freshness line and footer link.
+    const cell = screen.getByTestId("widget-cell-core/shortcuts");
+    expect(within(cell).getByTestId("card-empty")).toBeInTheDocument();
+    expect(cell.querySelector("[data-state]")).toHaveAttribute(
+      "data-state",
+      "empty"
+    );
     expect(
       screen.queryByText(/declares no shortcuts/i)
     ).not.toBeInTheDocument();
@@ -597,13 +638,15 @@ describe("WidgetGrid — collection and gating", () => {
     // component, its query batched, the `list` arm validated with its column
     // descriptions intact, and the headings taken from those rather than from
     // `select` -- which is what keeps a field the reader may not see out of the
-    // header row.
+    // header row. A full-width card on a 1200 px dashboard is large, the tier
+    // that draws its rows as a table.
+    stubDashboardWidth(1200, { cardWidth: 1200 });
     mockBranding = brandingWith([
       {
         id: "acme/posts",
         title: "Recent posts",
         archetype: "table",
-        defaultSize: "lg",
+        defaultSize: "full",
         query: {
           source: "collection:posts",
           op: "list",
@@ -704,8 +747,10 @@ describe("WidgetGrid — collection and gating", () => {
         query: { source: "collection:secrets", op: "count" },
       },
     ]);
-    const { container } = renderGrid();
-    expect(container).toBeEmptyDOMElement();
+    renderGrid();
+    // Only the dashboard's measured container, holding nothing: it is drawn in every case, so the
+    // width measured on it survives the first declarations arriving.
+    expect(screen.getByTestId("dashboard-container")).toBeEmptyDOMElement();
     expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
@@ -821,11 +866,26 @@ describe("WidgetGrid — sizing", () => {
       "@min-[640px]/dashboard:col-span-6",
       "@min-[1024px]/dashboard:col-span-3"
     );
-    // The container those classes answer to is the grid's own wrapper, so a
+    // The container those classes answer to is the dashboard's own, so a
     // dashboard narrowed by a sidebar draws the band that fits it.
     expect(
-      screen.getByLabelText("Dashboard widgets").parentElement
-    ).toHaveClass("@container/dashboard");
+      screen
+        .getByLabelText("Dashboard widgets")
+        .closest(".\\@container\\/dashboard")
+    ).toBe(screen.getByTestId("dashboard-container"));
+  });
+
+  it("draws its gap at the pixels a card's predicted width counts", () => {
+    // A card's first query is sized from a width predicted with GRID_GAP_PX. A gap in rem would
+    // follow the page's root font size and draw cards at another width than predicted.
+    registerComponents({ "@acme/admin#A": () => <div>a</div> });
+    mockBranding = brandingWith([
+      { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
+    ]);
+    renderGrid();
+    expect(screen.getByLabelText("Dashboard widgets").className).toContain(
+      `gap-[${GRID_GAP_PX}px]`
+    );
   });
 
   it("honours the deprecated half alias without half-width phones", () => {
@@ -1300,8 +1360,10 @@ describe("the grid distinguishes 'nothing to draw' from 'nothing has arrived'", 
   it("says nothing when the workspace settled and declared no widgets", () => {
     // The genuinely empty case, and the control for the two below: an app with
     // no widgets should render no grid rather than a permanent skeleton.
-    const { container } = renderGrid();
-    expect(container).toBeEmptyDOMElement();
+    renderGrid();
+    // Only the dashboard's measured container, holding nothing: it is drawn in every case, so the
+    // width measured on it survives the first declarations arriving.
+    expect(screen.getByTestId("dashboard-container")).toBeEmptyDOMElement();
   });
 
   it("holds space while the workspace query is still in flight", () => {

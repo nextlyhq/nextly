@@ -22,6 +22,7 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { ReactNode } from "react";
 
@@ -33,8 +34,82 @@ import type {
 
 import { resolveIconName } from "./archetypes/icon";
 import type { CellSlotLookup } from "./archetypes/types";
-import { resolveWidgetOutcome } from "./outcome";
-import { WidgetCard } from "./WidgetCard";
+import type { SkeletonShape } from "./frame/states";
+import { resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
+import { WidgetCard, type WidgetCardProps } from "./WidgetCard";
+
+/**
+ * The shape a card's skeleton takes while its data has never arrived, from what its
+ * archetype will draw: a figure where a number goes, rows where a list goes. Matching the
+ * shape is what keeps the card from jumping when the data lands.
+ */
+/**
+ * The items setting a list or table card's skeleton holds the place of, from the query as asked;
+ * `null` for one that declared no limit, which draws the default number, and `undefined` for any
+ * other card, whose skeleton draws its default rows.
+ */
+function skeletonItemsFor(definition: DashboardWidget): unknown {
+  if (definition.archetype !== "list" && definition.archetype !== "table")
+    return undefined;
+  return definition.query?.limit ?? null;
+}
+
+function skeletonFor(archetype: string): SkeletonShape {
+  switch (archetype) {
+    case "metric":
+    case "stats":
+      return "figure";
+    case "timeseries":
+      return "chart";
+    case "bars":
+      return "bars";
+    case "actions":
+      return "actions";
+    case "text":
+      return "text";
+    default:
+      return "rows";
+  }
+}
+
+/** Every outcome the frame draws itself, which is all but a plugin's own component. */
+type FramedOutcome = Exclude<WidgetOutcome, { state: "self-drawn" }>;
+
+/**
+ * The card's state props and body for one outcome.
+ *
+ * One mapping, so each state's rules sit side by side: only a failure offers Retry, and only a
+ * card with an answer (content, an empty answer, or an error over a refetch) is handed the
+ * batch's freshness and in-flight flag. The card itself withholds what a state should not show.
+ */
+function cardForOutcome(
+  outcome: FramedOutcome,
+  live: { updatedAt: Date | null; isFetching: boolean; onRetry?: () => void }
+): { props: Partial<Omit<WidgetCardProps, "children">>; body: ReactNode } {
+  // For a card showing an ANSWER, `isLoading` reports a refetch rather than a first load -- it
+  // marks the body busy and leaves what is already there alone, which is the whole reason the
+  // card marks rather than replaces.
+  const answered = { updatedAt: live.updatedAt, isLoading: live.isFetching };
+  switch (outcome.state) {
+    case "loading":
+      // Data has never arrived: a skeleton shaped like the body, not an empty busy card.
+      return { props: { state: "loading" }, body: null };
+    case "unavailable":
+      return { props: { state: "unavailable" }, body: null };
+    case "failed":
+      return {
+        props: { ...answered, error: outcome.message, onRetry: live.onRetry },
+        body: null,
+      };
+    case "empty":
+      return {
+        props: { ...answered, state: "empty", empty: outcome.empty },
+        body: null,
+      };
+    case "ready":
+      return { props: answered, body: outcome.node };
+  }
+}
 
 /**
  * A Lucide icon component for the definition's icon NAME, or nothing.
@@ -60,6 +135,12 @@ export interface WidgetRendererProps {
    * cell positions it for those.
    */
   headerAction?: ReactNode;
+  /** The drag handle in customise mode, drawn before the title. */
+  leading?: ReactNode;
+  /** Customise mode: the card's content stays visible but out of reach. */
+  customizing?: boolean;
+  /** Reload this card only, offered when its data failed to load. */
+  onRetry?: () => void;
   /**
    * This widget's slot from the batch. `undefined` means the batch has not
    * answered yet — which is why a data widget with no slot is BUSY rather than
@@ -86,6 +167,11 @@ export interface WidgetRendererProps {
    * way to know the dashboard was reading again.
    */
   isFetching?: boolean;
+  /**
+   * The tier the answer in `slot` was fetched at, when the card has grown past it: a list then
+   * draws only the rows that answer was asked for. See `AnswerTierContext`.
+   */
+  answerTier?: SizeTier;
   /**
    * Which CARD this render is, and what its reader configured.
    *
@@ -115,14 +201,26 @@ export function WidgetRenderer({
   slotFor,
   placement,
   headerAction,
+  leading,
+  customizing = false,
+  onRetry,
   updatedAt = null,
   isFetching = false,
+  answerTier,
 }: WidgetRendererProps) {
   const shared = {
     title: definition.title,
+    // The declaration's one optional line under the title, which the frame draws.
+    description: definition.description,
     icon: resolveIconName(definition.icon),
     link: definition.link,
     headerAction,
+    leading,
+    customizing,
+    cardId: placement?.id ?? definition.id,
+    skeleton: skeletonFor(definition.archetype),
+    skeletonItems: skeletonItemsFor(definition),
+    answerTier,
   };
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
@@ -208,34 +306,10 @@ export function WidgetRenderer({
     );
   }
 
-  if (outcome.state === "loading") {
-    return (
-      <WidgetCard {...shared} isLoading>
-        {null}
-      </WidgetCard>
-    );
-  }
-
-  // From here down the card is showing an ANSWER, so `isLoading` reports a
-  // refetch rather than a first load -- it marks the body busy and leaves what
-  // is already there alone, which is the whole reason the card marks rather
-  // than replaces.
-  if (outcome.state === "failed") {
-    return (
-      <WidgetCard
-        {...shared}
-        error={outcome.message}
-        updatedAt={updatedAt}
-        isLoading={isFetching}
-      >
-        {null}
-      </WidgetCard>
-    );
-  }
-
+  const drawn = cardForOutcome(outcome, { updatedAt, isFetching, onRetry });
   return (
-    <WidgetCard {...shared} updatedAt={updatedAt} isLoading={isFetching}>
-      {outcome.node}
+    <WidgetCard {...shared} {...drawn.props}>
+      {drawn.body}
     </WidgetCard>
   );
 }

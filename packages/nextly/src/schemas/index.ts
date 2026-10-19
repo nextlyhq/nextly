@@ -27,6 +27,7 @@ import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
 import { auditTables } from "./audit";
 import { authTokenTables } from "./auth-tokens";
+import { contentEventsTables } from "./content-events";
 import {
   DELETED_PRINCIPALS_TABLE,
   deletedPrincipalsTables,
@@ -60,6 +61,7 @@ import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
+import { noticesTables } from "./notices";
 import {
   ONE_TIME_SECRETS_TABLE,
   oneTimeSecretsTables,
@@ -82,6 +84,8 @@ import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
+import { versionPinsTables } from "./version-pins";
+import { versionViewsTables } from "./version-views";
 import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
 import { widgetLayoutTables } from "./widget-layout";
@@ -242,6 +246,14 @@ export function getCoreSchema(
     // unlike the migration ledger), so declaring it here is sufficient:
     // core-reconcile creates it on fresh and existing databases.
     ...Object.values(versionsTables(dialect)),
+    // `nextly_version_views` — each person's "last looked at" marker per
+    // document and part. Nothing marks before the table exists, so
+    // core-reconcile creating it is sufficient, as for `nextly_versions`.
+    ...Object.values(versionViewsTables(dialect)),
+    // The record of content events and the parts each one involved. Nothing
+    // records into them before they exist, so core-reconcile creating them is
+    // sufficient, as for `nextly_versions`.
+    ...Object.values(contentEventsTables(dialect)),
     // The release tables are first-class managed system tables, declared here
     // for the same reason `nextly_versions` is: nothing records into them
     // before they exist, so core-reconcile creating them on fresh and existing
@@ -249,6 +261,10 @@ export function getCoreSchema(
     // — a table absent from this snapshot is never created by db:sync, and the
     // SQLite bootstrap fallback would hide that on one dialect only.
     ...Object.values(releasesTables(dialect)),
+    // `nextly_version_pins` — the versions a feature holds against retention.
+    // Here for the same reason as the release tables: nothing pins before the
+    // table exists, so core-reconcile creating it is sufficient.
+    ...Object.values(versionPinsTables(dialect)),
     ...Object.values(jobsTables(dialect)),
     ...Object.values(webhookTables(dialect)),
     // `nextly_widget_layout` — one row per reader who has arranged the
@@ -257,6 +273,9 @@ export function getCoreSchema(
     // never created on a real installation however completely its own module
     // declares it.
     ...Object.values(widgetLayoutTables(dialect)),
+    // `nextly_notices` — each person's own notices. In the snapshot for the
+    // reason every table above is: it is the set `nextly migrate` creates.
+    ...Object.values(noticesTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -362,12 +381,17 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",
+  "nextly_version_views",
+  "nextly_content_events",
+  "nextly_content_event_parts",
   "nextly_releases",
   "nextly_release_members",
+  "nextly_version_pins",
   "nextly_jobs",
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",
+  "nextly_notices",
 ] as const;
 
 /**
@@ -448,6 +472,11 @@ export * from "./security-config"; // Zod — review in Task 19
 // state the server has never sent.
 export type {
   ReleaseState,
+  ReleaseKind,
   ReleaseMemberAction,
   ReleaseBlockerReason,
+  ReleaseCapabilities,
 } from "./releases/types";
+// The one value a client needs to say a release is full or over the limit,
+// from the declaration the server refuses with rather than a copy of it.
+export { RELEASE_MEMBER_LIMIT } from "./releases/types";

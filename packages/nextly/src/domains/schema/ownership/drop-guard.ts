@@ -366,6 +366,59 @@ const NOT_COLUMN_DROPS = new Set([
  * and `DETACH`, MySQL's `DROP`, `TRUNCATE`, `EXCHANGE`, `DISCARD` and
  * `IMPORT`. Those that reorganise rows without losing them are not here.
  */
+/**
+ * What an `ALTER` clause names when it alters something other than a column:
+ * a constraint, an index, a key, a check or a partition, the first word after
+ * `ALTER` in those spellings.
+ */
+const NOT_COLUMN_ALTERS = new Set([
+  "CONSTRAINT",
+  "INDEX",
+  "KEY",
+  "CHECK",
+  "PRIMARY",
+  "FOREIGN",
+  "PARTITION",
+]);
+
+/** The element an `ALTER <word>` clause changes in place, by its word. */
+/** The clause words an ALTER TABLE this reader models can start with. */
+const MODELLED_CLAUSE_WORDS = new Set([
+  "ADD",
+  "DROP",
+  "RENAME",
+  "ALTER",
+  "CHANGE",
+  "MODIFY",
+  "VALIDATE",
+  "ENGINE",
+  "ATTACH",
+  "DETACH",
+]);
+
+/** The act a refusal of an unmodelled form takes. */
+const UNMODELLED_ACT = "use a form the guard cannot read";
+
+const ALTERED_ELEMENT_KINDS = new Map<string, TakenElementKind>([
+  ["CONSTRAINT", "constraint"],
+  ["CHECK", "check"],
+  ["INDEX", "index"],
+]);
+
+/**
+ * The word after a column's name in an in-place change: `TYPE`, `SET`,
+ * `DROP`, `ADD` or `RESTART`, the forms `ALTER COLUMN` takes. A name followed
+ * by anything else is not changed in place.
+ */
+const IN_PLACE_CHANGE_WORDS = new Set([
+  "TYPE",
+  "SET",
+  "DROP",
+  "ADD",
+  "RESET",
+  "RESTART",
+]);
+
 const PARTITION_CHANGES = new Set([
   "ATTACH",
   "DETACH",
@@ -646,6 +699,19 @@ class DropReader {
    */
   readonly columns: TakenColumn[] = [];
   /**
+   * Columns this list changes in place without renaming or dropping them: a
+   * type, a nullability, a default, or a MySQL redefinition under the same
+   * name. Judged as a drop or rename is, except that the act is a change.
+   */
+  readonly alteredColumns: TakenColumn[] = [];
+  /** Indexes and constraints this list changes in place (`changeElement`). */
+  readonly alteredElements: TakenElement[] = [];
+  /**
+   * Tables a statement alters in a form this reader does not model. The guard
+   * fails closed on them: a foreign one is refused, naming it.
+   */
+  readonly unmodelled: string[] = [];
+  /**
    * Indexes and constraints this list drops or renames away, with the table
    * named by the name it had before the list renamed it.
    */
@@ -792,6 +858,41 @@ class DropReader {
     });
   }
 
+  /** Records a table an ALTER alters in a form this reader does not model. */
+  leaveUnmodelled(table: string): void {
+    this.unmodelled.push(table);
+  }
+
+  /** Records a column an ALTER changes in place (`alteredColumns`). */
+  changeColumn(table: TableRef, column: string): void {
+    if (table.local && this.created.has(table.name)) return;
+    this.alteredColumns.push({
+      table: this.renamedFrom.get(table.name) ?? table.name,
+      column,
+    });
+  }
+
+  /**
+   * Records an index or constraint this list changes in place: its deferral,
+   * its enforcement, its visibility or its tablespace. One on a table this
+   * list created is its own, and is not recorded.
+   */
+  changeElement(
+    table: TableRef | undefined,
+    name: string,
+    kind: TakenElementKind
+  ): void {
+    if (table?.local && this.created.has(table.name)) return;
+    this.alteredElements.push({
+      table:
+        table === undefined
+          ? undefined
+          : (this.renamedFrom.get(table.name) ?? table.name),
+      name,
+      kind,
+    });
+  }
+
   /**
    * Records an index or constraint dropped or renamed away. One on a table
    * this list created is its own, and is not recorded.
@@ -857,6 +958,7 @@ class DropReader {
  * which a later drop of that table takes with it.
  */
 type TableChange =
+  | "change the storage of"
   | "truncate"
   | "change the partitions of"
   | "attach as a partition"
@@ -1009,6 +1111,7 @@ class StatementWalk {
       this.readAlterTableRenames(at);
       this.readAlterTableColumns(at);
       this.readAlterIndexRename(at);
+      this.readAlterForeignTable(at);
       this.readRelationColumnRename(at);
     } else if (word === "CREATE") {
       this.readCreateTable(at);
@@ -1514,7 +1617,11 @@ class StatementWalk {
     const clausesAt = this.pastDescendants(table?.next ?? tableAt + 1);
     for (const clause of this.clauseStarts(clausesAt)) {
       this.readColumnClause(table, clause);
+      this.readColumnChangeClause(table, clause);
+      this.readTableStorageClause(table, clause);
+      this.readUnmodelledClause(table, clause);
       this.readElementClause(table, clause);
+      this.readElementChangeClause(table, clause);
       this.readPartitionClause(table, clause);
     }
   }
@@ -1661,10 +1768,58 @@ class StatementWalk {
    * taken from its table: after the rename no record names it. The tokens
    * are not consumed.
    */
+  /**
+   * PostgreSQL's `ALTER FOREIGN TABLE t ...`: its clauses are not read, so the
+   * table is recorded as unmodelled.
+   */
+  private readAlterForeignTable(at: number): void {
+    if (this.word(at + 1) !== "FOREIGN" || this.word(at + 2) !== "TABLE") {
+      return;
+    }
+    const relation = this.qualifiedName(this.skipIfExists(at + 3));
+    if (relation === undefined) return;
+    this.reader.leaveUnmodelled(relation.name);
+  }
+
+  /**
+   * A PostgreSQL `ALTER INDEX i <form>` other than `RENAME`: the index is
+   * changed in place, and an attached partition index is changed as well.
+   * The bulk `ALL IN TABLESPACE` form names no index, so it is refused.
+   */
+  private readPostgresIndexChange(
+    at: number,
+    index: { name: string; next: number }
+  ): void {
+    if (this.word(at + 2) === "ALL") {
+      this.refuse(
+        "an ALTER INDEX ALL IN TABLESPACE, whose indexes cannot be named"
+      );
+    }
+    this.reader.changeElement(undefined, index.name, "index");
+    if (
+      this.word(index.next) === "ATTACH" &&
+      this.word(index.next + 1) === "PARTITION"
+    ) {
+      const child = this.qualifiedName(index.next + 2);
+      if (child === undefined) {
+        this.refuse(
+          "an index attached as a partition whose name cannot be read"
+        );
+      }
+      this.reader.changeElement(undefined, child.name, "index");
+    }
+  }
+
   private readAlterIndexRename(at: number): void {
     if (this.word(at + 1) !== "INDEX") return;
     const index = this.qualifiedName(this.skipIfExists(at + 2));
     if (index === undefined) return;
+    // Every PostgreSQL ALTER INDEX form other than RENAME changes the index
+    // in place, so the index is judged as one.
+    if (this.reader.isPostgres && this.word(index.next) !== "RENAME") {
+      this.readPostgresIndexChange(at, index);
+      return;
+    }
     if (
       this.word(index.next) !== "RENAME" ||
       this.word(index.next + 1) !== "TO"
@@ -1689,6 +1844,74 @@ class StatementWalk {
       );
     }
     this.reader.takeElement(table, element.name, element.kind);
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at` in a form this reader does not
+   * model: any clause whose first word is not one it reads. The table is
+   * recorded, so a foreign one is refused.
+   */
+  private readUnmodelledClause(table: TableRef | undefined, at: number): void {
+    if (table === undefined || this.isModelledClauseAt(at)) return;
+    this.reader.leaveUnmodelled(table.name);
+  }
+
+  private isModelledClauseAt(at: number): boolean {
+    const word = this.word(at) ?? "";
+    if (word === "SET") {
+      return ["TABLESPACE", "ACCESS"].includes(this.word(at + 1) ?? "");
+    }
+    return MODELLED_CLAUSE_WORDS.has(word);
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at`, for a change to the table's
+   * storage: PostgreSQL's `SET ACCESS METHOD` and `SET TABLESPACE`, and
+   * MySQL's `ENGINE`. Such a change rewrites or moves the table's data.
+   */
+  private readTableStorageClause(
+    table: TableRef | undefined,
+    at: number
+  ): void {
+    if (table === undefined || !this.isTableStorageAt(at)) return;
+    this.reader.changeTable(table, "change the storage of");
+  }
+
+  private isTableStorageAt(at: number): boolean {
+    if (this.reader.isPostgres && this.word(at) === "SET") {
+      return (
+        this.word(at + 1) === "TABLESPACE" ||
+        (this.word(at + 1) === "ACCESS" && this.word(at + 2) === "METHOD")
+      );
+    }
+    return this.reader.isMysql && this.word(at) === "ENGINE";
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at`, for an index or constraint it
+   * changes in place: PostgreSQL's `ALTER CONSTRAINT c`, and MySQL's
+   * `ALTER INDEX|KEY i` (visibility) and `ALTER CHECK c` (enforcement).
+   */
+  private readElementChangeClause(
+    table: TableRef | undefined,
+    at: number
+  ): void {
+    const kind = this.changedElementKindAt(at);
+    if (kind === undefined) return;
+    const element = this.elementNamedAt(at + 2, kind);
+    if (element === null || table === undefined) {
+      this.refuse("an index or constraint change whose names cannot be read");
+    }
+    this.reader.changeElement(table, element.name, element.kind);
+  }
+
+  /** The element kind a clause changes in place, from its first word. */
+  private changedElementKindAt(at: number): TakenElementKind | undefined {
+    if (this.word(at) === "VALIDATE") {
+      return this.word(at + 1) === "CONSTRAINT" ? "constraint" : undefined;
+    }
+    if (this.word(at) !== "ALTER") return undefined;
+    return ALTERED_ELEMENT_KINDS.get(this.word(at + 1) ?? "");
   }
 
   /**
@@ -1768,6 +1991,71 @@ class StatementWalk {
       else if (char === "," && depth === 0) starts.push(k + 1);
     }
     return starts;
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at`, for a column it changes in place:
+   * its type, nullability or default, or a MySQL redefinition under the same
+   * name. A drop, a rename or a clause that names no column is read elsewhere.
+   */
+  private readColumnChangeClause(
+    table: TableRef | undefined,
+    at: number
+  ): void {
+    const column = this.changedInPlaceColumnAt(at);
+    if (column === undefined) return;
+    if (column === null || table === undefined) {
+      this.refuse("a column change whose names cannot be read");
+    }
+    this.reader.changeColumn(table, column);
+  }
+
+  /**
+   * The column a clause changes in place, `undefined` when the clause changes
+   * none, or `null` when it does and the name cannot be read.
+   *
+   * - `ALTER [COLUMN] c TYPE|SET|DROP|ADD ...` in PostgreSQL, and MySQL's
+   *   `ALTER [COLUMN] c SET|DROP DEFAULT`.
+   * - MySQL's `MODIFY [COLUMN] c ...`.
+   * - MySQL's `CHANGE [COLUMN] c c ...`, a redefinition under the same name.
+   */
+  private changedInPlaceColumnAt(at: number): string | null | undefined {
+    switch (this.word(at)) {
+      case "ALTER":
+        return this.alteredColumnAt(at + 1);
+      case "MODIFY":
+        if (!this.reader.isMysql) return undefined;
+        return this.word(at + 1) === "COLUMN"
+          ? (this.nameAt(at + 2) ?? null)
+          : (this.nameAt(at + 1) ?? null);
+      case "CHANGE":
+        return this.reader.isMysql ? this.redefinedColumnAt(at + 1) : undefined;
+      default:
+        return undefined;
+    }
+  }
+
+  /** The column an `ALTER` clause changes in place, from past `ALTER`. */
+  private alteredColumnAt(at: number): string | null | undefined {
+    const named = this.word(at) === "COLUMN" ? at + 1 : at;
+    if (named === at && NOT_COLUMN_ALTERS.has(this.word(at) ?? "")) {
+      return undefined;
+    }
+    const column = this.nameAt(named);
+    if (column === undefined) {
+      return named === at ? undefined : null;
+    }
+    return IN_PLACE_CHANGE_WORDS.has(this.word(named + 1) ?? "")
+      ? column
+      : undefined;
+  }
+
+  /** MySQL's `CHANGE [COLUMN] c c`: the same name, so no rename. */
+  private redefinedColumnAt(at: number): string | undefined {
+    const k = this.word(at) === "COLUMN" ? at + 1 : at;
+    const from = this.nameAt(k);
+    const to = this.nameAt(k + 1);
+    return from !== undefined && from === to ? from : undefined;
   }
 
   /** One ALTER TABLE clause starting at `at`, for a column it takes away. */
@@ -2521,7 +2809,10 @@ type Reading = Pick<
   | "dropped"
   | "renamed"
   | "columns"
+  | "alteredColumns"
   | "elements"
+  | "alteredElements"
+  | "unmodelled"
   | "rebuilt"
   | "relationRenames"
   | "changed"
@@ -3306,7 +3597,8 @@ export function indexesNamedWithoutTable(
   statements: readonly string[],
   dialect: SupportedDialect
 ): string[] {
-  return (readAsIfNoTableExisted(statements, dialect)?.elements ?? [])
+  const read = readAsIfNoTableExisted(statements, dialect);
+  return [...(read?.elements ?? []), ...(read?.alteredElements ?? [])]
     .filter(element => element.table === undefined)
     .map(element => element.name);
 }
@@ -3936,6 +4228,13 @@ export function assertNoForeignDrops(args: {
    * record claims.
    */
   liveIndexTables?: ReadonlyMap<string, string>;
+  /**
+   * Columns whose storage the app overrides (R-20): the app may change these
+   * in place. Only the app's stream is let through, and only for an in-place
+   * change, never a drop or a rename. The caller decides the value family the
+   * change must stay within; this guard does not read the column types.
+   */
+  columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
 }): void {
   const read = readOrRefuse(args);
   const holders = new OwnershipView(args);
@@ -3948,6 +4247,31 @@ export function assertNoForeignDrops(args: {
       table,
       column,
       act: "drop or rename",
+    });
+  }
+  for (const { table, column } of read.alteredColumns) {
+    if (overridden(args, table, column)) continue;
+    refuseUnlessHeld(holders.column(table, column), {
+      ...args,
+      table,
+      column,
+      act: "change in place",
+    });
+  }
+  for (const element of read.alteredElements) {
+    const table = element.table ?? args.liveIndexTables?.get(element.name);
+    refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
+      ...args,
+      table,
+      element: element.name,
+      act: "change in place",
+    });
+  }
+  for (const table of read.unmodelled) {
+    refuseUnlessHeld(holders.table(table), {
+      ...args,
+      table,
+      act: UNMODELLED_ACT,
     });
   }
   for (const element of [
@@ -4285,6 +4609,33 @@ function knownNames(
   );
 }
 
+/** Whether the app has recorded its override of this column's storage. */
+function overridden(
+  args: {
+    stream: MigrationStream;
+    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  },
+  table: string,
+  column: string
+): boolean {
+  if (args.stream !== APP_STREAM || args.columnOverrides === undefined) {
+    return false;
+  }
+  const key = columnKey(table, column);
+  return args.columnOverrides.some(
+    override => columnKey(override.table, override.column) === key
+  );
+}
+
+/** The log field that names who acted: a rename, a change or a drop. */
+function logKey(act: string): string {
+  if (act === "rename") return "renamedBy";
+  if (act === "change in place" || act === "change the storage of") {
+    return "changedBy";
+  }
+  return "droppedBy";
+}
+
 /** Throw the refusal for a table, column or element the stream does not hold. */
 function refuseUnlessHeld(
   claim: Claim,
@@ -4299,6 +4650,18 @@ function refuseUnlessHeld(
   }
 ): void {
   if (claim.kind === "own") return;
+  if (args.act === UNMODELLED_ACT) {
+    throw new NextlyError({
+      code: "DROP_OF_FOREIGN_TABLE",
+      publicMessage: `A migration alters ${args.table ?? "a table"} in a form the schema guard cannot read, and that table belongs to a different owner. It has been refused, and nothing was applied. Rewrite the statement as plain ALTER TABLE clauses, or use the app's override.`,
+      logContext: {
+        ...knownNames({ table: args.table }),
+        changedBy: args.stream,
+        belongsTo: claim.kind === "foreign" ? claim.owner.migratedBy : null,
+        source: args.source,
+      },
+    });
+  }
   const what = takenThing(args);
   // One code for every case: each takes something from whoever holds it, and
   // the operator's remedy is the same.
@@ -4314,7 +4677,7 @@ function refuseUnlessHeld(
         column: args.column,
         element: args.element,
       }),
-      [args.act === "rename" ? "renamedBy" : "droppedBy"]: args.stream,
+      [logKey(args.act)]: args.stream,
       ...(claim.kind === "foreign"
         ? { belongsTo: claim.owner.migratedBy, ownerId: claim.owner.ownerId }
         : { belongsTo: null }),

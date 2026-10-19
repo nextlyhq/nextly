@@ -1,0 +1,107 @@
+name: Skills installer
+
+# Installs the skills for people building with Nextly from this checkout with
+# the real `skills` installer, at a pinned release, and fails unless what it
+# installs is exactly `skills/` (scripts/check-skills-installer.mjs).
+#
+# `check-agent-contract` in ci.yml holds the rule this depends on, that every
+# SKILL.md outside `skills/` is marked internal, but it reads files and cannot
+# see what the installer does with the mark. This runs the installer.
+#
+# On pull_request it runs only when a path whose behaviour it exercises
+# changes: any skill the installer could find, and the folders that hold
+# them; the module that says which skills are the user skills; the guide
+# whose command it runs; and the check and this workflow. The weekly run catches what no file in this repository
+# changes: the npm registry serving the pinned release differently.
+on:
+  pull_request:
+    paths:
+      # Every SKILL.md anywhere, and the plugin manifests that can declare
+      # more, since the installer searches far more folders than these.
+      - "**/SKILL.md"
+      - "**/.claude-plugin/**"
+      - "skills/**"
+      - ".agents/skills/**"
+      - ".claude/skills/**"
+      - "scripts/agent-skills.mjs"
+      - "docs/guides/coding-agents.mdx"
+      - "scripts/check-skills-installer.mjs"
+      - ".github/workflows/skills-installer.yml"
+  schedule:
+    # Weekly, Monday morning UTC.
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push supersedes a pull request's run. A scheduled or manual run on
+# main is never cancelled by another, since a scheduled failure must reach the
+# report job, and so each trigger has its own group.
+concurrency:
+  group: skills-installer-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  installer:
+    name: Installer offers only the user skills
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # The check reads which skills are the user skills through
+      # scripts/agent-skills.mjs, which parses frontmatter with a dependency.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install the skills with the real installer
+        run: node scripts/check-skills-installer.mjs
+
+  report:
+    name: File an issue on failure
+    needs: installer
+    # Only the scheduled run has nobody watching its result; every other
+    # trigger shows its failure where it was started.
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The only job that writes anything, so it is the only one holding the
+    # permission to.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Create or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Its own label, one per concern as the other scheduled checks use, so
+          # an open issue for another check cannot swallow this one's reports.
+          existing=$(gh issue list --repo "${{ github.repository }}" \
+            --label ci-skills-installer-failure --state open --json number \
+            --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "${{ github.repository }}" \
+              --body "The skills installer check failed again: $RUN_URL"
+          else
+            # printf keeps the multi-line body inside this YAML block scalar.
+            body=$(printf 'The weekly skills installer check failed. Run: %s\n\nEither the pinned `skills` installer offered something other than exactly the skills in `skills/`, or it could not be run or read at all. The log says which, and names each skill that differs.\n\nA contributor skill offered to people building with Nextly needs `metadata: internal: true` in its frontmatter. If the files are right, the installer release behaves differently than the check expects: read its changes before moving the pin in `scripts/check-skills-installer.mjs`.' "$RUN_URL")
+            gh issue create --repo "${{ github.repository }}" \
+              --title "The skills installer offers something other than skills/" \
+              --label ci-skills-installer-failure \
+              --body "$body"
+          fi

@@ -19,10 +19,19 @@ import { fileURLToPath } from "node:url";
 
 import { load } from "js-yaml";
 
+import { repositoryFiles } from "./agent-instructions.mjs";
 import { isCliEntry } from "./cli-entry.mjs";
 
 export const SKILLS_HOME = ".agents/skills";
 export const CLAUDE_COPY = ".claude/skills";
+
+/**
+ * The skills for people building WITH Nextly, which they install with
+ * `npx skills add nextlyhq/nextly`. Those in `SKILLS_HOME` are for people
+ * building Nextly itself, and the two sets are kept apart by
+ * `userSkillSeparation`.
+ */
+export const USER_SKILLS_HOME = "skills";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -247,8 +256,8 @@ function removed(aside, remove) {
  *
  * @returns {{ skill: string, problem: string }[]}
  */
-export function skillFrontmatterProblems(base = root) {
-  const home = join(base, SKILLS_HOME);
+export function skillFrontmatterProblems(base = root, folder = SKILLS_HOME) {
+  const home = join(base, folder);
   if (!existsSync(home)) return [];
   const folders = readdirSync(home, { withFileTypes: true }).filter(entry => entry.isDirectory());
   return folders
@@ -271,7 +280,7 @@ function skillProblems(home, skill) {
  * is not evidence: `description: [` is not YAML, and a folded `>-` with no
  * text under it is an empty string.
  */
-function frontmatter(text) {
+export function frontmatter(text) {
   const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!block) return { problem: "has no frontmatter" };
   const { value, problem } = parsedYaml(block[1]);
@@ -321,6 +330,128 @@ function nameProblem(name, skill) {
 function descriptionProblem(description) {
   if (!description) return "has no description in its frontmatter";
   return description.length > MAX_DESCRIPTION ? `has a description of ${description.length} characters, over the ${MAX_DESCRIPTION} a skill may have` : null;
+}
+
+/**
+ * Whether installing the user skills could also install a contributor skill.
+ *
+ * `npx skills add nextlyhq/nextly` reads `skills/`, `.agents/skills/`,
+ * `.claude/skills/` and about fifty other agent folders, and searches the
+ * whole tree when those hold nothing. A list of those folders here would go
+ * stale with the installer, so the rule is structural instead: every SKILL.md
+ * the repository holds outside `USER_SKILLS_HOME` carries the installer's
+ * `metadata.internal: true`, which hides it unless INSTALL_INTERNAL_SKILLS is
+ * set. The installer compares that value with `true` itself, so the string
+ * "true" hides nothing and is reported here. A user skill must not carry the
+ * flag, nor a contributor skill's name or text.
+ *
+ * It fails closed. A frontmatter it cannot parse may still be offered, so it
+ * is reported rather than passed, and finding no contributor skills at all is
+ * reported too: an empty read would otherwise look exactly like a clean one.
+ * What it read is returned beside the problems, so a caller can see it.
+ *
+ * @returns {{ contributor: string[], user: string[], problems: { path: string, problem: string }[] }}
+ */
+export function userSkillSeparation(base = root, files = repositoryFiles(base)) {
+  const skills = files.filter(isSkillFile).sort().map(path => readSkill(base, path));
+  const contributor = skills.filter(found => contributorSkillName(found.path) !== null);
+  const problems = skills.flatMap(found => separationProblems(found, contributor));
+  if (contributor.length === 0) {
+    problems.unshift({ path: SKILLS_HOME, problem: "holds no skills, so nothing was checked for leaking into what people building with Nextly install" });
+  }
+  // The installer offers what is readable and not hidden. None at all would
+  // install nothing, which absence of findings would otherwise pass.
+  const offered = skills.filter(found => isUserSkill(found.path) && found.fields && !isInternal(found.fields));
+  if (offered.length === 0) {
+    problems.push({ path: USER_SKILLS_HOME, problem: "offers no skill, so `npx skills add nextlyhq/nextly` installs nothing for people building with Nextly" });
+  }
+  problems.push(...readmeDisagreements(base, files, offered.map(found => found.path.split("/").at(-2))));
+  return {
+    contributor: contributor.map(found => contributorSkillName(found.path)),
+    user: skills.filter(found => isUserSkill(found.path)).map(found => found.path.split("/").at(-2)),
+    problems,
+  };
+}
+
+/** The README that tells people which skills `skills/` holds. */
+const USER_SKILLS_README = `${USER_SKILLS_HOME}/README.md`;
+
+/**
+ * Where the README and the installer disagree. The README is what people
+ * read before installing, so its table and the skills offered must be one
+ * set: a skill gone from `skills/` but still listed, or one added and never
+ * listed, is reported, and so is a README that is not there at all.
+ */
+function readmeDisagreements(base, files, offered) {
+  if (!files.includes(USER_SKILLS_README)) {
+    return [{ path: USER_SKILLS_README, problem: "is missing, so nothing lists the skills people building with Nextly install" }];
+  }
+  const listed = skillTableNames(readFileSync(join(base, USER_SKILLS_README), "utf8"));
+  return [
+    ...offered.filter(name => !listed.has(name)).map(name => ({ path: `${USER_SKILLS_HOME}/${name}/SKILL.md`, problem: `is offered by the skills command but not listed in ${USER_SKILLS_README}` })),
+    ...[...listed].filter(name => !offered.includes(name)).map(name => ({ path: USER_SKILLS_README, problem: `lists ${name}, which skills/ does not offer` })),
+  ];
+}
+
+/**
+ * The skill names a Markdown table lists: rows whose first cell is a name in
+ * backticks. AGENTS.md's skill router and `skills/README.md` use this shape.
+ */
+export function skillTableNames(markdown) {
+  const names = new Set();
+  // The first character may be a digit, as the skill format's names allow.
+  for (const row of markdown.matchAll(/^\|\s*`([a-z0-9][a-z0-9-]*)`\s*\|/gm)) {
+    names.add(row[1]);
+  }
+  return names;
+}
+
+/** A SKILL.md, by its file name as the installer matches it: in any letter case. */
+function isSkillFile(path) {
+  return path.split("/").at(-1).toLowerCase() === "skill.md";
+}
+
+function isUserSkill(path) {
+  return path.startsWith(`${USER_SKILLS_HOME}/`);
+}
+
+/** The folder name of a skill in `SKILLS_HOME`, or null for any other file. */
+function contributorSkillName(path) {
+  const found = new RegExp(`^${SKILLS_HOME.replace(".", "\\.")}/([^/]+)/SKILL\\.md$`).exec(path);
+  return found ? found[1] : null;
+}
+
+/** One SKILL.md: its parsed frontmatter, or null when it cannot be parsed, and the text after it. */
+function readSkill(base, path) {
+  const text = readFileSync(join(base, path), "utf8");
+  const { fields } = frontmatter(text);
+  return { path, fields: fields ?? null, body: text.replace(/^---\r?\n[\s\S]*?\r?\n---/, "").trim() };
+}
+
+/** Whether the installer hides a skill: its `metadata.internal` is the boolean true. */
+function isInternal(fields) {
+  return isMapping(fields.metadata) && fields.metadata.internal === true;
+}
+
+/** What is wrong with one SKILL.md for the separation, if anything. */
+function separationProblems(found, contributor) {
+  if (!found.fields) return [{ path: found.path, problem: "has frontmatter that cannot be read, so whether the skills command offers it is unknown" }];
+  if (isUserSkill(found.path)) return userSkillProblems(found, contributor);
+  return isInternal(found.fields)
+    ? []
+    : [{ path: found.path, problem: "is offered by `npx skills add nextlyhq/nextly`: give it `metadata: internal: true`, or move it to skills/ if people building with Nextly need it" }];
+}
+
+/** A user skill hidden from the installer, or one that is a contributor skill under another folder. */
+function userSkillProblems(found, contributor) {
+  const name = found.path.split("/").at(-2);
+  const problems = [];
+  if (isInternal(found.fields)) problems.push("is marked internal, so the skills command never offers it to people building with Nextly");
+  const namesake = contributor.find(other => contributorSkillName(other.path) === name || contributorSkillName(other.path) === textOf(found.fields.name));
+  if (namesake) problems.push(`has the name of the contributor skill ${dirname(namesake.path)}`);
+  const twin = contributor.find(other => other.body !== "" && other.body === found.body);
+  if (twin) problems.push(`repeats the text of the contributor skill ${dirname(twin.path)}`);
+  return problems.map(problem => ({ path: found.path, problem }));
 }
 
 /**

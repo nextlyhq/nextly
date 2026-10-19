@@ -32,8 +32,10 @@ collection in the admin, and nothing about either changes because the other exis
 
 ## Moving between them
 
-A collection can be handed from code to the builder, so schema editing moves to the admin
-without recreating anything or losing content.
+A collection built in the admin can be moved into code with `nextly db:sync --promote <slug>`,
+without recreating the table or losing content; only its slug and fields are carried over
+([Collections](/docs/configuration/collections)). The other direction is not supported: a
+code-first collection that has been synced shows read-only in the Schema Builder.
 
 ## What differs from a code-first collection
 

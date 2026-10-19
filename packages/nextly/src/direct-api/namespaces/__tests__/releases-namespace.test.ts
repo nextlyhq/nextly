@@ -19,9 +19,25 @@ import { createReleasesNamespace } from "../releases";
 import type { NextlyContext } from "../context";
 
 const service = {
-  find: vi.fn(async () => []),
+  find: vi.fn(
+    async (): Promise<{
+      rows: { id: string }[];
+      total: number;
+      page: number;
+      limit: number;
+    }> => ({ rows: [], total: 0, page: 1, limit: 50 })
+  ),
+  count: vi.fn(async () => 0),
+  calendar: vi.fn(
+    async (query: { from: string; to: string; timezone: string }) => ({
+      ...query,
+      days: [],
+    })
+  ),
   create: vi.fn(async () => ({ id: "r1" })),
   addMember: vi.fn(async () => ({ id: "m1" })),
+  update: vi.fn(async () => ({ id: "r1" })),
+  delete: vi.fn(async () => undefined),
 };
 
 vi.mock("../../../di/container", () => ({
@@ -213,6 +229,119 @@ describe("releases namespace credential lifetime", () => {
         userId: "u2",
         authenticatedScope: requestScope,
       })
+    );
+  });
+});
+
+describe("the list's envelope", () => {
+  it("answers `{ items, meta }`, with the page arithmetic from the true total", async () => {
+    // The shape every other Direct API list returns. `meta` is derived from
+    // the service's total, so a page of 2 out of 7 says 4 pages and more to come.
+    service.find.mockResolvedValueOnce({
+      rows: [{ id: "a" }, { id: "b" }],
+      total: 7,
+      page: 2,
+      limit: 2,
+    });
+    const releases = createReleasesNamespace(instance({}));
+    await expect(releases.find({ page: 2, limit: 2 })).resolves.toEqual({
+      items: [{ id: "a" }, { id: "b" }],
+      meta: {
+        total: 7,
+        page: 2,
+        limit: 2,
+        totalPages: 4,
+        hasNext: true,
+        hasPrev: true,
+      },
+    });
+  });
+
+  it("counts with the caller keys stripped from the query", async () => {
+    // A caller key left in the query would reach the repository as a filter.
+    const releases = createReleasesNamespace(instance({}));
+    await releases.count({ tab: "attention", userId: "u2" });
+    expect(service.count).toHaveBeenCalledWith(
+      { tab: "attention" },
+      expect.objectContaining({ userId: "u2" })
+    );
+  });
+});
+
+describe("renaming and deleting through the namespace", () => {
+  it("hands the service the two fields of a rename, and the caller only as the actor", async () => {
+    // A spread of the argument bag would hand the service `userId` and the
+    // key scope as part of the change; the change is the two fields alone.
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await releases.update({
+      id: "r1",
+      title: "Renamed",
+      description: null,
+      userId: "u2",
+    });
+    expect(service.update).toHaveBeenCalledWith(
+      "r1",
+      { title: "Renamed", description: null },
+      expect.objectContaining({ userId: "u2", overrideAccess: false })
+    );
+  });
+
+  it("leaves out a field the call did not name, rather than clearing it", async () => {
+    // `description: undefined` in the change would be a different request
+    // from no description at all; a title-only rename keeps the description.
+    const releases = createReleasesNamespace(instance({}));
+    await releases.update({ id: "r1", title: "Renamed" });
+    expect(service.update).toHaveBeenCalledWith(
+      "r1",
+      { title: "Renamed" },
+      expect.objectContaining({ overrideAccess: true })
+    );
+  });
+
+  it("deletes as the instance's identity when the call names none", async () => {
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await releases.delete({ id: "r1" });
+    expect(service.delete).toHaveBeenCalledWith(
+      "r1",
+      expect.objectContaining({ userId: "u1", overrideAccess: false })
+    );
+  });
+});
+
+describe("the calendar", () => {
+  it("hands the service the window alone, and the caller as the actor", async () => {
+    // A caller key left in the query would reach the read as a field of the
+    // window; the actor is where it decides anything.
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await expect(
+      releases.calendar({
+        from: "2026-03-01",
+        to: "2026-04-11",
+        timezone: "Europe/Berlin",
+        kind: "single",
+        userId: "u2",
+      })
+    ).resolves.toEqual({
+      from: "2026-03-01",
+      to: "2026-04-11",
+      timezone: "Europe/Berlin",
+      kind: "single",
+      days: [],
+    });
+    expect(service.calendar).toHaveBeenCalledWith(
+      {
+        from: "2026-03-01",
+        to: "2026-04-11",
+        timezone: "Europe/Berlin",
+        kind: "single",
+      },
+      expect.objectContaining({ userId: "u2", overrideAccess: false })
     );
   });
 });

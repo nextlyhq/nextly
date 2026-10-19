@@ -12,17 +12,11 @@
  * @module components/features/widgets/archetypes/count-value
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { JSX } from "react";
 
-/**
- * The words a floor is said in, for both readers.
- *
- * One constant rather than one per renderer: the visible `+` and the spoken
- * phrase are two notations for the same claim, and a card whose two readers
- * disagree about whether a number is whole is the defect this module exists to
- * prevent, one level down.
- */
-const FLOOR_SUFFIX = " or more";
+import { CardFigure } from "../frame/figure";
+import { cardNumber } from "../frame/format";
 
 /**
  * What assistive technology should HEAR for a count.
@@ -35,8 +29,8 @@ const FLOOR_SUFFIX = " or more";
  * spoken form wherever a count is announced.
  */
 export function countLabel(total: number, atLeast?: boolean): string {
-  const formatted = total.toLocaleString();
-  return atLeast === true ? `${formatted}${FLOOR_SUFFIX}` : formatted;
+  // The card formatter's spoken form: the full grouped value, "N or more" for a floor.
+  return cardNumber(total, { floor: atLeast === true }).label;
 }
 
 /**
@@ -50,19 +44,15 @@ export function countLabel(total: number, atLeast?: boolean): string {
 export function CountValue({
   total,
   atLeast,
+  tier,
 }: {
   total: number;
   atLeast?: boolean;
+  /** The card's size tier: only `small` compacts ("1.2k"). */
+  tier?: SizeTier;
 }): JSX.Element {
-  return (
-    <>
-      {total.toLocaleString()}
-      {atLeast === true ? (
-        <>
-          <span aria-hidden="true">+</span>
-          <span className="sr-only">{FLOOR_SUFFIX}</span>
-        </>
-      ) : null}
-    </>
-  );
+  // The frame's one figure, so a count is written for the card's measured tier like every
+  // other number on it: a compact "1.2k" is still heard as "1,248", and a floor's "+" as "or
+  // more".
+  return <CardFigure value={total} floor={atLeast === true} tier={tier} />;
 }

@@ -1,9 +1,14 @@
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { parse } from "@babel/parser";
+import type { Node, ObjectProperty } from "@babel/types";
 import fs from "fs-extra";
 
+import { bundledSkillsVersionOrNull } from "../generators/agent-skills";
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { EXACT_VERSION } from "../lib/exact-version";
+import { packageVersion } from "../lib/package-version";
 import { getAvailableTemplateNames } from "../lib/templates";
 import type {
   DatabaseConfig,
@@ -128,6 +133,130 @@ export async function projectHasSearchIndexScript(
 }
 
 /**
+ * The plugins a Nextly config registers, by package name: each binding it
+ * imports from a `@nextlyhq/plugin-*` package (the SDK aside) that a
+ * `plugins: [...]` list in it names, however deep in an element. Read with
+ * the parser the Next config step uses, so nested brackets, either quote and
+ * default or aliased imports are read as the compiler reads them. First-party
+ * plugins register under their package name, which is what
+ * `nextly plugins install` takes. Throws for a config that does not parse,
+ * since every template's must.
+ *
+ * Exported for the test that holds every template's config to its build.
+ */
+export function configuredPlugins(
+  configText: string,
+  file = "nextly.config.ts"
+): string[] {
+  let program: Node;
+  try {
+    program = parse(configText, {
+      sourceType: "module",
+      plugins: ["typescript", "jsx"],
+    }).program;
+  } catch (error) {
+    throw new Error(
+      `${file} cannot be parsed (${(error as Error).message}), so the plugins its build must install cannot be read.`
+    );
+  }
+  const fromPackage = new Map<string, string>();
+  for (const statement of program.body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    const pkg = statement.source.value;
+    if (
+      !pkg.startsWith("@nextlyhq/plugin-") ||
+      pkg === "@nextlyhq/plugin-sdk"
+    ) {
+      continue;
+    }
+    for (const specifier of statement.specifiers) {
+      fromPackage.set(specifier.local.name, pkg);
+    }
+  }
+  const found: string[] = [];
+  for (const name of identifiersInPluginLists(program, file)) {
+    const pkg = fromPackage.get(name);
+    if (pkg !== undefined && !found.includes(pkg)) found.push(pkg);
+  }
+  return found;
+}
+
+/** Every identifier inside the value of each `plugins: [...]` property, in source order. */
+function identifiersInPluginLists(program: Node, file: string): string[] {
+  const names: string[] = [];
+  walkNodes(program, node => {
+    if (!isPluginList(node, file)) return;
+    walkNodes(node.value, inner => {
+      if (inner.type === "Identifier") names.push(inner.name);
+    });
+  });
+  return names;
+}
+
+/**
+ * A `plugins: [...]` property, by an identifier or a string key. A `plugins`
+ * property written any other way, such as a variable holding the list, a call
+ * or a spread inside it, is
+ * refused rather than read as no plugins: the build would then install none
+ * while the runtime registers them, and the production boot would refuse.
+ * Every template writes its list in place, which the test of their builds
+ * holds them to.
+ */
+function isPluginList(node: Node, file: string): node is ObjectProperty {
+  if (node.type !== "ObjectProperty") return false;
+  const key = node.key;
+  const named =
+    (key.type === "Identifier" && key.name === "plugins") ||
+    (key.type === "StringLiteral" && key.value === "plugins");
+  const inPlace =
+    node.value.type === "ArrayExpression" &&
+    node.value.elements.every(element => element?.type !== "SpreadElement");
+  if (named && !inPlace) {
+    throw new Error(
+      `${file} sets \`plugins\` to something other than a list written in place (a variable, a call or a spread), so the plugins its build must install cannot be read.`
+    );
+  }
+  return named;
+}
+
+/** Calls `visit` on `root` and every syntax node below it, parents first. */
+function walkNodes(root: unknown, visit: (node: Node) => void): void {
+  if (Array.isArray(root)) {
+    for (const child of root) walkNodes(child, visit);
+    return;
+  }
+  if (!isNode(root)) return;
+  visit(root);
+  for (const [key, child] of Object.entries(root)) {
+    if (key !== "loc") walkNodes(child, visit);
+  }
+}
+
+/** Whether a value is a syntax node: an object with a string `type`. */
+function isNode(value: unknown): value is Node {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === "string"
+  );
+}
+
+/**
+ * The plugins the scaffolded PROJECT's config registers, read from the
+ * finished project as {@link projectHasSearchIndexScript} is: a template
+ * offers more than one config (the blog's visual one registers none), so
+ * only the file the copy wrote can say. None when there is no config, or
+ * no project on disk to ask.
+ */
+async function projectPlugins(targetDir?: string): Promise<string[]> {
+  if (targetDir === undefined) return [];
+  const config = path.join(targetDir, "nextly.config.ts");
+  return (await fs.pathExists(config))
+    ? configuredPlugins(await fs.readFile(config, "utf-8"), config)
+    : [];
+}
+
+/**
  * Every file under `root` that could carry an import specifier.
  *
  * Async, and through the same `fs-extra` surface the rest of this module uses,
@@ -151,6 +280,17 @@ async function walkSourceFiles(root: string): Promise<string[]> {
 export function projectUsesFormBuilder(projectType: ProjectType): boolean {
   return PROJECT_TYPES_WITH_FORM_BUILDER.has(projectType);
 }
+
+/**
+ * What a scaffold with the form builder installs for it: the plugin, and its
+ * peer `@nextlyhq/plugin-sdk`. npm, pnpm and Bun add a missing peer on their
+ * own; Yarn does not, and under Plug'n'Play the plugin then cannot load the
+ * SDK, so the app's config fails to load. Both install paths read this list.
+ */
+export const FORM_BUILDER_PACKAGES = [
+  "@nextlyhq/plugin-form-builder",
+  "@nextlyhq/plugin-sdk",
+] as const;
 
 /** The npm dist-tag a scaffold installs `nextly` + `@nextlyhq/*` from. */
 export type NextlyDistTag = "latest" | "alpha";
@@ -498,6 +638,14 @@ function guidePlaceholders(
   return {
     "{{runCommand}}": scriptRunner(packageManager),
     "{{execCommand}}": binaryRunner(packageManager),
+    // The release whose tag publishes the skills this CLI bundles, for the
+    // guide's command that adds or restores them. Not the release the skills
+    // were checked against, whose tag may carry no user skills at all.
+    "{{skillsTag}}": packageVersion(),
+    // The release the skills at that tag declare, which the guide requires the
+    // project to run before it offers that command. "unknown" is never a
+    // version, so a copy without a readable bundle offers no restore.
+    "{{skillsVersion}}": bundledSkillsVersionOrNull() ?? "unknown",
   };
 }
 
@@ -858,18 +1006,20 @@ export function resolveTemplatePath(localTemplatePath?: string): string {
  */
 function buildPlaceholderMap(options: {
   database?: DatabaseConfig;
-  databaseUrl?: string;
   /** Plugin package name → fills `{{pluginName}}` (plugin template, D44). */
   pluginName?: string;
   /** Plugin's `nextly` compat range → fills `{{nextlyRange}}` (D44). */
   nextlyRange?: string;
 }): Record<string, string> {
-  const { database, databaseUrl, pluginName, nextlyRange } = options;
+  const { database, pluginName, nextlyRange } = options;
 
   const map: Record<string, string> = {};
   if (database) {
     map["{{databaseDialect}}"] = database.type;
-    map["{{databaseUrl}}"] = databaseUrl || database.envExample;
+    // The token fills only .env.example, which a project commits, so it is the
+    // database's generic example: a URL typed during setup carries a password
+    // and belongs in .env, which the env generator writes.
+    map["{{databaseUrl}}"] = database.envExample;
   }
   if (pluginName) map["{{pluginName}}"] = pluginName;
   if (nextlyRange) map["{{nextlyRange}}"] = nextlyRange;
@@ -993,6 +1143,16 @@ const PINNED_VERSIONS: Record<string, string> = {
   // dependencies never downloads it.
   esbuild: "^0.28.1",
 };
+
+/**
+ * Dev dependencies a project needs so the dev server and the CLI can read
+ * `nextly.config.ts`, as `name@range` specifiers. A fresh scaffold writes them
+ * into its package.json and the existing-app path installs them, both from
+ * here, so the two cannot disagree on a version.
+ */
+export const CONFIG_TOOLING_DEV_DEPENDENCIES = [
+  `esbuild@${PINNED_VERSIONS.esbuild}`,
+] as const;
 
 /**
  * Packages whose latest version is fetched from the npm registry at
@@ -1177,8 +1337,9 @@ export async function generatePackageJson(
     // resolve to an uninstalled package — `next dev` would then fail
     // with "Cannot find package '@nextlyhq/plugin-form-builder'".
     if (projectUsesFormBuilder(projectType)) {
-      dependencies["@nextlyhq/plugin-form-builder"] =
-        versions["@nextlyhq/plugin-form-builder"] || "latest";
+      for (const pkg of FORM_BUILDER_PACKAGES) {
+        dependencies[pkg] = versions[pkg] || "latest";
+      }
     }
   }
 
@@ -1213,6 +1374,11 @@ export async function generatePackageJson(
   const shipsSearchIndex = targetDir
     ? await projectHasSearchIndexScript(targetDir)
     : false;
+  // A production boot refuses a configured plugin that has not been
+  // installed on its database, so the build installs each one the project's
+  // config registers, against the database it migrates. The install is safe
+  // to repeat, so every build can run it.
+  const plugins = await projectPlugins(targetDir);
 
   // Pagefind builds the static index behind /search. DECLARED only where the
   // builder ships, because the index script invokes it through `node`, which
@@ -1237,8 +1403,9 @@ export async function generatePackageJson(
       // prompts, and child supervision. `nextly dev` is gone; the only
       // supported dev command is the standard `next dev`.
       dev: "next dev --turbopack",
-      // Build: migrate the database, compile Next.js, and generate the Pagefind
-      // search index for the templates that ship its builder.
+      // Build: migrate the database, install the plugins the config
+      // registers, compile Next.js, and generate the Pagefind search index for
+      // the templates that ship its builder.
       //
       // Whether that last step appears is decided HERE, from the files the
       // scaffold actually received, rather than by a shell conditional in the
@@ -1252,16 +1419,22 @@ export async function generatePackageJson(
       // And `|| true` turned a failed index build into a successful one. The
       // search page then ships pointing at an index that was never written,
       // which fails in the browser rather than in CI.
-      build: shipsSearchIndex
-        ? "nextly migrate && next build && node scripts/build-search-index.mjs"
-        : "nextly migrate && next build",
+      build: [
+        "nextly migrate",
+        ...plugins.map(plugin => `nextly plugins install ${plugin}`),
+        "next build",
+        ...(shipsSearchIndex ? ["node scripts/build-search-index.mjs"] : []),
+      ].join(" && "),
       // Offered only where the file exists. A script that always fails is worse
       // than an absent one: it reads as a supported command.
       ...(shipsSearchIndex
         ? { "search:index": "node scripts/build-search-index.mjs" }
         : {}),
       start: "next start",
-      lint: "next lint",
+      // ESLint itself, reading the template's flat `eslint.config.mjs`, as
+      // create-next-app writes it: Next.js 16 removed `next lint`, so that
+      // script failed in every new project.
+      lint: "eslint",
       nextly: "nextly",
       // First-time setup: sync schema + seed system permissions. Demo
       // content is seeded separately from the admin UI (visit /welcome
@@ -1288,9 +1461,6 @@ export async function generatePackageJson(
  * from the registry: `^1.2.3` or `^0.0.2-alpha.66`.
  */
 const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-
-/** One complete version, as a package.json `version` holds it: `0.0.2-alpha.66`. */
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
  * This CLI's version, and whether the scaffold pins to it. See
@@ -1523,6 +1693,15 @@ export const NATIVE_BUILD_DEPENDENCIES = [
 ] as const;
 
 /**
+ * The native packages Nextly itself brings: the SQLite driver, the config
+ * compiler and the image processor. `unrs-resolver` comes with a template's
+ * ESLint setup, so adding Nextly to an app the person set up leaves its
+ * approval to them.
+ */
+export const NEXTLY_NATIVE_BUILD_DEPENDENCIES =
+  NATIVE_BUILD_DEPENDENCIES.filter(dep => dep !== "unrs-resolver");
+
+/**
  * Generate the `pnpm-workspace.yaml` for a scaffolded project.
  *
  * pnpm 10+ blocks dependency build scripts by default and the allowlist's
@@ -1701,7 +1880,6 @@ export interface CopyTemplateOptions {
   projectType: ProjectType;
   targetDir: string;
   database: DatabaseConfig;
-  databaseUrl?: string;
   useYalc?: boolean;
   /** Schema approach for content templates (code-first, visual) */
   approach?: ProjectApproach;
@@ -1762,7 +1940,6 @@ export async function copyTemplate(
     projectType,
     targetDir,
     database,
-    databaseUrl,
     useYalc = false,
     approach,
     templateSource,
@@ -1832,9 +2009,26 @@ export async function copyTemplate(
     );
   }
 
+  // An example env file already in the target (scaffolding over a folder that
+  // has files) is the env generator's to merge, never the copy's to replace.
+  const targetExample = path.join(targetDir, ".env.example");
+  // lstat, not pathExists: pathExists follows a link, and calls a dangling
+  // one absent, which the copy would then replace. Only "absent" is absent:
+  // a file that could not be looked at may well be there, so any other
+  // failure stops the copy rather than let it replace the file.
+  const keepTargetExample = await fs.lstat(targetExample).then(
+    () => true,
+    (error: unknown) => {
+      if ((error as { code?: string }).code === "ENOENT") return false;
+      throw error;
+    }
+  );
   await fs.copy(baseDir, targetDir, {
     filter: _src => {
       const basename = path.basename(_src);
+      if (keepTargetExample && _src === path.join(baseDir, ".env.example")) {
+        return false;
+      }
       return !SKIP_FILES.has(basename);
     },
   });
@@ -1958,7 +2152,7 @@ export async function copyTemplate(
   // The placeholder map is built here rather than at step 9 because a merge into a file the
   // developer already had must render the incoming text itself; step 9 then skips what it
   // merged, so their prose is never rewritten.
-  const placeholders = buildPlaceholderMap({ database, databaseUrl });
+  const placeholders = buildPlaceholderMap({ database });
   if (approach) {
     placeholders["{{approach}}"] = approach;
   }
@@ -1967,6 +2161,8 @@ export async function copyTemplate(
     placeholders,
     packageManager
   );
+  // The person's own example file is theirs: a token in their text stays.
+  if (keepTargetExample) alreadyRendered.add(".env.example");
 
   // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
   // read it as a workspace declaration. Only for pnpm, because npm warns about the setting

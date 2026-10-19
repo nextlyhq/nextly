@@ -385,6 +385,19 @@ function BuiltInFieldDiff({ node }: { node: FieldDiff }) {
       );
     }
 
+    case "hidden": {
+      // The reader may not read this field, so the server sent nothing of its
+      // values, not even whether they changed. It is named so the reader knows
+      // it exists.
+      return (
+        <FieldRow label={node.label} status="unchanged">
+          <p className="text-xs text-muted-foreground">
+            Hidden: you don&apos;t have access to this field.
+          </p>
+        </FieldRow>
+      );
+    }
+
     default:
       return <UnrecognisedField node={node} />;
   }

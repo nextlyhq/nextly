@@ -22,6 +22,7 @@ import { MAX_WIDGET_SETTINGS, widgetSettingsProblem } from "../settings";
 
 import type { WidgetWidth } from "./define-widget";
 import { CORE_DISPLAYS, displayDataProblem, isCoreDisplay } from "./displays";
+import { quote } from "./quote";
 import {
   DEPENDENT_SETTING_TYPES,
   fitsNewSetting,
@@ -90,20 +91,6 @@ const nonBlank = z.string().trim().min(1);
 const isFunction = (value: unknown): boolean => typeof value === "function";
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-/**
- * A value as a fault quotes it. Total, because the value is whatever a plain
- * JavaScript declaration holds: `JSON.stringify` throws on a bigint or a
- * cycle, and the fault must still be reported, with every other.
- */
-function quote(value: unknown): string {
-  if (typeof value === "bigint") return `${value}n`;
-  try {
-    return JSON.stringify(value) ?? String(value);
-  } catch {
-    return `a ${typeof value} that cannot be written out`;
-  }
-}
-
 /** One line of text: no line break anywhere in it. */
 const oneLine = (text: string): boolean => !/[\r\n]/.test(text);
 

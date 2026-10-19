@@ -28,6 +28,8 @@ import { BUILT_IN_FORM_FIELD_TYPES } from "../types";
 import type { FormConfig, FormField, FormFieldType } from "../types";
 import { parseRedirectReference } from "../utils/redirect-reference";
 
+import { warnIfWebhooksConfigured } from "./removed-options";
+
 // ============================================================
 // Validation Error Types
 // ============================================================
@@ -721,6 +723,10 @@ function validateAccess(access: unknown, errors: FormValidationError[]): void {
  */
 export function validateFormConfig(config: FormConfig): FormValidationResult {
   const errors: FormValidationError[] = [];
+
+  // A removed option is not an error, since the rest of the config still
+  // works, but it is said here too, so a config checked this way is told.
+  warnIfWebhooksConfigured(config);
 
   // Validate slug
   validateSlug(config.slug, errors);

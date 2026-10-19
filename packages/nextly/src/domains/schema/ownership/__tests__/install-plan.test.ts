@@ -14,7 +14,7 @@ import {
   type InstallCandidate,
   type InstallDependencyInput,
 } from "../install-plan";
-import type { OwnerRecord } from "../owner-registry";
+import type { PluginLifecycleRecord } from "../plugin-lifecycle-state";
 
 function plugin(
   name: string,
@@ -29,17 +29,13 @@ function plugin(
   };
 }
 
-function ownerRow(ownerId: string, state: OwnerRecord["state"]): OwnerRecord {
-  return {
-    tableName: `${ownerId}__things`,
-    ownerKind: "plugin",
-    ownerId,
-    migratedBy: `plugin:${ownerId}`,
-    ownerVersion: "1.0.0",
-    schemaVersion: 1,
-    state,
-  };
-}
+/** The recorded lifecycle states, by plugin. */
+const recorded = (
+  states: Record<string, PluginLifecycleRecord>
+): ReadonlyMap<string, PluginLifecycleRecord> =>
+  new Map(Object.entries(states));
+
+const installed: PluginLifecycleRecord = { state: "installed" };
 
 const input = (
   over: Partial<InstallDependencyInput> = {}
@@ -50,7 +46,7 @@ const input = (
     plugin("auth", { declaredModules: ["001_init", "002_more"] }),
   ],
   appliedFilenames: new Set(["plugin:auth/001_init", "plugin:auth/002_more"]),
-  owners: [ownerRow("auth", "active")],
+  lifecycle: recorded({ auth: installed }),
   ...over,
 });
 
@@ -65,7 +61,7 @@ function refusal(run: () => unknown): NextlyError {
 }
 
 describe("missingDependencies", () => {
-  it("allows a dependency whose modules are all applied and rows active", () => {
+  it("allows a dependency whose modules are all applied and that is recorded installed", () => {
     expect(missingDependencies(input())).toEqual([]);
   });
 
@@ -81,43 +77,79 @@ describe("missingDependencies", () => {
     ]);
   });
 
-  it("refuses a dependency whose owner rows are uninstalled", () => {
-    // Every module still reads applied here — the case the ledger alone
-    // cannot see, so the owner state is what separates it from installed.
+  it("refuses a dependency recorded uninstalled", () => {
+    // Every module still reads applied here: the case the ledger alone
+    // cannot see, so the recorded state is what separates it from installed.
     expect(
-      missingDependencies(input({ owners: [ownerRow("auth", "uninstalled")] }))
+      missingDependencies(
+        input({ lifecycle: recorded({ auth: { state: "uninstalled" } }) })
+      )
     ).toEqual([{ name: "auth", reason: "uninstalled" }]);
   });
 
-  it("refuses a dependency uninstalled with --keep-data (orphaned rows)", () => {
+  it("refuses a dependency uninstalled with --keep-data", () => {
     // Its tables are still there, which is exactly why this is the case to
     // pin: every module reads applied, the tables exist, and its onUninstall
     // has nonetheless run.
     expect(
-      missingDependencies(input({ owners: [ownerRow("auth", "orphaned")] }))
+      missingDependencies(
+        input({ lifecycle: recorded({ auth: { state: "orphaned" } }) })
+      )
     ).toEqual([{ name: "auth", reason: "uninstalled" }]);
   });
 
-  it("ignores other plugins' uninstalled rows", () => {
+  it("refuses a dependency whose uninstall began and did not finish", () => {
     expect(
       missingDependencies(
         input({
-          owners: [
-            ownerRow("auth", "active"),
-            ownerRow("other", "uninstalled"),
-          ],
+          lifecycle: recorded({
+            auth: { state: "uninstalling", keepData: false },
+          }),
         })
       )
-    ).toEqual([]);
+    ).toEqual([{ name: "auth", reason: "uninstalling" }]);
   });
 
-  it("treats a dependency with no modules and no owner rows as installed", () => {
+  it("refuses a dependency whose modules a plain migrate applied, with no install recorded", () => {
+    // `nextly migrate` applies its modules and never runs its onInstall.
+    expect(missingDependencies(input({ lifecycle: recorded({}) }))).toEqual([
+      { name: "auth", reason: "never-installed" },
+    ]);
+  });
+
+  it("refuses a dependency with no modules and no table that was never installed", () => {
+    // Nothing in the ledger or the owner rows could show it missing; only
+    // the record can.
     expect(
       missingDependencies(
         input({
           configured: [plugin("sso", { requires: ["auth"] }), plugin("auth")],
           appliedFilenames: new Set(),
-          owners: [],
+          lifecycle: recorded({}),
+        })
+      )
+    ).toEqual([{ name: "auth", reason: "never-installed" }]);
+  });
+
+  it("allows a dependency with no modules once its install is recorded", () => {
+    expect(
+      missingDependencies(
+        input({
+          configured: [plugin("sso", { requires: ["auth"] }), plugin("auth")],
+          appliedFilenames: new Set(),
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("ignores other plugins' records", () => {
+    expect(
+      missingDependencies(
+        input({
+          lifecycle: recorded({
+            auth: installed,
+            other: { state: "uninstalled" },
+          }),
         })
       )
     ).toEqual([]);
@@ -136,7 +168,7 @@ describe("missingDependencies", () => {
           plugin("crypto", { declaredModules: ["001_keys"] }),
         ],
         appliedFilenames: new Set(),
-        owners: [],
+        lifecycle: recorded({}),
       })
     );
     expect(result.map(dep => dep.name)).toEqual(["crypto", "auth"]);
@@ -151,7 +183,7 @@ describe("missingDependencies", () => {
           plugin("crypto", { declaredModules: ["001_keys"] }),
         ],
         appliedFilenames: new Set(),
-        owners: [],
+        lifecycle: recorded({ auth: installed }),
       })
     );
     expect(result).toEqual([
@@ -165,7 +197,7 @@ describe("missingDependencies", () => {
         input({
           configured: [plugin("sso", { optionallyRequires: ["audit"] })],
           appliedFilenames: new Set(),
-          owners: [],
+          lifecycle: recorded({}),
         })
       )
     ).toEqual([]);
@@ -180,7 +212,7 @@ describe("missingDependencies", () => {
             plugin("audit", { declaredModules: ["001_log"] }),
           ],
           appliedFilenames: new Set(),
-          owners: [],
+          lifecycle: recorded({}),
         })
       )
     ).toEqual([
@@ -216,7 +248,7 @@ describe("missingDependencies", () => {
           plugin("auth", { requires: ["sso"], declaredModules: ["001_init"] }),
         ],
         appliedFilenames: new Set(),
-        owners: [],
+        lifecycle: recorded({}),
       })
     );
     expect(result.map(dep => dep.name)).toEqual(["auth"]);
@@ -241,7 +273,7 @@ describe("assertDependenciesInstalled", () => {
             plugin("crypto", { declaredModules: ["001_keys"] }),
           ],
           appliedFilenames: new Set(),
-          owners: [],
+          lifecycle: recorded({}),
         })
       )
     );

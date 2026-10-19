@@ -52,7 +52,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { VersionsRepository } from "../../versions/versions-repository";
+import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -290,8 +290,13 @@ export class SingleRegistryService extends BaseRegistryService<
   // Public API — Delegates to BaseRegistryService
   // ============================================================
 
-  async getSingleBySlug(slug: string): Promise<DynamicSingleRecord | null> {
-    return this.getRecordBySlug(slug);
+  async getSingleBySlug(
+    slug: string,
+    // Optional transaction-bound executor so the lookup runs on the caller's
+    // transaction connection instead of taking a second pooled one.
+    executor?: unknown
+  ): Promise<DynamicSingleRecord | null> {
+    return this.getRecordBySlug(slug, executor);
   }
 
   async getSingle(slug: string): Promise<DynamicSingleRecord> {
@@ -664,23 +669,20 @@ export class SingleRegistryService extends BaseRegistryService<
     }
 
     try {
-      // Recovery points go with the Single, in the SAME transaction as the
-      // registry row. Ordering alone cannot get this right: sweeping first and
-      // then failing to delete destroys unsaved work belonging to a Single
-      // that still exists, while sweeping afterwards can leave rows nothing
-      // else collects -- they are excluded from history listings, version
-      // reads and retention pruning alike. Atomicity avoids both, and it is
+      // Recovery points and version pins go with the Single, in the SAME
+      // transaction as the registry row. Ordering alone cannot get this right:
+      // sweeping first and then failing to delete destroys unsaved work
+      // belonging to a Single that still exists, while sweeping afterwards can
+      // leave rows nothing else collects. Atomicity avoids both, and it is
       // available here because this service talks to the adapter directly.
       //
-      // Durable history and working drafts are deliberately NOT touched. What
-      // a deletion owes a document's recorded past is a wider question, and
-      // answering it as a side effect here would decide it by accident.
+      // Swept HERE because this is the method every deletion path reaches,
+      // the schema route's DELETE as well as the metadata service.
+      //
+      // What is swept, and what is deliberately kept, is for
+      // `deleteEntityRegistryRow` to say.
       const count = await this.adapter.transaction(async tx => {
-        await new VersionsRepository(tx).deleteAutosavesForEntity(
-          "single",
-          slug
-        );
-        return tx.delete(this.registryTableName, this.whereEq("slug", slug));
+        return deleteEntityRegistryRow(tx, "single", slug);
       });
 
       if (count === 0) {

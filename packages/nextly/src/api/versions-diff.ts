@@ -20,10 +20,11 @@
 import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
-import { respondDoc } from "./response-shapes";
+import { privateToSession, respondDoc } from "./response-shapes";
 import {
-  assertDiffVersionPair,
-  diffDocumentVersions,
+  assertComparisonRequest,
+  compareDocumentVersions,
+  parseComparisonQuery,
   requireRouteVersionReadAccess,
 } from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
@@ -33,10 +34,12 @@ import { withErrorHandler } from "./with-error-handler";
 // deep-importing an internal module.
 export type {
   ComparableStatus,
+  DiffPathSegment,
   DiffStatus,
   FieldDiff,
   FieldDisplay,
   GroupFieldDiff,
+  HiddenFieldDiff,
   ListFieldDiff,
   ListItemDiff,
   RelationTarget,
@@ -84,24 +87,28 @@ function parseScopeKind(kind: string): VersionScopeKind {
 }
 
 /**
- * GET handler returning a typed diff of versions `from` and `to`.
+ * GET handler returning a typed diff of versions `from` and `to`, or of a
+ * target and a baseline the server resolves (`?to=6&baseline=previous`).
  *
- * The version pair is validated before the access gate so malformed input fails
+ * The request is validated before the access gate so malformed input fails
  * fast. The gate confirms the caller may read the live document, and each
  * snapshot is redacted for the caller inside the shared core before the diff is
  * computed, so a diff never reveals a field a normal read would hide.
  */
-export const GET = withErrorHandler(
-  async (request: Request, context: RouteContext) => {
+// Private to the session, refusals included: a comparison from where this
+// person last looked, and its NO_BASELINE, differ from one person to the next.
+export const GET = privateToSession(
+  withErrorHandler(async (request: Request, context: RouteContext) => {
     const { kind, slug, id } = await context.params;
     const scopeKind = parseScopeKind(kind);
 
-    const query = new URL(request.url).searchParams;
-    const from = Number(query.get("from"));
-    const to = Number(query.get("to"));
-    const modifiedOnly =
-      query.get("modifiedOnly") === "1" || query.get("modifiedOnly") === "true";
-    assertDiffVersionPair(from, to);
+    // The same parsing, validation and baseline resolution as every other
+    // surface that compares, so the two routes never answer one request
+    // differently. Validated before the gate: malformed input fails fast.
+    const query = parseComparisonQuery(
+      Object.fromEntries(new URL(request.url).searchParams)
+    );
+    assertComparisonRequest(query);
 
     const { user, authenticatedScope } = await requireRouteVersionReadAccess(
       request,
@@ -110,17 +117,15 @@ export const GET = withErrorHandler(
       id
     );
 
-    const diff = await diffDocumentVersions({
+    const diff = await compareDocumentVersions({
       scopeKind,
       slug,
       entryId: id,
       user,
-      from,
-      to,
-      modifiedOnly,
       authenticatedScope,
+      query,
     });
 
     return respondDoc(diff);
-  }
+  })
 );

@@ -25,12 +25,21 @@ export type AccessOverrides = Pick<
   "read" | "create" | "update" | "delete"
 >;
 
-/** Signed in. */
-const authenticated: AccessRule = ({ user }) => !!user;
-
-/** Signed in AND holding an administrative role. */
-const administrative: AccessRule = ({ roles }) =>
-  roles.includes("admin") || roles.includes("super-admin");
+/**
+ * The caller holds the permission for this operation on this collection, as
+ * the role screen grants it: `read-form-submissions` to read submissions,
+ * `update-forms` to edit a form.
+ *
+ * A collection's rule is the whole answer for a signed-in user, so "signed in"
+ * here would admit every staff member whatever their role holds, and a role
+ * name would refuse a custom role that holds the permission. The rule is given
+ * the caller's permissions as `resource:action`, for a session and an API key
+ * alike, and a visitor holds none. `collection` is the slug the host installed
+ * the collection under, so a renamed collection is judged by its own
+ * permissions. A super-admin is admitted before any rule runs.
+ */
+const permitted: AccessRule = ({ permissions, collection, operation }) =>
+  permissions.includes(`${collection}:${operation}`);
 
 /**
  * Host overrides applied over this plugin's defaults, per operation.
@@ -44,11 +53,9 @@ export function accessWithDefaults(
   defaults: { read?: AccessRule; create?: AccessRule } = {}
 ): AccessOverrides {
   return {
-    read: overrides?.read ?? defaults.read ?? authenticated,
-    create: overrides?.create ?? defaults.create ?? authenticated,
-    update: overrides?.update ?? authenticated,
-    // Deleting is administrative in both collections; the DB permission layer
-    // remains the backstop underneath it.
-    delete: overrides?.delete ?? administrative,
+    read: overrides?.read ?? defaults.read ?? permitted,
+    create: overrides?.create ?? defaults.create ?? permitted,
+    update: overrides?.update ?? permitted,
+    delete: overrides?.delete ?? permitted,
   };
 }

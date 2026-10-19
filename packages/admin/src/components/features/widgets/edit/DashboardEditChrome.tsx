@@ -20,13 +20,16 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  Button,
 } from "@nextlyhq/ui";
 import { useState } from "react";
 
 import * as Icons from "@admin/components/icons";
 
 import { DashboardEditBar } from "./DashboardEditBar";
+import type { DashboardFocus } from "./useDashboardFocus";
 import type { LayoutEditor } from "./useLayoutEditor";
+import type { SaveRequest } from "./useSaveRequest";
 
 export interface DashboardEditChromeProps {
   editor: LayoutEditor;
@@ -44,6 +47,16 @@ export interface DashboardEditChromeProps {
   isUnreadable: boolean;
   /** Stage the default dashboard in the draft, once the reader agreed. */
   onStageReset: () => void;
+  /**
+   * Opening and leaving customise mode, and going to the widgets on offer.
+   * The arrangement's own, rather than the editor's, because they also say
+   * what happened and move focus.
+   */
+  on: { begin: () => void; cancel: () => void; addWidget: () => void };
+  /** Saving, which over an unreadable stored layout asks first. */
+  saveRequest: SaveRequest;
+  /** Where the bar and the Customize button register for focus. */
+  focus: Pick<DashboardFocus, "barRef" | "customizeRef">;
 }
 
 /** One of the two questions this chrome asks before acting. */
@@ -108,6 +121,85 @@ function UnreadableNotice() {
   );
 }
 
+/**
+ * Why the last save did not land, and the one thing to do about it.
+ *
+ * Drawn inside the bar, beside the controls it is about. Not a live region:
+ * the grid keeps ONE, and it already says what happened, so an alert here
+ * would read the same failure a second time, assertively, over it.
+ */
+function SaveProblem({
+  editor,
+  writeError,
+  onRetry,
+}: {
+  editor: LayoutEditor;
+  writeError: Error | null;
+  onRetry: () => void;
+}) {
+  if (editor.isConflict) {
+    // Both guards refuse the same way and the remedy is the same, so this is
+    // one message rather than two. It does NOT clear the draft: the reader's
+    // work stays on screen while they decide.
+    return (
+      <div
+        className="flex flex-wrap items-start gap-3 rounded-md border border-border bg-muted/50 px-4 py-3 text-sm"
+        data-testid="dashboard-edit-conflict"
+      >
+        <Icons.AlertTriangle
+          aria-hidden
+          className="mt-0.5 size-4 shrink-0 text-warning"
+        />
+        <p className="min-w-0 flex-1">
+          Your dashboard changed somewhere else while you were customizing it.
+          Reload to pick up the current arrangement — your unsaved changes here
+          will be lost.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={editor.reload}
+          data-testid="dashboard-edit-reload"
+        >
+          Reload
+        </Button>
+      </div>
+    );
+  }
+
+  if (!writeError) return null;
+  // The remedy differs from a conflict's: this one is retried, not reloaded,
+  // so the arrangement stays exactly where it is. Full-strength
+  // `border-destructive`, which every other error surface uses; a faded
+  // border falls under the 3:1 a non-decorative border needs.
+  return (
+    <div
+      className="flex flex-wrap items-start gap-3 rounded-md border border-destructive bg-destructive/10 px-4 py-3 text-sm"
+      data-testid="dashboard-edit-error"
+    >
+      <Icons.XCircle
+        aria-hidden
+        className="mt-0.5 size-4 shrink-0 text-destructive"
+      />
+      <p className="min-w-0 flex-1">
+        Your dashboard could not be saved. Your changes are still here — try
+        again in a moment.
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onRetry}
+        disabled={editor.isWriting}
+        data-testid="dashboard-edit-retry"
+      >
+        Try again
+      </Button>
+    </div>
+  );
+}
+
 export function DashboardEditChrome({
   editor,
   writeError,
@@ -115,15 +207,12 @@ export function DashboardEditChrome({
   canReset,
   isUnreadable,
   onStageReset,
+  on,
+  saveRequest,
+  focus,
 }: DashboardEditChromeProps) {
   const [askingReset, setAskingReset] = useState(false);
-  const [askingReplace, setAskingReplace] = useState(false);
-
-  // 🔴 Over an unreadable stored layout, Save first asks. The server refuses a
-  // save over that row unless it says the reader confirmed, and this is the
-  // one place that may say so.
-  const requestSave = () =>
-    isUnreadable ? setAskingReplace(true) : editor.save();
+  const requestSave = () => void saveRequest.request();
 
   return (
     <>
@@ -135,11 +224,20 @@ export function DashboardEditChrome({
           isSaving={editor.isSaving}
           isWriting={editor.isWriting}
           canReset={canReset}
-          onBegin={editor.begin}
+          onBegin={on.begin}
           onSave={requestSave}
-          onCancel={editor.cancel}
+          onCancel={on.cancel}
           onReset={() => setAskingReset(true)}
-        />
+          onAddWidget={on.addWidget}
+          barRef={focus.barRef}
+          customizeRef={focus.customizeRef}
+        >
+          <SaveProblem
+            editor={editor}
+            writeError={writeError}
+            onRetry={requestSave}
+          />
+        </DashboardEditBar>
       ) : null}
 
       <ConfirmDialog
@@ -152,56 +250,21 @@ export function DashboardEditChrome({
         onConfirm={onStageReset}
         testId="dashboard-reset-ask"
       />
+      {/* 🔴 Over an unreadable stored layout, Save first asks. The server
+          refuses a save over that row unless it says the reader confirmed,
+          and this is the one place that may say so. */}
       <ConfirmDialog
-        open={askingReplace}
-        onOpenChange={setAskingReplace}
+        open={saveRequest.askingReplace}
+        onOpenChange={saveRequest.setAskingReplace}
         title="Replace your saved dashboard?"
         description="It couldn't be loaded, and saving replaces it with this layout."
         confirm="Replace and save"
         keep="Cancel"
-        onConfirm={() => editor.save({ replaceUnreadable: true })}
+        onConfirm={saveRequest.confirmReplace}
         testId="dashboard-replace-ask"
       />
 
       {isUnreadable ? <UnreadableNotice /> : null}
-
-      {editor.isConflict ? (
-        // Both guards refuse the same way and the remedy is the same, so this
-        // is one message rather than two. It does NOT clear the draft: the
-        // reader's work stays on screen while they decide.
-        <div
-          role="alert"
-          className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm"
-          data-testid="dashboard-edit-conflict"
-        >
-          Your dashboard changed somewhere else while you were customizing it.
-          Reload to pick up the current arrangement — your unsaved changes here
-          will be lost.{" "}
-          <button
-            type="button"
-            className="underline underline-offset-2"
-            onClick={editor.reload}
-            data-testid="dashboard-edit-reload"
-          >
-            Reload
-          </button>
-        </div>
-      ) : null}
-
-      {writeError && !editor.isConflict ? (
-        // The remedy differs from a conflict's: this one is retried, not
-        // reloaded, so the arrangement stays exactly where it is. Full-strength
-        // `border-destructive`, which every other error surface uses; a faded
-        // border falls under the 3:1 a non-decorative border needs.
-        <div
-          role="alert"
-          className="rounded-md border border-destructive bg-destructive/10 px-3 py-2 text-sm"
-          data-testid="dashboard-edit-error"
-        >
-          Your dashboard could not be saved. Your changes are still here — try
-          again in a moment.
-        </div>
-      ) : null}
     </>
   );
 }

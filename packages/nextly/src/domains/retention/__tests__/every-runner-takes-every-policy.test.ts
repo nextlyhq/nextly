@@ -166,7 +166,13 @@ describe("the derived policy list", () => {
     const keys = passes.map(pass => pass.key).sort();
     expect(keys).toEqual([
       "audit.retention.lastPassAt",
+      // A deleted subject's content events are kept for the activity log's
+      // window too, so the audit policy brings their pass as well.
+      "content-events.retention.lastPassAt",
       "email.retention.lastPassAt",
+      // Notices follow the activity log's window, so the audit policy brings
+      // their pass too.
+      "notices.retention.lastPassAt",
       "secrets.retention.lastPassAt",
       "webhooks.retention.lastPassAt",
     ]);

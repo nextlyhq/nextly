@@ -341,6 +341,10 @@ export const nextlyTables: TableDefinition[] = [
         name: "prt_used_at_idx",
         columns: ["used_at"],
       },
+      {
+        name: "prt_token_hash_idx",
+        columns: ["token_hash"],
+      },
     ],
   },
 
@@ -384,6 +388,10 @@ export const nextlyTables: TableDefinition[] = [
       {
         name: "evt_expires_idx",
         columns: ["expires"],
+      },
+      {
+        name: "evt_token_hash_idx",
+        columns: ["token_hash"],
       },
     ],
   },

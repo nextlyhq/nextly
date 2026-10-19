@@ -506,6 +506,47 @@ describe("refused-claim", () => {
     expect(refused(findings).map(f => f.line)).toEqual([2]);
   });
 
+  describe("an exemption for a phrase that wraps", () => {
+    // The phrase starts on the first line and ends on the second, so the passage it spans is
+    // both lines, and the exemption has to cover both.
+    const first = 'We never say "production';
+    const second = 'ready" before 1.0.';
+    const edited = 'ready" before 1.0, and we mean it today.';
+    const run = async (lines, digest) => {
+      const { root, files } = await fixture({ "docs/a.mdx": `${lines.join("\n")}\n` });
+      const { findings } = await runChecks({
+        repoRoot: root,
+        files,
+        remoteRefs: REFS,
+        hasLocalCommit: () => true,
+        allowlist: { "refused-claim": { "docs/a.mdx": { count: 1, digests: [digest] } } },
+      });
+      return refused(findings).map(f => f.line);
+    };
+
+    it("is honoured while every line of the passage is unchanged", async () => {
+      expect(await run([first, second], digestLine(`${first}\n${second}`))).toEqual([]);
+    });
+
+    it("stops being honoured when a continuation line is edited", async () => {
+      expect(await run([first, edited], digestLine(`${first}\n${second}`))).toEqual([1]);
+    });
+
+    it("ends at the line the phrase ends on, so later lines of the paragraph stay free to change", async () => {
+      // A third line continues the sentence after the phrase is complete. The exemption covers
+      // the phrase's own lines only, so rewording the third line keeps it.
+      const digest = digestLine(`${first}\n${second}`);
+      expect(await run([first, second, "and that is the whole point."], digest)).toEqual([]);
+      expect(await run([first, second, "which we have said for years."], digest)).toEqual([]);
+    });
+
+    it("is not held by its first line alone", async () => {
+      // A digest of the opening line would survive any edit beneath it, which is the hole:
+      // the phrase's own words on the next line could be rewritten under a standing exemption.
+      expect(await run([first, edited], digestLine(first))).toEqual([1]);
+    });
+  });
+
   it("says it examined nothing when the README or the docs are missing", async () => {
     // The population is asserted by identity: a tree with only one of the two, or neither, is
     // a run that could not check where the claims are made.
@@ -3013,5 +3054,44 @@ describe("documented-key-prefix repair", () => {
         },
       ])
     ).toThrow(/refusing to rewrite/);
+  });
+});
+
+describe("plugin-route-mount", () => {
+  // The mount is read from where the base template keeps its catch-all route. That an existing
+  // app gets the same route from create-nextly-app's generator is that package's own test, which
+  // runs the generator, so nothing here depends on how the generator's source spells the path.
+  const tree = (route = "templates/base/src/app/admin/api/[[...params]]/route.ts", docs = "/admin/api") => ({
+    [route]: 'import { createDynamicHandlers } from "nextly/runtime";\n',
+    "packages/nextly/src/plugins/routes/route-path.ts": 'export const PLUGIN_NAMESPACE_SEGMENT = "plugins";\n',
+    "docs/plugins/routes.mdx": `A plugin route answers at \`${docs}/plugins/@acme/thing/hello\`.\n`,
+  });
+
+  it("checks the docs against the template's mount", async () => {
+    const checks = await checksFor(tree());
+    expect(checks).not.toContain("plugin-route-mount-unreadable");
+    expect(checks).not.toContain("plugin-route-mount");
+  });
+
+  it("follows the template when its route moves", async () => {
+    const findings = await findingsFor(tree("templates/base/src/app/cms/api/[[...params]]/route.ts"));
+    expect(findings.find(f => f.check === "plugin-route-mount")?.message).toContain(
+      "the handler is mounted at /cms/api"
+    );
+  });
+
+  it("does not read the generator's source", async () => {
+    // A generator whose path no reader could follow must not make the mount unreadable.
+    const checks = await checksFor({
+      ...tree(),
+      "packages/create-nextly-app/src/generators/routes.ts": "await writeNew(cwd, buildRoutePath(projectInfo.appDir), T);\n",
+    });
+    expect(checks).not.toContain("plugin-route-mount-unreadable");
+  });
+
+  it("fails closed when the template holds no route to read the mount from", async () => {
+    const files = tree();
+    delete files["templates/base/src/app/admin/api/[[...params]]/route.ts"];
+    expect(await checksFor(files)).toContain("plugin-route-mount-unreadable");
   });
 });

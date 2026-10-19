@@ -25,6 +25,9 @@ export interface UserContext {
   /** User email */
   email?: string;
 
+  /** The user's display name, kept with the history events of their writes. */
+  name?: string;
+
   /** Singular authorized role. */
   role?: string;
 
@@ -179,6 +182,13 @@ export interface UpdateSingleOptions {
    * ordinary write that happens to reproduce an earlier state.
    */
   sourceVersionNo?: number;
+  /**
+   * Set when this write restores a recorded save of a working draft: its
+   * content was never live, so on a published Single it must be held as the
+   * working draft. Where the Single can no longer hold one, the write is
+   * refused rather than applied to the live row.
+   */
+  requireHeldDraft?: boolean;
   /**
    * Locale for localized fields.
    * Reserved for future i18n support.

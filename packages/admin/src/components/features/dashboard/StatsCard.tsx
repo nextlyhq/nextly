@@ -11,6 +11,7 @@
 import { Card, CardContent } from "@nextlyhq/ui";
 import React from "react";
 
+import { cardNumber } from "@admin/components/features/widgets/frame/format";
 import { TrendingUp, TrendingDown } from "@admin/components/icons";
 import { Sparkline } from "@admin/components/shared/charts/Sparkline";
 import { Link } from "@admin/components/ui/link";
@@ -54,7 +55,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
             <div className="flex items-start justify-between gap-4 relative z-10">
               <div className="space-y-1">
                 <p className="text-2xl font-bold tracking-[-0.03em] text-muted-foreground leading-none group-hover:text-foreground transition-colors">
-                  {typeof value === "number" ? value.toLocaleString() : value}
+                  {typeof value === "number" ? cardNumber(value).text : value}
                 </p>
                 <span className="block text-xs font-semibold tracking-tight text-muted-foreground truncate group-hover:text-foreground transition-colors pt-1">
                   {title}
@@ -73,7 +74,7 @@ export const StatsCard = React.forwardRef<HTMLDivElement, StatsCardProps>(
               <div className="flex items-start justify-between">
                 <div className="space-y-2">
                   <p className="text-fluid-4xl font-bold tracking-[-0.05em] text-muted-foreground leading-[0.9] transition-all duration-500 group-hover:text-foreground group-hover:translate-x-0.5">
-                    {typeof value === "number" ? value.toLocaleString() : value}
+                    {typeof value === "number" ? cardNumber(value).text : value}
                   </p>
                   <div className="flex items-center gap-2.5 pt-2">
                     <span className="text-xs font-bold uppercase tracking-[0.2em] text-muted-foreground group-hover:text-foreground transition-colors">

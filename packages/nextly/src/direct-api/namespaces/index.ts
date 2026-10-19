@@ -45,6 +45,7 @@ export {
   type RolesNamespace,
 } from "./rbac";
 export { createJobsNamespace, type JobsNamespace } from "./jobs";
+export { createNoticesNamespace, type NoticesNamespace } from "./notices";
 export {
   createReleasesNamespace,
   type ReleaseCallerArgs,

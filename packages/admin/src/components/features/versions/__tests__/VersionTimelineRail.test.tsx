@@ -255,3 +255,17 @@ describe("VersionTimelineRail — a failed Load more", () => {
     expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
   });
 });
+
+describe("VersionTimelineRail — a version with no recorded author", () => {
+  beforeEach(() => {
+    useLocalization.mockReset();
+    useLocalization.mockReturnValue({ enabled: false, getLocale: () => null });
+  });
+
+  it("says the author was not recorded", () => {
+    renderRail([version({ createdBy: null, author: null })]);
+
+    expect(screen.getByText(/Author not recorded/)).toBeInTheDocument();
+    expect(screen.queryByText(/Unknown author/)).not.toBeInTheDocument();
+  });
+});

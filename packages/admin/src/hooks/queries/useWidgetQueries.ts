@@ -25,6 +25,7 @@
  * @module hooks/queries/useWidgetQueries
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { useQueries } from "@tanstack/react-query";
 import {
   isTimeseriesInterval,
@@ -68,6 +69,24 @@ export interface WidgetQueryRequest {
    */
   cellKey?: string;
   query: WidgetQuery;
+  /**
+   * How many times this card's Retry has been pressed, for a retried card only.
+   *
+   * Part of the cache key and never sent: each press is a new question to the cache, so the card's
+   * query is asked again even when the previous retry's answer is still cached.
+   */
+  attempt?: number;
+  /**
+   * The query as the card's tier asks it, and that tier: what is SENT, while `query` is what
+   * the cache is keyed by.
+   *
+   * 🔴 Kept out of the key on purpose. A card's tier follows the dashboard's width, and every
+   * card of a dashboard travels in one partition, so a sized limit in the key would refetch the
+   * whole dashboard whenever any one card crossed a tier. Sent at fetch time instead, a resize
+   * refetches nothing, the next refresh asks every card at its current tier, and a card that
+   * now draws more than was fetched asks again alone (see `fetchedTierFor`).
+   */
+  sized?: { query: WidgetQuery; tier: SizeTier };
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -110,6 +129,14 @@ export interface UseWidgetQueriesResult {
    * partition that answered a second ago.
    */
   updatedAt: Date | null;
+  /**
+   * The tier a card's answer was fetched at, for a card whose request was sized; `undefined`
+   * before its first fetch in this mount, or for a request that carried no tier.
+   *
+   * Part of this hook's contract: the batch sizes each card's query at fetch time and records
+   * the tier it sent here, so a card that now draws more than was fetched can ask again alone.
+   */
+  fetchedTierFor: (placementId: string) => SizeTier | undefined;
 }
 
 /**
@@ -225,9 +252,14 @@ function asSlot(value: unknown): WidgetSlot {
   }
   if (!isObject(value)) return malformed();
 
-  const slot = value as { ok?: unknown; error?: unknown; result?: unknown };
+  const slot = value as {
+    ok?: unknown;
+    error?: unknown;
+    code?: unknown;
+    result?: unknown;
+  };
 
-  if (slot.ok === false) return refusal(slot.error);
+  if (slot.ok === false) return refusal(slot.error, slot.code);
   if (slot.ok !== true) return malformed();
 
   const result = asResult(slot.result);
@@ -274,30 +306,83 @@ function asResultFields(value: unknown): WidgetResultField[] | undefined {
 
   const described: WidgetResultField[] = [];
   for (const raw of value) {
-    if (!isObject(raw)) return undefined;
-    const field = raw as { name?: unknown; label?: unknown; type?: unknown };
-    if (typeof field.name !== "string" || field.name === "") return undefined;
-    if (field.label !== undefined && typeof field.label !== "string") {
-      return undefined;
-    }
-    /*
-     * An unrecognised kind is DROPPED, not refused. `label` above rejects the
-     * whole list on a wrong shape because a non-string label is a server that
-     * is broken; a type this admin does not know is a server that is NEWER, and
-     * blanking the card over it would make every future type a breaking change.
-     * Falling back to plain text is what the renderer did before types existed.
-     */
-    const type = KNOWN_FIELD_TYPES.has(field.type as string)
-      ? (field.type as WidgetResultField["type"])
-      : undefined;
-    described.push({
-      name: field.name,
-      ...(field.label !== undefined && { label: field.label }),
-      ...(type !== undefined && { type }),
-    });
+    const field = asResultField(raw);
+    if (field === undefined) return undefined;
+    described.push(field);
   }
 
   return described.length > 0 ? described : undefined;
+}
+
+/**
+ * One field description, or `undefined` when it is not one.
+ *
+ * Shared by a list's columns and a grouped result's `field`, so both are read by one set of
+ * rules.
+ */
+function asResultField(raw: unknown): WidgetResultField | undefined {
+  if (!isObject(raw)) return undefined;
+  const field = raw as {
+    name?: unknown;
+    label?: unknown;
+    type?: unknown;
+    choices?: unknown;
+  };
+  if (typeof field.name !== "string" || field.name === "") return undefined;
+  if (field.label !== undefined && typeof field.label !== "string") {
+    return undefined;
+  }
+  /*
+   * An unrecognised kind is DROPPED, not refused. `label` above rejects the
+   * whole list on a wrong shape because a non-string label is a server that
+   * is broken; a type this admin does not know is a server that is NEWER, and
+   * blanking the card over it would make every future type a breaking change.
+   * Falling back to plain text is what the renderer did before types existed.
+   */
+  const type = KNOWN_FIELD_TYPES.has(field.type as string)
+    ? (field.type as WidgetResultField["type"])
+    : undefined;
+  const choices = asChoices(field.choices);
+  return {
+    name: field.name,
+    ...(field.label !== undefined && { label: field.label }),
+    ...(type !== undefined && { type }),
+    ...(choices !== undefined && { choices }),
+  };
+}
+
+/**
+ * A column's value labels, or `undefined`.
+ *
+ * DROPPED rather than refused when malformed, for the reason an unknown kind is: the labels are
+ * presentation, and without them a cell shows the stored value, as it did before labels were
+ * carried. A malformed entry costs the whole list, because a partial list would label some values
+ * and print others raw in one column.
+ */
+function asChoices(
+  value: unknown
+): { value: string; label: string }[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const choices: { value: string; label: string }[] = [];
+  for (const raw of value) {
+    if (!isObject(raw)) return undefined;
+    const { value: stored, label } = raw as {
+      value?: unknown;
+      label?: unknown;
+    };
+    // A blank label is malformed too: the cell or bar would show nothing where the value belongs,
+    // which is why a source registering one is refused. A resolver's answer reaches here without
+    // passing that check, so it is repeated at this boundary.
+    if (
+      typeof stored !== "string" ||
+      typeof label !== "string" ||
+      label.trim() === ""
+    ) {
+      return undefined;
+    }
+    choices.push({ value: stored, label });
+  }
+  return choices;
 }
 
 /**
@@ -388,14 +473,19 @@ function asBuckets(
  */
 function asGrouped(
   buckets: unknown,
-  truncated: unknown
+  truncated: unknown,
+  field: unknown
 ): WidgetResult | undefined {
   const read = asBuckets(buckets);
   if (!read) return undefined;
+  // The grouped field's label and value labels, for the chart's heading and bars. A malformed
+  // one is dropped, like a column's: the buckets are the answer, the names are presentation.
+  const described = field === undefined ? undefined : asResultField(field);
   return {
     op: "groupBy",
     buckets: read,
     ...(truncated === true ? { truncated: true } : {}),
+    ...(described !== undefined && { field: described }),
   };
 }
 
@@ -479,6 +569,7 @@ function asResult(value: unknown): WidgetResult | undefined {
     fields?: unknown;
     buckets?: unknown;
     truncated?: unknown;
+    field?: unknown;
     points?: unknown;
     interval?: unknown;
   };
@@ -497,7 +588,7 @@ function asResult(value: unknown): WidgetResult | undefined {
   }
 
   if (result.op === "groupBy") {
-    return asGrouped(result.buckets, result.truncated);
+    return asGrouped(result.buckets, result.truncated, result.field);
   }
 
   if (result.op === "timeseries") {
@@ -531,9 +622,17 @@ function malformed(): WidgetSlot {
  * failure -- refusing to show it would be a second, silent one -- so it falls
  * back rather than being discarded.
  */
-function refusal(error: unknown): WidgetSlot {
+function refusal(error: unknown, code?: unknown): WidgetSlot {
   const usable = typeof error === "string" && error.trim() !== "";
-  return { ok: false, error: usable ? error : MALFORMED_SLOT_ERROR };
+  return {
+    ok: false,
+    error: usable ? error : MALFORMED_SLOT_ERROR,
+    // The one code the server sends for a source that is not available, kept so the card can
+    // say "Not available to you" rather than offering Retry for something that will not change.
+    // Only on a well-formed refusal: a slot missing its message is a broken answer that may
+    // recover, and the code would hide that behind a state that removes Retry.
+    ...(usable && code === "unavailable" && { code: "unavailable" as const }),
+  };
 }
 
 function readResults(body: unknown): unknown[] {
@@ -583,16 +682,19 @@ export function useWidgetQueries(
 
   const results = useQueries({
     queries: partitions.map(partition => ({
-      // The partition's own requests are its key. Two dashboards asking for
-      // different widgets are different questions and must not share one cache
-      // entry; TanStack hashes the array deterministically, so a re-render with
-      // an equal-but-new array does not refetch.
-      queryKey: ["dashboard", "widget-queries", partition],
+      // The partition's own requests are its key, WITHOUT their sizing. Two dashboards asking
+      // for different widgets are different questions and must not share one cache entry;
+      // TanStack hashes the array deterministically, so a re-render with an equal-but-new
+      // array does not refetch. `sized` is left out so a change of tier is not a new question;
+      // see `WidgetQueryRequest.sized`.
+      queryKey: ["dashboard", "widget-queries", partition.map(unsized)],
+      // Built from this render's partition, and TanStack runs the latest observer's function,
+      // so a refetch sends each card's CURRENT tier.
       queryFn: async () => {
         const body = await protectedApi.post<unknown>("/dashboard/query", {
-          queries: partition.map(entry => entry.query),
+          queries: partition.map(entry => entry.sized?.query ?? entry.query),
         });
-        return readResults(body);
+        return { slots: readResults(body), tiers: tiersSent(partition) };
       },
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
@@ -608,6 +710,10 @@ export function useWidgetQueries(
   // Both dictionaries are keyed by caller-supplied ids; see `emptyRecord`.
   const slots: Record<string, WidgetSlot> = emptyRecord();
   const cellSlots: CellSlots = emptyRecord();
+  // The tier each placement's answer was fetched at, read from the cached answer itself: the
+  // request that wrote it may belong to a render that has since left, and the answer a returning
+  // card receives is that request's, at that request's tier.
+  const fetchedTiers: Record<string, SizeTier> = emptyRecord();
   partitions.forEach((partition, index) => {
     const answer = results[index];
     if (!answer) return;
@@ -619,8 +725,14 @@ export function useWidgetQueries(
         // disagreeing about the shape. Saying so per widget is what stops the
         // trailing cards spinning silently forever -- and what keeps one bad
         // entry from throwing out of the renderer and taking the page with it.
-        fileAnswer(slots, cellSlots, entry, asSlot(answer.data[position]));
+        fileAnswer(
+          slots,
+          cellSlots,
+          entry,
+          asSlot(answer.data.slots[position])
+        );
       });
+      Object.assign(fetchedTiers, answer.data.tiers);
       return;
     }
 
@@ -659,6 +771,14 @@ export function useWidgetQueries(
 
   const settledAt = results.map(answer => answer.dataUpdatedAt);
 
+  // Stable while the tiers are, so a caller keyed on it does not run again on every render.
+  const tiersKey = JSON.stringify(fetchedTiers);
+  const fetchedTierFor = useMemo(() => {
+    const tiers = JSON.parse(tiersKey) as Record<string, SizeTier>;
+    return (placementId: string): SizeTier | undefined =>
+      Object.hasOwn(tiers, placementId) ? tiers[placementId] : undefined;
+  }, [tiersKey]);
+
   return {
     slots,
     cellSlots,
@@ -691,5 +811,36 @@ export function useWidgetQueries(
       settledAt.length > 0 && settledAt.every(at => at > 0)
         ? new Date(Math.min(...settledAt))
         : null,
+    fetchedTierFor,
+  };
+}
+
+/**
+ * The tier each sized request in `partition` was sent at, by placement: cached with the answer,
+ * so whoever reads the answer reads the tier it was asked for.
+ */
+function tiersSent(
+  partition: readonly WidgetQueryRequest[]
+): Record<string, SizeTier> {
+  const tiers: Record<string, SizeTier> = emptyRecord();
+  for (const entry of partition) {
+    if (entry.sized) tiers[entry.placementId] = entry.sized.tier;
+  }
+  return tiers;
+}
+
+/**
+ * A request as the cache keys it: everything but the sizing it is sent with. Named field by
+ * field, so a field added to the request is a decision about the key rather than an accident;
+ * TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as before.
+ */
+function unsized(
+  request: WidgetQueryRequest
+): Omit<WidgetQueryRequest, "sized"> {
+  return {
+    placementId: request.placementId,
+    cellKey: request.cellKey,
+    query: request.query,
+    attempt: request.attempt,
   };
 }

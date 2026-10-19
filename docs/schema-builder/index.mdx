@@ -51,7 +51,7 @@ Conditional visibility supports type-aware operators (`equals`, `notEquals`, `co
 
 ### Settings dialog
 
-The toolbar's Settings button opens a Basics / Advanced modal that edits entity-level metadata: name, slug, description, sidebar icon, admin group (Collections) or category (Components), sort order, and an `i18n` flag. Per-collection lifecycle hooks are configured in code via the `hooks` array on `defineCollection()`; the Visual Schema Builder does not currently expose a hooks editor in the UI.
+The toolbar's Settings button opens a Basics / Advanced modal that edits entity-level metadata: name, slug, description, sidebar icon, admin group (Collections) or category (Components), sort order, and an `i18n` flag. Hooks written as functions belong to collections defined in code, in the `hooks` object on `defineCollection()`, with an array of functions per phase, such as `hooks: { beforeChange: [...] }`: a function cannot be stored with a collection made here. A collection made here can carry Nextly's pre-built hooks (auto-slug, audit fields and unique validation) as stored settings, and they run on every write, but the Visual Schema Builder has no editor for them today.
 
 ## Field types
 
@@ -60,8 +60,6 @@ The palette ships every field type Nextly supports through code-first definition
 For the full per-type option reference, see [Fields](/docs/configuration/fields).
 
 ### Relationships and foreign keys
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 A one-to-one or many-to-one Relationship field stores the target's id in a
 column of its own, and that column carries a foreign key to the target
@@ -147,12 +145,12 @@ See [Branding > Schema Builder visibility](/docs/admin/branding#schema-builder-v
 
 Both approaches produce the same registered entities. Pick by workflow:
 
-| Aspect             | Visual Schema Builder                                         | Code-first                          |
-| ------------------ | ------------------------------------------------------------- | ----------------------------------- |
-| Speed to prototype | Drag-and-drop                                                 | Write config, run `nextly db:sync`  |
-| Source of truth    | DB row (Singles / Components) or generated file (Collections) | Hand-written TypeScript file        |
-| Lifecycle hooks    | Configure in code via `hooks` array                           | Configure in code via `hooks` array |
-| Team workflow      | Editors and non-developers can iterate                        | Developers own the schema           |
+| Aspect             | Visual Schema Builder                                         | Code-first                               |
+| ------------------ | ------------------------------------------------------------- | ---------------------------------------- |
+| Speed to prototype | Drag-and-drop                                                 | Write config, run `nextly db:sync`       |
+| Source of truth    | DB row (Singles / Components) or generated file (Collections) | Hand-written TypeScript file             |
+| Lifecycle hooks    | Pre-built hooks only, stored with the collection; no editor   | Any hook function, in the `hooks` object |
+| Team workflow      | Editors and non-developers can iterate                        | Developers own the schema                |
 
 You can mix both — define core collections in code and let editors prototype new ones in the Schema Builder, or vice versa.
 

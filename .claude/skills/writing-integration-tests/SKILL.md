@@ -1,6 +1,8 @@
 ---
 name: writing-integration-tests
 description: Use when writing or debugging Nextly integration tests (*.integration.test.ts), when integration tests fail with self-import or connection errors, or when adding database-backed test coverage for a new feature.
+metadata:
+  internal: true
 ---
 
 # Writing integration tests in the Nextly monorepo

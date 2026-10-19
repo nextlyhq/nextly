@@ -73,12 +73,19 @@ export const statsBody: CellsBody = (definition, slotFor: CellSlotLookup) => {
     settled.length === cells.length &&
     settled.every(slot => !slot?.ok)
   ) {
+    // Every cell refused as unavailable is the frame's "not available" state, not an error: Retry
+    // would ask the same question of a source this reader may not see. One cell that failed
+    // otherwise keeps the card an error, since that one may recover.
+    const allUnavailable = settled.every(
+      slot => slot?.ok === false && slot.code === "unavailable"
+    );
     return {
       ok: false,
       message:
         settled[0]?.ok === false
           ? settled[0].error
           : `"${definition.title}" could not read any of its numbers.`,
+      ...(allUnavailable && { unavailable: true as const }),
     };
   }
 

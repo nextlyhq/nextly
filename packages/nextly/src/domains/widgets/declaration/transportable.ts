@@ -135,7 +135,16 @@ function notPlainProblem(value: object, at: string): string | undefined {
  */
 function childrenOf(value: object): [string, unknown][] {
   if (Array.isArray(value)) {
-    return value.map((item: unknown, index) => [`[${index}]`, item]);
+    // By `length` and index, as `JSON.stringify` reads an array: neither a
+    // sparse array's holes nor an iterator the array overrides change what
+    // it is judged on. A hole reads as `undefined`, which JSON writes as
+    // `null`, so it is refused like any other `undefined` in an array.
+    const items: readonly unknown[] = value;
+    const children: [string, unknown][] = [];
+    for (let index = 0; index < items.length; index += 1) {
+      children.push([`[${index}]`, items[index]]);
+    }
+    return children;
   }
   return Object.entries(value)
     .filter(([, item]) => item !== undefined)

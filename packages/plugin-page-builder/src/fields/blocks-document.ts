@@ -52,3 +52,12 @@ function pickKind(kinds?: readonly DocumentKind[]): DocumentKind {
   if (!kinds || kinds.length === 0) return DEFAULT_KIND;
   return kinds.includes(DEFAULT_KIND) ? DEFAULT_KIND : kinds[0];
 }
+
+/** Whether a value carries a forest the composition can walk. */
+export function isForest(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as { nodes?: unknown }).nodes)
+  );
+}

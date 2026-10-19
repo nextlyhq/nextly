@@ -3,7 +3,7 @@ title: MySQL
 description: Set up Nextly with MySQL. Covers installation, connection strings, charset and collation, pool tuning, SSL, deadlock retry, migrations, and gaps versus PostgreSQL.
 ---
 
-import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
 
 MySQL is supported. Use it when you already run MySQL or a MySQL-compatible cloud database. The adapter uses [`mysql2`](https://github.com/sidorares/node-mysql2) and emulates features MySQL lacks (`RETURNING`, `ILIKE`) on top of the shared `DrizzleAdapter` core.
 
@@ -116,11 +116,11 @@ The Docker setup at the repo root already runs MySQL with `--character-set-serve
 
 The adapter uses `mysql2`'s built-in pool. Defaults:
 
-| Option | Default | Description |
-|---|---|---|
-| `pool.max` | `10` | Maps to `mysql2`'s `connectionLimit`. Maximum simultaneous connections. |
-| `pool.idleTimeoutMs` | `30000` | Idle connection timeout (`mysql2` `idleTimeout`). |
-| `pool.connectionTimeoutMs` | `10000` | Time to establish a new connection (`mysql2` `connectTimeout`). |
+| Option                     | Default | Description                                                             |
+| -------------------------- | ------- | ----------------------------------------------------------------------- |
+| `pool.max`                 | `10`    | Maps to `mysql2`'s `connectionLimit`. Maximum simultaneous connections. |
+| `pool.idleTimeoutMs`       | `30000` | Idle connection timeout (`mysql2` `idleTimeout`).                       |
+| `pool.connectionTimeoutMs` | `10000` | Time to establish a new connection (`mysql2` `connectTimeout`).         |
 
 ```typescript
 const adapter = createMySqlAdapter({
@@ -150,13 +150,13 @@ const adapter = createMySqlAdapter({
 
 ## MySQL-specific options
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `charset` | `string` | (driver default) | Connection charset. Set to `utf8mb4` for full Unicode. |
-| `timezone` | `string` | `'local'` | Timezone for date handling, e.g. `'+00:00'`. |
-| `multipleStatements` | `boolean` | `false` | Allow multiple statements per query. Off for SQL-injection safety; the adapter forces `false`. |
-| `dateStrings` | `boolean` | `false` | Return dates as strings instead of `Date` objects. The adapter forces `false`. |
-| `queryTimeoutMs` | `number` (ms) | `15000` | Default for the adapter's internal timeout helpers. |
+| Option               | Type          | Default          | Description                                                                                    |
+| -------------------- | ------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
+| `charset`            | `string`      | (driver default) | Connection charset. Set to `utf8mb4` for full Unicode.                                         |
+| `timezone`           | `string`      | `'local'`        | Timezone for date handling, e.g. `'+00:00'`.                                                   |
+| `multipleStatements` | `boolean`     | `false`          | Allow multiple statements per query. Off for SQL-injection safety; the adapter forces `false`. |
+| `dateStrings`        | `boolean`     | `false`          | Return dates as strings instead of `Date` objects. The adapter forces `false`.                 |
+| `queryTimeoutMs`     | `number` (ms) | `15000`          | Default for the adapter's internal timeout helpers.                                            |
 
 ```typescript
 const adapter = createMySqlAdapter({
@@ -175,7 +175,7 @@ The adapter handles each of these automatically, but they are worth knowing:
 - **No native `ILIKE`.** Case-insensitive search is rewritten to `LOWER(column) LIKE LOWER(value)`.
 - **No JSONB.** MySQL has a native `JSON` type but no JSONB-style binary-indexed variant.
 - **No array types.** Store arrays as JSON.
-- **`ON DUPLICATE KEY UPDATE`** instead of `ON CONFLICT DO UPDATE`. The adapter normalizes upserts across both syntaxes.
+- **Upsert needs a table with one unique key.** MySQL has no `ON CONFLICT (columns)`: `ON DUPLICATE KEY UPDATE` fires on a collision with any unique key, so it can't be held to the columns you name. The adapter's `upsert` therefore accepts a table only when its conflict columns are its one unique key besides the primary key. On any other table, it refuses before writing and names the other unique keys. There, insert and update inside a `transaction()` instead. On a table it accepts, `upsert` means what it does on PostgreSQL and SQLite: the row is inserted, or the existing row with that key is updated (or kept, when no column is left to update), and the stored row is returned. The conflict columns must be given values, and a conflict is resolved on the values you give: a `BEFORE INSERT` trigger that rewrites the key onto another row's value is refused as a unique violation rather than resolved onto that row.
 - **Backtick identifiers.** MySQL uses `` `name` `` instead of `"name"`.
 - **`?` placeholders.** MySQL uses positional `?` instead of `$1`, `$2`.
 
@@ -187,14 +187,14 @@ Transaction failures with MySQL error code 1213 (`ER_LOCK_DEADLOCK`) automatical
 
 ```typescript
 await adapter.transaction(
-  async (tx) => {
+  async tx => {
     await tx.insert("orders", orderData);
     await tx.update("inventory", stockUpdate, where);
   },
   {
     retryCount: 3,
     retryDelayMs: 100, // exponential backoff: 100ms, 200ms, 300ms
-  },
+  }
 );
 ```
 

@@ -3,7 +3,7 @@
  * loadable by both harnesses. Each case builds a small repository in a
  * temporary directory, so the property is judged on files, not on mocks.
  */
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +12,16 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CLAUDE_COPY, SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, syncCommand, syncSkillCopy } from "./agent-skills.mjs";
+import {
+  CLAUDE_COPY,
+  SKILLS_HOME,
+  USER_SKILLS_HOME,
+  skillCopyDrift,
+  skillFrontmatterProblems,
+  syncCommand,
+  syncSkillCopy,
+  userSkillSeparation,
+} from "./agent-skills.mjs";
 
 const POSIX = process.platform !== "win32";
 const SCRIPT = fileURLToPath(new URL("./agent-skills.mjs", import.meta.url));
@@ -314,6 +323,156 @@ describe("what makes a skill loadable by both harnesses", () => {
       { skill: "mismatched", problem: 'is named "something-else", not after its folder' },
       { skill: "nameless", problem: "has no name in its frontmatter" },
       { skill: "undescribed", problem: "has no description in its frontmatter" },
+    ]);
+  });
+});
+
+/*
+ * The skills people building with Nextly install live in `skills/`, and
+ * `npx skills add nextlyhq/nextly` reads the whole repository: `skills/`,
+ * `.agents/skills/`, `.claude/skills/` and dozens of other agent folders. What
+ * keeps the contributor skills out of a user's project is the installer's
+ * `metadata.internal: true`, so every case here is judged on a git repository
+ * holding real files, read the way the check reads the real one.
+ */
+describe("keeping contributor skills out of what people building with Nextly install", () => {
+  const USER_SKILL = "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n";
+  const internal = name => `---\nname: ${name}\ndescription: when ${name} applies\nmetadata:\n  internal: true\n---\n\nThe contributor procedure for ${name}.\n`;
+
+  /** A git repository whose skills/README.md lists `listed`, as the real one lists its skills. */
+  function repository(listed = ["nextly-install"]) {
+    execFileSync("git", ["init", "-q"], { cwd: base });
+    mkdirSync(join(base, USER_SKILLS_HOME), { recursive: true });
+    const rows = listed.map(name => `| \`${name}\` | what it covers |`).join("\n");
+    writeFileSync(join(base, USER_SKILLS_HOME, "README.md"), `# Skills\n\n| Skill | What it covers |\n| --- | --- |\n${rows}\n`);
+  }
+
+  it("passes contributor skills marked internal beside user skills that are not, and says what it read", () => {
+    repository();
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(CLAUDE_COPY, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    expect(userSkillSeparation(base)).toEqual({
+      contributor: ["a"],
+      user: ["nextly-install"],
+      problems: [],
+    });
+  });
+
+  it("names a contributor skill the skills command would offer, in the skills and in the Claude Code copy", () => {
+    repository();
+    skill(SKILLS_HOME, "a");
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    skill(CLAUDE_COPY, "a");
+    skill(SKILLS_HOME, "b", internal("b"));
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${SKILLS_HOME}/a/SKILL.md`, problem: "is offered by `npx skills add nextlyhq/nextly`: give it `metadata: internal: true`, or move it to skills/ if people building with Nextly need it" },
+      { path: `${CLAUDE_COPY}/a/SKILL.md`, problem: "is offered by `npx skills add nextlyhq/nextly`: give it `metadata: internal: true`, or move it to skills/ if people building with Nextly need it" },
+    ]);
+  });
+
+  /*
+   * The installer searches about fifty folders and falls back to the whole
+   * tree, so a list of the folders it reads would go stale. Every SKILL.md
+   * outside skills/ is held to the flag instead, wherever it is.
+   */
+  it("names a skill anywhere else in the repository, and one marked internal only as text", () => {
+    repository();
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    skill("packages/thing/.cursor/skills", "stray");
+    skill(".windsurf/skills", "quoted", "---\nname: quoted\ndescription: some\nmetadata:\n  internal: \"true\"\n---\n");
+    expect(userSkillSeparation(base).problems.map(found => found.path)).toEqual([
+      ".windsurf/skills/quoted/SKILL.md",
+      "packages/thing/.cursor/skills/stray/SKILL.md",
+    ]);
+  });
+
+  it("names a user skill hidden from the installer, one sharing a contributor skill's name, and one repeating its text", () => {
+    repository(["a", "copied"]);
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(SKILLS_HOME, "b", "---\nname: b\ndescription: when b applies\nmetadata:\n  internal: true\n---\n\nRun the fallow gate.\n");
+    skill(USER_SKILLS_HOME, "hidden", internal("hidden"));
+    skill(USER_SKILLS_HOME, "a");
+    skill(USER_SKILLS_HOME, "copied", "---\nname: copied\ndescription: renamed on the way in\n---\n\nRun the fallow gate.\n");
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${USER_SKILLS_HOME}/a/SKILL.md`, problem: `has the name of the contributor skill ${SKILLS_HOME}/a` },
+      { path: `${USER_SKILLS_HOME}/copied/SKILL.md`, problem: `repeats the text of the contributor skill ${SKILLS_HOME}/b` },
+      { path: `${USER_SKILLS_HOME}/hidden/SKILL.md`, problem: "is marked internal, so the skills command never offers it to people building with Nextly" },
+    ]);
+  });
+
+  // What it cannot read, it cannot clear: a frontmatter that does not parse
+  // may still be offered, so it is a finding rather than a pass.
+  it("names a skill whose frontmatter cannot be read, rather than passing it", () => {
+    repository();
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    skill(SKILLS_HOME, "broken", "---\nname: broken\ndescription: [\n---\n");
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${SKILLS_HOME}/broken/SKILL.md`, problem: "has frontmatter that cannot be read, so whether the skills command offers it is unknown" },
+    ]);
+  });
+
+  // An empty read and a clean one print the same nothing; the contributor
+  // skills are what the check guards, so reading none of them is a finding.
+  it("refuses a repository where it found no contributor skills to check", () => {
+    repository();
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: SKILLS_HOME, problem: "holds no skills, so nothing was checked for leaking into what people building with Nextly install" },
+    ]);
+  });
+
+  // The other half of the population: a repository whose skills/ lost every
+  // skill would offer nothing to install and still read clean.
+  it("refuses a repository whose skills/ offers no skill to people building with Nextly", () => {
+    repository([]);
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "hidden", internal("hidden"));
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${USER_SKILLS_HOME}/hidden/SKILL.md`, problem: "is marked internal, so the skills command never offers it to people building with Nextly" },
+      { path: USER_SKILLS_HOME, problem: "offers no skill, so `npx skills add nextlyhq/nextly` installs nothing for people building with Nextly" },
+    ]);
+  });
+
+  // The README is what people read before installing, so the skills it lists
+  // and the skills the installer offers are one set: a skill gone from
+  // skills/ still advertised, or one added without a word, is a finding.
+  it("names a skill the README lists that skills/ does not offer, and one it offers that the README does not list", () => {
+    repository(["nextly-install", "nextly-deploy"]);
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    skill(USER_SKILLS_HOME, "nextly-extra", "---\nname: nextly-extra\ndescription: something more\n---\n\nMore.\n");
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${USER_SKILLS_HOME}/nextly-extra/SKILL.md`, problem: `is offered by the skills command but not listed in ${USER_SKILLS_HOME}/README.md` },
+      { path: `${USER_SKILLS_HOME}/README.md`, problem: "lists nextly-deploy, which skills/ does not offer" },
+    ]);
+  });
+
+  // The skill format allows a name to start with a digit, so the README's
+  // table must be read the same way, or a correctly listed skill is reported.
+  it("reads a listed skill whose name starts with a digit", () => {
+    repository(["3d-tools"]);
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "3d-tools", "---\nname: 3d-tools\ndescription: when working with 3D assets\n---\n\nModels.\n");
+    expect(userSkillSeparation(base).problems).toEqual([]);
+  });
+
+  it("refuses a skills/ without the README that lists its skills", () => {
+    repository();
+    rmSync(join(base, USER_SKILLS_HOME, "README.md"));
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${USER_SKILLS_HOME}/README.md`, problem: "is missing, so nothing lists the skills people building with Nextly install" },
+    ]);
+  });
+
+  it("holds the user skills to the same loadable frontmatter as the contributor skills", () => {
+    skill(USER_SKILLS_HOME, "nextly-install", "---\nname: nextly-setup\ndescription: some\n---\n");
+    expect(skillFrontmatterProblems(base, USER_SKILLS_HOME)).toEqual([
+      { skill: "nextly-install", problem: 'is named "nextly-setup", not after its folder' },
     ]);
   });
 });

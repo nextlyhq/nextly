@@ -8,11 +8,16 @@ import {
 } from "../../../lib/plugins/component-registry";
 import { PluginComponentBoundary } from "../plugin-component-boundary";
 
-interface PluginSlotProps {
+/**
+ * Generic over the props so a caller holding a typed object — a view's
+ * declared props interface — passes it as it is, rather than widening it to a
+ * record through a double cast that would also accept anything else.
+ */
+interface PluginSlotProps<P extends object> {
   /** Component path to resolve via the registry. */
   path: ComponentPath | undefined;
   /** Props forwarded to the resolved component. */
-  props?: Record<string, unknown>;
+  props?: P;
   /** Rendered when `path` is empty or unresolved (plugin not installed/registered). */
   fallback?: ReactNode;
 }
@@ -25,18 +30,22 @@ interface PluginSlotProps {
  * - Resolved → rendered, isolated so a throw shows the boundary's identifiable
  *   fallback rather than white-screening the page.
  */
-export function PluginSlot({
+export function PluginSlot<P extends object = Record<string, unknown>>({
   path,
   props,
   fallback,
-}: PluginSlotProps): ReactNode {
-  const Component = getComponent(path);
+}: PluginSlotProps<P>): ReactNode {
+  // Resolved as taking `Partial<P>`: `props` is optional here, so the
+  // component is told the truth that it may be rendered with none of them.
+  // The registry is keyed by string and cannot check the component against
+  // `P` at all; that trust lives in `getComponent`, not in a cast here.
+  const Component = getComponent<Partial<P>>(path);
   if (!Component) {
     return fallback ?? null;
   }
   return (
     <PluginComponentBoundary componentPath={path as string}>
-      <Component {...(props ?? {})} />
+      <Component {...props} />
     </PluginComponentBoundary>
   );
 }

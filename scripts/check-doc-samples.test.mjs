@@ -26,6 +26,7 @@ import {
   namesToRebuild,
   readerOwnedMention,
   usedOnlyAsValue,
+  withDerivedCoverage,
   workspaceValueExports,
   parseSample,
   rebaseContextDiagnostics,
@@ -577,6 +578,51 @@ describe("declaredNamesIn and imports that are not declarations", () => {
       "NS",
     ]);
     expect(declaredNamesIn('import { a as b } from "p";')).toEqual(["b"]);
+  });
+});
+
+describe("withDerivedCoverage", () => {
+  // Two branches that each add a sample to a different page merge cleanly in
+  // the per-page map. A stored total keeps one branch's number, and the gate
+  // then reports a gain on every pull request after the merge.
+  const merged = {
+    coverage: { pages: 2, samples: 5, compiled: 4 },
+    samplesPerPage: {
+      "docs/a.mdx": { samples: 3, compiled: 2 },
+      "docs/b.mdx": { samples: 3, compiled: 3 },
+    },
+    pages: {},
+    findings: {},
+  };
+
+  it("sums the totals from the pages, whatever total is stored", () => {
+    expect(withDerivedCoverage(merged).coverage).toEqual({
+      pages: 2,
+      samples: 6,
+      compiled: 5,
+    });
+  });
+
+  it("reports no gain for a merge that only combined two pages' entries", () => {
+    const { gained, lost } = compareToBaseline({
+      baseline: withDerivedCoverage(merged),
+      coverage: {
+        files: Object.keys(merged.samplesPerPage),
+        samples: 6,
+        compiled: 5,
+        perPage: merged.samplesPerPage,
+      },
+      counted: {},
+      fingerprint: {},
+    });
+
+    expect(gained).toEqual([]);
+    expect(lost).toEqual([]);
+  });
+
+  it("leaves a baseline with no per-page map as it is", () => {
+    const old = { coverage: { pages: 1, samples: 1, compiled: 1 } };
+    expect(withDerivedCoverage(old)).toBe(old);
   });
 });
 

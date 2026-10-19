@@ -22,6 +22,7 @@
 import { tablesLeftInPlace } from "../../domains/schema/ownership/drop-guard";
 import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
 import { createOwnerRegistry } from "../../domains/schema/ownership/owner-registry";
+import type { PluginLifecycleRecord } from "../../domains/schema/ownership/plugin-lifecycle-state";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import {
   planUninstall,
@@ -149,6 +150,17 @@ export interface PluginLifecycleDeps {
   readAppliedModules: () => Promise<ReadonlySet<string>>;
   /** Which of the named tables exist in the database now. */
   liveTables: (tables: readonly string[]) => Promise<ReadonlySet<string>>;
+  /**
+   * Every plugin's recorded lifecycle state (`readPluginLifecycle`): what
+   * install reads its dependencies' installs from, and an uninstall run
+   * again reads how it was begun from.
+   */
+  readLifecycle: () => Promise<ReadonlyMap<string, PluginLifecycleRecord>>;
+  /** Records a plugin's new lifecycle state (`recordPluginLifecycle`). */
+  recordLifecycle: (
+    plugin: LifecyclePlugin,
+    record: PluginLifecycleRecord
+  ) => Promise<void>;
 }
 
 function find(plugins: LifecyclePlugin[], name: string): LifecyclePlugin {
@@ -217,6 +229,10 @@ export async function runPluginInstallCommand(
     }
 
     await deps.runLifecycleHook(plugin, "onInstall", { keepData: false });
+    // Last, once `onInstall` has returned: the record is what the boot and a
+    // dependent's install read as "installed", and an install that failed
+    // before here has not set up what they rely on.
+    await deps.recordLifecycle(plugin, { state: "installed" });
     return rows;
   });
 
@@ -244,15 +260,62 @@ export async function runPluginInstallCommand(
  * the command that installs it — the mirror of uninstall refusing while an
  * enabled dependent remains.
  */
+/**
+ * Install every configured plugin: what a deployment runs once its database
+ * is migrated, and what a fresh database needs before a production boot,
+ * which refuses a configured plugin no install has recorded.
+ *
+ * In `deps.plugins` order, which the config loader has already put in
+ * dependency order, so each install finds the plugins it depends on
+ * installed; that order is the loader's to decide, not this command's.
+ * Stops at the first install that fails, since a later one may depend on it.
+ *
+ * A disabled plugin is skipped and named: its install is refused anyway,
+ * because its hooks do not run, and refusing the whole run over it would
+ * leave every enabled plugin after it uninstalled.
+ */
+export async function runPluginInstallAllCommand(
+  deps: PluginLifecycleDeps
+): Promise<void> {
+  if (deps.plugins.length === 0) {
+    deps.logger.info("No plugins are configured.");
+    return;
+  }
+  for (const plugin of deps.plugins) {
+    if (!plugin.enabled) {
+      deps.logger.warn(
+        `Skipping ${plugin.name}: it is disabled in config. Enable it to install it.`
+      );
+      continue;
+    }
+    await runPluginInstallCommand(plugin.name, deps);
+  }
+}
+
+/**
+ * A disabled plugin's hooks do not run, so an install or an uninstall of it
+ * could record a state its hook never produced. Refused before any change.
+ */
+function assertEnabled(plugin: LifecyclePlugin): void {
+  if (plugin.enabled) return;
+  throw new NextlyError({
+    code: "PLUGIN_DISABLED",
+    publicMessage:
+      `The plugin "${plugin.name}" is disabled in config. Enable it in ` +
+      "the config to install or uninstall it.",
+  });
+}
+
 async function assertInstallable(
   plugin: LifecyclePlugin,
   deps: PluginLifecycleDeps
 ): Promise<void> {
+  assertEnabled(plugin);
   assertDependenciesInstalled({
     pluginName: plugin.name,
     configured: deps.plugins,
     appliedFilenames: await deps.readAppliedModules(),
-    owners: await new SchemaOwnersRepository(deps.db, deps.dialect).read(),
+    lifecycle: await deps.readLifecycle(),
   });
 }
 
@@ -262,8 +325,6 @@ interface UninstallDecision {
   plan: UninstallPlan;
   /** The modules' DOWNs, newest first, each already verified and judged. */
   downs: PreparedModuleDown[];
-  /** Whether the plugin has owner rows for its final state to be written on. */
-  recorded: boolean;
 }
 
 /**
@@ -302,6 +363,12 @@ async function decideUninstall(
   deps: PluginLifecycleDeps
 ): Promise<UninstallDecision> {
   const plugin = find(deps.plugins, name);
+  assertEnabled(plugin);
+  assertResumedTheSameWay(
+    plugin,
+    (await deps.readLifecycle()).get(plugin.name),
+    opts.keepData
+  );
   const repository = new SchemaOwnersRepository(deps.db, deps.dialect);
   const registry = createOwnerRegistry(repository);
   const recordedRows = await registry.listByOwner(plugin.name);
@@ -359,7 +426,31 @@ async function decideUninstall(
   assertDownsDropTables(plugin, plan, downs, deps.dialect);
   if (!opts.yes) assertNothingLostUnconfirmed(plugin, plan, downs, deps);
 
-  return { plugin, plan, downs, recorded: recordedRows.length > 0 };
+  return { plugin, plan, downs };
+}
+
+/**
+ * An uninstall that began and did not finish is finished by running it again
+ * the way it was begun, and refused the other way.
+ *
+ * Run again, an uninstall plans over what is left: the modules still applied
+ * and the tables still there, so it carries on from where it stopped. Not
+ * with the other `--keep-data` setting, though. A full uninstall that has
+ * dropped some tables cannot then keep its data, and one that kept data has
+ * run `onUninstall` for an uninstall that leaves the tables.
+ */
+function assertResumedTheSameWay(
+  plugin: LifecyclePlugin,
+  record: PluginLifecycleRecord | undefined,
+  keepData: boolean
+): void {
+  if (record?.state !== "uninstalling" || record.keepData === keepData) return;
+  const begun = record.keepData ? "with --keep-data" : "without --keep-data";
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_UNFINISHED",
+    publicMessage: `The uninstall of ${plugin.name} began ${begun} and did not finish. Run it again ${begun} to finish it. Nothing was changed.`,
+    logContext: { plugin: plugin.name, keepData: record.keepData },
+  });
 }
 
 /**
@@ -450,13 +541,21 @@ function warnList(
 
 /** Runs a decided uninstall: the hook, the DOWNs, the owner state. */
 async function executeUninstall(
-  { plugin, plan, downs, recorded }: UninstallDecision,
+  { plugin, plan, downs }: UninstallDecision,
   opts: { keepData: boolean },
   deps: PluginLifecycleDeps
 ): Promise<void> {
   const registry = createOwnerRegistry(
     new SchemaOwnersRepository(deps.db, deps.dialect)
   );
+
+  // Before the first change, the hook included: an uninstall that stops part
+  // way leaves this as the plugin's state, which the boot refuses and a run
+  // of the command again finishes.
+  await deps.recordLifecycle(plugin, {
+    state: "uninstalling",
+    keepData: opts.keepData,
+  });
 
   await deps.runLifecycleHook(plugin, "onUninstall", {
     keepData: opts.keepData,
@@ -474,13 +573,16 @@ async function executeUninstall(
   await assertTablesDropped(plugin, plan, deps);
 
   await registry.setState(plugin.name, plan.finalState);
+  await deps.recordLifecycle(plugin, { state: plan.finalState });
 
   deps.logger.success(
     plan.finalState === "orphaned"
       ? `${plugin.name} uninstalled; its tables were kept and are now orphaned.`
       : `${plugin.name} uninstalled and its tables dropped.`
   );
-  deps.logger.info(finishInstruction(plugin.name, plan.finalState, recorded));
+  deps.logger.info(
+    `Remove "${plugin.name}" from your config to finish. Until you do, boot will refuse to start.`
+  );
 }
 
 /**
@@ -602,24 +704,4 @@ async function assertTablesDropped(
       tables: left,
     },
   });
-}
-
-/**
- * What the operator does next, which depends on what the boot will make of
- * the plugin still being configured. Only `uninstalled` owner rows make it
- * refuse: an orphaned plugin boots, and a plugin with no owner rows has
- * nothing to carry the state, so it boots and initializes again.
- */
-function finishInstruction(
-  name: string,
-  finalState: UninstallPlan["finalState"],
-  recorded: boolean
-): string {
-  if (!recorded) {
-    return `Remove "${name}" from your config to finish. It owns no schema, so nothing records it as uninstalled: until the line is gone, it loads on every boot.`;
-  }
-  if (finalState === "uninstalled") {
-    return `Remove "${name}" from your config to finish. Until you do, boot will refuse to start.`;
-  }
-  return `Remove "${name}" from your config to finish. Until you do, it loads on every boot over the tables it left.`;
 }

@@ -14,6 +14,7 @@
  */
 import { expectTypeOf } from "vitest";
 
+import type { WidgetResultField } from "../../result";
 import type { QueryAnswer } from "../displays";
 import {
   defineWidget,
@@ -148,9 +149,11 @@ expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<
 
 // A widget drawn by a core display has that display's data, whatever its own
 // function's literal answer was.
+// `field` describes the grouped field (its label and value labels) when the source declares it.
 expectTypeOf<WidgetData<typeof ordersByState>>().toEqualTypeOf<{
   buckets: { value: string | null; count: number }[];
   truncated?: boolean;
+  field?: WidgetResultField;
 }>();
 
 // A list's rows may be any object type, an interface included: the wire type's

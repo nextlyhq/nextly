@@ -89,8 +89,12 @@ export interface EntryListShortcutsOptions {
 export interface EntryFormShortcutsOptions {
   /** Handler for saving the entry */
   onSave: () => void;
-  /** Handler for canceling and going back */
-  onCancel: () => void;
+  /**
+   * Handler for canceling and going back. Absent means Escape is not this
+   * form's to take — a full-screen surface drawn inside the form uses it for
+   * its own dismissals — so no Escape binding is registered at all.
+   */
+  onCancel: (() => void) | undefined;
 
   /** Whether the form has unsaved changes */
   isDirty: boolean;
@@ -223,7 +227,7 @@ export function useEntryListShortcuts({
  *
  * Shortcuts:
  * - Ctrl+S: Save entry (when form is dirty and not submitting)
- * - Escape: Cancel and go back
+ * - Escape: Cancel and go back (only when `onCancel` is given)
  *
  * @param options - Entry form shortcut options
  */
@@ -246,15 +250,19 @@ export function useEntryFormShortcuts({
       // report as the shortcut being broken.
       whenTyping: true,
     },
-    {
+  ];
+  // Not registered rather than registered and declined: a binding that exists claims the key,
+  // and the surface that owns Escape has to receive it untouched.
+  if (onCancel !== undefined) {
+    shortcuts.push({
       // Escape stays out of fields: it is how a menu, a popover or a composition session is
       // dismissed, and cancelling the whole form out from under one of those is not what the
       // keystroke meant.
       key: "Escape",
       action: onCancel,
       description: "Cancel and go back",
-    },
-  ];
+    });
+  }
 
   useKeyboardShortcuts(shortcuts, { enabled, name: "entry-form" });
 }

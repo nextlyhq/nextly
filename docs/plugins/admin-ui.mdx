@@ -37,8 +37,46 @@ registerComponents({
 });
 ```
 
-Running `nextly generate:types` emits a `plugin-admin-imports.generated.ts` import map so
-these load with no manual host wiring (D60).
+An app loads these through its **component map**, two generated files beside its generated
+types (D60):
+
+- `plugin-admin-imports.generated.ts` imports and registers every plugin admin component, and
+  the app's admin page imports it.
+- `plugin-admin-components.generated.ts` lists the same paths as plain strings, and the admin's
+  server layout passes them to `checkAdminComponents` from `nextly/runtime`.
+
+The app commits both. `nextly generate:types` writes them, and `next dev` rewrites them when
+they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, for a read-only
+checkout or CI. A production build whose map lacks a dashboard widget's component does not serve
+the admin: its server log names the plugin, the widget and the command that fixes it, and the
+public site keeps serving. Other components missing from the map are logged.
+
+After a map change in development, the request that finds the map out of date is already
+being served when the map is rewritten, so that one render can still draw the new widget's
+card empty. The rewritten map is what the next render loads.
+
+**The check runs once the admin layout calls it.** New apps import the map in their admin
+page; the layout's call is two lines to add. An app made from an older template has neither,
+and keeps drawing a missing component as an empty card, with a console warning, until it adds
+them:
+
+```tsx
+// src/app/admin/[[...params]]/page.tsx: with the other imports
+import "../../../types/generated/plugin-admin-imports.generated";
+```
+
+```tsx
+// src/app/admin/[[...params]]/layout.tsx: make the layout async, then
+import { checkAdminComponents } from "nextly/runtime";
+import config from "../../../../nextly.config";
+import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
+// ...inside the layout, before it returns:
+await checkAdminComponents({ config, registeredComponentPaths });
+```
+
+Then run `npx nextly generate:types` once and commit the two generated files. The paths
+assume the default types location (`./src/types/generated/`); use the folder your
+`typescript.outputFile` names.
 
 ## UI building blocks (`@nextlyhq/ui`)
 
@@ -180,6 +218,100 @@ contributes: {
 [Permissions](/docs/plugins/permissions)). View override slots are `list`, `edit`,
 `beforeList`, `afterList`, `beforeEdit`, `afterEdit`.
 
+### Document views
+
+> **Experimental.** `documentViews` and `DocumentViewProps` may change before
+> they are marked stable.
+
+A document view is a full-screen screen for one document, at its own address
+under the document's:
+
+- `/admin/collections/<slug>/<id>/<path>` for a collection entry;
+- `/admin/singles/<slug>/<path>` for a Single.
+
+A view declared under `views[slug]` is for that collection, like every other
+slot there. A Single, or any document wherever a field type appears, is reached
+by a field-type view (below).
+
+```ts
+views: {
+  pages: {
+    documentViews: [
+      { path: "builder", component: "@acme/nextly-plugin-builder/admin#Builder",
+        label: "Builder" },
+    ],
+  },
+},
+```
+
+A plugin that contributes a field type can instead offer a view on every
+collection and Single that has a field of that type. This includes collections
+created in the Schema Builder later:
+
+```ts
+contributes: {
+  fieldTypes: [{ type: "blocks", storage: "json", component: "@acme/x/admin#Blocks" }],
+  admin: {
+    documentViews: [
+      { path: "builder", fieldType: "blocks",
+        component: "@acme/x/admin#Builder", label: "Builder" },
+    ],
+  },
+},
+```
+
+A view can be scoped only to a field type the same plugin contributes. Only a
+top-level field counts: a document whose field sits inside a named group or a
+repeater doesn't get the view. A field inside an unnamed group counts as top-level,
+because the group only arranges the form. A field-type view's `path` must be unique among
+every document view any plugin declares.
+
+The admin keeps the document's own behaviour around your view, so you don't
+build any of it yourself:
+
+- It loads the document and holds its form state.
+- It holds the document's soft lock, and shows who else is editing.
+- It offers unsaved work recovered after a crash or a reload. Restoring it
+  unmounts your view, replaces the form's values, then mounts your view again.
+  A view that keeps its own copy of the document, read when it mounts, starts
+  from the restored work, and anything it writes into the form as it unmounts
+  is replaced by the restore.
+- It asks before the author leaves with unsaved changes.
+- It saves on the form's own shortcut, through the same actions as the edit form.
+
+Your component replaces the form's body and receives `DocumentViewProps` from
+`@nextlyhq/plugin-sdk/admin`:
+
+| Prop | What it is |
+|---|---|
+| `collectionSlug`, `entryId` | The collection entry being shown. |
+| `singleSlug` | The Single being shown, instead of the two above. |
+| `control` | The document form's react-hook-form `control`. Write to the fields through it. |
+| `readOnly` | `true` while someone else holds the document. Don't offer edits then. |
+| `exit` | Goes back to the document's edit form. Commit any state you hold into the form first. |
+| `field` | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
+
+Opening that address requires the same permission as editing the document.
+A field-type view also opens only for a field the edit form would let the
+author edit. If the field, or an unnamed group around it, is read-only,
+disabled, hidden, or hidden by its condition, the admin says why and offers the
+way back instead of drawing your view.
+
+To open a view from inside the admin, for example from a field editor, call
+`navigateTo(path)` from `@nextlyhq/plugin-sdk/admin`. It accepts a path
+starting `/admin/`, and refuses anything else by throwing. Moving between a
+document's edit form and its own views doesn't prompt about unsaved
+changes, because the same form stays mounted.
+
+Startup is refused, naming the plugins involved, when a view's `path`:
+
+- is not one segment of lowercase letters, digits and single dashes;
+- is `versions` or `api`, which the document already uses;
+- is declared twice on the same collection or Single, or is the path of a
+  field-type view and declared anywhere else;
+- belongs to a field-type view scoped to a field type the plugin does not
+  contribute.
+
 ## Dashboard widgets
 
 A widget is drawn one of two ways, and you pick by what you declare.
@@ -269,6 +401,16 @@ without renumbering anything.
 
 A reader's saved layout, once they have arranged their dashboard, wins over this. Think
 of it as where the card starts, not where it stays.
+
+### The card frame and its states
+
+Every card draws in one frame: its title, an optional line under it, the body, at most one footer
+link, and when its data last arrived. The frame also owns the states, so a card never draws its
+own: a skeleton while data has never arrived, the last value marked busy while it refreshes, an
+empty state, one "Not available to you" state for a source the reader cannot see (forbidden,
+missing and hidden all read the same), and an error that keeps the title and offers Retry for
+that card only. Figures go through `formatCount` from `@nextlyhq/ui/format`, so a number reads the
+same on every card.
 
 ### Widgets that draw their own surface
 
