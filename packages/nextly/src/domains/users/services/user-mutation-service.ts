@@ -1424,13 +1424,18 @@ export class UserMutationService extends BaseService {
 
       // Only an account the app itself provisions can become the install's
       // first administrator: never a stranger's self-registration, and never a
-      // plugin's. Granted inside the insert's own transaction, under the role
-      // row's lock, so two accounts provisioned at once on an install with no
-      // administrator leave exactly one (grantFirstAdministratorInTx). The role
-      // is ensured before the transaction opens, and only while no
-      // administrator is seen: once one exists, nothing here can grant.
+      // plugin's. The app's own provisioning (its admin, its server code) does
+      // so only for the install's very first account; once any account
+      // exists, even a role-less sign-up, an account it creates is never
+      // promoted, so a stranger who registered first cannot turn the app's
+      // next account into a super-admin. Setup alone creates the administrator
+      // whenever nobody holds the role. Granted inside the insert's own
+      // transaction, under the role row's lock, so two accounts provisioned at
+      // once leave exactly one (grantFirstAdministratorInTx). The role is
+      // ensured before the transaction opens, and only while no administrator
+      // is seen: once one exists, nothing here can grant.
       const provisionsFirstAdministrator =
-        caller === "app" || caller === "setup";
+        (caller === "app" && !anyAccount) || caller === "setup";
       const bootstrapRoleReady =
         provisionsFirstAdministrator &&
         (await this.mayBootstrapFirstAdministrator());

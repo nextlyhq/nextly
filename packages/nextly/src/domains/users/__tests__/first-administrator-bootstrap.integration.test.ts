@@ -147,11 +147,13 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual([]);
     });
 
-    it("still makes a hand-provisioned account the administrator after a self-registered one", async () => {
+    it("never makes an account the app creates the administrator once a stranger registered first", async () => {
       const t = await boot(dialect);
       await selfRegister(t, "stranger@example.com");
-      const id = await provision(t, "owner@example.com");
-      expect(await isAdministrator(t, id)).toBe(true);
+      // The app's own provisioning (an import, the admin API) promotes only
+      // the install's very first account: here it is not the first.
+      const id = await provision(t, "customer@example.com");
+      expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
     });
 
     it("keeps setup open after a self-registration, so the owner can still create the administrator", async () => {
@@ -170,8 +172,14 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await status.json()).toMatchObject({ isSetup: false });
 
-      const owner = await provision(t, "owner@example.com");
-      expect(await isAdministrator(t, owner)).toBe(true);
+      // Setup itself, not the app's general provisioning, creates the owner.
+      const owner = await deps.createSuperAdmin({
+        email: "owner@example.com",
+        name: "Owner",
+        password: PASSWORD,
+      });
+      expect(owner).not.toBeNull();
+      expect(await isAdministrator(t, String(owner?.id))).toBe(true);
       expect(await deps.hasAdministrator()).toBe(true);
     });
 
