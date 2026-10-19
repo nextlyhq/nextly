@@ -13,6 +13,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import {
   getFilterRegistry,
@@ -24,6 +25,7 @@ import {
 import { getBaseUrl } from "../../../lib/get-base-url";
 import { maskingServiceLogger } from "../../../observability/mask-emails";
 import {
+  isStaffPersonId,
   principalRefOf,
   staffPerson,
   staffPersonOf,
@@ -1430,10 +1432,16 @@ export class EmailService extends BaseService {
     if (value === undefined || value === null) return null;
     const staff = staffPersonOf(value);
     if (!staff) return pluginPersonToRecord(value);
-    const user = await this.db.query.users.findFirst({
-      where: { id: requireFilterValue(staff.id, "person.id") },
-      columns: { id: true },
-    });
+    let user: { id: string } | undefined;
+    try {
+      user = await this.db.query.users.findFirst({
+        where: { id: requireFilterValue(staff.id, "person.id") },
+        columns: { id: true },
+      });
+    } catch (error) {
+      // The canonical error, as every other database failure of a send is.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
     if (!user) {
       throw NextlyError.validation({
         errors: [
@@ -1466,7 +1474,11 @@ export class EmailService extends BaseService {
 function staffRecipient(user: {
   id?: string;
 }): { person: PrincipalRef } | undefined {
-  return user.id === undefined ? undefined : { person: staffPerson(user.id) };
+  // An id longer than a record can hold is sent naming nobody, as every core
+  // email was before staff users were named, rather than refused.
+  return isStaffPersonId(user.id)
+    ? { person: staffPerson(user.id) }
+    : undefined;
 }
 
 /**
@@ -1486,7 +1498,7 @@ function pluginPersonToRecord(value: unknown): PrincipalRef {
         path: "person",
         code: "INVALID",
         message:
-          '`person` must name a staff user (`{ kind: "staff", id }`) or a plugin-defined person by the full name of a registered kind, with an id of 1 to 128 characters.',
+          '`person` must name a staff user (`{ kind: "staff", id }`) or a plugin-defined person by the full name of a registered kind, with an id a delivery record can hold for a staff user, and of 1 to 128 characters for a plugin-defined person.',
       },
     ],
     logContext: { operation: "email.send" },

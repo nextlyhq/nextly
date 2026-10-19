@@ -9,6 +9,9 @@
  *
  * @module plugins/principals/ref
  */
+import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
+import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
+
 import { MAX_PRINCIPAL_ID_LENGTH } from "./recognise";
 import type { PrincipalRef } from "./types";
 
@@ -51,6 +54,22 @@ export function principalRefOf(value: unknown): PrincipalRef | null {
  */
 export const STAFF_PERSON_KIND = "staff";
 
+/**
+ * The longest staff user id a delivery record can name: the narrowest column
+ * a record keeps an id in. A staff user's id is not bound by the 128 characters
+ * a plugin-defined person's is, and `users.id` is unbounded text on
+ * PostgreSQL and SQLite, so this is the bound that decides. Read from the
+ * columns rather than restated, so a column changed later moves it.
+ */
+export const STAFF_PERSON_ID_MAX_LENGTH = Math.min(
+  ...[emailDeliveriesPg.principalId, emailDeliveriesMysql.principalId].map(
+    column => {
+      const length = (column as { length?: number }).length;
+      return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
+    }
+  )
+);
+
 /** A staff user, named by kind and id for a record that names a person. */
 export function staffPerson(userId: string): PrincipalRef {
   return { kind: STAFF_PERSON_KIND, id: userId };
@@ -58,8 +77,9 @@ export function staffPerson(userId: string): PrincipalRef {
 
 /**
  * The staff user `value` names, copied, or `null` when it names no staff
- * user: not an object, another kind, or an id that is not a string of 1 to
- * 128 characters. Whether that user exists is the caller's to ask.
+ * user: not an object, another kind, or an id that is not a string a delivery
+ * record can hold (1 to `STAFF_PERSON_ID_MAX_LENGTH` characters). Whether that
+ * user exists is the caller's to ask.
  */
 export function staffPersonOf(value: unknown): PrincipalRef | null {
   if (typeof value !== "object" || value === null) return null;
@@ -72,12 +92,15 @@ export function staffPersonOf(value: unknown): PrincipalRef | null {
     return null;
   }
   if (kind !== STAFF_PERSON_KIND) return null;
-  if (
-    typeof id !== "string" ||
-    id.length === 0 ||
-    id.length > MAX_PRINCIPAL_ID_LENGTH
-  ) {
-    return null;
-  }
+  if (!isStaffPersonId(id)) return null;
   return staffPerson(id);
+}
+
+/** Whether `id` is one a delivery record can name a staff user by. */
+export function isStaffPersonId(id: unknown): id is string {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= STAFF_PERSON_ID_MAX_LENGTH
+  );
 }

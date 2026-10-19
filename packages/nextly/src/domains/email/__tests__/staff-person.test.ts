@@ -12,6 +12,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { EmailProviderAdapter } from "../types";
 
+import { NextlyError } from "../../../errors";
+import { STAFF_PERSON_ID_MAX_LENGTH } from "../../../plugins/principals/ref";
 import { EmailService } from "../services/email-service";
 
 // `lib/env` only re-exports this module, and `getBaseUrl` reaches the real one
@@ -60,6 +62,9 @@ function makeService(
     {
       providerConfig: { provider: "resend" as const, apiKey: "re_x" },
       from: "App <noreply@example.com>",
+      templates: {
+        passwordReset: () => ({ subject: "Reset", html: "<p>reset</p>" }),
+      },
     }
   );
   vi.spyOn(
@@ -121,6 +126,69 @@ describe("a send naming a staff user", () => {
       send(service, { kind: "staff", id: "" })
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     expect(lookup).not.toHaveBeenCalled();
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("accepts a staff id longer than a plugin-defined person's, up to what a record holds", async () => {
+    // A staff user's id is not held to the 128 characters a plugin's person
+    // is: `users.id` is wider, and core's own emails always name the user.
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const id = "u".repeat(150);
+    const { service } = makeService(adapter, { id });
+
+    await expect(send(service, { kind: "staff", id })).resolves.toEqual(
+      expect.objectContaining({ success: true })
+    );
+    expect(adapter.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an id longer than a record can hold, without a lookup", async () => {
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const id = "u".repeat(STAFF_PERSON_ID_MAX_LENGTH + 1);
+    const { service, lookup } = makeService(adapter, { id });
+
+    await expect(send(service, { kind: "staff", id })).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
+
+  it("sends core's email to a user whose id no record can hold, naming nobody", async () => {
+    // Core's reset, verification and welcome emails must still reach such an
+    // account, as they did before staff users were named.
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const id = "u".repeat(STAFF_PERSON_ID_MAX_LENGTH + 1);
+    const { service, lookup } = makeService(adapter, { id });
+
+    const result = await service.sendPasswordResetEmail(
+      "ada@example.com",
+      { id, name: "Ada", email: "ada@example.com" },
+      "tok"
+    );
+
+    expect(result.success).toBe(true);
+    expect(adapter.send).toHaveBeenCalledTimes(1);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("reports a failed staff lookup as a Nextly error, not the driver's", async () => {
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockResolvedValue({ success: true }),
+    };
+    const { service, lookup } = makeService(adapter, { id: "u-1" });
+    lookup.mockRejectedValueOnce(new Error("connection lost"));
+
+    const failure = await send(service, { kind: "staff", id: "u-1" }).catch(
+      (error: unknown) => error
+    );
+    expect(NextlyError.is(failure)).toBe(true);
     expect(adapter.send).not.toHaveBeenCalled();
   });
 });
