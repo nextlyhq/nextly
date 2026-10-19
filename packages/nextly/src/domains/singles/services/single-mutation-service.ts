@@ -75,6 +75,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
@@ -3015,6 +3016,27 @@ export class SingleMutationService extends BaseService {
                   });
                 }
               }
+            }
+
+            // A receipt a caller pinned for this Single is kept here, in the
+            // write's own transaction, so it commits exactly when the write
+            // does. Only a write to the live row: a held edit left the live
+            // document as it was. The status is the one the UPDATE returned,
+            // as stored, not a hook's view of it.
+            if (!holdEdit) {
+              const storedStatus = (rows[0] as { status?: unknown }).status;
+              await recordWriteReceipt(
+                tx,
+                {
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                },
+                {
+                  status:
+                    typeof storedStatus === "string" ? storedStatus : undefined,
+                }
+              );
             }
 
             return rows;

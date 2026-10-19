@@ -11,7 +11,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { applyDueReleases, settleableComponents } from "../apply-due-releases";
-import type { ApplyDueReleasesDeps } from "../apply-due-releases";
+import type {
+  ApplyDueReleasesDeps,
+  ReleaseMutations,
+} from "../apply-due-releases";
 import type { ReleaseMemberRow, ReleaseRow } from "../releases-repository";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
@@ -48,6 +51,7 @@ function member(over: Partial<ReleaseMemberRow> = {}): ReleaseMemberRow {
     action: "publish",
     memberKey: `k${seq}`,
     singleSlot: null,
+    appliedRevision: null,
     createdBy: "author",
     createdAt: PAST,
     ...over,
@@ -66,9 +70,32 @@ function deps(over: {
   rescheduledTo?: Date;
   /** Make `markReleasePublished` answer `false`, as its fence does. */
   markRefuses?: boolean;
+  /**
+   * Each member's mark, by member id: the `applied_revision` column. Shared
+   * across passes by handing the same map to each, as the database is.
+   */
+  marks?: Map<string, number>;
+  /**
+   * Whether a write that resolves leaves its mark. The real write marks its
+   * member, in its own transaction, when it stores the action's status;
+   * `"never"` is a write whose hook changed the status, so it left none. A
+   * write that throws before landing leaves none either way.
+   */
+  marking?: "on-success" | "never";
 }): ApplyDueReleasesDeps {
   const releases = over.releases ?? [release()];
   const members = over.members ?? [member()];
+  const marks = over.marks ?? new Map<string, number>();
+  const marking =
+    (
+      write: ReleaseMutations["publish"] | undefined
+    ): ReleaseMutations["publish"] =>
+    async input => {
+      await write?.(input);
+      if (over.marking !== "never") {
+        marks.set(input.receipt.memberId, input.receipt.revision);
+      }
+    };
   // Answers with the ids it was given, which is what the repository does on a
   // component that transitioned whole. A stub returning a constant would let a
   // pass that blocked a DIFFERENT set look identical to a correct one.
@@ -89,7 +116,11 @@ function deps(over: {
       // that blocked exactly the hopeless.
       blockReleases: blocked,
       listMembersOf: async ids =>
-        members.filter(m => ids.includes(m.releaseId)),
+        members
+          .filter(m => ids.includes(m.releaseId))
+          .map(m => ({ ...m, appliedRevision: marks.get(m.id) ?? null })),
+      isMemberApplied: async (id: string, revision: number) =>
+        marks.get(id) === revision,
       isStillDueAt: async (id: string, scheduledAt: Date) =>
         over.cancelled !== id &&
         (over.rescheduledTo === undefined ||
@@ -101,15 +132,11 @@ function deps(over: {
         return over.markRefuses !== true;
       },
     },
+    // Default: the write did what it said, and so left its mark. A case that
+    // wants a write NOT to have landed throws from it, or sets `marking`.
     mutations: {
-      publish: async () => {},
-      unpublish: async () => {},
-      // Default: the write did what it said. Both the rejection path and the
-      // success path consult this, so a default of `false` would mean "every
-      // ordinary write silently failed" — the cases that want a write NOT to
-      // have landed override it explicitly.
-      applied: async () => true,
-      ...over.mutations,
+      publish: marking(over.mutations?.publish),
+      unpublish: marking(over.mutations?.unpublish),
     },
     runAs: {
       findUser: async id => ({ id, isActive: true }),
@@ -244,11 +271,9 @@ describe("applyDueReleases", () => {
           member({ entryId: "e2" }),
           member({ entryId: "e3" }),
         ],
-        mutations: {
-          publish,
-          // The refused write genuinely did not land; the other two did.
-          applied: async ({ ref }) => ref.entryId !== "e1",
-        },
+        // The refused write throws before landing, so it leaves no mark; the
+        // other two do.
+        mutations: { publish },
       })
     );
 
@@ -399,16 +424,19 @@ describe("applyDueReleases", () => {
     // that already persisted. Recording that as a failure leaves the release
     // scheduled, and every later sweep repeats the update, appends another
     // event and reruns the hooks — indefinitely. The thrown error cannot say
-    // whether the transaction committed; reading the document back can.
+    // whether the transaction committed; the mark it committed with can.
     const marked: string[] = [];
+    const marks = new Map<string, number>();
     const result = await applyDueReleases(
       deps({
         mutations: {
-          publish: async () => {
+          publish: async ({ receipt }) => {
+            // Committed with its mark, then a hook threw.
+            marks.set(receipt.memberId, receipt.revision);
             throw new Error("afterUpdate exploded");
           },
-          applied: async () => true,
         },
+        marks,
         marked,
       })
     );
@@ -427,7 +455,6 @@ describe("applyDueReleases", () => {
           publish: async () => {
             throw new Error("refused");
           },
-          applied: async () => false,
         },
       })
     );
@@ -440,14 +467,15 @@ describe("applyDueReleases", () => {
     // the ordinary mutation then succeeds having done nothing. Reporting that
     // as complete discharges the release, removes its read-time projection, and
     // loses the scheduled action permanently — the failure here that leaves no
-    // trace at all. A resolved promise is not proof the action was applied.
+    // trace at all. A resolved promise is not proof the action was applied:
+    // the write stored another status, so it left no mark.
     const marked: string[] = [];
     const result = await applyDueReleases(
       deps({
         mutations: {
           publish: async () => {}, // resolves, but the hook ate the status
-          applied: async () => false,
         },
+        marking: "never",
         marked,
       })
     );
@@ -547,13 +575,14 @@ describe("applyDueReleases", () => {
     expect(marked.sort()).toEqual(["r1", "r2"]);
   });
 
-  it("REPLAYS an overlapping component from its start when a pass is killed inside it", async () => {
+  it("CONTINUES an overlapping component a pass was killed inside, writing only the rest", async () => {
     // A host that ends the process part-way (a serverless time limit) leaves
-    // the writes that committed and settles no release, so the next pass
-    // plans the whole component again, in the same order, and rewrites the
-    // documents already published before it reaches the rest. Killed at the
-    // same point every time, the tail is never written and neither release is
-    // settled.
+    // the writes that committed, each with its mark, and settles no release.
+    // The next pass plans the whole component again and finds those members
+    // marked for their releases' current revision, so it writes only the
+    // documents still to go and settles the component. Without the marks it
+    // rewrote the documents already published first, and a pass killed at the
+    // same point every time never reached the tail.
     const members = [
       member({ releaseId: "r1", entryId: "e1" }),
       member({ releaseId: "r1", entryId: "e2" }),
@@ -561,12 +590,17 @@ describe("applyDueReleases", () => {
       member({ releaseId: "r2", entryId: "e3" }),
       member({ releaseId: "r2", entryId: "e4" }),
     ];
-    const killedAfter = async (writes: number) => {
+    const marks = new Map<string, number>();
+    const killedAfter = async (writes: number, revision = 0) => {
       const written: string[] = [];
       const marked: string[] = [];
       const d = deps({
-        releases: [release({ id: "r1" }), release({ id: "r2" })],
+        releases: [
+          release({ id: "r1", revision }),
+          release({ id: "r2", revision }),
+        ],
         members,
+        marks,
         marked,
         mutations: {
           // The process ends here: the write never returns.
@@ -583,15 +617,61 @@ describe("applyDueReleases", () => {
     };
 
     const first = await killedAfter(2);
-    const second = await killedAfter(2);
     expect(first.written).toEqual(["e1", "e2"]);
-    expect(second.written).toEqual(["e1", "e2"]);
-    expect([...first.marked, ...second.marked]).toEqual([]);
+    expect(first.marked).toEqual([]);
 
-    // The control: a pass the host lets finish settles the component.
-    const whole = await killedAfter(Number.POSITIVE_INFINITY);
-    expect(whole.written).toEqual(["e1", "e2", "e3", "e4"]);
-    expect(whole.marked.sort()).toEqual(["r1", "r2"]);
+    const second = await killedAfter(Number.POSITIVE_INFINITY);
+    expect(second.written).toEqual(["e3", "e4"]);
+    expect(second.marked.sort()).toEqual(["r1", "r2"]);
+  });
+
+  it("writes a component AGAIN once its releases have moved since the marks", async () => {
+    // A reschedule, a cancel, an edit or a membership change raises the
+    // release's revision, so marks left by an earlier pass are stale.
+    const members = [
+      member({ id: "a", releaseId: "r1", entryId: "e1" }),
+      member({ id: "b", releaseId: "r1", entryId: "e2" }),
+    ];
+    const marks = new Map([
+      ["a", 0],
+      ["b", 0],
+    ]);
+    const publish = vi.fn(async () => {});
+
+    const moved = await applyDueReleases(
+      deps({
+        releases: [release({ id: "r1", revision: 1 })],
+        members,
+        marks,
+        mutations: { publish },
+      })
+    );
+
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(moved).toMatchObject({ applied: 2, failed: 0, published: 1 });
+    // Marked afresh, for the revision the release now stands at.
+    expect([...marks.values()]).toEqual([1, 1]);
+  });
+
+  it("counts members ALREADY marked for the current revision as applied, without writing", async () => {
+    const marked: string[] = [];
+    const publish = vi.fn(async () => {});
+    const result = await applyDueReleases(
+      deps({
+        releases: [release({ id: "r1", revision: 4 })],
+        members: [member({ id: "a", entryId: "e1" })],
+        marks: new Map([["a", 4]]),
+        mutations: { publish },
+        // An author nobody could resolve: a member marked applied is not
+        // judged again, because its write already was.
+        runAs: { findUser: async () => null },
+        marked,
+      })
+    );
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ applied: 1, failed: 0, published: 1 });
+    expect(marked).toEqual(["r1"]);
   });
 
   it("does NOT discharge a release whose actions it never started", async () => {
@@ -649,11 +729,10 @@ describe("applyDueReleases", () => {
           member({ id: "y", releaseId: "rGood", entryId: "healthy" }),
         ],
         mutations: {
+          // The failed write leaves no mark, so the failure reaches the
+          // outcome and there is something to starve behind.
           publish:
             publish as unknown as ApplyDueReleasesDeps["mutations"]["publish"],
-          // The read-back must not rescue the failed write, or the failure never
-          // reaches the outcome and there is nothing to starve behind.
-          applied: async () => false,
         },
       });
       await applyDueReleases({
@@ -1136,7 +1215,7 @@ describe("a release nothing about retrying could fix is STOPPED", () => {
     // two are indistinguishable here — so a momentary blip must not permanently
     // halt a launch the next pass would have completed.
     // The fixture's own way to say the write did not land, per its comment.
-    const d = deps({ mutations: { applied: async () => false } });
+    const d = deps({ marking: "never" });
     const result = await applyDueReleases(d);
     // It still FAILED — the release is held open and retried, which is the
     // point. It is simply not stopped.

@@ -349,8 +349,72 @@ export interface ReleaseMemberRow {
    * release's kind.
    */
   singleSlot: number | null;
+  /**
+   * The release revision this member's action was last applied for, or null
+   * when no write of it has landed. Written only in the transaction of the
+   * content write itself; see {@link recordMemberApplied}. Read it through
+   * {@link memberAppliedFor}, never on its own: a mark for any revision but
+   * the release's current one describes a release that has since moved.
+   *
+   * @experimental
+   */
+  appliedRevision: number | null;
   createdBy: string | null;
   createdAt: Date;
+}
+
+/**
+ * Whether a member's action has been applied for the release as it now
+ * stands: marked, by its own write, for exactly this revision.
+ *
+ * The ONE reading of the mark. Every move of a release raises its revision
+ * (`advanceRevision`, and scheduling), so a mark left by an earlier pass is
+ * stale the moment the release is rescheduled, cancelled, renamed or has its
+ * membership changed, and nothing needs to clear it.
+ */
+export function memberAppliedFor(
+  member: Pick<ReleaseMemberRow, "appliedRevision">,
+  revision: number
+): boolean {
+  return member.appliedRevision === revision;
+}
+
+/**
+ * Mark a member applied for `revision`, inside the transaction of the content
+ * write that applied it, so the mark commits exactly when the write does: a
+ * write that rolls back leaves no mark, and one that commits cannot be left
+ * without it.
+ *
+ * Every other member naming the same document loses its mark in the same
+ * transaction. The document now carries THIS member's action, so a mark that
+ * said another member's action was in place is no longer true of it: without
+ * this, a release whose member lost the document to another release's write,
+ * and later won it back, would be passed over with the other action in place.
+ *
+ * Idempotent: a write that runs its transaction again writes the same values.
+ */
+export async function recordMemberApplied(
+  tx: Pick<ReleasesTxApi, "updateCount">,
+  member: { id: string; revision: number; ref: DocumentRef }
+): Promise<void> {
+  await tx.updateCount(
+    MEMBERS,
+    { appliedRevision: null },
+    {
+      and: [
+        { column: "scopeKind", op: "=", value: member.ref.scopeKind },
+        { column: "scopeSlug", op: "=", value: member.ref.scopeSlug },
+        { column: "entryId", op: "=", value: member.ref.entryId },
+        { column: "id", op: "!=", value: member.id },
+        { column: "appliedRevision", op: "IS NOT NULL" },
+      ],
+    }
+  );
+  await tx.updateCount(
+    MEMBERS,
+    { appliedRevision: member.revision },
+    { and: [{ column: "id", op: "=", value: member.id }] }
+  );
 }
 
 export interface NewRelease {
@@ -1274,6 +1338,26 @@ export class ReleasesRepository {
   }
 
   /**
+   * Whether this member's own write marked it applied for `revision`.
+   *
+   * Asked after each content write, resolved or rejected, because the
+   * promise cannot say: a write commits before its `afterUpdate` hooks run, so
+   * one whose hook threw rejects having landed, and one whose hook rewrote the
+   * status resolves having applied nothing. The mark is set in the write's own
+   * transaction only when the write stored the action's status, so it answers
+   * both without reading the document, which a read hook could rewrite.
+   */
+  async isMemberApplied(memberId: string, revision: number): Promise<boolean> {
+    const [row] = await this.db.select<
+      Pick<ReleaseMemberRow, "appliedRevision">
+    >(MEMBERS, {
+      columns: ["appliedRevision"],
+      where: { and: [{ column: "id", op: "=", value: memberId }] },
+    });
+    return row !== undefined && memberAppliedFor(row, revision);
+  }
+
+  /**
    * Whether this release is still scheduled FOR THE SAME INSTANT the plan was
    * built against.
    *
@@ -1454,6 +1538,8 @@ export class ReleasesRepository {
           // leave a single release's member without its slot — and so
           // unprotected.
           singleSlot: release.kind === "single" ? 1 : null,
+          // No write of it has landed yet.
+          appliedRevision: null,
           createdBy: input.createdBy ?? null,
           createdAt: new Date(),
         };

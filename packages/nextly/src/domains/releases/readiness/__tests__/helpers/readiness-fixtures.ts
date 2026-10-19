@@ -44,6 +44,7 @@ export function member(
     action: "publish",
     memberKey: `key-${id}`,
     singleSlot: null,
+    appliedRevision: null,
     createdBy: "author",
     createdAt: new Date("2026-01-02T00:00:00Z"),
     ...over,

@@ -25,6 +25,7 @@ function member(over: Partial<ReleaseMemberRow> = {}): ReleaseMemberRow {
     action: "publish",
     memberKey: `k${seq}`,
     singleSlot: null,
+    appliedRevision: null,
     createdBy: "author",
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     ...over,
@@ -34,7 +35,7 @@ function member(over: Partial<ReleaseMemberRow> = {}): ReleaseMemberRow {
 describe("planReleaseMaterialisation", () => {
   it("plans one action per document", () => {
     const plan = planReleaseMaterialisation({
-      releases: [{ id: "r1", scheduledAt: JAN }],
+      releases: [{ id: "r1", scheduledAt: JAN, revision: 0 }],
       members: [member({ entryId: "e1" }), member({ entryId: "e2" })],
       now: NOW,
     });
@@ -51,8 +52,8 @@ describe("planReleaseMaterialisation", () => {
     const publish = member({ releaseId: "r1", action: "publish" });
     const unpublish = member({ releaseId: "r2", action: "unpublish" });
     const releases = [
-      { id: "r1", scheduledAt: JAN },
-      { id: "r2", scheduledAt: FEB },
+      { id: "r1", scheduledAt: JAN, revision: 0 },
+      { id: "r2", scheduledAt: FEB, revision: 0 },
     ];
 
     const forward = planReleaseMaterialisation({
@@ -79,8 +80,8 @@ describe("planReleaseMaterialisation", () => {
     // would be the privileged principal the design refuses.
     const plan = planReleaseMaterialisation({
       releases: [
-        { id: "r1", scheduledAt: JAN },
-        { id: "r2", scheduledAt: FEB },
+        { id: "r1", scheduledAt: JAN, revision: 0 },
+        { id: "r2", scheduledAt: FEB, revision: 0 },
       ],
       members: [
         member({ releaseId: "r1", action: "publish", createdBy: "early" }),
@@ -99,7 +100,7 @@ describe("planReleaseMaterialisation", () => {
     // A member whose author was never recorded. Substituting anybody here would
     // be this module deciding who an unattributable change runs as.
     const plan = planReleaseMaterialisation({
-      releases: [{ id: "r1", scheduledAt: JAN }],
+      releases: [{ id: "r1", scheduledAt: JAN, revision: 0 }],
       members: [member({ createdBy: null })],
       now: NOW,
     });
@@ -110,7 +111,7 @@ describe("planReleaseMaterialisation", () => {
     // The same document may sit in a release scheduled for next month. That is
     // not an error and must not contribute a due instant.
     const plan = planReleaseMaterialisation({
-      releases: [{ id: "r1", scheduledAt: JAN }],
+      releases: [{ id: "r1", scheduledAt: JAN, revision: 0 }],
       members: [
         member({ releaseId: "r1", action: "publish" }),
         member({ releaseId: "elsewhere", action: "unpublish" }),
@@ -126,7 +127,7 @@ describe("planReleaseMaterialisation", () => {
     // — grouping on the entry id alone would let one language's release decide
     // the other's, and silently drop one of the two writes.
     const plan = planReleaseMaterialisation({
-      releases: [{ id: "r1", scheduledAt: JAN }],
+      releases: [{ id: "r1", scheduledAt: JAN, revision: 0 }],
       members: [
         member({ entryId: "e1", locale: "en" }),
         member({ entryId: "e1", locale: "de", action: "unpublish" }),
@@ -144,7 +145,13 @@ describe("planReleaseMaterialisation", () => {
     // The control for every case above: a planner that ignored `now` would
     // publish the future.
     const plan = planReleaseMaterialisation({
-      releases: [{ id: "r1", scheduledAt: new Date("2099-01-01T00:00:00Z") }],
+      releases: [
+        {
+          id: "r1",
+          scheduledAt: new Date("2099-01-01T00:00:00Z"),
+          revision: 0,
+        },
+      ],
       members: [member()],
       now: NOW,
     });
@@ -153,5 +160,54 @@ describe("planReleaseMaterialisation", () => {
     // caller, and reporting it separately is how a caller can tell "nothing to
     // do" from "not looked at".
     expect(plan.releaseIds).toEqual(["r1"]);
+  });
+
+  it("takes a document as applied only when its WINNER is marked for the current revision", () => {
+    // Marked for revision 3 by the write of a pass that ended part-way; the
+    // release still stands at 3, so this pass need not write it again.
+    const marked = planReleaseMaterialisation({
+      releases: [{ id: "r1", scheduledAt: JAN, revision: 3 }],
+      members: [member({ appliedRevision: 3 })],
+      now: NOW,
+    });
+    expect(marked.actions[0]).toMatchObject({ revision: 3, applied: true });
+
+    // The release has moved since (rescheduled, edited, a member changed), so
+    // the mark is for a release that no longer stands as it did.
+    const stale = planReleaseMaterialisation({
+      releases: [{ id: "r1", scheduledAt: JAN, revision: 4 }],
+      members: [member({ appliedRevision: 3 })],
+      now: NOW,
+    });
+    expect(stale.actions[0]).toMatchObject({ revision: 4, applied: false });
+
+    // The control: never written.
+    const unmarked = planReleaseMaterialisation({
+      releases: [{ id: "r1", scheduledAt: JAN, revision: 3 }],
+      members: [member()],
+      now: NOW,
+    });
+    expect(unmarked.actions[0]?.applied).toBe(false);
+  });
+
+  it("does not take a LOSING member's mark as the winner's", () => {
+    // The later release wins the document; the earlier one's member carries
+    // a mark for its own revision, which says nothing of the winner's write.
+    const plan = planReleaseMaterialisation({
+      releases: [
+        { id: "r1", scheduledAt: JAN, revision: 2 },
+        { id: "r2", scheduledAt: FEB, revision: 5 },
+      ],
+      members: [
+        member({ releaseId: "r1", action: "publish", appliedRevision: 2 }),
+        member({ releaseId: "r2", action: "unpublish" }),
+      ],
+      now: NOW,
+    });
+    expect(plan.actions[0]).toMatchObject({
+      releaseId: "r2",
+      revision: 5,
+      applied: false,
+    });
   });
 });

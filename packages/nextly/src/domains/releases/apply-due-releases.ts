@@ -46,6 +46,19 @@
  * connection blipped, skipping every later action and every unrelated due
  * release. One blip then looked exactly like a quiet night.
  *
+ * ## Why a pass ended part-way is continued rather than replayed
+ *
+ * A component is settled only once every action in it is applied, and a host
+ * may end a pass part-way (a serverless time limit) with some of its writes
+ * committed. Each write therefore marks its member, in the write's own
+ * transaction, with the release revision it was applied for; the next pass
+ * counts a member marked for its release's current revision as applied and
+ * does not write it again. Nothing is inferred from the document: the mark is
+ * the write's receipt, and permissions, field rules, drafts and languages were
+ * judged by that write when it ran. Any move of a release raises its revision,
+ * so the marks of a release rescheduled, cancelled or edited since are stale
+ * and its documents are written again.
+ *
  * @module domains/releases/apply-due-releases
  */
 
@@ -75,28 +88,26 @@ export interface ReleaseMutations {
    * edit lives in a snapshot and the live row is untouched, so publishing
    * without it would set a status the reader already saw and change nothing.
    */
-  publish(input: { ref: DocumentRef; user: UserContext }): Promise<void>;
+  publish(input: ReleaseWrite): Promise<void>;
   /** Withdraw the document from published reads. */
-  unpublish(input: { ref: DocumentRef; user: UserContext }): Promise<void>;
+  unpublish(input: ReleaseWrite): Promise<void>;
+}
+
+/** One member's write, and the mark it leaves when it lands. */
+export interface ReleaseWrite {
+  ref: DocumentRef;
+  user: UserContext;
   /**
-   * Whether the document ALREADY has the effect an action intended.
+   * The member to mark applied, and the release revision to mark it with.
    *
-   * Asked only after a write rejected, and it is what stops a committed write
-   * from being retried forever. `updateEntry` commits the row and its outbox
-   * event before running `afterUpdate` hooks, so a hook that throws rejects the
-   * promise for a write that already persisted. Recording that as a failure
-   * leaves the release scheduled, and every later sweep repeats the update,
-   * appends another event and reruns the hooks — indefinitely.
-   *
-   * Reading the document back is the instrument that can tell the two apart,
-   * because the thrown error cannot: `createErrorFromResult` carries the
-   * service's failure, not whether its transaction committed.
+   * The write marks it in its OWN transaction, and only when it stored the
+   * action's status on the live row (`recordMemberApplied`), so the mark
+   * commits exactly when the write does. That is what lets this pass ask
+   * afterwards whether the write counted: the promise cannot say,
+   * because a write commits before its `afterUpdate` hooks run and one whose
+   * hook threw rejects having landed.
    */
-  applied(input: {
-    ref: DocumentRef;
-    effect: "publish" | "unpublish";
-    user: UserContext;
-  }): Promise<boolean>;
+  receipt: { memberId: string; revision: number };
 }
 
 export interface ApplyDueReleasesDeps {
@@ -117,6 +128,8 @@ export interface ApplyDueReleasesDeps {
      */
     listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]>;
     isStillDueAt(releaseId: string, scheduledAt: Date): Promise<boolean>;
+    /** Whether the member's own write marked it applied for `revision`. */
+    isMemberApplied(memberId: string, revision: number): Promise<boolean>;
     markReleasePublished(id: string, at: Date): Promise<boolean>;
     /**
      * Stop a COMPONENT of releases nothing about retrying could fix, atomically.
@@ -380,6 +393,7 @@ export async function applyDueReleases(
       // never the epoch in practice; narrowing here rather than asserting keeps
       // a repository that ever changed its mind from publishing 1970.
       scheduledAt: r.scheduledAt ?? at,
+      revision: r.revision,
     })),
     members,
     now: at,
@@ -474,15 +488,20 @@ async function applyOne(
     effect: action.effect,
   };
 
+  // Applied by its own write on an earlier pass, for the release as it now
+  // stands: that write already judged its author, its permissions and the
+  // document, and writing it again would only replay its hooks and events.
+  if (action.applied) return { ...base, failure: null };
+
   // The read seam answers DOCUMENT-WIDE members only. `findDueDecisions`
   // filters `locale IS NULL` because per-locale lifecycle lives on the
   // companion's `_status`, which the main row it filters cannot express — so
   // per-locale release visibility is not built yet.
   //
   // Writing one locale here would therefore apply an effect the read path
-  // refuses to project, and the success check below cannot see it either:
-  // `findByID(locale)` returns the MAIN row's status, so a per-locale unpublish
-  // that COMMITTED reads back as unchanged, reports WRITE_FAILED, and replays
+  // refuses to project, and the mark below cannot record it either: the write
+  // marks a member from the MAIN row's stored status, so a per-locale
+  // unpublish that COMMITTED leaves no mark, reports WRITE_FAILED, and replays
   // its hooks and outbox events on every drain forever.
   //
   // Declined rather than half-performed. Nothing can reach this today — there
@@ -530,7 +549,7 @@ async function applyOne(
 }
 
 /**
- * The write, and the read-back that decides whether it counted.
+ * The write, and the read of its mark that decides whether it counted.
  *
  * Extracted from {@link applyOne} because it is a different question: that one
  * decides whether this action may be attempted at all, this one decides what
@@ -548,16 +567,21 @@ async function writeAndConfirm(
     // Called ON the object rather than through an extracted reference: a
     // mutations implementation that is a class method would lose `this` and
     // fail at a point that looks like the write being refused.
-    const input = { ref: action.ref, user };
+    const input: ReleaseWrite = {
+      ref: action.ref,
+      user,
+      receipt: { memberId: action.memberId, revision: action.revision },
+    };
     await (action.effect === "publish"
       ? deps.mutations.publish(input)
       : deps.mutations.unpublish(input));
   } catch (error) {
-    // A rejection is not proof the write did not land. Ask the document — and
-    // if THAT cannot be answered, report the failure, which is the safe
-    // direction: a retry of an applied action is a no-op, while treating an
-    // unapplied one as done loses it silently.
-    const landed = await confirmApplied(deps, action, user, false);
+    // A rejection is not proof the write did not land. Ask the member's mark,
+    // which only a committed write leaves — and if THAT cannot be answered,
+    // report the failure, which is the safe direction: a retry of an applied
+    // action rewrites one document, while treating an unapplied one as done
+    // loses it silently.
+    const landed = await confirmApplied(deps, action, false);
     if (landed) return { ...base, failure: null, detail: messageOf(error) };
     return { ...base, failure: "WRITE_FAILED", detail: messageOf(error) };
   }
@@ -567,13 +591,14 @@ async function writeAndConfirm(
   // ordinary mutation then succeeds without performing the publish or the
   // withdrawal. Reporting that as complete discharges the release, removes its
   // read-time projection, and loses the scheduled action permanently — the one
-  // failure here that leaves no trace at all.
+  // failure here that leaves no trace at all. Such a write stored another
+  // status, so it left no mark.
   //
   // So success is confirmed the same way a rejection is. An unanswerable
-  // read-back is treated as applied here, because the write did resolve;
+  // read is treated as applied here, because the write did resolve;
   // inventing a failure for it would be the direction that loses nothing but
   // replays the hooks and outbox events of a write that already happened.
-  if (!(await confirmApplied(deps, action, user, true))) {
+  if (!(await confirmApplied(deps, action, true))) {
     return {
       ...base,
       failure: "WRITE_FAILED",
@@ -585,9 +610,10 @@ async function writeAndConfirm(
 }
 
 /**
- * Whether the document now carries the effect the action intended.
+ * Whether the member's own write marked it applied, for the revision this
+ * pass planned against.
  *
- * @param whenUnverifiable what to answer when the read-back ITSELF fails, which
+ * @param whenUnverifiable what to answer when the read of the mark ITSELF fails, which
  *   says nothing either way. Both callers need that answer and they need
  *   opposite ones — a caller whose write rejected must not assume it landed, and
  *   a caller whose write resolved must not invent a failure for it — so it is a
@@ -596,15 +622,13 @@ async function writeAndConfirm(
 async function confirmApplied(
   deps: ApplyDueReleasesDeps,
   action: MaterialisationAction,
-  user: UserContext,
   whenUnverifiable: boolean
 ): Promise<boolean> {
   try {
-    return await deps.mutations.applied({
-      ref: action.ref,
-      effect: action.effect,
-      user,
-    });
+    return await deps.repository.isMemberApplied(
+      action.memberId,
+      action.revision
+    );
   } catch {
     return whenUnverifiable;
   }
@@ -615,7 +639,7 @@ async function confirmApplied(
  *
  * Separated from the action itself because it is the ACCESS decision, and it
  * has three distinct refusals that a reader should be able to take in without
- * also holding the write, the cancel check and the read-back in mind.
+ * also holding the write, the cancel check and the mark in mind.
  */
 async function resolveActionAuthor(
   deps: ApplyDueReleasesDeps,

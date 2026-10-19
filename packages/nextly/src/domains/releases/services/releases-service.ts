@@ -1858,6 +1858,7 @@ export class ReleasesService {
       action: input.action,
       memberKey,
       singleSlot: null,
+      appliedRevision: null,
       createdBy: actor.userId,
       createdAt: new Date(),
     });
