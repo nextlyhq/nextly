@@ -4278,6 +4278,20 @@ export type LiveTables = ReadonlySet<string> & {
 };
 
 /**
+ * `tables` with `created` added, keeping the descendants it carries: a later
+ * statement list run after one that creates tables is judged against the
+ * same inheritance tree, which a list creating tables cannot shrink.
+ */
+export function withTablesCreated(
+  tables: LiveTables,
+  created: readonly string[]
+): LiveTables {
+  return Object.assign(new Set([...tables, ...created]), {
+    descendants: tables.descendants,
+  });
+}
+
+/**
  * Which of the tables the statement lists create, and of the names
  * PostgreSQL's `ALTER INDEX ... RENAME` renames in them, exist already as
  * tables, read from the database the statements are about to run on — the

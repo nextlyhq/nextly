@@ -59,6 +59,7 @@ import {
   readLiveTables,
   rebuildBlockStatements,
   tablesCreatedBy,
+  withTablesCreated,
   type LiveColumns,
   type LiveElements,
 } from "../../domains/schema/ownership/drop-guard";
@@ -376,9 +377,11 @@ async function readLiveState(
     p.liveTables = tables;
     p.liveIndexTables = indexTables;
     columns = columnsAfter(p.statements, deps.dialect, columns);
+    // Kept with the descendants the live reading carries, so each later
+    // target is judged against the inheritance tree as well.
     tables =
       tables &&
-      new Set([...tables, ...tablesCreatedBy(p.statements, deps.dialect)]);
+      withTablesCreated(tables, tablesCreatedBy(p.statements, deps.dialect));
   }
 }
 

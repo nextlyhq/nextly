@@ -780,4 +780,29 @@ describe("migrateDownCore and the tables a DOWN creates", () => {
     });
     expect(executed).toEqual([]);
   });
+
+  it("judges a later target against the descendants read before the rollback", async () => {
+    // `app_child` inherits from the plugin's `t`, and no row gives it to the
+    // plugin. The older module's DOWN runs second; its ALTER without ONLY
+    // reaches `app_child` as much as the first target's would.
+    const live = Object.assign(new Set<string>(), {
+      descendants: new Map([["t", ["app_child"]]]),
+    });
+    const { deps, executed } = plugin(
+      {
+        "plugin:auth/001_init": 'ALTER TABLE "t" ADD COLUMN "x" int;',
+        "plugin:auth/002_more": 'CREATE TABLE "scratch" (id INT);',
+      },
+      async () => live
+    );
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: {
+        table: "app_child",
+        parent: "t",
+        source: "plugin:auth/001_init",
+      },
+    });
+    expect(executed).toEqual([]);
+  });
 });
