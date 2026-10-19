@@ -241,6 +241,15 @@ async function installPackages(
   if (source.kind === "yalc") {
     await installWithYalc(cwd, pm, allPackages, pluginPackages);
   } else {
+    // The others first: they include peers Nextly's packages require
+    // (@nextlyhq/ui needs lucide-react), and pnpm with auto-install-peers off
+    // and strict-peer-dependencies on refuses an add whose required peers
+    // are not there yet. They go in a command of their own, at what the
+    // registry has, so the exact flag below never pins them.
+    const others = allPackages.filter(pkg => !isNextlyPackage(pkg));
+    if (others.length > 0) {
+      await runInstall(INSTALL_COMMANDS[pm], others, cwd);
+    }
     // Nextly's packages at the release, recorded exactly as a new project
     // declares them: npm records `nextly@X` as `^X` unless told not to, and a
     // range would float to a later release. On the alpha line, the tag.
@@ -251,10 +260,6 @@ async function installPackages(
       allPackages.filter(isNextlyPackage).map(pkg => `${pkg}@${spec}`),
       cwd
     );
-    const others = allPackages.filter(pkg => !isNextlyPackage(pkg));
-    if (others.length > 0) {
-      await runInstall(INSTALL_COMMANDS[pm], others, cwd);
-    }
   }
   const tooling = await notYetDeclared(cwd, CONFIG_TOOLING_DEV_DEPENDENCIES);
   if (tooling.length > 0) {

@@ -73,14 +73,19 @@ beforeEach(async () => {
     throw new Error(`process.exit(${String(code)})`);
   });
   app = await mkdtemp(path.join(tmpdir(), "nextly-existing-version-"));
-  await mkdir(path.join(app, "src/app"), { recursive: true });
+  await makeNextApp(app);
+});
+
+/** The files project detection and the generators expect of a Next.js app. */
+async function makeNextApp(dir: string) {
+  await mkdir(path.join(dir, "src/app"), { recursive: true });
   await writeFile(
-    path.join(app, "src/app/layout.tsx"),
+    path.join(dir, "src/app/layout.tsx"),
     "export default function Layout({ children }) { return children; }\n"
   );
-  await writeFile(path.join(app, "tsconfig.json"), "{}\n");
-  await writeFile(path.join(app, "next.config.ts"), "export default {};\n");
-});
+  await writeFile(path.join(dir, "tsconfig.json"), "{}\n");
+  await writeFile(path.join(dir, "next.config.ts"), "export default {};\n");
+}
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -101,9 +106,9 @@ async function tree(dir: string): Promise<Record<string, string>> {
   return files;
 }
 
-async function withPackageJson(nextly?: string) {
+async function withPackageJson(nextly?: string, dir = app) {
   await writeFile(
-    path.join(app, "package.json"),
+    path.join(dir, "package.json"),
     JSON.stringify(
       {
         name: "app",
@@ -115,10 +120,10 @@ async function withPackageJson(nextly?: string) {
   );
 }
 
-async function withInstalled(version: string) {
-  await mkdir(path.join(app, "node_modules/nextly"), { recursive: true });
+async function withInstalled(version: string, dir = app) {
+  await mkdir(path.join(dir, "node_modules/nextly"), { recursive: true });
   await writeFile(
-    path.join(app, "node_modules/nextly/package.json"),
+    path.join(dir, "node_modules/nextly/package.json"),
     JSON.stringify({ name: "nextly", version })
   );
 }
@@ -156,6 +161,21 @@ describe("an existing app with Nextly at another version", () => {
         `nextly: installed ${release.replace(/\./g, "\\.")}, declared \\^`
       ),
     ],
+    // Every field is judged, not only the first that names the package: npm
+    // installs an optionalDependencies entry over a dependencies one.
+    [
+      "declared at this release and, in a later field, at another",
+      async () =>
+        writeFile(
+          path.join(app, "package.json"),
+          JSON.stringify({
+            name: "app",
+            dependencies: { next: "16.0.0", nextly: release },
+            optionalDependencies: { nextly: "0.0.1" },
+          })
+        ),
+      /nextly: declared 0\.0\.1/,
+    ],
   ])(
     "stops with the app exactly as it was when %s",
     async (_label, arrange, said) => {
@@ -174,6 +194,30 @@ describe("an existing app with Nextly at another version", () => {
       expect(message).toContain(`pnpm add --save-exact nextly@${release}`);
     }
   );
+});
+
+describe("an app in a workspace that hoists its dependencies", () => {
+  // Node loads the first node_modules/nextly in the app or a folder above, so
+  // an app with none of its own runs the workspace's. Declaring this release
+  // does not change what it runs, and with --skip-install nothing would.
+  it("stops when the nextly it loads from a folder above is another version", async () => {
+    const web = path.join(app, "apps/web");
+    await makeNextApp(web);
+    await withPackageJson(release, web);
+    await withInstalled("0.0.1", app);
+    const before = await tree(app);
+
+    await expect(
+      createNextly({ cwd: web, defaults: true, skipInstall: true })
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(await tree(app)).toEqual(before);
+    expect(String(cancel.mock.calls[0]?.[0])).toMatch(
+      new RegExp(
+        `nextly: installed 0\\.0\\.1, declared ${release.replace(/\./g, "\\.")}`
+      )
+    );
+  });
 });
 
 describe("an existing app with no Nextly package", () => {

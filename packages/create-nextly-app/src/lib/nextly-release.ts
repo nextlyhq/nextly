@@ -71,7 +71,8 @@ const DEPENDENCY_FIELDS = [
  * tag names no one release, so it conflicts even where the version installed
  * is `version`: the app would declare one thing and the CLI install another.
  *
- * What is installed is read from the app's own `node_modules`; where there is
+ * What is installed is what the app would load: its own `node_modules`, or a
+ * folder above it where a workspace hoists its dependencies. Where there is
  * none to read (an app not installed yet, or Yarn's Plug'n'Play), only the
  * declaration is judged.
  */
@@ -87,7 +88,9 @@ export async function nextlyVersionConflicts(
   const conflicts: NextlyVersionConflict[] = [];
   for (const name of names) {
     const installed = await installedVersion(cwd, name);
-    const spec = declared.get(name);
+    const specs = declared.get(name) ?? [];
+    // The declaration to name: one that is not the release, if any is.
+    const spec = specs.find(found => found !== version) ?? specs[0];
     if (
       (installed !== undefined && installed !== version) ||
       (spec !== undefined && spec !== version)
@@ -98,40 +101,52 @@ export async function nextlyVersionConflicts(
   return conflicts;
 }
 
-/** What the app's package.json declares for each Nextly package, first field first. */
+/**
+ * Every declaration the app's package.json makes of each Nextly package, in
+ * field order. All of them count, not only the first: npm installs an
+ * `optionalDependencies` entry over a `dependencies` one of the same name.
+ */
 async function declaredNextlyPackages(
   cwd: string
-): Promise<Map<string, string>> {
+): Promise<Map<string, string[]>> {
   const manifest = (await fs
     .readJson(path.join(cwd, "package.json"))
     .catch(() => ({}))) as Record<string, unknown>;
-  const declared = new Map<string, string>();
+  const declared = new Map<string, string[]>();
   for (const field of DEPENDENCY_FIELDS) {
     const deps = manifest[field];
     if (!deps || typeof deps !== "object") continue;
     for (const [name, spec] of Object.entries(deps)) {
-      if (
-        isNextlyPackage(name) &&
-        !declared.has(name) &&
-        typeof spec === "string"
-      ) {
-        declared.set(name, spec);
+      if (isNextlyPackage(name) && typeof spec === "string") {
+        declared.set(name, [...(declared.get(name) ?? []), spec]);
       }
     }
   }
   return declared;
 }
 
-async function installedVersion(
-  cwd: string,
+/**
+ * The version of `name` Node.js would load from `from`: the first
+ * `node_modules/<name>` in it or a folder above, as a workspace that hoists
+ * its dependencies puts it. Undefined when there is none, as under Yarn
+ * Plug'n'Play, which keeps no such folder.
+ */
+export async function installedVersion(
+  from: string,
   name: string
 ): Promise<string | undefined> {
-  const manifest = (await fs
-    .readJson(
-      path.join(cwd, "node_modules", ...name.split("/"), "package.json")
-    )
-    .catch(() => undefined)) as { version?: unknown } | undefined;
-  return typeof manifest?.version === "string" ? manifest.version : undefined;
+  let folder = path.resolve(from);
+  for (;;) {
+    const manifest = (await fs
+      .readJson(
+        path.join(folder, "node_modules", ...name.split("/"), "package.json")
+      )
+      .catch(() => undefined)) as { version?: unknown } | undefined;
+    if (typeof manifest?.version === "string") return manifest.version;
+    const parent = path.dirname(folder);
+    if (parent === folder) return undefined;
+    folder = parent;
+  }
 }
 
 /**
