@@ -1952,6 +1952,18 @@ function parseApiKeyRoutes(
     };
   }
 
+  if (id === "abilities" && httpMethod === "GET") {
+    // GET /api/api-keys/abilities → what a key of the asked type and role
+    // would be able to do, before it is created (@experimental). Matched
+    // before `:id`, which would otherwise read "abilities" as a key's id.
+    return {
+      service: "apiKeys",
+      operation: "single",
+      method: "getApiKeyAbilities",
+      routeParams,
+    };
+  }
+
   if (id && httpMethod === "GET") {
     // GET /api/api-keys/:id → get single key metadata
     routeParams.apiKeyId = id;

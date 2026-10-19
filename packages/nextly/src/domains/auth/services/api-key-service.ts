@@ -64,6 +64,9 @@ import {
   roles as rolesSqlite,
   userRoles as userRolesSqlite,
 } from "../../../schemas/rbac/sqlite";
+import { users as usersMysql } from "../../../schemas/users/mysql";
+import { users as usersPg } from "../../../schemas/users/postgres";
+import { users as usersSqlite } from "../../../schemas/users/sqlite";
 // PR 4 migration: switch from legacy ServiceError to NextlyError unified system.
 // ServiceError throw sites are replaced with NextlyError factory calls; identifying
 // info (key id, role id, exceeded permission) moves from public message to logContext
@@ -108,6 +111,11 @@ export interface ApiKeyMeta {
   tokenType: ApiKeyTokenType;
   /** Populated only for role-based keys. Null if no role is set or role was deleted. */
   role: { id: string; name: string; slug: string } | null;
+  /**
+   * The person who created the key, whose permissions a read-only or
+   * full-access key follows. Null only when their account no longer exists.
+   */
+  owner: { id: string; name: string | null; email: string } | null;
   /** ISO 8601 string, or null for unlimited keys. */
   expiresAt: string | null;
   /** ISO 8601 string of the last request that used this key, or null if never used. */
@@ -369,6 +377,9 @@ interface ApiKeyRow {
   roleId: string | null;
   roleName: string | null;
   roleSlug: string | null;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerEmail: string | null;
   expiresAt: Date | number | null;
   lastUsedAt: Date | number | null;
   isActive: boolean | number;
@@ -394,6 +405,7 @@ export class ApiKeyService extends BaseService {
     | typeof permissionsPg
     | typeof permissionsMysql
     | typeof permissionsSqlite;
+  private usersTable: typeof usersPg | typeof usersMysql | typeof usersSqlite;
 
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -405,6 +417,7 @@ export class ApiKeyService extends BaseService {
         this.userRolesTable = userRolesPg;
         this.rolePermissionsTable = rolePermissionsPg;
         this.permissionsTable = permissionsPg;
+        this.usersTable = usersPg;
         break;
       case "mysql":
         this.apiKeysTable = apiKeysMysql;
@@ -412,6 +425,7 @@ export class ApiKeyService extends BaseService {
         this.userRolesTable = userRolesMysql;
         this.rolePermissionsTable = rolePermissionsMysql;
         this.permissionsTable = permissionsMysql;
+        this.usersTable = usersMysql;
         break;
       case "sqlite":
         this.apiKeysTable = apiKeysSqlite;
@@ -419,6 +433,7 @@ export class ApiKeyService extends BaseService {
         this.userRolesTable = userRolesSqlite;
         this.rolePermissionsTable = rolePermissionsSqlite;
         this.permissionsTable = permissionsSqlite;
+        this.usersTable = usersSqlite;
         break;
       default:
         // `this.dialect` is narrowed to `never` here after the exhaustive switch;
@@ -448,39 +463,7 @@ export class ApiKeyService extends BaseService {
     userId: string,
     input: CreateApiKeyInput
   ): Promise<{ meta: ApiKeyMeta; key: string }> {
-    if (input.tokenType === "role-based" && !input.roleId) {
-      // §13.8: validation messages name the field, never the value. The bad
-      // tokenType context goes to logContext for operators to debug.
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "roleId",
-            code: "REQUIRED",
-            message: "roleId is required when tokenType is 'role-based'.",
-          },
-        ],
-        logContext: { tokenType: input.tokenType },
-      });
-    }
-    if (input.tokenType !== "role-based" && input.roleId) {
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "roleId",
-            code: "INVALID",
-            message:
-              "roleId must not be set when tokenType is not 'role-based'.",
-          },
-        ],
-        logContext: { tokenType: input.tokenType },
-      });
-    }
-
-    await this.checkPermissionCeiling(
-      userId,
-      input.tokenType,
-      input.roleId ?? null
-    );
+    await this.assertCreatable(userId, input.tokenType, input.roleId ?? null);
 
     const { fullKey, keyHash, keyPrefix } = generateApiKey();
     const id = randomUUID();
@@ -534,31 +517,78 @@ export class ApiKeyService extends BaseService {
    * @param opts.allUsers - When true, returns keys for all users (for super-admin callers)
    * @returns Array of key metadata (raw key and hash are never returned)
    */
+  /**
+   * What a key created now by `userId`, with this type and role, would be
+   * able to do: the grants the form shows before creation.
+   *
+   * Refused exactly as creating that key would be (a role-based key with no
+   * role, a role for another type, a role above its creator), and answered
+   * by the same resolution a key's requests use, without caching, since no
+   * key exists yet. A read-only or full-access key follows its creator, so
+   * this is the answer for now: it changes as their permissions do.
+   *
+   * @experimental The key form's summary; may change while that screen does.
+   */
+  async previewApiKeyGrants(
+    userId: string,
+    input: { tokenType: ApiKeyTokenType; roleId?: string | null }
+  ): Promise<readonly GrantedPermission[]> {
+    const roleId = input.roleId ?? null;
+    await this.assertCreatable(userId, input.tokenType, roleId);
+    const { rows } = await this.resolveGrantRows(
+      input.tokenType,
+      roleId,
+      userId
+    );
+    return Object.freeze(dedupeGrants(rows).map(row => Object.freeze(row)));
+  }
+
+  /**
+   * Whether `userId` may create a key of this type and role: the checks a
+   * creation runs before it writes anything, and a summary runs before it
+   * answers.
+   */
+  private async assertCreatable(
+    userId: string,
+    tokenType: ApiKeyTokenType,
+    roleId: string | null
+  ): Promise<void> {
+    if (tokenType === "role-based" && !roleId) {
+      // §13.8: validation messages name the field, never the value. The bad
+      // tokenType context goes to logContext for operators to debug.
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "roleId",
+            code: "REQUIRED",
+            message: "roleId is required when tokenType is 'role-based'.",
+          },
+        ],
+        logContext: { tokenType: tokenType },
+      });
+    }
+    if (tokenType !== "role-based" && roleId) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "roleId",
+            code: "INVALID",
+            message:
+              "roleId must not be set when tokenType is not 'role-based'.",
+          },
+        ],
+        logContext: { tokenType: tokenType },
+      });
+    }
+
+    await this.checkPermissionCeiling(userId, tokenType, roleId);
+  }
+
   async listApiKeys(
     userId: string,
     opts?: { allUsers?: boolean }
   ): Promise<ApiKeyMeta[]> {
-    let query = this.db
-      .select({
-        id: this.apiKeysTable.id,
-        name: this.apiKeysTable.name,
-        description: this.apiKeysTable.description,
-        keyPrefix: this.apiKeysTable.keyPrefix,
-        tokenType: this.apiKeysTable.tokenType,
-        roleId: this.apiKeysTable.roleId,
-        roleName: this.rolesTable.name,
-        roleSlug: this.rolesTable.slug,
-        expiresAt: this.apiKeysTable.expiresAt,
-        lastUsedAt: this.apiKeysTable.lastUsedAt,
-        isActive: this.apiKeysTable.isActive,
-        createdAt: this.apiKeysTable.createdAt,
-        updatedAt: this.apiKeysTable.updatedAt,
-      })
-      .from(this.apiKeysTable)
-      .leftJoin(
-        this.rolesTable,
-        eq(this.apiKeysTable.roleId, this.rolesTable.id)
-      );
+    let query = this.selectMeta();
 
     if (!opts?.allUsers) {
       query = query.where(eq(this.apiKeysTable.userId, userId));
@@ -585,29 +615,7 @@ export class ApiKeyService extends BaseService {
       ? eq(this.apiKeysTable.id, id)
       : and(eq(this.apiKeysTable.id, id), eq(this.apiKeysTable.userId, userId));
 
-    const rows = await this.db
-      .select({
-        id: this.apiKeysTable.id,
-        name: this.apiKeysTable.name,
-        description: this.apiKeysTable.description,
-        keyPrefix: this.apiKeysTable.keyPrefix,
-        tokenType: this.apiKeysTable.tokenType,
-        roleId: this.apiKeysTable.roleId,
-        roleName: this.rolesTable.name,
-        roleSlug: this.rolesTable.slug,
-        expiresAt: this.apiKeysTable.expiresAt,
-        lastUsedAt: this.apiKeysTable.lastUsedAt,
-        isActive: this.apiKeysTable.isActive,
-        createdAt: this.apiKeysTable.createdAt,
-        updatedAt: this.apiKeysTable.updatedAt,
-      })
-      .from(this.apiKeysTable)
-      .leftJoin(
-        this.rolesTable,
-        eq(this.apiKeysTable.roleId, this.rolesTable.id)
-      )
-      .where(whereClause)
-      .limit(1);
+    const rows = await this.selectMeta().where(whereClause).limit(1);
 
     if ((rows as ApiKeyRow[]).length === 0) return null;
     return this.toMeta((rows as ApiKeyRow[])[0]);
@@ -816,51 +824,19 @@ export class ApiKeyService extends BaseService {
       return cached.grants;
     }
 
-    let rows: GrantedPermission[];
-    // A role-based key holds its role directly, not through an assignment that
-    // can lapse, so only a user-based key's entry has an end of this kind.
-    let validUntil: number | undefined;
-
-    if (tokenType === "role-based") {
-      // Guard: referenced role was deleted via onDelete: "set null"
-      if (!roleId) {
-        this.logger.warn(
-          `API key ${keyId} is role-based but its role has been deleted — all requests will be denied`,
-          { keyId }
-        );
-        return Object.freeze([]);
-      }
-      rows = await this.resolveRolePermissionRows(roleId);
-    } else {
-      // A super-admin's power is a bypass, not a list. The role is granted
-      // every permission that exists when the install is set up and nothing
-      // grants it the ones a later collection adds, while the session never
-      // needs the rows. A key copies the rows, so a key of theirs held a stale
-      // subset at best and, on an install whose first user came before the
-      // grant, nothing: every request refused, and the first key an operator
-      // mints to try an integration with. The catalogue is what their key
-      // copies, bounded by the key's kind like anyone else's. Whether they are
-      // one is the session bypass's own question, asked of its own resolver:
-      // a role that inherits super-admin answers yes there, so it answers yes
-      // here, where a direct read of `user_roles` said no.
-      //
-      // The owner's next role expiry is read BEFORE the grants. Read after, a
-      // role lapsing between the two reads would leave its grants in the entry
-      // and its expiry out of it, and the entry would outlive the role.
-      validUntil = (await resolveUserRoles(userId)).validUntil;
-      const all = (await isSuperAdmin(userId))
-        ? await this.resolveCataloguePermissionRows()
-        : await this.resolveUserPermissionRows(userId);
-      // Still filtered on the STORED slug rather than on `action === "read"`.
-      // A deliberately custom slug is supported, so the two disagree — a row
-      // named `view-dashboard` on action `read` is excluded by the slug test
-      // and included by the action test, and widening what a read-only key
-      // holds is not this change's business.
-      rows =
-        tokenType === "read-only"
-          ? all.filter(row => row.slug.startsWith("read-"))
-          : all;
+    // Guard: referenced role was deleted via onDelete: "set null"
+    if (tokenType === "role-based" && !roleId) {
+      this.logger.warn(
+        `API key ${keyId} is role-based but its role has been deleted — all requests will be denied`,
+        { keyId }
+      );
+      return Object.freeze([]);
     }
+    const { rows, validUntil } = await this.resolveGrantRows(
+      tokenType,
+      roleId,
+      userId
+    );
 
     // Frozen rather than copied per caller. The array and its rows are shared
     // by every request this key makes for the TTL, and a caller narrowing its
@@ -887,6 +863,59 @@ export class ApiKeyService extends BaseService {
    *
    * @param keyId - The API key ID whose cache entry should be evicted
    */
+  /**
+   * The permission rows a key of this type and role grants, uncached: the one
+   * resolution both a key's requests and the pre-creation summary use.
+   *
+   * A role-based key grants its role's rows, and one whose role is gone
+   * grants nothing. A read-only or full-access key grants its creator's live
+   * permissions, read-only keeping only the `read-*` ones; `validUntil` is
+   * when one of the creator's roles lapses, after which the answer must be
+   * read again.
+   */
+  private async resolveGrantRows(
+    tokenType: ApiKeyTokenType,
+    roleId: string | null,
+    userId: string
+  ): Promise<{ rows: GrantedPermission[]; validUntil?: number }> {
+    // A role-based key holds its role directly, not through an assignment that
+    // can lapse, so only a user-based key's answer has an end of this kind.
+    if (tokenType === "role-based") {
+      return {
+        rows: roleId ? await this.resolveRolePermissionRows(roleId) : [],
+      };
+    }
+    // A super-admin's power is a bypass, not a list. The role is granted
+    // every permission that exists when the install is set up and nothing
+    // grants it the ones a later collection adds, while the session never
+    // needs the rows. A key copies the rows, so a key of theirs held a stale
+    // subset at best and, on an install whose first user came before the
+    // grant, nothing: every request refused, and the first key an operator
+    // mints to try an integration with. The catalogue is what their key
+    // copies, bounded by the key's kind like anyone else's. Whether they are
+    // one is the session bypass's own question, asked of its own resolver:
+    // a role that inherits super-admin answers yes there, so it answers yes
+    // here, where a direct read of `user_roles` said no.
+    //
+    // The owner's next role expiry is read BEFORE the grants. Read after, a
+    // role lapsing between the two reads would leave its grants in the entry
+    // and its expiry out of it, and the entry would outlive the role.
+    const { validUntil } = await resolveUserRoles(userId);
+    const all = (await isSuperAdmin(userId))
+      ? await this.resolveCataloguePermissionRows()
+      : await this.resolveUserPermissionRows(userId);
+    // Still filtered on the STORED slug rather than on `action === "read"`.
+    // A deliberately custom slug is supported, so the two disagree — a row
+    // named `view-dashboard` on action `read` is excluded by the slug test
+    // and included by the action test, and widening what a read-only key
+    // holds is not this change's business.
+    const rows =
+      tokenType === "read-only"
+        ? all.filter(row => row.slug.startsWith("read-"))
+        : all;
+    return { rows, validUntil };
+  }
+
   invalidatePermissionsCache(keyId: string): void {
     invalidateApiKeyPermissionsCache(keyId);
   }
@@ -1086,13 +1115,20 @@ export class ApiKeyService extends BaseService {
     // lifetime elsewhere. A failed read throws rather than admitting the key.
     if (!(await accountIsActive(row.userId))) return null;
 
-    // Fire-and-forget lastUsedAt update — not awaited; latency on every auth
-    // request is unacceptable, and a missed update is non-critical.
-
-    void this.db
+    // The key's last use, recorded without holding up the request it is for.
+    // A query runs only once something asks for its result, so `.then` is
+    // what sends it: discarding the query unawaited, as before, never wrote
+    // the row at all. A failed write is logged and costs only this one record.
+    this.db
       .update(this.apiKeysTable)
       .set({ lastUsedAt: new Date() })
-      .where(eq(this.apiKeysTable.id, row.id));
+      .where(eq(this.apiKeysTable.id, row.id))
+      .then(undefined, (error: unknown) => {
+        this.logger.warn("API key last use could not be recorded", {
+          keyId: row.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
 
     return {
       id: row.id,
@@ -1100,6 +1136,42 @@ export class ApiKeyService extends BaseService {
       tokenType: row.tokenType as ApiKeyTokenType,
       roleId: row.roleId ?? null,
     };
+  }
+
+  /**
+   * The columns every key's metadata is read with, and the joins that name its
+   * role and its owner. One selection for the list and for a single key, so
+   * the two can never describe the same key differently.
+   */
+  private selectMeta() {
+    return this.db
+      .select({
+        id: this.apiKeysTable.id,
+        name: this.apiKeysTable.name,
+        description: this.apiKeysTable.description,
+        keyPrefix: this.apiKeysTable.keyPrefix,
+        tokenType: this.apiKeysTable.tokenType,
+        roleId: this.apiKeysTable.roleId,
+        roleName: this.rolesTable.name,
+        roleSlug: this.rolesTable.slug,
+        ownerId: this.usersTable.id,
+        ownerName: this.usersTable.name,
+        ownerEmail: this.usersTable.email,
+        expiresAt: this.apiKeysTable.expiresAt,
+        lastUsedAt: this.apiKeysTable.lastUsedAt,
+        isActive: this.apiKeysTable.isActive,
+        createdAt: this.apiKeysTable.createdAt,
+        updatedAt: this.apiKeysTable.updatedAt,
+      })
+      .from(this.apiKeysTable)
+      .leftJoin(
+        this.rolesTable,
+        eq(this.apiKeysTable.roleId, this.rolesTable.id)
+      )
+      .leftJoin(
+        this.usersTable,
+        eq(this.apiKeysTable.userId, this.usersTable.id)
+      );
   }
 
   private toMeta(row: ApiKeyRow): ApiKeyMeta {
@@ -1115,6 +1187,14 @@ export class ApiKeyService extends BaseService {
               id: row.roleId,
               name: row.roleName,
               slug: row.roleSlug as string,
+            }
+          : null,
+      owner:
+        row.ownerId != null && row.ownerEmail != null
+          ? {
+              id: row.ownerId,
+              name: row.ownerName ?? null,
+              email: row.ownerEmail,
             }
           : null,
       expiresAt:

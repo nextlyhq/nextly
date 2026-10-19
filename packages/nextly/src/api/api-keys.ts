@@ -34,6 +34,7 @@ import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
+  ApiKeyTokenTypeSchema,
   CreateApiKeySchema,
   UpdateApiKeySchema,
 } from "../schemas/_zod/api-keys";
@@ -154,6 +155,71 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
  * Response: `{ message, item: { doc: ApiKeyMeta, key: string } }` via
  * `respondMutation`. `key` is the one-time raw secret; status 201.
  */
+/**
+ * The query a key summary is asked with: the type and role the form has
+ * chosen. Only their shapes are checked here; whether the two belong together,
+ * and whether the role is within its creator's, is the service's question, so
+ * a summary is refused exactly as creating that key would be.
+ */
+const ApiKeyAbilitiesQuerySchema = z.object({
+  tokenType: ApiKeyTokenTypeSchema,
+  roleId: z.string().min(1).optional(),
+});
+
+/**
+ * What a key the caller creates now, of this type and role, would be able to
+ * do: the summary the key form shows before creation.
+ *
+ * `GET /api/api-keys/abilities?tokenType=…&roleId=…`
+ *
+ * Answered by the resolution a key's own requests use, so the summary is what
+ * the key gets. Session-only and behind the permission to create keys, as
+ * creation is: a summary is that creation's preview, and a key asking it
+ * about another key is refused.
+ *
+ * Response: `{ items: { slug, action, resource }[], meta }`.
+ *
+ * @experimental The key form's summary; its shape may change while that
+ * screen does.
+ */
+export const getApiKeyAbilities = withErrorHandler(
+  async (req: Request): Promise<Response> => {
+    const authResult = await requireApiKeyPermission(req, "create");
+    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+
+    if (authResult.authMethod !== "session") denySessionOnly("create");
+
+    const params = new URL(req.url).searchParams;
+    let query: z.infer<typeof ApiKeyAbilitiesQuerySchema>;
+    try {
+      query = ApiKeyAbilitiesQuerySchema.parse({
+        tokenType: params.get("tokenType") ?? undefined,
+        roleId: params.get("roleId") ?? undefined,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
+    }
+
+    const service = await getApiKeyService();
+    const grants = await service.previewApiKeyGrants(authResult.userId, query);
+    const items = grants.map(({ slug, action, resource }) => ({
+      slug,
+      action,
+      resource,
+    }));
+
+    return respondList(items, {
+      total: items.length,
+      page: 1,
+      limit: items.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
+  }
+);
+
 export const createApiKey = withErrorHandler(
   async (req: Request): Promise<Response> => {
     const authResult = await requireApiKeyPermission(req, "create");
