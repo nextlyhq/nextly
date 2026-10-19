@@ -39,6 +39,7 @@ import { getDialectTables } from "../../database/index";
 import { NextlyError } from "../../errors/nextly-error";
 import { getNextlyLogger } from "../../observability/logger";
 import { linkedTransaction } from "../../plugins/database/plugin-transaction-link";
+import { staffPerson } from "../../plugins/principals/ref";
 import {
   CONTENT_EVENTS_TABLE,
   contentEventsTables,
@@ -158,6 +159,52 @@ export async function reportPrincipalDeleted(
   // A precondition: refused before the report's own transaction is opened.
   assertNoOpenTransaction(adapter, OPERATION);
   await runAdapterTransaction(adapter.transaction.bind(adapter), erase);
+}
+
+/**
+ * Inside a staff user's deletion transaction: put the user on the
+ * deleted-people list, as a deleted plugin-defined person is put on it, and
+ * erase every delivery record that names them, whatever address it went to.
+ *
+ * Recorded under the lock every write naming a person shares, so a delivery
+ * record being written for the user is either finished first and erased here,
+ * or waits for the deletion to commit and is written erased, its id replaced
+ * by the digest. The list keeps only the keyed digest of kind and id, with no
+ * expiry, under the key that survives a rotation of the install's secret.
+ *
+ * Their audit rows are not touched here: a staff user's deletion erases those
+ * through the audit trail's own staff erasure.
+ */
+export async function recordStaffUserDeleted(
+  db: PrincipalErasureDb,
+  adapter: unknown,
+  userId: string,
+  secrets: readonly string[]
+): Promise<void> {
+  const dialect = adapterDialect(adapter);
+  if (!dialect) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "An unexpected error occurred.",
+      logMessage:
+        "A staff user's deletion could not tell which database the adapter talks to.",
+      logContext: { operation: "deleteUser" },
+    });
+  }
+  const tables = principalErasureTables(dialect, false);
+  const subject = staffPerson(userId);
+  const digests = await readPrincipalDigests(
+    db,
+    rowLockServer(adapter, dialect),
+    tables,
+    "exclusive",
+    secrets
+  );
+  const digest = digests.digest(subject);
+  if (!(await digests.isDeleted(subject))) {
+    await db.insert(tables.deleted).values({ digest, deletedAt: new Date() });
+  }
+  await erasePrincipalDeliveries(db, tables.deliveries, subject, digest);
 }
 
 /**

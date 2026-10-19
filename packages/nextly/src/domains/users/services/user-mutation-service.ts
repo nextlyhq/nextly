@@ -62,10 +62,12 @@ import {
   liveColumnsOf,
   retiredTablesNamedForErasure,
 } from "../../../init/retired-auth-tables";
+import { env } from "../../../lib/env";
 import {
   CONTENT_EVENTS_TABLE,
   contentEventsTables,
 } from "../../../schemas/content-events";
+import { DELETED_PRINCIPALS_TABLE } from "../../../schemas/deleted-principals/table-name";
 import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
@@ -86,14 +88,16 @@ import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
+import { recordStaffUserDeleted } from "../../audit/erase-principal";
 import {
   buildAcceptInviteLink,
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
 import { deliveriesTableFor } from "../../email/deliveries-table";
-import { eraseRecipientDeliveries } from "../../email/erase-recipient";
+import { eraseUnnamedRecipientDeliveries } from "../../email/erase-recipient";
 import { revalidateMedia } from "../../media/revalidate-media";
+import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
@@ -2621,6 +2625,11 @@ export class UserMutationService extends BaseService {
   /**
    * Delete a user and all related data (roles, media ownership).
    *
+   * Their email delivery records are erased: every record naming them,
+   * whatever address it went to, and the unnamed records sent to their current
+   * address; a record written for them afterwards is written erased. An email
+   * the provider had already accepted may still be delivered.
+   *
    * §13.8 + spec note: user existence is sensitive (account enumeration);
    * the public message stays generic. The id flows only through logContext.
    *
@@ -2700,6 +2709,11 @@ export class UserMutationService extends BaseService {
     // commits, so it is declared out here rather than in the closure.
     let deletedAddress: string | undefined;
     const deliveriesExist = await this.tablePresent("email_deliveries");
+    // The deleted-people list, which a database that has not run
+    // `nextly migrate` since it arrived may lack, as it may lack media.
+    const deletedPeopleExist = await this.tablePresent(
+      DELETED_PRINCIPALS_TABLE
+    );
 
     // Asked out here for the same reason, and treated as present when the
     // probe cannot answer, for the same reason too. `media.uploaded_by`
@@ -3019,8 +3033,28 @@ export class UserMutationService extends BaseService {
         // only shape that produces it.
         deletedAddress =
           typeof preimage.email === "string" ? preimage.email : undefined;
+        // By person, every record that names this user, whatever address it
+        // went to: the user goes on the deleted-people list, and their records
+        // lose the address digest and name them by the keyed digest instead.
+        // Under the lock every write naming a person shares, so a record being
+        // written for them now is either erased here or written erased. First,
+        // before this transaction writes to the delivery log at all: on MySQL
+        // the address erasure's update holds gap locks a waiting writer's
+        // insert needs, and taking the lock after it would deadlock with that
+        // writer.
+        if (deliveriesExist && deletedPeopleExist) {
+          await recordStaffUserDeleted(
+            txDb,
+            this.adapter,
+            String(userId),
+            pluginSettingsSecrets(env)
+          );
+        }
+        // By address, only the records that name nobody: those written before
+        // sends named their person. A record naming a person is that person's,
+        // and someone else who holds or held the address keeps theirs.
         if (deliveriesExist && deletedAddress !== undefined) {
-          await eraseRecipientDeliveries(
+          await eraseUnnamedRecipientDeliveries(
             txDb,
             deliveriesTableFor(this.dialect),
             deletedAddress
@@ -3149,8 +3183,8 @@ export class UserMutationService extends BaseService {
       // an already-erased row holds the sentinel, which no address hashes to —
       // so a second pass over untouched rows costs one indexed update.
       if (deliveriesExist && deletedAddress !== undefined) {
-        await eraseRecipientDeliveries(
-          this.db as Parameters<typeof eraseRecipientDeliveries>[0],
+        await eraseUnnamedRecipientDeliveries(
+          this.db as Parameters<typeof eraseUnnamedRecipientDeliveries>[0],
           deliveriesTableFor(this.dialect),
           deletedAddress
         );
