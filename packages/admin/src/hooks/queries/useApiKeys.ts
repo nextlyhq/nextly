@@ -22,10 +22,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  fetchApiKeyAbilities,
   fetchApiKeys,
   createApiKey,
   updateApiKey,
   revokeApiKey,
+  type ApiKeyAbilitiesQuery,
+  type ApiKeyAbility,
   type ApiKeyMeta,
   type ApiKeyListResponse,
   type CreateApiKeyPayload,
@@ -40,6 +43,13 @@ import {
 export const apiKeyKeys = {
   all: () => ["apiKeys"] as const,
   lists: () => [...apiKeyKeys.all(), "list"] as const,
+  abilities: (query: ApiKeyAbilitiesQuery) =>
+    [
+      ...apiKeyKeys.all(),
+      "abilities",
+      query.tokenType,
+      query.roleId ?? null,
+    ] as const,
 };
 
 // ============================================================
@@ -58,6 +68,23 @@ export function useApiKeys() {
     queryKey: apiKeyKeys.lists(),
     queryFn: () => fetchApiKeys(),
     staleTime: 30_000,
+  });
+}
+
+/**
+ * useApiKeyAbilities — What a key of this type and role would be able to do,
+ * as the server answers it, for the form's summary before creation.
+ *
+ * Asked only once it can be answered: a role-based key needs its role. A
+ * read-only or full-access key follows its creator's live permissions, so
+ * the answer is kept briefly rather than for the session.
+ */
+export function useApiKeyAbilities(query: ApiKeyAbilitiesQuery) {
+  return useQuery<ApiKeyAbility[], Error>({
+    queryKey: apiKeyKeys.abilities(query),
+    queryFn: () => fetchApiKeyAbilities(query),
+    enabled: query.tokenType !== "role-based" || Boolean(query.roleId),
+    staleTime: 15_000,
   });
 }
 
