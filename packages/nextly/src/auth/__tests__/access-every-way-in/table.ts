@@ -125,7 +125,7 @@ export const ACTIONS = [
 export type Action = (typeof ACTIONS)[number];
 
 /** The actions that name one entry, which every collection door can ask. */
-const ENTRY_ACTIONS = ACTIONS.filter(
+export const ENTRY_ACTIONS = ACTIONS.filter(
   action => action !== "list" && action !== "count"
 );
 

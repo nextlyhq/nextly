@@ -33,7 +33,7 @@ import { apiKeyScopeFrom } from "../../authenticated-scope";
 import { requireAuthentication } from "../../middleware/index";
 
 import {
-  ACTIONS,
+  ENTRY_ACTIONS,
   CALLERS,
   RULES,
   type Action,
@@ -316,13 +316,10 @@ function serviceCall(
 }
 
 function probePlugin() {
-  // A gate names one permission on one entry, so none is a list or a count.
-  const entryActions = ACTIONS.filter(
-    action => action !== "list" && action !== "count"
-  );
   const gates = [
     ...RULES.flatMap(rule =>
-      entryActions.map(action => ({ slug: collectionOf(rule), action }))
+      // A gate names one permission on one entry, so none is a list or a count.
+      ENTRY_ACTIONS.map(action => ({ slug: collectionOf(rule), action }))
     ),
     ...RULES.flatMap(rule =>
       (["read", "update"] as const).map(action => ({

@@ -565,12 +565,24 @@ async function markUpdated(world: World, row: Row): Promise<void> {
  * Puts a Single with a status where its publish or unpublish starts: a draft
  * to publish, published to unpublish. Rows run in order, so each ask finds the
  * Single as the one before it left it otherwise.
+ *
+ * Written to its row directly and read back, never through a way in the
+ * table asks: a door that dropped the status would otherwise prepare its own
+ * starting point, and an ask that changed nothing would look done.
  */
 async function setPubStatus(world: World, row: Row): Promise<void> {
-  await world.t.nextly.updateSingle({
-    slug: pubSingleOf(row.rule),
-    data: { status: row.action === "publish" ? "draft" : "published" },
-  });
+  const before = row.action === "publish" ? "draft" : "published";
+  const [single] = await storedTable(world, row);
+  if (!single) throw new Error(`${tableOf(row)} holds no row`);
+  await world.t.adapter.update(
+    tableOf(row),
+    { status: before },
+    { and: [{ column: "id", op: "=", value: String(single.id) }] }
+  );
+  const [set] = await storedTable(world, row);
+  if (set?.status !== before) {
+    throw new Error(`${tableOf(row)} did not take status ${before}`);
+  }
 }
 
 /** The status a Single's publish or unpublish leaves it in. */
