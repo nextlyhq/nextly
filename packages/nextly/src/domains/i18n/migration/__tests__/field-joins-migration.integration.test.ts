@@ -291,6 +291,45 @@ for (const entry of DIALECTS) {
         expect(await companionTables()).toEqual([]);
       });
 
+      it("moves a field into the companion its last translated field left behind, and back on the way down", async () => {
+        // The last translated field leaving drops its column and keeps the companion table, so the
+        // next snapshot records no translated columns while the table is still there.
+        await seedShared();
+        const allShared: MinimalConfigEntity = {
+          ...shared,
+          fields: [
+            { name: "headline", type: "text", localized: false },
+            { name: "body", type: "text", localized: false },
+          ],
+        };
+        await migrateCreate(allShared);
+        await migrate();
+        expect(await companionTables()).toEqual([companion]);
+
+        await migrateCreate({
+          ...allShared,
+          fields: [
+            { name: "headline", type: "text", localized: false },
+            { name: "body", type: "text", localized: true },
+          ],
+        });
+        await migrate();
+
+        const [en] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+        );
+        expect(en?.body).toBe("Hello");
+
+        // The main file, then the joins file before it: the value is back on main, and the table
+        // the joins file did not create stays.
+        expect(await migrateDown(2)).toHaveLength(2);
+        const [main] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(table)} WHERE ${q("id")} = 'e1'`
+        );
+        expect(main?.body).toBe("Hello");
+        expect(await companionTables()).toEqual([companion]);
+      });
+
       it("rolls a Required field back to shared with its value, and Required again", async () => {
         // The main file's DOWN runs first and re-adds the column; made required there, before any
         // value is back, it would refuse every existing row.

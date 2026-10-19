@@ -147,13 +147,19 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     return Object.fromEntries(rows.map(row => [row.locale, row.heading]));
   }
 
-  /** A translated collection whose `heading` is shared, with one entry holding a value. */
-  async function seedCollection(): Promise<string> {
+  /**
+   * A translated collection whose `heading` is shared, with one entry holding a value; with
+   * `status`, it has Draft/Published.
+   */
+  async function seedCollection(
+    options: { status?: boolean } = {}
+  ): Promise<string> {
     const created = await handler().createCollection({
       name: "posts",
       label: "Post",
       localized: true,
       fields: SHARED,
+      ...(options.status ? { status: true } : {}),
     });
     expect(created.success, JSON.stringify(created)).toBe(true);
     const entry = await handler()
@@ -166,12 +172,20 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     return String((entry.data as { id: unknown }).id);
   }
 
-  /** A translated Single whose `heading` is shared, holding a value. */
-  async function seedSingle(): Promise<string> {
+  /** A translated Single whose `heading` is shared, holding a value; with `status`, it has Draft/Published. */
+  async function seedSingle(
+    options: { status?: boolean } = {}
+  ): Promise<string> {
     await dispatchSingles(
       "createSingle",
       {},
-      { slug: "hero", label: "Hero", localized: true, fields: SHARED }
+      {
+        slug: "hero",
+        label: "Hero",
+        localized: true,
+        fields: SHARED,
+        ...(options.status ? { status: true } : {}),
+      }
     );
     const singles: SingleEntryService =
       current.getService("singleEntryService");
@@ -344,6 +358,31 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
+  // An entity whose fields are all shared has no companion, so the change that makes its first
+  // field translated creates one. The default-language row each entry gets there carries the
+  // entry's publishing state: created with the companion's `draft` default, published content
+  // would stop being served.
+  it.each(PATHS.filter(p => p.table !== "comp_banner"))(
+    "keeps a published entry published when its first translated field is made translated, when $path",
+    async ({ table, change }) => {
+      const id =
+        table === "dc_posts"
+          ? await seedCollection({ status: true })
+          : await seedSingle({ status: true });
+      await query(
+        `UPDATE ${quote(dialect, table)} SET ${quote(dialect, "status")} = 'published'`
+      );
+
+      await change(TRANSLATED);
+
+      const [row] = await query<{ status: string }>(
+        `SELECT ${quote(dialect, "_status")} AS status FROM ${quote(dialect, `${table}_locales`)} ` +
+          `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'en'`
+      );
+      expect(row?.status).toBe("published");
+    }
+  );
+
   it.each(PATHS)(
     "refuses a field whose type changes as it becomes translated, and changes nothing, when $path",
     async ({ table, seed, change }) => {
@@ -471,17 +510,18 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(await readCollection(id)).toBe("Hello");
   });
 
-  it("moves the value when a code-first apply makes the field translated", async () => {
-    // The code-first applies (`next dev`, a config reload, `db:sync`) hand the pipeline the desired
-    // schema and nothing else, and a developer confirms drops at the prompt. The value still moves
-    // first, so confirming nothing loses it.
-    const id = await seedCollection();
+  /**
+   * A code-first apply (`next dev`, a config reload, `db:sync`) of the collection `posts` with
+   * `fields`: the pipeline gets the desired schema and nothing else, and a developer confirms
+   * every drop at the prompt.
+   */
+  async function applyCodeFirst(fields: unknown[]) {
     const desired = await buildFullDesiredSchema();
     const posts = desired.collections.posts;
     if (!posts) throw new Error("the collection posts is missing");
     desired.collections.posts = {
       ...posts,
-      fields: TRANSLATED as typeof posts.fields,
+      fields: fields as typeof posts.fields,
       localized: true,
     };
     const db = current.adapter.getDrizzle();
@@ -513,8 +553,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
             )[0]?.name
           )
         : undefined;
-
-    const applied = await pipeline.apply({
+    return pipeline.apply({
       desired,
       db,
       dialect,
@@ -523,9 +562,49 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       defaultLocale: "en",
       ...(databaseName !== undefined ? { databaseName } : {}),
     });
+  }
+
+  it("moves the value when a code-first apply makes the field translated", async () => {
+    // Confirming every drop loses nothing: the value moves first.
+    const id = await seedCollection();
+
+    const applied = await applyCodeFirst(TRANSLATED);
 
     expect(applied.success, JSON.stringify(applied)).toBe(true);
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+  });
+
+  it("keeps a published entry published when a code-first apply makes its first field translated", async () => {
+    const id = await seedCollection({ status: true });
+    await query(
+      `UPDATE ${quote(dialect, "dc_posts")} SET ${quote(dialect, "status")} = 'published'`
+    );
+
+    const applied = await applyCodeFirst(TRANSLATED);
+
+    expect(applied.success, JSON.stringify(applied)).toBe(true);
+    const [row] = await query<{ status: string }>(
+      `SELECT ${quote(dialect, "_status")} AS status FROM ${quote(dialect, "dc_posts_locales")} ` +
+        `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'en'`
+    );
+    expect(row?.status).toBe("published");
+  });
+
+  it("refuses a code-first apply that changes a field's type as it becomes translated, and changes nothing", async () => {
+    // A code-first apply has no previous fields to compare with, so it compares the live column:
+    // text copied as it is into a number column fails part-way on PostgreSQL and is coerced on
+    // MySQL and SQLite.
+    const id = await seedCollection();
+
+    const applied = await applyCodeFirst([
+      { name: "heading", type: "number", localized: true },
+      { name: "views", type: "number" },
+    ]);
+
+    expect(applied.success).toBe(false);
+    expect(JSON.stringify(applied)).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
+    expect(await mainHeading("dc_posts", id)).toBe("Hello");
+    expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
   });
 
   /** `heading` as the main table holds it, or undefined when the column is gone. */
