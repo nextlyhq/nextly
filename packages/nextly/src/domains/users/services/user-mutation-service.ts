@@ -2190,6 +2190,8 @@ export class UserMutationService extends BaseService {
       if (changes.sendWelcomeEmail && this.emailService) {
         await this.emailService
           .sendWelcomeEmail(user!.email, {
+            // Names the staff user on the delivery records.
+            id: String(user!.id),
             name: user!.name ?? null,
             email: user!.email,
           })

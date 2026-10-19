@@ -493,7 +493,8 @@ export class AuthService extends BaseService {
           // the branch below that deliberately withholds the token.
           const result = await this.emailService.sendPasswordResetEmail(
             normalizedEmail,
-            { name: user.name, email: user.email },
+            // Its id names the staff user on the delivery records.
+            { id: String(user.id), name: user.name, email: user.email },
             rawToken,
             { path: options?.redirectPath }
           );
@@ -739,7 +740,8 @@ export class AuthService extends BaseService {
 
       return await this.deliverVerificationEmail(
         email,
-        { name: user.name, email: user.email },
+        // Its id names the staff user on the delivery records.
+        { id: String(user.id), name: user.name, email: user.email },
         rawToken,
         options?.redirectPath
       );
@@ -781,7 +783,7 @@ export class AuthService extends BaseService {
    */
   private async deliverVerificationEmail(
     email: string,
-    recipient: { name: string | null; email: string },
+    recipient: { id: string; name: string | null; email: string },
     rawToken: string,
     redirectPath: string | undefined
   ): Promise<{ token?: string }> {

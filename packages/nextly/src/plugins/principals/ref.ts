@@ -43,3 +43,41 @@ export function principalRefOf(value: unknown): PrincipalRef | null {
   }
   return { kind, id };
 }
+
+/**
+ * The kind a staff user takes wherever a record names a person by kind and
+ * id, as an audit row names one. No plugin kind can be spelled this way, since
+ * every plugin kind holds a colon.
+ */
+export const STAFF_PERSON_KIND = "staff";
+
+/** A staff user, named by kind and id for a record that names a person. */
+export function staffPerson(userId: string): PrincipalRef {
+  return { kind: STAFF_PERSON_KIND, id: userId };
+}
+
+/**
+ * The staff user `value` names, copied, or `null` when it names no staff
+ * user: not an object, another kind, or an id that is not a string of 1 to
+ * 128 characters. Whether that user exists is the caller's to ask.
+ */
+export function staffPersonOf(value: unknown): PrincipalRef | null {
+  if (typeof value !== "object" || value === null) return null;
+  let kind: unknown;
+  let id: unknown;
+  try {
+    // Read once each, as principalRefOf does.
+    ({ kind, id } = value as { kind?: unknown; id?: unknown });
+  } catch {
+    return null;
+  }
+  if (kind !== STAFF_PERSON_KIND) return null;
+  if (
+    typeof id !== "string" ||
+    id.length === 0 ||
+    id.length > MAX_PRINCIPAL_ID_LENGTH
+  ) {
+    return null;
+  }
+  return staffPerson(id);
+}
