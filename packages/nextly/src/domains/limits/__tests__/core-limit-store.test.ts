@@ -194,3 +194,23 @@ describe("coreRateLimitStoreFor", () => {
     expect(seen[0]).not.toContain("203.0.113.7");
   });
 });
+
+describe("coreLimitStore with a window the settings accept but a store would refuse", () => {
+  it.each([
+    ["fractional", 1_500.5],
+    ["infinite", Number.POSITIVE_INFINITY],
+  ])(
+    "counts a %s window rather than failing the request",
+    async (_case, windowMs) => {
+      // Any positive number passes the settings, and the selected stores refuse
+      // an expiry that is fractional or past the safe integers.
+      const limiter = new RateLimiter(
+        coreLimitStore(createMemoryLimitStore(), SECRET)
+      );
+
+      expect((await limiter.check("k", 2, windowMs)).allowed).toBe(true);
+      expect((await limiter.check("k", 2, windowMs)).allowed).toBe(true);
+      expect((await limiter.check("k", 2, windowMs)).allowed).toBe(false);
+    }
+  );
+});

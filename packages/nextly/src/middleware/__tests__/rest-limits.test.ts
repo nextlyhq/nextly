@@ -4,7 +4,9 @@
  * readers of the test's own, so each case names the credential it carries;
  * the readers authentication supplies are covered in `rest-callers.test.ts`.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { container } from "../../di/container";
 
 import { limitStoreUnavailable } from "../../domains/limits/limit-store";
 import {
@@ -17,6 +19,7 @@ import { openRestLimitGate, type RestLimitTarget } from "../rest-limit-gate";
 import {
   createRateLimiter,
   createRestLimits,
+  restLimitCounts,
   SESSION_BUDGET_MULTIPLE,
   UNRESOLVED_CEILING_MULTIPLE,
 } from "../rest-limits";
@@ -470,5 +473,65 @@ describe("REST limit: while the store core's limits count in is away", () => {
     const check = limiter({ store: away });
     expect(await admitted(check, { address: "203.0.113.7" }, 5)).toBe(5);
     expect(await admitted(check, {}, 5)).toBe(5);
+  });
+});
+
+describe("REST limit: where it counts", () => {
+  afterEach(() => {
+    container.clear();
+  });
+
+  it("keeps an app's store without consume working, counting as it did", async () => {
+    // A store of the older contract may implement only increment and reset;
+    // the REST limit picks its counting path by whether consume exists.
+    const hits = new Map<string, number>();
+    const plain: RateLimitStore = {
+      increment: async (key, windowMs) => {
+        const count = (hits.get(key) ?? 0) + 1;
+        hits.set(key, count);
+        return { count, resetTime: Date.now() + windowMs };
+      },
+      reset: async key => {
+        hits.delete(key);
+      },
+    };
+    const check = limiter({
+      store: restLimitCounts({ store: plain }, async () => undefined),
+    });
+
+    expect(await admitted(check, { address: "203.0.113.7" }, 5)).toBe(2);
+    // A request presenting an API key, whose lookup is bounded by a peek
+    // where the store offers one, is counted rather than failing.
+    expect(
+      await admitted(check, { key: "bogus", address: "203.0.113.8" }, 1)
+    ).toBe(1);
+  });
+
+  it("starts the services on a cold worker so it counts in the shared store", async () => {
+    // A worker serving only requests that never start the services would
+    // otherwise count in its own memory for good, a budget per worker.
+    const counted: string[] = [];
+    const shared = new InMemoryRateLimitStore();
+    const recording: RateLimitStore = {
+      increment: (key, windowMs) => {
+        counted.push(key);
+        return shared.increment(key, windowMs);
+      },
+      reset: key => shared.reset(key),
+      consume: (key, limit, windowMs) => {
+        counted.push(key);
+        return shared.consume!(key, limit, windowMs);
+      },
+    };
+    const startServices = vi.fn(async () => {
+      container.registerSingleton("coreRateLimitStore", () => recording);
+    });
+    const check = limiter({
+      store: restLimitCounts({ limitStore: "database" }, startServices),
+    });
+
+    expect(await admitted(check, { address: "203.0.113.7" }, 3)).toBe(2);
+    expect(startServices).toHaveBeenCalled();
+    expect(counted.length).toBeGreaterThan(0);
   });
 });

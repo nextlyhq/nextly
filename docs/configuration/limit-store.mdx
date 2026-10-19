@@ -48,7 +48,7 @@ An app that already passes a store of the earlier `RateLimitStore` contract (`in
 
 An app's store of the earlier `RateLimitStore` contract, when configured, serves all of these instead.
 
-- **Keys are keyed hashes.** Core's keys hold client addresses, account ids and API key ids. None of them reaches any store as given, the memory store and an app's own store included.
+- **Keys are keyed hashes in the selected store.** Core's keys hold client addresses, account ids and API key ids. In the memory store, the database store, or an app's own `LimitStore`, each is stored only as a keyed hash. An app's store of the earlier `RateLimitStore` contract receives them as core names them, as it always has: treat what it holds as personal data.
 - **Counts roll.** An attempt counts for one window from when it was made, kept in up to 32 buckets per key, so an entry stays small however many attempts it holds. An attempt can be forgotten up to 1/32 of the window early. An entry expires by the end of its newest attempt's window.
 - **An outage refuses sign-in and opens the API.** Admitting sign-ins while their store is away would let password guessing run uncounted. Refusing API requests would take the whole site down with its store. The outage is logged once when it begins (`kind: "core-limit-store-unavailable"`) and once when the store answers again (`kind: "core-limit-store-recovered"`).
 - **With an app's own store, an outage stops staff sign-in until the store answers.** Monitor that store as you monitor the database.

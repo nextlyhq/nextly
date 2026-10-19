@@ -24,6 +24,8 @@
  */
 import { container } from "../di/container";
 import { openWhileStoreIsDown } from "../domains/limits/core-limit-outage";
+import { guardedAppRateLimitStore } from "../domains/limits/core-limit-store";
+import type { LimitStoreSelection } from "../domains/limits/limit-store-setting";
 import { NextlyError } from "../errors/nextly-error";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
@@ -481,6 +483,34 @@ export function createRestLimits(
 }
 
 /**
+ * The store the REST limit counts in, from the sanitized `rateLimit` config:
+ * an app's store of the older contract when it configured one, else where
+ * the services count core's own limits, read per call.
+ *
+ * @param startServices - Registers the services, asked only when a shared
+ *   store is selected.
+ */
+export function restLimitCounts(
+  config:
+    | { store?: RateLimitStore; limitStore?: LimitStoreSelection }
+    | undefined,
+  startServices: () => Promise<unknown>
+): RateLimitStore {
+  const own = config?.store;
+  if (own !== undefined) {
+    return coreCountsOr(guardedAppRateLimitStore(own), {
+      consume: own.consume !== undefined,
+    });
+  }
+  const shared =
+    config?.limitStore !== undefined && config.limitStore !== "memory";
+  return coreCountsOr(new InMemoryRateLimitStore(), {
+    consume: true,
+    ...(shared ? { startServices } : {}),
+  });
+}
+
+/**
  * Where core's own limits count, read on every call, or `fallback` while the
  * services are not registered yet.
  *
@@ -488,9 +518,19 @@ export function createRestLimits(
  * which can be before the services are: one store chosen then would be this
  * process's memory for good, and on the database store each instance would
  * count a budget of its own.
+ *
+ * @param options.startServices - Registers the services, for a site whose
+ *   limits count in a shared store: a cold worker serving only requests that
+ *   never start them would otherwise count in its own memory for good.
+ * @param options.consume - Whether the store offers `consume`. An app's store
+ *   of the older contract may not, and the REST limit picks its counting path
+ *   by whether `consume` exists, so it is offered only where the store has it.
  */
-export function coreCountsOr(fallback: RateLimitStore): RateLimitStore {
-  const current = (): RateLimitStore => {
+export function coreCountsOr(
+  fallback: RateLimitStore,
+  options: { startServices?: () => Promise<unknown>; consume: boolean }
+): RateLimitStore {
+  const registered = (): RateLimitStore | undefined => {
     try {
       if (container.has("coreRateLimitStore")) {
         return container.get<RateLimitStore>("coreRateLimitStore");
@@ -498,23 +538,32 @@ export function coreCountsOr(fallback: RateLimitStore): RateLimitStore {
     } catch {
       // The container is not initialized yet.
     }
-    return fallback;
+    return undefined;
   };
+  const current = async (): Promise<RateLimitStore> => {
+    const store = registered();
+    if (store !== undefined) return store;
+    if (options.startServices === undefined) return fallback;
+    await options.startServices();
+    return registered() ?? fallback;
+  };
+  const counts: RateLimitStore = {
+    increment: async (key, windowMs) =>
+      (await current()).increment(key, windowMs),
+    reset: async key => (await current()).reset(key),
+  };
+  if (!options.consume) return counts;
   return {
-    increment: (key, windowMs) => current().increment(key, windowMs),
-    reset: key => current().reset(key),
-    consume: (key, limit, windowMs) => {
-      const store = current();
-      // Both stores read here have `consume`: the core store when it is not
-      // the app's own (which the REST limit is given directly), and memory.
-      // Refused rather than emulated, since a peek emulated by `increment`
-      // would record the very request it was asked not to.
+    ...counts,
+    consume: async (key, limit, windowMs) => {
+      const store = await current();
+      // Offered only where the store has it; refused rather than emulated
+      // otherwise, since a peek emulated by `increment` would record the
+      // very request it was asked not to.
       if (!store.consume) {
-        return Promise.reject(
-          NextlyError.internal({
-            logContext: { reason: "rest-limit-store-without-consume" },
-          })
-        );
+        throw NextlyError.internal({
+          logContext: { reason: "rest-limit-store-without-consume" },
+        });
       }
       return store.consume(key, limit, windowMs);
     },

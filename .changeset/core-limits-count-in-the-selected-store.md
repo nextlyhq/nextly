@@ -34,8 +34,10 @@ Core's own rate limits now count in the limit store the site selected with
 API limit and each API key's limit. On `"database"`, every instance of the site
 counts one budget, where each used to count its own.
 
-- **Keys are stored only as keyed hashes.** Client addresses, account ids and
-  API key ids no longer reach the store as given, the memory store included.
+- **Keys are stored only as keyed hashes in the selected store.** Client
+  addresses, account ids and API key ids no longer reach the memory store, the
+  database store or an app's `LimitStore` as given. An app's store of the
+  earlier `RateLimitStore` contract still receives them as before.
 - **Counts roll in 32 buckets per window.** An attempt counts for one window
   from when it was made, and can be forgotten up to 1/32 of the window early.
   The sign-in limit used to slide exactly, and the REST limit reset its whole

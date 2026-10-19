@@ -33,6 +33,19 @@ import type { LimitStore, StoredLimit } from "./limit-store";
 /** How many buckets a window is counted in. */
 const BUCKETS = 32;
 
+/** The longest window counted, so an entry's expiry stays a safe integer. */
+const LONGEST_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
+
+/**
+ * A window as whole milliseconds, at least one and at most a year. The
+ * settings accept any positive number, and a store refuses an expiry that is
+ * fractional or past the safe integers, which would fail the request.
+ */
+function wholeWindow(windowMs: number): number {
+  if (!Number.isFinite(windowMs)) return LONGEST_WINDOW_MS;
+  return Math.min(LONGEST_WINDOW_MS, Math.max(1, Math.ceil(windowMs)));
+}
+
 /** What one key's entry holds: `[bucket start, attempts]`, oldest first. */
 interface CoreLimitValue {
   buckets: [number, number][];
@@ -111,7 +124,8 @@ export function coreLimitStore(
     `core:${createHmac("sha256", keyHashKey).update(key, "utf8").digest("base64url")}`;
 
   return {
-    increment(key: string, windowMs: number): Promise<RateLimitRecord> {
+    increment(key: string, requestedMs: number): Promise<RateLimitRecord> {
+      const windowMs = wholeWindow(requestedMs);
       const stored = storeKey(key);
       return store.update([stored], (current, now) => {
         const buckets = withAttempt(
@@ -129,8 +143,9 @@ export function coreLimitStore(
     consume(
       key: string,
       limit: number,
-      windowMs: number
+      requestedMs: number
     ): Promise<RateLimitRecord & { allowed: boolean }> {
+      const windowMs = wholeWindow(requestedMs);
       const stored = storeKey(key);
       return store.update<RateLimitRecord & { allowed: boolean }>(
         [stored],
@@ -180,9 +195,19 @@ export function coreRateLimitStoreFor(
   selected: () => LimitStore,
   secret: string | undefined
 ): RateLimitStore {
-  return watchCoreLimitOutage(
-    configured === undefined
-      ? coreLimitStore(selected(), secret)
-      : withRateLimitStoreDeadline(configured)
-  );
+  return configured === undefined
+    ? watchCoreLimitOutage(coreLimitStore(selected(), secret))
+    : guardedAppRateLimitStore(configured);
+}
+
+/**
+ * An app's store of the older contract as core's own limits use it: held to
+ * the limit store's time and watched for an outage. Its keys reach it as core
+ * names them, as they always have, and it offers `consume` only where it has
+ * it.
+ */
+export function guardedAppRateLimitStore(
+  store: RateLimitStore
+): RateLimitStore {
+  return watchCoreLimitOutage(withRateLimitStoreDeadline(store));
 }
