@@ -67,7 +67,7 @@ Next.js app, it still creates the plugin in its own directory.
 
 By default the plugin is copied from the template bundled in the CLI, and its
 Nextly packages are pinned to that CLI's release, so its files and its
-packages come from the same release. A `--branch` other than `main`,
+packages come from the same release. Any `--branch`, `main` included,
 `--local-template` or `--use-yalc` uses the live template instead.
 
 ## Schema approaches
@@ -103,7 +103,7 @@ pnpm create nextly-app@alpha my-app -y
 | `--template <name>` | `-t`  | Project template: `blank`, `blog`, `plugin`                  | Interactive prompt |
 | `--approach <type>` | `-a`  | Schema approach: `code-first`, `visual`                      | Interactive prompt |
 | `--database <db>`   | `-d`  | Database: `sqlite`, `postgresql`, `mysql`                    | Interactive prompt |
-| `--branch <branch>` | `-b`  | Git branch for template download                             | `main`             |
+| `--branch <branch>` | `-b`  | Git branch to take the template from                         | This release       |
 | `--version`         | `-V`  | Print the CLI version                                        |                    |
 | `--help`            | `-h`  | Show help text                                               |                    |
 
