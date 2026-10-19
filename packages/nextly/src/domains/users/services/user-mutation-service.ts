@@ -2738,6 +2738,21 @@ export class UserMutationService extends BaseService {
     // with that list: on a database without them, no record names anyone.
     const personColumnsExist =
       deliveriesExist && (await this.deliveriesNamePeople());
+    // With the columns but not the list, records can name this user and
+    // nothing can erase them by person, and the address pass leaves every
+    // record that names someone. Refused before anything is written, rather
+    // than deleting the account and keeping those records.
+    if (personColumnsExist && !deletedPeopleExist) {
+      throw new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "An unexpected error occurred.",
+        logMessage:
+          `email_deliveries names people but ${DELETED_PRINCIPALS_TABLE} ` +
+          "is missing, so deleting a user would keep the records that name " +
+          "them. Run `nextly migrate` to apply the core schema.",
+        logContext: { operation: "deleteUser" },
+      });
+    }
 
     // Asked out here for the same reason, and treated as present when the
     // probe cannot answer, for the same reason too. `media.uploaded_by`

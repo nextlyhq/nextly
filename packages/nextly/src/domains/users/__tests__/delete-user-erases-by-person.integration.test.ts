@@ -376,6 +376,29 @@ describe.each(getConfiguredTestDialects())(
       expect(left).toBeUndefined();
     }, 120_000);
 
+    it("refuses to delete when records can name people but the deleted-people list is missing", async () => {
+      // The two arrive together; a database holding only the columns has
+      // records naming this user that nothing could erase by person.
+      const t = await boot(dialect);
+      const id = await staffUser(t, "half@example.com");
+      const [written] = await added(t, () =>
+        email(t, "half@example.com", staffPerson(id))
+      );
+      await t.adapter.executeQuery("DROP TABLE nextly_deleted_principals");
+
+      await expect(remove(t, id)).rejects.toThrow(NextlyError);
+
+      expect(await row(t, written.id)).toMatchObject({
+        recipientHash: recipientDigest("half@example.com"),
+        principalKind: "staff",
+        principalId: id,
+      });
+      const [left] = await t.adapter.select<{ id: string }>("users", {
+        where: { and: [{ column: "id", op: "=", value: id }] },
+      });
+      expect(left).toBeDefined();
+    }, 120_000);
+
     it("leaves the records of someone who later took an address they used", async () => {
       const t = await boot(dialect);
       const reused = "reused@example.com";
