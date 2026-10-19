@@ -3103,14 +3103,33 @@ export class UserMutationService extends BaseService {
 /**
  * The refusal for a unique custom field's value another user already holds.
  * Generic in public, as an existing email is: naming the field would say that
- * some account holds that value. The database's own message, which names the
- * constraint or column, goes to the log.
+ * some account holds that value. The log gets the constraint or column only:
+ * the database's message, and a wrapped query's parameters, carry the value
+ * itself, and a custom field may hold personal data.
  */
 function takenUserFieldValue(error: unknown): NextlyError {
   return NextlyError.duplicate({
     logContext: {
       reason: "user-field-value-taken",
-      detail: error instanceof Error ? error.message : String(error),
+      constraint: uniqueConstraintIn(error),
     },
   });
+}
+
+/**
+ * The `user_ext` constraint or column a unique violation names, read from the
+ * error or its causes: `uq_user_ext_<column>` on PostgreSQL and MySQL,
+ * `user_ext.<column>` on SQLite. Undefined when none is named.
+ */
+function uniqueConstraintIn(error: unknown): string | undefined {
+  let cursor: unknown = error;
+  for (let depth = 0; depth < 6 && cursor != null; depth++) {
+    const message = cursor instanceof Error ? cursor.message : "";
+    const found =
+      /uq_user_ext_[a-z0-9_]+/.exec(message) ??
+      /user_ext\.[a-z0-9_]+/.exec(message);
+    if (found) return found[0];
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return undefined;
 }

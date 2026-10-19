@@ -116,6 +116,11 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(NextlyError.is(error)).toBe(true);
       expect((error as NextlyError).code).toBe("DUPLICATE");
+      // What is logged names the constraint or column, never the value: a
+      // custom field may hold personal data.
+      const logged = JSON.stringify((error as NextlyError).logContext);
+      expect(logged).not.toContain("E1");
+      expect(logged).toMatch(/uq_user_ext_employee_id|user_ext\.employee_id/);
 
       // The service still writes custom fields: it took the refusal for what
       // it is, not for a missing table.
@@ -137,6 +142,11 @@ describe.each(getConfiguredTestDialects())(
         .catch((e: unknown) => e);
       expect(NextlyError.is(error)).toBe(true);
       expect((error as NextlyError).code).toBe("DUPLICATE");
+      // What is logged names the constraint or column, never the value: a
+      // custom field may hold personal data.
+      const logged = JSON.stringify((error as NextlyError).logContext);
+      expect(logged).not.toContain("E1");
+      expect(logged).toMatch(/uq_user_ext_employee_id|user_ext\.employee_id/);
       expect(await stored(other.id)).toMatchObject({ employee: "E2" });
 
       // A later update still reaches user_ext.
