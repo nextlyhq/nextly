@@ -35,7 +35,7 @@ The Builder's ALTER generator wrote `ALTER TABLE … DROP COLUMN IF EXISTS`, a f
 
 Columns that an existing MySQL install kept from fields removed before this fix are not dropped by it: a save drops only the columns of the fields it removes. They stay, with their data, until removed on purpose.
 
-A collection save in the Schema Builder now applies whole or fails whole on PostgreSQL and SQLite, and says why on every database.
+A collection save in the Schema Builder now applies whole or fails whole, and says why.
 
 - Before anything runs, the save checks the entries: a field made Unique over repeated values, a new Unique field whose backfill would repeat, and a text field narrowed below a value an entry holds are refused, naming the field. A refusal never shows a stored value.
 - The migration runs before the file and the registry are written. On PostgreSQL and SQLite it runs in one transaction, so a refusal changes nothing. On MySQL, which commits each schema statement, the refusal says which statement stopped it. Saving again finishes the change for what such a refusal most often leaves behind: a column already added or already removed, Draft/Published already turned on or off, a plain or unique index already created or dropped, and a translated field's companion column already added.
