@@ -936,6 +936,7 @@ export class SingleMetadataService {
           tableHasRows: liveFacts.tableHasRows,
           foreignKeysByColumn: liveFacts.foreignKeysByColumn,
           indexNames: liveFacts.indexNames,
+          uniqueColumns: liveFacts.uniqueColumns,
           columnsContainingNull: liveFacts.columnsContainingNull,
           columnsAbsentFromTable: liveFacts.columnsAbsentFromTable,
           liveColumnTypes: liveFacts.liveColumnTypes,
@@ -1268,6 +1269,7 @@ export class SingleMetadataService {
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
+    uniqueColumns: ReadonlyMap<string, string | null>;
     columnsContainingNull: ReadonlySet<string>;
     columnsAbsentFromTable: ReadonlySet<string>;
     liveColumnTypes: ReadonlyMap<string, string>;
@@ -1276,6 +1278,7 @@ export class SingleMetadataService {
       readColumnNullState,
       readForeignKeyColumns,
       readIndexNames,
+      readUniqueColumns,
       tableHasRows,
     } = await import("../../schema/pipeline/live-table-facts");
     const { queryLiveColumnTypes } = await import(
@@ -1292,11 +1295,15 @@ export class SingleMetadataService {
     // probes anything, so a column this list names and the table lacks comes
     // back as absent rather than as an error.
     const mayHoldNull = columnsThatMayHoldNull(previousAlterFields);
-    const [hasRows, foreignKeys, indexes, nullState, liveTypes] =
+    const [hasRows, foreignKeys, indexes, unique, nullState, liveTypes] =
       await Promise.all([
         tableHasRows(db, dialect, tableName),
         readForeignKeyColumns(db, dialect, tableName),
         readIndexNames(db, dialect, tableName),
+        // What each unique index covers, which its name does not say: a column renamed by a save
+        // MySQL refused part-way keeps its unique index under the old name, and turning Unique off
+        // on the retry has to drop that one.
+        readUniqueColumns(db, dialect, tableName),
         readColumnNullState(db, dialect, tableName, mayHoldNull),
         // What each column IS, for MySQL's `MODIFY`, which has to restate a column it is not
         // otherwise changing. Rendering that type asks which renderer built the column, and that
@@ -1307,6 +1314,7 @@ export class SingleMetadataService {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
+      uniqueColumns: unique,
       columnsContainingNull: nullState.holdingNull,
       columnsAbsentFromTable: nullState.absent,
       liveColumnTypes: liveTypes.get(tableName) ?? new Map<string, string>(),

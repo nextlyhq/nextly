@@ -60,6 +60,9 @@ const argsWithoutLabel = (body: unknown = {}) => ({
   params: { _authenticatedUserId: "u1" },
 });
 
+/** Who the label is set by, as the dispatcher hands it to the service. */
+const BY = { actor: { type: "user", id: "u1" }, personName: null };
+
 describe("setVersionLabelForDocument — normalization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -74,7 +77,8 @@ describe("setVersionLabelForDocument — normalization", () => {
     expect(setLabelSpy).toHaveBeenCalledWith(
       expect.anything(),
       3,
-      "before redesign"
+      "before redesign",
+      BY
     );
   });
 
@@ -83,13 +87,13 @@ describe("setVersionLabelForDocument — normalization", () => {
     // distinguished from an unnamed one in the UI.
     await setVersionLabelForDocument(args("   "));
 
-    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, null);
+    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, null, BY);
   });
 
   it("clears on an explicit null", async () => {
     await setVersionLabelForDocument(args(null));
 
-    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, null);
+    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, null, BY);
   });
 
   it("accepts a label at the length limit", async () => {
@@ -97,7 +101,7 @@ describe("setVersionLabelForDocument — normalization", () => {
 
     await setVersionLabelForDocument(args(atLimit));
 
-    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, atLimit);
+    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, atLimit, BY);
   });
 
   it("rejects a label past the limit", async () => {
@@ -211,7 +215,7 @@ describe("setVersionLabelForDocument — an omitted label", () => {
     // The distinction this whole branch exists for.
     await setVersionLabelForDocument(argsWithoutLabel({ label: null }));
 
-    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, null);
+    expect(setLabelSpy).toHaveBeenCalledWith(expect.anything(), 3, null, BY);
   });
 
   it("still gates a request that changes nothing", async () => {

@@ -31,6 +31,7 @@ import type {
 } from "../../../schemas/user-field-definitions/types";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { carriedUserFieldOptions } from "../../../shared/lib/user-field-plugin-options";
 import type { UserFieldConfig } from "../../../users";
 import {
@@ -642,7 +643,34 @@ export class UserFieldDefinitionService extends BaseService {
             )
           );
       }
-    });
+    }).catch(error => this.settleConcurrentSync(error, incomingNames));
+  }
+
+  /**
+   * Decide whether a failed code-field sync lost a race or failed.
+   *
+   * Processes starting at once each find a code field missing and insert it;
+   * one wins, and the rest roll back on its name. When every field is now there
+   * as a code field, the sync is done. A name an admin's own field already
+   * holds collides the same way and leaves the code field missing, so that is
+   * still a failure, and so is anything other than a duplicate.
+   */
+  private async settleConcurrentSync(
+    error: unknown,
+    incomingNames: Set<string>
+  ): Promise<void> {
+    if (!isUniqueViolation(error)) throw error;
+    const present = await this.db
+      .select({ name: this.userFieldDefinitions.name })
+      .from(this.userFieldDefinitions)
+      .where(
+        and(
+          eq(this.userFieldDefinitions.source, "code"),
+          inArray(this.userFieldDefinitions.name, [...incomingNames])
+        )
+      );
+    if (present.length < incomingNames.size) throw error;
+    this.logger.debug("User fields were synced by another process");
   }
 
   /**
