@@ -666,3 +666,44 @@ describe("the review of d78f25b1a: credit that the database would not give", () 
     ).toMatchObject({ table: "fx__notes", column: "body" });
   });
 });
+
+describe("the review of 905d9ce11: qualified targets, conditional adds and USING INDEX", () => {
+  it("refuses a rename through a schema-qualified name", () => {
+    expect(() =>
+      guard(
+        ["ALTER TABLE plugin_schema.idx_status RENAME TO other"],
+        "app",
+        "postgresql"
+      )
+    ).toThrow();
+  });
+
+  it("does not credit a conditional MariaDB constraint addition", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD CONSTRAINT pk_idx UNIQUE INDEX IF NOT EXISTS pk_idx (id)",
+            "ALTER TABLE fx__notes ALTER KEY pk_idx IGNORED",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ element: "pk_idx", belongsTo: "plugin:fx" });
+  });
+
+  it("judges an existing index that a constraint takes over with USING INDEX", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE app_notes ADD CONSTRAINT app_unique UNIQUE USING INDEX idx_status",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
+  });
+});

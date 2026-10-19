@@ -1713,6 +1713,9 @@ class StatementWalk {
     // PostgreSQL's ALTER TABLE can name an index; MySQL's cannot.
     if (table !== undefined && this.reader.isPostgres) {
       this.reader.targetAltered(table.name);
+      // A schema-qualified target is looked up by its name alone, which may not
+      // reach the schema the statement names, so every such form is refused.
+      if (!table.local) this.reader.leaveQualifiedTarget(table.name);
     }
     const clausesAt = this.pastDescendants(table?.next ?? tableAt + 1);
     for (const clause of this.clauseStarts(clausesAt)) {
@@ -1988,6 +1991,7 @@ class StatementWalk {
     // An addition inside a dollar-quoted body may not run: a branch not taken,
     // an exception swallowed, or a routine never called. It is not credited.
     if (this.bodyDepth > 0) return;
+    this.readUsingIndexClause(table, at);
     const first = this.word(at + 1) ?? "";
     if (first === "CONSTRAINT") {
       this.readAddedConstraint(table, at + 2);
@@ -1995,6 +1999,35 @@ class StatementWalk {
     }
     if (NON_COLUMN_ELEMENTS.has(first)) return;
     this.readAddedColumn(table, first === "COLUMN" ? at + 2 : at + 1);
+  }
+
+  /** The token position of `USING INDEX` in an ADD clause, if it has one. */
+  private usingIndexAt(at: number): number | undefined {
+    for (let p = at + 1; p <= at + 4; p += 1) {
+      if (this.word(p) === "USING" && this.word(p + 1) === "INDEX") return p;
+    }
+    return undefined;
+  }
+
+  /**
+   * `ADD [CONSTRAINT c] UNIQUE|PRIMARY KEY USING INDEX i` takes over the
+   * existing index i and renames it, so i is judged as a change to its owner.
+   */
+  private readUsingIndexClause(table: TableRef | undefined, at: number): void {
+    const using = this.usingIndexAt(at);
+    if (using === undefined) return;
+    const name = this.nameAt(using + 2);
+    if (table === undefined || name === undefined) {
+      this.refuse(
+        "an index an ADD ... USING INDEX takes over, whose name cannot be read"
+      );
+    }
+    this.reader.changeElement(
+      table,
+      name,
+      "index",
+      this.spelledAsStoredAt(using + 2)
+    );
   }
 
   /** The column an `ADD [COLUMN]` clause adds, from the name at `k`. */
@@ -2018,6 +2051,11 @@ class StatementWalk {
     // MySQL and MariaDB ignore a primary key's symbol and name the index
     // PRIMARY, so the name given does not identify the added index.
     if (this.word(at + 1) === "PRIMARY") return;
+    // A constraint that takes over an index, or may be a no-op, is not credited.
+    if (this.usingIndexAt(at) !== undefined) return;
+    for (let p = at + 1; p <= at + 4; p += 1) {
+      if (this.isConditionalAddAt(p)) return;
+    }
     const name = this.nameAt(at);
     if (name === undefined) return;
     this.reader.addElement(
