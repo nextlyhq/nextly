@@ -447,8 +447,14 @@ first pass after its due time. With a backlog, or several expensive releases due
 expect it a pass or two later. Treat the scheduled time as "not before", not as "at".
 
 A pass the host ends part-way, at a serverless function's time limit for example, keeps
-the documents it already wrote and settles none of their releases. The next pass writes that
-whole group again, so those documents' hooks and outbox events can run a second time.
+the documents it already wrote and settles none of their releases. Each document's write
+records, in the same database transaction, that its release member was applied, so the next
+pass writes only the documents still to go and then settles the group: hooks and outbox events
+run once per document. A write the host stops before it commits leaves no record, so the next
+pass writes that one document again. A write that was refused, or whose hook stored a different
+status, records nothing, so the release stays scheduled however the document reads. Changing a
+release in any way, rescheduling, cancelling, renaming it or adding or removing a document,
+voids those records, and the next pass writes every document of that release again.
 
 ## Checks before the moment
 
