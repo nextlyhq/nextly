@@ -631,6 +631,47 @@ describe("bodies held open", () => {
       expect((await after.response)?.status).toBe(429);
     }
   );
+
+  it("leaves exactly the ceiling's places after setup counts wrong tokens, whatever their size", async () => {
+    const h = harness({ budget: 1 }); // ceiling 100
+    h.deps.hasAdministrator = async () => false;
+    h.deps.setupToken = {
+      required: true,
+      verify: async () => "invalid",
+      confirm: async () => "invalid",
+      spend: async () => {},
+      claim: async () => ({ release: async () => {} }),
+    };
+    const wrongSetup = (padding: number) =>
+      post(
+        h,
+        "setup",
+        {
+          email: "owner@example.com",
+          name: "Owner",
+          password: "Str0ng-P@ssw0rd!",
+          setupToken: "wrong",
+          csrfToken: "csrf-token",
+          padding: "x".repeat(padding),
+        },
+        { cookie: "nextly_csrf=csrf-token" }
+      );
+    // Larger than both setup's bound and the limiter's: admitted by the
+    // limit, then failing as too large. Then small, naming its account: the
+    // first is admitted and refused for its token, and the second is refused
+    // by the budget the first spent, so setup's requests reach the limit.
+    await expect(wrongSetup(40 * 1024)).rejects.toThrow("too large");
+    expect((await wrongSetup(0)).status).toBe(403);
+    expect((await wrongSetup(0)).status).toBe(429);
+
+    // Every place is free, and no more than every place: a place kept would
+    // refuse the last of these, and one given back twice would read the next.
+    const held = Array.from({ length: 100 }, () =>
+      heldLogin(h, "held@example.com")
+    );
+    expect((await Promise.all(held.map(readStarts))).every(Boolean)).toBe(true);
+    expect(await readStarts(heldLogin(h, "one-more@example.com"))).toBe(false);
+  });
 });
 
 describe("the account-less budget", () => {
