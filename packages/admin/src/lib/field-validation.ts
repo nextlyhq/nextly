@@ -51,6 +51,8 @@ import {
 } from "nextly/config";
 import { z } from "zod";
 
+import { RESTRICTED_REFERENCE } from "./form/stored-references";
+
 // ============================================================
 // Types
 // ============================================================
@@ -783,6 +785,9 @@ function convertRelationshipFieldToZod(
       .object({
         relationTo: z.string(),
         value: z.string().or(z.object({ id: z.string() }).passthrough()),
+        // Kept through validation: a save resets the form to the values it
+        // parsed, and a link the editor cannot see must stay marked there.
+        [RESTRICTED_REFERENCE]: z.literal(true).optional(),
       })
       .or(z.string()); // Allow ID string for backwards compatibility
   } else {

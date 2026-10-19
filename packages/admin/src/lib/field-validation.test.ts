@@ -648,3 +648,26 @@ describe("generateClientSchema — an upload naming several collections", () => 
     expect(schema.safeParse({ gallery: [pair] }).success).toBe(false);
   });
 });
+
+describe("generateClientSchema — a relationship naming several collections", () => {
+  it("keeps the marker on a pair the editor cannot see, so the form still shows it after a save", () => {
+    const schema = generateClientSchema([
+      {
+        type: "relationship",
+        name: "related",
+        relationTo: ["pages", "notes"],
+        hasMany: true,
+      } as unknown as FieldConfig,
+    ]);
+    const pair = {
+      relationTo: "notes",
+      value: "n1",
+      __restrictedReference: true,
+    };
+    const parsed = schema.safeParse({ related: [pair] });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect((parsed.data as { related: unknown[] }).related).toEqual([pair]);
+    }
+  });
+});

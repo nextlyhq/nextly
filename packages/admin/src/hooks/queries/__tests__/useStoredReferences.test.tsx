@@ -250,6 +250,26 @@ describe("useWithStoredReferences", () => {
     expect(result.current.error?.message).toMatch(/kept changing/);
   });
 
+  it("does not take one timestamp for one version when the links disagree", () => {
+    // Two writes in one second share a timestamp kept to the second. A row the
+    // stored read lacks shows the populated read is of the later one.
+    const refetch = vi.fn();
+    const { result } = renderHook(() =>
+      useWithStoredReferences({
+        fields: FIELDS,
+        documentKey: DOCUMENT,
+        populated: read(
+          { ...populatedV1, pages: [pageA, { id: "new", title: "New" }] },
+          { refetch }
+        ),
+        stored: read(storedV1, { refetch }),
+        scope: "e",
+      })
+    );
+    expect(result.current.document).toBeUndefined();
+    expect(refetch).toHaveBeenCalled();
+  });
+
   it("does not hand over a merge made for another language", () => {
     const { result, rerender } = renderHook(
       (props: { scope: string; populated: never; stored: never }) =>

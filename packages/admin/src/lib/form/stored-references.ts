@@ -184,6 +184,83 @@ function mergeFields(fields: FieldConfig[], populated: Doc, stored: Doc): Doc {
   return merged;
 }
 
+/** How many times each link is stored in a reference value. */
+function linkCounts(stored: unknown): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const item of Array.isArray(stored) ? stored : [stored]) {
+    const key = storedLinkOf(item)?.key;
+    if (key !== undefined) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** One reference value's rows, all among the links it stores. */
+function rowsAmongLinks(populated: unknown, stored: unknown): boolean {
+  const left = linkCounts(stored);
+  const rows = Array.isArray(populated) ? populated : [populated];
+  return rows.every(item => {
+    const key = populatedRowKey(item);
+    if (key === undefined) return true;
+    const count = left.get(key) ?? 0;
+    left.set(key, count - 1);
+    return count > 0;
+  });
+}
+
+type AmongCheck = (
+  field: FieldConfig,
+  populated: unknown,
+  stored: unknown
+) => boolean;
+
+/** A relationship or upload: its rows among its links, if the read populates it. */
+const referenceAmongLinks: AmongCheck = (field, populated, stored) =>
+  (field as { maxDepth?: unknown }).maxDepth === 0 ||
+  rowsAmongLinks(populated, stored);
+
+/** A group: its own fields, compared the same way. */
+const groupAmongStored: AmongCheck = (field, populated, stored) =>
+  !isRecord(populated) ||
+  !isRecord(stored) ||
+  populatedAmongStored(nestedFields(field), populated, stored);
+
+/** A repeater: rows paired by position, and the same number of them. */
+const repeaterAmongStored: AmongCheck = (field, populated, stored) => {
+  if (!Array.isArray(populated) || !Array.isArray(stored)) return true;
+  if (populated.length !== stored.length) return false;
+  return populated.every((row: unknown, index) =>
+    groupAmongStored(field, row, stored[index])
+  );
+};
+
+/** How each field kind is compared; any other kind cannot tell versions apart. */
+const AMONG_STORED: Record<string, AmongCheck> = {
+  relationship: referenceAmongLinks,
+  upload: referenceAmongLinks,
+  group: groupAmongStored,
+  repeater: repeaterAmongStored,
+};
+
+/**
+ * Whether the populated read could be of the same version as the depth-0
+ * read: every row it gives for a relationship or an upload is a link the
+ * depth-0 read stores. A timestamp alone cannot say so, since two writes in
+ * one second keep it on a database storing whole seconds; a row the stored
+ * read lacks is a link added or replaced between the two reads.
+ */
+export function populatedAmongStored(
+  fields: FieldConfig[],
+  populated: Doc,
+  stored: Doc
+): boolean {
+  return fields.every(field => {
+    const name = (field as { name?: unknown }).name;
+    if (typeof name !== "string" || !(name in stored)) return true;
+    const check = AMONG_STORED[field.type as string];
+    return check ? check(field, populated[name], stored[name]) : true;
+  });
+}
+
 /** A placeholder as the reference it stands for: the id, or the pair. */
 function referenceOf(value: unknown): unknown {
   if (!isRecord(value) || !isRestrictedReference(value)) return value;

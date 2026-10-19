@@ -422,7 +422,9 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
         // them, and newly picked media follow in the order picked.
         const picked = new Set(selectedMedia.map(m => m.id));
         const kept = files.filter(f => f.restricted || picked.has(f.id));
-        const keptIds = new Set(kept.map(f => f.id));
+        // Only a readable file the editor kept stands for a picked one: a
+        // hidden file with the same id belongs to another collection.
+        const keptIds = new Set(kept.filter(f => !f.restricted).map(f => f.id));
         const next = [
           ...kept,
           ...selectedMedia

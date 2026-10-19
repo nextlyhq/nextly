@@ -13,7 +13,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useCallback, useEffect, useRef } from "react";
+import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -442,9 +442,13 @@ export function useEntryForm({
   // useMemo'd on (fields, entry), so it only changes when entry's identity
   // changes — keeps this effect from firing on every keystroke. `form` is
   // a stable RHF ref.
+  // Set by a discard and cleared by the next document the page hands over;
+  // see `handleDiscardWorkingDraft`.
+  const [awaitingEntry, setAwaitingEntry] = useState(false);
   useEffect(() => {
     if (entry && mode === "edit") {
       form.reset(defaultValues);
+      setAwaitingEntry(false);
     }
   }, [entry, mode, defaultValues, form]);
 
@@ -500,7 +504,8 @@ export function useEntryForm({
   const isSubmitting =
     createMutation.isPending ||
     updateMutation.isPending ||
-    discardMutation.isPending;
+    discardMutation.isPending ||
+    awaitingEntry;
 
   //
   // The synchronous half of the same guard. `isSubmitting` is render state:
@@ -620,6 +625,11 @@ export function useEntryForm({
     try {
       const result = await discardMutation.mutateAsync();
       form.reset(getDefaultValues(fields, result.item));
+      // The discard answers with the live row as the API populates it, which
+      // leaves out a related item the editor may not read, so a save of these
+      // values would delete those links. Saving waits for the page to hand
+      // over the document again, merged with its stored links.
+      setAwaitingEntry(true);
     } catch (error) {
       console.error("Discard working draft error:", error);
       onError?.(error);

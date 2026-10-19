@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   RESTRICTED_REFERENCE,
   isRestrictedReference,
+  populatedAmongStored,
   withStoredReferences,
   withoutPlaceholders,
 } from "../stored-references";
@@ -291,5 +292,135 @@ describe("withoutPlaceholders", () => {
     expect(withoutPlaceholders(fields, { settings }).settings).toEqual(
       settings
     );
+  });
+});
+
+describe("populatedAmongStored", () => {
+  const fields = [
+    f({
+      name: "pages",
+      type: "relationship",
+      relationTo: "pages",
+      hasMany: true,
+    }),
+    f({ name: "page", type: "relationship", relationTo: "pages" }),
+  ];
+
+  it("holds when every populated row is a stored link, hidden ones left out", () => {
+    expect(
+      populatedAmongStored(
+        fields,
+        { pages: [pageA], page: "hidden" },
+        { pages: ["a", "hidden"], page: "hidden" }
+      )
+    ).toBe(true);
+  });
+
+  it("fails for a row the stored read lacks, which only another version can hold", () => {
+    expect(
+      populatedAmongStored(fields, { pages: [pageA, pageC] }, { pages: ["a"] })
+    ).toBe(false);
+    expect(populatedAmongStored(fields, { page: pageC }, { page: "a" })).toBe(
+      false
+    );
+  });
+});
+
+describe("populatedAmongStored, nested and edge cases", () => {
+  const nested = [
+    f({
+      name: "box",
+      type: "group",
+      fields: [f({ name: "page", type: "relationship", relationTo: "pages" })],
+    }),
+    f({
+      name: "lines",
+      type: "repeater",
+      fields: [
+        f({
+          name: "items",
+          type: "relationship",
+          relationTo: "pages",
+          hasMany: true,
+        }),
+      ],
+    }),
+    f({
+      name: "shallow",
+      type: "relationship",
+      relationTo: "pages",
+      maxDepth: 0,
+    }),
+    f({
+      name: "related",
+      type: "relationship",
+      relationTo: ["pages", "notes"],
+      hasMany: true,
+    }),
+  ];
+
+  it("reads groups and repeaters row by row", () => {
+    expect(
+      populatedAmongStored(
+        nested,
+        { box: { page: pageA }, lines: [{ items: [pageA] }] },
+        { box: { page: "a" }, lines: [{ items: ["a", "hidden"] }] }
+      )
+    ).toBe(true);
+    expect(
+      populatedAmongStored(
+        nested,
+        { box: { page: pageC } },
+        { box: { page: "a" } }
+      )
+    ).toBe(false);
+    expect(
+      populatedAmongStored(
+        nested,
+        { lines: [{ items: [pageC] }] },
+        { lines: [{ items: ["a"] }] }
+      )
+    ).toBe(false);
+  });
+
+  it("takes repeaters of different lengths for different versions", () => {
+    expect(
+      populatedAmongStored(
+        nested,
+        { lines: [{ items: [] }, { items: [] }] },
+        { lines: [{ items: [] }] }
+      )
+    ).toBe(false);
+  });
+
+  it("counts a link stored once against a row given twice", () => {
+    expect(
+      populatedAmongStored(
+        nested,
+        {
+          related: [
+            { relationTo: "pages", value: pageA },
+            { relationTo: "pages", value: pageA },
+          ],
+        },
+        { related: [{ relationTo: "pages", value: "a" }] }
+      )
+    ).toBe(false);
+  });
+
+  it("matches a multi-collection row by its collection", () => {
+    expect(
+      populatedAmongStored(
+        nested,
+        { related: [{ relationTo: "pages", value: pageA }] },
+        { related: [{ relationTo: "notes", value: "a" }] }
+      )
+    ).toBe(false);
+  });
+
+  it("leaves a field the read never populates out of the comparison", () => {
+    expect(
+      populatedAmongStored(nested, { shallow: "x" }, { shallow: "a" })
+    ).toBe(true);
   });
 });

@@ -9,7 +9,40 @@
 import { TooltipProvider } from "@nextlyhq/ui";
 import { fireEvent, screen } from "@testing-library/react";
 import { useForm } from "react-hook-form";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// The dialogs stand in for a pick and a quick edit, so the inputs' own
+// handling of the result is what is under test.
+vi.mock("@admin/components/features/media-library/MediaPickerDialog", () => ({
+  MediaPickerDialog: ({
+    open,
+    onSelect,
+  }: {
+    open: boolean;
+    onSelect: (media: unknown[]) => void;
+  }) =>
+    open ? (
+      <button
+        type="button"
+        onClick={() =>
+          onSelect([{ id: "x", filename: "x.png", url: "/x.png" }])
+        }
+      >
+        Pick x
+      </button>
+    ) : null,
+}));
+vi.mock("./relational/RelationshipQuickEdit", () => ({
+  RelationshipQuickEdit: ({
+    onUpdate,
+  }: {
+    onUpdate: (entry: Record<string, unknown>) => void;
+  }) => (
+    <button type="button" onClick={() => onUpdate({ title: "Page X, edited" })}>
+      Finish edit
+    </button>
+  ),
+}));
 
 import { RESTRICTED_REFERENCE } from "@admin/lib/form/stored-references";
 
@@ -111,5 +144,32 @@ describe("removing a restricted link", () => {
       })[0]
     );
     expect(latest).toEqual(["m2", placeholder]);
+  });
+
+  it("in an upload, lets the picker add a readable file whose id a hidden one shares", () => {
+    renderWithProviders(<UploadHarness initial={[hiddenPair("files", "x")]} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add More Media" }));
+    fireEvent.click(screen.getByRole("button", { name: "Pick x" }));
+    expect(latest).toEqual([hiddenPair("files", "x"), "x"]);
+  });
+
+  it("in a relationship, updates only the row edited, not a hidden link with its id", () => {
+    const readable = {
+      relationTo: "pages",
+      value: { id: "x", title: "Page X" },
+    };
+    renderWithProviders(
+      <RelationshipHarness initial={[readable, hiddenPair("notes", "x")]} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Edit Page X" }));
+    fireEvent.click(screen.getByRole("button", { name: "Finish edit" }));
+    const value = latest as unknown[];
+    expect(value).toHaveLength(2);
+    expect(value[0]).toMatchObject({
+      relationTo: "pages",
+      value: "x",
+      title: "Page X, edited",
+    });
+    expect(value[1]).toEqual(hiddenPair("notes", "x"));
   });
 });

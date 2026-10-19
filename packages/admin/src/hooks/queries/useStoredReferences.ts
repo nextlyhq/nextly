@@ -27,7 +27,10 @@ import {
 import type { FieldConfig } from "nextly/config";
 import { useEffect, useRef } from "react";
 
-import { withStoredReferences } from "@admin/lib/form/stored-references";
+import {
+  populatedAmongStored,
+  withStoredReferences,
+} from "@admin/lib/form/stored-references";
 import { entryApi, entryKeys } from "@admin/services/entryApi";
 import { singleApi } from "@admin/services/singleApi";
 
@@ -260,8 +263,12 @@ export function useWithStoredReferences<T extends Doc>({
   const last = useRef<Merge<T> | null>(null);
 
   const pair = settledPair(fields, populated, stored, saving);
+  // The same timestamp, and no row the stored read lacks: a timestamp kept to
+  // the second is shared by two writes made in that second.
   const agree =
-    pair !== null && versionOf(pair.populated) === versionOf(pair.stored);
+    pair !== null &&
+    versionOf(pair.populated) === versionOf(pair.stored) &&
+    populatedAmongStored(pair.fields, pair.populated, pair.stored);
   // Settled reads of two versions: something changed the document between
   // them. Read both again rather than wait for a refetch nothing schedules.
   const retries = useReconcileRetries(

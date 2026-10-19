@@ -307,6 +307,9 @@ export function RelationshipInput<
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   // Track which item is being edited (null when no edit modal is open)
   const [editingItem, setEditingItem] = useState<RelatedItem | null>(null);
+  // Which row is being edited. An id names more than one row when a field
+  // holds the same id from two collections, or a link twice.
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   const hasMany = field.hasMany ?? false;
 
@@ -485,10 +488,9 @@ export function RelationshipInput<
 
       if (hasMany) {
         const currentValues = Array.isArray(value) ? [...value] : [];
-        const updatedValues = currentValues.map(v => {
-          // Match by ID (handle both string and object values)
-          const itemId = referenceIdOf(v);
-          if (itemId === editingItem.id) {
+        const updatedValues = currentValues.map((v, at) => {
+          // The row that was edited, by its position.
+          if (at === editingIndex) {
             if (isPolymorphicField) {
               return {
                 relationTo: editingItem.relationTo,
@@ -517,7 +519,7 @@ export function RelationshipInput<
       // Clear editing state
       setEditingItem(null);
     },
-    [editingItem, hasMany, value, onChange, isPolymorphicField]
+    [editingItem, editingIndex, hasMany, value, onChange, isPolymorphicField]
   );
 
   const isDisabled = disabled || readOnly;
@@ -562,7 +564,10 @@ export function RelationshipInput<
                     id: String(item.id),
                   });
                 }
-              : () => setEditingItem(item);
+              : () => {
+                  setEditingItem(item);
+                  setEditingIndex(index);
+                };
 
             return (
               <RelationshipCard
