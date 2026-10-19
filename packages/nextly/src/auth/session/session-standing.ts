@@ -467,8 +467,29 @@ let held: { cache: SessionStandingCache; adapter: DrizzleAdapter } | null =
   null;
 let cacheClock: (() => number) | undefined;
 
+/**
+ * The adapters the cache has belonged to lately, newest last. Services
+ * registered again bring a new adapter while a write on an old one may still
+ * be open, and only the adapter a write runs on can say whether it has
+ * committed, so a forget asks these as well as the registered one. Held
+ * weakly, so an adapter that is gone, and its connections, can be collected.
+ */
+const MAX_RECENT_ADAPTERS = 4;
+let recentAdapters: Array<WeakRef<DrizzleAdapter>> = [];
+
+function rememberAdapter(adapter: DrizzleAdapter): void {
+  recentAdapters = [
+    ...recentAdapters.filter(ref => {
+      const known = ref.deref();
+      return known !== undefined && known !== adapter;
+    }),
+    new WeakRef(adapter),
+  ].slice(-MAX_RECENT_ADAPTERS);
+}
+
 function cacheFor(adapter: DrizzleAdapter): SessionStandingCache {
   if (held?.adapter !== adapter) {
+    rememberAdapter(adapter);
     held = {
       cache: createSessionStandingCache({
         read: userId => readSessionStanding(userId, adapter),
@@ -530,21 +551,37 @@ export function forgetSessionStanding(userId: string | number): void {
   // through the new one, and a mark left there is one the next read never
   // sees. The cache is made here when no request has made it yet, for the
   // same reason.
-  const previous = held?.adapter;
   const adapter = adapterIsRegistered()
     ? container.get<DrizzleAdapter>("adapter")
-    : previous;
+    : held?.adapter;
   if (adapter === undefined) return;
   // Whether the change that made this call has committed: a transaction this
   // flow is inside is still open, which every dialect answers. Asked of the
-  // cache's previous adapter too: while services are registered again, the
-  // write can be open on the one they replaced, and only that adapter knows.
-  const writers =
-    previous && previous !== adapter ? [adapter, previous] : [adapter];
+  // adapters the cache served lately too: while services are registered
+  // again, the write can be open on one they replaced, and only that adapter
+  // knows, even once a read has moved the cache to the new one.
+  const writers = new Set<DrizzleAdapter>([adapter]);
+  for (const ref of recentAdapters) {
+    const known = ref.deref();
+    if (known !== undefined) writers.add(known);
+  }
   const writing = watchTransaction(() =>
-    writers.some(writer => writer.transactionOpenInFlow())
+    [...writers].some(writer => writer.transactionOpenInFlow())
   );
   cacheFor(adapter).forget(String(userId), writing);
+}
+
+/**
+ * Whether `isOpen` answers yes. A probe that fails is not a yes: watching
+ * stops, and the mark falls back to its fixed lifetime, rather than an
+ * error escaping from a timer no request is waiting on.
+ */
+function openNow(isOpen: () => boolean): boolean {
+  try {
+    return isOpen();
+  } catch {
+    return false;
+  }
 }
 
 /** How often {@link watchTransaction} asks whether the transaction ended. */
@@ -564,10 +601,10 @@ export function watchTransaction(
   isOpen: () => boolean,
   intervalMs = TRANSACTION_WATCH_MS
 ): (() => boolean) | undefined {
-  if (!isOpen()) return undefined;
+  if (!openNow(isOpen)) return undefined;
   let open = true;
   const check = (): void => {
-    if (isOpen()) {
+    if (openNow(isOpen)) {
       setTimeout(check, intervalMs).unref?.();
       return;
     }
@@ -585,5 +622,6 @@ export function resetSessionStandingForTests(options?: {
   now?: () => number;
 }): void {
   held = null;
+  recentAdapters = [];
   cacheClock = options?.now;
 }
