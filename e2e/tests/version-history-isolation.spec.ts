@@ -95,9 +95,10 @@ async function openOldestVersion(page: Page): Promise<void> {
   // The list is newest first, so the last row is the earliest version — the one
   // that differs from what is live, which is what makes the assertions bite.
   await rows.last().click();
-  // The banner lives in the DOCUMENT now, not in the panel: choosing a version
-  // replaces the page rather than previewing beside it.
-  await expect(page.getByText(/reading a past version/i)).toBeVisible({
+  // The version is framed in the DOCUMENT, not in the panel: choosing a
+  // version replaces the page rather than previewing beside it. The oldest has
+  // nothing before it, so it reads whole, every field drawn.
+  await expect(page.getByRole("region", { name: "Comparison" })).toBeVisible({
     timeout: 30_000,
   });
 }
@@ -145,13 +146,13 @@ test.describe("reading history does not write", () => {
     // The document is showing the past.
     await expect(documentExcerpt(page)).toHaveValue(first, { timeout: 15_000 });
 
-    // Restoring is offered from the banner, over the version being read. This
-    // is a wiring assertion and belongs here rather than in a unit test: the
-    // panel publishes the trigger and the banner consumes it, so a component
-    // test of either half passes while the two are not connected.
+    // Restoring is offered from the title bar, over the version being read.
+    // This is a wiring assertion and belongs here rather than in a unit test:
+    // the panel publishes the trigger and the title bar consumes it, so a
+    // component test of either half passes while the two are not connected.
     await expect(
-      page.getByRole("button", { name: /restore this version/i }),
-      "an authorised reader must be offered restore from the banner"
+      page.locator("main").getByRole("button", { name: "Restore…" }),
+      "an authorised reader must be offered restore from the title bar"
     ).toBeVisible({ timeout: 15_000 });
 
     // Returning must restore what is LIVE, unchanged. Had the snapshot been
