@@ -312,6 +312,20 @@ describe.each(getConfiguredTestDialects())(
         expect(records[0]).toMatchObject(expected(user.id));
       }, 120_000);
 
+      it("refuses a person that names nobody through the Direct API's sendWithTemplate", async () => {
+        // Forwarded and validated, as `send` validates it, not dropped.
+        const t = await boot(dialect);
+
+        await expect(
+          t.nextly.email.sendWithTemplate({
+            to: "nobody@example.com",
+            template: "mailer-notice",
+            person: false as never,
+          })
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(sent).toEqual([]);
+      }, 120_000);
+
       it("is refused, before anything is sent, for a staff user who does not exist", async () => {
         const t = await boot(dialect);
 

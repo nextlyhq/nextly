@@ -13,7 +13,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { EmailProviderAdapter } from "../types";
 
 import { NextlyError } from "../../../errors";
-import { STAFF_PERSON_ID_MAX_LENGTH } from "../../../plugins/principals/ref";
+import {
+  isStaffPersonId,
+  STAFF_PERSON_ID_MAX_LENGTH,
+} from "../../../plugins/principals/ref";
 import { EmailService } from "../services/email-service";
 
 // `lib/env` only re-exports this module, and `getBaseUrl` reaches the real one
@@ -226,5 +229,12 @@ describe("a send naming a staff user", () => {
     ).personToRecord({ kind: "staff", id: "U-1" });
 
     expect(named).toEqual({ kind: "staff", id: "u-1" });
+  });
+
+  it("counts a staff id in characters, as the column does", () => {
+    // 100 emoji are 100 characters to varchar(191), and 200 UTF-16 units.
+    const id = "😀".repeat(100);
+    expect(id.length).toBeGreaterThan(STAFF_PERSON_ID_MAX_LENGTH);
+    expect(isStaffPersonId(id)).toBe(true);
   });
 });

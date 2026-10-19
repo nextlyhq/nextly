@@ -112,7 +112,9 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
       if (args.cc?.length) sendOptions.cc = args.cc;
       if (args.bcc?.length) sendOptions.bcc = args.bcc;
       if (args.attachments) sendOptions.attachments = args.attachments;
-      if (args.person) sendOptions.person = args.person;
+      // Anything given is forwarded, so the send validates it as `send` does;
+      // only an absent person is left out.
+      if (args.person !== undefined) sendOptions.person = args.person;
 
       const result = await ctx.emailSendService.sendWithTemplate(
         args.template,

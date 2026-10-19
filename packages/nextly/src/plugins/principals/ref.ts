@@ -98,9 +98,10 @@ export function staffPersonOf(value: unknown): PrincipalRef | null {
 
 /** Whether `id` is one a delivery record can name a staff user by. */
 export function isStaffPersonId(id: unknown): id is string {
+  // In characters, as `varchar(191)` counts them, not in UTF-16 units.
   return (
     typeof id === "string" &&
     id.length > 0 &&
-    id.length <= STAFF_PERSON_ID_MAX_LENGTH
+    [...id].length <= STAFF_PERSON_ID_MAX_LENGTH
   );
 }
