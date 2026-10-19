@@ -46,6 +46,7 @@
  * @module domains/releases/release-mutations
  */
 
+import { NextlyError } from "../../errors";
 import type { UserContext } from "../collections/services/collection-types";
 import { EVERY_LOCALE } from "../i18n/locale-selector";
 import { createJobContentApi } from "../jobs/job-content-api";
@@ -222,8 +223,26 @@ export function createReleaseMutations(deps: {
 
   return {
     ...mutations,
-    applied: async ({ ref, effect }) =>
-      reachedInStorage(await settlement.storedLifecycle(ref), effect),
+    applied: async ({ ref, effect }) => {
+      const stored = await settlement.storedLifecycle(ref);
+      // Unknown is not a mismatch. Before the migration that creates its
+      // translation table, a document's lifecycle cannot be read although the
+      // write committed; reporting that as a failure would repeat the write
+      // and its hooks on every pass. Thrown, so the caller's own rule for an
+      // unanswerable read-back decides, and only a status read and found
+      // elsewhere fails the action.
+      if (stored === null) {
+        throw NextlyError.internal({
+          logContext: {
+            reason: "release-lifecycle-unreadable",
+            scopeKind: ref.scopeKind,
+            scopeSlug: ref.scopeSlug,
+            entryId: ref.entryId,
+          },
+        });
+      }
+      return reachedInStorage(stored, effect);
+    },
     settled: async ({ ref, effect, user }) => {
       // The write's own judgements first, as the write makes them first: a
       // document already live does not excuse an author the write would

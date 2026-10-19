@@ -213,6 +213,7 @@ describe.each(getConfiguredTestDialects())(
 );
 
 const PAGES = "pages";
+const LEGACY = "legacy";
 const PREFERENCES = "preferences";
 
 async function bootLocalized(dialect: TestDialect): Promise<TestNextly> {
@@ -239,6 +240,21 @@ async function bootLocalized(dialect: TestDialect): Promise<TestNextly> {
           ],
         },
         fields: [text({ name: "title", localized: true })],
+      }),
+      // Not localized at boot, so its translatable column is on the main row;
+      // made localized part-way through a case.
+      defineCollection({
+        slug: LEGACY,
+        status: true,
+        access: open,
+        hooks: {
+          afterChange: [
+            () => {
+              changes += 1;
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
       }),
     ],
     singles: [
@@ -376,6 +392,37 @@ describe.each(getConfiguredTestDialects())(
       expect((await t.nextly.releases.findByID({ id: releaseId }))?.state).toBe(
         "published"
       );
+    });
+
+    it("applies a document once, and settles its release, while its translation table is not migrated yet", async () => {
+      // A collection made localized whose translation table the migration has
+      // not created yet: the write commits on the main row, and the stored
+      // lifecycle cannot be read. Unknown is not a mismatch, so the committed
+      // write is not reported failed and repeated, hooks and all, every pass.
+      const t = await bootLocalized(dialect);
+      const id = await entryIn(t, LEGACY, "draft");
+      await t.adapter.update(
+        "dynamic_collections",
+        { localized: true },
+        { and: [{ column: "slug", op: "=", value: LEGACY }] }
+      );
+      const releaseId = await dueReleaseOf(t, [id], {
+        scopeKind: "collection",
+        scopeSlug: LEGACY,
+      });
+      changes = 0;
+
+      const result = await materialise(t);
+
+      expect(result.failed).toBe(0);
+      expect(changes).toBe(1);
+      expect(await storedStatus(t, LEGACY, id)).toBe("published");
+      expect((await t.nextly.releases.findByID({ id: releaseId }))?.state).toBe(
+        "published"
+      );
+      // Settled: a further pass has nothing left to write.
+      await materialise(t);
+      expect(changes).toBe(1);
     });
   }
 );

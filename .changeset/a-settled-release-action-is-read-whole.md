@@ -38,4 +38,6 @@ set its status, as the write requires, and never once its collection or Single h
 draft/published lifecycle turned off. A write the writer refuses (an access or field-rule
 refusal) now fails that document without the document being read back, and a write that
 committed is confirmed from storage alone, so a role revoked just after it no longer leaves
-the release scheduled.
+the release scheduled. A committed write whose document cannot be read back yet, before the
+migration that creates its translation table, is no longer reported failed and repeated on
+every pass.

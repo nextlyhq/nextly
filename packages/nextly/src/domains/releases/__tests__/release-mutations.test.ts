@@ -202,8 +202,19 @@ describe("a release action that would change nothing", () => {
     expect(mayPerform).not.toHaveBeenCalled();
   });
 
-  it("does not confirm a write the storage read cannot vouch for", async () => {
+  it("leaves a write the storage read cannot vouch for to the caller, rather than failing it", async () => {
+    // Unknown is not a mismatch: before its translation table is migrated a
+    // committed document cannot be read. Rejecting hands the decision to the
+    // applier's rule for an unanswerable read-back; answering false would fail
+    // a committed write and repeat it every pass.
     const { m } = mutations("published", [], null);
+    await expect(
+      m.applied({ ref: POST, effect: "publish", user: USER })
+    ).rejects.toThrow();
+  });
+
+  it("fails a write whose stored status was read and found elsewhere", async () => {
+    const { m } = mutations("draft", []);
     expect(await m.applied({ ref: POST, effect: "publish", user: USER })).toBe(
       false
     );
