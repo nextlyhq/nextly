@@ -1920,7 +1920,55 @@ export class UserMutationService extends BaseService {
         ? new ServiceContainer(this.adapter)
         : undefined;
 
-      if (hasFieldUpdates || requestedRoleIds) {
+      // 2c) The custom fields' user_ext row, written in the account's own
+      // transaction below so the two commit together: a unique custom field's
+      // value another user holds refuses the whole update, rather than
+      // refusing it after the account's other fields and roles had committed.
+      const customFieldTable = hasCustomFieldChanges
+        ? this.getUserExtTable()
+        : null;
+      let userExtWriteFailed = false;
+      const writeCustomFields = async (txDb: DrizzleTransactionLike) => {
+        if (!customFieldTable) return;
+        try {
+          const now = new Date();
+          // Required by Drizzle ORM — runtime-generated tables need untyped db access
+          const db = txDb as unknown as DrizzleChain;
+          // Check if user_ext row exists. DrizzleChain await resolves
+          // to Record<string, unknown>[] already.
+          const existingExt = await db
+            .select({ id: customFieldTable.id })
+            .from(customFieldTable)
+            .where(eq(customFieldTable.user_id as Column, currentUser.id))
+            .limit(1);
+
+          if (existingExt.length > 0) {
+            // UPDATE existing row with changed fields only
+            await db
+              .update(customFieldTable)
+              .set({ ...customFieldUpdates, updated_at: now })
+              .where(eq(customFieldTable.user_id as Column, currentUser.id));
+          } else {
+            // INSERT new row (upsert: row was somehow missing)
+            await db.insert(customFieldTable).values({
+              id: randomUUID(),
+              user_id: currentUser.id,
+              ...customFieldUpdates,
+              created_at: now,
+              updated_at: now,
+            });
+          }
+        } catch (err) {
+          // Mark user_ext as the failing statement and abort the transaction,
+          // so the caller below tells a taken value from a missing table.
+          // Aborting rather than continuing is required: PostgreSQL poisons
+          // the whole transaction after any statement error.
+          userExtWriteFailed = true;
+          throw err;
+        }
+      };
+
+      if (hasFieldUpdates || requestedRoleIds || customFieldTable) {
         if (hasFieldUpdates) updateData.updatedAt = new Date();
         // A deactivation, or a password an administrator set, ends every
         // session the account holds. The refresh rows are what a session is
@@ -1937,110 +1985,86 @@ export class UserMutationService extends BaseService {
         // assigning the new ones commit together, and on SQLite the
         // transaction queues behind any other request's open one rather than
         // running inside it, where that one's rollback would undo the write
-        // and hand back the roles just removed.
-        await this.withTransaction(async tx => {
-          const txDb = tx as DrizzleTransactionLike;
-          // A deactivation or a role replacement may not leave the install
-          // without an active super-admin. First, before any row lock, for
-          // the lock order `refuseRemovingLastSuperAdmin` describes.
-          if (changes.isActive === false || requestedRoleIds) {
-            await refuseRemovingLastSuperAdmin(
-              tx as LastSuperAdminTx,
-              this.tables,
-              this.dialect,
-              currentUser.id,
-              changes.isActive === false
-                ? { kind: "deactivate" }
-                : { kind: "replaceRoles", roleIds: requestedRoleIds ?? [] }
-            );
+        // and hand back the roles just removed. The custom fields' row is
+        // written last in it, when asked for.
+        const writeAccount = (withCustomFields: boolean) =>
+          this.withTransaction(async tx => {
+            const txDb = tx as DrizzleTransactionLike;
+            // A deactivation or a role replacement may not leave the install
+            // without an active super-admin. First, before any row lock, for
+            // the lock order `refuseRemovingLastSuperAdmin` describes.
+            if (changes.isActive === false || requestedRoleIds) {
+              await refuseRemovingLastSuperAdmin(
+                tx as LastSuperAdminTx,
+                this.tables,
+                this.dialect,
+                currentUser.id,
+                changes.isActive === false
+                  ? { kind: "deactivate" }
+                  : { kind: "replaceRoles", roleIds: requestedRoleIds ?? [] }
+              );
+            }
+            if (guardsAdministrator) {
+              await this.refuseSuperAdminAccount(
+                currentUser.id,
+                administratorRefusal,
+                txDb
+              );
+            }
+            if (guardsExternalIdentity) {
+              await this.refuseExternalIdentityShape(
+                currentUser.id,
+                updateData,
+                txDb,
+                options.customPasswordHasher === true
+              );
+            }
+            if (hasFieldUpdates && endsSessions) {
+              await updateUserEndingSessions(txDb, this.tables, this.dialect, {
+                userId: currentUser.id,
+                set: updateData,
+              });
+            } else if (hasFieldUpdates) {
+              await txDb
+                .update(users)
+                .set(updateData)
+                .where(eq(users.id, currentUser.id));
+            }
+            if (requestedRoleIds && services) {
+              hasRoleUpdates = await services.userRoles.replaceUserRoles(
+                String(currentUser.id),
+                requestedRoleIds,
+                tx
+              );
+            }
+            if (withCustomFields) await writeCustomFields(txDb);
+          });
+        try {
+          await writeAccount(customFieldTable !== null);
+        } catch (txErr) {
+          // A unique custom field's value already held by another user is
+          // refused, and the transaction took the rest of the update with it.
+          // It is not a missing table: skipping would drop the change and turn
+          // custom fields off.
+          if (userExtWriteFailed && isUniqueViolation(txErr)) {
+            throw takenUserFieldValue(txErr);
           }
-          if (guardsAdministrator) {
-            await this.refuseSuperAdminAccount(
-              currentUser.id,
-              administratorRefusal,
-              txDb
-            );
-          }
-          if (guardsExternalIdentity) {
-            await this.refuseExternalIdentityShape(
-              currentUser.id,
-              updateData,
-              txDb,
-              options.customPasswordHasher === true
-            );
-          }
-          if (hasFieldUpdates && endsSessions) {
-            await updateUserEndingSessions(txDb, this.tables, this.dialect, {
-              userId: currentUser.id,
-              set: updateData,
-            });
-          } else if (hasFieldUpdates) {
-            await txDb
-              .update(users)
-              .set(updateData)
-              .where(eq(users.id, currentUser.id));
-          }
-          if (requestedRoleIds && services) {
-            hasRoleUpdates = await services.userRoles.replaceUserRoles(
-              String(currentUser.id),
-              requestedRoleIds,
-              tx
-            );
-          }
-        });
+          // Any failure other than the user_ext write is a real error.
+          if (!userExtWriteFailed) throw txErr;
+          // The user_ext table may not exist on this dialect: disable it for
+          // this process and write the rest of the update without it.
+          const cause = txErr instanceof Error ? txErr.message : String(txErr);
+          this.logger.warn(
+            `user_ext upsert skipped during updateUser: ${cause}`
+          );
+          this.userExtDisabled = true;
+          hasCustomFieldChanges = false;
+          if (hasFieldUpdates || requestedRoleIds) await writeAccount(false);
+        }
         if (hasRoleUpdates && services) {
           await this.afterCommit(() =>
             services.userRoles.invalidateRoleCaches(String(currentUser.id))
           );
-        }
-      }
-
-      // 2c) Upsert custom fields in user_ext
-      if (hasCustomFieldChanges) {
-        const userExtTable = this.getUserExtTable();
-        if (userExtTable) {
-          try {
-            const now = new Date();
-            // Required by Drizzle ORM — runtime-generated tables need untyped db access
-            const db = this.db as unknown as DrizzleChain;
-            // Check if user_ext row exists. DrizzleChain await resolves
-            // to Record<string, unknown>[] already.
-            const existingExt = await db
-              .select({ id: userExtTable.id })
-              .from(userExtTable)
-              .where(eq(userExtTable.user_id as Column, currentUser.id))
-              .limit(1);
-
-            if (existingExt.length > 0) {
-              // UPDATE existing row with changed fields only
-              await db
-                .update(userExtTable)
-                .set({ ...customFieldUpdates, updated_at: now })
-                .where(eq(userExtTable.user_id as Column, currentUser.id));
-            } else {
-              // INSERT new row (upsert: row was somehow missing)
-              await db.insert(userExtTable).values({
-                id: randomUUID(),
-                user_id: currentUser.id,
-                ...customFieldUpdates,
-                created_at: now,
-                updated_at: now,
-              });
-            }
-          } catch (err) {
-            // A unique custom field's value already held by another user is
-            // refused, not taken for a missing table: skipping would drop the
-            // change and turn custom fields off. The account's other fields
-            // were written above, in their own transaction.
-            if (isUniqueViolation(err)) throw takenUserFieldValue(err);
-            // user_ext table may not exist on this dialect — disable and skip
-            const cause = err instanceof Error ? err.message : String(err);
-            this.logger.warn(
-              `user_ext upsert skipped during updateUser: ${cause}`
-            );
-            this.userExtDisabled = true;
-            hasCustomFieldChanges = false;
-          }
         }
       }
 

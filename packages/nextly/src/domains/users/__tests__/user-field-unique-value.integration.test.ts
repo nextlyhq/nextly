@@ -155,5 +155,28 @@ describe.each(getConfiguredTestDialects())(
       } as Parameters<UserMutationService["updateUser"]>[1]);
       expect(await stored(other.id)).toMatchObject({ team: "violet" });
     });
+
+    it("refuses the whole update when its custom field value is taken, leaving the account's own fields as they were", async () => {
+      await create("first@test.local", "E1", "red");
+      const other = await create("other@test.local", "E2", "blue");
+
+      const error = await users
+        .updateUser(String(other.id), {
+          name: "Renamed",
+          employeeId: "E1",
+        } as Parameters<UserMutationService["updateUser"]>[1])
+        .catch((e: unknown) => e);
+      expect(NextlyError.is(error)).toBe(true);
+      expect((error as NextlyError).code).toBe("DUPLICATE");
+
+      // The account row and user_ext commit together or not at all: a refused
+      // update that had already renamed the account would report a failure
+      // for a change that partly happened.
+      const [account] = await handle.adapter.executeQuery<{ name: string }>(
+        `SELECT ${q}name${q} AS name FROM ${q}users${q} WHERE ${q}id${q} = '${String(other.id)}'`
+      );
+      expect(account?.name).toBe("other@test.local");
+      expect(await stored(other.id)).toMatchObject({ employee: "E2" });
+    });
   }
 );
