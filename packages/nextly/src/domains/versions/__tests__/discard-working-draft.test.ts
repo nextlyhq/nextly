@@ -82,6 +82,9 @@ describe("discardWorkingDraft", () => {
       collectionName: "posts",
       entryId: "e1",
       locale: null,
+      // Who discarded it, for the document's history.
+      actor: undefined,
+      user: { id: "u1", roles: ["editor"] },
     });
     expect(unlockedDeleteSpy).not.toHaveBeenCalled();
     // The live read precedes the deletion, so a read failure can leave the draft
@@ -106,6 +109,9 @@ describe("discardWorkingDraft", () => {
       collectionName: "posts",
       entryId: "e1",
       locale: "es",
+      // Who discarded it, for the document's history.
+      actor: undefined,
+      user: { id: "u1", roles: ["editor"] },
     });
     expect(getEntrySpy).toHaveBeenCalledWith(
       expect.objectContaining({ locale: "es" })

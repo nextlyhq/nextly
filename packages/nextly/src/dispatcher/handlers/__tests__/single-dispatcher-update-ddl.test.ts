@@ -137,6 +137,8 @@ vi.mock("../../../domains/schema/pipeline/live-table-facts", () => ({
   tableHasRows: vi.fn(async () => liveTableHasRows.value),
   readForeignKeyColumns: vi.fn(async () => new Map<string, string[]>()),
   readIndexNames: vi.fn(async () => new Set<string>()),
+  // No unique index on any column, as no index name above.
+  readUniqueColumns: vi.fn(async () => new Map<string, string | null>()),
   // A table that reports no nulls and no absent columns, so the requiredness precondition
   // has nothing to refuse and these stay about the statements. What that precondition does
   // WITH the facts is pinned where the facts are real, in

@@ -9,6 +9,8 @@
  * @module components/features/versions/HistoricalDocumentBanner
  */
 
+import { ArrowLeft } from "lucide-react";
+
 import { Badge, Button } from "@admin/components/ui";
 
 export interface HistoricalDocumentBannerProps {
@@ -17,6 +19,12 @@ export interface HistoricalDocumentBannerProps {
   locale?: string | null;
   /** Returns the document area to the live document. */
   onReturnToCurrent: () => void;
+  /** Shows the history list again, where it stepped aside for this version. */
+  onBackToHistory?: () => void;
+  /** Opens the full comparison, where the history list cannot offer it. */
+  onCompare?: () => void;
+  /** Opens the comparison of this version with the newest in its language. */
+  onCompareCurrent?: () => void;
   /** Offered only to a caller who may write the document. */
   onRestore?: () => void;
   restoreDisabled?: boolean;
@@ -26,6 +34,9 @@ export function HistoricalDocumentBanner({
   versionNo,
   locale = null,
   onReturnToCurrent,
+  onBackToHistory,
+  onCompare,
+  onCompareCurrent,
   onRestore,
   restoreDisabled = false,
 }: HistoricalDocumentBannerProps) {
@@ -36,6 +47,20 @@ export function HistoricalDocumentBanner({
       role="status"
       className="flex flex-wrap items-center gap-3 border-b border-border bg-primary/5 px-6 py-3"
     >
+      {/* First, where a reader who came from the list looks for the way back.
+          type="button" for the reason the actions below have it. */}
+      {onBackToHistory ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          type="button"
+          className="-ml-2"
+          onClick={onBackToHistory}
+        >
+          <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+          History
+        </Button>
+      ) : null}
       <Badge variant="default">Version {versionNo}</Badge>
       <p className="text-sm text-foreground">
         You are reading a past version of this document
@@ -60,6 +85,21 @@ export function HistoricalDocumentBanner({
             disabled={restoreDisabled}
           >
             Restore this version
+          </Button>
+        ) : null}
+        {onCompare ? (
+          <Button variant="outline" size="sm" type="button" onClick={onCompare}>
+            Open full comparison
+          </Button>
+        ) : null}
+        {onCompareCurrent ? (
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            onClick={onCompareCurrent}
+          >
+            Compare with current
           </Button>
         ) : null}
         <Button

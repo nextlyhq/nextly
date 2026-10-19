@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   defaultPair,
+  newestInLocale,
   predecessorOf,
   sameLocaleVersions,
 } from "../version-pairing";
@@ -204,5 +205,24 @@ describe("defaultPair — a locale's first is not the document's only", () => {
 
   it("still reports an empty history as having nothing to compare", () => {
     expect(defaultPair([], false)).toEqual({ kind: "no-history" });
+  });
+});
+
+describe("newestInLocale", () => {
+  const history = [
+    { versionNo: 5, locale: "es" },
+    { versionNo: 4, locale: "en" },
+    { versionNo: null, locale: "en" },
+    { versionNo: 2, locale: "en" },
+  ];
+
+  it("names the newest version in the version's own language", () => {
+    // Not 5, the newest overall: that is another language's text.
+    expect(newestInLocale(history, 2)).toBe(4);
+  });
+
+  it("names none for the newest itself, or for a version not loaded", () => {
+    expect(newestInLocale(history, 4)).toBeNull();
+    expect(newestInLocale(history, 9)).toBeNull();
   });
 });

@@ -24,12 +24,17 @@ import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import {
+  buildFieldsJoiningTranslationStatements,
+  fieldsJoiningTranslation,
+} from "../../i18n/migration/field-joins-translation";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
   fieldsLeavingTranslation,
 } from "../../i18n/migration/reconcile-companion";
 import {
+  companionHasColumn,
   companionHasStatusColumn,
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
@@ -833,26 +838,33 @@ export class DynamicCollectionService extends BaseService {
     main: { artefact: string; local?: string },
     args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
   ): Promise<{ sql: string; localSql?: string; needsArchive: boolean }> {
-    const { sql, localSql, beforeMainSql, needsArchive } =
+    const { sql, localSql, beforeMainSql, localBeforeMainSql, needsArchive } =
       await this.buildCompanionTransitionSQL(args);
     const archive = needsArchive
       ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
       : "";
-    const assemble = (mainSQL: string, companion: string) =>
+    const assemble = (mainSQL: string, beforeMain: string, companion: string) =>
       orderLocalizedMigration(args.isLocalized, {
         main: mainSQL,
         archive,
-        beforeMain: beforeMainSql,
+        beforeMain,
         companion,
       });
-    // What this database runs differs from the file when either half does.
-    const differs = localSql !== undefined || main.local !== undefined;
+    // What this database runs differs from the file when any part does.
+    const differs =
+      localSql !== undefined ||
+      main.local !== undefined ||
+      localBeforeMainSql !== undefined;
     return {
-      sql: assemble(main.artefact, sql),
+      sql: assemble(main.artefact, beforeMainSql, sql),
       needsArchive,
       ...(differs
         ? {
-            localSql: assemble(main.local ?? main.artefact, localSql ?? sql),
+            localSql: assemble(
+              main.local ?? main.artefact,
+              localBeforeMainSql ?? beforeMainSql,
+              localSql ?? sql
+            ),
           }
         : {}),
     };
@@ -1028,6 +1040,8 @@ export class DynamicCollectionService extends BaseService {
     sql: string;
     localSql?: string;
     beforeMainSql: string;
+    /** What this database runs before main, when it differs from the file's. */
+    localBeforeMainSql?: string;
     needsArchive: boolean;
   }> {
     const companionTable = `${args.tableName}_locales`;
@@ -1041,6 +1055,44 @@ export class DynamicCollectionService extends BaseService {
     const localizedOldNames = new Set(
       resolveLocalizedFieldNames(args.oldFields, args.wasLocalized)
     );
+    // Fields becoming translated: their values move into the default language's companion rows
+    // before the main table loses their columns. The file adds each companion column; this
+    // database skips one its companion already has (a run that stopped part-way, or the
+    // unattended reconcile at boot), since adding a column twice fails on every dialect.
+    const joinArgs = {
+      slug: args.slug,
+      tableName: args.tableName,
+      dialect: this.adapter.dialect,
+      builtBy: "collection" as const,
+      defaultLocale: this.defaultLocale,
+      oldFields: args.oldFields,
+      newFields: args.newFields,
+      status: args.wasStatus && companionHasStatus !== false,
+      companionStatus: args.status,
+      companionExists,
+    };
+    const joining =
+      args.wasLocalized && args.isLocalized
+        ? buildFieldsJoiningTranslationStatements(joinArgs)
+        : {
+            fields: [],
+            columns: [],
+            createsCompanion: false,
+            statements: [],
+          };
+    const presentOnCompanion = new Set<string>();
+    for (const column of companionExists ? joining.columns : []) {
+      if (await companionHasColumn(this.adapter, companionTable, column)) {
+        presentOnCompanion.add(column);
+      }
+    }
+    const localJoining =
+      presentOnCompanion.size > 0
+        ? buildFieldsJoiningTranslationStatements({
+            ...joinArgs,
+            companionColumns: presentOnCompanion,
+          })
+        : undefined;
     const common = {
       // This service owns Schema Builder collections, so the companion mirrors that builder.
       builtBy: "collection" as const,
@@ -1054,12 +1106,14 @@ export class DynamicCollectionService extends BaseService {
       isLocalized: args.isLocalized,
       oldFields: args.oldFields,
       newFields: args.newFields,
-      companionExists,
+      // A companion the joining fields' statements create exists by the time the transition runs.
+      companionExists: companionExists || joining.createsCompanion,
       companionHasStatus,
       wasStatus: args.wasStatus,
       // This service writes the whole migration, main-table change included, so the archive
       // writes come back separately to go ahead of it.
       archiveBeforeMain: true,
+      joinedBefore: joining.fields,
     };
 
     // Which translatable columns the main table still carries. A disable must not re-add one that
@@ -1089,7 +1143,18 @@ export class DynamicCollectionService extends BaseService {
     return {
       sql: this.toBreakpointSql(artefact.statements),
       ...(local ? { localSql: this.toBreakpointSql(local.statements) } : {}),
-      beforeMainSql: this.toBreakpointSql(artefact.beforeMain ?? []),
+      beforeMainSql: this.toBreakpointSql([
+        ...(artefact.beforeMain ?? []),
+        ...joining.statements,
+      ]),
+      ...(localJoining
+        ? {
+            localBeforeMainSql: this.toBreakpointSql([
+              ...(artefact.beforeMain ?? []),
+              ...localJoining.statements,
+            ]),
+          }
+        : {}),
       needsArchive: artefact.needsArchive,
     };
   }
@@ -1348,8 +1413,8 @@ export class DynamicCollectionService extends BaseService {
         oldUserFields,
         userDefinedFields
       );
-      // A field leaving translation has preconditions of its own, asked before anything here is
-      // written or altered.
+      // A field leaving or joining translation has preconditions of its own, asked before anything
+      // here is written or altered.
       await archiveFieldsLeavingTranslation({
         // This service builds Schema Builder collections.
         builtBy: "collection",
@@ -1443,8 +1508,17 @@ export class DynamicCollectionService extends BaseService {
             ? fieldsLeavingTranslation(oldUserFields, userDefinedFields)
             : []
         );
+        // A field that becomes translated while the collection stays translated: its main column
+        // goes, so the main diff has to see it as there before and gone after. Its value moves to
+        // the default language's companion row first, ahead of this diff (see the companion
+        // transition below).
+        const joiningTranslation = new Set(
+          collectionWasLocalized && collectionIsLocalized
+            ? fieldsJoiningTranslation(oldUserFields, userDefinedFields)
+            : []
+        );
         const oldShared = oldUserFields.filter(
-          f => !excludedLocalized.has(f.name)
+          f => !excludedLocalized.has(f.name) || joiningTranslation.has(f.name)
         );
         const newShared = userDefinedFields.filter(
           f => !excludedLocalized.has(f.name) || leavingTranslation.has(f.name)

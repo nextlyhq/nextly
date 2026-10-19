@@ -225,6 +225,35 @@ export function normalizeMediaUrls<
     sizes?: MediaSizes | string;
   },
 >(row: T): T {
-  if (!("sizes" in row)) return { ...row };
-  return { ...row, sizes: normalizeSizes(row.sizes) };
+  const read: T = { ...row };
+  if (typeof row.url === "string") read.url = fromSiteRoot(row.url);
+  if (typeof row.thumbnailUrl === "string") {
+    read.thumbnailUrl = fromSiteRoot(row.thumbnailUrl);
+  }
+  if (!("sizes" in row)) return read;
+  const sizes = normalizeSizes(row.sizes);
+  return {
+    ...read,
+    sizes: sizes
+      ? Object.fromEntries(
+          Object.entries(sizes).map(([name, variant]) => [
+            name,
+            typeof variant?.url === "string"
+              ? { ...variant, url: fromSiteRoot(variant.url) }
+              : variant,
+          ])
+        )
+      : sizes,
+  };
+}
+
+/**
+ * A URL as a page reads it from the site's root. A local storage `baseUrl`
+ * written without its leading slash (`uploads`) stores `uploads/<key>`,
+ * which a page at `/admin/media` would resolve to `/admin/media/uploads/...`;
+ * an absolute, protocol-relative or root-relative URL is returned unchanged.
+ */
+function fromSiteRoot(url: string): string {
+  if (!url || isAbsoluteUrl(url) || url.startsWith("/")) return url;
+  return `/${url}`;
 }
