@@ -233,5 +233,35 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
         vi.useRealTimers();
       }
     });
+
+    it("reports TOKEN_EXPIRED when the claim runs at the exact expiry instant", async () => {
+      const { auth1, db } = await setup(dialect);
+      const { token } = await auth1.generatePasswordResetToken(EMAIL, {
+        disableEmail: true,
+      });
+
+      // Park the clock exactly on the token's stored expiry: the initial
+      // expiry check passes (strict <), the claim refuses (not strictly
+      // greater), and the refusal must be reported as an expiration.
+      const [row] = await db
+        .select()
+        .from(tables.passwordResetTokens)
+        .where(eq(tables.passwordResetTokens.identifier, EMAIL));
+      const expires = row.expires as Date;
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(expires.getTime());
+
+        await expect(
+          auth1.resetPasswordWithToken(token as string, "Passw0rdA123!")
+        ).rejects.toMatchObject({
+          code: "TOKEN_EXPIRED",
+          statusCode: 401,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

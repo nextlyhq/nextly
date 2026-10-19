@@ -685,7 +685,11 @@ export class AuthService extends BaseService {
       });
 
       if (!consumed) {
-        if (tokenExpired(resetToken)) {
+        // The claim refuses anything not strictly live (`expires > now`), so
+        // this branch mirrors the claim's own boundary: an instant-equal or
+        // past expiry is an expiration. `tokenExpired`'s strict `<` would
+        // call the exact instant live and report a lost race instead.
+        if (resetToken.expires <= new Date()) {
           throw this.resetTokenExpiredError(resetToken);
         }
 
