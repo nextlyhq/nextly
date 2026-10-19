@@ -51,6 +51,14 @@ describe("masking addresses in text", () => {
     // A punycode top-level label, and an internationalized domain and local
     // part, each masked whole.
     ["john@example.xn--p1ai", "j***@example.xn--p1ai"],
+    // A punycode label in any letter case: DNS labels are case-insensitive.
+    ["john@example.XN--P1AI", "j***@example.XN--P1AI"],
+    ["john@example.Xn--p1ai", "j***@example.Xn--p1ai"],
+    // Scripts that write with combining marks (a Devanagari vowel sign or
+    // virama), in the local part and in the domain, masked whole.
+    ["जॉन@example.com", "ज***@example.com"],
+    ["जो@example.com", "ज***@example.com"],
+    ["john@उदाहरण.भारत", "j***@उदाहरण.भारत"],
     ["john@bücher.de", "j***@bücher.de"],
     ["jöhn@example.com", "j***@example.com"],
     ["ölaf@example.com", "ö***@example.com"],

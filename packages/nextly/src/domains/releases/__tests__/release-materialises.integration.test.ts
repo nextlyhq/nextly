@@ -22,7 +22,6 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { applyDueReleases } from "../apply-due-releases";
-import { VersionsRepository } from "../../versions/versions-repository";
 import { createReleaseMutations } from "../release-mutations";
 import { ReleasesRepository } from "../releases-repository";
 import {
@@ -111,10 +110,7 @@ async function draftInRelease(
 async function materialise(t: TestNextly, author: { id: string } | null) {
   return applyDueReleases({
     repository: new ReleasesRepository(t.adapter),
-    mutations: createReleaseMutations({
-      contentApi: t.nextly,
-      drafts: new VersionsRepository(t.adapter),
-    }),
+    mutations: createReleaseMutations({ contentApi: t.nextly }),
     runAs: {
       findUser: async id => (author === null ? null : { id, isActive: true }),
       listRoleSlugs: async () => [],
