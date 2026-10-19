@@ -206,6 +206,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   }) => {
     chromeRequests.push(request);
   },
+  useBeforeDocumentAction: () => {},
+  useDocumentActions: () => null,
   useDocumentStatus: () => null,
   useSingleDocument: () => ({
     data: undefined,

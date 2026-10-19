@@ -37,6 +37,7 @@ import type { LibraryReadState } from "../pattern-library-client";
 import { SavePatternPrompt } from "../SavePatternPrompt";
 import { UnsavedChangesPill } from "../UnsavedChangesPill";
 
+import { DocumentActionButtons } from "./document-action-buttons";
 import {
   editorPanelRenderer,
   useEditorPanels,
@@ -254,6 +255,10 @@ function editorTopBar(view: EditorView): React.JSX.Element {
         }}
         status={siteStyleStatus(siteStylePending, siteStyleError)}
       />
+      {/* Last, at the bar's far end where the header kept them: the
+          document's save verbs, which the builder's taking the window would
+          otherwise leave reachable only from the keyboard. */}
+      <DocumentActionButtons />
     </>
   );
 }

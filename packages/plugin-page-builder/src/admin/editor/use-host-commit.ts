@@ -4,19 +4,20 @@
  * The form owns the field's value and its dirty flag; the editor owns the
  * document and its history until the author leaves. What crosses between them
  * while the editor is open is here: the recovery point, the report that the
- * editor holds unsaved work, the save shortcut, the exit that hands the
- * document back, and the request that the admin's chrome step aside.
+ * editor holds unsaved work, the open passage finished before the document is
+ * stored, the exit that hands the document back, and the request that the
+ * admin's chrome step aside.
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/use-host-commit
  */
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { documentAfter, type InlineEditOutcome } from "@nextlyhq/builder/shell";
 import {
+  useBeforeDocumentAction,
   useDocumentCheckpoint,
   useReportUnsavedWork,
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
-import { chordMatches, detectApplePlatform, parseKeys } from "@nextlyhq/ui";
 import {
   useCallback,
   useEffect,
@@ -133,26 +134,6 @@ export function finishInlineEdit(
     document: documentAfter(outcome, held),
     mayClose: outcome.status !== "refused",
   };
-}
-
-/**
- * The form's save shortcut, parsed from the SAME spec the form registers.
- *
- * Asked of the shortcut library rather than written out here. A hand-rolled
- * `key === "s" && (metaKey || ctrlKey)` treats modifiers as a minimum, so it
- * also fires on Ctrl+Shift+S and Ctrl+Alt+S — which the manager rejects,
- * meaning the form does NOT save. Ctrl+Shift+S is the browser's Save As on
- * several platforms, so the author would have got a dialog, an inline edit
- * closed underneath it, and a field changed by a keystroke that saved nothing.
- */
-const SAVE_CHORD = parseKeys("mod+s")[0];
-
-/** Whether a key event is the form's save shortcut on this platform. */
-function isSaveChord(event: KeyboardEvent): boolean {
-  return (
-    SAVE_CHORD !== undefined &&
-    chordMatches(SAVE_CHORD, event.key, event, detectApplePlatform())
-  );
 }
 
 /**
@@ -288,37 +269,24 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   useReportUnsavedWork(`blocks:${name}`, hasUnsavedWork(editor, inline));
 
   /*
-   * Finish an open passage before the form is asked to save it.
+   * Finish an open passage before the document is stored.
    *
    * An inline edit lives in the element until it ends, so the field still holds
-   * the value from before it. Reporting the edit as unsaved work is what lets
-   * the form submit — and reporting cannot write to the form, by that context's
-   * own contract — so a save taken while a passage is open would send the
-   * previous value and report success.
+   * the value from before it, and a save taken while a passage is open would
+   * send the previous value and report success. The editor that hosts this asks
+   * every action that stores the document to wait for this first — the save
+   * shortcut, the Save and Publish buttons, a menu item — so no way of saving
+   * can leave a passage behind.
    *
-   * Capture phase, so this runs before the form's own handler sees the chord.
-   *
-   * This closes the SHORTCUT. A save started any other way — a button, a
-   * command palette — still leaves an open passage behind, because nothing lets
-   * a surface holding uncommitted work be asked to flush before submission.
-   * That is a contract the form does not have, not something this can reach.
+   * Saved even when the passage was refused, and NOT closed either way. The
+   * document is right and complete for everything except the passage still
+   * open, so withholding the save would lose the rest of their work to protect
+   * a paragraph that is not going anywhere: it stays in the editor, on screen,
+   * and the message is what tells them it is still there.
    */
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (!isSaveChord(event)) return;
-      /*
-       * Saved even when the passage was refused, and NOT closed either way.
-       * The document is right and complete for everything except the passage
-       * still open, so withholding the save would lose the rest of their work
-       * to protect a paragraph that is not going anywhere: it stays in the
-       * editor, on screen, and the message is what tells them it is still
-       * there.
-       */
-      onCommit(finishInlineEdit(inline, editor.document).document);
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [editor.document, inline, onCommit]);
+  useBeforeDocumentAction(() => {
+    onCommit(finishInlineEdit(inline, editor.document).document);
+  });
 
   /*
    * Writing back on the way out rather than on every keystroke.

@@ -26,6 +26,9 @@ import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
 import type { EntryValue } from "@admin/types/collection";
 
+import { submitDocument } from "./submit-document";
+import { submitBusy, type SubmitOutcome } from "./submit-outcome";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -266,31 +269,6 @@ export function mapIntentToPayload(
 }
 
 /**
- * The submit intent a plain save (the keyboard Cmd/Ctrl+S shortcut) uses for an
- * editor in a given lifecycle state, mirroring the primary Save button.
- *
- * `effectiveStatus` is the ACTIVE locale's status (from `effectiveEntryStatus`),
- * not the main row's: on a non-default language the main row carries the default
- * language's lifecycle, so keying the shortcut off it could publish or unpublish
- * the wrong translation. A published document stores a working draft on a drafts
- * collection or re-asserts published otherwise; any other state saves a draft; a
- * non-status collection has no lifecycle intent (its single Save button submits
- * without one).
- */
-export function resolveDefaultSaveIntent(args: {
-  mode: EntryFormMode;
-  hasStatus: boolean;
-  effectiveStatus: string | undefined;
-  draftsEnabled: boolean;
-}): EntryFormIntent | undefined {
-  if (args.mode !== "edit" || !args.hasStatus) return undefined;
-  if (args.effectiveStatus === "published") {
-    return args.draftsEnabled ? "save-working-draft" : "save-changes";
-  }
-  return "save-draft";
-}
-
-/**
  * Return type for useEntryForm hook
  */
 export interface UseEntryFormReturn {
@@ -299,11 +277,12 @@ export interface UseEntryFormReturn {
   /** Handle form submission. The optional `intent` arg names the user's
    *  action; payload shape is derived from intent. Omit for non-status
    *  collections (single Save button submits with whatever status the
-   *  server already has). */
+   *  server already has). Resolves to what the submission came to; never
+   *  rejects. */
   handleSubmit: (
     e?: React.BaseSyntheticEvent,
     intent?: EntryFormIntent
-  ) => Promise<void>;
+  ) => Promise<SubmitOutcome>;
   /** Handle entry deletion (edit mode only) */
   handleDelete: () => void;
   /** Discard the pending working draft (draft/published split), reverting the
@@ -383,6 +362,51 @@ function getSingularLabel(collection: EntryFormCollection): string {
  * });
  * ```
  */
+/** What makes an entry a different one for the form: see `useEntryForm`. */
+interface EntryIdentity {
+  id: unknown;
+  version: string | null;
+  /** The language and read it was loaded for, and a working draft's overlay. */
+  place: string;
+}
+
+function entryIdentity(
+  entry: EntryData,
+  locale: string | undefined,
+  readDraft: boolean | undefined
+): EntryIdentity {
+  return {
+    id: entry.id,
+    version: typeof entry.updatedAt === "string" ? entry.updatedAt : null,
+    place: JSON.stringify([
+      locale ?? null,
+      readDraft ?? null,
+      entry._isWorkingDraft === true,
+    ]),
+  };
+}
+
+/**
+ * Whether an arriving entry resets the form: not at all when its identity is
+ * unchanged (a save's own optimistic copy or rollback), keeping unsaved edits
+ * when it is this author's own save coming back (a new version of the same
+ * entry, in the same place, while the save is in flight or matching the
+ * version it stored), and fully otherwise.
+ */
+function resetDecision(
+  last: EntryIdentity | undefined,
+  next: EntryIdentity,
+  ownSave: { inFlight: boolean; storedVersion?: string }
+): "none" | "keep-unsaved" | "full" {
+  if (last === undefined) return "full";
+  const samePlace = last.id === next.id && last.place === next.place;
+  if (samePlace && last.version === next.version) return "none";
+  const ownEcho =
+    ownSave.inFlight ||
+    (next.version !== null && next.version === ownSave.storedVersion);
+  return samePlace && ownEcho ? "keep-unsaved" : "full";
+}
+
 export function useEntryForm({
   collection,
   entry = null,
@@ -441,11 +465,34 @@ export function useEntryForm({
   // useMemo'd on (fields, entry), so it only changes when entry's identity
   // changes — keeps this effect from firing on every keystroke. `form` is
   // a stable RHF ref.
+  //
+  // The stored row this author's own save puts in the cache arrives here as a
+  // new entry, and resetting to it blindly would wipe whatever they typed
+  // while the save was in flight; the save has already made it the form's
+  // starting point, so that echo keeps unsaved edits. Recognised while the
+  // save is in flight, and afterwards by the version it stored, because it can
+  // arrive on either side of the save's own reset. Any other arrival — a
+  // restored version, a colleague's change, a different entry — resets the
+  // form to it, as Restore promises when it warns unsaved work is discarded.
+  //
+  // "Arrives" is a change of the entry's identity, never of its object: its
+  // id, its stored version, the language and the read it was loaded for, and
+  // whether a working draft is overlaid. A save rewrites the cache twice
+  // without changing any of those — its optimistic copy before the request,
+  // and the stored entry put back (as a new object) when the request fails —
+  // and resetting to either wiped unsaved work.
+  const resetKey = useRef<EntryIdentity | undefined>(undefined);
+  const ownSave = useRef<{ inFlight: boolean; storedVersion?: string }>({
+    inFlight: false,
+  });
   useEffect(() => {
-    if (entry && mode === "edit") {
-      form.reset(defaultValues);
-    }
-  }, [entry, mode, defaultValues, form]);
+    if (!entry || mode !== "edit") return;
+    const next = entryIdentity(entry, locale, readDraft);
+    const decision = resetDecision(resetKey.current, next, ownSave.current);
+    if (decision === "none") return;
+    form.reset(defaultValues, { keepDirtyValues: decision === "keep-unsaved" });
+    resetKey.current = next;
+  }, [entry, mode, defaultValues, form, locale, readDraft]);
 
   // Mutations - pass setError to enable server error mapping to form fields
   const createMutation = useCreateEntry({
@@ -514,48 +561,70 @@ export function useEntryForm({
   // determines payload shape (see EntryFormIntent). Without an intent,
   // submission keeps the existing status and just persists dirty fields
   // (used by the single-Save button when drafts aren't enabled).
+  //
+  // Resolves to what the submission came to, never rejects: the toasts and
+  // field messages report to the author as before, and the outcome reports to
+  // the caller, which may have to act on it (save, then open the builder).
+  //
   const handleSubmit = useCallback(
-    async (e?: React.BaseSyntheticEvent, intent?: EntryFormIntent) => {
+    async (
+      e?: React.BaseSyntheticEvent,
+      intent?: EntryFormIntent
+    ): Promise<SubmitOutcome> => {
       e?.preventDefault();
-      if (isSubmitting || submissionLatch.current) return;
+      if (isSubmitting || submissionLatch.current) return submitBusy;
       submissionLatch.current = true;
+      // The saved row, for `onSuccess` once the form has taken it in.
+      let savedRow: EntryData | undefined;
       try {
-        await form.handleSubmit(async rawData => {
+        const outcome = await submitDocument({
+          form,
+          event: e,
           // Why: intent → payload mapping is the core PR-3 bug fix —
           // extracted to mapIntentToPayload above so the contract is
           // unit-testable without renderHook plumbing.
-          const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
-
-          try {
+          toPayload: values =>
+            mapIntentToPayload(values, intent, blankPasswordFields),
+          write: async data => {
             if (mode === "create") {
               const result = await createMutation.mutateAsync(
                 data as Record<string, EntryValue>
               );
-              // Reset form to mark as clean after successful create
-              form.reset(data);
-              // The entry, not the envelope: the mutation now resolves to the
-              // whole response so the hook can report post-commit failures, and
-              // this callback's contract is the saved row.
-              onSuccess?.(result.item);
-            } else {
-              if (!entry?.id) {
-                throw new Error("Entry ID is required for update");
-              }
-              // entryId is passed to useUpdateEntry hook, so we just pass data here
-              const result = await updateMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
-              // Reset form to mark as clean after successful update
-              form.reset(data);
-              onSuccess?.(result.item);
+              savedRow = result.item;
+              return {
+                item: result.item,
+                stored: getDefaultValues(fields, result.item),
+              };
             }
-          } catch (error) {
-            // Server errors are automatically mapped to form fields via setError
-            // passed to the mutation hooks. Only log for debugging.
-            console.error("Form submission error:", error);
-            onError?.(error);
-          }
-        })(e);
+            if (!entry?.id) {
+              throw new Error("Entry ID is required for update");
+            }
+            // entryId is passed to useUpdateEntry hook, so we just pass data here
+            ownSave.current.inFlight = true;
+            const result = await updateMutation
+              .mutateAsync(data as Record<string, EntryValue>)
+              .finally(() => {
+                ownSave.current.inFlight = false;
+              });
+            ownSave.current.storedVersion =
+              typeof result.item.updatedAt === "string"
+                ? result.item.updatedAt
+                : undefined;
+            savedRow = result.item;
+            return {
+              item: result.item,
+              stored: getDefaultValues(fields, result.item),
+            };
+          },
+          // Server errors are mapped to form fields through the setError the
+          // mutation hooks are given; this reports the failure onwards.
+          onFailure: onError,
+        });
+        // The entry, not the envelope: the mutation resolves to the whole
+        // response so the hook can report post-commit failures, and this
+        // callback's contract is the saved row.
+        if (outcome.ok && savedRow !== undefined) onSuccess?.(savedRow);
+        return outcome;
       } finally {
         submissionLatch.current = false;
       }
@@ -571,6 +640,7 @@ export function useEntryForm({
       onSuccess,
       onError,
       blankPasswordFields,
+      fields,
     ]
   );
 
