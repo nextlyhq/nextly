@@ -13,7 +13,7 @@
 
 import {
   assertPasswordHasherContract,
-  setActivePasswordHasher,
+  DEFAULT_MIN_PASSWORD_LENGTH,
   setMinPasswordLength,
 } from "../../auth/password/policy";
 import { resolveWebhookWritePathInfra } from "../../domains/webhooks/write-path-infra";
@@ -31,20 +31,18 @@ import type { RegistrationContext } from "./types";
 export function registerUserServices(ctx: RegistrationContext): void {
   const { adapter, logger, config, passwordHasher } = ctx;
 
-  if (passwordHasher) {
-    assertPasswordHasherContract(passwordHasher);
-    setActivePasswordHasher(passwordHasher);
-  }
+  // The configured digester must declare its reach contract before anything
+  // consults it. A hasher the flows do not name is judged by the flows that
+  // hash with it (UserService passes it explicitly); there is no process-wide
+  // default for it — a check defaults to the digester its own flow hashes
+  // with, which for every core flow is bcrypt.
+  if (passwordHasher) assertPasswordHasherContract(passwordHasher);
 
-  if (
-    config.auth &&
-    typeof (config.auth as { minPasswordLength?: unknown })
-      .minPasswordLength === "number"
-  ) {
-    setMinPasswordLength(
-      (config.auth as { minPasswordLength: number }).minPasswordLength
-    );
-  }
+  // Always overwrite the configured minimum, so a registration whose config
+  // omits it returns to the default instead of keeping the previous one's.
+  setMinPasswordLength(
+    config.auth?.minPasswordLength ?? DEFAULT_MIN_PASSWORD_LENGTH
+  );
 
   // UserFieldDefinitionService — CRUD for custom user field metadata.
   container.registerSingleton<UserFieldDefinitionService>(

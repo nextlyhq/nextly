@@ -12,7 +12,6 @@ import {
   setMinPasswordLength,
   getMinPasswordLength,
   resetPasswordPolicy,
-  setActivePasswordHasher,
   DEFAULT_MIN_PASSWORD_LENGTH,
   DEFAULT_DIGESTER_REACH_BYTES,
   MAX_PASSWORD_LENGTH_CHARS,
@@ -647,6 +646,55 @@ describe("password utilities", () => {
           hasher: validateHasher,
         });
         expect(resValid.ok).toBe(true);
+      });
+
+      it("refuses a numeric reach that is not a positive whole number of bytes", () => {
+        for (const reach of [Number.NaN, Infinity, -1, 0, 7.5]) {
+          expect(() =>
+            assertPasswordHasherContract({
+              name: "BrokenHasher",
+              reach,
+              hash: async () => "",
+              verify: async () => true,
+            })
+          ).toThrowError(/positive whole number of bytes/);
+        }
+
+        // A bare descriptor naming an invalid reach is refused the same way —
+        // the check runs wherever the contract is consulted, boot included.
+        expect(() =>
+          checkDigesterReach("x".repeat(10), {
+            name: "BrokenDescriptor",
+            reach: Number.NaN,
+          })
+        ).toThrowError(/positive whole number of bytes/);
+
+        expect(() =>
+          assertPasswordHasherContract({
+            name: "WholeHasher",
+            reach: 72,
+            hash: async () => "",
+            verify: async () => true,
+          })
+        ).not.toThrow();
+      });
+
+      it("keeps a thrown validator's message out of the public refusal", () => {
+        const throwingHasher: PasswordHasher = {
+          name: "ThrowingHasher",
+          validate: () => {
+            throw new Error("connection to HSM vault lost at 10.0.0.7");
+          },
+          hash: async () => "",
+          verify: async () => true,
+        };
+
+        const res = validatePasswordStrength("some-secret-password", {
+          hasher: throwingHasher,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.errors).toEqual(["Password exceeds the digester's reach."]);
+        expect(res.errors?.some(e => e.includes("HSM vault"))).toBe(false);
       });
     });
   });

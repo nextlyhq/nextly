@@ -44,7 +44,6 @@
 // envelope, so this façade just propagates errors and shapes the response.
 import {
   assertPasswordHasherContract,
-  setActivePasswordHasher,
   validatePasswordStrength,
 } from "../../../auth/password";
 import { actorForWrite } from "../../../auth/request-actor";
@@ -192,10 +191,12 @@ export class UserService {
     private readonly logger: Logger = consoleLogger,
     private readonly caller: UserWriteCaller = "app"
   ) {
-    if (passwordHasher) {
-      assertPasswordHasherContract(passwordHasher);
-      setActivePasswordHasher(passwordHasher);
-    }
+    // The configured digester must declare its reach contract before anything
+    // consults it. This instance passes it explicitly to the checks its own
+    // custom-hasher flow runs (changePassword), so it is never published as a
+    // process-wide default — a check defaults to the digester its own flow
+    // hashes with, which for every core flow is bcrypt.
+    if (passwordHasher) assertPasswordHasherContract(passwordHasher);
   }
 
   /**

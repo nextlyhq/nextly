@@ -13,7 +13,8 @@
  * transaction-dependent success legs of reset and invite do not run on the
  * unit lane's SQLite (see the skip notes in auth-service.test.ts), and the
  * registration success leg needs the RBAC bootstrap. Where the lane does
- * allow it — change, and the administrator set/update validators — acceptance
+ * allow it — change, and the administrator create/update writes, whose
+ * refusals are driven through the services themselves — acceptance
  * is asserted too, class-less passwords included.
  */
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
@@ -28,6 +29,7 @@ import {
   CreateLocalUserSchema,
   UpdateUserSchema,
 } from "../../../schemas/_zod/user";
+import { UserMutationService } from "../../../services/users/user-mutation-service";
 import { hashInviteToken } from "../lib/invite-token";
 import { AuthService } from "../services/auth-service";
 
@@ -309,43 +311,25 @@ describe("the R-5 password rule runs in every flow that sets a staff password", 
   });
 
   describe("a password an administrator sets", () => {
-    // The administrator write path judges through these schemas — the same
-    // validators `createLocalUser` and `updateUser` run before hashing — so
-    // the schema here is the flow's gate, not a stand-in for it.
+    // The write itself is the gate under test: `createLocalUser` and
+    // `updateUser` judge the password through their schemas before they hash,
+    // and a refusal leaves the state it found unchanged. The boundary the
+    // schemas accept (class-less, exactly at reach) is pinned separately,
+    // since the success legs need the transaction/RBAC lanes the other
+    // suites cover.
     const createInput = {
       email: "admin-set@test.com",
       name: "Admin Set",
     };
 
-    it("accepts a class-less password, and refuses one on the common list", () => {
+    it("accepts a class-less password at the schema both writes judge through", () => {
       expect(
         CreateLocalUserSchema.safeParse({ ...createInput, password: CLASSLESS })
           .success
       ).toBe(true);
-
-      const refused = CreateLocalUserSchema.safeParse({
-        ...createInput,
-        password: COMMON,
-      });
-      expect(refused.success).toBe(false);
-      if (!refused.success) {
-        expect(refused.error.issues.map(issue => issue.message)).toEqual([
-          expect.stringContaining("too common"),
-        ]);
-      }
-    });
-
-    it("refuses a password past the digester's reach, and takes one exactly at it", () => {
-      const refused = CreateLocalUserSchema.safeParse({
-        ...createInput,
-        password: OVER_REACH,
-      });
-      expect(refused.success).toBe(false);
-      if (!refused.success) {
-        expect(refused.error.issues.map(issue => issue.message)).toEqual([
-          expect.stringContaining("72-byte"),
-        ]);
-      }
+      expect(UpdateUserSchema.safeParse({ password: CLASSLESS }).success).toBe(
+        true
+      );
 
       // 70 ASCII bytes plus one two-byte character: exactly the 72 bytes the
       // default digester reads whole.
@@ -357,16 +341,90 @@ describe("the R-5 password rule runs in every flow that sets a staff password", 
       ).toBe(true);
     });
 
-    it("judges an administrator's update of a password the same way", () => {
-      expect(UpdateUserSchema.safeParse({ password: CLASSLESS }).success).toBe(
-        true
-      );
-      expect(UpdateUserSchema.safeParse({ password: COMMON }).success).toBe(
-        false
-      );
-      expect(UpdateUserSchema.safeParse({ password: OVER_REACH }).success).toBe(
-        false
-      );
+    it("refuses a create with a password on the common list, leaving no account at the address", async () => {
+      const service = new UserMutationService(testDb.adapter, testLogger);
+
+      const err = await service
+        .createLocalUser({ ...createInput, password: COMMON })
+        .catch((e: unknown) => e);
+
+      expect((err as { code?: string }).code).toBe("VALIDATION_ERROR");
+      expect(validationErrors(err)).toEqual([
+        expect.objectContaining({
+          path: "password",
+          message: expect.stringContaining("too common"),
+        }),
+      ]);
+
+      const user = await testDb.db.query.users.findFirst({
+        where: { email: createInput.email },
+      });
+      expect(user).toBeUndefined();
+    });
+
+    it("refuses a create with a password past the digester's reach, leaving no account", async () => {
+      const service = new UserMutationService(testDb.adapter, testLogger);
+
+      const err = await service
+        .createLocalUser({ ...createInput, password: OVER_REACH })
+        .catch((e: unknown) => e);
+
+      expect((err as { code?: string }).code).toBe("VALIDATION_ERROR");
+      expect(validationErrors(err)).toEqual([
+        expect.objectContaining({
+          path: "password",
+          message: expect.stringContaining("72-byte"),
+        }),
+      ]);
+
+      const user = await testDb.db.query.users.findFirst({
+        where: { email: createInput.email },
+      });
+      expect(user).toBeUndefined();
+    });
+
+    it("refuses an update to a password on the common list, the stored credential standing", async () => {
+      const email = "admin-update@test.com";
+      const currentHash = await hashPassword(CURRENT, FIXTURE_SALT_ROUNDS);
+      const user = userFactory({ email, passwordHash: currentHash });
+      await testDb.db.insert(testDb.schema.users).values(user);
+
+      const service = new UserMutationService(testDb.adapter, testLogger);
+      const err = await service
+        .updateUser(user.id, { password: COMMON })
+        .catch((e: unknown) => e);
+
+      expect((err as { code?: string }).code).toBe("VALIDATION_ERROR");
+      expect(validationErrors(err)).toEqual([
+        expect.objectContaining({
+          path: "password",
+          message: expect.stringContaining("too common"),
+        }),
+      ]);
+
+      expect(await storedHash(email)).toBe(currentHash);
+    });
+
+    it("refuses an update to a password past the digester's reach, the stored credential standing", async () => {
+      const email = "admin-update-reach@test.com";
+      const currentHash = await hashPassword(CURRENT, FIXTURE_SALT_ROUNDS);
+      const user = userFactory({ email, passwordHash: currentHash });
+      await testDb.db.insert(testDb.schema.users).values(user);
+
+      const service = new UserMutationService(testDb.adapter, testLogger);
+      const err = await service
+        .updateUser(user.id, { password: OVER_REACH })
+        .catch((e: unknown) => e);
+
+      expect((err as { code?: string }).code).toBe("VALIDATION_ERROR");
+      expect(validationErrors(err)).toEqual([
+        expect.objectContaining({
+          path: "password",
+          message: expect.stringContaining("72-byte"),
+        }),
+      ]);
+
+      expect(await storedHash(email)).toBe(currentHash);
     });
   });
 });

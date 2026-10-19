@@ -15,11 +15,12 @@ import { NextlyError } from "../../errors/nextly-error";
 import { COMMON_PASSWORDS } from "../../plugins/security/common-passwords";
 
 export const DEFAULT_MIN_PASSWORD_LENGTH = 8;
+/** The highest minimum an app may configure (NIST SP 800-63B-4: raise 8 to 15). */
+export const MAX_MIN_PASSWORD_LENGTH = 15;
 export const MAX_PASSWORD_LENGTH_CHARS = 128;
 export const DEFAULT_DIGESTER_REACH_BYTES = 72;
 
 let activeMinPasswordLength = DEFAULT_MIN_PASSWORD_LENGTH;
-let activePasswordHasher: PasswordHasher | undefined;
 
 // Pre-compute lowercased, NFC-normalized common password set for fast O(1) lookup.
 const commonPasswordsSet = new Set<string>(
@@ -34,18 +35,16 @@ export function setMinPasswordLength(length: number): void {
   activeMinPasswordLength = length;
 }
 
-export function getActivePasswordHasher(): PasswordHasher | undefined {
-  return activePasswordHasher;
-}
-
-export function setActivePasswordHasher(hasher?: PasswordHasher): void {
-  activePasswordHasher = hasher;
-}
-
 export function resetPasswordPolicy(): void {
   activeMinPasswordLength = DEFAULT_MIN_PASSWORD_LENGTH;
-  activePasswordHasher = undefined;
 }
+
+/**
+ * The reach-relevant part of a digester's contract — everything
+ * `checkDigesterReach` reads. A full `PasswordHasher` satisfies it, and so
+ * does a bare descriptor naming only what the check needs.
+ */
+export type DigesterReach = Pick<PasswordHasher, "reach" | "validate" | "name">;
 
 /**
  * Counts Unicode code points (characters) rather than UTF-16 code units.
@@ -67,20 +66,35 @@ export function isCommonPassword(password: string): boolean {
 
 /**
  * Asserts that a custom PasswordHasher declares its reach contract.
- * Throws NextlyError.invalidInput naming the digester if missing.
+ * Throws NextlyError.invalidInput naming the digester if the contract is
+ * missing, or if a numeric reach is not a positive whole number of bytes —
+ * `NaN`/`Infinity` would silently disable the truncation check (comparisons
+ * against them are always false) and a negative reach would refuse every
+ * password, so neither may reach a check.
  */
 export function assertPasswordHasherContract(hasher: unknown): void {
   if (!hasher || typeof hasher !== "object") return;
   const h = hasher as Record<string, unknown>;
+  const digesterName =
+    (typeof h.name === "string" && h.name) ||
+    (h.constructor && h.constructor.name !== "Object"
+      ? h.constructor.name
+      : "PasswordHasher");
+
+  if (
+    typeof h.reach === "number" &&
+    !(Number.isSafeInteger(h.reach) && h.reach > 0)
+  ) {
+    throw NextlyError.invalidInput({
+      message: `Password digester "${digesterName}" declares reach ${String(h.reach)}: it must be a positive whole number of bytes or "unbounded".`,
+      logContext: { digester: digesterName, reach: String(h.reach) },
+    });
+  }
+
   const hasReach = h.reach === "unbounded" || typeof h.reach === "number";
   const hasValidate = typeof h.validate === "function";
 
   if (!hasReach && !hasValidate) {
-    const digesterName =
-      (typeof h.name === "string" && h.name) ||
-      (h.constructor && h.constructor.name !== "Object"
-        ? h.constructor.name
-        : "PasswordHasher");
     throw NextlyError.invalidInput({
       message: `Password digester "${digesterName}" must declare its reach contract (specify 'reach' or 'validate').`,
       logContext: { digester: digesterName },
@@ -89,61 +103,100 @@ export function assertPasswordHasherContract(hasher: unknown): void {
 }
 
 /**
- * Validates the reach of a password against the digester.
- * Returns an error message string if the password exceeds the reach, or null if valid.
+ * The refusal a validator's ANSWER states — `false`, a message, or a
+ * `{ ok: false }` verdict — or null when it accepts.
+ */
+function validatorResultRefusal(result: unknown): string | null {
+  if (result === false) {
+    return "Password exceeds the digester's reach.";
+  }
+  if (typeof result === "string") {
+    return result;
+  }
+  if (
+    typeof result === "object" &&
+    result !== null &&
+    "ok" in result &&
+    !(result as { ok: boolean }).ok
+  ) {
+    return (
+      (result as { message?: string }).message ??
+      "Password exceeds the digester's reach."
+    );
+  }
+  return null;
+}
+
+/**
+ * What a named digester's custom validator says about the password, if it
+ * has one. A thrown validator is a fault, not a policy answer: its message
+ * may carry internal detail, so it stays off the wire and the generic
+ * refusal stands in for it.
+ */
+function namedValidatorRefusal(
+  password: string,
+  digester: DigesterReach
+): string | null {
+  if (typeof digester.validate !== "function") {
+    return null;
+  }
+  try {
+    return validatorResultRefusal(digester.validate(password));
+  } catch {
+    return "Password exceeds the digester's reach.";
+  }
+}
+
+/**
+ * What a named digester's declared byte reach says about the password, once
+ * its validator (if any) has accepted. "Unbounded" reads any length whole —
+ * the 128 character resource cap applies on its own.
+ */
+function namedReachRefusal(
+  password: string,
+  digester: DigesterReach
+): string | null {
+  if (digester.reach === "unbounded") {
+    return null;
+  }
+  if (typeof digester.reach === "number") {
+    const bytes = Buffer.byteLength(password, "utf8");
+    if (bytes > digester.reach) {
+      return `Password exceeds the ${digester.reach}-byte limit of the password digester.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The refusal a password earns from a NAMED digester's contract, or null
+ * when the digester reads it whole.
+ */
+function digesterContractRefusal(
+  password: string,
+  digester: DigesterReach
+): string | null {
+  // The named digester: must adhere to its reach contract.
+  assertPasswordHasherContract(digester);
+  return (
+    namedValidatorRefusal(password, digester) ??
+    namedReachRefusal(password, digester)
+  );
+}
+
+/**
+ * Validates the reach of a password against the digester that will hash it.
+ * Returns an error message string if the password exceeds the reach, or null
+ * if valid. With no digester named, the default bcrypt reach applies — the
+ * answer for every core flow, which all hash with bcrypt; a flow that hashes
+ * with an app-configured digester passes that digester here itself.
  */
 export function checkDigesterReach(
   password: string,
-  hasher?: PasswordHasher
+  digester?: DigesterReach
 ): string | null {
-  const effectiveHasher = hasher ?? activePasswordHasher;
-
-  if (effectiveHasher) {
-    // Custom digester: must adhere to its reach contract
-    assertPasswordHasherContract(effectiveHasher);
-
-    if (typeof effectiveHasher.validate === "function") {
-      try {
-        const result = effectiveHasher.validate(password);
-        if (result === false) {
-          return "Password exceeds the digester's reach.";
-        }
-        if (typeof result === "string") {
-          return result;
-        }
-        if (
-          typeof result === "object" &&
-          result !== null &&
-          "ok" in result &&
-          !result.ok
-        ) {
-          return (
-            (result as { message?: string }).message ??
-            "Password exceeds the digester's reach."
-          );
-        }
-      } catch (err) {
-        return (
-          (err instanceof Error ? err.message : String(err)) ||
-          "Password exceeds the digester's reach."
-        );
-      }
-    }
-
-    if (effectiveHasher.reach === "unbounded") {
-      // Unbounded: no byte length limit (the 128 character resource cap applies)
-      return null;
-    }
-
-    if (typeof effectiveHasher.reach === "number") {
-      const bytes = Buffer.byteLength(password, "utf8");
-      if (bytes > effectiveHasher.reach) {
-        return `Password exceeds the ${effectiveHasher.reach}-byte limit of the password digester.`;
-      }
-      return null;
-    }
-
-    return null;
+  if (digester) {
+    return digesterContractRefusal(password, digester);
   }
 
   // Default bcrypt digester: 72 bytes
@@ -156,7 +209,7 @@ export function checkDigesterReach(
 
 export interface PasswordPolicyOptions {
   minLength?: number;
-  hasher?: PasswordHasher;
+  hasher?: DigesterReach;
 }
 
 export type { PasswordHasher };
