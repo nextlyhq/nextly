@@ -26,12 +26,15 @@ import type { NextlyError } from "../../../errors/nextly-error";
 import {
   SESSION_CUTOFF_SECONDS,
   SESSION_STANDING_TTL_MS,
+  accountIsActive,
   createSessionStandingCache,
+  forgetSessionStanding,
   readSessionStanding,
   resetSessionStandingForTests,
   sessionTokenIsCurrent,
   setSessionStandingBoot,
   standingAdmits,
+  watchTransaction,
   type SessionStanding,
 } from "../session-standing";
 
@@ -629,6 +632,74 @@ describe("sessionTokenIsCurrent across a change of database", () => {
     );
 
     expect(await sessionTokenIsCurrent(claims)).toBe(false);
+  });
+});
+
+describe("forgetSessionStanding across a change of database", () => {
+  afterEach(() => {
+    resetSessionStandingForTests();
+    container.clear();
+    ready.registered = false;
+  });
+
+  it("marks the cache the registered adapter reads through, not one it replaced", async () => {
+    // The cache still belongs to the old adapter until something reads
+    // through the new one. A forget made then has to land where the next
+    // read looks, or that read keeps the uncommitted change's old row.
+    ready.registered = true;
+    container.registerSingleton("adapter", () => adapterHolding(ACTIVE));
+    expect(await accountIsActive("u1")).toBe(true);
+
+    let row: SessionStanding = ACTIVE;
+    let writing = true;
+    container.clear();
+    container.registerSingleton("adapter", () => ({
+      ...adapterHolding(ACTIVE),
+      transactionOpenInFlow: () => writing,
+      getDrizzle: () => ({
+        select: () => ({
+          from: () => ({
+            where: () => ({ limit: async () => [row] }),
+          }),
+        }),
+      }),
+    }));
+
+    forgetSessionStanding("u1");
+    // Read before the change commits: the row is still as it was.
+    expect(await accountIsActive("u1")).toBe(true);
+    row = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await accountIsActive("u1")).toBe(false);
+  });
+});
+
+describe("watchTransaction", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("answers nothing for a caller outside any transaction", () => {
+    expect(watchTransaction(() => false)).toBeUndefined();
+  });
+
+  it("reports the transaction open until it ends, then stops watching", () => {
+    // Watching holds the writer's context through its timer, so it must stop
+    // once the transaction ends rather than keep that context for as long as
+    // the mark it feeds is kept.
+    vi.useFakeTimers();
+    let open = true;
+    const writing = watchTransaction(() => open, 50);
+
+    expect(writing?.()).toBe(true);
+    vi.advanceTimersByTime(200);
+    expect(writing?.()).toBe(true);
+    open = false;
+    vi.advanceTimersByTime(50);
+
+    expect(writing?.()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

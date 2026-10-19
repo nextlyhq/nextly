@@ -44,8 +44,6 @@
  *
  * @module auth/session/session-standing
  */
-import { AsyncResource } from "node:async_hooks";
-
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq } from "drizzle-orm";
 
@@ -519,20 +517,49 @@ export async function accountIsActive(userId: string): Promise<boolean> {
  * without waiting out the cache.
  */
 export function forgetSessionStanding(userId: string | number): void {
-  // The cache is made here when no request has made it yet, so a read while
-  // the change is still uncommitted finds the mark rather than keeping the
-  // old row in a cache that never heard of the change.
-  const adapter =
-    held?.adapter ??
-    (adapterIsRegistered()
-      ? container.get<DrizzleAdapter>("adapter")
-      : undefined);
+  // The registered adapter first: after services are registered again, the
+  // cache can still belong to the adapter they replaced until something reads
+  // through the new one, and a mark left there is one the next read never
+  // sees. The cache is made here when no request has made it yet, for the
+  // same reason.
+  const adapter = adapterIsRegistered()
+    ? container.get<DrizzleAdapter>("adapter")
+    : held?.adapter;
   if (adapter === undefined) return;
-  // Asked later, from other requests, but bound to the writer's own async
-  // context: whether a transaction THIS flow is inside is still open, which
-  // is whether the change has committed. Every dialect answers it.
-  const writing = AsyncResource.bind(() => adapter.transactionOpenInFlow());
+  // Whether the change that made this call has committed: a transaction this
+  // flow is inside is still open, which every dialect answers.
+  const writing = watchTransaction(() => adapter.transactionOpenInFlow());
   cacheFor(adapter).forget(String(userId), writing);
+}
+
+/** How often {@link watchTransaction} asks whether the transaction ended. */
+const TRANSACTION_WATCH_MS = 50;
+
+/**
+ * Whether the calling flow's transaction is still open, readable from any
+ * other request; undefined when the caller is in no transaction.
+ *
+ * `isOpen` can only answer in the calling flow's own async context, so it is
+ * asked from a timer started here, which runs in that context, until it says
+ * no. What the returned reader keeps is the answer alone. The timer holds
+ * the context only while the transaction is open, and lets it go within one
+ * interval of its end; it never keeps the process alive.
+ */
+export function watchTransaction(
+  isOpen: () => boolean,
+  intervalMs = TRANSACTION_WATCH_MS
+): (() => boolean) | undefined {
+  if (!isOpen()) return undefined;
+  let open = true;
+  const check = (): void => {
+    if (isOpen()) {
+      setTimeout(check, intervalMs).unref?.();
+      return;
+    }
+    open = false;
+  };
+  setTimeout(check, intervalMs).unref?.();
+  return () => open;
 }
 
 /**
