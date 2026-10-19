@@ -639,11 +639,7 @@ export class PostgresAdapter extends DrizzleAdapter {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // A transaction opened inside another's work takes a second connection
-      // (`notePoolAccess`); this one's own checkout is recorded after it.
-      this.notePoolAccess();
-      const client = await pool.connect();
-      this.markFlowTransactionConnected();
+      const client = await this.connectFlowTransaction(() => pool.connect());
       const startTime = Date.now();
       // Set when the ROLLBACK failed. The client may then still be inside the
       // transaction, so it is destroyed rather than pooled: the next request
@@ -913,9 +909,7 @@ export class PostgresAdapter extends DrizzleAdapter {
     const reported = this.observedPool(pool, ["query"]);
     return this.trackFlowTransactions(
       this.pinDrizzleTransactions(onClient(reported), async () => {
-        this.notePoolAccess();
-        const client = await pool.connect();
-        this.markFlowTransactionConnected();
+        const client = await this.connectFlowTransaction(() => pool.connect());
         return {
           drizzle: onClient(client),
           rollback: () => client.query("ROLLBACK"),

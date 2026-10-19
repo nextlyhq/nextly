@@ -71,6 +71,40 @@ const TRANSACTION_ESCAPE_OBSERVER = Symbol.for(
   "nextly.transactionEscapeObserver"
 );
 
+/** What a test harness installed to hear about escapes, if anything. */
+type EscapeObserver = (report: {
+  dialect: string;
+  stack: string;
+  openedAt?: string;
+}) => void;
+
+/** The escape observer a test harness installed; undefined in production. */
+function escapeObserver(): EscapeObserver | undefined {
+  const observe = (globalThis as Record<symbol, unknown>)[
+    TRANSACTION_ESCAPE_OBSERVER
+  ];
+  return typeof observe === "function"
+    ? (observe as EscapeObserver)
+    : undefined;
+}
+
+/**
+ * The current stack, deep enough to reach the code that made the query. The
+ * driver's and Drizzle's own frames fill V8's default of ten, which cut every
+ * report off before its caller. Raised only for this capture and restored
+ * after, so nothing else sees the deeper limit; it runs only for an observer a
+ * test harness installed.
+ */
+function deepStack(): string {
+  const limit = Error.stackTraceLimit;
+  try {
+    Error.stackTraceLimit = 64;
+    return new Error().stack ?? "";
+  } finally {
+    Error.stackTraceLimit = limit;
+  }
+}
+
 /**
  * A transaction an async flow runs inside, as that flow sees it: its own, or
  * one it was started from inside.
@@ -86,6 +120,13 @@ interface FlowTransaction {
   connected: boolean;
   /** The transaction the flow that opened this one was itself inside. */
   enclosing: FlowTransaction | undefined;
+  /**
+   * The stack that opened the transaction, kept only while a test harness
+   * observes escapes. A statement that escapes is often reached through a
+   * query builder awaited as a thenable, and V8 links no caller across that,
+   * so where its transaction was opened is the code it can still be traced to.
+   */
+  openedAt?: string;
 }
 
 /**
@@ -497,6 +538,7 @@ export abstract class DrizzleAdapter {
       open: true,
       connected: false,
       enclosing: this.flowTransactions.getStore(),
+      openedAt: escapeObserver() === undefined ? undefined : deepStack(),
     };
     return this.flowTransactions.run(scope, async () => {
       try {
@@ -520,6 +562,25 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * Check out, through `checkout`, the connection the calling flow's
+   * transaction runs on. A transaction opened inside another's work takes a
+   * second connection, so the checkout is reported first
+   * ({@link notePoolAccess}); once it holds its own, the transaction is
+   * marked connected, so its later checkouts are told apart from it.
+   *
+   * @param checkout - Takes a connection from the dialect's pool
+   * @returns The connection
+   */
+  protected async connectFlowTransaction<C>(
+    checkout: () => Promise<C>
+  ): Promise<C> {
+    this.notePoolAccess();
+    const connection = await checkout();
+    this.markFlowTransactionConnected();
+    return connection;
+  }
+
+  /**
    * Called by a pooled dialect before it takes anything from its pool: a
    * query, or a connection checkout.
    *
@@ -533,17 +594,19 @@ export abstract class DrizzleAdapter {
    * production process, this is one property read.
    */
   protected notePoolAccess(): void {
-    const observe = (globalThis as Record<symbol, unknown>)[
-      TRANSACTION_ESCAPE_OBSERVER
-    ];
-    if (typeof observe !== "function") return;
+    const observe = escapeObserver();
+    if (observe === undefined) return;
     for (
       let at = this.flowTransactions.getStore();
       at !== undefined;
       at = at.enclosing
     ) {
       if (at.open && at.connected) {
-        observe({ dialect: this.dialect, stack: new Error().stack ?? "" });
+        observe({
+          dialect: this.dialect,
+          stack: deepStack(),
+          openedAt: at.openedAt,
+        });
         return;
       }
     }

@@ -5,6 +5,7 @@ import { describeAbortedTransactions } from "../plugins/aborted-transaction-sigh
 import {
   describeTransactionEscapes,
   installTransactionEscapeObserver,
+  recordTransactionEscapes,
   takeTransactionEscapes,
 } from "./transaction-escapes";
 
@@ -67,7 +68,11 @@ afterEach(() => {
 installTransactionEscapeObserver();
 
 afterEach(() => {
-  const escapes = describeTransactionEscapes(takeTransactionEscapes());
+  const reported = takeTransactionEscapes();
+  // Every escape, accepted ones too, goes to the run's inventory when it keeps
+  // one (`./transaction-escapes-inventory`), with the file that made it.
+  recordTransactionEscapes(reported, expect.getState().testPath);
+  const escapes = describeTransactionEscapes(reported);
   if (!escapes) return;
   if (process.env.NEXTLY_TRANSACTION_ESCAPES === "report") {
     console.warn(`[transaction escapes] ${escapes}`);

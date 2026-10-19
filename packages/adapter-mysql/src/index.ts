@@ -561,11 +561,9 @@ export class MySqlAdapter extends DrizzleAdapter {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      // A transaction opened inside another's work takes a second connection
-      // (`notePoolAccess`); this one's own checkout is recorded after it.
-      this.notePoolAccess();
-      const connection = await pool.getConnection();
-      this.markFlowTransactionConnected();
+      const connection = await this.connectFlowTransaction(() =>
+        pool.getConnection()
+      );
       const startTime = Date.now();
       // Set when the ROLLBACK failed (`returnTransactionConnection`).
       let rollbackFailed = false;
@@ -765,9 +763,9 @@ export class MySqlAdapter extends DrizzleAdapter {
     );
     return this.trackFlowTransactions(
       this.pinDrizzleTransactions(onClient(callbackPool), async () => {
-        this.notePoolAccess();
-        const connection = await pool.getConnection();
-        this.markFlowTransactionConnected();
+        const connection = await this.connectFlowTransaction(() =>
+          pool.getConnection()
+        );
         return {
           drizzle: onClient(
             (connection as unknown as { connection: CallbackConnection })

@@ -15,7 +15,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { describeEachDialect } from "../plugins/__tests__/helpers/dialect-matrix";
 import { createTestNextly, type TestNextly } from "../plugins/test-nextly";
 
-import { takeTransactionEscapes } from "./transaction-escapes";
+import { OPENED_BY, takeTransactionEscapes } from "./transaction-escapes";
 
 describeEachDialect("the transaction escape guard", dialect => {
   let current: TestNextly;
@@ -40,6 +40,11 @@ describeEachDialect("the transaction escape guard", dialect => {
     expect(escapes).toHaveLength(pooled ? 1 : 0);
     if (pooled) {
       expect(escapes[0].site).toContain("transaction-escapes.integration.test");
+      // Awaited as a promise, the statement's own caller is on its stack.
+      expect(escapes[0].key).toMatch(
+        /^packages\/nextly\/src\/__tests__\/transaction-escapes\.integration\.test\.ts#/
+      );
+      expect(escapes[0].key).not.toContain(OPENED_BY);
     }
   });
 
@@ -55,7 +60,14 @@ describeEachDialect("the transaction escape guard", dialect => {
         await db.execute("SELECT 1");
       });
 
-      expect(takeTransactionEscapes()).toHaveLength(1);
+      // A query builder is awaited as a thenable, and V8 links no caller
+      // across that, so the escape is traced to where its transaction was
+      // opened, here, rather than reported with no site at all.
+      const escapes = takeTransactionEscapes();
+      expect(escapes).toHaveLength(1);
+      expect(escapes[0].key).toBe(
+        `packages/nextly/src/__tests__/transaction-escapes.integration.test.ts#<anonymous>${OPENED_BY}`
+      );
     }
   );
 
