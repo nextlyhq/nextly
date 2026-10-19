@@ -44,7 +44,12 @@ export interface EventEnvelope<P = unknown> {
   payload: P;
 }
 
-/** Observe-only event handler. Return value is ignored (cannot modify/abort). */
+/**
+ * Observe-only event handler. What it returns cannot modify or abort the
+ * event. A promise it returns is still what it is waited for by: the plugin
+ * lifecycle command waits for the handlers of what a plugin's `onInstall` or
+ * `onUninstall` set off, and only for the work their promises cover.
+ */
 export type EventHandler<P = unknown> = (
   event: EventEnvelope<P>
 ) => void | Promise<void>;
@@ -80,13 +85,14 @@ export function isReservedEventName(name: EventName): boolean {
 export class EventBus {
   private handlers: Map<EventName, Set<EventHandler>> = new Map();
   private declaredEvents: Set<EventName> = new Set();
-  private inFlight: Set<Promise<void>> = new Set();
   /**
-   * The cause each in-flight handler is traced to, for those that have one:
-   * the work run under {@link runCaused} emitted its event, directly or
-   * through the handlers of events it emitted.
+   * Every async handler still running, with the cause it is traced to when
+   * it has one: the work run under {@link runCaused} emitted its event,
+   * directly or through the handlers of events it emitted. One registry, so
+   * "what is running" and "what is running for this cause" are read from the
+   * same entries.
    */
-  private readonly caused = new Map<Promise<void>, symbol>();
+  private readonly inFlight = new Map<Promise<void>, symbol | undefined>();
   /** The cause the calling async context runs under, when it has one. */
   private readonly causes = new AsyncLocalStorage<symbol>();
   private logger: EventLogger | undefined;
@@ -163,11 +169,9 @@ export class EventBus {
           const tracked: Promise<void> = Promise.resolve(result).catch(err => {
             this.logError(name, err);
           });
-          this.inFlight.add(tracked);
-          if (cause !== undefined) this.caused.set(tracked, cause);
+          this.inFlight.set(tracked, cause);
           void tracked.finally(() => {
             this.inFlight.delete(tracked);
-            this.caused.delete(tracked);
           });
         }
       } catch (err) {
@@ -192,11 +196,16 @@ export class EventBus {
    * producer started anywhere else, such as a plugin's `init()`, is not
    * waited for, since one its plugin stops only in `destroy()` would never let
    * the bus empty. Resolves true when every traced handler finished in time.
+   *
+   * Only work a handler returns is waited for: a handler is in flight while
+   * the promise it returned is pending. One that returns nothing and leaves
+   * work to a timer, or to a promise it does not return, has finished as far
+   * as the bus can tell, and what that work emits later is not waited for.
    */
   async settleCaused(cause: symbol, timeoutMs: number): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const pending = [...this.caused]
+      const pending = [...this.inFlight]
         .filter(([, traced]) => traced === cause)
         .map(([promise]) => promise);
       if (pending.length === 0) return true;
@@ -225,7 +234,7 @@ export class EventBus {
    */
   async settle(): Promise<void> {
     while (this.inFlight.size > 0) {
-      await Promise.all([...this.inFlight]);
+      await Promise.all([...this.inFlight.keys()]);
     }
   }
 
@@ -234,7 +243,6 @@ export class EventBus {
     this.handlers.clear();
     this.declaredEvents.clear();
     this.inFlight.clear();
-    this.caused.clear();
   }
 
   private isKnownName(name: EventName): boolean {
