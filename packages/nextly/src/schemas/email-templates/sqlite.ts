@@ -198,7 +198,7 @@ export const emailTemplatesSqlite = sqliteTable(
     /** Who owns the template: `core`, `plugin` or `site`. */
     ownerKind: text("owner_kind"),
 
-    /** The owning plugin's name, for `ownerKind = 'plugin'`. */
+    /** The owning plugin's name, for `ownerKind = 'plugin'`; unbounded, as a plugin's name is. */
     ownerName: text("owner_name"),
 
     /**

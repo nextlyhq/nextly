@@ -200,8 +200,8 @@ export const emailTemplatesPg = pgTable(
     /** Who owns the template: `core`, `plugin` or `site`. */
     ownerKind: varchar("owner_kind", { length: 20 }),
 
-    /** The owning plugin's name, for `ownerKind = 'plugin'`. */
-    ownerName: varchar("owner_name", { length: 255 }),
+    /** The owning plugin's name, for `ownerKind = 'plugin'`; unbounded, as a plugin's name is. */
+    ownerName: text("owner_name"),
 
     /**
      * Whether the site has overridden an owned template. While true the row

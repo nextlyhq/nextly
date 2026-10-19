@@ -821,20 +821,29 @@ export class EmailTemplateService extends BaseService {
       ),
     };
     this.assertLayoutMarker(row.kind, start.htmlContent);
+    // As an edit's override: a row the boot hasn't brought to the owner's
+    // current version is based on what it holds, so the owner's changes since
+    // are still offered for review.
+    const base = sameVersion(versionOf(row), entry.version)
+      ? { version: keptBase(entry), digest: entry.digest }
+      : {
+          version: { ...versionOf(row), details: detailsOf(row) },
+          digest: versionDigest(versionOf(row)),
+        };
 
     await this.db
       .update(this.emailTemplates)
       .set({
         ...start,
         overridden: true,
-        baseVersion: keptBase(entry),
-        baseDigest: entry.digest,
+        baseVersion: base.version,
+        baseDigest: base.digest,
         updatedAt: new Date(),
       })
       // Conditioned on the row as read: `start` carries every version field
       // from that read, so a save in between must not be overwritten.
       .where(this.unchanged(row));
-    await this.assertWritten(id, start, entry.digest, record.slug);
+    await this.assertWritten(id, start, base.digest, record.slug);
 
     await this.recordActivity({
       action: "update",
@@ -873,7 +882,12 @@ export class EmailTemplateService extends BaseService {
 
     // The owner's version and details; the site's settings (name, layout use,
     // provider, From, Reply-To, attachments, active) stay as they are.
-    const restored = this.ownerColumns(entry);
+    // The owner too: a reset can land before the boot's backfill has written
+    // it, and the send path reads the stored owner.
+    const restored = {
+      ...this.ownerColumns(entry),
+      ...storedOwner(entry.owner),
+    };
     await this.db
       .update(this.emailTemplates)
       .set({

@@ -187,6 +187,54 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         expect(reset.htmlContent).toBe(V2);
       });
 
+      it("bases an explicit override made before reconciliation on the stored version", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        const starting = store.newService();
+        starting.configureOwnership({
+          plugins: [{ name: ORDERS, templates: [shipped(V2)] }],
+        });
+        await starting.overrideTemplate(id, undefined, ACTOR);
+        expect((await shippedTemplate(starting)).ownerChanged).toBe(true);
+        expect((await starting.compareTemplate(id)).changes).toHaveLength(2);
+      });
+
+      it("writes the owner on a reset that lands before the boot's backfill", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await store.exec(
+          `UPDATE ${store.q("email_templates")} SET ${store.q("owner_kind")} = NULL, ${store.q("owner_name")} = NULL WHERE ${store.q("id")} = ?`,
+          [id]
+        );
+        const starting = store.newService();
+        starting.configureOwnership({
+          plugins: [{ name: ORDERS, templates: [shipped(V2)] }],
+        });
+        await starting.resetTemplate(id, ACTOR);
+        const [row] = await store.query<{
+          owner_kind: string;
+          owner_name: string;
+        }>(
+          `SELECT ${store.q("owner_kind")}, ${store.q("owner_name")} FROM ${store.q("email_templates")} WHERE ${store.q("id")} = ?`,
+          [id]
+        );
+        expect(row).toMatchObject({ owner_kind: "plugin", owner_name: ORDERS });
+      });
+
+      it("stores a plugin owner's name of any length", async () => {
+        const long = `@acme/${"plugin-".repeat(50)}orders`;
+        const service = store.newService();
+        service.configureOwnership({
+          plugins: [{ name: long, templates: [shipped(V1)] }],
+        });
+        await service.ensureBuiltInTemplates();
+        expect((await shippedTemplate(service)).owner).toEqual({
+          kind: "plugin",
+          name: long,
+          installed: true,
+        });
+      });
+
       it("offers the owner's changes for an edit made before the boot reconciled the template", async () => {
         const first = await boot(V1);
         const id = (await shippedTemplate(first)).id;
