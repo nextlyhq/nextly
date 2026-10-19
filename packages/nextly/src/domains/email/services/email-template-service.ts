@@ -22,7 +22,7 @@
 import { createHash, randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, desc, isNull, type Column } from "drizzle-orm";
+import { and, eq, desc, isNull, sql, type Column } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
@@ -807,7 +807,12 @@ export class EmailTemplateService extends BaseService {
 
     const start: EmailTemplateVersion = {
       ...versionOf(row),
-      ...(options?.version ?? {}),
+      // Only the fields given: an optional left undefined keeps the stored one.
+      ...Object.fromEntries(
+        Object.entries(options?.version ?? {}).filter(
+          ([, v]) => v !== undefined
+        )
+      ),
     };
     this.assertLayoutMarker(row.kind, start.htmlContent);
 
@@ -867,7 +872,9 @@ export class EmailTemplateService extends BaseService {
         baseDigest: null,
         updatedAt: new Date(),
       })
-      .where(eq(this.emailTemplates.id, id));
+      // Conditioned on the row as read, as override, apply and undo are.
+      .where(this.unchanged(row));
+    await this.assertWritten(id, entry.version, null, record.slug);
 
     await this.recordActivity({
       action: "update",
@@ -898,7 +905,8 @@ export class EmailTemplateService extends BaseService {
     const mine = versionOf(row);
     return {
       base,
-      theirs: entry.version,
+      // A copy: the registry's own version must not change with a caller's.
+      theirs: versionOf(entry.version),
       mine,
       changes: ownerChanges(base, entry.version, mine),
       review: reviewToken(base, entry.version, mine),
@@ -1027,8 +1035,7 @@ export class EmailTemplateService extends BaseService {
    * The row as it was read, in what these writes depend on: its version, its
    * description, whether it is overridden and the base it is kept against. A
    * write conditioned on it doesn't apply when the site saved any of those in
-   * between. Compared by value, and by `updatedAt` for the declared
-   * variables, which can't be compared portably in SQL.
+   * between. Compared by value, the declared variables included.
    */
   private unchanged(row: StoredTemplateRow) {
     const t = this.emailTemplates;
@@ -1043,17 +1050,31 @@ export class EmailTemplateService extends BaseService {
       same(t.description, row.description ?? null),
       same(t.overridden, row.overridden ?? null),
       same(t.baseDigest, row.baseDigest ?? null),
-      // Every save moves it, to the second on SQLite and MySQL: this catches
-      // an edit to what the values above leave out, the declared variables.
+      this.sameVariables(row.variables ?? null),
+      // Every save moves it, to the second on SQLite and MySQL.
       row.updatedAt ? eq(t.updatedAt, row.updatedAt) : isNull(t.updatedAt)
     );
+  }
+
+  /**
+   * The declared variables as read, compared by value: `jsonb` equality on
+   * PostgreSQL, JSON equality on MySQL (the text cast to JSON), and the stored
+   * text on SQLite, which drizzle writes with `JSON.stringify`.
+   */
+  private sameVariables(variables: EmailTemplateVariable[] | null) {
+    const column = this.emailTemplates.variables;
+    if (variables === null) return isNull(column);
+    if (this.dialect === "mysql") {
+      return sql`${column} = CAST(${JSON.stringify(variables)} AS JSON)`;
+    }
+    return eq(column, variables);
   }
 
   /** Refuse (CONFLICT) when a conditioned write did not land: something saved the template first. */
   private async assertWritten(
     id: string,
     version: EmailTemplateVersion,
-    baseDigest: string,
+    baseDigest: string | null,
     slug: string
   ): Promise<void> {
     const after = await this.getRow(id);

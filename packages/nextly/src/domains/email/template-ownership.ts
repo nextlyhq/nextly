@@ -68,21 +68,38 @@ export const CODE_TEMPLATE_KEYS: Readonly<
 };
 
 /**
- * Slug prefixes of first-party plugins' templates, so a template left behind
- * by one of them can be recognised while the plugin is not running. A plugin
+ * The slugs first-party plugins contribute, so a template left behind by one
+ * of them can be recognised while the plugin is not running. Exact slugs, not
+ * a prefix: a site's own `accounts-newsletter` stays the site's. A plugin
  * that is running declares its own templates, so this is needed only for one
  * that is absent; a third-party plugin's leftover templates count as the
  * site's until that plugin runs again and claims them.
  */
-export const KNOWN_PLUGIN_TEMPLATE_PREFIXES: ReadonlyArray<{
-  prefix: string;
+export const KNOWN_PLUGIN_TEMPLATES: ReadonlyArray<{
   plugin: string;
-}> = [{ prefix: "accounts-", plugin: "@nextlyhq/plugin-accounts" }];
+  slugs: ReadonlyArray<string>;
+}> = [
+  {
+    plugin: "@nextlyhq/plugin-accounts",
+    slugs: [
+      "verify-address",
+      "sign-up-taken",
+      "reset-password",
+      "reset-required",
+      "address-change-asked",
+      "confirm-new-address",
+      "address-in-use",
+      "address-changed",
+      "account-deleted",
+      "password-changed",
+    ].map(kind => `accounts-${kind}`),
+  },
+];
 
 /** The plugin a leftover template belongs to, by its slug, or null. */
 export function absentPluginFor(slug: string): string | null {
-  const match = KNOWN_PLUGIN_TEMPLATE_PREFIXES.find(entry =>
-    slug.startsWith(entry.prefix)
+  const match = KNOWN_PLUGIN_TEMPLATES.find(entry =>
+    entry.slugs.includes(slug)
   );
   return match ? match.plugin : null;
 }

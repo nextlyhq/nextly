@@ -218,6 +218,35 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         });
       });
 
+      it("leaves declared variables saved in the same second as the boot's read", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await first.overrideTemplate(id, undefined, ACTOR);
+        const second = store.newService();
+        second.configureOwnership({
+          plugins: [
+            {
+              name: ORDERS,
+              templates: [{ ...shipped(V1), variables: [{ name: "number" }] }],
+            },
+          ],
+        });
+        const internals = second as unknown as {
+          getRowBySlug(slug: string): Promise<unknown>;
+          followOwnerDetails(row: unknown, entry: unknown): Promise<void>;
+          registry: { owned: Map<string, unknown> };
+        };
+        // No wait between the read and the save: same second on SQLite and MySQL.
+        const stale = await internals.getRowBySlug("orders-shipped");
+        const mine = [{ name: "carrier", description: "Who delivers it" }];
+        await first.updateTemplate(id, { variables: mine }, ACTOR);
+        await internals.followOwnerDetails(
+          stale,
+          internals.registry.owned.get("orders-shipped")
+        );
+        expect((await shippedTemplate(second)).variables).toEqual(mine);
+      });
+
       it("keeps a removed plugin's templates, as not installed, and lets the site delete them for good", async () => {
         await boot(V1);
         const without = await boot(null);
