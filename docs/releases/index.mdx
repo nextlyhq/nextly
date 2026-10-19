@@ -447,9 +447,12 @@ holds no working draft, is not written a second time: its hooks and outbox event
 again, and the pass goes on to the documents still to go. A document that holds a working
 draft is still written, since putting that draft live is what the release is for, and so is
 one with a translation not yet where the release leaves it. The check reads the stored status,
-not what a read hook reports, and counts a document only for an author still allowed to
-publish (or take down) it: a release whose author has lost that permission fails that
-document and is not marked published, even when the document is already live.
+not what a read hook reports, together with the working drafts and under the same row lock the
+write takes, and counts a document only for an author the write would still let act: allowed
+to publish (or take down) it, and to set its status under the collection's field rules. A
+release whose author has lost either fails that document and is not marked published, even
+when the document is already live, and so does one whose collection or Single no longer has a
+draft/published lifecycle.
 
 ## Checks before the moment
 

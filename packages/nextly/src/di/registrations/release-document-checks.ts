@@ -105,8 +105,9 @@ export function releaseDocumentChecks(
 
 /**
  * What a release's run reads to tell whether a member's action already
- * stands: the document's lifecycle from storage, and the same author gate
- * these checks ask, so the run and its readiness answer it one way. A Single
+ * stands: the document's lifecycle from storage, and the same author gate and
+ * field-rule judgement these checks ask, so the run and its readiness answer
+ * it one way. A Single
  * answers only for the row the member names: any other is a document that is
  * gone, which nothing here vouches for.
  */
@@ -114,6 +115,9 @@ export function releaseSettlementReads(
   adapter: Adapter,
   logger: Logger
 ): ReleaseSettlementReads {
+  // The readiness checks' own judgements of the run's write, so the run and
+  // its readiness answer whether the author may act one way.
+  const checks = releaseDocumentChecks(adapter, logger);
   return {
     storedLifecycle: async ref => {
       if (ref.scopeKind !== "single") {
@@ -129,7 +133,8 @@ export function releaseSettlementReads(
         ? single.lifecycle
         : null;
     },
-    mayPerform: releaseDocumentChecks(adapter, logger).mayPerform,
+    mayPerform: checks.mayPerform,
+    publishProblems: checks.publishProblems,
   };
 }
 

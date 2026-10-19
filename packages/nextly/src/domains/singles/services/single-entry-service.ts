@@ -213,8 +213,9 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
-   * This Single's lifecycle as stored, past every read hook: the main row's
-   * status and each translation's. See the mutation service.
+   * This Single's lifecycle as stored, past every read hook and in one
+   * snapshot: the main row's status, each translation's, and the languages
+   * holding a working draft. See the mutation service.
    *
    * @experimental
    */

@@ -30,7 +30,6 @@ import type { RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { JobContentSource } from "../jobs/job-content-api";
 import { defineJob } from "../jobs/job-registry";
 import type { JobDefinition } from "../jobs/job-registry";
-import { VersionsRepository } from "../versions/versions-repository";
 
 import { applyDueReleases } from "./apply-due-releases";
 import type { ApplyDueReleasesResult } from "./apply-due-releases";
@@ -103,7 +102,6 @@ export function createReleasesDrainJob(deps: {
         repository: new ReleasesRepository(deps.db),
         mutations: createReleaseMutations({
           contentApi: deps.contentApi,
-          drafts: new VersionsRepository(deps.db),
           settlement: deps.settlement,
         }),
         runAs: deps.runAs,

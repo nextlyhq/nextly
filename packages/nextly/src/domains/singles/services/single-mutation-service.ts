@@ -397,15 +397,19 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * This Single's lifecycle as stored, read now from the pool and past every
-   * read hook: the main row's own status, and each stored translation's own,
-   * keyed by locale, which a release's document-wide write moves besides the
-   * main row. Answered with the id of the row it was asked of, so a caller can
-   * tell the Single's document from one it held before; `null` for a Single
-   * with no stored document. The translations are empty for a Single that
-   * keeps none; the lifecycle is `null` where it keeps them but they cannot be
-   * read here (the translation table is not there yet, or has no per-language
-   * status), so that is never taken for "none to move".
+   * This Single's lifecycle as stored, past every read hook, in one
+   * snapshot: the main row's own status, each stored translation's own, keyed
+   * by locale, which a release's document-wide write moves besides the main
+   * row, and the languages holding a working draft. Read in one transaction
+   * under the row lock the write takes, so a lifecycle write cannot land
+   * between the statuses and the drafts. Answered with the id of the row it
+   * was asked of, so a caller can tell the Single's document from one it held
+   * before; `null` for a Single with no stored document. The translations are
+   * empty for a Single that keeps none; the lifecycle is `null` for a Single
+   * whose draft/published lifecycle is off (the write refuses it), or whose
+   * translations it keeps but cannot read here (the table is not there yet,
+   * or has no per-language status), so none of those is taken for "already
+   * there".
    *
    * @experimental
    */
@@ -414,14 +418,17 @@ export class SingleMutationService extends BaseService {
     lifecycle: {
       status: string | null;
       languages: Map<string, string | null>;
+      drafts: (string | null)[];
     } | null;
   } | null> {
     const stored = await this.releaseSingleRow(params.slug);
     if (stored === null) return null;
     const { singleMeta, row } = stored;
-    const status = typeof row.status === "string" ? row.status : null;
+    const unknown = { entryId: row.id, lifecycle: null };
+    if ((singleMeta as { status?: boolean }).status !== true) return unknown;
     // Built as the write builds it, so the languages read are the ones the
-    // write moves.
+    // write moves; its readiness resolved before the transaction opens, since
+    // resolving may query and a failed query aborts a PostgreSQL transaction.
     const companion =
       this.localization && singleMeta.localized === true
         ? buildCompanionSchema({
@@ -429,32 +436,42 @@ export class SingleMutationService extends BaseService {
             tableName: singleMeta.tableName,
             fields: singleMeta.fields as { name: string; type: string }[],
             dialect: this.adapter.dialect,
-            status: (singleMeta as { status?: boolean }).status === true,
+            status: true,
           })
         : null;
-    if (!companion) {
-      return { entryId: row.id, lifecycle: { status, languages: new Map() } };
-    }
     if (
-      !companion.hasStatus ||
-      !(await isCompanionReady(this.adapter, companion.companionTableName))
+      companion !== null &&
+      (!companion.hasStatus ||
+        !(await isCompanionReady(this.adapter, companion.companionTableName)))
     ) {
-      return { entryId: row.id, lifecycle: null };
+      return unknown;
     }
-    return {
-      entryId: row.id,
-      lifecycle: {
-        status,
-        languages: await readCompanionLocaleStatusAll(
-          this.adapter.getDrizzle<
-            Parameters<typeof readCompanionLocaleStatusAll>[0]
-          >(),
-          companion.table,
-          row.id,
-          "ready"
-        ),
-      },
-    };
+    const lifecycle = await this.adapter.transaction(async tx => {
+      const locked = await tx.selectOne<SingleDocument>(singleMeta.tableName, {
+        where: this.whereEq("id", row.id),
+        forUpdate: true,
+      });
+      if (!locked) return null;
+      const languages = companion
+        ? await readCompanionLocaleStatusAll(
+            tx.getDrizzle<Parameters<typeof readCompanionLocaleStatusAll>[0]>(),
+            companion.table,
+            row.id,
+            "ready"
+          )
+        : new Map<string, string | null>();
+      const drafts = await new VersionsRepository(tx).listWorkingDraftLocales({
+        scopeKind: "single",
+        scopeSlug: params.slug,
+        entryId: row.id,
+      });
+      return {
+        status: typeof locked.status === "string" ? locked.status : null,
+        languages,
+        drafts,
+      };
+    });
+    return { entryId: row.id, lifecycle };
   }
 
   /**

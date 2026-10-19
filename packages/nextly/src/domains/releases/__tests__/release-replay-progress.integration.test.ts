@@ -25,6 +25,10 @@ import { defineCollection } from "../../../collections/config/define-collection"
 import { text } from "../../../collections/fields";
 import { defineSingle } from "../../../config";
 import { resetHookRegistry } from "../../../hooks/hook-registry";
+import {
+  clearFieldFunctions,
+  registerFieldFunctions,
+} from "../../../shared/lib/field-level-registry";
 import { releaseSettlementReads } from "../../../di/registrations/release-document-checks";
 import {
   createTestNextly,
@@ -49,8 +53,9 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
-  // Collection hooks register into the global registry.
+  // Collection hooks and field rules register into global registries.
   resetHookRegistry();
+  clearFieldFunctions();
 });
 
 const SLUG = "posts";
@@ -137,7 +142,6 @@ function materialise(t: TestNextly) {
     repository: new ReleasesRepository(t.adapter),
     mutations: createReleaseMutations({
       contentApi: t.nextly,
-      drafts: new VersionsRepository(t.adapter),
       settlement: releaseSettlementReads(t.adapter, t.getService("logger")),
     }),
     runAs: {
@@ -378,6 +382,8 @@ describe.each(getConfiguredTestDialects())(
 
 const HOOKED = "hooked";
 const LOCKED = "locked";
+const RULED = "ruled";
+const SEASONAL = "seasonal";
 
 async function bootGuarded(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
@@ -415,9 +421,45 @@ async function bootGuarded(dialect: TestDialect): Promise<TestNextly> {
         },
         fields: [text({ name: "title" })],
       }),
+      // Open to everyone; a field rule on its status is added per case.
+      defineCollection({
+        slug: RULED,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [text({ name: "title" })],
+      }),
+      // Its draft/published lifecycle is turned off part-way through a case.
+      defineCollection({
+        slug: SEASONAL,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [text({ name: "title" })],
+      }),
     ],
   });
   return current;
+}
+
+/**
+ * Let nobody set a ruled document's status, by a field rule: registered as a
+ * plugin's raw field contribution, since the code-first config refuses a
+ * field named `status` while the lifecycle is on.
+ */
+function guardStatus(): void {
+  registerFieldFunctions("collection", RULED, [
+    { name: "title", type: "text" },
+    { name: "status", type: "text", access: { update: () => false } },
+  ]);
 }
 
 async function entryIn(
@@ -487,6 +529,46 @@ describe.each(getConfiguredTestDialects())(
 
       expect(result.failed).toBe(1);
       expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
+      expect((await t.nextly.releases.findByID({ id: releaseId }))?.state).toBe(
+        "scheduled"
+      );
+    });
+
+    it("does NOT discharge a release whose author's field rules refuse the status, though the document is live", async () => {
+      const t = await bootGuarded(dialect);
+      guardStatus();
+      const id = await entryIn(t, RULED, "published");
+      const releaseId = await dueReleaseOf(t, [id], {
+        scopeKind: "collection",
+        scopeSlug: RULED,
+      });
+
+      const result = await materialise(t);
+
+      expect(result.failed).toBe(1);
+      expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
+      expect((await t.nextly.releases.findByID({ id: releaseId }))?.state).toBe(
+        "scheduled"
+      );
+    });
+
+    it("does NOT discharge a release once its collection's lifecycle is turned off, though the stored row still reads live", async () => {
+      const t = await bootGuarded(dialect);
+      const id = await entryIn(t, SEASONAL, "published");
+      const releaseId = await dueReleaseOf(t, [id], {
+        scopeKind: "collection",
+        scopeSlug: SEASONAL,
+      });
+      await t.adapter.update(
+        "dynamic_collections",
+        { status: false },
+        { and: [{ column: "slug", op: "=", value: SEASONAL }] }
+      );
+      expect(await storedStatus(t, SEASONAL, id)).toBe("published");
+
+      const result = await materialise(t);
+
+      expect(result.failed).toBe(1);
       expect((await t.nextly.releases.findByID({ id: releaseId }))?.state).toBe(
         "scheduled"
       );

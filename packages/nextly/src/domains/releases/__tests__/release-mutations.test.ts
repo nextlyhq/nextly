@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { JobContentSource } from "../../jobs/job-content-api";
 import { createReleaseMutations } from "../release-mutations";
 import type { DocumentRef } from "../releases-repository";
+import type { ValidationIssue } from "../../../shared/lib/entry-validation";
 
 const USER = { id: "author" };
 
@@ -32,38 +33,45 @@ const POST: DocumentRef = {
 type Languages = ReadonlyMap<string, string | null> | null;
 
 /**
- * Mutations over a document stored with `status` and `languages`, whose
- * document read reports `readStatus` (a read hook may say otherwise than the
- * row), for an author the write's gate does or does not let act.
+ * Mutations over a document stored with `status`, `languages` and held
+ * `heldDrafts`, read as one snapshot, whose document read reports
+ * `readStatus` (a read hook may say otherwise than the row), for an author the
+ * write's gate and field rules do or do not let act.
  */
 function mutations(
   status: string,
   heldDrafts: (string | null)[],
   languages: Languages = new Map(),
-  over: { readStatus?: string; mayPerform?: boolean } = {}
+  over: {
+    readStatus?: string;
+    mayPerform?: boolean;
+    problems?: ValidationIssue[];
+  } = {}
 ) {
-  const listWorkingDraftLocales = vi.fn(async () => heldDrafts);
   const readStatus = over.readStatus ?? status;
   const contentApi = {
     findByID: async () => ({ id: "e1", status: readStatus }),
     findSingle: async () => ({ id: "s1", status: readStatus }),
   } as unknown as JobContentSource;
+  const storedLifecycle = vi.fn(async () =>
+    languages === null ? null : { status, languages, drafts: heldDrafts }
+  );
   const mayPerform = vi.fn(async () => over.mayPerform ?? true);
+  const publishProblems = vi.fn(
+    async (_scope: unknown, entryIds: readonly string[]) =>
+      new Map(entryIds.map(id => [id, over.problems ?? []]))
+  );
   const m = createReleaseMutations({
     contentApi,
-    drafts: { listWorkingDraftLocales },
-    settlement: {
-      storedLifecycle: async () =>
-        languages === null ? null : { status, languages },
-      mayPerform,
-    },
+    settlement: { storedLifecycle, mayPerform, publishProblems },
   });
   const settled = m.settled;
   if (settled === undefined) throw new Error("settled not offered");
   return {
     m: { settled, applied: m.applied },
-    listWorkingDraftLocales,
+    storedLifecycle,
     mayPerform,
+    publishProblems,
   };
 }
 
@@ -84,24 +92,19 @@ describe("a release action that would change nothing", () => {
     }
   });
 
-  it("is NOT settled when the stored status is not the target, and reads no drafts", async () => {
-    const { m, listWorkingDraftLocales } = mutations("draft", []);
+  it("is NOT settled when the stored status is not the target", async () => {
+    const { m } = mutations("draft", []);
     expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
       false
     );
-    expect(listWorkingDraftLocales).not.toHaveBeenCalled();
   });
 
   it("judges a withdrawal by the withdrawn status, and asks about the whole document", async () => {
-    const { m, listWorkingDraftLocales } = mutations("draft", []);
+    const { m, storedLifecycle } = mutations("draft", []);
     expect(
       await m.settled({ ref: POST, effect: "unpublish", user: USER })
     ).toBe(true);
-    expect(listWorkingDraftLocales).toHaveBeenCalledWith({
-      scopeKind: "collection",
-      scopeSlug: "posts",
-      entryId: "e1",
-    });
+    expect(storedLifecycle).toHaveBeenCalledWith(POST);
   });
 
   it("is NOT settled while another language is still where it was", async () => {
@@ -165,26 +168,49 @@ describe("a release action that would change nothing", () => {
     );
   });
 
-  it("is NOT settled, nor applied, for an author the write's gate refuses", async () => {
-    // The document already stands, but the write would refuse this author, so
-    // neither the skip nor a refused write may count the action as done.
+  it("is NOT settled for an author the write's gate refuses", async () => {
+    // The document already stands, but the write would refuse this author.
     const { m, mayPerform } = mutations("published", [], new Map(), {
       mayPerform: false,
     });
     expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
       false
     );
-    expect(await m.applied({ ref: POST, effect: "publish", user: USER })).toBe(
-      false
-    );
     expect(mayPerform).toHaveBeenCalledWith(USER, POST, "publish");
   });
 
-  it("offers no settlement without a way to read the languages", () => {
-    const m = createReleaseMutations({
-      contentApi: {} as JobContentSource,
-      drafts: { listWorkingDraftLocales: async () => [] },
+  it("is NOT settled for an author whose field rules refuse the status the write sets", async () => {
+    // The gate lets them act, but the write's field rules strip its status.
+    const { m, publishProblems } = mutations("published", [], new Map(), {
+      problems: [{ path: "status", code: "FORBIDDEN", message: "no" }],
     });
+    expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
+      false
+    );
+    expect(publishProblems).toHaveBeenCalledWith(POST, ["e1"], USER, "publish");
+  });
+
+  it("confirms a committed write from storage alone, not from the author's present authority", async () => {
+    // A role revoked after the write committed (by a hook, or a race) says
+    // nothing about what committed.
+    const { m, mayPerform } = mutations("published", [], new Map(), {
+      mayPerform: false,
+    });
+    expect(await m.applied({ ref: POST, effect: "publish", user: USER })).toBe(
+      true
+    );
+    expect(mayPerform).not.toHaveBeenCalled();
+  });
+
+  it("does not confirm a write the storage read cannot vouch for", async () => {
+    const { m } = mutations("published", [], null);
+    expect(await m.applied({ ref: POST, effect: "publish", user: USER })).toBe(
+      false
+    );
+  });
+
+  it("offers no settlement without the stored lifecycle and the write's judgements", () => {
+    const m = createReleaseMutations({ contentApi: {} as JobContentSource });
     expect(m.settled).toBeUndefined();
   });
 });

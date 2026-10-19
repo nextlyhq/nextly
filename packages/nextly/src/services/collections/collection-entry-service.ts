@@ -631,8 +631,9 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
-   * One entry's lifecycle as stored, past every read hook: the main row's
-   * status and each translation's. See the mutation service.
+   * One entry's lifecycle as stored, past every read hook and in one
+   * snapshot: the main row's status, each translation's, and the languages
+   * holding a working draft. See the mutation service.
    *
    * @experimental
    */
@@ -642,6 +643,7 @@ export class CollectionEntryService extends BaseService {
   }): Promise<{
     status: string | null;
     languages: Map<string, string | null>;
+    drafts: (string | null)[];
   } | null> {
     return this.mutationService.releaseStoredLifecycle(params);
   }

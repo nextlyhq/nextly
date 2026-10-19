@@ -49,6 +49,7 @@
  * @module domains/releases/apply-due-releases
  */
 
+import { NextlyError } from "../../errors";
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
@@ -579,10 +580,16 @@ async function writeAndConfirm(
       ? deps.mutations.publish(input)
       : deps.mutations.unpublish(input));
   } catch (error) {
-    // A rejection is not proof the write did not land. Ask the document — and
-    // if THAT cannot be answered, report the failure, which is the safe
-    // direction: a retry of an applied action is a no-op, while treating an
-    // unapplied one as done loses it silently.
+    // The writer refusing the author is proof the write did not land: it
+    // refuses before anything commits. Read back, a document that already
+    // stood would count the refused action as performed.
+    if (isRefusal(error)) {
+      return { ...base, failure: "WRITE_FAILED", detail: messageOf(error) };
+    }
+    // Any other rejection is not proof the write did not land. Ask the
+    // document — and if THAT cannot be answered, report the failure, which is
+    // the safe direction: a retry of an applied action is a no-op, while
+    // treating an unapplied one as done loses it silently.
     const landed = await confirmApplied(deps, action, user, false);
     if (landed) return { ...base, failure: null, detail: messageOf(error) };
     return { ...base, failure: "WRITE_FAILED", detail: messageOf(error) };
@@ -608,6 +615,18 @@ async function writeAndConfirm(
   }
 
   return { ...base, failure: null };
+}
+
+/**
+ * The codes a write refuses its caller with before anything commits: the
+ * access gate's (`FORBIDDEN`, `AUTH_REQUIRED`), and `CONFLICT`, which the
+ * document-wide write answers when the author's field rules strip the status
+ * it moves, leaving it nothing to write.
+ */
+const REFUSAL_CODES = ["FORBIDDEN", "AUTH_REQUIRED", "CONFLICT"] as const;
+
+function isRefusal(error: unknown): boolean {
+  return REFUSAL_CODES.some(code => NextlyError.isCode(error, code));
 }
 
 /**

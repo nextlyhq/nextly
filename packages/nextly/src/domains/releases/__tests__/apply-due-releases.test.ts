@@ -10,6 +10,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import { applyDueReleases, settleableComponents } from "../apply-due-releases";
 import type {
   ApplyDueReleasesDeps,
@@ -439,6 +440,35 @@ describe("applyDueReleases", () => {
     );
 
     expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
+  });
+
+  it("FAILS a write the writer refused its author, without reading the document back", async () => {
+    // A refusal happens before anything commits, so it is proof the write did
+    // not land. Read back, a document that already stood would count the
+    // refused action as performed and discharge the release.
+    for (const refusal of [
+      NextlyError.forbidden(),
+      NextlyError.authRequired(),
+      NextlyError.conflict(),
+    ]) {
+      const marked: string[] = [];
+      const applied = vi.fn(async () => true);
+      const result = await applyDueReleases(
+        deps({
+          mutations: {
+            publish: async () => {
+              throw refusal;
+            },
+            applied,
+          },
+          marked,
+        })
+      );
+
+      expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
+      expect(applied).not.toHaveBeenCalled();
+      expect(marked).toEqual([]);
+    }
   });
 
   it("REFUSES a write that RESOLVED without applying the status", async () => {
