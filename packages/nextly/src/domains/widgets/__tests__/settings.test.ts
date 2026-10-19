@@ -513,6 +513,31 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     ]);
   });
 
+  it("names a setting's own fault and a dependency's at once", () => {
+    // Plain JavaScript learns of every fault from one restart, not one kind at
+    // a time.
+    const problems = widgetSettingsProblems([
+      { name: "limit", type: "number", defaultValue: "five" as never },
+      { name: "by", type: "groupBy", of: "colection" },
+    ]);
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain('setting "limit"');
+    expect(problems[1]).toBe(
+      'setting "by" depends on "colection", which is not a Collection setting of this widget'
+    );
+  });
+
+  it("counts a faulty Collection setting by its name, so its dependents are not misnamed", () => {
+    // The Collection setting's own fault is the one to fix; its dependent
+    // names it correctly and must not be reported as well.
+    const problems = widgetSettingsProblems([
+      { name: "collection", type: "collection", defaultValue: " " },
+      { name: "by", type: "groupBy", of: "collection" },
+    ]);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('setting "collection" is typed "collection"');
+  });
+
   it("refuses a starting value its type cannot hold", () => {
     const [blank] = widgetSettingsProblems([
       { name: "collection", type: "collection", defaultValue: " " },

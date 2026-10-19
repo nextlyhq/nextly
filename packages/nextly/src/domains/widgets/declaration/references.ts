@@ -30,11 +30,7 @@ import { getSource } from "../sources";
 
 import { buildCardQuery } from "./card-query";
 import { type DeclaredWidget, listDeclaredWidgets } from "./declared-widgets";
-import {
-  displayOpProblem,
-  displaySelectProblem,
-  isCoreDisplay,
-} from "./displays";
+import { declaredQueryProblem } from "./displays";
 import {
   widgetDeclarationsRefused,
   type WidgetDeclarationFault,
@@ -121,13 +117,8 @@ function startingQueryFault(
   if (query === undefined) return undefined;
   // What a core display draws is fixed by the code, whatever the database
   // holds: the types refuse the pairing, and plain JavaScript is refused here.
-  const { display } = declared.declaration;
-  if (isCoreDisplay(display)) {
-    const mismatch =
-      displayOpProblem(display, query.op) ??
-      displaySelectProblem(display, query.select);
-    if (mismatch !== undefined) return mismatch;
-  }
+  const mismatch = declaredQueryProblem(declared.declaration.display, query);
+  if (mismatch !== undefined) return mismatch;
   return contentFault(declared, query, content);
 }
 

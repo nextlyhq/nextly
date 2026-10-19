@@ -473,6 +473,30 @@ export const w = defineWidget({
     code: 2322,
     message: "a component display's path must be written as a literal string",
   },
+  {
+    // Narrower than `string`, but still a pattern: a map keyed by it is an
+    // index signature that an empty map satisfies, as one keyed by `string`.
+    name: "a component display's path is a literal, not a template pattern",
+    ...pair(
+      display => `${imports}declare const pattern: \`@test/\${string}/admin#Card\`;
+
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ total: 3 }),
+  display: ${display}, ${MARK}
+});
+`,
+      "{ component: pattern }",
+      `{ component: "@test/w/admin#Card" }`
+    ),
+    code: 2322,
+    message: "a component display's path must be written as a literal string",
+  },
   ...(["list", "table"] as const).map(
     (display): Case => ({
       name: `the ${display} display refuses a query that selects no fields`,

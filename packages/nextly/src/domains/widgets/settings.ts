@@ -381,28 +381,41 @@ export function widgetSettingsProblems(settings: unknown): string[] {
 
   const seen = new Set<string>();
   const problems: string[] = [];
+  const wellFormed: AnyWidgetSetting[] = [];
   for (const setting of settings) {
     const problem = settingProblem(setting, seen);
-    if (problem !== undefined) problems.push(problem);
+    if (problem === undefined) wellFormed.push(setting as AnyWidgetSetting);
+    else problems.push(problem);
   }
-  if (problems.length > 0) return problems;
-  return dependencyProblems(settings as AnyWidgetSetting[]);
+  // Both kinds in one answer, so one restart names every fault.
+  return [...problems, ...dependencyProblems(wellFormed, settings)];
 }
 
 /**
- * Every dependent setting whose `of` names no Collection setting of the same
- * widget.
+ * Every well-formed dependent setting whose `of` names no Collection setting
+ * of the same widget.
  *
- * A property of the SET, read once each setting is known well formed: the
- * name a dependency gives is only right or wrong against its siblings.
+ * A property of the SET: the name a dependency gives is only right or wrong
+ * against its siblings. A Collection setting counts by its name even when it
+ * has a fault of its own, which is reported once, as itself, rather than
+ * again through every setting that depends on it.
  */
-function dependencyProblems(settings: readonly AnyWidgetSetting[]): string[] {
+function dependencyProblems(
+  dependents: readonly AnyWidgetSetting[],
+  all: readonly unknown[]
+): string[] {
   const collections = new Set(
-    settings
-      .filter(setting => setting.type === "collection")
+    all
+      .filter(
+        (setting): setting is { type: "collection"; name: string } =>
+          typeof setting === "object" &&
+          setting !== null &&
+          (setting as { type?: unknown }).type === "collection" &&
+          typeof (setting as { name?: unknown }).name === "string"
+      )
       .map(setting => setting.name)
   );
-  return settings
+  return dependents
     .filter(isDependent)
     .filter(setting => !collections.has(setting.of))
     .map(

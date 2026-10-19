@@ -75,6 +75,26 @@ export function displaySelectProblem(
 }
 
 /**
+ * Why a declared widget's display cannot draw its query, or `undefined` when
+ * it can: the operation and the selection, judged together.
+ *
+ * One check for both places a declared query is built, at startup from the
+ * starting settings and for each card from its own, so a query is never
+ * accepted by one and refused by the other. A component display draws
+ * whatever its component does, so only a core display is judged.
+ */
+export function declaredQueryProblem(
+  display: unknown,
+  query: { readonly op?: unknown; readonly select?: unknown }
+): string | undefined {
+  if (!isCoreDisplay(display)) return undefined;
+  return (
+    displayOpProblem(display, query.op) ??
+    displaySelectProblem(display, query.select)
+  );
+}
+
+/**
  * Which query answer each display draws, read from the table registration
  * checks at startup (`ARCHETYPE_OPS` in `definition.ts`), so the compile-time
  * pairing and the startup check are one table.

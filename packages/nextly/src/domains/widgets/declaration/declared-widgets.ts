@@ -20,11 +20,13 @@
  * @module domains/widgets/declaration/declared-widgets
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
 import type { WidgetQuery } from "../query";
 import type { WidgetWidth } from "../widths";
 
 import { buildCardQuery } from "./card-query";
+import { declaredQueryProblem } from "./displays";
 import {
   collectWidgetDeclarationFaults,
   widgetDeclarationsRefused,
@@ -224,9 +226,28 @@ export function cardQueryFor(
   stored: Record<string, unknown> | undefined
 ): WidgetQuery | undefined {
   const declared = store().get(widgetId);
-  return declared === undefined
-    ? undefined
-    : buildCardQuery(declared.declaration, stored, declared.collections);
+  if (declared === undefined) return undefined;
+  const query = buildCardQuery(
+    declared.declaration,
+    stored,
+    declared.collections
+  );
+  if (query === undefined) return undefined;
+  /*
+   * 🔴 Judged here as well as at startup. Startup builds the query from the
+   * starting settings, and a Collection setting with no default leaves it
+   * unbuilt there, so a plain JavaScript list with no fields passed startup
+   * and was first built here, for a card, with no check in between.
+   */
+  const problem = declaredQueryProblem(declared.declaration.display, query);
+  if (problem !== undefined) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "An unexpected error occurred.",
+      logMessage: `Declared widget "${widgetId}" cannot draw its query: ${problem}.`,
+    });
+  }
+  return query;
 }
 
 /** Forgets every declared widget. Called at boot before declaring again. */

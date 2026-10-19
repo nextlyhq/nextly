@@ -65,6 +65,36 @@ describe("registering declared widgets", () => {
     expect(cardQueryFor("acme/unknown", {})).toBeUndefined();
   });
 
+  it("refuses a card's query its display cannot draw, once the card names its collection", () => {
+    // Plain JavaScript, as no type saw it: a list whose query selects nothing.
+    // Its Collection setting has no default, so startup builds no query and
+    // checks nothing; the first query is this card's own.
+    const unselected = {
+      ...recentOrders,
+      id: "acme/unselected",
+      data: {
+        query: ({ settings }: { settings: Record<string, unknown> }) => ({
+          collection: settings.collection,
+          op: "list",
+          limit: settings.items,
+        }),
+      },
+    } as unknown as typeof recentOrders;
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [unselected] }]);
+
+    expect(cardQueryFor("acme/unselected", {})).toBeUndefined();
+    let refused: unknown;
+    try {
+      cardQueryFor("acme/unselected", { collection: "orders" });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect((refused as NextlyError).logMessage).toBe(
+      'Declared widget "acme/unselected" cannot draw its query: its query selects no fields, so the "list" display has nothing to show in each row.'
+    );
+  });
+
   it("keeps a declared set of widths with gaps, in core's own words", () => {
     // Two widths that are not neighbours: no smallest-to-largest range could
     // say this, and the set is read back exactly as declared, in the

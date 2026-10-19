@@ -81,13 +81,29 @@ expectTypeOf<SelectField>().not.toBeNever();
  * a collection picker or a filter builder, so they stay out of the published
  * `WidgetSetting` that the settings sheet hands to `FieldRenderer`. Joined to it
  * before the sheet draws them, every assertion above would still pass while a
- * registered widget's sheet crashed. Each is checked absent, and present in
- * the wider type the rules read, so neither side can drift alone.
+ * registered widget's sheet crashed. Each is checked present in the wider type
+ * the rules read, and not assignable to the published one, so neither side can
+ * drift alone.
+ *
+ * 🔴 Assignability, not an `Extract` of the published union. `Extract` keeps a
+ * member only when it is wholly assignable to `{ type: "collection" }`, so a
+ * member typed `{ type: string }` or `{ type: "text" | "collection" }` came out
+ * as `never` and read as "absent" while accepting a collection setting. Each
+ * concrete content setting is asked here whether `WidgetSetting` takes it,
+ * which is the question the sheet's prop answers.
  */
-expectTypeOf<Extract<WidgetSetting, { type: "collection" }>>().toBeNever();
-expectTypeOf<Extract<WidgetSetting, { type: "filter" }>>().toBeNever();
-expectTypeOf<Extract<WidgetSetting, { type: "sort" }>>().toBeNever();
-expectTypeOf<Extract<WidgetSetting, { type: "groupBy" }>>().toBeNever();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "collection" }>
+>().not.toExtend<WidgetSetting>();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "filter" }>
+>().not.toExtend<WidgetSetting>();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "sort" }>
+>().not.toExtend<WidgetSetting>();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "groupBy" }>
+>().not.toExtend<WidgetSetting>();
 expectTypeOf<
   Extract<AnyWidgetSetting, { type: "collection" }>
 >().not.toBeNever();

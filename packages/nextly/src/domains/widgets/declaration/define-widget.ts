@@ -293,15 +293,18 @@ type OneDisplay<Display> =
  *
  * 🔴 The component map (`WidgetComponentMap`) is keyed by each declared path,
  * so a component written for another widget, or a path with no component, is
- * refused there. A display read from a variable typed `ComponentDisplay` has
- * `string` for its path, and a map keyed by `string` is an index signature
- * that ANY path satisfies, which silently turns that check off. The error
- * names the fault in words, as `OneDisplay`'s does.
+ * refused there. A path that names no one string turns that check off: a map
+ * keyed by `string`, or by a pattern such as `@acme/${string}#Card`, is an
+ * index signature that even an empty map satisfies. A display read from a
+ * variable typed `ComponentDisplay` has such a path, and so does one built
+ * from a template. So the path must be literal: one whose record an empty
+ * object does not satisfy, which `string` and every open pattern do. The
+ * error names the fault in words, as `OneDisplay`'s does.
  */
 type LiteralPath<Display> = Display extends {
   component: infer Path extends string;
 }
-  ? string extends Path
+  ? Record<never, never> extends Record<Path, true>
     ? {
         "a component display's path must be written as a literal string": Display;
       }
