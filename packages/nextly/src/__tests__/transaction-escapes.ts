@@ -32,7 +32,9 @@ export interface TransactionEscape {
    * it survives ordinary edits to the file. A statement reached through a
    * query builder awaited as a thenable carries no caller, since V8 links none
    * across that; it is keyed by where its transaction was opened instead,
-   * marked `OPENED_BY`. `UNKNOWN_SITE` when neither was captured.
+   * marked `OPENED_BY`, with the statement's verb and table
+   * (`statementFingerprint`), so escapes of one flow stay apart.
+   * `UNKNOWN_SITE` when neither was captured.
    */
   key: string;
   stack: string;
@@ -122,6 +124,45 @@ function functionOf(frame: string): string {
   return at < 0 ? "" : frame.slice(0, at);
 }
 
+/** A table name as written in SQL, quoted or schema-qualified. */
+const NAME = String.raw`((?:[\`"]?[\w$]+[\`"]?\.)*[\`"]?[\w$]+[\`"]?)`;
+
+/** Where each verb names its table. */
+const TABLE_AFTER: Readonly<Partial<Record<string, RegExp>>> = {
+  select: new RegExp(String.raw`\bfrom ${NAME}`, "i"),
+  with: new RegExp(String.raw`\bfrom ${NAME}`, "i"),
+  delete: new RegExp(String.raw`\bfrom ${NAME}`, "i"),
+  insert: new RegExp(String.raw`\binto ${NAME}`, "i"),
+  update: new RegExp(String.raw`^update ${NAME}`, "i"),
+  truncate: new RegExp(String.raw`^truncate (?:table )?${NAME}`, "i"),
+  create: new RegExp(
+    String.raw`\b(?:table|index|view) (?:if not exists )?${NAME}`,
+    "i"
+  ),
+  alter: new RegExp(String.raw`\btable (?:if exists )?${NAME}`, "i"),
+  drop: new RegExp(
+    String.raw`\b(?:table|index|view) (?:if exists )?${NAME}`,
+    "i"
+  ),
+};
+
+/**
+ * A statement as its verb and table, `select nextly_dynamic_collections`:
+ * what an escape keyed by its transaction's opener adds, so a new statement in
+ * the same flow is told apart from the known ones. No literals, parameters or
+ * columns, so an ordinary edit to the query keeps its fingerprint. `checkout`
+ * for a connection taken with no statement.
+ */
+export function statementFingerprint(sql: string | undefined): string {
+  if (sql === undefined) return "checkout";
+  const text = sql.replace(/\s+/g, " ").trim();
+  const verb = (/^\(?\s*(\w+)/.exec(text)?.[1] ?? "?").toLowerCase();
+  const table = TABLE_AFTER[verb]?.exec(text)?.[1];
+  if (table === undefined) return verb;
+  const bare = table.split(".").pop() ?? table;
+  return `${verb} ${bare.replace(/[`"]/g, "")}`;
+}
+
 /**
  * A site as `<file>#<function>`: the file from `packages/` on, without the
  * line and column, and `<anonymous>` for a frame with no function name.
@@ -142,6 +183,7 @@ export function installTransactionEscapeObserver(): void {
     dialect: string;
     stack: string;
     openedAt?: string;
+    statement?: string;
   }): void => {
     const site = callSiteOf(report.stack);
     const opener =
@@ -159,7 +201,7 @@ export function installTransactionEscapeObserver(): void {
       key:
         site !== undefined || opener === undefined
           ? siteKeyOf(site)
-          : `${siteKeyOf(opener)}${OPENED_BY}`,
+          : `${siteKeyOf(opener)}${OPENED_BY} · ${statementFingerprint(report.statement)}`,
       stack: stacks,
       accepted: ACCEPTED_ESCAPES.find(entry => stacks.includes(entry.frame)),
     });

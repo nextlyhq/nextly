@@ -76,7 +76,20 @@ type EscapeObserver = (report: {
   dialect: string;
   stack: string;
   openedAt?: string;
+  statement?: string;
 }) => void;
+
+/**
+ * The SQL text a pool call was handed: a string, or the `text` (pg) or `sql`
+ * (mysql2) of a query object. Undefined for a connection checkout.
+ */
+function statementOf(argument: unknown): string | undefined {
+  if (typeof argument === "string") return argument;
+  if (typeof argument !== "object" || argument === null) return undefined;
+  const { text, sql } = argument as { text?: unknown; sql?: unknown };
+  if (typeof text === "string") return text;
+  return typeof sql === "string" ? sql : undefined;
+}
 
 /** The escape observer a test harness installed; undefined in production. */
 function escapeObserver(): EscapeObserver | undefined {
@@ -592,8 +605,11 @@ export abstract class DrizzleAdapter {
    * `Symbol.for("nextly.transactionEscapeObserver")`, with the stack that
    * names its call site. With no observer installed, which is every
    * production process, this is one property read.
+   *
+   * @param statement - What the pool call was handed, its SQL passed on so
+   *   the harness can say which statement escaped; nothing for a checkout
    */
-  protected notePoolAccess(): void {
+  protected notePoolAccess(statement?: unknown): void {
     const observe = escapeObserver();
     if (observe === undefined) return;
     for (
@@ -606,6 +622,7 @@ export abstract class DrizzleAdapter {
           dialect: this.dialect,
           stack: deepStack(),
           openedAt: at.openedAt,
+          statement: statementOf(statement),
         });
         return;
       }
@@ -645,7 +662,7 @@ export abstract class DrizzleAdapter {
           return value;
         }
         return (...args: unknown[]) => {
-          this.notePoolAccess();
+          this.notePoolAccess(args[0]);
           return Reflect.apply(value, target, args);
         };
       },

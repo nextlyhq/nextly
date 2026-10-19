@@ -506,7 +506,7 @@ export class MySqlAdapter extends DrizzleAdapter {
 
     try {
       // Outside the calling flow's transaction, if it has one (`notePoolAccess`).
-      this.notePoolAccess();
+      this.notePoolAccess(sql);
       const [rows] = await pool.query<RowDataPacket[]>(
         sql,
         params as unknown[]

@@ -66,7 +66,7 @@ describeEachDialect("the transaction escape guard", dialect => {
       const escapes = takeTransactionEscapes();
       expect(escapes).toHaveLength(1);
       expect(escapes[0].key).toBe(
-        `packages/nextly/src/__tests__/transaction-escapes.integration.test.ts#<anonymous>${OPENED_BY}`
+        `packages/nextly/src/__tests__/transaction-escapes.integration.test.ts#<anonymous>${OPENED_BY} · select`
       );
     }
   );

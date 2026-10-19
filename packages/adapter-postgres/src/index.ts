@@ -559,7 +559,7 @@ export class PostgresAdapter extends DrizzleAdapter {
     for (let attempt = 1; attempt <= maxQueryAttempts; attempt++) {
       try {
         // Outside the calling flow's transaction, if it has one (`notePoolAccess`).
-        this.notePoolAccess();
+        this.notePoolAccess(sql);
         const result = await pool.query(sql, params as unknown[]);
 
         // Log query if logger configured
