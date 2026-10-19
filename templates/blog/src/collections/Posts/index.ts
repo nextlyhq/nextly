@@ -24,8 +24,7 @@ import {
 // root nextly.config.ts via Node.js, which pulls this file transitively
 // through Node's module resolver - no TypeScript path-alias support.
 import { anyone } from "../../access/anyone";
-import { authenticated } from "../../access/authenticated";
-import { isAuthorOrEditor } from "../../access/is-author-or-editor";
+import { hasPermission } from "../../access/has-permission";
 import { autoSlug } from "../../hooks/auto-slug";
 
 import { computeReadingTime } from "./hooks/reading-time";
@@ -88,16 +87,17 @@ export const Posts = defineCollection({
     defaultColumns: ["title", "status", "author", "publishedAt"],
   },
   // Access control: reads are public (frontend queries filter by
-  // status=published for visitors); any logged-in user can draft a
-  // post; content-role users (admin/editor/author) can update or
-  // delete. Row-level "authors can only edit their own posts" is
-  // enforced by the RBAC permission rules on the `author` role - the
-  // AccessControlFunction signature does not receive the target doc.
+  // status=published for visitors). Creating, editing and deleting need
+  // the matching permission on the caller's role (`create-posts`,
+  // `update-posts`, `delete-posts`), and publishing needs
+  // `publish-posts`, which no rule here overrides. A rule cannot see the
+  // post it is judging, so "authors edit only their own posts" is not
+  // expressible here: what an author may do is what the role holds.
   access: {
     read: anyone,
-    create: authenticated,
-    update: isAuthorOrEditor,
-    delete: isAuthorOrEditor,
+    create: hasPermission,
+    update: hasPermission,
+    delete: hasPermission,
   },
   hooks: {
     beforeValidate: [autoSlug, requireFeaturedAlt],

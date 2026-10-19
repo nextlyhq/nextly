@@ -25,7 +25,7 @@ Element.prototype.setPointerCapture = () => undefined;
 Element.prototype.releasePointerCapture = () => undefined;
 Element.prototype.scrollIntoView = () => undefined;
 
-// jsdom implements no media queries at all, and next-themes calls matchMedia
+// jsdom implements no media queries at all, and the theme provider calls matchMedia
 // while mounting, so a provider test dies on `matchMedia is not a function`
 // before reaching an assertion. This stub always answers "no match", which
 // means the OS reports light: a test about SYSTEM theme resolution must set up

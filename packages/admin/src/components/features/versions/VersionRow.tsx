@@ -15,6 +15,7 @@ import { formatDateTime } from "@admin/lib/dates/format";
 import { cn } from "@admin/lib/utils";
 import type { VersionMeta } from "@admin/services/versionApi";
 
+import { versionAuthorLabel } from "./version-author";
 import { VersionLocaleBadge, useVersionLocale } from "./VersionLocaleBadge";
 
 export interface VersionRowProps {
@@ -84,9 +85,8 @@ export function VersionRow({
   const named = version.label !== null && version.label !== "";
   const title = named ? (version.label as string) : ordinal;
 
-  // Attribution is absent for a system write rather than missing, so it reads
-  // as "nobody signed this" instead of looking like a failed lookup.
-  const author = version.author?.name ?? "Unknown author";
+  // An absent author reads as not recorded, never as a guess or a blank.
+  const author = versionAuthorLabel(version);
 
   // A restore records the version it was made from, so this row can show its
   // lineage. Absent (null) for an ordinary edit, in which case nothing shows.
@@ -111,7 +111,11 @@ export function VersionRow({
     <div
       className={cn(
         "relative flex items-stretch border-b border-border last:border-b-0",
-        active && "bg-primary/5"
+        // The chosen version stays in the list beside what is on screen, so it
+        // is marked plainly in either scheme: the primary tint, and a primary
+        // bar on the leading edge.
+        active &&
+          "bg-primary/10 before:absolute before:inset-y-0 before:left-0 before:w-1 before:bg-primary"
       )}
     >
       <button

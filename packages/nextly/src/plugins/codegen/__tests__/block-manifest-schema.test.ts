@@ -437,6 +437,22 @@ describe("the published JSON Schema", () => {
                         },
                         "type": "array",
                       },
+                      "lock": {
+                        "anyOf": [
+                          {
+                            "enum": [
+                              "all",
+                              "insert",
+                              "contentOnly",
+                            ],
+                            "type": "string",
+                          },
+                          {
+                            "const": false,
+                            "type": "boolean",
+                          },
+                        ],
+                      },
                     },
                     "type": "object",
                   },

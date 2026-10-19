@@ -9,6 +9,7 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import { UNAVAILABLE_TITLE } from "../frame/states";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 const count = (total: number): WidgetSlot => ({
@@ -152,6 +153,34 @@ describe("a stats card", () => {
     );
     expect(screen.getByText(/you may not read posts/i)).toBeInTheDocument();
     expect(screen.queryByTestId("widget-stats")).not.toBeInTheDocument();
+  });
+
+  it("shows the one unavailable state, with no Retry, when every cell is unavailable", () => {
+    // Retry would ask the same question of a source this reader may not see.
+    const unavailable: WidgetSlot = {
+      ok: false,
+      error: "Invalid widget query: unavailable source or unsupported op",
+      code: "unavailable",
+    };
+    renderWith({ total: unavailable, draft: unavailable });
+
+    expect(screen.getByText(UNAVAILABLE_TITLE)).toBeInTheDocument();
+    expect(screen.queryByTestId("card-retry")).not.toBeInTheDocument();
+  });
+
+  it("stays an error with Retry when one cell failed for another reason", () => {
+    // The control: one cell that may recover keeps the card an error.
+    renderWith({
+      total: {
+        ok: false,
+        error: "Invalid widget query: unavailable source or unsupported op",
+        code: "unavailable",
+      },
+      draft: { ok: false, error: "An unexpected error occurred." },
+    });
+
+    expect(screen.queryByText(UNAVAILABLE_TITLE)).not.toBeInTheDocument();
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
   });
 
   it("still DRAWS when one cell survives", () => {

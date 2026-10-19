@@ -10,6 +10,24 @@
  */
 
 import { formatGlobalDateTime } from "@admin/lib/dates/format";
+import type { WidgetResultField } from "@admin/types/dashboard/widgets";
+
+/** What a cell needs to know about its column to present a value: its kind and its value labels. */
+export type CellColumn = Pick<WidgetResultField, "type" | "choices">;
+
+/**
+ * What a person calls a stored choice value, or `undefined` when the column names none.
+ *
+ * One lookup for every place a stored value is shown -- a row, a table cell, a chart group -- so a
+ * status reads "Published" in all of them or in none. A value the column does not list (an option
+ * removed since the row was written) falls back to the stored value, which is still the truth.
+ */
+export function choiceLabel(
+  value: string,
+  choices: CellColumn["choices"]
+): string | undefined {
+  return choices?.find(choice => choice.value === value)?.label;
+}
 
 /**
  * One cell as text, or `undefined` when it is not something to print.
@@ -91,11 +109,20 @@ export function selectsNothing(
  */
 export function asPresentedText(
   value: unknown,
-  type: string | undefined
+  column: CellColumn | undefined
 ): string | undefined {
+  // A choice column shows the value's label, never the stored value ("Published", not
+  // `published`); the stored value is kept when the column names no label for it. Asked
+  // before the value is judged printable, so an option that stores "" under a label ("None")
+  // reads as that label, as it does on a bar, rather than as an empty cell.
+  const named =
+    typeof value === "string" && column?.choices
+      ? choiceLabel(value, column.choices)
+      : undefined;
+  if (named !== undefined) return named;
   const text = asText(value);
   if (text === undefined) return undefined;
-  if (type !== "date") return text;
+  if (column?.type !== "date") return text;
 
   // The raw text is the FALLBACK, so an unparseable value still reaches the
   // reader as evidence rather than as an em dash claiming the row has nothing.

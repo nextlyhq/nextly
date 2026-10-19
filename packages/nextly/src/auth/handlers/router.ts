@@ -5,6 +5,10 @@ import type { PluginContext } from "../../plugins/plugin-context";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import type { CredentialUserRow } from "../credentials/verify-credentials";
 import { authRateLimiter } from "../middleware/rate-limiter";
+import type {
+  UnknownSourceCounter,
+  UnknownSourceVerdict,
+} from "../middleware/unknown-source-counter";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import type { SpentChallenges } from "../pipeline/spent-challenges";
@@ -22,6 +26,7 @@ import type { RefreshTokenRecord } from "./issue-session";
 import { handleLogin } from "./login";
 import { handleLogout } from "./logout";
 import { handlePending } from "./pending";
+import { noteUnresolvedAuthRequest } from "./proxy-posture";
 import { handleRefresh } from "./refresh";
 import { handleRegister } from "./register";
 import { handleResetPassword } from "./reset-password";
@@ -29,6 +34,11 @@ import { handleSession } from "./session";
 import type { WithSessionRowTransaction } from "./session-row";
 import { handleSetInitialPassword } from "./set-initial-password";
 import { handleSetupStatus, handleSetup } from "./setup";
+import {
+  admitUnknownSource,
+  type ReadingPlace,
+  type StoredTokenKind,
+} from "./unknown-source";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
 /**
@@ -59,6 +69,20 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
 ]);
 
 /**
+ * Whether a request to `authPath` is judged by the auth rate limit.
+ *
+ * Exported because the REST limit leaves exactly these requests to the auth
+ * limit when their client address cannot be resolved, and one answer keeps
+ * the two from disagreeing: an auth path the auth limit does not cover is
+ * then held to the REST limit's ceiling like any other request.
+ */
+export function hasAuthRateLimit(method: string, authPath: string): boolean {
+  return (
+    method.toUpperCase() === "POST" && RATE_LIMITED_AUTH_PATHS.has(authPath)
+  );
+}
+
+/**
  * @experimental Combined dependency interface for all auth handlers.
  * Defined as a standalone interface (not multi-extends) to avoid TS2320 conflicts
  * where the same method name has different return types across handler deps.
@@ -83,6 +107,8 @@ export interface AuthRouterDeps {
    * (trades enumeration risk for UX).
    */
   revealRegistrationConflict: boolean;
+  /** Whether strangers may register (`auth.allowRegistration`); off by default. */
+  allowRegistration: boolean;
   /**
    * Dev-only auto-login config (config.admin.devAutoLogin). Hard-blocked
    * at runtime when isProduction is true. When set, the session handler
@@ -100,9 +126,11 @@ export interface AuthRouterDeps {
   /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
   /**
-   * Per-IP rate limit on auth write endpoints. `requestsPerHour: 0`
-   * disables the envelope. Single shared bucket across login / register
-   * / forgot-password / reset-password per IP.
+   * Rate limit on auth write endpoints. `requestsPerHour: 0` disables it.
+   * A request whose client address resolves counts in that address's one
+   * bucket across every limited route. One whose address cannot be resolved
+   * counts against the account it names, under a shared ceiling; see
+   * `auth/handlers/unknown-source`.
    */
   authRateLimit: {
     requestsPerHour: number;
@@ -113,7 +141,22 @@ export interface AuthRouterDeps {
      * anywhere else — see `auth/middleware/rate-limiter`.
      */
     store?: RateLimitStore;
+    /**
+     * Where unknown-source admissions are counted. Absent means `store`
+     * when one is set, else this process's own counter.
+     */
+    unknownSourceCounter?: UnknownSourceCounter;
   };
+  /**
+   * The address of the account a stored token belongs to, without using the
+   * token up, or `null` when it belongs to none. The limiter counts a token
+   * request from an unresolvable address against that account. Absent, every
+   * such request counts against the account-less budget.
+   */
+  findTokenOwner?: (
+    kind: StoredTokenKind,
+    token: string
+  ) => Promise<string | null>;
   /**
    * The limit store the site selected, where the two-factor attempt budget
    * is counted when no store of the earlier contract is configured.
@@ -212,12 +255,12 @@ export interface AuthRouterDeps {
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
 
-  getUserCount: () => Promise<number>;
+  hasAdministrator: () => Promise<boolean>;
   createSuperAdmin: (data: {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string }>;
+  }) => Promise<{ id: string; email: string; name: string } | null>;
   seedPermissions: () => Promise<void>;
 
   // These throw NextlyError on failure and return the success-case data
@@ -248,7 +291,11 @@ export interface AuthRouterDeps {
   setInitialPassword: (
     userId: string,
     newPassword: string
-  ) => Promise<{ userId: string; passwordUpdatedAt: Date | null }>;
+  ) => Promise<{
+    userId: string;
+    passwordUpdatedAt: Date | null;
+    sessionEpoch: number;
+  }>;
   changePassword: (
     userId: string,
     currentPassword: string,
@@ -309,40 +356,20 @@ async function dispatchAuthRequest(
   }
 
   if (method === "POST") {
-    if (RATE_LIMITED_AUTH_PATHS.has(authPath)) {
-      const limited = await checkAuthIpRateLimit(request, deps);
-      if (limited) return limited;
+    let place: ReadingPlace | undefined;
+    if (hasAuthRateLimit(method, authPath)) {
+      const limited = await checkAuthIpRateLimit(request, authPath, deps);
+      if (limited.refused) return limited.refused;
+      place = limited.place;
     }
-    return auditCsrfFailure(request, authPath, deps, () => {
-      switch (authPath) {
-        case "login":
-          return handleLogin(request, deps);
-        case "challenge/resolve":
-          return handleChallengeResolve(request, deps);
-        case "logout":
-          return handleLogout(request, deps);
-        case "refresh":
-          return handleRefresh(request, deps);
-        case "setup":
-          return handleSetup(request, deps);
-        case "register":
-          return handleRegister(request, deps);
-        case "forgot-password":
-          return handleForgotPassword(request, deps);
-        case "reset-password":
-          return handleResetPassword(request, deps);
-        case "accept-invite":
-          return handleAcceptInvite(request, deps);
-        case "set-initial-password":
-          return handleSetInitialPassword(request, deps);
-        case "verify-email":
-          return handleVerifyEmail(request, deps);
-        case "verify-email/resend":
-          return handleResendVerification(request, deps);
-        default:
-          return Promise.resolve(null);
-      }
-    });
+    // A body the limiter stopped reading is read to its end by the handler,
+    // at the client's pace, so its reading place is held until the handler
+    // has answered, however it ends.
+    try {
+      return await handleAuthPost(request, authPath, deps);
+    } finally {
+      place?.release();
+    }
   }
 
   if (method === "PATCH") {
@@ -357,6 +384,44 @@ async function dispatchAuthRequest(
   }
 
   return null;
+}
+
+/** The handler for an auth POST the limit has admitted. */
+function handleAuthPost(
+  request: Request,
+  authPath: string,
+  deps: AuthRouterDeps
+): Promise<Response | null> {
+  return auditCsrfFailure(request, authPath, deps, () => {
+    switch (authPath) {
+      case "login":
+        return handleLogin(request, deps);
+      case "challenge/resolve":
+        return handleChallengeResolve(request, deps);
+      case "logout":
+        return handleLogout(request, deps);
+      case "refresh":
+        return handleRefresh(request, deps);
+      case "setup":
+        return handleSetup(request, deps);
+      case "register":
+        return handleRegister(request, deps);
+      case "forgot-password":
+        return handleForgotPassword(request, deps);
+      case "reset-password":
+        return handleResetPassword(request, deps);
+      case "accept-invite":
+        return handleAcceptInvite(request, deps);
+      case "set-initial-password":
+        return handleSetInitialPassword(request, deps);
+      case "verify-email":
+        return handleVerifyEmail(request, deps);
+      case "verify-email/resend":
+        return handleResendVerification(request, deps);
+      default:
+        return Promise.resolve(null);
+    }
+  });
 }
 
 /**
@@ -415,47 +480,47 @@ async function auditCsrfFailure(
 }
 
 /**
- * Per-IP rate limit on auth write endpoints.
+ * Rate limit on auth write endpoints.
  *
- * Returns a 429 `Response` when the IP has exhausted its budget for the
- * current window, or `null` when the request should proceed. Uses the
- * shared in-memory sliding-window `rateLimiter` singleton (the same
- * one the API-key middleware uses). The backing store is in-memory, so
- * single-instance deployments are the documented beta scope until a
- * shared store lands.
- *
- * Falls back to a single shared `unknown` bucket when the trusted IP
- * is null (matches the pattern in `middleware/rate-limit.ts`). That
- * means a non-proxied deployment without `trustProxy` enabled will
- * lump every auth request into one bucket: heavy-handed but
- * intentional, since the alternative (skip the limiter) leaves the
- * deployment open to credential-stuffing.
+ * Returns a 429 `Response` as `refused` when the request's budget is spent for
+ * the current window, or `refused: null` when the request should proceed,
+ * with the reading place an admitted request still holds (`ReadingPlace`),
+ * which the caller gives back once the handler has answered. A request whose client
+ * address resolves through the trusted-proxy settings counts in that
+ * address's bucket of the shared sliding-window `rateLimiter` (the one the
+ * API-key middleware uses). One whose address cannot be resolved (every
+ * request, where no proxy is trusted) counts against the account it names,
+ * under a ceiling shared by all of them (`admitUnknownSource`): one bucket for
+ * every such request let anyone refuse sign-in to everyone. The backing store
+ * is in-memory, so single-instance deployments are the documented beta scope
+ * until a shared store lands.
  */
 async function checkAuthIpRateLimit(
   request: Request,
+  authPath: string,
   deps: AuthRouterDeps
-): Promise<Response | null> {
+): Promise<{ refused: Response | null; place?: ReadingPlace }> {
   const limit = deps.authRateLimit.requestsPerHour;
-  if (limit <= 0) return null; // explicitly disabled
+  if (limit <= 0) return { refused: null }; // explicitly disabled
 
-  const ip =
-    getTrustedClientIp(request, {
-      trustProxy: deps.trustProxy,
-      trustedProxyIps: deps.trustedProxyIps,
-    }) ?? "unknown";
+  const ip = getTrustedClientIp(request, {
+    trustProxy: deps.trustProxy,
+    trustedProxyIps: deps.trustedProxyIps,
+  });
 
-  const result = await authRateLimiter(deps.authRateLimit.store).check(
-    `auth-ip:${ip}`,
-    limit,
-    deps.authRateLimit.windowMs
-  );
-  if (result.allowed) return null;
+  if (ip === null) noteUnresolvedAuthRequest(request);
+  const admission =
+    ip === null
+      ? await admitUnknownSource(request, authPath, deps)
+      : { verdict: await admitAddress(ip, deps) };
+  const result = admission.verdict;
+  if (result.allowed) return { refused: null, place: admission.place };
 
   const retryAfter = Math.max(
     1,
-    Math.ceil((result.resetAt.getTime() - Date.now()) / 1000)
+    Math.ceil((result.resetAt - Date.now()) / 1000)
   );
-  return new Response(
+  const refused = new Response(
     JSON.stringify({
       error: {
         code: "RATE_LIMIT_EXCEEDED",
@@ -470,8 +535,27 @@ async function checkAuthIpRateLimit(
         "retry-after": String(retryAfter),
         "x-ratelimit-limit": String(limit),
         "x-ratelimit-remaining": "0",
-        "x-ratelimit-reset": String(result.resetAt.getTime()),
+        "x-ratelimit-reset": String(result.resetAt),
       },
     }
   );
+  return { refused };
+}
+
+/**
+ * Admit or refuse a request from a resolved client address: that address's
+ * one bucket, at the configured budget, as it always has been.
+ */
+async function admitAddress(
+  ip: string,
+  deps: AuthRouterDeps
+): Promise<UnknownSourceVerdict> {
+  const result = await authRateLimiter(deps.authRateLimit.store).check(
+    `auth-ip:${ip}`,
+    deps.authRateLimit.requestsPerHour,
+    deps.authRateLimit.windowMs
+  );
+  return result.allowed
+    ? { allowed: true }
+    : { allowed: false, by: "budget", resetAt: result.resetAt.getTime() };
 }

@@ -1,4 +1,7 @@
+import path from "path";
+
 import { execa } from "execa";
+import fs from "fs-extra";
 
 import type {
   DatabaseConfig,
@@ -6,7 +9,13 @@ import type {
   ProjectInfo,
   ProjectType,
 } from "../types";
-import { projectUsesFormBuilder } from "../utils/template";
+import {
+  CONFIG_TOOLING_DEV_DEPENDENCIES,
+  FORM_BUILDER_PACKAGES,
+  projectUsesFormBuilder,
+} from "../utils/template";
+
+import { approveNativeBuilds } from "./native-build-approvals";
 
 const INSTALL_COMMANDS: Record<PackageManager, string[]> = {
   npm: ["npm", "install"],
@@ -14,6 +23,50 @@ const INSTALL_COMMANDS: Record<PackageManager, string[]> = {
   pnpm: ["pnpm", "add"],
   bun: ["bun", "add"],
 };
+
+/** Each manager's spelling of "add these as dev dependencies". */
+const DEV_INSTALL_COMMANDS: Record<PackageManager, string[]> = {
+  npm: ["npm", "install", "--save-dev"],
+  yarn: ["yarn", "add", "--dev"],
+  pnpm: ["pnpm", "add", "--save-dev"],
+  bun: ["bun", "add", "--dev"],
+};
+
+/** `pnpm --version` in the app, or undefined when it cannot be read. */
+async function readPnpmVersion(cwd: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await execa("pnpm", ["--version"], { cwd });
+    return stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Runs one install command in an existing app. When it fails, the error names
+ * the exact command, so the person can run it themselves and read the package
+ * manager's own reason, and says how to finish once it succeeds.
+ */
+async function runInstall(
+  [cmd, ...args]: string[],
+  packages: string[],
+  cwd: string
+): Promise<void> {
+  try {
+    await execa(cmd, [...args, ...packages], { cwd });
+  } catch (error) {
+    const command = [cmd, ...args, ...packages].join(" ");
+    const reason =
+      (error as { shortMessage?: string }).shortMessage ??
+      (error as Error).message;
+    throw new Error(
+      `Installing Nextly's packages failed.\n\n${reason}\n\n` +
+        `Run this in the project to see why:\n  ${command}\n` +
+        `then run create-nextly-app again.`,
+      { cause: error }
+    );
+  }
+}
 
 /**
  * Core Nextly packages that are always installed.
@@ -46,19 +99,16 @@ const ALL_ADAPTER_PACKAGES = [
 
 /**
  * Plugin packages added only for templates that register the plugin in their
- * `nextly.config.ts`. Must stay in sync with the deps added by
- * `generatePackageJson` (template.ts) — both paths scaffold the same project,
- * the only difference is whether deps resolve from npm or yalc. The
- * existing-project install path generates a blank-equivalent config, so it
- * never needs these.
+ * `nextly.config.ts`, read from the same list `generatePackageJson`
+ * (template.ts) uses: both paths scaffold the same project, the only
+ * difference is whether deps resolve from npm or yalc. The existing-project
+ * install path generates a blank-equivalent config, so it never needs these.
  */
-const TEMPLATE_PLUGIN_PACKAGES = ["@nextlyhq/plugin-form-builder"];
-
 function templatePluginPackages(
   projectType: ProjectType | undefined
 ): string[] {
   return projectType && projectUsesFormBuilder(projectType)
-    ? TEMPLATE_PLUGIN_PACKAGES
+    ? [...FORM_BUILDER_PACKAGES]
     : [];
 }
 
@@ -76,6 +126,8 @@ function getPackagesToInstall(database: DatabaseConfig): string[] {
  *
  * @param isFreshProject - When true, package.json already has all deps from
  *   copyTemplate(), so we just run `<pm> install` instead of adding packages.
+ * @returns lines saying what was changed in the project's own settings, for
+ *   the caller to show once its spinner stops.
  */
 export async function installDependencies(
   cwd: string,
@@ -84,81 +136,180 @@ export async function installDependencies(
   useYalc: boolean = false,
   isFreshProject: boolean = false,
   projectType?: ProjectType
-): Promise<void> {
+): Promise<string[]> {
   const pm = projectInfo.packageManager;
   const pluginPackages = templatePluginPackages(projectType);
 
-  if (isFreshProject) {
-    if (useYalc) {
-      // Yalc mode: @nextlyhq/* packages were omitted from package.json by
-      // generatePackageJson(useYalc: true). Install npm-only deps first,
-      // then layer yalc packages on top. Include ALL adapter packages because
-      // yalc file: links cause Turbopack to resolve conditional dynamic imports.
-      // A plugin scaffold imports @nextlyhq/plugin-sdk directly, so it is linked
-      // too; otherwise the local packages would run against the published SDK.
-      const yalcPackages = [
-        ...new Set([
-          "nextly",
-          "@nextlyhq/admin",
-          "@nextlyhq/ui",
-          "@nextlyhq/adapter-drizzle",
-          ...ALL_ADAPTER_PACKAGES,
-          ...pluginPackages,
-          ...(projectType === "plugin" ? ["@nextlyhq/plugin-sdk"] : []),
-        ]),
-      ];
-
-      // Step 1: Install non-@nextlyhq packages
-      await execa(pm, ["install"], { cwd });
-
-      // Step 2: Add @nextlyhq/* packages from local yalc store
-      for (const pkg of yalcPackages) {
-        await execa("yalc", ["add", pkg], { cwd });
-      }
-
-      // Step 3: Install again to resolve yalc transitive dependencies
-      await execa(pm, ["install"], { cwd });
-    } else {
-      // Plain install - all deps are already in package.json
-      await execa(pm, ["install"], { cwd });
-    }
-  } else {
-    // Existing project: add specific packages to their package.json.
-    const allPackages = getPackagesToInstall(database);
-
-    if (useYalc) {
-      const yalcPackages = [
-        ...new Set([
-          "nextly",
-          "@nextlyhq/admin",
-          "@nextlyhq/ui",
-          "@nextlyhq/adapter-drizzle",
-          ...ALL_ADAPTER_PACKAGES,
-          ...pluginPackages,
-        ]),
-      ];
-
-      // Everything else in the install set comes from npm, not the yalc store:
-      // @tanstack/react-query and lucide-react are externalised from the admin
-      // bundle and peer-required by @nextlyhq/ui, so `yalc add` would never
-      // provide them and the peers would stay unresolved.
-      const registryPackages = allPackages.filter(
-        pkg => !yalcPackages.includes(pkg)
-      );
-
-      if (registryPackages.length > 0) {
-        const [cmd, ...args] = INSTALL_COMMANDS[pm];
-        await execa(cmd, [...args, ...registryPackages], { cwd });
-      }
-
-      for (const pkg of yalcPackages) {
-        await execa("yalc", ["add", pkg], { cwd });
-      }
-
-      await execa(pm, ["install"], { cwd });
-    } else {
-      const [cmd, ...args] = INSTALL_COMMANDS[pm];
-      await execa(cmd, [...args, ...allPackages], { cwd });
-    }
+  if (!isFreshProject) {
+    return installIntoExistingApp(cwd, pm, database, useYalc, pluginPackages);
   }
+
+  if (useYalc) {
+    // Yalc mode: @nextlyhq/* packages were omitted from package.json by
+    // generatePackageJson(useYalc: true). Install npm-only deps first,
+    // then layer yalc packages on top. Include ALL adapter packages because
+    // yalc file: links cause Turbopack to resolve conditional dynamic imports.
+    // A plugin scaffold imports @nextlyhq/plugin-sdk directly, so it is linked
+    // too; otherwise the local packages would run against the published SDK.
+    const yalcPackages = [
+      ...new Set([
+        "nextly",
+        "@nextlyhq/admin",
+        "@nextlyhq/ui",
+        "@nextlyhq/adapter-drizzle",
+        ...ALL_ADAPTER_PACKAGES,
+        ...pluginPackages,
+        ...(projectType === "plugin" ? ["@nextlyhq/plugin-sdk"] : []),
+      ]),
+    ];
+
+    // Step 1: Install non-@nextlyhq packages
+    await execa(pm, ["install"], { cwd });
+
+    // Step 2: Add @nextlyhq/* packages from local yalc store
+    for (const pkg of yalcPackages) {
+      await execa("yalc", ["add", pkg], { cwd });
+    }
+
+    // Step 3: Install again to resolve yalc transitive dependencies
+    await execa(pm, ["install"], { cwd });
+  } else {
+    // Plain install - all deps are already in package.json
+    await execa(pm, ["install"], { cwd });
+  }
+  // A fresh scaffold's settings are written whole by the template, so there
+  // is nothing in the project's own files to report.
+  return [];
+}
+
+/**
+ * Existing project: add Nextly's packages to its package.json, plus the dev
+ * dependencies reading `nextly.config.ts` needs, which a fresh scaffold writes
+ * into its package.json and nothing else installs: `nextly` takes esbuild only
+ * as an optional peer.
+ *
+ * On pnpm and Bun, the native packages' install scripts are approved first:
+ * pnpm 11 and later refuse an install while one is unapproved, and Bun skips
+ * it, which left the SQLite driver without its compiled binding.
+ */
+async function installIntoExistingApp(
+  cwd: string,
+  pm: PackageManager,
+  database: DatabaseConfig,
+  useYalc: boolean,
+  pluginPackages: string[]
+): Promise<string[]> {
+  const notes = await approveNativeBuilds(
+    cwd,
+    pm,
+    pm === "pnpm" ? await readPnpmVersion(cwd) : undefined
+  );
+  try {
+    await installPackages(cwd, pm, database, useYalc, pluginPackages);
+  } catch (error) {
+    // The notes are printed after a successful install, so a failed one
+    // carries them: a version-scoped rule the app kept is what makes pnpm
+    // stop, and the note says what to do then.
+    if (notes.length === 0) throw error;
+    throw new Error(`${(error as Error).message}\n\n${notes.join("\n")}`, {
+      cause: error,
+    });
+  }
+  return notes;
+}
+
+async function installPackages(
+  cwd: string,
+  pm: PackageManager,
+  database: DatabaseConfig,
+  useYalc: boolean,
+  pluginPackages: string[]
+): Promise<void> {
+  const allPackages = getPackagesToInstall(database);
+  if (useYalc) {
+    await installWithYalc(cwd, pm, allPackages, pluginPackages);
+  } else {
+    await runInstall(INSTALL_COMMANDS[pm], allPackages, cwd);
+  }
+  const tooling = await notYetDeclared(cwd, CONFIG_TOOLING_DEV_DEPENDENCIES);
+  if (tooling.length > 0) {
+    await runInstall(DEV_INSTALL_COMMANDS[pm], tooling, cwd);
+  }
+}
+
+/**
+ * The specifiers whose package the app's package.json does not declare yet.
+ * One it declares stays as the app wrote it: an app that runs migrations on
+ * boot keeps esbuild in `dependencies`, and a `--save-dev` install would move
+ * it to `devDependencies`, which a production install omits.
+ */
+async function notYetDeclared(
+  cwd: string,
+  specifiers: readonly string[]
+): Promise<string[]> {
+  const declared = new Set<string>();
+  try {
+    const pkg = (await fs.readJson(path.join(cwd, "package.json"))) as Record<
+      string,
+      unknown
+    >;
+    for (const field of DEPENDENCY_FIELDS) {
+      const deps = pkg[field];
+      if (deps && typeof deps === "object") {
+        for (const name of Object.keys(deps)) declared.add(name);
+      }
+    }
+  } catch {
+    // No readable package.json: nothing is declared, so everything is added.
+  }
+  return specifiers.filter(spec => !declared.has(packageName(spec)));
+}
+
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+] as const;
+
+/** `esbuild@^0.28.1` → `esbuild`; `@scope/pkg@1` → `@scope/pkg`. */
+const packageName = (specifier: string): string => {
+  const at = specifier.lastIndexOf("@");
+  return at > 0 ? specifier.slice(0, at) : specifier;
+};
+
+async function installWithYalc(
+  cwd: string,
+  pm: PackageManager,
+  allPackages: string[],
+  pluginPackages: string[]
+): Promise<void> {
+  const yalcPackages = [
+    ...new Set([
+      "nextly",
+      "@nextlyhq/admin",
+      "@nextlyhq/ui",
+      "@nextlyhq/adapter-drizzle",
+      ...ALL_ADAPTER_PACKAGES,
+      ...pluginPackages,
+    ]),
+  ];
+
+  // Everything else in the install set comes from npm, not the yalc store:
+  // @tanstack/react-query and lucide-react are externalised from the admin
+  // bundle and peer-required by @nextlyhq/ui, so `yalc add` would never
+  // provide them and the peers would stay unresolved.
+  const registryPackages = allPackages.filter(
+    pkg => !yalcPackages.includes(pkg)
+  );
+
+  if (registryPackages.length > 0) {
+    await runInstall(INSTALL_COMMANDS[pm], registryPackages, cwd);
+  }
+
+  for (const pkg of yalcPackages) {
+    await execa("yalc", ["add", pkg], { cwd });
+  }
+
+  await execa(pm, ["install"], { cwd });
 }

@@ -1,0 +1,301 @@
+/**
+ * Declared widgets through a real instance, on each database: what a saved
+ * card's settings become when a starting value changes in code, and startup
+ * refusing a declaration that cannot work.
+ *
+ * Booted with `createTestNextly`, so startup is the real boot path: the
+ * plugin's `contributes.dashboard` is read by the same reset production runs.
+ */
+
+// Set before the harness boots (env validation reads it once).
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { defineCollection, text } from "../../../../config";
+import { createAdapter } from "../../../../database/factory";
+import { NextlyError } from "../../../../errors/nextly-error";
+import * as loggerModule from "../../../../observability/logger";
+import { definePlugin } from "../../../../plugins/plugin-context";
+import {
+  createTestNextly,
+  type TestNextly,
+} from "../../../../plugins/test-nextly";
+import { WidgetLayoutService } from "../../../../services/widgets/widget-layout-service";
+import type { WidgetPlacement } from "../../layout";
+import { resolveCardSettings } from "../card-query";
+import { declaredWidget } from "../declared-widgets";
+import { defineWidget } from "../define-widget";
+import { settings } from "../setting-builders";
+
+const ORDERS = "orders";
+
+const orders = defineCollection({
+  slug: ORDERS,
+  fields: [text({ name: "state" })],
+});
+
+/** The same widget, with its starting number of items set in code. */
+function recentOrders(startingItems: number) {
+  return defineWidget({
+    id: "acme/recent-orders",
+    title: "Recent orders",
+    description: "The newest orders",
+    category: "Shop",
+    widths: ["1/2", "full"],
+    width: "full",
+    permission: `read-${ORDERS}`,
+    settings: {
+      collection: settings.collection(),
+      items: settings.items({ default: startingItems }),
+    },
+    data: {
+      query: ({ settings }) => ({
+        collection: settings.collection,
+        op: "list",
+        limit: settings.items,
+      }),
+    },
+    display: "list",
+  });
+}
+
+function shop(startingItems: number) {
+  return definePlugin({
+    name: "@test/shop",
+    version: "1.0.0",
+    nextly: ">=0.0.1",
+    contributes: {
+      collections: [orders],
+      dashboard: { widgets: [recentOrders(startingItems)] },
+    },
+  });
+}
+
+const silentLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+};
+
+function card(id: string, config: Record<string, unknown>): WidgetPlacement {
+  return {
+    id,
+    widgetId: "acme/recent-orders",
+    width: "full",
+    removed: false,
+    config,
+  };
+}
+
+/** The values a stored card's readers are handed, by the declaration as it now stands. */
+function valuesOf(placement: WidgetPlacement | undefined) {
+  const declared = declaredWidget("acme/recent-orders");
+  expect(declared).toBeDefined();
+  return resolveCardSettings(declared!.declaration.settings, placement?.config);
+}
+
+function declaredWidgetSuite(
+  label: string,
+  boot: (startingItems: number) => Promise<TestNextly>
+) {
+  describe(`declared widgets (${label})`, () => {
+    let handle: TestNextly | undefined;
+
+    afterEach(async () => {
+      await handle?.destroy();
+      handle = undefined;
+    });
+
+    it("hand a saved card a new starting value, and leave a value its person chose", async () => {
+      handle = await boot(5);
+      const layouts = new WidgetLayoutService(handle.adapter, silentLogger);
+      const scope = `starting-values-${label}`;
+      await layouts.saveLayout(
+        "user",
+        scope,
+        [
+          card("untouched", { collection: ORDERS }),
+          card("chosen", { collection: ORDERS, items: 9 }),
+        ],
+        0
+      );
+
+      const before = (await layouts.getLayout("user", scope)).layout
+        ?.placements;
+      expect(valuesOf(before?.find(p => p.id === "untouched")).items).toBe(5);
+      expect(valuesOf(before?.find(p => p.id === "chosen")).items).toBe(9);
+
+      // The code changes its starting value; the database does not change.
+      // The boot reset is what a redeploy or a development reload runs.
+      const { resetWidgetRegistries } = await import(
+        "../../../../di/registrations/register-widgets"
+      );
+      resetWidgetRegistries([shop(7)]);
+
+      const after = (await layouts.getLayout("user", scope)).layout?.placements;
+      // The stored rows are as they were: nothing was rewritten.
+      expect(after).toEqual(before);
+      expect(valuesOf(after?.find(p => p.id === "untouched")).items).toBe(7);
+      expect(valuesOf(after?.find(p => p.id === "chosen")).items).toBe(9);
+    });
+  });
+}
+
+declaredWidgetSuite("sqlite", startingItems =>
+  createTestNextly({ plugins: [shop(startingItems)] })
+);
+
+describe("startup with a declaration that cannot work (sqlite)", () => {
+  it("is refused, naming the plugin, the widget and what to change", async () => {
+    const broken = definePlugin({
+      name: "@test/broken",
+      version: "1.0.0",
+      nextly: ">=0.0.1",
+      contributes: {
+        dashboard: {
+          widgets: [
+            { ...recentOrders(5), id: "core/orders", width: "1/4" },
+          ] as unknown as NonNullable<
+            NonNullable<
+              Parameters<typeof definePlugin>[0]["contributes"]
+            >["dashboard"]
+          >["widgets"],
+        },
+      },
+    });
+    let refused: unknown;
+    try {
+      const handle = await createTestNextly({ plugins: [broken] });
+      await handle.destroy();
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    const message = (refused as NextlyError).logMessage ?? "";
+    expect(message).toContain("2 widget declarations cannot work");
+    expect(message).toContain(
+      'plugin "@test/broken", widget "core/orders": id "core/orders" is in the reserved "core/" namespace'
+    );
+    expect(message).toContain(
+      'plugin "@test/broken", widget "core/orders": width "1/4" is not one of the widths it allows'
+    );
+  });
+});
+
+/** A plugin whose one widget lists a collection, sorted by one field. */
+function listingPlugin(name: string, collection: string, sort: string) {
+  return definePlugin({
+    name,
+    version: "1.0.0",
+    nextly: ">=0.0.1",
+    contributes: {
+      collections: [orders],
+      dashboard: {
+        widgets: [
+          defineWidget({
+            id: "acme/listing",
+            title: "Listing",
+            description: "Entries of one collection",
+            category: "Shop",
+            widths: ["full"],
+            width: "full",
+            settings: {
+              collection: {
+                ...settings.collection(),
+                defaultValue: collection,
+              },
+            },
+            data: {
+              query: ({ settings }) => ({
+                collection: settings.collection,
+                op: "list",
+                sort,
+              }),
+            },
+            display: "list",
+          }),
+        ],
+      },
+    },
+  });
+}
+
+describe("startup checks what a declared widget's starting query names (sqlite)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("refuses a field missing from a collection the code defines", async () => {
+    let refused: unknown;
+    try {
+      const handle = await createTestNextly({
+        plugins: [listingPlugin("@test/shop", ORDERS, "missing")],
+      });
+      await handle.destroy();
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect((refused as NextlyError).logMessage).toContain(
+      'plugin "@test/shop", widget "acme/listing": its query, built from its starting settings, cannot run'
+    );
+  });
+
+  it("starts, and warns, over a collection the code does not define", async () => {
+    // As a collection made in the Schema Builder and since deleted would be:
+    // the database's fact, which must not stop the site from starting.
+    const warn = vi.fn();
+    vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
+      warn,
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
+    const handle = await createTestNextly({
+      plugins: [listingPlugin("@test/shop", "notes", "title")],
+    });
+    try {
+      expect(warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "widget-query-names-missing-content",
+          widget: "acme/listing",
+          source: "collection:notes",
+        })
+      );
+    } finally {
+      await handle.destroy();
+    }
+  });
+});
+
+// PostgreSQL and MySQL: self-skipping without their URLs, run by CI's matrix.
+const PG_URL = process.env.TEST_POSTGRES_URL ?? "";
+const MY_URL = process.env.TEST_MYSQL_URL ?? "";
+
+describe.skipIf(!PG_URL)("postgres", () => {
+  declaredWidgetSuite("postgres", async startingItems => {
+    process.env.DB_DIALECT = "postgresql";
+    process.env.DATABASE_URL = PG_URL;
+    const adapter = await createAdapter({
+      type: "postgresql",
+      url: PG_URL,
+    } as Parameters<typeof createAdapter>[0]);
+    return createTestNextly({ adapter, plugins: [shop(startingItems)] });
+  });
+});
+
+describe.skipIf(!MY_URL)("mysql", () => {
+  declaredWidgetSuite("mysql", async startingItems => {
+    process.env.DB_DIALECT = "mysql";
+    process.env.DATABASE_URL = MY_URL;
+    const adapter = await createAdapter({
+      type: "mysql",
+      url: MY_URL,
+    } as Parameters<typeof createAdapter>[0]);
+    return createTestNextly({ adapter, plugins: [shop(startingItems)] });
+  });
+});

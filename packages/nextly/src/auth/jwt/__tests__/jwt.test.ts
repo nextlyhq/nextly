@@ -19,6 +19,7 @@ describe("buildClaims", () => {
       name: "Test User",
       image: "/avatar.jpg",
       roleIds: ["role_admin"],
+      sessionEpoch: 0,
     });
 
     expect(claims.sub).toBe("user_123");
@@ -35,6 +36,7 @@ describe("buildClaims", () => {
       name: "Test",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
       customFields: { department: "Engineering", level: 5 },
     });
 
@@ -49,6 +51,7 @@ describe("buildClaims", () => {
       name: "Test",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
       customFields: { sub: "hacked", email: "hacked@evil.com", iat: 999 },
     });
 
@@ -56,6 +59,52 @@ describe("buildClaims", () => {
     expect(claims.email).toBe("test@example.com");
     // iat is a JWT internal claim, should be excluded
     expect(claims.iat).toBeUndefined();
+  });
+
+  it("carries the account's session epoch", () => {
+    // What the session check compares with the row: a token without it would
+    // read as epoch zero, and outlive the account's first change.
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test",
+      image: null,
+      roleIds: [],
+      sessionEpoch: 4,
+    });
+
+    expect(claims.sev).toBe(4);
+  });
+
+  it("signs epoch zero when the caller gives none", () => {
+    // Code that builds its own claims predates the epoch. Zero is where every
+    // account starts, so its token works until the account's sessions are
+    // first ended, and not after.
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test",
+      image: null,
+      roleIds: [],
+    });
+
+    expect(claims.sev).toBe(0);
+  });
+
+  it("lets no custom field replace the session epoch", () => {
+    // A custom user field named like the claim would otherwise decide which
+    // of the account's tokens stay valid.
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test",
+      image: null,
+      roleIds: [],
+      sessionEpoch: 4,
+      customFields: { sev: 0 },
+    });
+
+    expect(claims.sev).toBe(4);
   });
 });
 
@@ -67,6 +116,7 @@ describe("signAccessToken", () => {
       name: "Test User",
       image: null,
       roleIds: ["role_admin"],
+      sessionEpoch: 0,
     });
 
     const token = await signAccessToken(claims, TEST_SECRET, 900);
@@ -82,6 +132,7 @@ describe("signAccessToken", () => {
       name: "Test User",
       image: null,
       roleIds: ["role_admin"],
+      sessionEpoch: 0,
     });
 
     const token = await signAccessToken(claims, TEST_SECRET, 900);
@@ -103,6 +154,7 @@ describe("signAccessToken", () => {
       name: "Test",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
       customFields: { department: "Engineering", level: 5 },
     });
 
@@ -123,6 +175,7 @@ describe("verifyAccessToken", () => {
       name: "Test User",
       image: null,
       roleIds: ["role_admin"],
+      sessionEpoch: 0,
     });
 
     const token = await signAccessToken(claims, TEST_SECRET, 900);
@@ -143,6 +196,7 @@ describe("verifyAccessToken", () => {
       name: "Test",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
     });
 
     const token = await signAccessToken(claims, TEST_SECRET);
@@ -164,6 +218,7 @@ describe("verifyAccessToken", () => {
       name: "Test",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
     });
 
     // Sign with 0 second TTL (immediately expired)
@@ -207,6 +262,7 @@ describe("signAccessTokenWithExpiry", () => {
       name: "Test User",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
     });
 
     const { token, expiresAt } = await signAccessTokenWithExpiry(
@@ -227,6 +283,7 @@ describe("signAccessTokenWithExpiry", () => {
       name: "Test User",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
     });
 
     const { token, expiresAt } = await signAccessTokenWithExpiry(
@@ -265,6 +322,7 @@ describe("signAccessTokenWithExpiry with a bound", () => {
     name: "Test User",
     image: null,
     roleIds: ["role_brief"],
+    sessionEpoch: 0,
   });
 
   afterEach(() => {

@@ -15,10 +15,12 @@ entirely on npm.
    - `"type": "module"` and an `exports` map (include `./admin` if you ship admin
      components, like the scaffold does).
    - `"files": ["dist"]` so the embedded `dev/` playground never publishes.
-   - Add the **`nextly-plugin`** keyword (this is how plugins are discovered, D42).
+   - Add the **`nextly-plugin`** keyword (this is how plugins are discovered).
    - List `nextly` (and `@nextlyhq/admin`/`react` if you have admin UI) as
      **peerDependencies**, and declare a `nextly` core-compatibility range in your
-     `definePlugin` (e.g. `"^1 || ^2"`, boot-checked, D6).
+     `definePlugin` (e.g. `">=0.0.2-alpha.67"`). It is checked at boot, and a core
+     outside it refuses to start, so while Nextly is in alpha a range like `"^1"`
+     matches no release.
 3. `npm publish`.
 
 ```jsonc
@@ -31,7 +33,7 @@ entirely on npm.
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.mjs" },
     "./admin": { "types": "./dist/admin.d.ts", "import": "./dist/admin.mjs" }
   },
-  "peerDependencies": { "nextly": "^1" }
+  "peerDependencies": { "nextly": "^0.0.2-alpha.67" }
 }
 ```
 

@@ -65,3 +65,18 @@ export function clearPendingCookie(): string {
 export function readPendingCookie(request: Request): string | null {
   return parseCookie(request.headers.get("cookie"), PENDING_COOKIE_NAME);
 }
+
+/**
+ * The pending token a request presents: the body's `pendingToken` when it
+ * names one, else the cookie's, else `""`. Every reader of a pending token
+ * asks this one function, so the limiter that counts a pending request
+ * against its account reads the token the handler will act on.
+ */
+export function presentedPendingToken(
+  body: Record<string, unknown>,
+  request: Request
+): string {
+  return typeof body.pendingToken === "string"
+    ? body.pendingToken
+    : (readPendingCookie(request) ?? "");
+}

@@ -5,7 +5,7 @@ description: Set up Nextly with SQLite. SQLite is for local demos only -- this p
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-> **SQLite is for local demos only.** Concurrent writes serialize on a single file lock, the database is fragile across process crashes and shared filesystems, there is no SSL or network access, and you will likely hit issues even during serious local development. Use **PostgreSQL** for any meaningful work -- `docker compose up -d postgres` is a one-liner. Set `DB_DIALECT=postgresql` and point `DATABASE_URL` at it. See the [PostgreSQL setup page](/docs/database/postgres#local-development-with-docker).
+> **SQLite is for local demos only.** Concurrent writes serialize on a single file lock, the database is fragile across process crashes and shared filesystems, there is no SSL or network access, and you will likely hit issues even during serious local development. Use **PostgreSQL** for any meaningful work -- with the compose file on the PostgreSQL page, `docker compose up -d postgres` starts one. Set `DB_DIALECT=postgresql` and point `DATABASE_URL` at it. See the [PostgreSQL setup page](/docs/database/postgres#local-development-with-docker).
 
 The SQLite adapter wraps [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) -- a synchronous C++ binding -- behind the same async `DrizzleAdapter` interface as the other dialects. It is in the codebase so a one-off demo, a quick `npx create-nextly-app@alpha` walk-through, or a tiny in-memory test suite Just Works without any infrastructure.
 
@@ -50,14 +50,14 @@ bun add @nextlyhq/adapter-sqlite better-sqlite3
 
 ## Configuration
 
-Set `DB_DIALECT=sqlite` and either `DATABASE_URL` (with a `file:` prefix) or leave both unset to fall back to the default file path.
+Set `DB_DIALECT=sqlite` and `DATABASE_URL` with a `file:` prefix. The CLI commands that use the database (`nextly migrate`, `nextly db:sync` and the other `migrate:*` commands) refuse to run without `DATABASE_URL`, on SQLite too.
 
 ```bash title=".env"
 DB_DIALECT=sqlite
 DATABASE_URL=file:./data/nextly.db
 ```
 
-If you set neither `DATABASE_URL` nor `SQLITE_PATH`, Nextly's runtime adapter factory defaults to `file:./data/nextly.db` and logs a warning in development. The adapter creates the file automatically if it does not exist.
+If `DATABASE_URL` is unset, the running app falls back to `file:./data/nextly.db` and logs a warning in development, but those CLI commands do not, so set it. The adapter creates the file automatically if it does not exist.
 
 ### Programmatic usage
 
@@ -124,19 +124,14 @@ WAL mode creates two sidecar files alongside the database: `<name>.db-wal` and `
 
 ## Environment variables
 
-You can configure the database path two ways:
+Set the database path in `DATABASE_URL`, with a `file:` prefix:
 
 ```bash title=".env"
-# Option 1: with a file: prefix in DATABASE_URL
 DB_DIALECT=sqlite
 DATABASE_URL=file:./data/nextly.db
-
-# Option 2: SQLITE_PATH alongside DB_DIALECT (no DATABASE_URL needed)
-DB_DIALECT=sqlite
-SQLITE_PATH=./data/nextly.db
 ```
 
-Either is fine; pick one consistently. If both are unset, the runtime defaults to `file:./data/nextly.db`.
+`SQLITE_PATH` is accepted by the environment check but is not used to open the database: use `DATABASE_URL`.
 
 ## Limitations
 
@@ -175,7 +170,7 @@ pnpm nextly migrate
 pnpm nextly migrate:fresh   # destructive
 ```
 
-> **Forward-only.** No `migrate:rollback` or `migrate:down`. Write a new corrective migration to reverse a change. See [production migrations](/docs/guides/production-migrations).
+> **Rolling back.** `nextly migrate:down` rolls back the most recently applied migration using its `-- DOWN` section; there is no `migrate:rollback`. For anything else, write a new corrective migration. See [production migrations](/docs/guides/production-migrations).
 
 ## Capabilities
 

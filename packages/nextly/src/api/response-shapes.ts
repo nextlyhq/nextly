@@ -409,6 +409,17 @@ function varyingOnCredentials(existing: string | null): string {
   return fields.join(", ");
 }
 
+/**
+ * A route whose every answer belongs to one session, its refusals included: a
+ * shared cache must not replay one person's answer, or one person's refusal,
+ * to another.
+ */
+export function privateToSession<A extends unknown[]>(
+  handler: (...args: A) => Promise<Response>
+): (...args: A) => Promise<Response> {
+  return async (...args) => withSessionCacheHeaders(await handler(...args));
+}
+
 /** {@link applySessionCacheHeaders} for a response the caller owns. */
 export function withSessionCacheHeaders(response: Response): Response {
   applySessionCacheHeaders(response.headers);

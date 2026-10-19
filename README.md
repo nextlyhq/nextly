@@ -38,19 +38,19 @@
 
 Nextly is an open-source content platform for Next.js.
 
-Developers define the content model in TypeScript, or build it in the admin with the Visual Schema Builder; either way it is the same data model. Your team then composes pages in the Visual Page Builder, translates them, keeps a version history, and schedules what goes live. It all runs inside your own Next.js app, on your own database. No SaaS, no proprietary cloud.
+Developers define the content model in TypeScript, or build it in the admin with the Visual Schema Builder; either way it is the same data model. Your team then composes pages in the Visual Page Builder, translates them, keeps a version history, and schedules what goes live. MIT licensed, self-hosted: it runs inside your own Next.js app, on your own PostgreSQL or MySQL database, or SQLite for local work.
 
 ## Why Nextly?
 
 - **Model in code, or in the admin.** Define your content types (we call them collections) in TypeScript, or build them in the Visual Schema Builder. Same data model either way.
-- **Compose pages visually.** The Visual Page Builder gives your team a canvas of blocks your developers registered. Pages render on the server and ship no JavaScript unless a block needs it.
+- **Compose pages visually.** The Visual Page Builder gives your team a canvas of blocks your developers registered. Pages render on the server, and the core blocks add no JavaScript of their own.
 - **Run in several languages.** The same site in multiple locales, with a fallback when a translation is missing. Each language has its own draft and published state, so you can publish one language without publishing the rest.
 - **Keep a version history.** Compare any two versions of a document and restore one. Restoring snapshots the current state first, so nothing is destroyed.
 - **Schedule what goes live.** Group entries into a release and publish or unpublish them together, at a time you choose.
 - **Control who can edit what.** Roles and permissions, down to individual fields.
 - **Connect it to the rest of your stack.** Webhooks with signing secrets and retries, background jobs, and dashboard widgets in the admin.
-- **Extend it.** A plugin SDK covering schema, services, routes, admin UI and permissions. The Visual Page Builder is itself a plugin, built on that same public API.
-- **Type-safe everywhere.** REST API, Direct API, and the admin UI are typed end-to-end.
+- **Extend it.** A plugin SDK covering schema, services, routes, admin UI and permissions. The Visual Page Builder is itself a plugin.
+- **Typed from your config.** `nextly generate:types` writes types for the collections, singles and field groups in your config. Those made in the Visual Schema Builder get none.
 - **Your database, your storage.** PostgreSQL, MySQL, or SQLite. Local disk by default; S3 (and R2, MinIO), Vercel Blob, or UploadThing for production.
 - **Self-hosted, MIT-licensed.** Your stack, your data, no vendor lock-in.
 
@@ -70,7 +70,7 @@ yarn create nextly-app@alpha my-app
 bun create nextly-app@alpha my-app
 ```
 
-That's it. Follow the prompts and you'll have a running CMS with admin panel and database in under a minute.
+That's it. Follow the prompts and you'll have a running CMS with an admin panel and a database.
 
 > Prefer a manual setup? See the [installation guide](https://nextlyhq.com/docs/getting-started/installation) for clone-and-configure instructions, Docker, and database options.
 
@@ -132,23 +132,23 @@ Set `DATABASE_URL` (and `DB_DIALECT`) in your `.env`; Nextly picks the dialect a
 
 ### Storage adapters
 
-| Package                           | Description                            |
-| --------------------------------- | -------------------------------------- |
-| **@nextlyhq/storage-s3**          | Amazon S3 (also R2, MinIO, B2, Wasabi) |
-| **@nextlyhq/storage-vercel-blob** | Vercel Blob storage                    |
-| **@nextlyhq/storage-uploadthing** | UploadThing storage                    |
+| Package                           | Description                |
+| --------------------------------- | -------------------------- |
+| **@nextlyhq/storage-s3**          | Amazon S3 (also R2, MinIO) |
+| **@nextlyhq/storage-vercel-blob** | Vercel Blob storage        |
+| **@nextlyhq/storage-uploadthing** | UploadThing storage        |
 
 ### Plugins
 
-Nextly has a first-class plugin SDK. The Visual Page Builder is itself a plugin, built on the same public API you would use.
+Nextly has a plugin SDK, in alpha: pin exact versions. The Visual Page Builder is itself a plugin.
 
-| Package                           | Description                                                 |
-| --------------------------------- | ----------------------------------------------------------- |
-| **@nextlyhq/plugin-page-builder** | Visual Page Builder: blocks, canvas, server-first rendering |
-| **@nextlyhq/plugin-seo**          | SEO fields and a sitemap for your content                   |
-| **@nextlyhq/plugin-form-builder** | Visual form builder and submission capture                  |
-| **@nextlyhq/plugin-sdk**          | Build your own plugins: schema, services, routes, admin UI  |
-| **@nextlyhq/plugin-mcp**          | Experimental: an MCP endpoint for agents, off by default    |
+| Package                           | Description                                                                                                           |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **@nextlyhq/plugin-page-builder** | Visual Page Builder: blocks, canvas, server-first rendering                                                           |
+| **@nextlyhq/plugin-seo**          | SEO fields and a sitemap for your content                                                                             |
+| **@nextlyhq/plugin-form-builder** | Visual form builder and submission capture                                                                            |
+| **@nextlyhq/plugin-sdk**          | Build your own plugins: schema, services, routes, admin UI                                                            |
+| **@nextlyhq/plugin-mcp**          | Experimental, off by default: a read-only MCP endpoint with one tool that tells an agent what its credential may read |
 
 > Nextly is in alpha, and some plugin surfaces are still settling. The [stability ladder](https://nextlyhq.com/docs/plugins/stability) says which parts are stable today and which are experimental.
 
@@ -162,13 +162,13 @@ Nextly has a first-class plugin SDK. The Visual Page Builder is itself a plugin,
 
 ## Requirements
 
-| Tool       | Minimum                                           |
-| ---------- | ------------------------------------------------- |
-| Node.js    | 20+ (Node 24 LTS recommended)                     |
-| pnpm       | 9+ recommended; npm, yarn, and bun also supported |
-| Next.js    | 16+ (App Router required)                         |
-| React      | 19+                                               |
-| TypeScript | 5+                                                |
+| Tool       | Minimum                                                 |
+| ---------- | ------------------------------------------------------- |
+| Node.js    | 20.19+, 22.12+ or 24+ (not 23; Node 24 LTS recommended) |
+| pnpm       | 9+ recommended; npm, yarn, and bun also supported       |
+| Next.js    | 16+ (App Router required)                               |
+| React      | 19+                                                     |
+| TypeScript | 5+                                                      |
 
 ### Database support
 
@@ -182,8 +182,8 @@ See the [database support docs](https://nextlyhq.com/docs/database/support) for 
 
 ## Documentation
 
-- [**Installation**](https://nextlyhq.com/docs/getting-started/installation): get started in minutes
-- [**Quick start**](https://nextlyhq.com/docs/getting-started/quick-start): build a blog in 5 minutes
+- [**Installation**](https://nextlyhq.com/docs/getting-started/installation): add Nextly to a new or existing project
+- [**Quick start**](https://nextlyhq.com/docs/getting-started/quick-start): build a blog, step by step
 - [**Configuration**](https://nextlyhq.com/docs/configuration): collections, singles, fields, hooks
 - [**Visual Schema Builder**](https://nextlyhq.com/docs/schema-builder): define schema in the admin UI
 - [**Authentication & permissions**](https://nextlyhq.com/docs/guides/authentication): RBAC, API keys, JWT
@@ -192,6 +192,16 @@ See the [database support docs](https://nextlyhq.com/docs/database/support) for 
 - [**Admin customization**](https://nextlyhq.com/docs/admin/customization): extend the dashboard
 - [**Plugin development**](https://nextlyhq.com/docs/plugins): build your own integrations
 - [**Deployment**](https://nextlyhq.com/docs/guides/deployment): Vercel, Docker, and more
+
+### With a coding agent
+
+Skills that teach Claude Code, Codex, Cursor and other agents to install
+Nextly, define collections, set up authentication and deploy live in
+[`skills/`](./skills). Add them to your project with:
+
+```bash
+npx skills add nextlyhq/nextly
+```
 
 ## Examples
 
@@ -202,16 +212,26 @@ See the [database support docs](https://nextlyhq.com/docs/database/support) for 
 
 Nextly draws inspiration from each of these projects. The table compares Nextly against the most common Next.js CMS choices, both self-hosted and SaaS. If you want a fully managed SaaS that you do not run yourself, Sanity is the strongest pick on the right; if you want to own your stack and your data, look at the left.
 
-| Dimension                         | Nextly                  | Payload                   | Strapi v5                                      | Sanity                                              |
-| --------------------------------- | ----------------------- | ------------------------- | ---------------------------------------------- | --------------------------------------------------- |
-| License                           | MIT                     | MIT                       | MIT (+ EE)                                     | MIT (Studio); proprietary SaaS (Content Lake)       |
-| Self-hostable                     | yes                     | yes                       | yes                                            | no (SaaS only)                                      |
-| All features free (no paid gates) | yes                     | yes                       | no (advanced RBAC, SSO, audit log gated in EE) | no (free tier + usage-based paid plans)             |
-| Hosted in your Next.js app        | yes                     | yes                       | no (separate Node server)                      | no (Studio mounts in your app; data is hosted SaaS) |
-| Code-first schema                 | yes                     | yes                       | partial (CLI generators)                       | yes                                                 |
-| Visual schema builder             | yes                     | no                        | yes                                            | no                                                  |
-| Both code-first **and** visual    | yes                     | no                        | partial                                        | no                                                  |
-| Database / storage                | Postgres, MySQL, SQLite | Postgres, MongoDB, SQLite | Postgres, MySQL/MariaDB, SQLite                | Sanity Content Lake (managed)                       |
+Checked on 2026-10-16 against each project's own documentation, linked below.
+
+| Dimension                      | Nextly                                  | Payload                   | Strapi v5                                       | Sanity                                                  |
+| ------------------------------ | --------------------------------------- | ------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| License                        | MIT                                     | MIT                       | MIT (+ EE)                                      | MIT (Studio); proprietary SaaS (Content Lake)           |
+| Self-hostable                  | yes                                     | yes                       | yes                                             | no (the Studio can be; the Content Lake is hosted SaaS) |
+| Hosted in your Next.js app     | yes                                     | yes                       | no (separate Node server)                       | no (Studio mounts in your app; data is hosted SaaS)     |
+| Code-first schema              | yes                                     | yes                       | partial (`strapi generate` writes JSON schemas) | yes                                                     |
+| Visual schema builder          | yes                                     | no                        | yes (in development only)                       | no                                                      |
+| Both code-first **and** visual | yes                                     | no                        | partial                                         | no                                                      |
+| Database / storage             | Postgres, MySQL (SQLite for local work) | Postgres, MongoDB, SQLite | Postgres, MySQL/MariaDB, SQLite                 | Sanity Content Lake (managed)                           |
+
+"Partial" for Strapi: a content type is a JSON schema file, written by `strapi generate` or by the admin's Content-type Builder, and the builder works in development only.
+
+Sources:
+
+- **Nextly:** [licence](./LICENSE.md), [installation](https://nextlyhq.com/docs/getting-started/installation), [configuration](https://nextlyhq.com/docs/configuration), [Visual Schema Builder](https://nextlyhq.com/docs/schema-builder), [database support](https://nextlyhq.com/docs/database/support).
+- **Payload:** [licence](https://github.com/payloadcms/payload/blob/main/LICENSE.md), [what Payload is](https://payloadcms.com/docs/getting-started/what-is-payload), [databases](https://payloadcms.com/docs/database/overview).
+- **Strapi:** [licence](https://github.com/strapi/strapi/blob/develop/LICENSE), [installation](https://docs.strapi.io/cms/installation/cli), [CLI](https://docs.strapi.io/cms/cli), [Content-type Builder](https://docs.strapi.io/cms/features/content-type-builder), [databases](https://docs.strapi.io/cms/configurations/database).
+- **Sanity:** [Studio licence](https://github.com/sanity-io/sanity/blob/main/LICENSE), [setup and deployment](https://www.sanity.io/docs/setup-and-deployment), [Studio in Next.js](https://www.sanity.io/docs/nextjs/embedding-sanity-studio-in-nextjs), [Content Lake](https://www.sanity.io/docs/content-lake).
 
 ## Roadmap
 
@@ -229,13 +249,13 @@ See [`nextlyhq.com/roadmap`](https://nextlyhq.com/roadmap) for what's next.
 
 Contributions of every size are welcome: typo fixes, new database adapters, plugins, docs improvements, anything. Start with the [Contributing guide](./CONTRIBUTING.md) for local setup, the development workflow, and our PR/commit conventions.
 
-Local boot is one command: `pnpm install && pnpm dev:app` from a fresh clone lands a working `/admin` with seeded demo content in roughly a minute. SQLite by default, no Docker required. `pnpm dev:postgres` and `pnpm dev:mysql` are opt-in if you want to test against those.
+Local boot is one command: `pnpm install && pnpm dev:app` from a fresh clone lands a working `/admin` with seeded demo content. SQLite by default, no Docker required. `pnpm dev:postgres` and `pnpm dev:mysql` are opt-in if you want to test against those.
 
 ## Telemetry
 
-The Nextly CLI (`create-nextly-app` and `nextly`) collects anonymous usage data to help us improve the tool. No personal information, project contents, file paths, or secrets are collected. Telemetry is automatically disabled in CI, Docker, production, and non-interactive shells.
+The Nextly CLI (`create-nextly-app` and `nextly`) collects usage data under a random ID, to help us improve the tool: never your name, project contents, file paths or secrets. It is off in CI, Docker, production and non-interactive shells, and `nextly telemetry disable` turns it off.
 
-See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for the full list of what is and is not collected, and for instructions on opting out (`nextly telemetry disable` or `NEXTLY_TELEMETRY_DISABLED=1`).
+See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for the full list of what is and is not collected, and for the environment variable that also turns it off (`NEXTLY_TELEMETRY_DISABLED=1`).
 
 ## License
 

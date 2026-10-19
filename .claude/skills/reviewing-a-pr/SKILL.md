@@ -1,6 +1,8 @@
 ---
 name: reviewing-a-pr
 description: Use when reviewing a Nextly pull request, responding to reviewer feedback (Codex, CodeRabbit), or preparing a PR to pass review.
+metadata:
+  internal: true
 ---
 
 # Reviewing a PR in the Nextly monorepo

@@ -36,6 +36,7 @@ import { assertSettingsPermissionsGuardSettings } from "./settings-permission";
 import { topoSortPlugins } from "./topo-sort";
 import { assertAdminWidgets } from "./validate-admin-widgets";
 import { assertClientConfigs } from "./validate-client-config";
+import { assertDocumentViews } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
 import { validatePluginSlugs } from "./validate-slugs";
 import { validatePluginVersions } from "./validate-versions";
@@ -137,6 +138,9 @@ export function assertPluginManifests(plugins: PluginDefinition[]): void {
   // one card -- which is a worse failure than a bad `clientConfig`, not a
   // lesser one.
   assertAdminWidgets(plugins);
+  // And the document views: two screens on one address would leave the admin
+  // drawing whichever it reached first, and a transformer can add either.
+  assertDocumentViews(plugins);
   // Two plugins sharing an admin slug share an address, and nothing downstream
   // can detect it: every lookup along that address returns a plugin, which is
   // what a correct lookup returns. Registration is where the ambiguity is still

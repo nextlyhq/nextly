@@ -2,8 +2,9 @@
  * End-to-end secure-by-default proof for plugin routes, driven through the
  * REAL catch-all dispatcher (`createDynamicHandlers`) with REAL JWT auth.
  *
- * Coverage split (documented): auth is stateless JWT verification, so a signed
- * `nextly_session` cookie exercises the real auth path here — proving routes are
+ * Coverage split (documented): auth verifies the JWT and checks that its account
+ * may still use it, so a signed `nextly_session` cookie for an account the test
+ * creates exercises the real auth path here — proving routes are
  * closed by default (401), `public` opts out (200), and `requiredPermission`
  * blocks the unprivileged (403). The `requiredPermission`-GRANTED path is DB-RBAC
  * backed (`isSuperAdmin`/`hasPermission` resolve by userId from the DB) and the
@@ -19,6 +20,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildClaims } from "../../auth/jwt/claims";
+import { getDialectTables } from "../../database/index";
 import { signAccessToken } from "../../auth/jwt/sign";
 import { createDynamicHandlers } from "../../routeHandler";
 import { definePlugin } from "../plugin-context";
@@ -54,6 +56,25 @@ const e2ePlugin = definePlugin({
   },
 });
 
+/**
+ * The active account the session cookie names. A token is a session only while
+ * its account exists and may still use it, so the account is created first.
+ */
+async function signedUpUser(t: TestNextly): Promise<void> {
+  const db = t.adapter.getDrizzle() as unknown as {
+    insert(table: unknown): {
+      values(row: Record<string, unknown>): Promise<unknown>;
+    };
+  };
+  await db.insert(getDialectTables().users).values({
+    id: "u1",
+    email: "u1@example.com",
+    name: "U1",
+    emailVerified: new Date(),
+    isActive: true,
+  });
+}
+
 async function cookie(roleIds: string[] = []): Promise<string> {
   const token = await signAccessToken(
     buildClaims({
@@ -62,6 +83,7 @@ async function cookie(roleIds: string[] = []): Promise<string> {
       name: "U1",
       image: null,
       roleIds,
+      sessionEpoch: 0,
     }),
     process.env.NEXTLY_SECRET!
   );
@@ -107,6 +129,7 @@ describe("plugin routes — secure by default (D28, end-to-end)", () => {
 
   it("a non-public route runs with the authed user when a session is present", async () => {
     handle = await createTestNextly({ plugins: [e2ePlugin] });
+    await signedUpUser(handle);
     const res = await get("whoami", { cookie: await cookie() });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ id: "u1" });
@@ -114,6 +137,7 @@ describe("plugin routes — secure by default (D28, end-to-end)", () => {
 
   it("a requiredPermission route returns 403 for a user lacking the permission", async () => {
     handle = await createTestNextly({ plugins: [e2ePlugin] });
+    await signedUpUser(handle);
     expect((await get("privileged", { cookie: await cookie() })).status).toBe(
       403
     );

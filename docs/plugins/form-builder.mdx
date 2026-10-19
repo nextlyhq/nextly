@@ -5,7 +5,7 @@ description: Create and manage dynamic forms with a visual drag-and-drop builder
 
 > **Alpha (`0.x`) — pin your versions.**
 >
-> The plugin API surface is now **stable and semver-protected** (see [API stability](/docs/plugins/stability)); the plugin packages themselves are still `0.x` alpha, so pin your versions and read the release notes before upgrading.
+> The plugin SDK is alpha: its `@public` surface becomes semver-protected at 1.0 (see [API stability](/docs/plugins/stability)). Until then, pin exact versions of the plugin packages and read the release notes before upgrading.
 
 The Form Builder plugin adds a complete form management system to Nextly. Build forms visually in the admin panel or define them in code, collect submissions, send email notifications, and protect against spam -- all without writing custom endpoints.
 
@@ -131,10 +131,15 @@ formOverrides: {
   ],
   access: {
     read: () => true,
-    create: ({ user }) => !!user,
+    create: ({ permissions }) => permissions.includes('forms:create'),
   },
 }
 ```
+
+By default a visitor can read a form and create a submission. Everything else needs the
+matching permission on the Roles screen: `read-form-submissions` to read submissions,
+`update-forms` to edit a form, `delete-form-submissions` to delete one. An override narrows
+from there; check the permission in it rather than a role's name.
 
 **Function style** -- full control over the field list:
 
@@ -352,7 +357,7 @@ it is supposed to depend on. An application that hosts its own route, as below, 
 
 The plugin generates [Zod](https://zod.dev) schemas from form field definitions at runtime. Every submission is validated against the schema before storage, and free-text fields are sanitized by stripping HTML tags to prevent injection.
 
-That happens on a `beforeChange` hook on the submissions collection, the last collection-level mutating phase before the insert, so it applies to every way a submission can be written: your own route calling `submitForm`, the built-in `POST /api/forms/:slug/submit`, `nextly.forms.submit()`, an admin editing a stored submission, and a record created from the admin. A submission is also projected onto the fields the form declares, so a key the form does not define is dropped rather than stored. Field-level `beforeChange` hooks run after this one and are handed the whole record, so one you register on this collection yourself is trusted the way core trusts a field hook on any other collection.
+That happens on a `beforeChange` hook on the submissions collection, the last collection-level mutating phase before the insert, so it applies to every way a submission can be written: your own route calling `submitForm`, the built-in `POST /admin/api/forms/:slug/submit`, `nextly.forms.submit()`, an admin editing a stored submission, and a record created from the admin. A submission is also projected onto the fields the form declares, so a key the form does not define is dropped rather than stored. Field-level `beforeChange` hooks run after this one and are handed the whole record, so one you register on this collection yourself is trusted the way core trusts a field hook on any other collection.
 
 Values are sanitized before they are validated, so every rule judges the value that will actually be stored rather than the one that arrived.
 
@@ -362,9 +367,11 @@ Spam protection runs on the same hook, and is decided BEFORE the payload is vali
 
 The honeypot and the rate limit are facts about an HTTP REQUEST rather than about a row, so they stand down when no request produced the write: a trusted server importing a thousand submissions does not rate-limit its own import, and a honeypot field means nothing without a browser to have skipped it. What separates the two is whether a request reached the hook, not which function was called.
 
-You do not need a route of your own to get any of it. `POST /api/forms/:slug/submit` is contributed by this plugin and calls `submitForm`, so a browser posting to it meets the honeypot and the rate limit exactly as one posting to a route you host yourself would. Host your own when you want a different response shape or extra work around the submission, not to obtain spam protection.
+You do not need a route of your own to get any of it. `POST /admin/api/forms/:slug/submit` is contributed by this plugin and calls `submitForm`, so a browser posting to it meets the honeypot and the rate limit exactly as one posting to a route you host yourself would. Host your own when you want a different response shape or extra work around the submission, not to obtain spam protection.
 
-On a localized site, post to `/api/forms/:slug/submit?locale=fr` from a French page. The locale decides which translation the redirect target is read in, so the visitor lands on that page's French URL; a submission that names none is answered in the default language. A code the site does not have reads as the default rather than refusing the submission — the visitor filled the form in, and a wrong query string is not a reason to lose it. The target is read as the visitor, so a translation that is still a draft is not where they are sent: the published default answers until the translation is published.
+The plugin's routes sit directly under wherever your app mounts `createDynamicHandlers`, which a scaffolded project does at `src/app/admin/api/[[...params]]/route.ts`: hence `/admin/api`. A bare `/api/forms/...` is a 404 there (see [Routes](/docs/plugins/routes)).
+
+On a localized site, post to `/admin/api/forms/:slug/submit?locale=fr` from a French page. The locale decides which translation the redirect target is read in, so the visitor lands on that page's French URL; a submission that names none is answered in the default language. A code the site does not have reads as the default rather than refusing the submission — the visitor filled the form in, and a wrong query string is not a reason to lose it. The target is read as the visitor, so a translation that is still a draft is not where they are sent: the published default answers until the translation is published.
 
 You can validate data without creating a submission:
 
@@ -444,7 +451,7 @@ Three layers of protection are available, all enabled by default (except reCAPTC
 
 ### Honeypot Fields
 
-Hidden form fields that bots fill in automatically. When a honeypot field contains a value, the submission is silently rejected -- the bot receives a fake success response to avoid revealing the detection.
+Hidden form fields that bots fill in automatically. When a honeypot field contains a value, the submission is stored flagged as spam and the bot receives an ordinary success response, so the detection is not revealed.
 
 Standard honeypot field names checked: `__honeypot`, `_honeypot`, `honeypot`, `__hp`, `_hp`, `website`, `url_field`, `fax_number`.
 
@@ -461,7 +468,7 @@ spamProtection: {
 }
 ```
 
-The rate limit store is in-memory. For multi-instance deployments, consider using a shared store (Redis) or adjusting thresholds.
+The rate limit uses the deployment's shared rate-limit store, `rateLimit.store` in `defineConfig`, which falls back to memory. With several instances and no shared store, each instance counts on its own.
 
 ### reCAPTCHA v3
 
@@ -519,65 +526,14 @@ Multiple conditions can be combined with `AND` (all must match) or `OR` (any mus
 
 ## Webhooks
 
-Forms support webhook integrations that fire on submission events. Webhooks are asynchronous -- they do not block the submission response. Failed webhooks are logged but do not cause submission failures.
+Form submissions are delivered through Nextly's own [webhooks](/docs/webhooks): subscribe an endpoint to the `form.submission.created` event. Its payload says which form, when, and the submission's status, and its `resource.id` names the submission (`resource.slug` is the submissions collection, `form-submissions` unless you renamed it). It never carries the answers, the IP address or the user agent, so a receiver that needs them reads the submission by that id:
 
-```typescript
-// In a form's notification config
-webhooks: [
-  {
-    url: 'https://api.example.com/webhooks/form-submissions',
-    events: ['submission.created'],
-    secret: 'your-webhook-secret',
-    includeData: true,
-  },
-  {
-    url: 'https://crm.example.com/api/leads',
-    events: ['submission.created', 'submission.updated'],
-    headers: { 'X-API-Key': 'abc123' },
-    method: 'POST',
-  },
-]
-```
+- A receiver in another system calls the [REST API](/docs/api-reference/rest-api): `GET /admin/api/collections/form-submissions/entries/{id}`, authenticated with an [API key](/docs/api-reference/rest-api#api-key-server-to-server) that may read submissions (`read-form-submissions`).
+- A receiver inside the same Next.js app can use the [Direct API](/docs/api-reference/direct-api) instead.
 
-Supported events: `submission.created`, `submission.updated`, `submission.deleted`.
+Verify each delivery's signature as the Webhooks page describes, before reading anything.
 
-When a `secret` is configured, the request includes an `X-Webhook-Signature` header with an HMAC-SHA256 signature (`sha256=<hex>`). Verify it on the receiving end:
-
-```typescript
-// app/api/form-webhook/route.ts
-import { createHmac, timingSafeEqual } from "node:crypto";
-
-export async function POST(request: Request) {
-  // Fail closed on a missing secret. Defaulting to "" still produces a valid
-  // HMAC, and it is one anybody can compute, so the endpoint would authenticate
-  // every forged request instead of none.
-  const secret = process.env.FORM_WEBHOOK_SECRET;
-  if (!secret) {
-    return new Response("Webhook secret is not configured", { status: 500 });
-  }
-
-  // The RAW body, read once. Signing a re-serialised object instead compares a
-  // signature against bytes the sender never sent: `JSON.parse` then
-  // `JSON.stringify` is free to reorder keys and drop whitespace, so a correct
-  // signature fails whenever the two disagree.
-  const raw = await request.text();
-  const expected = `sha256=${createHmac("sha256", secret).update(raw).digest("hex")}`;
-  const sent = request.headers.get("x-webhook-signature") ?? "";
-
-  // Lengths first: `timingSafeEqual` throws on a mismatch, which turns a forged
-  // signature into a 500 rather than a rejection.
-  const a = Buffer.from(sent);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    return new Response("Invalid signature", { status: 401 });
-  }
-
-  const payload: unknown = JSON.parse(raw);
-  // ... handle the verified payload
-
-  return Response.json({ received: true });
-}
-```
+A form has no webhook settings of its own, and the submissions collection's default `entry.*` events are switched off, so an endpoint subscribed to `entry.created` or `*` does not receive the answers either.
 
 ## Exporting Submissions
 

@@ -387,6 +387,42 @@ export type {
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
 export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
+// What a composed document breaks that no stored document breaks alone: the
+// nesting rule across a placement, and depth counted from the document's own
+// root. Exported for the write path, which has to refuse what the renderer
+// would otherwise cut short or draw where the rule forbids it.
+export { compositionFaults } from "./composition-faults";
+export type {
+  ComposedLockBreak,
+  CompositionFault,
+  CompositionFaultCode,
+  CompositionFaultOptions,
+} from "./composition-faults";
+// A component's exposed fields that drive something a `contentOnly` lock
+// holds. Exported for the component's own save, which refuses a new one so a
+// designer meets the lock where the exposure is made, not on every page.
+export { contentOnlyExposures, nodeLocks } from "./content-only-exposures";
+export type { LockedExposure, NodeLock } from "./content-only-exposures";
+// The lock judgement as the editor asks it before an action: every break a
+// document holds, located, and the one an edit would add, by the rules a save
+// applies. And the one repair planner, run as a list of rules so a later rule
+// extends the repair rather than building a second one. `@experimental` until
+// the editor that consumes them ships.
+export { lockBreaksIn, lockRefusal } from "./lock-breaks";
+export type { LocatedLockBreak, LockSources } from "./lock-breaks";
+export { lockRepairRule, planRepair } from "./repair-plan";
+export type {
+  RepairContext,
+  RepairPlan,
+  RepairRule,
+  RepairStep,
+  SlotPlace,
+} from "./repair-plan";
+// What a lock lets change, for an editor that shows a block's settings
+// read-only inside `contentOnly`: the lock a slot passes down, and the props
+// a block declares as content.
+export { contentPropsOf, slotLockOf } from "./slot-lock";
+export type { ActiveSlotLock } from "./slot-lock";
 // The measurement's return type travels with the function. Without it a
 // consumer naming `measureBytes`'s result has to rebuild the union by hand or
 // reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a
@@ -473,6 +509,7 @@ export {
   allSupports,
   clearBlocks,
   MAX_BLOCK_VERSION,
+  registryBlockSource,
   registryLookup,
   registryMigrationSource,
   registryNestingSource,

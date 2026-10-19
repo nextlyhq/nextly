@@ -24,6 +24,7 @@ import { registerGenerateManifestCommand } from "./commands/generate-manifest";
 import { registerGenerateTypesCommand } from "./commands/generate-types";
 import { registerI18nRestoreCommand } from "./commands/i18n-restore";
 import { registerInitCommand } from "./commands/init";
+import { createMediaCommand } from "./commands/media";
 import { registerMigrateCommand } from "./commands/migrate";
 import { registerMigrateBaselineCommand } from "./commands/migrate-baseline";
 import { registerMigrateCheckCommand } from "./commands/migrate-check";
@@ -42,7 +43,13 @@ import { registerPruneCommand } from "./commands/prune";
 import { registerTelemetryCommand } from "./commands/telemetry";
 import { registerUpgradeCommand } from "./commands/upgrade";
 import { registerWebhooksPruneCommand } from "./commands/webhooks-prune";
-import { createLogger, type Logger, type LoggerOptions } from "./utils/logger";
+import { createContext, type CommandContext } from "./context";
+
+export {
+  createContext,
+  type CommandContext,
+  type GlobalOptions,
+} from "./context";
 
 // ============================================================================
 // Version
@@ -67,61 +74,6 @@ export const CLI_VERSION = getCoreVersion();
 // ============================================================================
 // Types
 // ============================================================================
-
-/**
- * Global CLI options that apply to all commands
- */
-export interface GlobalOptions {
-  /**
-   * Path to nextly.config.ts file
-   */
-  config?: string;
-
-  /**
-   * Enable verbose output
-   */
-  verbose?: boolean;
-
-  /**
-   * Enable quiet mode (errors only)
-   */
-  quiet?: boolean;
-
-  /**
-   * Working directory
-   */
-  cwd?: string;
-
-  /**
-   * Disable colors
-   */
-  noColor?: boolean;
-}
-
-/**
- * Context passed to command handlers
- */
-export interface CommandContext {
-  /**
-   * Logger instance configured with global options
-   */
-  logger: Logger;
-
-  /**
-   * Global options
-   */
-  options: GlobalOptions;
-
-  /**
-   * Working directory (resolved)
-   */
-  cwd: string;
-
-  /**
-   * Config file path (if specified)
-   */
-  configPath?: string;
-}
 
 // ============================================================================
 // Program Creation
@@ -248,6 +200,7 @@ function registerCommands(program: Command): void {
 
   // Permissions commands
   program.addCommand(createPermissionsCleanupCommand());
+  program.addCommand(createMediaCommand());
 
   // Plugin introspection (D48) — `nextly plugins list` / `info`.
   registerPluginsCommand(program);
@@ -266,23 +219,6 @@ function registerCommands(program: Command): void {
  * @param options - Global options from Commander
  * @returns Command context
  */
-export function createContext(options: GlobalOptions): CommandContext {
-  const loggerOptions: LoggerOptions = {
-    verbose: options.verbose,
-    quiet: options.quiet,
-    noColor: options.noColor,
-  };
-
-  const logger = createLogger(loggerOptions);
-  const cwd = options.cwd ?? process.cwd();
-
-  return {
-    logger,
-    options,
-    cwd,
-    configPath: options.config,
-  };
-}
 
 // ============================================================================
 // Placeholder Command Implementations

@@ -10,6 +10,14 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// The public origin points at another host and port than the one serving the
+// request, as a generated project's `http://localhost:3000` does on any other
+// port: a read that resolved URLs against it would show here.
+vi.mock("../../../shared/lib/get-base-url", () => ({
+  getBaseUrl: () => "http://elsewhere.example:4000",
+  getPublicOrigin: () => "http://elsewhere.example:4000",
+}));
+
 import { getMediaVariant } from "../../../lib/media-variant";
 import { UploadValidator } from "../../../services/upload-validation";
 import type { RequestContext } from "../../../shared/types";
@@ -105,25 +113,24 @@ describe("a media file fetched on its own carries what the row holds", () => {
     data,
   });
 
-  it("returns every generated variant, with each URL absolutized", async () => {
+  it("returns every generated variant, each URL as the storage wrote it", async () => {
     legacyMedia.getMediaById.mockResolvedValue(
       answer(row({ sizes: variants }))
     );
 
     const file = await service.findById("media-1", context);
 
-    // The variant URLs get the same treatment as `url`, which is the whole
-    // reason a caller can hand this object to `getMediaVariant` and put the
-    // result straight into an <Image src>.
-    expect(file.sizes?.large.url).toBe(
-      "http://localhost:3000/uploads/2026/04/photo-1200x800.jpg"
-    );
+    // The variant URLs get the same treatment as `url`: the local adapter's
+    // own base and the file's path, which the app's pages resolve on any host,
+    // so a caller can hand this object to `getMediaVariant` and put the result
+    // straight into an <Image src>.
+    expect(file.sizes?.large.url).toBe("/uploads/2026/04/photo-1200x800.jpg");
     expect(file.sizes?.thumbnail.url).toBe(
-      "http://localhost:3000/uploads/2026/04/photo-150x150.jpg"
+      "/uploads/2026/04/photo-150x150.jpg"
     );
     // The control: the fields that were already carried still are, so a mapper
     // that returned the raw row would not pass this.
-    expect(file.url).toBe("http://localhost:3000/uploads/2026/04/photo.jpg");
+    expect(file.url).toBe("/uploads/2026/04/photo.jpg");
     expect(file.sizes?.large.width).toBe(1200);
   });
 
@@ -162,9 +169,7 @@ describe("a media file fetched on its own carries what the row holds", () => {
     const file = await service.findById("media-1", context);
 
     expect(typeof file.sizes).toBe("object");
-    expect(file.sizes?.large.url).toBe(
-      "http://localhost:3000/uploads/2026/04/photo-1200x800.jpg"
-    );
+    expect(file.sizes?.large.url).toBe("/uploads/2026/04/photo-1200x800.jpg");
   });
 
   it("carries the focal point", async () => {
@@ -202,12 +207,12 @@ describe("a media file fetched on its own carries what the row holds", () => {
     const file = await service.findById("media-1", context);
 
     expect(getMediaVariant(file, "large", { fallback: "thumbnail" })).toBe(
-      "http://localhost:3000/uploads/2026/04/photo-1200x800.jpg"
+      "/uploads/2026/04/photo-1200x800.jpg"
     );
     // The control: a name that exists in neither falls back to the thumbnail,
     // so the assertion above is reading the variant rather than the fallback.
     expect(getMediaVariant(file, "missing", { fallback: "alsoMissing" })).toBe(
-      "http://localhost:3000/uploads/2026/04/photo-thumb.jpg"
+      "/uploads/2026/04/photo-thumb.jpg"
     );
   });
 });

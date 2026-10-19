@@ -2,6 +2,7 @@ import { readAccessTokenCookie } from "../cookies/access-token-cookie";
 import { JWT_INTERNAL_CLAIMS, type NextlyJwtPayload } from "../jwt/claims";
 import { verifyAccessToken, type VerifyResult } from "../jwt/verify";
 
+import { sessionTokenIsCurrent } from "./session-standing";
 import type { SessionUser } from "./session-types";
 
 export type GetSessionResult =
@@ -10,7 +11,14 @@ export type GetSessionResult =
 
 /**
  * Extract and verify the session from a request.
- * No database hit -- purely stateless JWT verification.
+ *
+ * The signature says core issued the token; it does not say the account may
+ * still use it. So a verified token is also checked against its account's
+ * row, cached for a few seconds (`session-standing`): one that no longer
+ * exists, is not active, or has had its sessions ended since the token was
+ * signed answers `invalid`. That is within ten seconds of a deactivation or
+ * an administrator setting the password, at every place that reads a session
+ * through here. A failure to read the row throws rather than answering.
  */
 export async function getSession(
   request: Request,
@@ -35,6 +43,12 @@ export async function getSession(
   // /auth/challenge/resolve. The refusal now lives in the verifier, which is
   // reached by every session-resolution path (requireAuth, /auth/session,
   // determineUser fallthrough) rather than only by the ones that remembered.
+  // After the signature, so a request without a token core signed never
+  // reaches the database.
+  if (!(await sessionTokenIsCurrent(result.payload))) {
+    return { authenticated: false, reason: "invalid" };
+  }
+
   const user = payloadToSessionUser(result.payload);
   return { authenticated: true, user };
 }

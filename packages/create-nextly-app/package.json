@@ -1,6 +1,6 @@
 {
   "name": "create-nextly-app",
-  "version": "0.0.2-alpha.66",
+  "version": "0.0.2-alpha.68",
   "description": "CLI to scaffold Nextly in your Next.js project",
   "license": "MIT",
   "type": "module",
@@ -20,6 +20,7 @@
   "files": [
     "dist",
     "bin",
+    "skills",
     "templates"
   ],
   "scripts": {
@@ -33,25 +34,35 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.7",
     "@clack/prompts": "^1.1.0",
     "commander": "^14.0.2",
+    "dotenv-expand": "10.0.0",
     "execa": "^9.6.0",
     "fs-extra": "^11.3.0",
     "picocolors": "^1.1.1",
-    "tar": "^7.5.19"
+    "picomatch": "^4.0.5",
+    "tar": "^7.5.19",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@babel/types": "^7.29.7",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/eslint-plugin": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",
     "@nextlyhq/tsconfig": "workspace:*",
+    "@testing-library/react": "^16.3.0",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.19.17",
+    "@types/picomatch": "^4.0.3",
     "@types/tar": "^6.1.13",
     "@typescript-eslint/parser": "^8.59.0",
     "@vitest/coverage-v8": "^4.1.0",
     "@vitest/ui": "^4.1.0",
     "eslint": "^9.39.1",
+    "jsdom": "^27.1.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^5.1.4",

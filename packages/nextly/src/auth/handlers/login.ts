@@ -6,7 +6,10 @@ import type { AuthUser } from "../../types/auth";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import type { AuthHookRegistry } from "../pipeline/hooks";
-import { provenPasswordVersion } from "../pipeline/password-strategy";
+import {
+  provenPasswordVersion,
+  provenSessionEpoch,
+} from "../pipeline/password-strategy";
 import {
   mintPendingToken,
   MUST_CHANGE_PASSWORD_CHALLENGE,
@@ -16,10 +19,11 @@ import { runStrategyChain } from "../pipeline/strategy-chain";
 import type { AuthStrategy } from "../pipeline/types";
 
 import {
+  csrfFailure,
   jsonResponse,
-  stallResponse,
   loginFailureResponse,
   recordLoginFailure,
+  stallResponse,
 } from "./handler-utils";
 import {
   issueSession,
@@ -84,6 +88,7 @@ async function pauseWithPendingToken(
     challengeId: string;
     strategy?: string;
     passwordUpdatedAt?: Date | null;
+    sessionEpoch?: number;
   }
 ): Promise<string> {
   return mintPendingToken(
@@ -135,6 +140,8 @@ async function interruptedLogin(
     mustChangePassword: boolean;
     /** The password version the session will be judged against. */
     passwordUpdatedAt: Date | null;
+    /** The session epoch the session will be signed at and judged against. */
+    sessionEpoch: number;
   }
 ): Promise<LoginContinuation> {
   const { afterAuth, strategy, requestId, mustChangePassword } = args;
@@ -148,6 +155,7 @@ async function interruptedLogin(
       // Carried to the session the answer mints: a password set while the
       // second factor is outstanding ends the sign-in the old one started.
       passwordUpdatedAt: args.passwordUpdatedAt,
+      sessionEpoch: args.sessionEpoch,
     });
     return { interrupted: challengeResponse(ch, pendingToken, requestId) };
   }
@@ -226,7 +234,7 @@ export async function handleLogin(
       return jsonResponse(
         403,
         {
-          error: { code: "CSRF_FAILED", message: csrfResult.error },
+          error: csrfFailure(request, csrfResult),
         },
         { "x-request-id": requestId }
       );
@@ -275,6 +283,7 @@ export async function handleLogin(
         challengeId: outcome.challenge.id,
         strategy,
         passwordUpdatedAt: challengedState.passwordUpdatedAt,
+        sessionEpoch: challengedState.sessionEpoch,
       });
       await stallResponse(startTime, deps.loginStallTimeMs);
       return challengeResponse(outcome.challenge, pendingToken, requestId);
@@ -298,6 +307,12 @@ export async function handleLogin(
     const proven = provenPasswordVersion(outcome.user);
     const passwordUpdatedAt =
       proven !== undefined ? proven : accountState.passwordUpdatedAt;
+    // The epoch read with that password, for the same reason: a reset in the
+    // same second as the proof leaves the stored time as it was, and raises
+    // this.
+    const provenEpoch = provenSessionEpoch(outcome.user);
+    const sessionEpoch =
+      provenEpoch !== undefined ? provenEpoch : accountState.sessionEpoch;
     const afterAuth = await deps.authHooks.runAfterAuthenticate(
       outcome.user,
       deps.pluginCtx
@@ -313,6 +328,7 @@ export async function handleLogin(
       // through a benign profile-transforming hook.
       mustChangePassword: accountState.mustChangePassword === true,
       passwordUpdatedAt,
+      sessionEpoch,
     });
     if ("interrupted" in continuation) {
       await stallResponse(startTime, deps.loginStallTimeMs);
@@ -324,7 +340,7 @@ export async function handleLogin(
       deps,
       request,
       requestId,
-      { strategy, passwordUpdatedAt }
+      { strategy, passwordUpdatedAt, sessionEpoch }
     );
     await stallResponse(startTime, deps.loginStallTimeMs);
     return response;

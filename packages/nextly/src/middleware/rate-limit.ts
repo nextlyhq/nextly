@@ -8,7 +8,7 @@
  * - Pluggable store interface (in-memory default, Redis-compatible)
  * - Separate read/write limits
  * - Per-collection overrides
- * - Skip function for admin users
+ * - Budgets by who is asking: a session, an API key, an address
  * - Standard rate limit headers
  *
  * @module middleware/rate-limit
@@ -28,7 +28,6 @@
  */
 
 import { container } from "../di/container";
-import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
 // ============================================================================
 // Types & Interfaces
@@ -196,8 +195,9 @@ export interface RateLimitConfig {
   /**
    * Function to generate a unique key for rate limiting.
    * Defaults to the trusted client IP address (see `trustProxy` /
-   * `trustedProxyIps`). Requests with no resolvable IP fall back to a
-   * shared `unknown` bucket so anonymous traffic is still rate-limited.
+   * `trustedProxyIps`). Requests with no resolvable IP spend the
+   * `unresolvedCeiling` instead. A key this function returns is always taken
+   * as a resolved source.
    *
    * @param request - The incoming request
    * @returns A unique identifier string
@@ -226,35 +226,40 @@ export interface RateLimitConfig {
    * Function to skip rate limiting for certain requests.
    * Returns true to skip rate limiting.
    *
-   * **Default**: skips the admin internal API (`/admin/api/*`). The
-   * rate limiter is meant to protect the public REST surface from
-   * anonymous abuse; admin routes are session-authed and already gated
-   * by `requireAdminAuth`/`requireCollectionAccess`, so applying the
-   * same per-IP cap to admin causes false positives during normal
-   * navigation (each admin page fires several parallel queries —
-   * `/me`, `/dashboard/stats`, `/schema/journal`, per-collection
-   * queries — and a handful of nav events trips the public default).
-   *
-   * Pass an explicit `skip` to override. If you want to rate-limit
-   * admin too (e.g. for insider-abuse defense), wrap the default:
+   * No request is skipped by default, the admin API included: a signed-in
+   * session spends a budget of its own (`sessions`), so the admin's parallel
+   * page loads never share the per-address budget an anonymous caller spends.
    *
    * @param request - The incoming request
    * @returns True to skip rate limiting
    *
    * @example
    * ```typescript
-   * // Override: rate-limit everything, including admin
-   * skip: () => false
-   *
-   * // Override: skip admin AND internal service calls
-   * skip: (req) => {
-   *   const url = new URL(req.url);
-   *   if (url.pathname.startsWith("/admin/api/")) return true;
-   *   return req.headers.get("x-internal-key") === process.env.INTERNAL_KEY;
-   * }
+   * // Skip internal service calls
+   * skip: (req) =>
+   *   req.headers.get("x-internal-key") === process.env.INTERNAL_KEY
    * ```
    */
   skip?: (request: Request) => boolean | Promise<boolean>;
+
+  /**
+   * The budget a signed-in session spends per window, counted per user
+   * whatever address the session comes from. A session that does not verify,
+   * a revoked one included, spends the budget of a request that carries none.
+   *
+   * @default five times `readLimit` and `writeLimit`
+   */
+  sessions?: { readLimit?: number; writeLimit?: number };
+
+  /**
+   * The ceiling shared, per window, by every request that carries no session
+   * and no API key and comes from no address the server can resolve (see
+   * `trustProxy`). Spending it refuses only such requests, never a session or
+   * a key, and never a request to an auth route, which its own limits judge.
+   *
+   * @default ten times `readLimit` and `writeLimit`
+   */
+  unresolvedCeiling?: { readLimit?: number; writeLimit?: number };
 
   /**
    * Per-collection rate limit overrides.
@@ -331,6 +336,29 @@ export class InMemoryRateLimitStore implements RateLimitStore {
     return record;
   }
 
+  /**
+   * Record an attempt only while the key's window holds fewer than `limit`.
+   *
+   * Kept so the REST limiter can ask a key's count before work it bounds,
+   * with a `limit` of 0, which records nothing and starts no window.
+   */
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async consume(
+    key: string,
+    limit: number,
+    windowMs: number
+  ): Promise<RateLimitRecord & { allowed: boolean }> {
+    const now = Date.now();
+    const held = this.hits.get(key);
+    const live = held && now <= held.resetTime ? held : undefined;
+    const count = live?.count ?? 0;
+    const resetTime = live?.resetTime ?? now + windowMs;
+    if (count >= limit) return { count, resetTime, allowed: false };
+    const record = { count: count + 1, resetTime };
+    this.hits.set(key, record);
+    return { ...record, allowed: true };
+  }
+
   // eslint-disable-next-line @typescript-eslint/require-await
   async reset(key: string): Promise<void> {
     this.hits.delete(key);
@@ -373,7 +401,11 @@ export class InMemoryRateLimitStore implements RateLimitStore {
 // ============================================================================
 
 /**
- * Default configuration values.
+ * Default configuration values: the one source of them. The sanitized config
+ * (`DEFAULT_RATE_LIMIT_CONFIG`) is this object, so an app configured through
+ * `defineConfig` and a limiter built without values count the same budgets.
+ * A signed-in session spends a budget of its own, a multiple of these, so the
+ * admin's parallel page loads are not sized against them.
  *
  * Exported because the plugin-route limiter answers to the same defaults:
  * a general-limited plugin route with no configured limits is limited by
@@ -382,27 +414,10 @@ export class InMemoryRateLimitStore implements RateLimitStore {
  * different allowance than the REST surface beside them.
  */
 export const RATE_LIMIT_DEFAULTS = {
-  readLimit: 600, // 10 req/s burst — admin UI makes many parallel GETs on load
-  writeLimit: 120,
+  readLimit: 100,
+  writeLimit: 30,
   windowMs: 60000, // 1 minute
 } as const;
-
-/**
- * Build the default keyGenerator: returns the trusted client IP, or
- * the literal string `"unknown"` when no IP is available (so anonymous
- * traffic still shares one bucket rather than collapsing into a
- * unique-per-request key).
- *
- * replaces a leftmost-XFF parser that any direct
- * attacker could rotate to bypass per-IP rate limits.
- */
-function buildDefaultKeyGenerator(
-  trustProxy: boolean,
-  trustedProxyIps: readonly string[]
-): (request: Request) => string {
-  return request =>
-    getTrustedClientIp(request, { trustProxy, trustedProxyIps }) ?? "unknown";
-}
 
 /**
  * Determine if the request is a read (GET) or write (POST/PATCH/PUT/DELETE) operation.
@@ -416,176 +431,18 @@ export function isReadOperation(method: string): boolean {
 }
 
 /**
- * Default `skip` function: returns true for admin internal API requests.
+ * A `skip` function that exempts every `/admin/api/*` request.
  *
- * Exported for tests + for users who want to compose their own skip
- * function on top of the default behaviour. The check is URL-pattern
- * based (`/admin/api/*`) since the rate-limit middleware runs before
- * session resolution; URL is a reliable proxy for "this request is
- * destined for the auth-gated admin surface, not the public REST".
+ * It was the default, and no longer is: the REST limit now counts a signed-in
+ * session against a budget of its own, so the admin needs no exemption. Kept,
+ * unchanged, for an app that passes it as `rateLimit.skip`.
+ *
+ * @deprecated The default limit already gives the admin its own budget. A
+ * later release removes this export.
  */
 export function defaultSkipAdminApi(request: Request): boolean {
   const { pathname } = new URL(request.url);
   return pathname.startsWith("/admin/api/");
-}
-
-/**
- * Extract collection name from request URL.
- *
- * Matches patterns like:
- * - /api/collections/{slug}/entries
- * - /admin/api/collections/{slug}/entries
- */
-function extractCollectionFromUrl(url: string): string | null {
-  const match = url.match(/\/collections\/([^/]+)/);
-  return match ? match[1] : null;
-}
-
-/**
- * Create a rate limiter middleware function.
- *
- * @param config - Rate limiting configuration
- * @returns Middleware function that checks rate limits
- *
- * @example
- * ```typescript
- * const rateLimiter = createRateLimiter({
- *   enabled: true,
- *   readLimit: 100,
- *   writeLimit: 30,
- * });
- *
- * // In route handler
- * const rateLimitResponse = await rateLimiter(request);
- * if (rateLimitResponse) {
- *   return rateLimitResponse; // 429 Too Many Requests
- * }
- * // Continue with request handling
- * ```
- */
-export function createRateLimiter(config: RateLimitConfig) {
-  // Early exit if not enabled
-  if (!config.enabled) {
-    // eslint-disable-next-line @typescript-eslint/require-await
-    return async (_request: Request): Promise<Response | null> => null;
-  }
-
-  // Initialize store (in-memory by default)
-  const store = config.store ?? new InMemoryRateLimitStore();
-
-  // Merge with defaults
-  const readLimit = config.readLimit ?? RATE_LIMIT_DEFAULTS.readLimit;
-  const writeLimit = config.writeLimit ?? RATE_LIMIT_DEFAULTS.writeLimit;
-  const windowMs = config.windowMs ?? RATE_LIMIT_DEFAULTS.windowMs;
-  const keyGenerator =
-    config.keyGenerator ??
-    buildDefaultKeyGenerator(
-      config.trustProxy ?? false,
-      config.trustedProxyIps ?? []
-    );
-  // Why: admin internal API is session-authed and the rate limiter's
-  // job is to protect the public REST surface. Without this default
-  // skip, normal admin navigation (multiple parallel queries per page)
-  // trips the public read cap and cascades 429s across the UI. Callers
-  // pass an explicit `skip` to override (e.g. to rate-limit admin too).
-  const skip = config.skip ?? defaultSkipAdminApi;
-  const collections = config.collections ?? {};
-  const handler = config.handler;
-
-  console.log(
-    `[Nextly] Rate limiting enabled: ${readLimit} reads / ${writeLimit} writes per ${windowMs / 1000}s window`
-  );
-
-  /**
-   * Rate limit middleware function.
-   *
-   * @param request - Incoming request to check
-   * @returns Response if rate limited, null if allowed
-   */
-  return async (request: Request): Promise<Response | null> => {
-    // Always skip lightweight system/health endpoints
-    const url = new URL(request.url);
-    const isSystemEndpoint =
-      url.pathname.endsWith("/auth/setup-status") ||
-      url.pathname.endsWith("/health");
-    if (isSystemEndpoint) {
-      return null;
-    }
-
-    // Check if should skip
-    const shouldSkip = await skip(request);
-    if (shouldSkip) {
-      return null;
-    }
-
-    // Determine operation type and limit
-    const method = request.method;
-    const isRead = isReadOperation(method);
-    let limit = isRead ? readLimit : writeLimit;
-
-    // Check for per-collection overrides
-    const collection = extractCollectionFromUrl(request.url);
-    if (collection && collections[collection]) {
-      const collectionConfig = collections[collection];
-      if (isRead && collectionConfig.readLimit !== undefined) {
-        limit = collectionConfig.readLimit;
-      } else if (!isRead && collectionConfig.writeLimit !== undefined) {
-        limit = collectionConfig.writeLimit;
-      }
-    }
-
-    // Generate rate limit key
-    const baseKey = keyGenerator(request);
-    const operationType = isRead ? "read" : "write";
-    const key = collection
-      ? `ratelimit:${baseKey}:${collection}:${operationType}`
-      : `ratelimit:${baseKey}:${operationType}`;
-
-    // Check rate limit
-    const record = await store.increment(key, windowMs);
-    const remaining = Math.max(0, limit - record.count);
-    const allowed = record.count <= limit;
-
-    const result: RateLimitResult = {
-      allowed,
-      limit,
-      remaining,
-      resetTime: record.resetTime,
-    };
-
-    // If allowed, return null (continue with request)
-    if (allowed) {
-      return null;
-    }
-
-    // Rate limited - return 429 response
-    if (handler) {
-      return handler(request, result);
-    }
-
-    const retryAfter = Math.ceil((record.resetTime - Date.now()) / 1000);
-
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: {
-          code: "RATE_LIMIT_EXCEEDED",
-          message: "Too many requests. Please try again later.",
-          retryAfter,
-        },
-      }),
-      {
-        status: 429,
-        headers: {
-          "Content-Type": "application/json",
-          "Retry-After": String(retryAfter),
-          "X-RateLimit-Limit": String(limit),
-          "X-RateLimit-Remaining": "0",
-          "X-RateLimit-Reset": String(record.resetTime),
-        },
-      }
-    );
-  };
 }
 
 /**

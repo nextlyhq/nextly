@@ -35,6 +35,7 @@ import type { NextRequest } from "next/server";
 
 import { readAccessTokenCookie } from "../auth/cookies/access-token-cookie";
 import { verifyAccessToken } from "../auth/jwt/verify";
+import { sessionTokenIsCurrent } from "../auth/session/session-standing";
 import { getDialectTables } from "../database/index";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -79,6 +80,14 @@ export const GET = withErrorHandler(async (request: NextRequest) => {
   if (!verifyResult.valid) {
     throw NextlyError.authRequired({
       logContext: { reason: verifyResult.reason },
+    });
+  }
+
+  // The same check every session read makes: a token its account can no
+  // longer use reports no signed-in state, here as everywhere else.
+  if (!(await sessionTokenIsCurrent(verifyResult.payload))) {
+    throw NextlyError.authRequired({
+      logContext: { reason: "session-ended" },
     });
   }
 

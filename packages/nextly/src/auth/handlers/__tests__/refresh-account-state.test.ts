@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { handleRefresh, type RefreshHandlerDeps } from "../refresh";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
@@ -11,6 +11,7 @@ interface State {
   lockedUntil: Date | null;
   emailVerified: Date | null;
   passwordUpdatedAt?: Date | null;
+  sessionEpoch?: number;
 }
 
 /**
@@ -27,6 +28,7 @@ function makeDeps(
     async userId => ({
       userId,
       passwordUpdatedAt: null,
+      ...fixtureIdentity,
       ...(opts.lockedState ?? state),
     }),
     () => opts.consumes ?? true
@@ -56,7 +58,9 @@ function makeDeps(
       image: null,
       isActive: state.isActive,
     }),
-    fetchAccountState: vi.fn().mockResolvedValue({ userId: "u1", ...state }),
+    fetchAccountState: vi
+      .fn()
+      .mockResolvedValue({ userId: "u1", ...fixtureIdentity, ...state }),
     fetchSessionRoles: vi
       .fn()
       .mockResolvedValue({ roleIds: ["editor"], validUntil: undefined }),
@@ -187,6 +191,17 @@ describe("refresh rotation spends the presented token once", () => {
     [
       "given a new password",
       { ...usable, passwordUpdatedAt: new Date("2026-02-01T00:00:00Z") },
+    ],
+    // The same password time and a raised epoch: a password set within the
+    // same second, which MySQL and SQLite store whole, so only the epoch can
+    // tell the rotation the account's sessions were ended.
+    [
+      "whose sessions were ended within the same second",
+      {
+        ...usable,
+        passwordUpdatedAt: new Date("2026-01-01T00:00:00Z"),
+        sessionEpoch: 1,
+      },
     ],
   ])(
     "refuses an account %s while the rotation was being prepared",

@@ -34,13 +34,10 @@ export type {
   UserMutationResponse,
 } from "./services/user-mutation-service";
 
+// The account service exports no result types: its methods return data or
+// throw NextlyError, and the linked-account results went with the retired
+// linked-account endpoints.
 export { UserAccountService } from "./services/user-account-service";
-// PasswordOperationResponse removed in PR 4: updatePasswordHash now
-// returns void and throws on failure.
-export type {
-  GetAccountsResponse,
-  UnlinkAccountResult,
-} from "./services/user-account-service";
 
 export { UserExtSchemaService } from "./services/user-ext-schema-service";
 export type { SupportedDialect } from "./services/user-ext-schema-service";

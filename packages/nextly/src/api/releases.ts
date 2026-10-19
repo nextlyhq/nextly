@@ -7,8 +7,8 @@
  *
  * ## Two gates, and why neither is redundant
  *
- * The route checks the SYSTEM authority — read, create or publish on
- * `content-releases` — because that is what produces a proper 401 or 403 for an
+ * The route checks the SYSTEM authority — read, create, publish, update or
+ * delete on `content-releases` — because that is what produces a proper 401 or 403 for an
  * unauthenticated or unauthorized caller, and it stops a request before any
  * service work happens.
  *
@@ -21,35 +21,58 @@
  * @module api/releases
  */
 
+import { z } from "zod";
+
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
-import { container } from "../di";
-import type {
-  DocumentRef,
-  ReleaseRow,
+import { getLoggerFromDI } from "../dispatcher/helpers/di";
+import { isKnownTimeZone } from "../domains/releases/release-calendar";
+import { isDueAt } from "../domains/releases/release-due";
+import {
+  isReleaseTab,
+  RELEASE_ATTENTION_REASONS,
+  RELEASE_TABS,
+  type ReleaseAttentionReason,
+  type ReleaseTab,
+} from "../domains/releases/release-tabs";
+import {
+  RELEASE_LIST_ORDERS,
+  type DocumentRef,
+  type ReleaseListOrder,
+  type ReleaseRow,
 } from "../domains/releases/releases-repository";
 import {
+  DEFAULT_RELEASE_PAGE_SIZE,
+  MAX_RELEASE_PAGE_SIZE,
+  MAX_RELEASE_TITLE_LENGTH,
   RELEASES_RESOURCE,
-  type ReleaseCapabilities,
+  type ReleaseAuthority,
+  type ReleaseDayFilter,
 } from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
+  isReleaseKind,
   isReleaseState,
+  RELEASE_KINDS,
   RELEASE_STATES,
+  type ReleaseCapabilities,
+  type ReleaseKind,
   type ReleaseState,
 } from "../schemas/releases/types";
 
 import {
   respondAction,
+  respondData,
   respondDoc,
   respondList,
   respondMutation,
 } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 /**
  * The release authority each method needs, declared once.
@@ -65,19 +88,57 @@ import { withErrorHandler } from "./with-error-handler";
  * is the act that puts content live, and the seed keeps the two apart —
  * "publish-content-releases" is defined as "schedule or cancel".
  */
-const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
+const RELEASE_AUTHORITY: Record<string, ReleaseAuthority> = {
   listReleases: "read",
+  releaseCalendar: "read",
   getRelease: "read",
   listReleaseMembers: "read",
   listReleaseBlockers: "read",
+  getReleaseReadiness: "read",
   createRelease: "create",
   addReleaseMember: "create",
   // Removing a member un-does part of assembling a release and can only ever
   // make LESS content go live, so it is `create` rather than `publish`.
   removeReleaseMember: "create",
+  // Switching a document's action re-assembles the release; the document's
+  // own authority for the new action, and `publish` for a scheduled release,
+  // are the service's to ask.
+  changeReleaseMemberAction: "create",
   scheduleRelease: "publish",
   cancelRelease: "publish",
+  publishRelease: "publish",
+  // Each its own permission rather than `create` and `publish`: renaming is
+  // not assembling, and deleting a release is not scheduling one.
+  updateRelease: "update",
+  deleteRelease: "delete",
 };
+
+/**
+ * What a rename may send: a title, a description, or both, and nothing else.
+ *
+ * Strict, so a field this route does not change — a `state`, a `scheduledAt`
+ * — is refused rather than accepted and ignored, which would answer 200 for
+ * a change that never happened. The title follows create's rules: required
+ * text when present, never empty, and no longer than the narrowest dialect
+ * stores. The service checks the same again for the Direct API.
+ */
+const RELEASE_DETAILS_BODY = z
+  .object({
+    title: z
+      .string()
+      .min(1, "`title` must not be empty.")
+      .max(
+        MAX_RELEASE_TITLE_LENGTH,
+        `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`
+      )
+      .optional(),
+    description: z.string().nullable().optional(),
+  })
+  .strict()
+  .refine(
+    body => body.title !== undefined || body.description !== undefined,
+    "Give a `title`, a `description`, or both."
+  );
 
 /**
  * Reject a body that is not a JSON object.
@@ -227,9 +288,7 @@ const ISO_INSTANT =
  */
 function requireTimezone(body: Record<string, unknown>): string {
   const zone = requireString(body, "timezone");
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: zone });
-  } catch {
+  if (!isKnownTimeZone(zone)) {
     throw badRequest(
       "`timezone` must be an IANA time zone, such as Europe/Berlin.",
       {
@@ -257,6 +316,26 @@ function releaseStateParam(value: string | null): ReleaseState | undefined {
 }
 
 /**
+ * A release kind from a query string or a body, or a refusal — for the reason
+ * an unknown state is refused: `kind=singles` ignored would list every release.
+ */
+function releaseKindParam(value: unknown): ReleaseKind | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!isReleaseKind(value)) {
+    throw badRequest(`\`kind\` must be one of: ${RELEASE_KINDS.join(", ")}.`);
+  }
+  return value;
+}
+
+/** A kind present in a body: one of the kinds, or a refusal (`null` too). */
+function requireKind(value: unknown): ReleaseKind {
+  if (!isReleaseKind(value)) {
+    throw badRequest(`\`kind\` must be one of: ${RELEASE_KINDS.join(", ")}.`);
+  }
+  return value;
+}
+
+/**
  * The page size, always bounded.
  *
  * An omitted limit used to mean "no limit", so `GET /api/releases` selected and
@@ -264,21 +343,76 @@ function releaseStateParam(value: string | null): ReleaseState | undefined {
  * unbounded read on any installation with a real release history. A supplied one
  * was accepted at any size, which is the same read asked for explicitly.
  */
-const DEFAULT_RELEASE_PAGE = 50;
-const MAX_RELEASE_PAGE = 200;
-
 function pageSize(value: string | null): number {
-  if (value === null) return DEFAULT_RELEASE_PAGE;
+  if (value === null) return DEFAULT_RELEASE_PAGE_SIZE;
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) {
     throw badRequest("`limit` must be a positive integer.");
   }
-  if (n > MAX_RELEASE_PAGE) {
-    throw badRequest(`\`limit\` may be at most ${MAX_RELEASE_PAGE}.`, {
+  if (n > MAX_RELEASE_PAGE_SIZE) {
+    throw badRequest(`\`limit\` may be at most ${MAX_RELEASE_PAGE_SIZE}.`, {
       requested: n,
     });
   }
   return n;
+}
+
+/**
+ * Which page, counting from 1.
+ *
+ * Refused rather than clamped when it is not a whole number of at least one: a
+ * client asking for page 0 or page "2a" has a bug, and answering with page 1
+ * would hide it behind a plausible list.
+ */
+function pageNumber(value: string | null): number {
+  if (value === null) return 1;
+  const n = Number(value);
+  // A safe integer: `1e308` passes `Number.isInteger` and becomes an infinite
+  // offset further in.
+  if (!Number.isSafeInteger(n) || n < 1) {
+    throw badRequest("`page` must be a whole number of at least 1.");
+  }
+  return n;
+}
+
+/**
+ * One of the list's tabs, or a refusal.
+ *
+ * Refused rather than ignored for the reason `state` is: an unknown tab dropped
+ * on the floor answers with every release, and a client paging through what it
+ * believes is one tab cannot tell.
+ */
+function releaseTabParam(value: string | null): ReleaseTab | undefined {
+  if (value === null) return undefined;
+  if (!isReleaseTab(value)) {
+    throw badRequest(`\`tab\` must be one of: ${RELEASE_TABS.join(", ")}.`);
+  }
+  return value;
+}
+
+/** One part of the attention tab, or a refusal. */
+function releaseReasonParam(
+  value: string | null
+): ReleaseAttentionReason | undefined {
+  if (value === null) return undefined;
+  const known = RELEASE_ATTENTION_REASONS.find(reason => reason === value);
+  if (known === undefined) {
+    throw badRequest(
+      `\`reason\` must be one of: ${RELEASE_ATTENTION_REASONS.join(", ")}.`
+    );
+  }
+  return known;
+}
+
+/** Which end of the timeline comes first, or a refusal. */
+function releaseOrderParam(value: string | null): ReleaseListOrder | undefined {
+  if (value === null) return undefined;
+  if (!(RELEASE_LIST_ORDERS as readonly string[]).includes(value)) {
+    throw badRequest(
+      `\`order\` must be one of: ${RELEASE_LIST_ORDERS.join(", ")}.`
+    );
+  }
+  return value as ReleaseListOrder;
 }
 
 /**
@@ -294,120 +428,55 @@ function optionalInstant(value: string | null, key: string): Date | undefined {
 }
 
 /**
- * Whether this scope declares a Draft/Published lifecycle.
+ * The list's day filter as a query string carries it: `day` and `timezone`,
+ * both or neither.
  *
- * Asked of the registry, which holds what the schema declared. Answering `false`
- * when the registry cannot be reached is deliberate: a member whose lifecycle
- * support is unknown is one the drain may not be able to perform, and admitting
- * it on an unavailable answer trades a clear refusal now for a release that
- * silently never publishes.
+ * Only their presence is decided here. Whether the date exists and the zone is
+ * known is the service's question, asked the same way of a Direct API caller.
  */
-async function declaresLifecycle(
-  scopeKind: "collection" | "single",
-  scopeSlug: string
-): Promise<boolean> {
-  const key =
-    scopeKind === "single"
-      ? "singleRegistryService"
-      : "collectionRegistryService";
-  if (!container.has(key)) return false;
-  const registry = container.get<{
-    getCollectionBySlug?: (
-      slug: string
-    ) => Promise<{ status?: boolean } | null>;
-    getSingleBySlug?: (slug: string) => Promise<{ status?: boolean } | null>;
-  }>(key);
-  const record = await (scopeKind === "single"
-    ? registry.getSingleBySlug?.(scopeSlug)
-    : registry.getCollectionBySlug?.(scopeSlug));
-  return record?.status === true;
+const DAY_PARAMS = z.object({
+  day: z.string({
+    error: "`day` is required with `timezone`: a date such as 2026-03-29.",
+  }),
+  timezone: z.string({
+    error:
+      "`timezone` is required with `day`: an IANA time zone such as Europe/Berlin.",
+  }),
+});
+
+/**
+ * The day to narrow the list to, or none.
+ *
+ * Half a filter is refused rather than dropped: a `day` without its zone has
+ * no instants, and ignoring it would answer with every release.
+ */
+function dayParam(params: URLSearchParams): ReleaseDayFilter | undefined {
+  const day = params.get("day");
+  const timezone = params.get("timezone");
+  if (day === null && timezone === null) return undefined;
+  const parsed = DAY_PARAMS.safeParse({
+    day: day ?? undefined,
+    timezone: timezone ?? undefined,
+  });
+  if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  return { date: parsed.data.day, timezone: parsed.data.timezone };
 }
 
 /**
- * Refuse a member whose target document is not there.
- *
- * A typo or a stale id is accepted happily by the write path — nothing joins a
- * member to a document — and then fails at the scheduled instant with
- * not-found, holding the release open and reporting a failure nobody is
- * watching for. Resolved as the CALLER, so a document they may not read is
- * indistinguishable from one that does not exist and this cannot be used to
- * probe for ids.
- *
- * Placed at this boundary because it is where a content reader is available.
- * When the add-time document-rule check lands in the wiring it will carry the
- * reader into the service, and this moves there so the Direct API path gets it
- * too.
+ * A calendar read's window as a query string carries it. Every field is
+ * required; what each must hold is the service's to check.
  */
-async function resolveTarget(
-  ctx: ReleaseContext,
-  scopeKind: "collection" | "single",
-  scopeSlug: string,
-  entryId: string
-): Promise<string> {
-  // `status: "all"` is REQUIRED, not incidental. An untrusted read defaults to
-  // `published`, and the document a release most often exists to publish is a
-  // DRAFT — so the ordinary draft-to-launch flow would 404 at the moment it is
-  // assembled, which is the one case this check must not break.
-  const found = (await (scopeKind === "single"
-    ? ctx.nextly.findSingle({
-        slug: scopeSlug as never,
-        overrideAccess: false,
-        user: { id: ctx.caller.userId } as never,
-        status: "all",
-      } as never)
-    : ctx.nextly.findByID({
-        collection: scopeSlug as never,
-        id: entryId,
-        overrideAccess: false,
-        user: { id: ctx.caller.userId } as never,
-        status: "all",
-      } as never))) as { id?: string; status?: unknown } | null | undefined;
-
-  if (found === null || found === undefined) {
-    // Read AS the caller, so a document they may not see and one that is not
-    // there are the same answer and this cannot be used to probe for ids.
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "release-member-target-missing",
-        scopeKind,
-        scopeSlug,
-        entryId,
-      },
-    });
-  }
-
-  // A target with no publish lifecycle can never satisfy the member.
-  // Materialisation works by writing the status field, so with the lifecycle
-  // disabled the write produces no observable published or draft state, the
-  // drain records a failed action, and the release stays scheduled forever.
-  //
-  // Read from the SCHEMA, not probed on the row. An earlier version checked
-  // whether the row carried a `status` property, which is wrong in the
-  // dangerous direction: the name is reserved only when the lifecycle is
-  // enabled, so a collection with it DISABLED may legally define an ordinary
-  // field called `status` — and materialisation would then overwrite that
-  // author's field with "published" and report the release complete.
-  if (!(await declaresLifecycle(scopeKind, scopeSlug))) {
-    throw badRequest(
-      `\`${scopeSlug}\` has no draft/published lifecycle, so it cannot be scheduled in a release.`,
-      { reason: "target-without-lifecycle", scopeKind, scopeSlug }
-    );
-  }
-
-  // The SINGLE's own id, not the one the caller sent. A Single is addressed by
-  // slug, so any id is accepted here — but release visibility compares stored
-  // decisions against the row's real id, and a member carrying a stale one is
-  // invisible to reads until a background drain happens to run.
-  if (scopeKind === "single") {
-    if (typeof found.id !== "string") {
-      throw NextlyError.internal({
-        logContext: { reason: "single-without-id", scopeSlug },
-      });
-    }
-    return found.id;
-  }
-  return entryId;
-}
+const CALENDAR_PARAMS = z.object({
+  from: z.string({
+    error: "`from` is required: the first day, such as 2026-03-01.",
+  }),
+  to: z.string({
+    error: "`to` is required: the last day, such as 2026-04-11.",
+  }),
+  timezone: z.string({
+    error: "`timezone` is required: an IANA time zone, such as Europe/Berlin.",
+  }),
+});
 
 /**
  * What every release operation is handed.
@@ -506,8 +575,86 @@ async function withCapabilities(
       cancel: false,
       addMember: false,
       removeMember: false,
+      publishNow: false,
+      update: false,
+      delete: false,
     },
   }));
+}
+
+/**
+ * What a Publish now answer says, by the state the run left the release in.
+ *
+ * One sentence per state, in a record keyed by every state, so a state added
+ * later is a compile error here rather than a release told it is going out.
+ *
+ * A release still `scheduled` is due and is being sent out by the runner: the
+ * run here ran out of time or could not write a document yet, or another run
+ * of the drain already held it. The wording holds for each, since none of its
+ * documents may be live yet. A `cancelled` one was called off after it was
+ * moved to now, and nothing more of it goes out.
+ */
+const PUBLISH_NOW_MESSAGES: Record<ReleaseState, string> = {
+  published: "Release published.",
+  blocked:
+    "Release stopped part-way. Fix the documents blocking it, then schedule it again.",
+  scheduled:
+    "Release is going out; any of its documents not yet live will follow shortly.",
+  cancelled:
+    "Release was cancelled before it went out; nothing more from it will be sent.",
+  draft: "Release has not been sent; it is still a draft.",
+};
+
+/**
+ * The Publish now answer for the release the run left.
+ *
+ * A `scheduled` release is going out only once its instant has come, by the
+ * drain's own rule. One rescheduled for later while Publish now ran waits for
+ * that instant, and the drain leaves it alone until then, so promising the
+ * rest shortly would be untrue: the answer names the instant instead.
+ */
+function publishNowMessage(release: ReleaseRow, now: Date): string {
+  if (
+    release.state === "scheduled" &&
+    release.scheduledAt instanceof Date &&
+    !isDueAt(release.scheduledAt, now)
+  ) {
+    return `Release was rescheduled for ${release.scheduledAt.toISOString()} while it was being sent; it will go out then.`;
+  }
+  return PUBLISH_NOW_MESSAGES[release.state];
+}
+
+/**
+ * A release with its capabilities, for an answer given AFTER a write.
+ *
+ * The capabilities are decoration on a write that has already committed, so
+ * no failure to read them may fail the request: that would report a write
+ * that happened as one that did not, and invite a retry of it. The release is
+ * answered without them instead. A refusal is expected — a key scoped to
+ * publish releases has no read grant — and is not reported; any other
+ * failure is logged through the application logger, the way this layer
+ * reports work that goes wrong without failing the request.
+ */
+async function decorateAfterWrite(
+  release: ReleaseRow,
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+): Promise<ReleaseRow | (ReleaseRow & { can: ReleaseCapabilities })> {
+  try {
+    const [item] = await withCapabilities([release], caller, releases);
+    return item;
+  } catch (error) {
+    if (!(NextlyError.is(error) && error.code === "FORBIDDEN")) {
+      getLoggerFromDI()?.error(
+        "A release's capabilities could not be read after a write",
+        {
+          releaseId: release.id,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+    return release;
+  }
 }
 
 /**
@@ -525,18 +672,14 @@ const RELEASE_OPERATIONS: Record<
 > = {
   listReleases: async ({ request, caller, releases }) => {
     const params = new URL(request.url).searchParams;
-    const limit = pageSize(params.get("limit"));
-    // ONE row past the limit, so truncation is observable. Without it a page of
-    // five is reported as `total: 5, hasNext: false` whether five releases exist
-    // or five hundred do, and a client renders an incomplete schedule as the
-    // whole one.
-    const found = await releases.find({
+    // The runtime guards belong HERE, at the untyped boundary. The service
+    // takes typed values so a typed caller cannot pass a typo, but a query
+    // string is whatever was sent — and an unrecognised state or tab answered
+    // with an empty list reads exactly like "nothing is scheduled".
+    const shared = {
       ...caller,
-      // The runtime guard belongs HERE, at the untyped boundary. The service
-      // takes `ReleaseState` so a typed caller cannot pass a typo, but a query
-      // string is whatever was sent — and an unrecognised state answered with
-      // an empty list reads exactly like "nothing is scheduled".
       state: releaseStateParam(params.get("state")),
+      kind: releaseKindParam(params.get("kind")),
       scheduledAfter: optionalInstant(
         params.get("scheduledAfter"),
         "scheduledAfter"
@@ -545,28 +688,59 @@ const RELEASE_OPERATIONS: Record<
         params.get("scheduledBefore"),
         "scheduledBefore"
       ),
-      ...containingRef(params),
-      limit: limit + 1,
+      page: pageNumber(params.get("page")),
+      limit: pageSize(params.get("limit")),
+    };
+    const listOnly = {
+      tab: releaseTabParam(params.get("tab")),
+      reason: releaseReasonParam(params.get("reason")),
+      // Passed as sent: the service trims it, bounds its length and matches it
+      // literally, so a REST and a Direct API caller searching the same text
+      // get the same releases.
+      search: params.get("search") ?? undefined,
+      order: releaseOrderParam(params.get("order")),
+      day: dayParam(params),
+    };
+    const { containing } = containingRef(params);
+    if (containing !== undefined) {
+      // One document's releases are not a tab of the list, nor searched, and
+      // come in the order they will be applied to it. Refused rather than
+      // dropped: a filter accepted and ignored answers a different question.
+      const extra = Object.entries(listOnly).find(([, v]) => v !== undefined);
+      if (extra !== undefined) {
+        throw badRequest(
+          `\`${extra[0]}\` is not available when filtering by document.`
+        );
+      }
+    }
+    const found = await releases.find(
+      containing !== undefined
+        ? { ...shared, containing }
+        : { ...shared, ...listOnly }
+    );
+    const items = await withCapabilities(found.items, caller, releases);
+    // The service's own page and total, so `meta.total` is every release the
+    // query matches, not the rows this page holds.
+    return respondList(items, found.meta);
+  },
+
+  releaseCalendar: async ({ request, caller, releases }) => {
+    const params = new URL(request.url).searchParams;
+    const parsed = CALENDAR_PARAMS.safeParse({
+      from: params.get("from") ?? undefined,
+      to: params.get("to") ?? undefined,
+      timezone: params.get("timezone") ?? undefined,
     });
-    const page = found.slice(0, limit);
-    const hasNext = found.length > limit;
-    const items = await withCapabilities(page, caller, releases);
-    // The canonical list envelope, so shared client tooling reads this like
-    // every other list. The meta is synthetic because the query is windowed
-    // rather than paged — `total` is what this page holds, and a second query
-    // to count the whole table would be a read nobody asked for.
-    return respondList(items, {
-      // `total` is what this window holds, not a count of the table: the query
-      // is windowed rather than paged, and a second COUNT would be a read
-      // nobody asked for. `hasNext` is the honest part — it says whether more
-      // matched than were returned.
-      total: page.length,
-      page: 1,
-      limit,
-      totalPages: hasNext ? 2 : 1,
-      hasNext,
-      hasPrev: false,
-    });
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    // A calendar is one answer about a window, not a page of rows, so it is
+    // the bare read its Direct API method returns.
+    return respondData(
+      await releases.calendar({
+        ...caller,
+        ...parsed.data,
+        kind: releaseKindParam(params.get("kind")),
+      })
+    );
   },
 
   getRelease: async ({ caller, releases, releaseId }) => {
@@ -608,6 +782,9 @@ const RELEASE_OPERATIONS: Record<
         ...caller,
         title: requireString(body, "title"),
         description,
+        // Present means given: an explicit null is a malformed kind, not an
+        // omitted one, and is refused rather than read as `release`.
+        kind: "kind" in body ? requireKind(body.kind) : undefined,
       }),
       { status: 201 }
     );
@@ -650,10 +827,9 @@ const RELEASE_OPERATIONS: Record<
       });
     }
 
-    // Returns the id the member must carry, which for a Single is the row's
-    // own rather than whatever the caller sent.
-    const targetId = await resolveTarget(ctx, scopeKind, scopeSlug, entryId);
-
+    // The target checks — the document is there for the caller, its
+    // collection has a lifecycle, a Single resolves to its own row — are the
+    // service's, so the Direct API makes them too.
     return respondMutation(
       "Added to release.",
       await releases.addMember({
@@ -661,7 +837,7 @@ const RELEASE_OPERATIONS: Record<
         releaseId,
         scopeKind,
         scopeSlug,
-        entryId: targetId,
+        entryId,
         locale,
         action,
       }),
@@ -697,6 +873,40 @@ const RELEASE_OPERATIONS: Record<
     });
   },
 
+  /**
+   * Every problem the release's documents have now, hard ones (which stop it
+   * from being scheduled or published now) apart from soft ones.
+   */
+  getReleaseReadiness: async ({ caller, releases, releaseId }) =>
+    respondDoc(await releases.readiness({ ...caller, releaseId })),
+
+  /**
+   * Switch a document between going live and coming down. Bound to the
+   * release in the path, as a removal is.
+   */
+  changeReleaseMemberAction: async ({
+    request,
+    caller,
+    releases,
+    releaseId,
+    memberId,
+  }) => {
+    const body = await jsonObject(request);
+    const action = body.action;
+    if (action !== "publish" && action !== "unpublish") {
+      throw badRequest("`action` must be `publish` or `unpublish`.");
+    }
+    return respondMutation(
+      "Release document updated.",
+      await releases.changeMemberAction({
+        ...caller,
+        releaseId,
+        memberId,
+        action,
+      })
+    );
+  },
+
   removeReleaseMember: async ({ caller, releases, releaseId, memberId }) => {
     // Bound to the release in the PATH. Deleting by member id alone means
     // `/api/releases/A/members/B` removes B even when B belongs to release C —
@@ -726,6 +936,40 @@ const RELEASE_OPERATIONS: Record<
     // Not `{ cancelled: true }`: the response-shape contract refuses
     // boolean-only bodies, because a caller cannot grow against them.
     return respondAction("Release cancelled.", { releaseId });
+  },
+
+  updateRelease: async ({ request, caller, releases, releaseId }) => {
+    const parsed = RELEASE_DETAILS_BODY.safeParse(await jsonObject(request));
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    const release = await releases.update({
+      ...caller,
+      id: releaseId,
+      ...parsed.data,
+    });
+    return respondMutation(
+      "Release updated.",
+      await decorateAfterWrite(release, caller, releases)
+    );
+  },
+
+  deleteRelease: async ({ caller, releases, releaseId }) => {
+    // The mutation envelope with the release as it was, as a deleted entry is
+    // answered: the client can name what it just removed.
+    return respondMutation(
+      "Release deleted.",
+      await releases.delete({ ...caller, id: releaseId })
+    );
+  },
+
+  publishRelease: async ({ caller, releases, releaseId }) => {
+    const release = await releases.publishNow({ ...caller, id: releaseId });
+    // The release as it stands after the run, and a message that says which
+    // way it went: a release still `scheduled` has documents the runner will
+    // finish, and a `blocked` one stopped and will not go on until fixed.
+    return respondMutation(
+      publishNowMessage(release, new Date()),
+      await decorateAfterWrite(release, caller, releases)
+    );
   },
 };
 

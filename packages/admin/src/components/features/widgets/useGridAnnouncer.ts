@@ -5,7 +5,8 @@
  *
  * Its own hook because announcing is a subject rather than a step: it decides
  * when silence is right, it dedupes a repeated sentence, and it is shared by
- * two very different events — a batch settling, and a reader moving a card.
+ * very different events — a batch settling, a reader moving a card, and
+ * customise mode opening, closing or saving.
  * Left inline it was four more pieces of state and branching in a component the
  * complexity gate was already objecting to.
  *
@@ -23,41 +24,53 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export interface GridAnnouncer {
   /** The live region's current text. */
   announcement: string;
-  /** Say where a card landed. */
-  announceMove: (title: string, position: number, count: number) => void;
   /**
-   * Say that a card changed COLUMN.
+   * Say where a card moved, counted among the cards the reader can see.
    *
-   * 🔴 Its own sentence rather than the position formatter. A column and a
-   * position within one are different facts, so passing a column through
-   * `announceMove` says "moved to position 3 of 3" about a card that is the
-   * only one in column 3 — a position it does not hold, in a list whose length
-   * is not its column's. Two facts, two wordings.
+   * Both ends of the move, because a reader who moved a card from its menu
+   * cannot see where it went: "moved from 2 to 5 of 9" says the start, the
+   * landing and how far the list runs, in the order the grid is read.
    */
-  announceColumn: (
+  announceMoved: (
     title: string,
-    column: number,
-    columnCount: number,
-    position: number,
+    from: number,
+    to: number,
     count: number
   ) => void;
-  /**
-   * Say that a card was put away, or brought back.
-   *
-   * Hiding changes nothing a screen reader can otherwise perceive: the card
-   * simply stops being rendered, and the control that did it keeps its own
-   * label. Without this the only feedback is the card's silent disappearance,
-   * which is indistinguishable from the page having failed.
-   */
-  announceHidden: (title: string, hidden: boolean) => void;
+  /** Say the width a card was just set to, by its name ("Half width"). */
+  announceWidth: (title: string, widthName: string) => void;
   /**
    * Say that a card was taken off the dashboard.
    *
-   * Its own sentence rather than the hiding one, because the two differ in
-   * what they cost: hiding keeps the placement and removing drops it, and a
-   * reader deciding whether to undo needs to hear which one happened.
+   * Removing changes nothing a screen reader can otherwise perceive: the card
+   * simply stops being rendered. Without this the only feedback is its silent
+   * disappearance, which is indistinguishable from the page having failed.
    */
   announceRemoved: (title: string) => void;
+  /** Say that a removed card was put back where it was. */
+  announceRestored: (title: string) => void;
+  /**
+   * Say that the default dashboard is staged in place of the reader's own.
+   *
+   * Nothing is written until they save, and the sentence says so: a reset that
+   * sounded final would have a reader leave without saving it.
+   */
+  announceReset: () => void;
+  /**
+   * Say that customise mode opened, and that nothing in it is stored yet.
+   *
+   * Entering moves focus to the bar, which a screen reader announces by its
+   * name; what the name cannot say is that every change waits for Save.
+   */
+  announceEntered: () => void;
+  /** Say that Cancel threw the draft away. */
+  announceDiscarded: () => void;
+  /** Say that a save landed. */
+  announceSaved: () => void;
+  /** Say that a save was refused because the dashboard moved elsewhere. */
+  announceRefused: () => void;
+  /** Say that a save failed, and that the draft is still on screen. */
+  announceSaveFailed: () => void;
 }
 
 /**
@@ -86,10 +99,10 @@ function settledAnnouncement(
 /**
  * The next announcement, alternated so an identical sentence is spoken again.
  *
- * The zero-width space, for the reason `announceMove` carries one: a live
- * region does not re-announce text that did not change. Two placements of one
- * widget carry the same title, so putting both away produces the same sentence
- * twice and the second would be silent.
+ * The zero-width space, because a live region does not re-announce text that
+ * did not change. Two placements of one widget carry the same title, so
+ * removing both produces the same sentence twice and the second would be
+ * silent.
  *
  * At module scope because it is pure: inside the hook it would be a dependency
  * of every callback below, and a new identity each render.
@@ -115,65 +128,74 @@ export function useGridAnnouncer(
     setAnnouncement(next);
   }, [next]);
 
-  const announceMove = useCallback(
-    (title: string, position: number, count: number) => {
-      setAnnouncement(current =>
-        alternate(
-          current,
-          `${title} moved to position ${position} of ${count}.`
-        )
-      );
-    },
+  /*
+   * Every sentence goes through one setter, so the dedupe rule below is
+   * applied to all of them rather than restated per sentence.
+   */
+  const say = useCallback(
+    (sentence: string) =>
+      setAnnouncement(current => alternate(current, sentence)),
     []
   );
 
-  const announceColumn = useCallback(
-    (
-      title: string,
-      column: number,
-      columnCount: number,
-      position: number,
-      count: number
-    ) => {
-      setAnnouncement(current =>
-        alternate(
-          current,
-          `${title} moved to column ${column} of ${columnCount}, position ${position} of ${count}.`
-        )
-      );
-    },
-    []
+  const announceMoved = useCallback(
+    (title: string, from: number, to: number, count: number) =>
+      say(`${title} moved from ${from} to ${to} of ${count}.`),
+    [say]
   );
 
-  const announceHidden = useCallback(
-    (title: string, hidden: boolean) =>
-      setAnnouncement(current =>
-        alternate(
-          current,
-          hidden
-            ? // Names where it went rather than only that it went. A hidden
-              // card is still in the arrangement, and a reader who cannot see
-              // the dimmed cell has no other way to learn it is recoverable.
-              `${title} hidden. Edit the dashboard to bring it back.`
-            : `${title} shown again.`
-        )
-      ),
-    []
+  const announceWidth = useCallback(
+    (title: string, widthName: string) => say(`${title} set to ${widthName}.`),
+    [say]
   );
 
   const announceRemoved = useCallback(
-    (title: string) =>
-      setAnnouncement(current =>
-        alternate(current, `${title} removed from the dashboard.`)
-      ),
-    []
+    (title: string) => say(`${title} removed.`),
+    [say]
+  );
+
+  const announceRestored = useCallback(
+    (title: string) => say(`${title} restored.`),
+    [say]
+  );
+
+  const announceReset = useCallback(
+    () => say("Dashboard reset to the default. Save to keep it."),
+    [say]
+  );
+
+  const announceEntered = useCallback(
+    () =>
+      say("Customizing your dashboard. Nothing is saved until you press Save."),
+    [say]
+  );
+
+  const announceDiscarded = useCallback(() => say("Changes discarded."), [say]);
+
+  const announceSaved = useCallback(() => say("Dashboard saved."), [say]);
+
+  const announceRefused = useCallback(
+    () => say("Your dashboard changed elsewhere, so nothing was saved."),
+    [say]
+  );
+
+  const announceSaveFailed = useCallback(
+    () =>
+      say("Your dashboard could not be saved. Your changes are still here."),
+    [say]
   );
 
   return {
     announcement,
-    announceMove,
-    announceColumn,
-    announceHidden,
+    announceMoved,
+    announceWidth,
     announceRemoved,
+    announceRestored,
+    announceReset,
+    announceEntered,
+    announceDiscarded,
+    announceSaved,
+    announceRefused,
+    announceSaveFailed,
   };
 }

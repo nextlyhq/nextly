@@ -21,6 +21,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { actorForWrite } from "../../../auth/request-actor";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -37,7 +38,9 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
+import { recordTransitionEvents } from "../../content-events/write-event";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 import {
@@ -49,6 +52,8 @@ import {
   isCompanionReady,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { draftComponentValues } from "../../versions/draft-components";
+import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -69,12 +74,15 @@ import type {
 } from "../types";
 
 import {
-  readCompanionValuesInTx,
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { assertDraftsMayBePromoted } from "./promote-gate";
+import {
+  assertDraftsMayBePromoted,
+  liveStoredDocument,
+  promoteCallerFor,
+} from "./promote-gate";
 import {
   checkSingleAccess,
   type SingleQueryService,
@@ -114,6 +122,12 @@ interface PublishPlan {
   companionPublishable: boolean;
   fieldConfigs: FieldConfig[];
   recordingEnabled: boolean;
+  /**
+   * Whether the Single may have working drafts, as its schema read reports.
+   * A stored draft is promoted only while it does: one left from before the
+   * schema made it ineligible is hidden from every read.
+   */
+  draftsEligible: boolean;
   actor: ReturnType<typeof actorForWrite>;
 }
 
@@ -177,6 +191,16 @@ export class SinglePublishAllService extends BaseService {
         options.user,
         options.authenticatedScope
       );
+
+      // Every component type's readiness, resolved before the transaction:
+      // the drafts' component values are written inside it, where a verdict
+      // can only be read, and an unknown one reads as unavailable. The payload
+      // is empty, so this warms and refuses nothing.
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: plan.fieldConfigs,
+        data: {},
+        locale: undefined,
+      });
 
       const outcome = await withVersionConflictRetry(() =>
         this.adapter.transaction(tx =>
@@ -312,6 +336,17 @@ export class SinglePublishAllService extends BaseService {
         fieldConfigs: singleMeta.fields ?? [],
         recordingEnabled: isOutboxRecordingActive("single", slug),
         actor: actorForWrite(options.actor ?? null, options.user),
+        // Resolved before the transaction: it reads the component registry.
+        draftsEligible: (
+          await schemaDraftSplit({
+            status: (singleMeta as { status?: boolean }).status,
+            versions: singleMeta.versions,
+            fields: singleMeta.fields ?? [],
+            slug,
+            localized: singleMeta.localized,
+            entityKind: "single",
+          })
+        ).eligible,
       },
     };
   }
@@ -425,17 +460,53 @@ export class SinglePublishAllService extends BaseService {
           )
         : new Map<string, string | null>();
 
+    // Judged before anything is written, on the row this transaction locked:
+    // the gate is the precondition of the publish, not a check of its result.
+    // As ONE outcome, because the promotion applies every language's snapshot
+    // to the same main row, so the shared values that survive are the last
+    // writer's. A language with nothing pending goes live as it is stored,
+    // judged when it was saved as a draft and never as published, so it is
+    // judged as a promotion of an empty change in the same outcome.
+    const pending = await this.pendingChanges(tx, plan);
+    await this.assertPendingChangesMayBePromoted(
+      tx,
+      plan,
+      lockedRow,
+      [
+        ...pending,
+        ...languagesGoingLiveAsStored(
+          plan,
+          pending,
+          { mainStatus: lockedRow.status, companion: priorCompanionStatuses },
+          new Set(this.localization?.locales.map(locale => locale.code) ?? [])
+        ),
+      ],
+      options,
+      promoteGrants
+    );
+
+    // The components as they stood before the drafts are promoted, for each
+    // language an event's previous state is built in: the promotion rewrites
+    // the component tables that assembly would otherwise read.
+    const priorComponents = await this.componentsBeforePromotion(
+      tx,
+      plan,
+      pending,
+      priorCompanionStatuses
+    );
+
     const written = await this.writePublishedStatuses(
       tx,
       plan,
       lockedRow,
       priorCompanionStatuses,
-      options,
-      promoteGrants
+      pending,
+      options.user
     );
 
+    let publishVersionNo: number | null = null;
     if (singleMeta.versions?.enabled) {
-      await this.capturePublishSnapshot(
+      publishVersionNo = await this.capturePublishSnapshot(
         tx,
         slug,
         existingDoc.id,
@@ -447,6 +518,13 @@ export class SinglePublishAllService extends BaseService {
       );
     }
 
+    await this.recordPublishHistory(tx, plan, {
+      user: options.user,
+      mainFrom: lockedRow.status as string | null,
+      priorCompanionStatuses,
+      versionNo: publishVersionNo,
+    });
+
     const eventRecorded = plan.recordingEnabled
       ? await this.recordPublishEvents(tx, {
           plan,
@@ -454,6 +532,7 @@ export class SinglePublishAllService extends BaseService {
           publishedRow: written.publishedRow,
           mainRowTransitioned: written.mainRowTransitioned,
           priorCompanionStatuses,
+          priorComponents,
         })
       : false;
 
@@ -480,9 +559,10 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     lockedRow: Record<string, unknown>,
     priorCompanionStatuses: Map<string, string | null>,
-    options: PublishAllSingleLocalesOptions,
-    /** Resolved before this transaction opened; see `publishAllLocales`. */
-    promoteGrants?: () => Promise<CallerGrants>
+    /** The pending changes, already judged. */
+    pending: readonly PendingChange[],
+    /** The publisher, whom the component save's own field rules see. */
+    user: UserContext | undefined
   ): Promise<{
     publishedRow: Record<string, unknown>;
     mainRowTransitioned: boolean;
@@ -517,13 +597,7 @@ export class SinglePublishAllService extends BaseService {
     // the statuses would all say published while the content each author was
     // holding stayed unapplied — the document would report itself fully
     // published and show none of the work being published.
-    await this.promotePendingChanges(
-      tx,
-      plan,
-      publishNow,
-      options,
-      promoteGrants
-    );
+    await this.promotePendingChanges(tx, plan, publishNow, pending, user);
 
     if (companion && plan.companionPublishable) {
       // Every stored translation moves in ONE statement, through the adapter's
@@ -569,11 +643,17 @@ export class SinglePublishAllService extends BaseService {
   private async assertPendingChangesMayBePromoted(
     tx: TransactionContext,
     plan: PublishPlan,
+    /** The main row as this transaction locked it, which the write lands on. */
+    lockedRow: Record<string, unknown>,
     pending: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
     options: PublishAllSingleLocalesOptions,
     promoteGrants?: () => Promise<CallerGrants>
   ): Promise<void> {
+    // Nothing goes live that was not live already: nothing to judge.
+    if (pending.length === 0) return;
     const { slug, singleMeta, existingDoc, companion, fieldConfigs } = plan;
+    // The row the write lands on, not the one read before the transaction.
+    const live = lockedRow as SingleDocument;
     const reader = this.queryService;
     // Constructed without a reader only by a caller that built this service
     // directly. The gate cannot run blind, and silently skipping it would make
@@ -589,17 +669,22 @@ export class SinglePublishAllService extends BaseService {
       });
     }
 
+    const localizedFieldNames = new Set(
+      (companion?.localizedFields ?? []).map(f => f.name)
+    );
     await assertDraftsMayBePromoted(pending, {
-      slug,
+      ...promoteCallerFor({
+        tx,
+        slug,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+        fields: fieldConfigs,
+        options,
+        grants: promoteGrants,
+      }),
       entryId: existingDoc.id,
-      fields: fieldConfigs,
-      user: options.user,
-      overrideAccess: options.overrideAccess,
-      authenticatedScope: options.authenticatedScope,
-      grants: promoteGrants,
       toLogical: doc =>
         reader.deserializeJsonFields(
-          { id: existingDoc.id, updatedAt: existingDoc.updatedAt, ...doc },
+          { id: existingDoc.id, updatedAt: live.updatedAt, ...doc },
           singleMeta.fields
         ),
       // The stored row, in the shape a snapshot holds, so an untouched upload
@@ -607,20 +692,26 @@ export class SinglePublishAllService extends BaseService {
       // identifier with the document a read would have expanded it into. And
       // with this language's companion values over it, since a translation
       // lives there and the main row reports every one of them as absent.
-      liveStoredFor: async locale =>
-        companion && locale
-          ? {
-              ...existingDoc,
-              ...(await readCompanionValuesInTx(
-                tx,
-                companion,
-                existingDoc.id,
-                locale
-              )),
-            }
-          : existingDoc,
-      localizedFieldNames: new Set(
-        (companion?.localizedFields ?? []).map(f => f.name)
+      liveStoredFor: locale =>
+        liveStoredDocument({
+          tx,
+          row: live,
+          locale,
+          companion,
+          // The condition this read has always been taken under here.
+          companionExists: companion !== null,
+          fieldGroupDataService: this.fieldGroupDataService,
+          parentTable: singleMeta.tableName,
+          fieldConfigs,
+          slug,
+        }),
+      // A language whose draft was saved as a draft still goes live here.
+      status: "published",
+      localizedFieldNames,
+      perLanguageFieldNames: await this.perLanguageFieldNames(
+        tx,
+        fieldConfigs,
+        localizedFieldNames
       ),
       // Every language goes live here, so none of them is falling back to
       // another and each one's required values are enforced.
@@ -639,38 +730,21 @@ export class SinglePublishAllService extends BaseService {
     tx: TransactionContext,
     plan: PublishPlan,
     publishNow: Date,
-    options: PublishAllSingleLocalesOptions,
-    promoteGrants?: () => Promise<CallerGrants>
+    /** Judged before the statuses moved; see the transaction body. */
+    pending: readonly PendingChange[],
+    user: UserContext | undefined
   ): Promise<void> {
-    const { slug, singleMeta, existingDoc, companion } = plan;
-    if (singleMeta.versions?.drafts?.enabled !== true) return;
-
-    const repo = new VersionsRepository(tx);
-    const ref = {
-      scopeKind: "single" as const,
-      scopeSlug: slug,
-      entryId: existingDoc.id,
-    };
-    const pending = await repo.findAllWorkingDrafts(ref);
     if (pending.length === 0) return;
-
-    // Judged here, on the drafts this transaction has read under its lock, and
-    // as ONE outcome: the loop below applies every language's snapshot to the
-    // same main row, so the shared values that survive are the last writer's.
-    // Judged one at a time, each draft can pass against its own shared values
-    // while the document that actually lands holds another language's.
-    await this.assertPendingChangesMayBePromoted(
-      tx,
-      plan,
-      pending,
-      options,
-      promoteGrants
-    );
+    const { singleMeta, existingDoc, companion } = plan;
 
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this
       // publish writes are the ones that count.
-      const { main, companion: companionValues } = splitPendingChange(
+      const {
+        main,
+        companion: companionValues,
+        components,
+      } = splitPendingChange(
         draft.snapshot,
         plan.singleMeta.tableName,
         plan.singleMeta.fields,
@@ -699,9 +773,122 @@ export class SinglePublishAllService extends BaseService {
           values: companionValues,
         });
       }
+      await this.promoteComponents(tx, plan, components, draft.locale, user);
     }
 
-    await repo.deleteAllWorkingDrafts(ref);
+    await new VersionsRepository(tx).deleteAllWorkingDrafts(
+      this.workingDraftRef(plan)
+    );
+  }
+
+  /**
+   * Write a pending change's component values, the way an ordinary publish
+   * writes them. They live in tables of their own, so without this the drafts
+   * are consumed and a held component edit is lost while the publish succeeds.
+   * Cloned because the save mutates its input (ids, hashed passwords).
+   */
+  private async promoteComponents(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    components: Record<string, unknown>,
+    locale: string | null,
+    user: UserContext | undefined
+  ): Promise<void> {
+    if (!this.fieldGroupDataService || Object.keys(components).length === 0) {
+      return;
+    }
+    await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
+      parentId: plan.existingDoc.id,
+      parentTable: plan.singleMeta.tableName,
+      fields: plan.fieldConfigs,
+      data: structuredClone(components),
+      locale: locale ?? undefined,
+      req: user ? { user } : {},
+    });
+  }
+
+  /**
+   * The fields each language's draft carries a value of its own for: the
+   * translated fields, and every field whose component is translated, whose
+   * values `promoteComponents` writes per language.
+   */
+  private async perLanguageFieldNames(
+    tx: TransactionContext,
+    fieldConfigs: FieldConfig[],
+    localizedFieldNames: Set<string>
+  ): Promise<Set<string>> {
+    const service = this.fieldGroupDataService;
+    if (!service) return new Set(localizedFieldNames);
+    return perLanguageFieldNames(fieldConfigs, localizedFieldNames, slug =>
+      service.isComponentLocalized(slug, tx.getDrizzle())
+    );
+  }
+
+  /**
+   * Each language's component subtrees before the drafts are promoted, keyed
+   * by locale ("" for none), for the previous state of this publish's events.
+   * Empty when no event is recorded, or when no pending change holds a
+   * component value: nothing is then rewritten, and the assembly reads the
+   * tables as they stand.
+   */
+  private async componentsBeforePromotion(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    pending: readonly PendingChange[],
+    priorCompanionStatuses: Map<string, string | null>
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const prior = new Map<string, Record<string, unknown>>();
+    if (!plan.recordingEnabled) return prior;
+    const holdsComponents = pending.some(
+      draft =>
+        Object.keys(
+          draftComponentValues(
+            (draft.snapshot ?? {}) as Record<string, unknown>,
+            plan.fieldConfigs
+          )
+        ).length > 0
+    );
+    if (!holdsComponents || !this.fieldGroupDataService) return prior;
+    const defaultLocale = this.localization?.defaultLocale;
+    const locales = new Set<string | undefined>([
+      defaultLocale,
+      ...priorCompanionStatuses.keys(),
+    ]);
+    for (const locale of locales) {
+      prior.set(
+        locale ?? "",
+        await readComponentSubtrees({
+          fieldGroupDataService: this.fieldGroupDataService,
+          tx,
+          entryId: plan.existingDoc.id,
+          parentTable: plan.singleMeta.tableName,
+          fieldConfigs: plan.fieldConfigs,
+          locale,
+          reason: "webhook-single-component-read",
+          logContext: { table: plan.singleMeta.tableName },
+        })
+      );
+    }
+    return prior;
+  }
+
+  /** Every language's pending change, where the Single keeps drafts. */
+  private async pendingChanges(
+    tx: TransactionContext,
+    plan: PublishPlan
+  ): Promise<PendingChange[]> {
+    if (!plan.draftsEligible) return [];
+    return new VersionsRepository(tx).findAllWorkingDrafts(
+      this.workingDraftRef(plan)
+    );
+  }
+
+  private workingDraftRef(plan: PublishPlan) {
+    return {
+      scopeKind: "single" as const,
+      scopeSlug: plan.slug,
+      entryId: plan.existingDoc.id,
+    };
   }
 
   /**
@@ -789,7 +976,7 @@ export class SinglePublishAllService extends BaseService {
     fieldConfigs: FieldConfig[],
     user: UserContext | undefined,
     maxPerDoc: number | false | undefined
-  ): Promise<void> {
+  ): Promise<number | null> {
     // Match the read shape: keep user field keys (which may contain
     // underscores like `site_title`) exactly, converting only the timestamp
     // columns — camel-casing every key would rewrite those fields.
@@ -820,7 +1007,10 @@ export class SinglePublishAllService extends BaseService {
       logContext: { single: slug },
     });
 
-    await captureInTx(tx, this.versionCapture, {
+    // Always recorded: publishing every language can change only a
+    // language's status, which this snapshot does not hold, so it would
+    // compare equal with the version before.
+    const { versionNo } = await captureInTx(tx, this.versionCapture, {
       ref: { scopeKind: "single", scopeSlug: slug, entryId },
       contentStatus: "published",
       parts: {
@@ -839,6 +1029,48 @@ export class SinglePublishAllService extends BaseService {
       locale: null,
       maxPerDoc,
     });
+    return versionNo;
+  }
+
+  /**
+   * One history event for the whole publish, naming the languages it moved
+   * (the app's own; a locale it no longer configures names nothing it
+   * exposes), whatever the Single's webhook settings.
+   */
+  private async recordPublishHistory(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    publish: {
+      user: UserContext | undefined;
+      mainFrom: string | null;
+      priorCompanionStatuses: Map<string, string | null>;
+      versionNo: number | null;
+    }
+  ): Promise<void> {
+    const configuredLocales = new Set(
+      this.localization?.locales.map(locale => locale.code) ?? []
+    );
+    await recordTransitionEvents(
+      tx,
+      { adapter: this.adapter },
+      {
+        subject: { kind: "single", slug: plan.slug, id: plan.existingDoc.id },
+        actor: plan.actor,
+        personName: publish.user?.name ?? null,
+        versionNo: publish.versionNo,
+      },
+      [
+        ...(plan.hasMainStatus
+          ? [{ from: publish.mainFrom, to: "published" }]
+          : []),
+        ...[...publish.priorCompanionStatuses]
+          .filter(
+            ([locale]) =>
+              configuredLocales.size === 0 || configuredLocales.has(locale)
+          )
+          .map(([locale, from]) => ({ locale, from, to: "published" })),
+      ]
+    );
   }
 
   /**
@@ -865,6 +1097,8 @@ export class SinglePublishAllService extends BaseService {
       publishedRow: Record<string, unknown>;
       mainRowTransitioned: boolean;
       priorCompanionStatuses: Map<string, string | null>;
+      /** Each language's components before promotion, keyed by locale ("" for none). */
+      priorComponents: Map<string, Record<string, unknown>>;
     }
   ): Promise<boolean> {
     const {
@@ -910,6 +1144,7 @@ export class SinglePublishAllService extends BaseService {
       publishedRow,
       webhookFields,
       resource,
+      priorComponents: args.priorComponents,
       // The untagged publish event is emitted only when the main row really
       // transitioned AND no default-locale companion event already encodes it.
       emitPublished:
@@ -925,6 +1160,7 @@ export class SinglePublishAllService extends BaseService {
       priorCompanionStatuses,
       webhookFields,
       resource,
+      priorComponents: args.priorComponents,
     });
 
     return documentRecorded || localeRecorded;
@@ -944,7 +1180,8 @@ export class SinglePublishAllService extends BaseService {
     row: Record<string, unknown>,
     companionValues: Record<string, unknown>,
     payloadLocale: string | undefined,
-    localeStatus?: string
+    localeStatus?: string,
+    components?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     return buildSingleWebhookDoc(
       this.fieldGroupDataService,
@@ -957,7 +1194,8 @@ export class SinglePublishAllService extends BaseService {
       !!plan.companion && plan.companionPublishable,
       companionValues,
       payloadLocale,
-      localeStatus
+      localeStatus,
+      components
     );
   }
 
@@ -977,6 +1215,7 @@ export class SinglePublishAllService extends BaseService {
       webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
       resource: WebhookResource;
       emitPublished: boolean;
+      priorComponents: Map<string, Record<string, unknown>>;
     }
   ): Promise<boolean> {
     const { plan, lockedRow, publishedRow, webhookFields, resource } = args;
@@ -1004,7 +1243,9 @@ export class SinglePublishAllService extends BaseService {
       plan,
       lockedRow,
       defaultCompanionValues,
-      defaultLocale
+      defaultLocale,
+      undefined,
+      args.priorComponents.get(defaultLocale ?? "")
     );
 
     let recorded = await recordMutationEvent(tx, {
@@ -1051,6 +1292,7 @@ export class SinglePublishAllService extends BaseService {
       priorCompanionStatuses: Map<string, string | null>;
       webhookFields: Awaited<ReturnType<typeof expandComponentFields>>;
       resource: WebhookResource;
+      priorComponents: Map<string, Record<string, unknown>>;
     }
   ): Promise<boolean> {
     const {
@@ -1100,7 +1342,8 @@ export class SinglePublishAllService extends BaseService {
           lockedRow,
           localeValues,
           locale,
-          priorStatus ?? undefined
+          priorStatus ?? undefined,
+          args.priorComponents.get(locale)
         ),
         fields: webhookFields,
         actor: plan.actor,
@@ -1109,4 +1352,86 @@ export class SinglePublishAllService extends BaseService {
     }
     return recorded;
   }
+}
+
+/** One language's pending change, as the versions store holds it. */
+type PendingChange = Awaited<
+  ReturnType<VersionsRepository["findAllWorkingDrafts"]>
+>[number];
+
+/** Each language's status as committed before this publish moved it. */
+interface PriorStatuses {
+  /** The main row's, which is the whole document's for an unlocalized Single. */
+  readonly mainStatus: unknown;
+  /** Each stored translation's `_status`, keyed by locale. */
+  readonly companion: ReadonlyMap<string, string | null>;
+}
+
+/**
+ * The languages this publish judges as stored, beside its pending changes:
+ * those it puts live from their stored rows alone, and, when a pending change
+ * may rewrite the shared values beneath them, those already live too. A
+ * language that was live and is not touched was judged as published when it
+ * went live, and a pending change is judged on its own account.
+ *
+ * The main row is one of them where nothing else carries it: shared content
+ * goes live with the main row's status even where no translation is stored,
+ * as on a Single whose only edits were shared ones, so it is judged then too.
+ */
+function languagesGoingLiveAsStored(
+  plan: PublishPlan,
+  pending: ReadonlyArray<{ locale: string | null }>,
+  prior: PriorStatuses,
+  /**
+   * The languages the app configures. A removed language's row can outlive
+   * it, and no request can reach it to repair, so it is not judged.
+   */
+  configured: ReadonlySet<string>
+): { locale: string | null; snapshot: Record<string, never> }[] {
+  const held = new Set(pending.map(change => change.locale));
+  // A pending change can write shared values to the main row, which every
+  // language's document reads, so a language already live is changed by it as
+  // surely as one going live: with anything pending, every stored translation
+  // is judged.
+  const changesShared = pending.length > 0;
+  const translations =
+    plan.companion && plan.companionPublishable
+      ? [...prior.companion]
+          .filter(
+            ([locale, status]) =>
+              !held.has(locale) &&
+              (configured.size === 0 || configured.has(locale)) &&
+              (changesShared || status !== "published")
+          )
+          .map(([locale]) => ({ locale, snapshot: {} }))
+      : [];
+  // Each of these is judged on the main row too, so it carries it already.
+  if (translations.length > 0 || pending.length > 0) return translations;
+  if (!plan.hasMainStatus || prior.mainStatus === "published") return [];
+  return [{ locale: null, snapshot: {} }];
+}
+
+/**
+ * The fields judged per language when every language is published: the
+ * translated fields, and each field whose component is translated. A dynamic
+ * zone counts when any type it permits is translated. References are read
+ * through `fieldGroupSlugList`, so a definition stored under the migrated
+ * `fieldGroup` / `fieldGroups` keys counts as the field-group saver sees it.
+ */
+export async function perLanguageFieldNames(
+  fieldConfigs: readonly FieldConfig[],
+  localizedFieldNames: ReadonlySet<string>,
+  isComponentLocalized: (slug: string) => Promise<boolean>
+): Promise<Set<string>> {
+  const names = new Set(localizedFieldNames);
+  for (const field of fieldConfigs) {
+    if (!isFieldGroupField(field)) continue;
+    for (const slug of fieldGroupSlugList(field)) {
+      if (await isComponentLocalized(slug)) {
+        names.add(field.name);
+        break;
+      }
+    }
+  }
+  return names;
 }

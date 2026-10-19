@@ -26,10 +26,21 @@ everything.
 
 ## Collection access
 
-Grants say what a role may do. Collection access says which documents:
+Grants say what a role may do. When a collection declares an `access` rule for an
+operation, that rule is the whole answer for a signed-in user: the grant is not checked
+beside it, so a rule that returns `true` admits someone whose role lacks the grant. So
+for staff and API keys, make the rule check the permission itself, then add your own
+condition, and it only ever narrows what the Roles screen grants. A rule that also admits
+plugin-defined people checks for them in a separate branch, since they hold no
+permissions (see the end of this section):
 
 ```ts
+import type { AccessControlFunction } from "nextly";
 import { defineCollection, relationship, text } from "nextly/config";
+
+/** The caller holds this operation's permission on this collection. */
+const permitted: AccessControlFunction = ({ permissions, collection, operation }) =>
+  permissions.includes(`${collection}:${operation}`);
 
 export const Posts = defineCollection({
   slug: "posts",
@@ -39,16 +50,30 @@ export const Posts = defineCollection({
   ],
   access: {
     read: true,
-    create: ({ roles }) => roles.includes("editor") || roles.includes("admin"),
+    create: permitted,
+    // Narrowed: the permission, and not while a content freeze is on.
+    update: args => permitted(args) && process.env.CONTENT_FREEZE !== "on",
   },
 });
 ```
 
-`true` means anyone, including unauthenticated readers. A function receives the request
-context and decides.
+A rule is given the caller's `permissions` as `resource:action` — `posts:update`, the grant
+the Roles screen calls `update-posts` — for a signed-in user and an API key alike. A visitor
+holds none, so a permission check refuses them. A super-admin is admitted before any rule
+runs.
+
+**Don't check a role's name in a rule.** `roles.includes("editor")` refuses a role an admin
+created that holds `update-posts`, and every API key whose roles carry none of the names you
+listed, while the Roles screen says both may act. The role's permissions are what the admin
+manages, so a rule that reads them stays in step with that screen.
+
+`true` means anyone, including unauthenticated readers.
 
 A collection whose `access` says nothing about an operation falls back to grants: a
 signed-in user needs `read-posts` to read `posts`.
+
+An **API key** must hold the permission in its own grants, and then satisfy the rule if there
+is one.
 
 A plugin-defined signed-in person, such as a shop's customer, is different: they
 hold no grants, so a rule is the only way in. A rule sees them as `principal`
@@ -96,9 +121,10 @@ export const Users = defineCollection({
     text({ name: "name" }),
     text({
       name: "internalNotes",
+      // Only callers who may manage users see or change the notes.
       access: {
-        read: ({ req }) => req.user?.role === "admin",
-        update: ({ req }) => req.user?.role === "admin",
+        read: ({ permissions }) => permissions.includes("users:update"),
+        update: ({ permissions }) => permissions.includes("users:update"),
       },
     }),
   ],
@@ -107,6 +133,15 @@ export const Users = defineCollection({
 
 A field the reader may not see is removed from the response rather than blanked, and a
 field they may not change is rejected on write rather than silently dropped.
+
+A field the reader may not see cannot be used to choose rows either: filtering, sorting
+or grouping on it is refused with a `400` that names the field, and a collection's search
+leaves it out. Before a query there is no entry yet, so the `read` rule is asked without
+one. A rule that allows the reader outright, like the one above, lets an admin filter on
+`internalNotes`. A rule that needs the entry to decide, such as `({ req, data }) =>
+data?.owner === req.user?.id`, cannot allow, so the field can't be queried at all, not
+even by its owner. That keeps a filter or an ordering from revealing the value on entries
+where the reader can't see it.
 
 This is the level most systems either do not have or sell separately. It is what lets one
 collection serve two audiences — an editor who sees the article, and a finance user who

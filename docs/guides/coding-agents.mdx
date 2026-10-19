@@ -1,0 +1,69 @@
+---
+title: Coding agents
+description: The agent guide and skills a Nextly project comes with, how to add the skills to an existing project, and how to keep them in step with the Nextly version you run.
+---
+
+Coding agents such as Claude Code, Codex and Cursor answer from whatever they remember of some other Nextly version unless the project tells them otherwise. A project made with `create-nextly-app` tells them in two ways:
+
+- **`AGENTS.md`**, with `CLAUDE.md` pointing to it: where things are, the commands, and the mistakes worth avoiding. Agents read it in every session.
+- **Skills**: step-by-step instructions for common Nextly tasks (installing Nextly, defining collections, authentication, going live). An agent loads a skill only when a task needs it, so a skill can go into more detail than `AGENTS.md`.
+
+The skills are written for one Nextly release and checked against it. The ones a project starts with are the ones released with the `create-nextly-app` that made it.
+
+## Where the skills are
+
+| folder            | read by                                           |
+| ----------------- | ------------------------------------------------- |
+| `.agents/skills/` | Codex, Cursor, GitHub Copilot, Gemini CLI, others |
+| `.claude/skills/` | Claude Code                                       |
+
+Both folders hold the same files. They are real copies rather than a link from one to the other, because Git for Windows checks a symbolic link out as a plain text file. Commit both.
+
+## New projects
+
+`create-nextly-app` asks whether to add the skills, and adds them unless you answer no. With `-y` it adds them without asking. To leave them out:
+
+```bash
+npx create-nextly-app@alpha my-app --no-skills
+```
+
+Running `create-nextly-app` inside an existing Next.js app asks the same question. A skill folder the project already has is left exactly as it is, and the output says which ones were skipped.
+
+The skills are added only when the project's `nextly` is the release they were checked against. Each skill names that release in its `metadata.nextly-version`. A project that installs another release, for example because npm's `latest` tag lags the `create-nextly-app` you ran, gets no skills. Instead, the output names both versions, and you can add matching skills as described below.
+
+## Adding or updating the skills
+
+To add the skills to a project that has none, or to bring them up to the Nextly version you now run, first read that version:
+
+```bash
+npx nextly --version
+```
+
+Then install the skills from the matching release, with that version in place of `<version>`:
+
+```bash
+npx skills add 'nextlyhq/nextly#v<version>' --skill '*' --agent claude-code codex cursor --copy -y
+```
+
+- The quotes stop your shell from reading `#` as the start of a comment.
+- `--copy` writes real files into `.claude/skills/`, as `create-nextly-app` does. Without it the command links that folder's skills to `.agents/skills/`.
+- It replaces each skill it installs, including any edits you made to it. To keep your own version of a skill, give it a different folder name.
+- It also writes `skills-lock.json`, the installer's record of what it installed.
+
+<Callout type="warn">
+  Releases after `0.0.2-alpha.66` publish the skills. On `0.0.2-alpha.66` or
+  earlier, upgrade Nextly first. The repository at those versions has no skills
+  for people building apps, so the command would install the skills Nextly's own
+  contributors use instead.
+</Callout>
+
+Installing without a version, as `nextlyhq/nextly`, takes the skills from the main branch. They can describe features your installed version does not have yet.
+
+## Documentation for agents
+
+The documentation is published in two files written for agents to fetch:
+
+- [`llms.txt`](https://nextlyhq.com/llms.txt): every documentation page, with a one-line summary.
+- [`llms-full.txt`](https://nextlyhq.com/llms-full.txt): all of the documentation as one file.
+
+Both describe the current release. Check the version your project runs before trusting a detail against an older one.

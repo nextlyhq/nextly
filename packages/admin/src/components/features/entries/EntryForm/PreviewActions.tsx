@@ -358,6 +358,74 @@ export function PreviewActions({
   );
 }
 
+/** One thing an author can do with the preview, as a menu row. */
+export interface PreviewChoice {
+  id: "pane" | "open" | "copy";
+  label: string;
+  run: () => void;
+  disabled: boolean;
+}
+
+/**
+ * Every preview action this surface offers, as plain menu rows, named exactly
+ * as the control names them.
+ *
+ * For a screen too narrow to keep the control in the header: the same choices
+ * move into the document's menu rather than wrapping the header onto another
+ * row. Derived from the same labels the control draws, so the two never call
+ * one action by different names.
+ */
+export function previewChoices({
+  isPreviewAvailable = false,
+  onPreview,
+  previewLabel,
+  onTogglePreviewPane,
+  previewPaneOpen = false,
+  isLinkAvailable = false,
+  onCopyLink,
+  isCopyingLink = false,
+  disabled = false,
+}: PreviewActionsProps): PreviewChoice[] {
+  const canPane = onTogglePreviewPane !== undefined;
+  const canOpen = isPreviewAvailable && onPreview !== undefined;
+  const canCopy = isLinkAvailable && onCopyLink !== undefined;
+  const choices: PreviewChoice[] = [];
+  /*
+   * Named by what each row DOES, not by the preview's own label. Folded into
+   * the document's menu the rows sit side by side, out of the control that
+   * told them apart, and a collection's declared label ("View page") on both
+   * would give two rows one name: one opens the pane beside the editor, the
+   * other a new tab.
+   */
+  if (canPane) {
+    choices.push({
+      id: "pane",
+      label: previewPaneOpen ? "Hide preview pane" : "Show preview pane",
+      run: () => onTogglePreviewPane?.(),
+      disabled,
+    });
+  }
+  if (canOpen) {
+    choices.push({
+      id: "open",
+      // The control's own name for opening, so a preview that opens in this
+      // window is never promised a new tab.
+      label: previewLabels(previewLabel, previewPaneOpen, canPane).menuOpen,
+      run: () => void onPreview?.(),
+      disabled,
+    });
+  }
+  if (canCopy) {
+    choices.push({
+      id: "copy",
+      label: COPY_LABEL,
+      run: () => onCopyLink?.(),
+      disabled: disabled || isCopyingLink,
+    });
+  }
+  return choices;
+}
+
 /** Copying reports its own progress: in flight, just done, or ready. */
 function copyIcon(copying: boolean, copied: boolean): ReactElement {
   if (copying) return <Loader2 className="h-4 w-4 animate-spin" />;

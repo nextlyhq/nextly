@@ -17,6 +17,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { barsAccepts, barsBody } from "../bars";
+import { CardEmpty } from "../../frame/states";
 
 const widget = (): DashboardWidget =>
   ({
@@ -39,7 +40,9 @@ const grouped = (
 function draw(result: WidgetResult, definition = widget()) {
   const outcome = barsBody(result, definition);
   if (!outcome.ok) throw new Error(`expected a body, got: ${outcome.message}`);
-  render(<>{outcome.node}</>);
+  render(
+    <>{outcome.empty ? <CardEmpty {...outcome.empty} /> : outcome.node}</>
+  );
 }
 
 describe("the bars archetype", () => {
@@ -179,12 +182,95 @@ describe("the bars archetype", () => {
 
   it("discloses a cap rather than quietly showing a partial picture", () => {
     draw(grouped([{ value: "Published", count: 9 }], true));
-    expect(screen.getByText(/some are not listed/i)).toBeInTheDocument();
+    expect(screen.getByText(/more groups exist/i)).toBeInTheDocument();
   });
 
   it("says nothing was matched rather than drawing an empty frame", () => {
     draw(grouped([]));
-    expect(screen.getByText(/no rows matched/i)).toBeInTheDocument();
+    // The frame's one empty state, worded for groups.
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      /Nothing to compare yet/
+    );
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+});
+
+describe("a breakdown names its groups as a person reads them", () => {
+  // The server describes the grouped field: its label heads the value column and its value
+  // labels name the bars, so a person reads "Needs review" rather than `needs_review`.
+  const described = (buckets: { value: string | null; count: number }[]) =>
+    ({
+      op: "groupBy",
+      buckets,
+      field: {
+        name: "stage",
+        label: "Stage",
+        type: "string",
+        choices: [
+          { value: "needs_review", label: "Needs review" },
+          { value: "done", label: "Done" },
+        ],
+      },
+    }) as WidgetResult;
+
+  it("names each bar by its value's label and keeps the count beside it", () => {
+    draw(
+      described([
+        { value: "needs_review", count: 12 },
+        { value: "done", count: 3 },
+      ])
+    );
+
+    const table = screen.getByRole("table");
+    const row = within(table).getByRole("row", { name: /Needs review/ });
+    expect(within(row).getByText("12")).toBeInTheDocument();
+    expect(screen.queryByText("needs_review")).not.toBeInTheDocument();
+  });
+
+  it("heads the value column with the grouped field's label", () => {
+    draw(described([{ value: "done", count: 3 }]));
+
+    expect(
+      within(screen.getByRole("table")).getByRole("columnheader", {
+        name: "Stage",
+      })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps a stored value the field does not name, and the null bucket's placeholder", () => {
+    draw(
+      described([
+        { value: "archived", count: 2 },
+        { value: null, count: 1 },
+      ])
+    );
+
+    const table = screen.getByRole("table");
+    expect(
+      within(table).getByRole("row", { name: /archived/ })
+    ).toBeInTheDocument();
+    // The null bucket is named by what it means, as before the labels existed.
+    expect(
+      within(table).getByRole("row", { name: /no value stored/ })
+    ).toBeInTheDocument();
+  });
+
+  it("names an empty stored value by its declared choice, as a list does", () => {
+    // An option that stores "" on purpose ("None") is a choice, not missing data.
+    draw({
+      op: "groupBy",
+      buckets: [{ value: "", count: 4 }],
+      field: {
+        name: "stage",
+        label: "Stage",
+        type: "string",
+        choices: [{ value: "", label: "None" }],
+      },
+    } as WidgetResult);
+
+    const table = screen.getByRole("table");
+    const row = within(table).getByRole("row", { name: /None/ });
+    expect(within(row).getByText("4")).toBeInTheDocument();
+    expect(screen.queryByText("(empty)")).not.toBeInTheDocument();
   });
 });

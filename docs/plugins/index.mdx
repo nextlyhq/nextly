@@ -5,7 +5,7 @@ description: Extend Nextly with official and custom plugins that add collections
 
 > **Alpha (`0.x`) — pin your versions.**
 >
-> The plugin API surface is now **stable and semver-protected** (see [API stability](/docs/plugins/stability)); the packages themselves are still `0.x` alpha. Build against `@nextlyhq/plugin-sdk` — the stability boundary — and pin your `nextly` / `@nextlyhq/plugin-sdk` versions.
+> The plugin SDK is alpha: its `@public` surface becomes semver-protected at 1.0 (see [API stability](/docs/plugins/stability)). Build against `@nextlyhq/plugin-sdk` — the stability boundary — and until then pin exact `nextly` / `@nextlyhq/plugin-sdk` versions.
 
 Plugins extend Nextly with new functionality without modifying core code. A plugin can add collections, register lifecycle hooks, inject custom admin views, and transform configuration -- all through a single `plugins` array in your config.
 
@@ -69,7 +69,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export const myPlugin = definePlugin({
   name: "@acme/nextly-plugin-example",
   version: "1.0.0",
-  nextly: "^1.0.0",
+  nextly: ">=0.0.2-alpha.67",
   contributes: {
     collections: [MyCollection], // merged automatically by the pipeline
   },
@@ -95,7 +95,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export const auditPlugin = definePlugin({
   name: "audit-log",
   version: "1.0.0",
-  nextly: "^1.0.0",
+  nextly: ">=0.0.2-alpha.67",
 
   async init(ctx) {
     ctx.hooks.on("afterCreate", "*", async context => {

@@ -632,3 +632,89 @@ describe("what an unresolved instance tells whoever is debugging it", () => {
     ]);
   });
 });
+
+describe("a composition no save was able to judge", () => {
+  // A component save judges the documents that place it only where the usage
+  // index can list them, so a host can be left unjudged and then broken by a
+  // later change. What stands between such a page and a reader is the render
+  // itself, and these pin that it stays bounded: no exception, no hang.
+  const box = defineBlock({
+    name: "test/box",
+    version: 1,
+    description: "Nests one slot.",
+    example: { props: {} },
+    slots: { children: {} },
+    render: ({ className, renderSlot }) => (
+      <div className={className}>{renderSlot("children")}</div>
+    ),
+  });
+  const blocks = createBlockResolver([box, text]);
+
+  const nested = (levels: number, leaf: BlockNode): BlockNode => {
+    let deepest = leaf;
+    for (let level = 0; level < levels; level += 1) {
+      deepest = {
+        id: `box-${String(level)}`,
+        type: "test/box",
+        version: 1,
+        props: {},
+        slots: { children: [deepest] },
+      };
+    }
+    return deepest;
+  };
+
+  it("renders a page a component took past the depth limit, drawing a placeholder there", async () => {
+    const deep = component([nested(200, node("leaf", "leaf-past-the-cap"))]);
+
+    const html = await renderToHtml(
+      <PageRenderer
+        document={page([node("before", "kept"), instance("i1", "deep")])}
+        blocks={blocks}
+        definitions={defs({ deep })}
+      />
+    );
+
+    expect(html).toContain("nx-pb-page");
+    expect(html).toContain("kept");
+    expect(html).not.toContain("leaf-past-the-cap");
+    expect(html).toContain('data-nx-block-placeholder="unresolved-component"');
+  });
+
+  it("renders a page and a component that are too deep only together", async () => {
+    // Each within the cap on its own, so the resolver composes it: what bounds
+    // the result is that every definition is capped and components nest at
+    // most MAX_COMPOSED_DEPTH levels, so a composed tree is finite by
+    // construction and the render cannot run away.
+    const deep = component([nested(10, node("inner-leaf", "inner"))]);
+    const host = nested(10, instance("i1", "deep"));
+
+    const html = await renderToHtml(
+      <PageRenderer
+        document={page([host])}
+        blocks={blocks}
+        definitions={defs({ deep })}
+      />
+    );
+
+    expect(html).toContain("nx-pb-page");
+    expect(html).toContain("inner");
+  });
+
+  it("renders a page whose components place each other, drawing the loop as a placeholder", async () => {
+    const a = component([node("a1", "from a"), instance("a2", "b")]);
+    const b = component([node("b1", "from b"), instance("b2", "a")]);
+
+    const html = await renderToHtml(
+      <PageRenderer
+        document={page([instance("i1", "a")])}
+        blocks={blocks}
+        definitions={defs({ a, b })}
+      />
+    );
+
+    expect(html).toContain("from a");
+    expect(html).toContain("from b");
+    expect(html).toContain('data-nx-block-placeholder="unresolved-component"');
+  });
+});

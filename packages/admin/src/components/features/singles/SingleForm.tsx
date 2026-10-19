@@ -30,9 +30,13 @@ import { z } from "zod";
 
 import { CopyFromLanguageScope } from "@admin/components/features/entries/CopyFromLanguageScope";
 import { singleSourceFetcher } from "@admin/components/features/entries/entry-locale-source";
-import { AutosaveRecoveryBanner } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
+import { LiveDocumentRecoveryOffer } from "@admin/components/features/entries/EntryForm/AutosaveRecoveryBanner";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
 import { DocumentLockBanner } from "@admin/components/features/entries/EntryForm/DocumentLockBanner";
+import {
+  DocumentViewBody,
+  type DocumentViewMount,
+} from "@admin/components/features/entries/EntryForm/DocumentViewBody";
 import { EntryFormContent } from "@admin/components/features/entries/EntryForm/EntryFormContent";
 import {
   EntryFormContextProvider,
@@ -49,18 +53,19 @@ import {
   useFormUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
 import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
+import { useDocumentPanelCollapsed } from "@admin/components/features/entries/EntryForm/useDocumentPanelCollapsed";
 import {
   mapIntentToPayload,
   passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
-import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
+import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import {
@@ -207,6 +212,11 @@ export interface SingleFormProps {
     /** Leave the mode, keeping the language being edited. */
     onExit?: () => void;
   };
+  /**
+   * @experimental A plugin's document view to draw in place of the form body,
+   * when the route names one.
+   */
+  documentView?: DocumentViewMount;
   /** Additional CSS classes */
   className?: string;
 }
@@ -400,6 +410,7 @@ export function SingleForm({
   sourceValues,
   className,
   documentActions,
+  documentView,
 }: SingleFormProps) {
   // Generate Zod schema from field configurations. Singles render title/slug
   // read-only from config, so relax their required rule — submitting must not
@@ -629,7 +640,8 @@ export function SingleForm({
     onSave: () => {
       void handleSubmit();
     },
-    onCancel: handleCancel,
+    // The view owns Escape; the save chords stay. As in the entry editor.
+    onCancel: documentView ? undefined : handleCancel,
     isDirty: hasUnsavedWork,
     isSubmitting,
     enabled: true,
@@ -668,7 +680,10 @@ export function SingleForm({
 
   // Rail collapse pref (shared with collection EntryForm via the same
   // localStorage key).
-  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+  // Out of the way when the author collapsed it (shared with the collection
+  // editor), and while history is open, which takes its place.
+  const { collapsed: railCollapsed, toggle: toggleRail } =
+    useDocumentPanelCollapsed(historyEnabledFrom(schema) !== false);
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
@@ -739,7 +754,9 @@ export function SingleForm({
   const translationMode = useTranslationSource({
     fields: schema.fields,
     documentLocalized: schema.localized === true,
-    translation,
+    // Never split under a document view, whatever the address asks — the
+    // reason the entry editor gives.
+    translation: documentView ? undefined : translation,
     locale,
     defaultLocale,
     getLocale,
@@ -801,6 +818,8 @@ export function SingleForm({
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
     enabled: mayRecordRecovery(busy, viewingVersion),
+    // The pace the Single configures, else the editor's default.
+    debounceMs: autosaveIntervalFrom(schema),
   });
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
@@ -813,6 +832,7 @@ export function SingleForm({
     <UnsavedChangesGuard
       isDirty={hasUnsavedWork}
       disabled={isSubmitting}
+      fields={schema.fields}
       // Same rule as the entry editor: a refused switch takes its seed with it.
       onCancel={onSeedHandled}
     >
@@ -857,7 +877,8 @@ export function SingleForm({
                  * the admin is left — the same reason the entry editor withholds
                  * it there.
                  */
-                open={previewPane.open}
+                // Nor beside a document view, which takes the window alone.
+                open={previewPane.open && !documentView}
                 onClose={previewPane.onClose}
                 scope={previewPane.scope}
                 label={previewPane.label}
@@ -869,214 +890,227 @@ export function SingleForm({
                   onExit={translationMode.onExit}
                   control={form.control}
                 >
-                  <div className={cn("space-y-0", className)}>
-                    <EntryFormProvider form={form} onSubmit={handleSubmit}>
-                      <CopyFromLanguageScope>
-                        <FormErrorSummary
-                          errors={errors}
-                          submitCount={submitCount}
-                          className="mx-6 mt-3"
-                        />
+                  {/* A document view replaces the form body and nothing around
+                      it, as in the entry editor. */}
+                  {documentView ? (
+                    <DocumentViewBody
+                      view={documentView}
+                      target={{ singleSlug: schema.slug }}
+                      form={form}
+                      lock={lock}
+                      recovery={recovery}
+                      viewingVersion={viewingVersion}
+                      fields={schema.fields}
+                    />
+                  ) : (
+                    <div className={cn("space-y-0", className)}>
+                      <EntryFormProvider form={form} onSubmit={handleSubmit}>
+                        <CopyFromLanguageScope>
+                          <FormErrorSummary
+                            errors={errors}
+                            submitCount={submitCount}
+                            className="mx-6 mt-3"
+                          />
 
-                        <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
-                          {/* Main column */}
-                          <div className="flex-1 min-w-0 flex flex-col">
-                            {/* No horizontal compensation here, and none needed. The
+                          <div className="flex flex-col @4xl/content:flex-row @4xl/content:min-h-[calc(100vh-4rem)] items-stretch @4xl/content:-my-8">
+                            {/* Main column */}
+                            <div className="flex-1 min-w-0 flex flex-col">
+                              {/* No horizontal compensation here, and none needed. The
                 parent's `-my-8` cancels the page's VERTICAL inset only; the
                 horizontal inset is spent as grid columns on a measured page and
                 is not a padding any margin can pull back from. A horizontal one here
                 would not cancel anything — it would push the header and meta
                 strip past the content column, which is what it did when the
                 parent still cancelled both axes. */}
-                            <EntrySystemHeader
-                              autosaveEnabled={autosaveScope !== null}
-                              autosaveStatus={autosave.status}
-                              autosaveLastSavedAt={autosave.lastSavedAt}
-                              mode="edit"
-                              titleField={titleField}
-                              historyFields={schema.fields}
-                              historyEnabled={historyEnabledFrom(schema)}
-                              hasStatus={hasStatus}
-                              // The whole busy state: the header's spinner,
-                              // disabled reasons and discard dialog all
-                              // reflect a discard in flight as well as a save.
-                              isSubmitting={busy}
-                              isDirty={isDirty}
-                              hasUnsavedWork={hasUnsavedWork}
-                              entry={entryLike}
-                              collectionSlug={schema.slug}
-                              /* The active language, which the header reads to decide
+                              <EntrySystemHeader
+                                autosaveEnabled={autosaveScope !== null}
+                                autosaveStatus={autosave.status}
+                                autosaveLastSavedAt={autosave.lastSavedAt}
+                                mode="edit"
+                                titleField={titleField}
+                                historyFields={schema.fields}
+                                historyEnabled={historyEnabledFrom(schema)}
+                                hasStatus={hasStatus}
+                                // The whole busy state: the header's spinner,
+                                // disabled reasons and discard dialog all
+                                // reflect a discard in flight as well as a save.
+                                isSubmitting={busy}
+                                isDirty={isDirty}
+                                hasUnsavedWork={hasUnsavedWork}
+                                entry={entryLike}
+                                collectionSlug={schema.slug}
+                                /* The active language, which the header reads to decide
                              which row's status its save buttons act on — a
                              localized single's default row and its translations
                              can be in different publish states. Switching
                              language is the language panel's job, so no handler
                              is forwarded here. */
-                              locale={locale}
-                              localized={schema.localized === true}
-                              /* A Single has a draft lifecycle, so it has drafts worth
+                                locale={locale}
+                                localized={schema.localized === true}
+                                /* A Single has a draft lifecycle, so it has drafts worth
                    sharing. The control is offered whenever the Single carries
                    that lifecycle; whether a link can actually be minted is the
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
-                              isLinkAvailable={previewLink.isAvailable}
-                              onCopyLink={previewLink.copy}
-                              isCopyingLink={previewLink.isCopying}
-                              /* The pane is offered on exactly the terms the
+                                isLinkAvailable={previewLink.isAvailable}
+                                onCopyLink={previewLink.copy}
+                                isCopyingLink={previewLink.isCopying}
+                                /* The pane is offered on exactly the terms the
                            shareable link is: a Single with a draft lifecycle
                            and a resolvable language. Withheld in translation
                            mode, where the pane itself is withheld — a button
                            that toggles a flag nothing reads is worse than no
                            button. */
-                              {...previewPane.toggle}
-                              contributedActions={documentActions}
-                              toolbarSlot={versionAwareToolbarSlots(
-                                viewedVersionHost,
-                                lock.actionsDisabled,
-                                "single",
-                                controllerNames[0]
-                              )}
-                              onSaveDraft={() => {
-                                void handleSubmit(undefined, "save-draft");
-                              }}
-                              onPublish={() => {
-                                void handleSubmit(undefined, "publish");
-                              }}
-                              onSaveChanges={() => {
-                                void handleSubmit(undefined, "save-changes");
-                              }}
-                              /* The draft/published split. Without this the header
+                                {...previewPane.toggle}
+                                contributedActions={documentActions}
+                                toolbarSlot={versionAwareToolbarSlots(
+                                  viewedVersionHost,
+                                  lock.actionsDisabled,
+                                  "single",
+                                  controllerNames[0]
+                                )}
+                                onSaveDraft={() => {
+                                  void handleSubmit(undefined, "save-draft");
+                                }}
+                                onPublish={() => {
+                                  void handleSubmit(undefined, "publish");
+                                }}
+                                onSaveChanges={() => {
+                                  void handleSubmit(undefined, "save-changes");
+                                }}
+                                /* The draft/published split. Without this the header
                    takes its `draftsEnabled: false` branch, whose Save names the
                    status — and a write that names one is never held, so the
                    engine's pending-change support stayed dark for every Single.
                    The label is the visible tell: "Save changes" rather than
                    "Save". */
-                              draftsEnabled={schema.draftsEnabled === true}
-                              onSaveWorkingDraft={() => {
-                                void handleSubmit(
-                                  undefined,
-                                  "save-working-draft"
-                                );
-                              }}
-                              onUnpublish={() => {
-                                void handleSubmit(undefined, "unpublish");
-                              }}
-                              onDiscardWorkingDraft={async () => {
-                                // Through the same gate: this reaches the row
-                                // directly and never passed `handleSubmit`. The
-                                // latch is held for its duration so a save
-                                // started in the same turn cannot run against
-                                // it.
-                                if (
-                                  writesHeld ||
-                                  busy ||
-                                  submissionLatch.current
-                                ) {
-                                  return;
-                                }
-                                submissionLatch.current = true;
-                                try {
-                                  await discardMutation.mutateAsync();
-                                } finally {
-                                  submissionLatch.current = false;
-                                }
-                              }}
-                              onCancel={handleCancel}
-                              onViewApi={onViewApi}
-                              /* Why: Singles share the Show JSON dialog with collections,
+                                draftsEnabled={schema.draftsEnabled === true}
+                                onSaveWorkingDraft={() => {
+                                  void handleSubmit(
+                                    undefined,
+                                    "save-working-draft"
+                                  );
+                                }}
+                                onUnpublish={() => {
+                                  void handleSubmit(undefined, "unpublish");
+                                }}
+                                onDiscardWorkingDraft={async () => {
+                                  // Through the same gate: this reaches the row
+                                  // directly and never passed `handleSubmit`. The
+                                  // latch is held for its duration so a save
+                                  // started in the same turn cannot run against
+                                  // it.
+                                  if (
+                                    writesHeld ||
+                                    busy ||
+                                    submissionLatch.current
+                                  ) {
+                                    return;
+                                  }
+                                  submissionLatch.current = true;
+                                  try {
+                                    await discardMutation.mutateAsync();
+                                  } finally {
+                                    submissionLatch.current = false;
+                                  }
+                                }}
+                                onCancel={handleCancel}
+                                onViewApi={onViewApi}
+                                /* Why: Singles share the Show JSON dialog with collections,
                  but at the /api/singles/{slug} URL pattern. Passing
                  `scope="single"` routes the dialog through singleApi
                  instead of entryApi. */
-                              scope="single"
-                              lockIdentity
-                              documentLocked={lock.readOnly}
-                              isRailCollapsed={railCollapsed}
-                              onToggleRail={toggleRail}
-                            />
-                            <EntryMetaStrip
-                              slugField={slugField}
-                              hasStatus={hasStatus}
-                              status={documentStatus}
-                              isRailCollapsed={railCollapsed}
-                              lockSlug
-                            />
+                                scope="single"
+                                lockIdentity
+                                documentLocked={lock.readOnly}
+                                isRailCollapsed={railCollapsed}
+                                onToggleRail={toggleRail}
+                              />
+                              <EntryMetaStrip
+                                slugField={slugField}
+                                hasStatus={hasStatus}
+                                status={documentStatus}
+                                // The pill shows wherever the panel is off
+                                // screen, a phone included, so it reports a
+                                // pending working draft as the panel does.
+                                hasWorkingDraft={hasPendingWorkingDraft(
+                                  document
+                                )}
+                                isRailCollapsed={railCollapsed}
+                                lockSlug
+                              />
 
-                            {/* Inside the main column, below the header, matching the entry
+                              {/* Inside the main column, below the header, matching the entry
                   editor. Placed above the flex row it sat UNDER the sticky
                   header, which intercepted pointer events: the offer was
                   visible and its buttons were not clickable. */}
-                            <DocumentLockBanner
-                              notice={lock.notice}
-                              onTakeOver={lock.takeOver}
-                              onRequestAccess={lock.requestAccess}
-                              className="mx-6 mt-3"
-                            />
-                            {/* The recovery offer restores work into the LIVE
-                  form, so it is withheld while a past version is on screen —
-                  restoring values nobody can see is deciding without seeing,
-                  and the offer returns when the live document does. */}
-                            {viewingVersion === null && recovery.offer ? (
-                              <AutosaveRecoveryBanner
-                                savedAt={recovery.offer.savedAt}
-                                onRestore={recovery.restore}
-                                onDismiss={recovery.dismiss}
+                              <DocumentLockBanner
+                                notice={lock.notice}
+                                onTakeOver={lock.takeOver}
+                                onRequestAccess={lock.requestAccess}
                                 className="mx-6 mt-3"
                               />
-                            ) : null}
+                              <LiveDocumentRecoveryOffer
+                                recovery={recovery}
+                                viewingVersion={viewingVersion}
+                                className="mx-6 mt-3"
+                              />
 
-                            {/* The banner over the version being read, with the
+                              {/* The banner over the version being read, with the
                               document's other notices: above the fields it
                               describes, below the header that offered the
                               panel. Renders nothing while the live document is
                               on screen. A submit in flight withholds restore
                               too — a restore racing the ordinary save would let
                               completion order decide which contents survive. */}
-                            <ViewedVersionBanner
-                              actionsDisabled={lock.actionsDisabled || busy}
-                            />
+                              <ViewedVersionBanner
+                                actionsDisabled={lock.actionsDisabled || busy}
+                              />
 
-                            {/* The language panel, inline: the exact complement
+                              {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
-                            <SingleFormLanguagePanel
+                              <SingleFormLanguagePanel
+                                actionsDisabled={writesHeld}
+                                enabled={localizationEnabled}
+                                hasStatus={hasStatus}
+                                railCollapsed={railCollapsed}
+                                {...(singleTranslations === undefined
+                                  ? {}
+                                  : { translations: singleTranslations })}
+                                {...(locale === undefined ? {} : { locale })}
+                                {...(onLocaleChange === undefined
+                                  ? {}
+                                  : { onLocaleChange })}
+                              />
+
+                              {/* Reading a past version replaces the document rather
+                              than opening beside it — see the fields panel. */}
+                              <SingleFormFieldsPanel
+                                historicalFields={historicalFields}
+                                historicalValues={historicalValues}
+                                isSubmitting={isSubmitting}
+                                mainFields={mainFields}
+                                readOnly={lock.readOnly}
+                              />
+                            </div>
+
+                            {/* Rail (collapsible). */}
+                            <SingleFormRail
                               actionsDisabled={writesHeld}
-                              enabled={localizationEnabled}
+                              entry={entryLike}
                               hasStatus={hasStatus}
+                              isDirty={isDirty}
                               railCollapsed={railCollapsed}
-                              {...(singleTranslations === undefined
-                                ? {}
-                                : { translations: singleTranslations })}
                               {...(locale === undefined ? {} : { locale })}
                               {...(onLocaleChange === undefined
                                 ? {}
                                 : { onLocaleChange })}
                             />
-
-                            {/* Reading a past version replaces the document rather
-                              than opening beside it — see the fields panel. */}
-                            <SingleFormFieldsPanel
-                              historicalFields={historicalFields}
-                              historicalValues={historicalValues}
-                              isSubmitting={isSubmitting}
-                              mainFields={mainFields}
-                              readOnly={lock.readOnly}
-                            />
                           </div>
-
-                          {/* Rail (collapsible). */}
-                          <SingleFormRail
-                            actionsDisabled={writesHeld}
-                            entry={entryLike}
-                            hasStatus={hasStatus}
-                            isDirty={isDirty}
-                            railCollapsed={railCollapsed}
-                            {...(locale === undefined ? {} : { locale })}
-                            {...(onLocaleChange === undefined
-                              ? {}
-                              : { onLocaleChange })}
-                          />
-                        </div>
-                      </CopyFromLanguageScope>
-                    </EntryFormProvider>
-                  </div>
+                        </CopyFromLanguageScope>
+                      </EntryFormProvider>
+                    </div>
+                  )}
                 </TranslationPanes>
               </PreviewPanes>
             </DocumentHistoryContext.Provider>

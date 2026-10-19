@@ -75,6 +75,15 @@ export interface SessionRowWrite {
    */
   passwordUpdatedAt: Date | null;
   /**
+   * The session epoch the session was signed at: the one read with the
+   * password the sign-in proved, or when the sign-in or refresh first judged
+   * the account. A different value under the lock means the account's
+   * sessions were ended since, and the session is refused. This is what
+   * catches a password set within the same second as that read, which
+   * `passwordUpdatedAt` cannot: MySQL and SQLite store it in whole seconds.
+   */
+  sessionEpoch: number;
+  /**
    * The refresh row this write replaces, for a rotation. It is spent only
    * after the new row is in place, and only if this transaction is the one
    * that removes it.
@@ -97,8 +106,9 @@ export type SessionRowOutcome = "written" | "consumed-elsewhere";
  * order, inside one transaction.
  *
  * @throws NextlyError `AUTH_INVALID_CREDENTIALS` when the account is gone, may
- *   no longer hold a session, or its password changed since
- *   `passwordUpdatedAt` was read. Nothing is written.
+ *   no longer hold a session, or its password changed or its sessions were
+ *   ended since `passwordUpdatedAt` and `sessionEpoch` were read. Nothing is
+ *   written.
  */
 export async function writeSessionRow(
   withTransaction: WithSessionRowTransaction,
@@ -133,8 +143,8 @@ export async function writeSessionRow(
 
 /**
  * The account-state gate over the state read under the lock, plus the
- * password version: a refusal here is a revocation that committed while the
- * session was being prepared.
+ * password version and the session epoch: a refusal here is a revocation that
+ * committed while the session was being prepared.
  */
 function assertSessionRowAllowed(
   state: AccountState | null,
@@ -147,9 +157,13 @@ function assertSessionRowAllowed(
     });
   }
   assertAccountUsable(state, write.gate);
+  // Either one moving is a password set since the read: an epoch raised on an
+  // account still active can only be one, and the epoch is what moves when the
+  // stored time cannot show a second change within the same second.
   if (
     (state.passwordUpdatedAt?.getTime() ?? null) !==
-    (write.passwordUpdatedAt?.getTime() ?? null)
+      (write.passwordUpdatedAt?.getTime() ?? null) ||
+    state.sessionEpoch !== write.sessionEpoch
   ) {
     throw NextlyError.invalidCredentials({
       logContext: { userId, reason: auditReason("password-changed") },

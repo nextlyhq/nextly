@@ -513,7 +513,7 @@ const columns = { searchVector: col.text({ nullable: true }) };
 export default definePlugin({
   name: "@acme/search",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.63",
+  nextly: ">=0.0.2-alpha.67",
   contributes: {
     schema: {
       extend: [({ schema }) => schema.extendTable("dc_posts", { columns })],

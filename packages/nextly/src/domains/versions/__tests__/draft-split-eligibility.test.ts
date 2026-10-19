@@ -100,6 +100,38 @@ describe("isDraftSplitEligible", () => {
     ).toBe(true);
   });
 
+  it("is off for a non-localized Single that reaches a localized component", () => {
+    // Its working draft is keyed with no language while the component stores
+    // a value per language, so one draft would mix several languages' edits.
+    expect(
+      evaluateDraftSplitEligibility({
+        ...base,
+        entityKind: "single",
+        documentLocalized: false,
+        componentSchemas: components({ localized: true }),
+      })
+    ).toEqual({
+      eligible: false,
+      reason: "localized-component",
+      componentSlug: "hero",
+    });
+    // A localized Single keys its draft by language, so it stays eligible, and
+    // a collection is judged without this rule.
+    for (const input of [
+      { entityKind: "single" as const, documentLocalized: true },
+      { entityKind: "collection" as const, documentLocalized: false },
+      {},
+    ]) {
+      expect(
+        isDraftSplitEligible({
+          ...base,
+          ...input,
+          componentSchemas: components({ localized: true }),
+        })
+      ).toBe(true);
+    }
+  });
+
   it("is off for an unresolved component", () => {
     expect(
       isDraftSplitEligible({

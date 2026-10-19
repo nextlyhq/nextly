@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import type {
@@ -40,6 +41,26 @@ const FORBIDDEN = [
   "ComponentMigrationStatus",
   "COMPONENT_SOURCE_TYPES",
   "COMPONENT_MIGRATION_STATUSES",
+];
+
+// The validators of the retired linked-account endpoints (listing a user's
+// linked accounts and unlinking one). The endpoints and the service methods
+// behind them are gone, so a validator still published for them describes a
+// request nothing accepts.
+const RETIRED_ACCOUNT_NAMES = [
+  "DeleteUserAccountSchema",
+  "UnlinkAccountSchema",
+  "UnlinkAccountResponseSchema",
+];
+
+// The types inferred from those validators. A type is erased at runtime, so
+// importing a module cannot see it, and compiling this file proves nothing
+// about a name it never mentions: a type-only re-export would pass both. They
+// are read from the compiler's own list of each entry point's exports instead.
+const RETIRED_ACCOUNT_TYPES = [
+  "DeleteUserAccount",
+  "UnlinkAccount",
+  "UnlinkAccountResponse",
 ];
 
 /**
@@ -121,6 +142,65 @@ const ENTRY_POINTS: Array<[string, string]> = declaredSubpaths.map(subpath => [
   sourceOf(manifest.exports[subpath]!.import),
 ]);
 
+/**
+ * Every name each published entry point exports, types included, keyed by
+ * entry point.
+ *
+ * Read from the type checker rather than from an import, because an import
+ * sees only runtime values and a type-only export is erased before it runs.
+ * The program is built with the package's own compiler options, so `@nextly/*`
+ * paths and every `export *` chain resolve as they do in the build.
+ */
+function compiledProgram(): ts.Program {
+  const configPath = path.join(packageRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  const parsed = ts.parseJsonConfigFileContent(
+    config.config,
+    ts.sys,
+    packageRoot
+  );
+  return ts.createProgram({
+    rootNames: ENTRY_POINTS.map(([, source]) => source),
+    options: { ...parsed.options, noEmit: true },
+  });
+}
+
+/** The exported symbols of each published entry point, by name. */
+function compiledExports(): Map<string, Map<string, ts.Symbol>> {
+  const program = compiledProgram();
+  const checker = program.getTypeChecker();
+  const exported = new Map<string, Map<string, ts.Symbol>>();
+  for (const [entry, source] of ENTRY_POINTS) {
+    const file = program.getSourceFile(source);
+    const moduleSymbol = file ? checker.getSymbolAtLocation(file) : undefined;
+    exported.set(
+      entry,
+      new Map(
+        (moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : []).map(
+          symbol => {
+            // A re-export is an alias; its documentation is on what it names.
+            const target =
+              symbol.flags & ts.SymbolFlags.Alias
+                ? checker.getAliasedSymbol(symbol)
+                : symbol;
+            return [symbol.getName(), target];
+          }
+        )
+      )
+    );
+  }
+  return exported;
+}
+
+function compiledExportNames(): Map<string, Set<string>> {
+  return new Map(
+    [...compiledExports()].map(([entry, symbols]) => [
+      entry,
+      new Set(symbols.keys()),
+    ])
+  );
+}
+
 describe("published export surface", () => {
   // 🔴 Guards the derivation, not the package. Every check below is generated from `ENTRY_POINTS`,
   // so a mapping that silently produced fewer entries — or none — would delete its own cases and
@@ -136,6 +216,63 @@ describe("published export surface", () => {
   // is checked separately so the failure says which of the two happened.
   it.each(ENTRY_POINTS)("%s resolves to a source module", (_name, source) => {
     expect(existsSync(source), `no source module at ${source}`).toBe(true);
+  });
+
+  it.each(ENTRY_POINTS)(
+    "%s exposes no retired linked-account validators",
+    async (_name, source) => {
+      const mod = (await import(pathToFileURL(source).href)) as Record<
+        string,
+        unknown
+      >;
+      const leaked = RETIRED_ACCOUNT_NAMES.filter(name => name in mod);
+      expect(leaked).toEqual([]);
+    }
+  );
+
+  it("exports no retired linked-account type from any entry point", () => {
+    const compiled = compiledExportNames();
+    const leaked = [...compiled].flatMap(([entry, names]) =>
+      [...RETIRED_ACCOUNT_TYPES, ...RETIRED_ACCOUNT_NAMES]
+        .filter(name => names.has(name))
+        .map(name => `${entry}: ${name}`)
+    );
+    expect(leaked).toEqual([]);
+
+    // The controls. A file the program failed to load, or a re-export chain
+    // the checker did not follow, reads as an entry point exporting nothing,
+    // which passes every absence check. So each entry point must export
+    // something, and the user types and validators that stayed beside the
+    // retired ones must be read through both `export *` hops to the root.
+    expect(compiled.size).toBe(ENTRY_POINTS.length);
+    for (const [entry, names] of compiled) {
+      expect(names.size, `${entry} exports nothing`).toBeGreaterThan(0);
+    }
+    for (const entry of ["nextly", "nextly/schemas"]) {
+      expect(compiled.get(entry)?.has("UserListResponse")).toBe(true);
+      expect(compiled.get(entry)?.has("UserListResponseSchema")).toBe(true);
+    }
+  });
+
+  it("keeps publishing defaultSkipAdminApi from the root, marked deprecated", () => {
+    // No longer the REST limit's default, and kept for an app that passes it
+    // as `rateLimit.skip` until a later release removes it.
+    const symbol = compiledExports().get("nextly")?.get("defaultSkipAdminApi");
+    expect(symbol, "nextly exports defaultSkipAdminApi").toBeDefined();
+    expect(symbol?.getJsDocTags().map(tag => tag.name)).toContain("deprecated");
+  });
+
+  it("still publishes the user validators beside the retired ones", async () => {
+    // The control: an absence check is also satisfied by an entry point that
+    // published nothing. `nextly/schemas` is where the retired validators
+    // were, and its other user validators are asserted there, so the scan
+    // above is seen reading the module they lived in.
+    const schemas = (await import("../schemas/index")) as Record<
+      string,
+      unknown
+    >;
+    expect(schemas.UserListResponseSchema).toBeDefined();
+    expect(schemas.DeleteUserResponseSchema).toBeDefined();
   });
 
   it.each(ENTRY_POINTS)(

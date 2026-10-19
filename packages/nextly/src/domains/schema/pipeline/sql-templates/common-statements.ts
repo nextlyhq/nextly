@@ -148,3 +148,18 @@ export function dropConstraintSql(
 ): string {
   return `ALTER TABLE ${q(tableName)} ${verb} ${q(constraintName)}`;
 }
+
+/**
+ * A column dropped by a Schema Builder ALTER generator, written into its migration file. Only
+ * PostgreSQL accepts `IF EXISTS` here; MySQL has no such form (MariaDB does) and SQLite neither,
+ * so there the plain form is the one that runs. One rule for every such generator: with
+ * `IF EXISTS` on MySQL the statement fails, the column stays, and a NOT NULL one refuses every
+ * later insert. The push renders its own drops with `dropColumnSql` above.
+ */
+export function builderDropColumnSql(
+  dialect: "postgresql" | "mysql" | "sqlite",
+  quotedTable: string,
+  quotedColumn: string
+): string {
+  return `ALTER TABLE ${quotedTable} DROP COLUMN ${dialect === "postgresql" ? "IF EXISTS " : ""}${quotedColumn};`;
+}

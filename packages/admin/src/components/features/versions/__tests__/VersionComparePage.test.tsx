@@ -514,3 +514,36 @@ describe("VersionComparePage — selecting a row keeps the language", () => {
     expect(navigateMock.mock.calls[0]?.[0]).not.toContain("locale");
   });
 });
+
+describe("VersionComparePage — the language its address names", () => {
+  it("lists the versions of that language", () => {
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+        locale="de"
+      />
+    );
+
+    expect(useVersionsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ locale: "de" })
+    );
+  });
+
+  it("lists every language when the address names none", () => {
+    render(
+      <VersionComparePage
+        scope={collection("e1")}
+        documentHref="/admin/collections/posts/e1"
+        readOnlyHref="/admin/collections/posts"
+      />
+    );
+
+    const calls = useVersionsMock.mock.calls as unknown as [
+      { locale?: string },
+    ][];
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[calls.length - 1][0].locale).toBeUndefined();
+  });
+});

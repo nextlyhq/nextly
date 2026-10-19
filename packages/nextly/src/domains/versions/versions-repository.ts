@@ -577,6 +577,35 @@ export class VersionsRepository {
   }
 
   /**
+   * THE working draft in one locale of each of many documents in one scope,
+   * keyed by entry id: what {@link findWorkingDraft} answers for each, in one
+   * query rather than one per document.
+   */
+  async findWorkingDraftsOf(
+    scope: Pick<VersionRef, "scopeKind" | "scopeSlug">,
+    entryIds: readonly string[],
+    locale: string | null
+  ): Promise<Map<string, VersionRow>> {
+    const byEntry = new Map<string, VersionRow>();
+    if (entryIds.length === 0) return byEntry;
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: scope.scopeKind },
+          { column: "scopeSlug", op: "=", value: scope.scopeSlug },
+          { column: "entryId", op: "IN", value: [...new Set(entryIds)] },
+          ...WORKING_DRAFT_SHAPE,
+          this.localeCondition(locale),
+        ],
+      },
+    });
+    for (const row of rows) {
+      if (!byEntry.has(row.entryId)) byEntry.set(row.entryId, row);
+    }
+    return byEntry;
+  }
+
+  /**
    * Which languages hold a pending change, for many documents at once.
    *
    * One query for a whole page of documents rather than one per document: the
@@ -624,6 +653,24 @@ export class VersionsRepository {
    * For the operations that act on the whole document at once — publishing all
    * of its languages — rather than on the language in front of the author.
    */
+  /**
+   * The parts (language keys, null for none) that hold a working draft,
+   * without the drafts' snapshots.
+   */
+  async listWorkingDraftLocales(ref: VersionRef): Promise<(string | null)[]> {
+    const rows = await this.db.select<{ locale: string | null }>(TABLE, {
+      columns: ["locale"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+        ],
+      },
+    });
+    return rows.map(row => row.locale);
+  }
+
   async findAllWorkingDrafts(ref: VersionRef): Promise<VersionRow[]> {
     return this.db.select<VersionRow>(TABLE, {
       where: {
@@ -740,6 +787,53 @@ export class VersionsRepository {
     return typeof top === "number" ? top : 0;
   }
 
+  /**
+   * The newest durable version of a document, whatever its part (language),
+   * snapshot included. What a save is compared with to tell whether it changed
+   * anything.
+   */
+  async findNewest(ref: VersionRef): Promise<VersionRow | undefined> {
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NOT NULL" },
+        ],
+      },
+      orderBy: [{ column: "versionNo", direction: "desc" }],
+      limit: 1,
+      // A locking read: on MySQL a plain one answers from the snapshot the
+      // transaction's first read took, so a write that waited for this
+      // document's lock would compare with a version older than the newest.
+      forUpdate: true,
+    });
+    return rows[0];
+  }
+
+  /**
+   * The part (language, or null for none) of one durable version, or
+   * undefined when the document has no such version. Reads that one row's
+   * language only.
+   */
+  async findPartOfVersion(
+    ref: VersionRef,
+    versionNo: number
+  ): Promise<string | null | undefined> {
+    const rows = await this.db.select<{ locale: string | null }>(TABLE, {
+      columns: ["locale"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "=", value: versionNo },
+        ],
+      },
+      limit: 1,
+    });
+    return rows.length === 0 ? undefined : (rows[0]?.locale ?? null);
+  }
+
   /** Fetch one durable version by its number, snapshot included. */
   async findByVersionNo(
     ref: VersionRef,
@@ -847,12 +941,20 @@ export class VersionsRepository {
 
   /**
    * Durable rows for one document, newest-first, projecting only what the
-   * retention rules need. Autosave rows are excluded because they never count
-   * toward the cap.
+   * retention rules need: the language, name and restore source decide what is
+   * always kept, and the snapshot is never read. Autosave rows are excluded
+   * because they never count toward the cap.
    */
   async listDurableForPrune(ref: VersionRef): Promise<PrunableVersion[]> {
     return this.db.select<PrunableVersion>(TABLE, {
-      columns: ["id", "versionNo", "status"],
+      columns: [
+        "id",
+        "versionNo",
+        "status",
+        "locale",
+        "label",
+        "sourceVersionNo",
+      ],
       where: {
         and: [
           ...this.docWhere(ref),
@@ -1151,13 +1253,33 @@ export class VersionsRepository {
     );
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  /**
+   * Delete the versions a retention pass selected, except any that has been
+   * named since the pass read it.
+   *
+   * Naming a version does not take the document's write lock, so a name can be
+   * committed between the pass's read and this delete. Testing the name in the
+   * delete itself, rather than trusting the earlier read, means a version
+   * someone has just chosen to keep is never removed after they were told it
+   * was kept. The other protections are decided by writes to the same
+   * document, which that lock already serializes with the pass.
+   */
+  async deletePrunedVersions(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
     let deleted = 0;
     for (let i = 0; i < ids.length; i += DELETE_CHUNK_SIZE) {
       const chunk = ids.slice(i, i + DELETE_CHUNK_SIZE);
       deleted += await this.db.delete(TABLE, {
-        and: [{ column: "id", op: "IN", value: chunk }],
+        and: [
+          { column: "id", op: "IN", value: chunk },
+          // Unnamed exactly as retention judges it: no label, or an empty one.
+          {
+            or: [
+              { column: "label", op: "IS NULL" },
+              { column: "label", op: "=", value: "" },
+            ],
+          },
+        ],
       });
     }
     return deleted;

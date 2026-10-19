@@ -6,6 +6,7 @@ import { FormProvider } from "react-hook-form";
 
 import { ArrowRight, Loader2 } from "@admin/components/icons";
 import { AuthFormCard } from "@admin/components/shared/auth/AuthFormCard";
+import { AuthRefusalNotice } from "@admin/components/shared/auth/AuthRefusalNotice";
 import {
   AuthSignupFields,
   type SignupFormValues,
@@ -15,6 +16,7 @@ import { toast } from "@admin/components/ui";
 import { ROUTES } from "@admin/constants/routes";
 import { useAppName } from "@admin/context/providers/BrandingProvider";
 import { useApi } from "@admin/hooks/useApi";
+import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
@@ -26,9 +28,13 @@ export function Setup() {
   const [isLoading, setIsLoading] = useState(false);
 
   const form = useSignupForm();
+  // A refused submission is shown in the form, where it stays while the
+  // person acts on it; a toast is kept for every other failure.
+  const authRefusal = useAuthRefusal();
 
   async function onSubmit(values: SignupFormValues) {
     setIsLoading(true);
+    authRefusal.clear();
 
     try {
       const csrfToken = await getCsrfToken();
@@ -54,6 +60,7 @@ export function Setup() {
       // and ensures the browser properly processes the session cookies.
       window.location.href = ROUTES.DASHBOARD;
     } catch (error) {
+      if (authRefusal.take(error)) return;
       toast.error("Setup failed", {
         description: apiErrorMessage(
           error,
@@ -70,6 +77,7 @@ export function Setup() {
       title={`Welcome to ${appName}`}
       description="Create your first admin account to get started"
     >
+      <AuthRefusalNotice refusal={authRefusal.refusal} />
       <FormProvider {...form}>
         <form
           onSubmit={e => {

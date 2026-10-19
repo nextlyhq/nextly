@@ -1,59 +1,62 @@
 "use client";
 
 /**
- * One cell of the grid: its width, its spacing, its edit controls and the
+ * One cell of the grid: its width, its spacing, its customise controls and the
  * widget inside it.
  *
- * Its own component because the grid was carrying every one of these decisions
- * inline and the complexity gate objected before a reader would have. The split
- * is by SUBJECT rather than by size: everything here is about one card, and
- * everything left in the grid is about the set.
+ * Its own component because the split is by SUBJECT: everything here is about
+ * one card, and everything left in the grid is about the set.
  *
  * @module components/features/widgets/edit/ArrangedCell
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { resolveWidgetSettings } from "nextly/config";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
 
 import { cn } from "@admin/lib/utils";
 import type {
   DashboardWidget,
   WidgetSlot,
+  WidgetWidth,
 } from "@admin/types/dashboard/widgets";
 
 import type { CellSlotLookup } from "../archetypes/types";
-import { moveAffordance, columnAffordance } from "../layout-editor";
-import { widgetSpanClass } from "../sizes";
+import type { MoveDirection } from "../layout-editor";
+import { cardSpanClass, drawnWidth } from "../sizes";
+import { widgetAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
+import { CardActionsMenu, CardWidthLabel } from "./CardActionsMenu";
+import {
+  CardControlsOverlay,
+  CardControlsSpace,
+  CustomizingFence,
+} from "./CustomizingFence";
 import { DismissWidgetButton } from "./DismissWidgetButton";
 import { SortableWidgetCell } from "./SortableWidgetCell";
 import type { ArrangedWidget } from "./useDashboardArrangement";
-import { WidgetEditControls } from "./WidgetEditControls";
 import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
   isEditing: boolean;
   /**
-   * Whether a dismissal is in flight anywhere on this dashboard.
+   * Whether a layout write is in flight anywhere on this dashboard.
    *
-   * Dashboard-wide rather than per-card, because the write is a whole-layout
+   * Dashboard-wide rather than per-card, because every write is a whole-layout
    * snapshot guarded by one cached version: two in flight at once carry the
    * same guard, so the server honours one and refuses the other as a conflict
    * the reader never caused.
    */
-  isDismissing: boolean;
+  isWriting: boolean;
   /**
-   * Where this card sits, and among how many.
-   *
-   * Grouped because the four are one fact read four ways: they decide which
-   * moves are possible, and they are what the controls announce. `index` and
-   * `count` are positions within THIS column rather than the whole
-   * arrangement — the sequence is interleaved across columns, so a global
-   * index would offer a move whose neighbour the reader cannot see.
+   * Why a single-card write is unavailable right now, or absent when it is
+   * available. Present while the stored layout is unreadable.
    */
-  at: { index: number; count: number; column: number; columnCount: number };
+  singleCardWriteBlocked?: string;
+  /** Which of the four moves would move this card. */
+  can: Record<MoveDirection, boolean>;
   /**
    * What the batch answered for this card, or its absence.
    *
@@ -68,40 +71,33 @@ export interface ArrangedCellProps {
     /** `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
+    /** The tier the answer shown was fetched at; see `WidgetRenderer`'s own. */
+    answerTier?: SizeTier;
+    /** Reload this card's data on its own, offered in its error state. */
+    onRetry?: () => void;
+  };
+  /** Registers the card's controls, so focus can be sent back to them. */
+  refs: {
+    menu: (element: HTMLElement | null) => void;
+    dismiss: (element: HTMLElement | null) => void;
   };
   /**
-   * What acting on this card does.
-   *
-   * 🔴 Every one is bound by the CALLER rather than resolved here. `at.index`
-   * is a position within the rendered column, and the cell has no way to turn
-   * one into the neighbour it should swap with; the writes are keyed by
-   * placement, and the cell should not have to know how the editor addresses
-   * one.
+   * What acting on this card does, each already bound to this placement by
+   * the caller: the writes are keyed by placement, and the cell should not
+   * have to know how the editor addresses one.
    */
   on: {
-    /** Move this card one step within ITS OWN column. */
-    move: (delta: number) => void;
-    moveColumn: (placementId: string, targetColumn: number) => void;
-    toggleHidden: (placementId: string) => void;
+    move: (direction: MoveDirection) => void;
+    setWidth: (width: WidgetWidth) => void;
+    remove: () => void;
     /**
-     * Send this card away from the card itself, outside edit mode.
-     *
-     * Separate from {@link toggleHidden} because the two reach different
-     * writers: that one edits the draft, which exists only while editing, so a
-     * standing control wired to it would do nothing at all. Takes the title
-     * because the handler announces the outcome after the write, when this row
-     * may be gone.
+     * Send this card away from the card itself, outside customise mode.
      *
      * 🔴 ABSENT rather than present-and-inert before an arrangement has been
-     * read, the rule {@link ArrangedCellProps.on.saveSettings}'s neighbour
-     * `openSettings` already follows. The grid draws the DECLARATIONS while
-     * the layout request is in flight, and those rows carry no stored
-     * placement to hide -- so a control drawn then answered a click by doing
-     * nothing at all, which is the silent no-op this whole path exists to
-     * avoid.
+     * read: the rows drawn then carry no stored placement to remove, so a
+     * control drawn then would answer a click by doing nothing at all.
      */
-    dismiss?: (placementId: string, title: string) => void;
-    remove: (placementId: string) => void;
+    dismiss?: () => void;
     /** Records what a reader chose for THIS card. */
     saveSettings: (config: Record<string, unknown>) => void;
   };
@@ -110,41 +106,34 @@ export interface ArrangedCellProps {
 /**
  * This card's dismiss control, and where it is drawn.
  *
- * Two answers rather than one because the placement is not the cell's to pick
- * freely: a FRAMED card has a header that reserves space beside the declared
- * icon, and an UNFRAMED one has no header at all, so the cell floats the
- * control in the corner the drag handle leaves free while not editing. Both
- * are `undefined` for a card whose author offered no dismiss.
+ * A FRAMED card has a header that reserves space beside the declared icon; an
+ * UNFRAMED one has no header, so the cell floats the control in the corner the
+ * drag handle leaves free while not customising. Both are `undefined` for a
+ * card whose author offered no dismiss, and while customising, where Remove in
+ * the card's menu does the same thing.
  *
- * 🔴 `=== true`, not truthiness. `widgetValueProblem` refuses a non-boolean at
- * boot, but a registration arrives over the wire from a server that may be a
- * different version and the admin copies the field verbatim -- so a malformed
- * `dismissible: "false"` would otherwise DRAW the control, which is the one
- * reading the declaration cannot have meant.
- *
- * Its own function because the cell had grown past what a reader can hold, and
- * this is one decision with one subject: whether this card can be sent away,
- * and by which route.
+ * 🔴 `=== true`, not truthiness. A registration arrives over the wire from a
+ * server that may be a different version and the admin copies the field
+ * verbatim, so a malformed `dismissible: "false"` would otherwise DRAW the
+ * control, which is the one reading the declaration cannot have meant.
  */
 function dismissAffordance(
-  card: {
-    widget: DashboardWidget;
-    placementId: string;
-    isEditing: boolean;
-    isDismissing: boolean;
-  },
-  dismiss: ((placementId: string, title: string) => void) | undefined
+  widget: DashboardWidget,
+  props: Pick<
+    ArrangedCellProps,
+    "isEditing" | "isWriting" | "singleCardWriteBlocked" | "refs"
+  >,
+  dismiss: (() => void) | undefined
 ): { floating?: ReactNode; header?: ReactNode } {
-  const { widget, placementId, isEditing, isDismissing } = card;
-  if (!dismiss || isEditing || widget.dismissible !== true) return {};
-  // Absent while a dismissal is in flight is NOT the rule: the button stays and
-  // disables, so the card does not move under a reader mid-click.
+  if (!dismiss || props.isEditing || widget.dismissible !== true) return {};
   const button = (floating: boolean) => (
     <DismissWidgetButton
       title={widget.title}
-      isDismissing={isDismissing}
+      isDismissing={props.isWriting}
+      unavailableReason={props.singleCardWriteBlocked}
       floating={floating}
-      onDismiss={() => dismiss(placementId, widget.title)}
+      buttonRef={props.refs.dismiss}
+      onDismiss={dismiss}
     />
   );
   return widget.chrome === "none"
@@ -152,15 +141,146 @@ function dismissAffordance(
     : { header: button(false) };
 }
 
-export function ArrangedCell({
-  row,
-  isEditing,
-  isDismissing,
-  at,
-  data,
-  on,
-}: ArrangedCellProps) {
-  const { index, count, column, columnCount } = at;
+/** A card's width and its one menu, side by side, while customising. */
+function CardEditActions(props: {
+  row: ArrangedCellProps["row"];
+  width: WidgetWidth;
+  can: ArrangedCellProps["can"];
+  isWriting: boolean;
+  refs: ArrangedCellProps["refs"];
+  on: ArrangedCellProps["on"];
+  /** Present only when the widget offers settings. */
+  openSettings?: () => void;
+}) {
+  const { row, width, can, isWriting, refs, on, openSettings } = props;
+  return (
+    <span className="flex items-center gap-1" data-testid="card-edit-actions">
+      <CardWidthLabel width={width} />
+      <CardActionsMenu
+        title={row.widget.title}
+        width={width}
+        allowedWidths={row.allowedWidths}
+        can={can}
+        disabled={isWriting}
+        triggerRef={refs.menu}
+        on={{
+          move: on.move,
+          setWidth: on.setWidth,
+          remove: on.remove,
+          ...(openSettings ? { openSettings } : {}),
+        }}
+      />
+    </span>
+  );
+}
+
+/**
+ * The small header the cell gives an unframed widget while customising.
+ *
+ * An unframed widget draws no header of its own, so the cell draws one: the
+ * card's name and its controls. `pl-9` leaves room for the drag handle, which
+ * sits over its left end.
+ */
+function UnframedEditHeader(props: { title: string; children: ReactNode }) {
+  return (
+    <div
+      className="flex items-center gap-2 rounded-t-lg border-b border-border bg-muted/40 py-1 pl-9 pr-2"
+      data-testid="widget-edit-header"
+    >
+      <span className="mr-auto truncate text-xs font-medium text-muted-foreground">
+        {props.title}
+      </span>
+      {props.children}
+    </div>
+  );
+}
+
+/** The widget itself, in the one of its three settings the cell is in. */
+function CardBody(props: {
+  widget: DashboardWidget;
+  placement: ComponentProps<typeof WidgetRenderer>["placement"];
+  headerAction: ReactNode;
+  data: ArrangedCellProps["data"];
+  isEditing: boolean;
+  /** Whether a floated dismiss control shares the cell. */
+  floated: boolean;
+}) {
+  const { widget, placement, headerAction, data, isEditing, floated } = props;
+  if (isEditing) {
+    // While customising: drawn, and out of reach. A different element from
+    // the resting cell's, so entering and leaving customise mode mounts the
+    // widget afresh, as the floated control's slot below already does for a
+    // dismissible card.
+    return (
+      <CustomizingFence framed={widget.chrome !== "none"}>
+        <WidgetRenderer
+          definition={widget}
+          placement={placement}
+          headerAction={headerAction}
+          {...data}
+        />
+      </CustomizingFence>
+    );
+  }
+  if (floated) {
+    // The body's own slot, so the cell can ask whether the widget drew
+    // anything. Present only where a floated control shares the cell.
+    return (
+      <div data-widget-body>
+        <WidgetRenderer definition={widget} placement={placement} {...data} />
+      </div>
+    );
+  }
+  // 🔴 A DIRECT child otherwise, because the cell's `empty:hidden` reads
+  // `:empty` -- which counts element children, not rendered output. An
+  // always-present wrapper made every cell non-empty.
+  return (
+    <WidgetRenderer
+      definition={widget}
+      placement={placement}
+      headerAction={headerAction}
+      {...data}
+    />
+  );
+}
+
+/** The cell's classes: its width, its collapse when empty, and its spacing. */
+function cellClassName(
+  row: ArrangedCellProps["row"],
+  unframed: boolean,
+  isEditing: boolean
+): string {
+  return cn(
+    // `relative` so the drag handle, which is absolutely positioned, lands
+    // on this cell rather than on the grid.
+    "relative",
+    // 🔴 The PLACEMENT's width, drawn at the nearest width its widget
+    // allows. The stored width IS the reader's arrangement, so it is never
+    // replaced by the declaration's default here.
+    cardSpanClass(row.width, row.allowedWidths),
+    // `empty:hidden` so a widget that drew NOTHING costs no grid row: an
+    // unframed widget whose component returned null, which core's
+    // conditional sections do. A framed widget always renders its card.
+    "empty:hidden",
+    // The same collapse, asked of the BODY, for a cell that also carries a
+    // floated dismiss control: that control comes from the declaration, so
+    // it is present even when the widget renders nothing. `:empty` on the
+    // body counts text nodes, which `:only-child` on the control would not.
+    "has-[>[data-widget-body]:empty]:hidden",
+    // An unframed widget is a SECTION, and sections on this page sit 48px
+    // apart: 24px of trailing margin plus the grid's 24px gap. Bottom only,
+    // so the first row is not pushed down from the welcome header.
+    unframed && "mb-6",
+    // Room above each control as it takes focus, so scrolling it into view
+    // stops below the customise bar stuck to the top rather than under
+    // it. On the controls rather than the cell, because the margin that
+    // counts is the focused element's own.
+    isEditing && "[&_button]:scroll-mt-40"
+  );
+}
+
+export function ArrangedCell(props: ArrangedCellProps) {
+  const { row, isEditing, isWriting, can, data, refs, on } = props;
   /*
    * Open state lives with the CELL rather than with the grid: the sheet belongs
    * to one card, and hoisting it would make the grid track which of many is
@@ -168,12 +288,14 @@ export function ArrangedCell({
    */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
-
-  const widget = row.widget;
+  // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
+  const widget = useMemo(
+    () => widgetAsAsked(row.widget, row.config),
+    [row.widget, row.config]
+  );
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
-   * config are both in scope -- the same reason the grid applies settings to
-   * the query where it does. `resolveWidgetSettings` returns only DECLARED
+   * config are both in scope. `resolveWidgetSettings` returns only DECLARED
    * names, so a component cannot act on a key its widget never offered.
    */
   const placement = useMemo(
@@ -183,32 +305,25 @@ export function ArrangedCell({
     }),
     [row.placementId, widget.settings, row.config]
   );
-  /*
-   * Bound once here rather than written inline in the JSX below. Each is the
-   * cell supplying the one thing its caller's handler cannot know — which
-   * placement, or which direction — and inline they turned a flat list of
-   * controls into seven nested closures a reader has to step into to see what
-   * each button does.
-   */
-  const moveUp = () => on.move(-1);
-  const moveDown = () => on.move(1);
-  const moveLeft = () => on.moveColumn(row.placementId, column - 1);
-  const moveRight = () => on.moveColumn(row.placementId, column + 1);
-  const toggleHidden = () => on.toggleHidden(row.placementId);
-  const { floating: floatingControl, header: headerControl } =
-    dismissAffordance(
-      { widget, placementId: row.placementId, isEditing, isDismissing },
-      on.dismiss
-    );
-  const floatsDismiss = floatingControl !== undefined;
-  const remove = () => on.remove(row.placementId);
-  const openSettings = () => setSettingsOpen(true);
-  const { canMoveUp, canMoveDown } = moveAffordance(index, count);
-  // Derived from the column this card is DRAWN in. A card stored past the
-  // current count is folded into the last column, so computing from the stored
-  // value offers a Left that lands outside the dashboard and a label naming a
-  // column the reader cannot see.
-  const { canMoveLeft, canMoveRight } = columnAffordance(column, columnCount);
+  const { floating: floatingControl, header: dismissControl } =
+    dismissAffordance(widget, props, on.dismiss);
+  const width = drawnWidth(row.width, row.allowedWidths);
+
+  // While customising, the card's width and its one menu, side by side. A
+  // framed card shows them over its own header's right end; an unframed one
+  // in the small header the cell draws for it below. Both outside the fence
+  // that puts the card's own content out of reach.
+  const editActions = isEditing ? (
+    <CardEditActions
+      {...{ row, width, can, isWriting, refs, on }}
+      {...(hasSettings ? { openSettings: () => setSettingsOpen(true) } : {})}
+    />
+  ) : null;
+  const unframed = widget.chrome === "none";
+  // While customising, a framed card's header keeps the room its controls are
+  // drawn over; at rest it holds the dismiss control, if any.
+  const framedHeaderAction = isEditing ? <CardControlsSpace /> : dismissControl;
+  const headerAction = unframed ? undefined : framedHeaderAction;
 
   return (
     <SortableWidgetCell
@@ -216,100 +331,21 @@ export function ArrangedCell({
       title={widget.title}
       isEditing={isEditing}
       data-testid={`widget-cell-${widget.id}`}
-      className={cn(
-        // `relative` so the drag handle, which is absolutely positioned, lands
-        // on this cell rather than on the grid.
-        "relative",
-        // 🔴 The PLACEMENT's size wins over the declaration's. The stored size
-        // IS the reader's arrangement — the layout API preserves it precisely
-        // so a card they resized stays resized — and reading the declaration
-        // instead silently re-sized their dashboard whenever a plugin changed
-        // its `defaultSize`. `widgetSpanClass` already survives a value this
-        // admin does not recognise, which is what makes it safe to hand it one
-        // that came from storage rather than from this release's enum.
-        widgetSpanClass(row.size ?? widget.size),
-        // `empty:hidden` so a widget that drew NOTHING costs no row. A framed
-        // widget always renders its card, so this can never hide one; it
-        // reaches only an unframed widget whose component returned null --
-        // which core's conditional sections do, and did before they were
-        // widgets. Without it each becomes a blank cell with a `gap-6` on
-        // either side, which is the empty-slot bug rather than the hiding those
-        // components have always performed.
-        "empty:hidden",
-        // The same collapse, asked of the BODY, for a cell that also carries a
-        // floated dismiss control. That control comes from the DECLARATION
-        // rather than from anything the body produced, so it is present even
-        // when the widget renders nothing -- and an element child stops
-        // `:empty` matching on the cell, so without this a card that drew
-        // nothing would hold a blank row with a stray button in it.
-        //
-        // 🔴 `:empty` on a body slot, not `:only-child` on the control.
-        // `:only-child` counts ELEMENT siblings and ignores text, so an
-        // unframed component returning a bare string left the control as the
-        // only element and the whole cell was hidden over real content.
-        // `:empty` counts text nodes, which is exactly the question being
-        // asked: did this widget draw anything at all.
-        "has-[>[data-widget-body]:empty]:hidden",
-        // An unframed widget is a SECTION, and sections on this page have
-        // always been 48px apart -- the `space-y-12` the dashboard used before
-        // these became widgets. The grid's own `gap-6` is a card rhythm and
-        // right for cards, so the difference belongs to the widgets that are
-        // not cards: 24px of trailing margin plus the 24px row gap puts two
-        // adjacent sections back at 48px.
-        //
-        // BOTTOM only. A symmetric `my-3` also pushed the FIRST row down, and
-        // the page's outer `space-y-12` already places the grid 48px below the
-        // welcome header -- so every dashboard gained 12px there while the
-        // inter-section gaps looked correct. Measuring the gaps alone could not
-        // see it; only the header-to-first-section distance could.
-        //
-        // Margins, not padding: a hidden cell contributes neither, but padding
-        // would also inset a body that draws its own background.
-        widget.chrome === "none" && "mb-6"
-      )}
+      className={cellClassName(row, unframed, isEditing)}
     >
-      {isEditing ? (
-        <WidgetEditControls
-          card={{
-            title: widget.title,
-            position: index + 1,
-            count,
-            // 1-based for the labels, which say "column 2 of 3" to a reader
-            // who counts from one.
-            column: column + 1,
-            columnCount,
-            hidden: row.hidden,
-            // Boolean rather than the declaration's optional field: the label
-            // branches on it, and `undefined` reaching a prop that reads as a
-            // yes/no question is a third state nothing here means.
-            dismissible: widget.dismissible === true,
-          }}
-          can={{
-            up: canMoveUp,
-            down: canMoveDown,
-            left: canMoveLeft,
-            right: canMoveRight,
-          }}
-          on={{
-            moveUp,
-            moveDown,
-            moveLeft,
-            moveRight,
-            toggleHidden,
-            remove,
-            ...(hasSettings ? { openSettings } : {}),
-          }}
-        />
+      {!unframed && editActions ? (
+        <CardControlsOverlay>{editActions}</CardControlsOverlay>
       ) : null}
-      {/* Floated only for an UNFRAMED card, which draws no header to put a
-          control in. A framed one receives the same control through
-          `headerAction` below, where `WidgetCard` reserves space for it beside
-          the declared icon. */}
+      {unframed && editActions ? (
+        <UnframedEditHeader title={widget.title}>
+          {editActions}
+        </UnframedEditHeader>
+      ) : null}
       {floatingControl}
-      {/* Mounted whenever the widget offers settings, not only while editing.
-          A closed `Sheet` renders nothing, so this costs a card nothing — and
-          it is what lets the panel outlive edit mode rather than being torn
-          out from under a reader who is still filling it in. */}
+      {/* Mounted whenever the widget offers settings, not only while
+          customising. A closed `Sheet` renders nothing, so this costs a card
+          nothing — and it is what lets the panel outlive customise mode rather
+          than being torn out from under a reader still filling it in. */}
       {hasSettings ? (
         <WidgetSettingsSheet
           open={settingsOpen}
@@ -320,43 +356,10 @@ export function ArrangedCell({
           onSave={on.saveSettings}
         />
       ) : null}
-      {/* The dimming wraps the BODY only. Applied to the cell it composited
-          every descendant — the controls, the drag handle, their labels and
-          their focus rings — so the buttons needed to bring a hidden card back
-          were themselves faded, which is the opposite of what the comment
-          beside it promised. A hidden card is dimmed so it is not mistaken for
-          a live one; the controls that act on it stay legible. */}
-      {row.hidden ? (
-        <div className="opacity-50">
-          <WidgetRenderer definition={widget} placement={placement} {...data} />
-        </div>
-      ) : floatsDismiss ? (
-        // The body's own slot, so the cell can ask whether the widget drew
-        // anything. Present only where a floated control shares the cell with
-        // it: every other cell keeps the DOM it has, and its own `:empty`.
-        <div data-widget-body>
-          <WidgetRenderer
-            definition={widget}
-            placement={placement}
-            headerAction={headerControl}
-            {...data}
-          />
-        </div>
-      ) : (
-        // 🔴 A DIRECT child when nothing is dimmed, because the cell's
-        // `empty:hidden` reads `:empty` -- which counts element children, not
-        // rendered output. An always-present wrapper made every cell non-empty,
-        // so a widget that drew NOTHING stopped collapsing and left a full-width
-        // blank slot with its margins. Nothing is lost by branching: a hidden
-        // card is only ever drawn while editing, where the controls above are
-        // themselves a child and the cell can never be empty anyway.
-        <WidgetRenderer
-          definition={widget}
-          placement={placement}
-          headerAction={headerControl}
-          {...data}
-        />
-      )}
+      <CardBody
+        {...{ widget, placement, headerAction, data, isEditing }}
+        floated={floatingControl !== undefined}
+      />
     </SortableWidgetCell>
   );
 }

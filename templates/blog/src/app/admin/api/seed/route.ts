@@ -42,6 +42,15 @@ async function ensureSuperAdmin(
   if (!secret) {
     return { status: 500, error: "Server configuration error." };
   }
+  // Nextly is initialised before the session is read: reading one checks
+  // that its account may still use it, which needs the database, and this
+  // route can run in a function where nothing else has started Nextly yet.
+  // Unavailable rather than an error, as the probe below answers it.
+  try {
+    await getNextly({ config });
+  } catch {
+    return { status: 503, error: "Nextly is not available yet." };
+  }
   const session = await getSession(request, secret);
   if (!session.authenticated) {
     return { status: 401, error: "Authentication required." };
@@ -89,6 +98,16 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  // Initialised before the session is read, for the reason given in
+  // `ensureSuperAdmin` above.
+  try {
+    await getNextly({ config });
+  } catch {
+    return Response.json(
+      { errors: [{ message: "Nextly is not available yet." }] },
+      { status: 503 }
+    );
+  }
   const session = await getSession(request, secret);
   if (!session.authenticated) {
     return Response.json(

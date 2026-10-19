@@ -79,19 +79,36 @@ const serverEntries = [
   // merging via @nextly/scripts/merge-schemas). Consolidated under
   // src/schemas/ by Plan A.
   "src/schemas/index.ts",
+  // Small server-side surfaces with entries of their own. Each reaches
+  // server-only code by design (Drizzle for the operators, `node:crypto` for
+  // the schema DSL's migrations, `node:http` and `node:dns` for fetching
+  // stored bytes), and plugins and storage adapters import them only in server
+  // code, so they are not on the client-safe list below.
+  // Re-exports of Drizzle's query operators, so a plugin uses CORE's instance
+  // rather than a second copy whose internal symbols do not match.
+  "src/db-operators.ts",
+  // The DSL a plugin's server entry declares tables with.
+  "src/schema-extension.ts",
+  // The one helper an out-of-tree storage adapter needs, as its OWN entry.
+  //
+  // Reaching it through `nextly/storage` instead makes a bundler traverse that
+  // whole barrel — the local adapter and its `fs/promises` and `path`, the
+  // env-config and its dotenv chunks — into a package that depends on neither.
+  // Measured on `@nextlyhq/storage-vercel-blob`: 240K over 6 files became 1.3M
+  // over 16 the moment the barrel import landed, and every install pays it.
+  "src/storage/fetch-stored-bytes.ts",
 ];
 
 // Client-safe entry points that should NOT have Node.js shims
 // These are imported in browser contexts (admin UI, client components)
-// Entry points a browser bundle may reach. NOTE: membership here has no build effect — every
-// entry is concatenated into one `entry` under one config with `shims: false`. Keeping the list is
-// documentation of intent; nothing currently enforces that these are free of Node built-ins.
+// Entry points a browser bundle may reach. Membership here has no build effect — every entry is
+// concatenated into one `entry` under one config with `shims: false`. What makes the list a
+// contract is `packages/admin/src/client-bundle-boundary.test.ts`, which reads it from this file
+// and fails when any entry's runtime import closure reaches a Node built-in, a database package,
+// or a module marked with the `server-only` package. Keep it a plain array of path strings: the
+// check reads it as written, and refuses a shape it cannot read.
 const clientEntries = [
   "src/config.ts",
-  // Re-exports of Drizzle's query operators, so a plugin uses CORE's instance
-  // rather than a second copy whose internal symbols do not match.
-  "src/db-operators.ts",
-  "src/schema-extension.ts",
   "src/next.ts",
   "src/field-group-type.ts",
   // Types only, consumed by the admin's reconcile surface. Contributes no runtime code.
@@ -141,17 +158,12 @@ const clientEntries = [
   // chunk imports: measured through package resolution, `nextly/runtime` pulls
   // 3,251 inputs and 21.3 MB, while this entry pulls 2 and 1.4 KB.
   "src/runtime/routing/slug-param.ts",
-  // The one helper an out-of-tree storage adapter needs, as its OWN entry.
-  //
-  // Reaching it through `nextly/storage` instead makes a bundler traverse that
-  // whole barrel — the local adapter and its `fs/promises` and `path`, the
-  // env-config and its dotenv chunks — into a package that depends on neither.
-  // Measured on `@nextlyhq/storage-vercel-blob`: 240K over 6 files became 1.3M
-  // over 16 the moment the barrel import landed, and every install pays it.
-  "src/storage/fetch-stored-bytes.ts",
   // The over-cap refusal, reachable by an adapter without the barrel for the
   // same reason as the helper above.
   "src/storage/read-errors.ts",
+  // `nextly/zod`: the Zod generated schema files import, so they compile in an
+  // app that depends on `nextly` and not on `zod`. Pure, so browser-safe.
+  "src/zod.ts",
 ];
 
 // Shared config options

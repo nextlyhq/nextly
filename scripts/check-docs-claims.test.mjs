@@ -210,6 +210,360 @@ describe("forbidden-status-phrase", () => {
   });
 });
 
+describe("refused-claim", () => {
+  /**
+   * Every refused phrase, written out here rather than read from the list the check uses.
+   * Iterating that list would pass after an entry was deleted from it, which is the regression
+   * this exists to catch. Spelled as public copy spells them, in mixed case.
+   */
+  const REFUSED = [
+    "Free forever",
+    "forever free",
+    "always free",
+    "All features free",
+    "no paid gates",
+    "no paid tier",
+    "no paid plan",
+    "no paid version",
+    "never charge",
+    "No SaaS",
+    "no proprietary cloud",
+    "no hosted offering",
+    "no hosted version",
+    "Nextly cloud",
+    "single sign-on",
+    "SSO",
+    "SAML",
+    "SCIM",
+    "OIDC",
+    "OpenID Connect",
+    "enforce sign-on",
+    "enforced sign-on",
+    "enforces sign-on",
+    "enforcing sign-on",
+    "compliance report",
+    "sign in with Google",
+    "sign in with Microsoft",
+    "sign in with GitHub",
+    "log in with Google",
+    "log in with Microsoft",
+    "log in with GitHub",
+    "login with Google",
+    "login with Microsoft",
+    "login with GitHub",
+    "production-ready",
+    "enterprise-grade",
+    "produce the same result",
+    "identical results",
+    "export to code",
+    "row-level security",
+    "live preview",
+    "prevents conflicting edits",
+    "stable and semver-protected",
+    "same public API",
+    "AI-native",
+    "AI-powered",
+    "agent-ready",
+    "MCP-enabled",
+    "no dev required",
+    "no code required",
+    "backed by Vercel",
+    "Vercel-backed",
+    "in under a minute",
+    "in 5 minutes",
+    "in five minutes",
+  ];
+
+  const refused = findings => findings.filter(f => f.check === "refused-claim");
+
+  it("fires on every refused phrase, each on the line that holds it", async () => {
+    // Membership by line rather than a count: a matcher that skipped one phrase and reported
+    // another twice would still reach the right total.
+    const page = REFUSED.map(phrase => `Nextly is ${phrase} for you.`).join("\n");
+    const hits = refused(await findingsFor({ "docs/a.mdx": `${page}\n` }));
+    expect(hits.map(f => f.line).sort((a, b) => a - b)).toEqual(
+      REFUSED.map((_, index) => index + 1)
+    );
+  });
+
+  it("fires on the sentences the README and the site carried", async () => {
+    const hits = refused(
+      await findingsFor({
+        "README.md": [
+          "No SaaS, no proprietary cloud.",
+          "",
+          "| All features free (no paid gates) | yes |",
+          "",
+          "Free forever. No Nextly cloud required.",
+          "",
+        ].join("\n"),
+      })
+    );
+    expect(hits.map(f => f.line)).toEqual([1, 3, 5]);
+  });
+
+  it("is silent on the wording that replaces them", async () => {
+    expect(
+      refused(
+        await findingsFor({
+          "README.md":
+            "MIT licensed, self-hosted. Runs inside your own Next.js app, on your own PostgreSQL or MySQL database, or SQLite for local work.\n",
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("reads every surface a reader meets: README, docs, and each published package's npm page", async () => {
+    const hits = refused(
+      await findingsFor({
+        "README.md": "Free forever.\n",
+        "docs/guide/a.mdx": "Free forever.\n",
+        "docs/b.md": "Free forever.\n",
+        "docs/meta.json": '{ "title": "Free forever" }\n',
+        "packages/thing/package.json": pkg({ description: "Free forever." }),
+        "packages/thing/README.md": "# thing\n\nFree forever.\n",
+        "packages/tagged/package.json": pkg({
+          name: "@nextlyhq/tagged",
+          keywords: ["cms", "sso"],
+        }),
+        "packages/tagged/README.md": "# tagged\n",
+      })
+    );
+    expect(hits.map(f => f.file).sort()).toEqual([
+      "README.md",
+      "docs/b.md",
+      "docs/guide/a.mdx",
+      "docs/meta.json",
+      "packages/tagged/package.json",
+      "packages/thing/README.md",
+      "packages/thing/package.json",
+    ]);
+  });
+
+  it("leaves files that describe the repository rather than the product", async () => {
+    // npm trusted publishing is OIDC, and a contributor guide says so accurately. A private
+    // package has no npm page, a CHANGELOG is history, and a file outside a package's README
+    // is not what npm shows.
+    expect(
+      refused(
+        await findingsFor({
+          "AGENTS.md": "Publishing uses OIDC.\n",
+          ".agents/skills/x/SKILL.md": "Publishing uses OIDC.\n",
+          "packages/secret/package.json": pkg({
+            name: "@nextlyhq/secret",
+            private: true,
+            description: "Free forever.",
+          }),
+          "packages/secret/README.md": "Free forever.\n",
+          "packages/thing/package.json": pkg(),
+          "packages/thing/README.md": "# thing\n",
+          "packages/thing/CHANGELOG.md": "Free forever.\n",
+          "packages/thing/GUIDE.md": "Free forever.\n",
+          "templates/blog/README.md": "Free forever.\n",
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("matches the short names only as whole words", async () => {
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": [
+          "This also works with a lasso.",
+          "Scimitars and samles and oidcx.",
+          "The limit resets within 5 minutes.",
+          "Admins sign in with SSO.",
+          "Done in 5 minutes.",
+          "",
+        ].join("\n"),
+      })
+    );
+    expect(hits.map(f => f.line)).toEqual([4, 5]);
+  });
+
+  it("matches a hyphen written as a space or left out, and a space written as a hyphen", async () => {
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": [
+          "It is production ready.",
+          "It is productionready.",
+          "Use single sign on.",
+          "An AI powered editor.",
+          "Sign-in with Google.",
+          "Ready in-5-minutes.",
+          "",
+        ].join("\n"),
+      })
+    );
+    expect(hits.map(f => f.line)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it("fires once, on the first line, when a wrap splits the phrase", async () => {
+    const hits = refused(
+      await findingsFor({ "docs/a.mdx": "Every plugin is free, with no paid\ngates at all.\n" })
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0].line).toBe(1);
+  });
+
+  it("fires once, on the first line, when wraps put each word of a phrase on its own line", async () => {
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": "All\nfeatures\nfree.\n\nYou can sign\nin\nwith\nGoogle.\n",
+      })
+    );
+    expect(hits.map(f => f.line)).toEqual([1, 5]);
+  });
+
+  it("fires when a wrap splits the phrase inside a quotation", async () => {
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": "> The plugin API is now **stable and\n> semver-protected**.\n",
+      })
+    );
+    expect(hits.map(f => f.line)).toEqual([1]);
+  });
+
+  it("fires through emphasis or a code span inside the phrase", async () => {
+    const hits = refused(
+      await findingsFor({ "docs/a.mdx": "There are no **paid** gates.\nThere is no `paid` tier.\n" })
+    );
+    expect(hits.map(f => f.line)).toEqual([1, 2]);
+  });
+
+  it("fires through a link, an inline tag, an entity or underscore emphasis inside the phrase", async () => {
+    // Each renders as the bare words, so each must not split the phrase it sits in.
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": [
+          "No [SaaS](https://example.com) here.",
+          "There are [no paid][plans] gates.",
+          "No <strong>SaaS</strong> here.",
+          "No&nbsp;SaaS here.",
+          "There are no _paid_ gates.",
+          "",
+        ].join("\n"),
+      })
+    );
+    expect(hits.map(f => f.line)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("fires on text a tag puts on the page: an image's alt and a component's captions", async () => {
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": [
+          '<img src="/a.png" alt="No SaaS required" />',
+          '<Tabs items={["Single sign-on", "Passwords"]}>',
+          '<Callout title="Free forever">',
+          '<Callout type="sso-banner">plain words</Callout>',
+          "",
+        ].join("\n"),
+      })
+    );
+    // The last line's `type` is configuration, not a caption, so it is not read as a claim.
+    expect(hits.map(f => f.line)).toEqual([1, 2, 3]);
+  });
+
+  it("reports a surface it could not read rather than passing over it", async () => {
+    // The tracked list names a page the disk does not have: its claims went unexamined.
+    const { root, files } = await fixture({ "README.md": "x\n", "docs/a.mdx": "x\n" });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files: [...files, "docs/gone.mdx"],
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(
+      findings.filter(f => f.check === "refused-claim-unexamined").map(f => f.file)
+    ).toEqual(["docs/gone.mdx"]);
+  });
+
+  it("does not join a line to a new block beneath it", async () => {
+    // A list item and a quotation opening beneath a sentence are separate statements. Each
+    // marker is one the reading strips, so without the boundary the two lines would run
+    // together into the phrase.
+    expect(
+      refused(
+        await findingsFor({
+          "docs/a.mdx": "- Plans with no paid\n* gates\n\nOur plan has no paid\n> gates here.\n",
+        })
+      )
+    ).toEqual([]);
+  });
+
+  it("does not fire on an allowlisted line, and spends the exemption", async () => {
+    const exempt = 'We never say "production-ready" before 1.0.';
+    const { root, files } = await fixture({ "docs/a.mdx": `${exempt}\n${exempt}\n` });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files,
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+      allowlist: {
+        "refused-claim": { "docs/a.mdx": { count: 1, digests: [digestLine(exempt)] } },
+      },
+    });
+    expect(refused(findings).map(f => f.line)).toEqual([2]);
+  });
+
+  describe("an exemption for a phrase that wraps", () => {
+    // The phrase starts on the first line and ends on the second, so the passage it spans is
+    // both lines, and the exemption has to cover both.
+    const first = 'We never say "production';
+    const second = 'ready" before 1.0.';
+    const edited = 'ready" before 1.0, and we mean it today.';
+    const run = async (lines, digest) => {
+      const { root, files } = await fixture({ "docs/a.mdx": `${lines.join("\n")}\n` });
+      const { findings } = await runChecks({
+        repoRoot: root,
+        files,
+        remoteRefs: REFS,
+        hasLocalCommit: () => true,
+        allowlist: { "refused-claim": { "docs/a.mdx": { count: 1, digests: [digest] } } },
+      });
+      return refused(findings).map(f => f.line);
+    };
+
+    it("is honoured while every line of the passage is unchanged", async () => {
+      expect(await run([first, second], digestLine(`${first}\n${second}`))).toEqual([]);
+    });
+
+    it("stops being honoured when a continuation line is edited", async () => {
+      expect(await run([first, edited], digestLine(`${first}\n${second}`))).toEqual([1]);
+    });
+
+    it("ends at the line the phrase ends on, so later lines of the paragraph stay free to change", async () => {
+      // A third line continues the sentence after the phrase is complete. The exemption covers
+      // the phrase's own lines only, so rewording the third line keeps it.
+      const digest = digestLine(`${first}\n${second}`);
+      expect(await run([first, second, "and that is the whole point."], digest)).toEqual([]);
+      expect(await run([first, second, "which we have said for years."], digest)).toEqual([]);
+    });
+
+    it("is not held by its first line alone", async () => {
+      // A digest of the opening line would survive any edit beneath it, which is the hole:
+      // the phrase's own words on the next line could be rewritten under a standing exemption.
+      expect(await run([first, edited], digestLine(first))).toEqual([1]);
+    });
+  });
+
+  it("says it examined nothing when the README or the docs are missing", async () => {
+    // The population is asserted by identity: a tree with only one of the two, or neither, is
+    // a run that could not check where the claims are made.
+    const examined = async spec =>
+      (await findingsFor(spec)).filter(f => f.check === "refused-claim-unexamined").map(f => f.file);
+    expect(await examined({ "docs/a.mdx": "x\n" })).toEqual(["README.md"]);
+    expect(await examined({ "README.md": "x\n" })).toEqual(["docs/"]);
+    expect(await examined({ "README.md": "x\n", "docs/a.mdx": "x\n" })).toEqual([]);
+  });
+
+  it("names the phrase and what to write instead", async () => {
+    const [hit] = refused(await findingsFor({ "README.md": "No SaaS here.\n" }));
+    expect(hit.message).toContain('"No SaaS"');
+    expect(hit.message).toContain("MIT licensed, self-hosted");
+  });
+});
+
 describe("naming-rule", () => {
   it("fires on the bare phrase Visual Builder", async () => {
     expect(await checksFor({ "docs/a.mdx": "The Visual Builder does things.\n" })).toContain(
@@ -2700,5 +3054,44 @@ describe("documented-key-prefix repair", () => {
         },
       ])
     ).toThrow(/refusing to rewrite/);
+  });
+});
+
+describe("plugin-route-mount", () => {
+  // The mount is read from where the base template keeps its catch-all route. That an existing
+  // app gets the same route from create-nextly-app's generator is that package's own test, which
+  // runs the generator, so nothing here depends on how the generator's source spells the path.
+  const tree = (route = "templates/base/src/app/admin/api/[[...params]]/route.ts", docs = "/admin/api") => ({
+    [route]: 'import { createDynamicHandlers } from "nextly/runtime";\n',
+    "packages/nextly/src/plugins/routes/route-path.ts": 'export const PLUGIN_NAMESPACE_SEGMENT = "plugins";\n',
+    "docs/plugins/routes.mdx": `A plugin route answers at \`${docs}/plugins/@acme/thing/hello\`.\n`,
+  });
+
+  it("checks the docs against the template's mount", async () => {
+    const checks = await checksFor(tree());
+    expect(checks).not.toContain("plugin-route-mount-unreadable");
+    expect(checks).not.toContain("plugin-route-mount");
+  });
+
+  it("follows the template when its route moves", async () => {
+    const findings = await findingsFor(tree("templates/base/src/app/cms/api/[[...params]]/route.ts"));
+    expect(findings.find(f => f.check === "plugin-route-mount")?.message).toContain(
+      "the handler is mounted at /cms/api"
+    );
+  });
+
+  it("does not read the generator's source", async () => {
+    // A generator whose path no reader could follow must not make the mount unreadable.
+    const checks = await checksFor({
+      ...tree(),
+      "packages/create-nextly-app/src/generators/routes.ts": "await writeNew(cwd, buildRoutePath(projectInfo.appDir), T);\n",
+    });
+    expect(checks).not.toContain("plugin-route-mount-unreadable");
+  });
+
+  it("fails closed when the template holds no route to read the mount from", async () => {
+    const files = tree();
+    delete files["templates/base/src/app/admin/api/[[...params]]/route.ts"];
+    expect(await checksFor(files)).toContain("plugin-route-mount-unreadable");
   });
 });

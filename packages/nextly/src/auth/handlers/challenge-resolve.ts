@@ -10,6 +10,7 @@ import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { AuthUser } from "../../types/auth";
 import {
   clearPendingCookie,
+  presentedPendingToken,
   readPendingCookie,
   setPendingCookie,
 } from "../cookies/pending-cookie";
@@ -613,6 +614,7 @@ async function wrongAnswer(
       flow?: string;
       flowExpiresAt?: number;
       passwordUpdatedAt?: number | null;
+      sessionEpoch?: number;
     };
     usedCookie: boolean;
     requestId: string;
@@ -651,6 +653,9 @@ async function wrongAnswer(
       // the session the answer mints is still judged against it.
       ...(args.pending.passwordUpdatedAt !== undefined
         ? { passwordUpdatedAt: args.pending.passwordUpdatedAt }
+        : {}),
+      ...(args.pending.sessionEpoch !== undefined
+        ? { sessionEpoch: args.pending.sessionEpoch }
         : {}),
     },
     deps.secret,
@@ -707,10 +712,7 @@ export async function handleChallengeResolve(
     // page could have kept — see auth/cookies/pending-cookie.
     const cookieToken = readPendingCookie(request);
     usedCookie = typeof body.pendingToken !== "string" && cookieToken !== null;
-    const pendingTokenInput =
-      typeof body.pendingToken === "string"
-        ? body.pendingToken
-        : (cookieToken ?? "");
+    const pendingTokenInput = presentedPendingToken(body, request);
     const challengeResponse = (body.response ?? {}) as Record<string, unknown>;
 
     let pending;

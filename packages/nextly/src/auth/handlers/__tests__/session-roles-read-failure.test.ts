@@ -12,7 +12,7 @@ import type { AuthUser } from "../../../types/auth";
 import { buildAuthRouterDeps } from "../deps-bridge";
 import { issueSession, type IssueSessionDeps } from "../issue-session";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 
 /** The failure the database raises for the role read. */
 const ROLE_READ_FAILED = new Error("user_roles could not be read");
@@ -40,6 +40,7 @@ describe("reading a session's roles", () => {
     const rows = fakeSessionRows(async userId => ({
       userId,
       passwordUpdatedAt: null,
+      ...fixtureIdentity,
       isActive: true,
       lockedUntil: null,
       emailVerified: new Date(),
@@ -57,6 +58,7 @@ describe("reading a session's roles", () => {
       fetchAccountState: vi.fn(async (userId: string) => ({
         userId,
         passwordUpdatedAt: null,
+        ...fixtureIdentity,
         isActive: true,
         lockedUntil: null,
         emailVerified: new Date(),

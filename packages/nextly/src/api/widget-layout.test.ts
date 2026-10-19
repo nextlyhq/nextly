@@ -41,7 +41,6 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
 import { requireAuthentication } from "../auth/middleware";
 import type { WidgetDefinition } from "../domains/widgets/definition";
 import {
-  DEFAULT_COLUMN_COUNT,
   MAX_PLACEMENTS,
   layoutSizeProblem,
   serializeLayout,
@@ -70,12 +69,11 @@ let saved:
   | {
       placements: WidgetPlacement[];
       expected: number;
-      columnCount?: number;
       arranged?: boolean;
     }
   | undefined;
 let saveThrows: Error | undefined;
-let deleted: { kind: string; scope: string } | undefined;
+let deleted: { kind: string; scope: string; expected: number } | undefined;
 const logged: object[] = [];
 
 const fakeService = {
@@ -95,8 +93,8 @@ const fakeService = {
       return { layout: undefined, version: stored.version, unreadable: true };
     }
   },
-  deleteLayout: async (kind: string, scope: string) => {
-    deleted = { kind, scope };
+  deleteLayout: async (kind: string, scope: string, expected: number) => {
+    deleted = { kind, scope, expected };
     stored = undefined;
   },
   saveLayout: async (
@@ -104,16 +102,13 @@ const fakeService = {
     _scope: string,
     placements: WidgetPlacement[],
     expected: number,
-    columnCount?: number,
     arranged?: boolean
   ) => {
     if (saveThrows) throw saveThrows;
-    // The count is recorded because the response ECHOES one: a writer that
-    // answered with the right number while storing another would satisfy every
-    // assertion made on the body alone. Whether the write ARRANGES is recorded
-    // for a different reason -- nothing in the response says it, so the only
-    // place a wrong answer is visible is what reaches the service.
-    saved = { placements, expected, columnCount, arranged };
+    // Whether the write ARRANGES is recorded because nothing in the response
+    // says it, so the only place a wrong answer is visible is what reaches the
+    // service.
+    saved = { placements, expected, arranged };
     return expected + 1;
   },
 };
@@ -175,7 +170,11 @@ interface LayoutPayload {
   version?: number;
   source?: string;
   scope?: string;
-  columnCount?: number;
+  defaultPlacements?: WidgetPlacement[];
+  widgets?: Record<
+    string,
+    { allowedWidths: string[]; defaultWidth: string; allowsSeveral: boolean }
+  >;
 }
 
 /** A GET answers with the object itself. */
@@ -273,8 +272,8 @@ describe("GET /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p2", widgetId: "core/b", column: 0, order: 0, hidden: false },
-        { id: "p1", widgetId: "core/a", column: 0, order: 10, hidden: true },
+        { id: "p2", widgetId: "core/b", width: "full", removed: false },
+        { id: "p1", widgetId: "core/a", width: "full", removed: true },
       ]),
     };
 
@@ -296,8 +295,8 @@ describe("GET /api/dashboard/layout", () => {
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "same", widgetId: "core/a", column: 0, order: 0, hidden: false },
-        { id: "same", widgetId: "core/b", column: 0, order: 10, hidden: false },
+        { id: "same", widgetId: "core/a", width: "full", removed: false },
+        { id: "same", widgetId: "core/b", width: "full", removed: false },
       ]),
     };
 
@@ -314,13 +313,12 @@ describe("GET /api/dashboard/layout", () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", width: "full", removed: false },
         {
           id: "p2",
           widgetId: "plugin/uninstalled",
-          column: 0,
-          order: 10,
-          hidden: false,
+          width: "full",
+          removed: false,
         },
       ]),
     };
@@ -337,8 +335,11 @@ describe("GET /api/dashboard/layout", () => {
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
-    expect(body.source).toBe("default");
+    // Says so, so the admin can tell the reader and ask before a save
+    // replaces the row.
+    expect(body.source).toBe("unreadable");
     expect(body.placements?.map(p => p.widgetId)).toEqual(["core/a"]);
+    expect(logged).toEqual([{ unreadable: true }]);
     // The TRUE version, not 0. Reporting 0 would tell the client there is no
     // row, sending its next PUT down the insert path to collide with the row
     // that is still there -- turning a recoverable bad row into a dashboard
@@ -375,9 +376,8 @@ describe("a widget that only CONTRIBUTED", () => {
           {
             id: "p1",
             widgetId: "forms/latest",
-            column: 0,
-            order: 0,
-            hidden: false,
+            width: "full",
+            removed: false,
           },
         ],
         version: 0,
@@ -395,7 +395,7 @@ describe("a widget that only CONTRIBUTED", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", width: "full", removed: false },
       ]),
     };
 
@@ -419,14 +419,21 @@ describe("a widget that only CONTRIBUTED", () => {
     );
   });
 
-  it("takes the geometry it declared, unknown values included", async () => {
+  it("takes the width it declared, and survives a size it cannot read", async () => {
     // A contribution may come from a plugin built against a newer core, so an
-    // unrecognised size must reach the placement rather than being refused.
-    setContributedWidgets([{ id: "forms/latest", defaultSize: "xxl" }]);
+    // unrecognised size is drawn full rather than refused; a known one becomes
+    // the width of the same span.
+    setContributedWidgets([
+      { id: "forms/latest", defaultSize: "xxl" },
+      { id: "forms/count", defaultSize: "sm" },
+    ]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
-    expect(body.placements?.[0]).toMatchObject({ size: "xxl" });
+    expect(body.placements?.map(p => [p.widgetId, p.width])).toEqual([
+      ["forms/latest", "full"],
+      ["forms/count", "quarter"],
+    ]);
   });
 });
 
@@ -439,7 +446,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 3,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", width: "full", removed: false },
       ]),
     };
 
@@ -458,7 +465,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 3,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", width: "full", removed: false },
       ]),
     };
 
@@ -478,7 +485,7 @@ describe("a widget registered after the reader last saved", () => {
     stored = {
       version: 1,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", width: "full", removed: false },
       ]),
     };
 
@@ -507,7 +514,7 @@ describe("a widget registered after the reader last saved", () => {
 function unarrangedRow(placements: WidgetPlacement[], version = 1) {
   return {
     version,
-    layout: serializeLayout(placements, DEFAULT_COLUMN_COUNT, false),
+    layout: serializeLayout(placements, false),
   };
 }
 
@@ -522,7 +529,7 @@ describe("a row nobody arranged still follows the defaults", () => {
     registerWidget(widget({ id: "core/a" }));
     registerWidget(widget({ id: "core/new" }));
     stored = unarrangedRow([
-      { id: "core/a", widgetId: "core/a", column: 0, order: 0, hidden: true },
+      { id: "core/a", widgetId: "core/a", width: "full", removed: true },
     ]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
@@ -542,15 +549,15 @@ describe("a row nobody arranged still follows the defaults", () => {
     registerWidget(widget({ id: "core/a" }));
     registerWidget(widget({ id: "core/new" }));
     stored = unarrangedRow([
-      { id: "core/a", widgetId: "core/a", column: 0, order: 0, hidden: true },
+      { id: "core/a", widgetId: "core/a", width: "full", removed: true },
     ]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
 
-    expect(body.placements?.find(p => p.widgetId === "core/a")?.hidden).toBe(
+    expect(body.placements?.find(p => p.widgetId === "core/a")?.removed).toBe(
       true
     );
-    expect(body.placements?.find(p => p.widgetId === "core/new")?.hidden).toBe(
+    expect(body.placements?.find(p => p.widgetId === "core/new")?.removed).toBe(
       false
     );
   });
@@ -564,22 +571,19 @@ describe("a row nobody arranged still follows the defaults", () => {
     registerWidget(widget({ id: "core/a", defaultOrder: 20 }));
     registerWidget(widget({ id: "core/b", defaultOrder: 10 }));
     stored = unarrangedRow([
-      { id: "core/a", widgetId: "core/a", column: 0, order: 0, hidden: false },
-      { id: "core/b", widgetId: "core/b", column: 1, order: 10, hidden: false },
+      { id: "core/a", widgetId: "core/a", width: "full", removed: false },
+      { id: "core/b", widgetId: "core/b", width: "full", removed: false },
     ]);
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
-    const orderOf = (id: string) =>
-      body.placements?.find(p => p.widgetId === id)?.order ?? -1;
 
-    expect(orderOf("core/b")).toBeLessThan(orderOf("core/a"));
-    expect(orderOf("core/b")).toBeGreaterThanOrEqual(0);
+    expect(body.placements?.map(p => p.widgetId)).toEqual(["core/b", "core/a"]);
   });
 });
 
 describe("the kind of write a PUT is", () => {
-  const onePlacement = (hidden: boolean, id = "core/a") => [
-    { id, widgetId: "core/a", column: 0, order: 0, hidden },
+  const onePlacement = (removed: boolean, id = "core/a"): WidgetPlacement[] => [
+    { id, widgetId: "core/a", width: "full", removed },
   ];
 
   it("records a dismissal on a reader with no row as unarranged", async () => {
@@ -679,13 +683,12 @@ describe("the kind of write a PUT is", () => {
       widget({ id: "core/gated", requiredPermission: "read-secrets" })
     );
     stored = unarrangedRow([
-      { id: "core/a", widgetId: "core/a", column: 0, order: 0, hidden: false },
+      { id: "core/a", widgetId: "core/a", width: "full", removed: false },
       {
         id: "core/gated",
         widgetId: "core/gated",
-        column: 1,
-        order: 10,
-        hidden: true,
+        width: "full",
+        removed: true,
       },
     ]);
     callerHoldsPermission.mockResolvedValue(false);
@@ -700,7 +703,7 @@ describe("the kind of write a PUT is", () => {
     );
 
     expect(
-      saved?.placements.find(p => p.widgetId === "core/gated")?.hidden
+      saved?.placements.find(p => p.widgetId === "core/gated")?.removed
     ).toBe(true);
   });
 });
@@ -717,9 +720,8 @@ describe("opaque config survives the response pipeline", () => {
               {
                 id: "p1",
                 widgetId: "core/a",
-                column: 0,
-                order: 0,
-                hidden: false,
+                width: "full",
+                removed: false,
               },
             ],
             version: 0,
@@ -744,7 +746,7 @@ describe("opaque config survives the response pipeline", () => {
 
 describe("PUT /api/dashboard/layout", () => {
   const onePlacement: WidgetPlacement[] = [
-    { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+    { id: "p1", widgetId: "core/a", width: "full", removed: false },
   ];
 
   it("stores what the caller submitted", async () => {
@@ -772,13 +774,12 @@ describe("PUT /api/dashboard/layout", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", width: "full", removed: false },
         {
           id: "p9",
           widgetId: "core/gated",
-          column: 0,
-          order: 10,
-          hidden: false,
+          width: "full",
+          removed: false,
         },
       ]),
     };
@@ -809,9 +810,8 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p9",
           widgetId: "core/gated",
-          column: 0,
-          order: 10,
-          hidden: false,
+          width: "full",
+          removed: false,
         },
       ]),
     };
@@ -845,9 +845,8 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/gated",
-            column: 0,
-            order: 0,
-            hidden: false,
+            width: "full",
+            removed: false,
           },
         ],
         version: 0,
@@ -868,8 +867,8 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "dup", widgetId: "core/a", column: 0, order: 0, hidden: false },
-          { id: "dup", widgetId: "core/a", column: 0, order: 1, hidden: false },
+          { id: "dup", widgetId: "core/a", width: "full", removed: false },
+          { id: "dup", widgetId: "core/a", width: "full", removed: false },
         ],
         version: 0,
         scope: scopeFor(),
@@ -904,8 +903,8 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "dup", widgetId: "core/a", column: 0, order: 0, hidden: false },
-          { id: "dup", widgetId: "core/b", column: 0, order: 1, hidden: false },
+          { id: "dup", widgetId: "core/a", width: "full", removed: false },
+          { id: "dup", widgetId: "core/b", width: "full", removed: false },
         ],
         version: 0,
         scope: scopeFor(),
@@ -925,8 +924,8 @@ describe("PUT /api/dashboard/layout", () => {
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "one", widgetId: "core/a", column: 0, order: 0, hidden: false },
-          { id: "two", widgetId: "core/b", column: 0, order: 1, hidden: false },
+          { id: "one", widgetId: "core/a", width: "full", removed: false },
+          { id: "two", widgetId: "core/b", width: "full", removed: false },
         ],
         version: 0,
         scope: scopeFor(),
@@ -937,65 +936,39 @@ describe("PUT /api/dashboard/layout", () => {
     expect(saved).toBeDefined();
   });
 
-  it("keeps a resolved placement's column across the read/write round trip", async () => {
+  it("keeps a resolved placement's id across the read/write round trip", async () => {
     /*
-     * 🔴 The failure a freshly minted repair id causes, at the level it causes
-     * it. A client that states no column inherits the one the stored row holds
-     * for that placement, looked up BY ID. If the id it was handed on GET is
-     * not the id this PUT's own read produces, the lookup misses and the card
-     * silently moves to the first column. The repair id is derived from the id
-     * it repeats precisely so both reads answer the same thing.
+     * 🔴 The failure a freshly minted repair id would cause. A client echoes
+     * the ids it was handed; if the id it was handed on GET is not the id this
+     * PUT's own read produces, the card it sends back is no longer recognised
+     * as the one it was shown, and a width it kept is judged as a change. The
+     * repair id is derived from the id it repeats, so both reads agree.
      */
     registerWidget(widget({ id: "core/a" }));
-    registerWidget(widget({ id: "core/b" }));
+    registerWidget(widget({ id: "core/b", minSize: "full" }));
     stored = {
       version: 4,
-      layout: serializeLayout(
-        [
-          {
-            id: "same",
-            widgetId: "core/a",
-            column: 0,
-            order: 0,
-            hidden: false,
-          },
-          {
-            id: "same",
-            widgetId: "core/b",
-            column: 1,
-            order: 10,
-            hidden: false,
-          },
-        ],
-        2
-      ),
+      layout: serializeLayout([
+        { id: "same", widgetId: "core/a", width: "full", removed: false },
+        // A width core/b no longer allows: kept, because it is unchanged.
+        { id: "same", widgetId: "core/b", width: "quarter", removed: false },
+      ]),
     };
 
     const body = await bodyOf(await getWidgetLayout(getReq()));
     const handed = body.placements ?? [];
     expect(new Set(handed.map(p => p.id)).size).toBe(2);
-    const moved = handed.find(p => p.widgetId === "core/b");
-    expect(moved?.id).not.toBe("same");
-    expect(moved?.column).toBe(1);
+    const repaired = handed.find(p => p.widgetId === "core/b");
+    expect(repaired?.id).not.toBe("same");
 
-    // A client written before columns echoes what it was handed and states no
-    // column of its own.
     const res = await putWidgetLayout(
-      putReq({
-        placements: handed.map(p => ({
-          id: p.id,
-          widgetId: p.widgetId,
-          order: p.order,
-          hidden: p.hidden,
-        })),
-        version: 4,
-        scope: body.scope,
-      })
+      putReq({ placements: handed, version: 4, scope: body.scope })
     );
 
     expect(res.status).toBe(200);
-    const stayed = saved?.placements.find(p => p.widgetId === "core/b");
-    expect(stayed?.column).toBe(1);
+    expect(saved?.placements.find(p => p.widgetId === "core/b")).toEqual(
+      repaired
+    );
   });
 
   it("refuses a body that is not an object", async () => {
@@ -1018,13 +991,12 @@ describe("PUT /api/dashboard/layout", () => {
     stored = {
       version: 2,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+        { id: "p1", widgetId: "core/a", width: "full", removed: false },
         {
           id: "p9",
           widgetId: "core/gated",
-          column: 0,
-          order: 10,
-          hidden: false,
+          width: "full",
+          removed: false,
         },
       ]),
     };
@@ -1060,9 +1032,8 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/gated",
-            column: 0,
-            order: 0,
-            hidden: false,
+            width: "full",
+            removed: false,
           },
         ],
         version: 0,
@@ -1106,9 +1077,8 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/tools",
-            column: 0,
-            order: 0,
-            hidden: false,
+            width: "full",
+            removed: false,
           },
         ],
         version: 0,
@@ -1185,9 +1155,8 @@ describe("PUT /api/dashboard/layout", () => {
           {
             id: "p1",
             widgetId: "core/a",
-            column: 0,
-            order: 0,
-            hidden: false,
+            width: "full",
+            removed: false,
             config: { blob: "x".repeat(40_000) },
           },
         ],
@@ -1298,9 +1267,8 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p9",
           widgetId: "core/gated",
-          column: 0,
-          order: 0,
-          hidden: false,
+          width: "full",
+          removed: false,
           config: { blob: "y".repeat(60_000) },
         },
       ]),
@@ -1315,9 +1283,8 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p9",
           widgetId: "core/gated",
-          column: 0,
-          order: 0,
-          hidden: false,
+          width: "full",
+          removed: false,
         },
       ]),
     };
@@ -1360,11 +1327,13 @@ describe("PUT /api/dashboard/layout", () => {
       })
     );
 
-    // Sorted the way a later read will sort it, with the gate lifted.
-    const order = [...(saved?.placements ?? [])]
-      .sort((x, y) => x.order - y.order)
-      .map(p => p.widgetId);
-    expect(order).toEqual(["core/a", "core/gated", "core/b"]);
+    // In the order a later read will draw it once the gate lifts: the array
+    // order is the arrangement, and the carried card is back in its place.
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "core/gated",
+      "core/b",
+    ]);
   });
 
   it("refuses an oversized body without buffering it", async () => {
@@ -1377,9 +1346,8 @@ describe("PUT /api/dashboard/layout", () => {
         {
           id: "p1",
           widgetId: "core/a",
-          column: 0,
-          order: 0,
-          hidden: false,
+          width: "full",
+          removed: false,
           config: { blob: "z".repeat(200_000) },
         },
       ],
@@ -1409,9 +1377,8 @@ describe("PUT /api/dashboard/layout", () => {
     const many = Array.from({ length: 400 }, (_, i) => ({
       id: `p${i}`,
       widgetId: "core/a",
-      column: 0,
-      order: i,
-      hidden: false,
+      width: "full",
+      removed: false,
     }));
 
     const res = await putWidgetLayout(
@@ -1436,41 +1403,47 @@ describe("PUT /api/dashboard/layout", () => {
   });
 });
 
+/** A saved reset, naming the version and token it was staged against. */
+function deleteReq(query: Record<string, string> = {}): Request {
+  const params = new URLSearchParams(query);
+  return new Request(`http://localhost/api/dashboard/layout?${params}`, {
+    method: "DELETE",
+  });
+}
+
 describe("DELETE /api/dashboard/layout", () => {
-  it("removes the row and reports the reset", async () => {
+  it("removes the row, naming the version it was staged against", async () => {
     registerWidget(widget({ id: "core/a" }));
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: true },
+        { id: "p1", widgetId: "core/a", width: "full", removed: true },
       ]),
     };
 
     const res = await deleteWidgetLayout(
-      new Request("http://localhost/api/dashboard/layout", { method: "DELETE" })
+      deleteReq({ version: "4", scope: scopeFor() })
     );
 
     expect(res.status).toBe(200);
-    expect(deleted).toEqual({ kind: "user", scope: "user-1" });
+    // The service is what refuses a moved row, in its WHERE clause; this is
+    // what it is asked to remove.
+    expect(deleted).toEqual({ kind: "user", scope: "user-1", expected: 4 });
   });
 
-  it("leaves the reader tracking the live registry, not a frozen copy", async () => {
-    // 🔴 The reason this is a DELETE and not a PUT of the current defaults.
-    // Writing a snapshot would freeze today's defaults into the row, so a
-    // widget registered later — or a `defaultOrder` a plugin changes later —
-    // would never reach this reader again. They would be "reset" onto a layout
-    // that no longer tracks the thing they reset to.
+  it("leaves the reader following the default, not a frozen copy", async () => {
+    // 🔴 The reason this is a DELETE and not a PUT of the current default.
+    // Writing a snapshot would freeze today's default into the row, so a
+    // widget registered later would never reach this reader again.
     registerWidget(widget({ id: "core/a" }));
     stored = {
       version: 4,
       layout: serializeLayout([
-        { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: true },
+        { id: "p1", widgetId: "core/a", width: "full", removed: true },
       ]),
     };
 
-    await deleteWidgetLayout(
-      new Request("http://localhost/api/dashboard/layout", { method: "DELETE" })
-    );
+    await deleteWidgetLayout(deleteReq({ version: "4", scope: scopeFor() }));
 
     // A widget that did not exist when the row was written.
     registerWidget(widget({ id: "core/added-later" }));
@@ -1484,6 +1457,48 @@ describe("DELETE /api/dashboard/layout", () => {
     ]);
   });
 
+  it("refuses a reset staged against a different set of widgets, removing nothing", async () => {
+    // 🔴 A stale tab's reset would otherwise delete an arrangement holding a
+    // card that became visible after the tab read: the guard a save has.
+    registerWidget(widget({ id: "core/a" }));
+    stored = {
+      version: 4,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/a", width: "full", removed: false },
+      ]),
+    };
+
+    const res = await deleteWidgetLayout(
+      deleteReq({ version: "4", scope: scopeFor(["core/a", "core/new"]) })
+    );
+
+    expect(res.status).toBe(409);
+    expect(deleted).toBeUndefined();
+  });
+
+  it("refuses a reset that names no version, or not a whole number", async () => {
+    // Absent must not read as 0, "there is no row", which would let a reset
+    // past a row the caller never read.
+    const queries: Array<Record<string, string>> = [
+      { scope: scopeFor() },
+      { version: "", scope: scopeFor() },
+      { version: "4.5", scope: scopeFor() },
+      { version: "-1", scope: scopeFor() },
+      { version: "four", scope: scopeFor() },
+    ];
+    for (const query of queries) {
+      const res = await deleteWidgetLayout(deleteReq(query));
+      expect(res.status).toBe(400);
+    }
+    expect(deleted).toBeUndefined();
+  });
+
+  it("refuses a reset that names no scope", async () => {
+    const res = await deleteWidgetLayout(deleteReq({ version: "0" }));
+    expect(res.status).toBe(400);
+    expect(deleted).toBeUndefined();
+  });
+
   it("refuses an API key", async () => {
     reqAuth.mockResolvedValue({
       userId: "user-1",
@@ -1493,7 +1508,7 @@ describe("DELETE /api/dashboard/layout", () => {
     });
 
     const res = await deleteWidgetLayout(
-      new Request("http://localhost/api/dashboard/layout", { method: "DELETE" })
+      deleteReq({ version: "0", scope: scopeFor() })
     );
 
     expect(res.status).toBe(403);
@@ -1549,151 +1564,219 @@ describe("the submission cap, when an install declares more than one write may c
   });
 });
 
-describe("the column count travels with the arrangement", () => {
-  it("ANSWERS a column count on a dashboard nobody has arranged", async () => {
-    // 🔴 The count decides which column a placement's coordinate names, so a
-    // client left to assume it draws a DIFFERENT arrangement from the stored
-    // one — and then saves that back. Sending it is what stops a dashboard
-    // being silently re-columned by whatever the client guessed.
-    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
-    const body = await bodyOf(await getWidgetLayout(getReq()));
-    expect(typeof body.columnCount).toBe("number");
-    // The control: not merely present, but a count this core would honour on
-    // the way back in. A response carrying a value the reader refuses is worse
-    // than one carrying none.
-    expect([2, 3, 4]).toContain(body.columnCount);
+describe("an arrangement the server could not read", () => {
+  beforeEach(() => {
+    registerWidget(widget({ id: "core/a" }));
+    stored = { version: 7, layout: "{not json" };
+  });
+
+  const save = (extra: Record<string, unknown> = {}) =>
+    putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "core/a", widgetId: "core/a", width: "full", removed: false },
+        ],
+        version: 7,
+        scope: scopeFor(),
+        ...extra,
+      })
+    );
+
+  it("is not replaced by a save the person did not confirm", async () => {
+    const res = await save();
+    expect(res.status).toBe(409);
+    expect(saved).toBeUndefined();
+    expect(stored?.layout).toBe("{not json");
+  });
+
+  it("is replaced by a save that confirms it", async () => {
+    const res = await save({ replaceUnreadable: true });
+    expect(res.status).toBe(200);
+    expect(saved?.expected).toBe(7);
+    expect(saved?.arranged).toBe(true);
+  });
+
+  it("refuses a single-card write outright, even one claiming confirmation", async () => {
+    // A removal outside customise mode has nothing to merge into. Replacing
+    // the row is only ever the person's confirmed save.
+    const res = await save({ arranged: false, replaceUnreadable: true });
+    expect(res.status).toBe(409);
+    expect(saved).toBeUndefined();
+  });
+
+  it("refuses a confirmation that is not a boolean", async () => {
+    const res = await save({ replaceUnreadable: "true" });
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+
+  it("CONTROL: a readable row needs no confirmation", async () => {
+    stored = {
+      version: 7,
+      layout: serializeLayout([
+        { id: "core/a", widgetId: "core/a", width: "full", removed: false },
+      ]),
+    };
+    expect((await save()).status).toBe(200);
   });
 });
 
-describe("a stored row describes itself", () => {
-  it("BOUNDS a submitted column against the count that was accepted", async () => {
-    // 🔴 The two tolerances disagreed. An unsupported `columnCount` is coerced
-    // to the default, while a placement's `column` was only bounded downward —
-    // so `{ columnCount: 5, column: 4 }` persisted as a 3-column row holding a
-    // card in column 4. Nothing rejects that row; every reader silently
-    // reinterprets it, and the arrangement a reader gets back is not the one
-    // they sent.
-    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+describe("the widths a card may take", () => {
+  const putOne = (width: string, version = 1) =>
+    putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "p1", widgetId: "core/narrow", width, removed: false },
+        ],
+        version,
+        scope: scopeFor(),
+      })
+    );
+
+  beforeEach(() => {
+    // Allows a third to two thirds.
+    registerWidget(
+      widget({
+        id: "core/narrow",
+        defaultSize: "md",
+        minSize: "md",
+        maxSize: "xl",
+      })
+    );
+  });
+
+  it("are answered for every widget the reader may see", async () => {
+    registerWidget(widget({ id: "core/any" }));
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.widgets).toEqual({
+      "core/narrow": {
+        allowedWidths: ["third", "half", "twoThirds"],
+        defaultWidth: "third",
+        allowsSeveral: false,
+      },
+      "core/any": {
+        allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
+        defaultWidth: "full",
+        allowsSeveral: false,
+      },
+    });
+  });
+
+  it("start a default card at its widget's default width", async () => {
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+    expect(body.placements?.[0]?.width).toBe("third");
+  });
+
+  it("accept a card set to a width its widget allows", async () => {
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/narrow", width: "third", removed: false },
+      ]),
+    };
+    expect((await putOne("twoThirds")).status).toBe(200);
+    expect(saved?.placements[0]?.width).toBe("twoThirds");
+  });
+
+  it("refuse a card SET to a width its widget does not allow", async () => {
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/narrow", width: "third", removed: false },
+      ]),
+    };
+    const res = await putOne("full");
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+
+  it("keep a stored width the widget no longer allows when it did not change", async () => {
+    // 🔴 Kept on purpose, drawn at the nearest allowed width. Refusing it
+    // would make every unrelated change to the dashboard impossible to save.
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/narrow", width: "full", removed: false },
+      ]),
+    };
+    expect((await putOne("full")).status).toBe(200);
+    expect(saved?.placements[0]?.width).toBe("full");
+  });
+
+  it("refuse a width that is not one of the five", async () => {
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/narrow", width: "third", removed: false },
+      ]),
+    };
+    expect((await putOne("wide")).status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+});
+
+describe("widgets the reader may still add", () => {
+  it("include a widget that allows several cards, even once one is placed", async () => {
+    registerWidget(widget({ id: "core/one" }));
+    setContributedWidgets([{ id: "forms/many", allowsSeveral: true }]);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.widgetId)).toEqual([
+      "forms/many",
+      "core/one",
+    ]);
+    expect(body.available).toEqual(["forms/many"]);
+  });
+});
+
+describe("a body in an earlier format", () => {
+  it("is refused, and nothing is written", async () => {
+    // An admin built for the columns format sends column, order, hidden and
+    // size. Stored half-understood, every card would lose its width.
+    registerWidget(widget({ id: "core/a" }));
     const res = await putWidgetLayout(
       putReq({
         placements: [
           {
-            id: "p1",
+            id: "core/a",
             widgetId: "core/a",
-            column: 4,
+            column: 0,
             order: 0,
             hidden: false,
+            size: "md",
           },
         ],
+        columnCount: 3,
         version: 0,
-        scope: scopeFor(["core/a"]),
-        columnCount: 5,
+        scope: scopeFor(),
       })
     );
-    expect(res.status).toBe(200);
-    const saved = await itemOf(res);
-    // Coerced ONCE, at the boundary, so the row is self-describing rather than
-    // reinterpreted differently by whoever reads it next.
-    expect(saved.columnCount).toBeLessThanOrEqual(4);
-    for (const placement of saved.placements ?? []) {
-      expect(placement.column).toBeLessThan(saved.columnCount ?? 3);
-    }
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
   });
+});
 
-  it("KEEPS the stored count when a PUT omits one", async () => {
-    // 🔴 Every client written before columns sends no `columnCount`, and this
-    // endpoint accepts the omission. Defaulting on their behalf rewrote a
-    // four-column row as a three-column one, after which the bounding step
-    // folds every card in the fourth column into the third — permanently, and
-    // during an edit that touched neither the count nor that card.
-    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+describe("cards the writer could not see, through a save", () => {
+  it("go back after the card they followed, wherever that card moved", async () => {
+    registerWidget(widget({ id: "core/a" }));
+    registerWidget(widget({ id: "core/gated", requiredPermission: "secret" }));
+    registerWidget(widget({ id: "core/b" }));
     stored = {
       version: 2,
-      layout: serializeLayout(
-        [{ id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false }],
-        4
-      ),
+      layout: serializeLayout([
+        { id: "a", widgetId: "core/a", width: "full", removed: false },
+        { id: "g", widgetId: "core/gated", width: "half", removed: false },
+        { id: "b", widgetId: "core/b", width: "full", removed: false },
+      ]),
     };
+    callerHoldsPermission.mockResolvedValue(false);
 
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false },
-        ],
-        version: 2,
-        scope: scopeFor(["core/a"]),
-      })
-    );
-
-    expect(res.status).toBe(200);
-    const item = await itemOf(res);
-    expect(item.columnCount).toBe(4);
-    // The consequence, not only the number: the card in the fourth column is
-    // still in the fourth column. A row that kept the count while the bounding
-    // step had already moved the card would satisfy the assertion above.
-    expect(item.placements?.[0]?.column).toBe(3);
-    expect(saved?.columnCount).toBe(4);
-    expect(saved?.placements[0]?.column).toBe(3);
-  });
-
-  it("still takes a count the client actually SENT", async () => {
-    // The control. Inheriting whenever the stored row has a count would
-    // satisfy the case above while making the picker unable to narrow a
-    // dashboard at all — the same defect pointing the other way.
-    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
-    stored = {
-      version: 2,
-      layout: serializeLayout(
-        [{ id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false }],
-        4
-      ),
-    };
-
-    const res = await putWidgetLayout(
-      putReq({
-        placements: [
-          { id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false },
-        ],
-        version: 2,
-        scope: scopeFor(["core/a"]),
-        columnCount: 2,
-      })
-    );
-
-    expect(res.status).toBe(200);
-    const item = await itemOf(res);
-    expect(item.columnCount).toBe(2);
-    // Narrowing folds the card into the last column that now exists, which is
-    // the documented behaviour for a column that went away.
-    expect(item.placements?.[0]?.column).toBe(1);
-  });
-
-  it("KEEPS each card's column when the placements state none", async () => {
-    // 🔴 Preserving the count alone was half an answer. A client written before
-    // columns omits the coordinate on every placement as well, and the reader
-    // has to turn an omission into a number — so the row kept its four columns
-    // while every card in it had been moved into the first. The arrangement was
-    // destroyed by an edit that named neither the count nor any column.
-    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
-    registerWidget(widget({ id: "core/b", defaultOrder: 1 }));
-    stored = {
-      version: 2,
-      layout: serializeLayout(
-        [
-          { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
-          { id: "p2", widgetId: "core/b", column: 3, order: 10, hidden: false },
-        ],
-        4
-      ),
-    };
-
-    const res = await putWidgetLayout(
-      putReq({
-        // Exactly what a pre-column client sends: no `columnCount`, and no
-        // `column` on any placement.
-        placements: [
-          { id: "p1", widgetId: "core/a", order: 0, hidden: false },
-          { id: "p2", widgetId: "core/b", order: 10, hidden: false },
+          { id: "b", widgetId: "core/b", width: "full", removed: false },
+          { id: "a", widgetId: "core/a", width: "full", removed: false },
         ],
         version: 2,
         scope: scopeFor(["core/a", "core/b"]),
@@ -1701,154 +1784,108 @@ describe("a stored row describes itself", () => {
     );
 
     expect(res.status).toBe(200);
-    const byId = new Map(
-      (await itemOf(res)).placements?.map(p => [p.id, p.column]) ?? []
-    );
-    expect(byId.get("p2")).toBe(3);
-    // The control: `p1` was already in column 0, so it alone cannot tell
-    // "kept its column" from "collapsed everything into the first".
-    expect(byId.get("p1")).toBe(0);
-    expect(saved?.placements.find(p => p.id === "p2")?.column).toBe(3);
+    expect(saved?.placements.map(p => p.id)).toEqual(["b", "a", "g"]);
+    // And the reply names only what the caller sent.
+    expect((await itemOf(res)).placements?.map(p => p.id)).toEqual(["b", "a"]);
   });
+});
 
-  it("inherits from the DEFAULT arrangement when there is no stored row", async () => {
-    // 🔴 A caller who has never saved was still handed an arrangement — the
-    // server's round-robin default, which spreads the first widgets across the
-    // columns. A pre-column client round-trips that set without the field it
-    // does not know about, and inheritance that reads only the stored row finds
-    // nothing to inherit, so the very first save flattens the default into one
-    // column. The baseline has to be what the caller was SHOWN, and with no row
-    // that is the defaults.
-    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
-    registerWidget(widget({ id: "core/b", defaultOrder: 1 }));
-    registerWidget(widget({ id: "core/c", defaultOrder: 2 }));
-
-    // Exactly what a GET hands out, so the fixture is the arrangement the
-    // client is round-tripping rather than one invented here.
-    const offered = (await bodyOf(await getWidgetLayout(getReq()))).placements;
-    expect(offered?.map(p => p.column)).toEqual([0, 1, 2]);
-
-    const res = await putWidgetLayout(
-      putReq({
-        // The same placements with `column` dropped, which is all a pre-column
-        // client can send.
-        placements: offered?.map(({ id, widgetId, order, hidden }) => ({
-          id,
-          widgetId,
-          order,
-          hidden,
-        })),
-        version: 0,
-        scope: scopeFor(["core/a", "core/b", "core/c"]),
-      })
-    );
-
-    expect(res.status).toBe(200);
-    const saved2 = (await itemOf(res)).placements;
-    expect(saved2?.map(p => p.column)).toEqual([0, 1, 2]);
-  });
-
-  it("never inherits from a placement this caller cannot SEE", async () => {
-    // 🔴 An existence oracle. Default placement ids ARE widget ids, so a caller
-    // can submit a placement whose id names a widget they may not know about
-    // and whose `widgetId` is one they may. Inheriting across the whole stored
-    // row echoed the hidden placement's column straight back, and a nonzero one
-    // distinguishes a hit — which is the disclosure `mergePreservingHidden`
-    // re-keys collisions to prevent. The baseline is the caller's own visible
-    // half, so there is nothing of the hidden row in it to leak.
+describe("the default dashboard, answered beside a reader's own", () => {
+  it("is what a reader following the default would see, whatever they saved", async () => {
+    // A staged reset draws it, and the admin must not work the default out
+    // for itself: the server's one computation answers both.
     registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
     registerWidget(
-      widget({ id: "core/gated", requiredPermission: "read-secrets" })
+      widget({ id: "core/gated", defaultOrder: 5, requiredPermission: "x" })
     );
+    registerWidget(
+      widget({ id: "core/b", defaultOrder: 10, defaultSize: "sm" })
+    );
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        { id: "mine", widgetId: "core/b", width: "full", removed: false },
+      ]),
+    };
     callerHoldsPermission.mockResolvedValue(false);
-    stored = {
-      version: 2,
-      layout: serializeLayout(
-        [
-          { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
-          {
-            id: "probe",
-            widgetId: "core/gated",
-            column: 3,
-            order: 10,
-            hidden: false,
-          },
-        ],
-        4
-      ),
-    };
 
-    const res = await putWidgetLayout(
-      putReq({
-        placements: [
-          // The probe: an id that collides with the hidden placement, carrying
-          // a widget this caller legitimately holds, and stating no column.
-          { id: "probe", widgetId: "core/a", order: 0, hidden: false },
-        ],
-        version: 2,
-        scope: scopeFor(["core/a"]),
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.id)).toEqual(["mine"]);
+    expect(body.defaultPlacements).toEqual([
+      { id: "core/a", widgetId: "core/a", width: "full", removed: false },
+      { id: "core/b", widgetId: "core/b", width: "quarter", removed: false },
+    ]);
+  });
+});
+
+describe("a placement that changes widget", () => {
+  it("is judged as a new card: it may not keep a width its new widget does not allow", async () => {
+    registerWidget(widget({ id: "core/wide" }));
+    registerWidget(
+      widget({
+        id: "core/narrow",
+        defaultSize: "md",
+        minSize: "md",
+        maxSize: "md",
       })
     );
-
-    expect(res.status).toBe(200);
-    const echoed = (await itemOf(res)).placements ?? [];
-    expect(echoed).toHaveLength(1);
-    // Column 0 is the reader's own fallback, which says nothing. Column 3 would
-    // be the hidden placement's, and is the whole finding.
-    expect(echoed[0]?.column).toBe(0);
-    // The control: the hidden placement is still CARRIED into the row, so this
-    // is inheritance being scoped rather than the placement having vanished —
-    // which would satisfy the assertion above for the wrong reason.
-    expect(
-      saved?.placements.find(p => p.widgetId === "core/gated")?.column
-    ).toBe(3);
-  });
-
-  it("still MOVES a card whose placement states a column", async () => {
-    // The control. Inheriting whenever a stored placement exists would satisfy
-    // the case above while making every sideways move unsaveable — the same
-    // defect pointing the other way, and the one a reader would notice first.
-    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
     stored = {
-      version: 2,
-      layout: serializeLayout(
-        [{ id: "p1", widgetId: "core/a", column: 3, order: 0, hidden: false }],
-        4
-      ),
+      version: 1,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/wide", width: "full", removed: false },
+      ]),
     };
-
     const res = await putWidgetLayout(
       putReq({
         placements: [
-          { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+          { id: "p1", widgetId: "core/narrow", width: "full", removed: false },
         ],
-        version: 2,
-        scope: scopeFor(["core/a"]),
-        columnCount: 4,
+        version: 1,
+        scope: scopeFor(),
       })
     );
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+});
 
-    expect(res.status).toBe(200);
-    expect((await itemOf(res)).placements?.[0]?.column).toBe(0);
+describe("a widget that allows one card", () => {
+  const two = (widgetId: string) => [
+    { id: "a", widgetId, width: "full", removed: false },
+    { id: "b", widgetId, width: "full", removed: false },
+  ];
+
+  it("is refused a second card", async () => {
+    registerWidget(widget({ id: "core/one" }));
+    const res = await putWidgetLayout(
+      putReq({ placements: two("core/one"), version: 0, scope: scopeFor() })
+    );
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
   });
 
-  it("DEFAULTS the count when there is no stored row to inherit from", async () => {
-    // The other control. Inheriting is only right where something exists to
-    // inherit; a first save has to land on a count this core supports rather
-    // than on whatever an absent row reads as.
-    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+  it("still saves a row that already held two, so an older arrangement stays savable", async () => {
+    registerWidget(widget({ id: "core/one" }));
+    stored = {
+      version: 1,
+      layout: serializeLayout(two("core/one") as WidgetPlacement[]),
+    };
+    const res = await putWidgetLayout(
+      putReq({ placements: two("core/one"), version: 1, scope: scopeFor() })
+    );
+    expect(res.status).toBe(200);
+  });
 
+  it("CONTROL: a widget that allows several takes a second card", async () => {
+    setContributedWidgets([{ id: "forms/many", allowsSeveral: true }]);
     const res = await putWidgetLayout(
       putReq({
-        placements: [
-          { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
-        ],
+        placements: two("forms/many"),
         version: 0,
-        scope: scopeFor(["core/a"]),
+        scope: scopeFor(["forms/many"]),
       })
     );
-
     expect(res.status).toBe(200);
-    expect((await itemOf(res)).columnCount).toBe(DEFAULT_COLUMN_COUNT);
   });
 });

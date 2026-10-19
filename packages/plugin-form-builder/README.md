@@ -60,7 +60,7 @@ import "@nextlyhq/plugin-form-builder/admin";
 - **Admin routes:** `/admin/collections/forms` and `/admin/collections/form-submissions`
 - **Collections:** `forms`, `form-submissions`
 - **Form lifecycle states:** Draft, Published, Closed
-- **Optional integrations:** email notifications, webhook delivery on submission, spam protection (honeypot, rate limit, reCAPTCHA v3)
+- **Optional integrations:** email notifications, a `form.submission.created` webhook through Nextly's own webhooks, spam protection (honeypot, rate limit, reCAPTCHA v3)
 
 ### Submission privacy
 
@@ -100,15 +100,15 @@ See the [Field types reference](https://nextlyhq.com/docs/plugins/form-builder#f
 - Server helpers: `submitForm`, `validateSubmission`, `getFormSubmissionStats`, `createFormConfig`, `validateFormConfig`, `assertValidFormConfig`
 - Export utilities: `exportToCSV`, `exportToJSON`, `exportAndDownload`, `downloadFile`, `generateExportFilename`
 - Collections: `formsCollection`, `submissionsCollection`
-- Type exports: `FormDocument`, `SubmissionDocument`, `FormSubmission`, `FormNotification`, `EmailConfig`, `WebhookConfig`, `WebhookEvent`, `FormFieldOption`
+- Type exports: `FormDocument`, `SubmissionDocument`, `FormSubmission`, `FormNotification`, `EmailConfig`, `FormFieldOption`
 
 ## Compatibility
 
-| Tool              | Version |
-| ----------------- | ------- |
-| Node.js           | 20+     |
-| `nextly`          | 0.0.x   |
-| `@nextlyhq/admin` | 0.0.x   |
+| Tool              | Version               |
+| ----------------- | --------------------- |
+| Node.js           | 20.19+, 22.12+ or 24+ |
+| `nextly`          | 0.0.x                 |
+| `@nextlyhq/admin` | 0.0.x                 |
 
 Plugins can break across minor versions during alpha. Pin exact versions of `nextly`, `@nextlyhq/admin`, and this plugin together.
 

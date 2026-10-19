@@ -76,6 +76,7 @@ describe("typed tokens", () => {
       name: "",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
       customFields: { typ: "pending-auth" },
     });
     expect("typ" in claims).toBe(false);

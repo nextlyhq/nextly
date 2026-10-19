@@ -99,17 +99,9 @@ export const ListUsersSchema = z.object({
   sortOrder: z.enum(["asc", "desc"]).optional().default("asc"),
 });
 
-export const DeleteUserAccountSchema = z.object({
-  userId: UserIdSchema,
-  provider: z.string().min(1, "Provider is required"),
-  providerAccountId: z.string().min(1, "Provider account ID is required"),
-});
-
-export const UnlinkAccountSchema = z.object({
-  userId: UserIdSchema,
-  provider: z.string().min(1, "Provider is required"),
-  providerAccountId: z.string().min(1, "Provider account ID is required"),
-});
+// No validators for unlinking a user's linked account: the endpoints that
+// listed and unlinked linked accounts are retired, so nothing accepts that
+// request or sends that response.
 
 export const UserListResponseSchema = z.array(MinimalUserSchema);
 
@@ -118,15 +110,6 @@ export const UserResponseSchema = MinimalUserSchema;
 export const DeleteUserResponseSchema = z.object({
   deleted: z.boolean(),
 });
-
-export const UnlinkAccountResponseSchema = z.union([
-  z.object({ ok: z.literal(true) }),
-  z.object({
-    ok: z.literal(false),
-    status: z.number(),
-    error: z.string(),
-  }),
-]);
 
 export type MinimalUser = z.infer<typeof MinimalUserSchema>;
 export type UserAccount = z.infer<typeof UserAccountSchema>;
@@ -139,9 +122,6 @@ export type UpdatePassword = z.infer<typeof UpdatePasswordSchema>;
 export type GetUserById = z.infer<typeof GetUserByIdSchema>;
 export type DeleteUser = z.infer<typeof DeleteUserSchema>;
 export type ListUsers = z.infer<typeof ListUsersSchema>;
-export type DeleteUserAccount = z.infer<typeof DeleteUserAccountSchema>;
-export type UnlinkAccount = z.infer<typeof UnlinkAccountSchema>;
 export type UserListResponse = z.infer<typeof UserListResponseSchema>;
 export type UserResponse = z.infer<typeof UserResponseSchema>;
 export type DeleteUserResponse = z.infer<typeof DeleteUserResponseSchema>;
-export type UnlinkAccountResponse = z.infer<typeof UnlinkAccountResponseSchema>;

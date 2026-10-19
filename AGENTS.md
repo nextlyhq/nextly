@@ -67,7 +67,8 @@ Claude Code loads by path, `.claude/rules/integration-tests.md` for
   and `blocks-engine` imports exactly the same packages, so no import guard can
   tell the two apart.
 - `packages/plugin-sdk` - the ONLY stable import surface for plugin authors.
-- `packages/plugin-{form-builder,page-builder}` - first-party plugins.
+- `packages/plugin-*` - first-party plugins. `plugin-accounts` and
+  `plugin-commerce` are private: not on npm yet.
 - `packages/storage-{s3,vercel-blob,uploadthing}` - media storage adapters.
 - `packages/create-nextly-app` - scaffolding CLI. Templates live in
   `/templates` (`base`, `blank`, `blog`, `plugin`).

@@ -26,6 +26,9 @@
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
+import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
+import type { ReleaseReadiness } from "../../domains/releases/readiness/evaluate-readiness";
+import type { ReleaseCalendar } from "../../domains/releases/release-calendar";
 import type {
   ReleaseMemberRow,
   ReleaseRow,
@@ -34,11 +37,18 @@ import type {
   AddMemberInput,
   FindReleasesQuery,
   ReleaseBlocker,
-  ReleaseCapabilities,
+  ReleaseCalendarQuery,
+  ReleaseCountQuery,
+  ReleaseDetailsChange,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
-import type { ReleaseMemberAction } from "../../schemas/releases/types";
+import type {
+  ReleaseCapabilities,
+  ReleaseKind,
+  ReleaseMemberAction,
+} from "../../schemas/releases/types";
+import type { ListResult } from "../types/shared";
 
 import type { NextlyContext } from "./context";
 import { accessOptions, mergeConfig } from "./helpers";
@@ -82,22 +92,67 @@ export interface ReleaseCallerArgs {
 }
 
 export interface ReleasesNamespace {
+  /**
+   * Make a release. `kind` is `release` (the default), or `single` for a
+   * document scheduled on its own, which holds exactly one document; it is
+   * fixed once the release exists. `kind` is `@experimental`.
+   */
   create(
-    args: { title: string; description?: string | null } & ReleaseCallerArgs
+    args: {
+      title: string;
+      description?: string | null;
+      kind?: ReleaseKind;
+    } & ReleaseCallerArgs
   ): Promise<ReleaseRow>;
   /**
-   * Releases in a window, newest scheduled instant first.
+   * One page of releases, as `{ items, meta }` like every other Direct API
+   * list, with `meta.total` counting every release that matches.
    *
-   * Filtering by `containing` returns them SOONEST first instead — the order
-   * they will be applied to that document — and each row carries the member's
-   * action, because a release can publish one document while taking another
-   * down. Declared in the return type rather than left to the runtime: a caller
-   * that cannot see `memberAction` cannot tell which way a release moves the
-   * document it just asked about.
+   * Narrow it by `tab` (`upcoming`, `attention`, `drafts`, `done`), by `state`
+   * and a window on the scheduled instant, by `kind` (`release` leaves out
+   * single-document releases), by `search`, a case-insensitive
+   * match on the title or description, and by `day`, a date in a named time
+   * zone (`{ date: "2026-03-29", timezone: "Europe/Berlin" }`), for the
+   * releases whose time falls on that day there. Page it with `page` (from 1) and
+   * `limit` (50 by default, at most 200). The scheduled releases come soonest
+   * first unless `order` says otherwise; other listings latest first.
+   *
+   * Filtering by `containing` returns one document's releases instead, SOONEST
+   * first — the order they will be applied to it — and each row carries the
+   * member's action, because a release can publish one document while taking
+   * another down. Declared in the return type rather than left to the
+   * runtime: a caller that cannot see `memberAction` cannot tell which way a
+   * release moves the document it just asked about.
+   *
+   * `tab`, `kind`, `search`, `day` and `page` are `@experimental`.
    */
   find(
     args?: FindReleasesQuery & ReleaseCallerArgs
-  ): Promise<Array<ReleaseRow & { memberAction?: ReleaseMemberAction }>>;
+  ): Promise<ListResult<ReleaseRow & { memberAction?: ReleaseMemberAction }>>;
+  /**
+   * How many releases a listing holds, without reading them: the same tab,
+   * state, window and search `find` takes, and the same answer as its
+   * `meta.total`. What a page outside Releases asks, such as "how many need
+   * attention?".
+   *
+   * @experimental
+   */
+  count(args?: ReleaseCountQuery & ReleaseCallerArgs): Promise<number>;
+  /**
+   * The releases in a window of days, `from` to `to` inclusive and at most six
+   * weeks, grouped by the day their time falls on in `timezone`.
+   *
+   * Every day of the window comes back, in order, with `total` and `counts`
+   * (by state) covering all of that day's releases and `releases` holding the
+   * first three in time order; the rest of a day is `find({ day })`. Refused
+   * for an unknown zone, a date that does not exist, a `to` before `from`, or
+   * a window longer than 42 days.
+   *
+   * @experimental
+   */
+  calendar(
+    args: ReleaseCalendarQuery & ReleaseCallerArgs
+  ): Promise<ReleaseCalendar>;
   findByID(
     args: { id: string } & ReleaseCallerArgs
   ): Promise<ReleaseRow | null>;
@@ -120,7 +175,18 @@ export interface ReleasesNamespace {
   blockingReasons(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseBlocker[]>;
-  /** Put a document into a release under a lifecycle action. */
+  /**
+   * Every problem the release's documents have now: `hard` ones, which stop
+   * it from being scheduled or published now, and `soft` ones, which are
+   * notes. Each is a code and the document it is about, in the order the
+   * documents were added. Every document is checked, however many the release
+   * holds. An unknown release is refused as not found.
+   *
+   * @experimental
+   */
+  readiness(
+    args: { releaseId: string } & ReleaseCallerArgs
+  ): Promise<ReleaseReadiness>;
   /**
    * Put a document into a release under a lifecycle action.
    *
@@ -155,6 +221,25 @@ export interface ReleasesNamespace {
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseMemberRow[]>;
   /**
+   * Switch a document in a release between going live (`publish`) and coming
+   * down (`unpublish`).
+   *
+   * Asks what adding the document under the new action asks, and `publish`
+   * authority on releases for a scheduled one. In a scheduled release the new
+   * action is checked as the document's author, who the release still acts as;
+   * a switch that would leave a hard problem is refused as a `CONFLICT` naming
+   * the problems in `data.problems`, and the release is left as it was.
+   *
+   * @experimental
+   */
+  changeMemberAction(
+    args: {
+      releaseId: string;
+      memberId: string;
+      action: ReleaseMemberAction;
+    } & ReleaseCallerArgs
+  ): Promise<ReleaseMemberRow>;
+  /**
    * Commit a release to an instant.
    *
    * `timezone` is the authoring intent and travels beside the instant rather
@@ -166,6 +251,38 @@ export interface ReleasesNamespace {
     args: { id: string; at: Date; timezone: string } & ReleaseCallerArgs
   ): Promise<void>;
   cancel(args: { id: string } & ReleaseCallerArgs): Promise<void>;
+  /**
+   * Run a draft or scheduled release now, with the same checks and the same
+   * all-together run as at its scheduled time, and answer the release as it
+   * then stands: `published`, or still `scheduled` if some of it is left for
+   * the runner to finish. Refused for a stopped release (fix it and schedule it
+   * again) and for a published or cancelled one, which never runs again.
+   *
+   * @experimental
+   */
+  publishNow(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
+  /**
+   * Rename a release, change its description (`null` clears it), or both,
+   * and answer the release as it now reads. Needs `update-content-releases`
+   * on a checked call, and works in any state.
+   *
+   * @experimental
+   */
+  update(
+    args: { id: string } & ReleaseDetailsChange & ReleaseCallerArgs
+  ): Promise<ReleaseRow>;
+  /**
+   * Delete a release that never ran, with its documents: a draft, or a
+   * release cancelled before it was ever scheduled. Needs
+   * `delete-content-releases` on a checked call. Any other release is
+   * refused with CONFLICT, the reason in the error's data: scheduled or
+   * stopped (`committed`), published (`published`), or cancelled after being
+   * scheduled (`was-scheduled`). A release that is not there is NOT_FOUND.
+   * Answers the release as it was when deleted.
+   *
+   * @experimental
+   */
+  delete(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
 }
 
 /**
@@ -256,11 +373,11 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
   return {
     create: args =>
       service().create(
-        { title: args.title, description: args.description },
+        { title: args.title, description: args.description, kind: args.kind },
         actorOf(ctx, args)
       ),
 
-    find: (args = {}) => {
+    find: async (args = {}) => {
       // Caller keys are stripped from the QUERY as well as read for the actor.
       // Leaving them in sends `authenticatedScope` to the repository as a filter
       // column, which is a query nobody wrote and a credential in a place it
@@ -276,8 +393,45 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       void overrideAccess;
       void authenticatedScope;
       void userRoles;
-      return service().find(query, actorOf(ctx, args));
+      const found = await service().find(query, actorOf(ctx, args));
+      return {
+        items: found.rows,
+        meta: toPaginationMeta({
+          total: found.total,
+          page: found.page,
+          limit: found.limit,
+          totalPages: Math.ceil(found.total / found.limit),
+        }),
+      };
     },
+
+    count: (args = {}) => {
+      // Stripped for the reason `find` gives: caller keys are not filters.
+      const {
+        userId,
+        overrideAccess,
+        authenticatedScope,
+        userRoles,
+        ...query
+      } = args;
+      void userId;
+      void overrideAccess;
+      void authenticatedScope;
+      void userRoles;
+      return service().count(query, actorOf(ctx, args));
+    },
+
+    calendar: args =>
+      // The window's own fields, named, so no caller key reaches the query.
+      service().calendar(
+        {
+          from: args.from,
+          to: args.to,
+          timezone: args.timezone,
+          kind: args.kind,
+        },
+        actorOf(ctx, args)
+      ),
 
     findByID: args => service().findByID(args.id, actorOf(ctx, args)),
 
@@ -317,9 +471,32 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
     listMembers: args =>
       service().listMembers(args.releaseId, actorOf(ctx, args)),
 
+    readiness: args => service().readiness(args.releaseId, actorOf(ctx, args)),
+
+    changeMemberAction: args =>
+      service().changeMemberAction(
+        args.memberId,
+        args.action,
+        actorOf(ctx, args),
+        args.releaseId
+      ),
+
     schedule: args =>
       service().schedule(args.id, args.at, args.timezone, actorOf(ctx, args)),
 
     cancel: args => service().cancel(args.id, actorOf(ctx, args)),
+
+    publishNow: args => service().publishNow(args.id, actorOf(ctx, args)),
+
+    update: args => {
+      // Only the two fields, named rather than spread: a spread of the rest
+      // would hand the service the caller keys as part of the change.
+      const change: ReleaseDetailsChange = {};
+      if ("title" in args) change.title = args.title;
+      if ("description" in args) change.description = args.description;
+      return service().update(args.id, change, actorOf(ctx, args));
+    },
+
+    delete: args => service().delete(args.id, actorOf(ctx, args)),
   };
 }

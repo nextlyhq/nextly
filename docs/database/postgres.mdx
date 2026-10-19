@@ -193,13 +193,13 @@ pnpm nextly migrate                                 # apply pending migrations
 pnpm nextly migrate:fresh                           # destructive: drop all tables and re-apply
 ```
 
-> **Forward-only.** There is no `migrate:rollback` or `migrate:down`. To undo an applied change, write a NEW corrective migration that reverses it. See [production migrations](/docs/guides/production-migrations).
+> **Rolling back.** `nextly migrate:down` rolls back the most recently applied migration using its `-- DOWN` section; there is no `migrate:rollback`. To undo anything else, write a NEW corrective migration that reverses it. See [production migrations](/docs/guides/production-migrations).
 
 `migrate:fresh` is destructive and prompts for confirmation -- use `--force` to skip the prompt in scripted local-dev flows. It is CLI-only and refuses to import from runtime code; never invoke it from a deployed app.
 
 ## Local development with Docker
 
-Nextly ships a `docker-compose.yml` at the repo root with a Postgres service. The simplest way to run Postgres locally for a Nextly app:
+A new project has no compose file. The simplest way to run Postgres locally is to save this as `docker-compose.yml` in your project:
 
 ```yaml title="docker-compose.yml"
 services:

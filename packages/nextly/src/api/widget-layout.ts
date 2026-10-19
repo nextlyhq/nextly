@@ -2,7 +2,7 @@
  * GET / PUT `/api/dashboard/layout`
  *
  * One reader's arrangement of the dashboard: which cards, in which order, at
- * which size, and which they have put away.
+ * which width, and which they have removed.
  *
  * ## The response is resolved, not stored
  *
@@ -37,7 +37,9 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import {
   declaredWidgets,
+  widthFacts,
   type CanonicalWidget,
+  type WidgetWidthFacts,
 } from "../domains/widgets/canonical";
 import { widgetsWhoseConditionHolds } from "../domains/widgets/conditions";
 import {
@@ -51,14 +53,9 @@ import {
   mergePreservingHidden,
   partitionPlacements,
   readPlacements,
-  statesColumn,
   visibilityToken,
   type StoredLayout,
   type WidgetPlacement,
-  byPosition,
-  DEFAULT_COLUMN_COUNT,
-  readColumnCount,
-  type ColumnCount,
 } from "../domains/widgets/layout";
 import { widgetAudience } from "../domains/widgets/visibility";
 import { NextlyError } from "../errors/nextly-error";
@@ -104,143 +101,99 @@ const OPAQUE_CONFIG_HEADERS = {
   [SKIP_DATE_FORMATTING_HEADER]: "1",
 } as const;
 
-/** Which layer the returned arrangement came from. */
-type LayoutSource = "own" | "default";
+/**
+ * Which arrangement the reader was handed.
+ *
+ * `unreadable` is a stored row that could not be read: the reader is shown the
+ * default, told so, and the row is left exactly as it was until they confirm a
+ * save that replaces it.
+ */
+type LayoutSource = "own" | "default" | "unreadable";
+
+/** A declared widget as the default arrangement reads it. */
+function placeable(widget: CanonicalWidget) {
+  return {
+    id: widget.id,
+    ...(widget.defaultOrder === undefined
+      ? {}
+      : { defaultOrder: widget.defaultOrder }),
+    defaultWidth: widthFacts(widget).defaultWidth,
+  };
+}
 
 /**
- * The default arrangement, split by what this caller may see.
+ * The whole arrangement a reader without an arranged row follows: the one
+ * computed default, with their removals applied.
  *
- * ONE materialization, asked in one place. Both halves come from the same
- * sorted set, because positions are indices into it: two calls that filtered
- * differently would give the carried half positions that collide with the
- * visible one, and a reader gaining a permission would find their arrangement
- * silently reordered.
+ * ONE materialization over every declared widget, split afterwards, so the
+ * cards a caller may see and the ones they may not keep one order between
+ * them. Materialized from {@link declaredWidgets} rather than from every
+ * widget that exists: a card core GENERATED for a collection is offered
+ * through `available`, never placed.
  *
- * Materialized from {@link declaredWidgets} rather than from every widget that
- * exists. A card core GENERATED for a collection is offered through
- * `available`, never placed -- so it must not take a default position, and must
- * not spend one of the placements a caller may submit.
+ * A row nobody arranged contributes its removals and nothing else, applied to
+ * the WHOLE materialization, so a card this caller cannot see keeps the
+ * removal it was given, and comes back removed the day they can.
  */
-function defaultRow(
-  visibleIds: ReadonlySet<string>,
-  unarranged?: StoredLayout
-): {
-  visible: WidgetPlacement[];
-  invisible: WidgetPlacement[];
-} {
-  // A row nobody arranged contributes its dismissals and nothing else, applied
-  // to the WHOLE materialization before it is split -- so a card this caller
-  // cannot see keeps the dismissal it was given, and returns dismissed the day
-  // they can.
-  return partitionPlacements(
-    dismissalsApplied(defaultPlacements(declaredWidgets()), unarranged),
-    visibleIds
+function followedDefault(unarranged?: StoredLayout): WidgetPlacement[] {
+  return dismissalsApplied(
+    defaultPlacements(declaredWidgets().map(placeable)),
+    unarranged
   );
 }
 
 /**
- * The placements a write must carry through untouched.
+ * The WHOLE arrangement this caller's view was cut from: their arranged row,
+ * or the default they follow. Both what a reader is shown and what a writer
+ * carries back come from this, so the two cannot disagree.
  *
- * Two cases, and the second is the one that is easy to miss. With a stored row,
- * it is the placements this caller could not see. With NO stored row, the
- * caller was still shown a FILTERED default set — so a first save would freeze
- * a snapshot that never contained the gated defaults, and a permission granted
- * afterwards could never reveal them: `defaultPlacements` runs only while the
- * row is absent, and after that first write it never runs again. The visibility
- * token catches a grant that lands BETWEEN the read and the write; it cannot
- * catch one that lands after a successful save. So the invisible half of the
- * default set is carried into the first row exactly as a stored row's invisible
- * half is carried into every later one.
- *
- * Derived from `defaultPlacements` over the WHOLE registry rather than
- * generated separately, so a carried default keeps the position it would have
- * had — and so there is one implementation of "where does an unplaced widget
- * go" rather than two that agree today.
+ * 🔴 With no arranged row, the caller was still shown a FILTERED default, so
+ * a first save must carry the default's cards they could not see into the row,
+ * in place. Otherwise a permission granted after that save could never bring
+ * them back: the default is consulted only while the reader follows it.
  */
-function carriedPlacements(
-  stored: StoredLayout | undefined,
-  visibleIds: ReadonlySet<string>
-): WidgetPlacement[] {
-  if (stored && layoutIsArranged(stored)) {
-    return partitionPlacements(stored.placements, visibleIds).invisible;
-  }
-  // No row, or a row that still follows the defaults: the carried half is the
-  // DEFAULT's, because that is what the reader was shown -- see
-  // `visibleArrangement`, which answers the same way.
-  return defaultRow(visibleIds, stored).invisible;
+function wholeArrangement(stored: StoredLayout | undefined): WidgetPlacement[] {
+  return stored && layoutIsArranged(stored)
+    ? stored.placements
+    : followedDefault(stored);
 }
 
 /**
- * The arrangement this caller was HANDED: their stored row, or the default.
+ * The arrangement this caller was HANDED, in order.
  *
- * 🔴 One implementation, because the writer inherits from exactly what the
- * reader was shown, and each half of that is load-bearing in a different
- * direction.
+ * 🔴 A row EXISTING is not enough to honour it as a snapshot. A row a removal
+ * outside customise mode wrote has never been arranged, and honouring it would
+ * freeze that reader out of every widget declared afterwards.
  *
- * The DEFAULT half matters because a caller who has never saved was still
- * handed an arrangement. A baseline reading only the stored row gives them
- * nothing to inherit, so a client that round-trips the default set without its
- * columns collapses the round-robin into a single column on its first save.
- *
- * The VISIBILITY half is a trust boundary. A baseline reading the row
- * unfiltered lets a submitted placement inherit the column of one this caller
- * may not know exists, which is an existence oracle over any id — and default
- * placement ids are widget ids, so the probe space is guessable.
+ * The visible half of a FOLLOWED default is capped at `MAX_PLACEMENTS`, the
+ * most a caller may submit, so an install declaring more than that still
+ * answers with a dashboard the reader's first save can store. Capped after the
+ * split, never before: the whole set includes widgets this caller may not know
+ * exist, and capping it first let them exhaust the allowance. The surplus is
+ * offered through `available`.
  */
 function visibleArrangement(
   stored: StoredLayout | undefined,
-  widgets: readonly CanonicalWidget[]
+  visibleIds: ReadonlySet<string>
 ): WidgetPlacement[] {
-  // 🔴 A row EXISTING is not enough to honour it as a snapshot. A row a
-  // dismissal wrote has never been arranged, and honouring it would freeze
-  // that reader out of every widget declared afterwards -- so only an arranged
-  // row is read as written, and the rest follow the live registry with their
-  // dismissals applied.
-  if (stored && layoutIsArranged(stored)) {
-    return partitionPlacements(
-      stored.placements,
-      new Set(widgets.map(widget => widget.id))
-    ).visible;
-  }
-  return visibleDefaults(widgets, stored);
+  const { visible } = partitionPlacements(wholeArrangement(stored), visibleIds);
+  return stored && layoutIsArranged(stored)
+    ? visible
+    : visible.slice(0, MAX_PLACEMENTS);
 }
 
 /**
- * The default arrangement as this caller sees it: materialized over the WHOLE
- * registry, then filtered.
+ * Each widget this reader may see, with the widths its cards may take.
  *
- * 🔴 Materializing over the filtered set instead produces positions that
- * COLLIDE with the carried half. Positions come from a placement's index in the
- * sorted set, so with visible defaults A and B surrounding a gated G, filtering
- * first gives A=0 and B=10, while the carried half — materialized over the full
- * registry — gives G=10. The stored row then holds two placements at 10, and
- * once the permission is granted the tie sorts A, B, G instead of the declared
- * A, G, B: the reader's arrangement silently reorders itself the moment they
- * gain access to something.
- *
- * So there is ONE materialization and two views of it, rather than two
- * materializations that agree only while nothing is hidden.
+ * Sent so the admin never works a width out for itself: which widths to offer,
+ * where a new card starts, and whether a second card may be added are answered
+ * here, from the one reading of the declaration (`widthFacts`).
  */
-function visibleDefaults(
-  widgets: readonly CanonicalWidget[],
-  unarranged?: StoredLayout
-): WidgetPlacement[] {
-  const visibleIds = new Set(widgets.map(widget => widget.id));
-  return (
-    defaultRow(visibleIds, unarranged)
-      .visible // 🔴 The submission cap applies HERE, to what this caller can actually
-      // send, rather than to the materialization above. `layoutSizeProblem`
-      // refuses a submission over `MAX_PLACEMENTS`, so an install declaring
-      // more than that answered the read with a default the reader's first
-      // gesture could never save -- the dashboard was simply not arrangeable.
-      //
-      // On the visible half rather than the whole set, because the whole set
-      // includes widgets this caller may not know exist: capping before the
-      // partition let two hundred denied widgets exhaust the allowance and
-      // hand an ungated one an empty dashboard. Positions still come from the
-      // whole-registry materialization, so nothing about the carried half
-      // moves. The surplus is offered through `available`.
-      .slice(0, MAX_PLACEMENTS)
+function widthsOf(
+  widgets: readonly CanonicalWidget[]
+): Record<string, WidgetWidthFacts> {
+  return Object.fromEntries(
+    widgets.map(widget => [widget.id, widthFacts(widget)])
   );
 }
 
@@ -248,9 +201,9 @@ function visibleDefaults(
  * The scope a layout belongs to today.
  *
  * Every row this endpoint writes is the caller's own, so there is exactly one
- * scope kind to resolve and no resolution ORDER to get wrong yet. The key
- * reserves the dimension anyway: a second kind of owner added after rows exist
- * is a migration, and reserving one column now costs nothing.
+ * scope kind to resolve. The key reserves the dimension anyway: a second kind
+ * of owner added after rows exist is a migration, and reserving one column now
+ * costs nothing.
  */
 const SCOPE_KIND = "user" as const;
 
@@ -260,115 +213,97 @@ async function getLayoutService(): Promise<WidgetLayoutService> {
 }
 
 /**
+ * The widgets this caller may see right now, and the token over them.
+ *
+ * 🔴 The SAME two passes for every verb, in the same order. The token is a hash
+ * of the set the client was shown, so a write that derived it from a
+ * different set could never match. The first pass, the permission gate,
+ * decides what this reader may be told exists; the second decides which
+ * transient cards are worth showing now, and a lapsed card is not a refusal.
+ */
+async function visibleWidgets(auth: AuthContext) {
+  const reader = await readCaller(auth);
+  const caller = readAccessCaller(reader);
+  const audience = await widgetAudience(caller);
+  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
+  return {
+    caller,
+    audience,
+    widgets,
+    visibleIds: new Set(widgets.map(widget => widget.id)),
+    scope: visibilityToken(
+      widgets.map(widget => widget.id),
+      audience.heldActionGates
+    ),
+  };
+}
+
+/**
  * The version the client must echo back.
  *
  * An unreadable row keeps its real version rather than reporting 0. Reporting 0
  * would tell the client "there is no row", and its next PUT would take the
  * INSERT path and collide with the row that is still sitting there -- turning a
- * recoverable bad row into a dashboard that cannot be saved at all. Echoing the
- * true version lets the next PUT overwrite the unreadable row, which is exactly
- * the repair the reader is trying to perform.
+ * recoverable bad row into a dashboard that cannot be saved at all.
  */
 export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
   const service = await getLayoutService();
-  // BOTH shapes are kept. The entity-level caller is derived from the read
-  // caller, and a condition reads through the ordinary counted path, which
-  // needs the read caller itself -- so discarding it here and rebuilding it
-  // later would be two answers to "who is asking".
-  const reader = await readCaller(auth);
-  const caller = readAccessCaller(reader);
+  const view = await visibleWidgets(auth);
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
 
-  const [stored, audience] = await Promise.all([
-    service.getLayout(SCOPE_KIND, caller.userId),
-    widgetAudience(caller),
-  ]);
-  // A SECOND pass, after the permission gate and never folded into it. The gate
-  // decides what this reader may be told exists; this decides which transient
-  // cards are worth showing right now, and a lapsed onboarding card is not a
-  // refusal.
-  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
+  const source: LayoutSource = stored.unreadable
+    ? "unreadable"
+    : stored.layout
+      ? "own"
+      : "default";
+  const placements = visibleArrangement(stored.layout, view.visibleIds);
+  const widths = widthsOf(view.widgets);
 
-  const source: LayoutSource = stored.layout ? "own" : "default";
-  const placements = visibleArrangement(stored.layout, widgets);
-
-  // Widgets this caller may see and has not placed. A stored arrangement is a
-  // full snapshot, so a widget registered AFTER the reader last saved has no
-  // placement in it and appears nowhere in `placements` — which is correct, and
-  // is the decision this product has taken: a newly installed plugin's card is
-  // never inserted into somebody's arrangement behind their back.
-  //
-  // 🔴 But "not auto-added" only works if it is ADDABLE, and without this the
-  // widget was discoverable from nothing: the card was absent from every read,
-  // the next write persisted a snapshot that still lacked it, and the reader
-  // had no way to learn it existed. Naming the unplaced set is what makes the
-  // prompt possible, and it costs nothing to a client that ignores it.
+  // Widgets this caller may see and may still add. A saved arrangement is a
+  // full snapshot, so a widget registered after the reader last saved appears
+  // nowhere in `placements` -- a new plugin's card is never inserted into
+  // somebody's arrangement behind their back. It is OFFERED here instead, and
+  // so is any widget that allows several cards, placed or not.
   //
   // Ids only. Titles and icons already reach the admin through the widget
   // metadata it renders from; what only this endpoint can answer is WHICH of
   // them this caller is allowed to know about.
   const placed = new Set(placements.map(placement => placement.widgetId));
-  const available = widgets
-    .map(widget => widget.id)
-    .filter(id => !placed.has(id));
+  const available = view.widgets
+    .filter(widget => !placed.has(widget.id) || widths[widget.id].allowsSeveral)
+    .map(widget => widget.id);
 
   return respondData(
     {
       placements,
+      // The default as this reader would see it, from the same computation a
+      // reader following it is shown: a staged reset draws it, and the admin
+      // never works the default out for itself.
+      defaultPlacements: visibleArrangement(undefined, view.visibleIds),
+      widgets: widths,
       available,
       version: stored.version,
       source,
-      // The reader's own column count, or the default when they have never
-      // arranged anything. Sent rather than left for the client to assume: the
-      // count decides which column each placement's coordinate refers to, so a
-      // client guessing it would draw a DIFFERENT arrangement from the stored
-      // one and then save that back.
-      columnCount: stored.layout?.columnCount ?? DEFAULT_COLUMN_COUNT,
-      scope: visibilityToken(
-        widgets.map(w => w.id),
-        audience.heldActionGates
-      ),
+      scope: view.scope,
       // The audience the workspace payload is built for, so the admin can tell
       // the payload it holds apart from the one this reader would be sent now.
-      audience: audience.token,
+      audience: view.audience.token,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
 });
 
 /**
- * Reads the `version` a PUT is guarded by.
+ * Reads the `version` a write is guarded by.
  *
  * A non-integer is refused rather than coerced. `Number("")` is 0, which is the
  * "there is no row yet" version -- so a client that omitted the field, or sent
- * an empty string, would be read as asserting the row does not exist and would
- * overwrite a real arrangement through the insert path.
+ * an empty string, would be read as asserting the row does not exist.
  */
-
-/**
- * Placements whose columns all fall inside `columnCount`.
- *
- * 🔴 Applied to the MERGED row, not to what the caller sent. A carried
- * placement -- one this reader can no longer see, kept so it is not lost --
- * holds the column it had when it was last visible, so bounding only the
- * submission lets a hidden card smuggle a column past the count the row
- * declares. The invariant is about the stored ROW, so it is enforced where the
- * row is assembled.
- */
-function boundColumns(
-  placements: readonly WidgetPlacement[],
-  columnCount: ColumnCount
-): WidgetPlacement[] {
-  const last = columnCount - 1;
-  return placements.map(placement =>
-    placement.column > last ? { ...placement, column: last } : placement
-  );
-}
-
-function readVersion(body: Record<string, unknown>): number {
-  const { version } = body;
+function readVersion(version: unknown): number {
   if (!Number.isInteger(version) || (version as number) < 0) {
     throw NextlyError.validation({
       errors: [
@@ -384,43 +319,39 @@ function readVersion(body: Record<string, unknown>): number {
 }
 
 /**
- * Reads whether this write is a reader taking charge of the arrangement.
- *
- * OPTIONAL, and absent reads as `true`, unlike `scope`. Every client written
- * before a card could be dismissed from the dashboard only ever wrote from the
- * editor, so treating its silence as an arrangement keeps what it does today --
- * and the one write that is not an arrangement is new enough to say so.
- *
- * Refused when present and not a boolean, rather than read for truthiness:
- * `"false"` read that way would freeze a reader out of every later widget on
- * the strength of a string that says the opposite.
+ * Reads an OPTIONAL boolean field, refusing anything but a boolean when it is
+ * present: `"false"` read for truthiness would mean the opposite of what it
+ * says.
  */
-function readArranged(body: Record<string, unknown>): boolean {
-  const { arranged } = body;
-  if (arranged === undefined) return true;
-  if (typeof arranged !== "boolean") {
+function readOptionalBoolean(
+  body: Record<string, unknown>,
+  field: string,
+  absent: boolean
+): boolean {
+  const value = body[field];
+  if (value === undefined) return absent;
+  if (typeof value !== "boolean") {
     throw NextlyError.validation({
       errors: [
         {
-          path: "arranged",
+          path: field,
           code: "INVALID_VALUE",
-          message: '"arranged", when given, must be a boolean.',
+          message: `"${field}", when given, must be a boolean.`,
         },
       ],
     });
   }
-  return arranged;
+  return value;
 }
 
 /**
- * Reads the visibility token a PUT must echo.
+ * Reads the visibility token a write must echo.
  *
  * Required, not optional. An optional token would be absent for every client
  * that has not been updated -- which is every client that has the bug this
  * token exists to prevent.
  */
-function readScope(body: Record<string, unknown>): string {
-  const { scope } = body;
+function readScope(scope: unknown): string {
   if (typeof scope !== "string" || scope === "") {
     throw NextlyError.validation({
       errors: [
@@ -437,31 +368,36 @@ function readScope(body: Record<string, unknown>): string {
 }
 
 /**
+ * Refuses a write whose view of the widgets is stale.
+ *
+ * 🔴 The row's `version` guards the row; this guards the FILTER that shaped
+ * what the client was shown. Without it, a card that was invisible when the
+ * client read and is visible now sits in neither the submission nor the
+ * carried set, and a save deletes it -- with `version` matching, because a
+ * permission grant does not touch the row. A saved reset would remove it the
+ * same way. Checked before anything the write would change.
+ */
+function refuseStaleScope(submitted: string, current: string): void {
+  if (submitted !== current) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message:
+        "The widgets available to you changed since you loaded the dashboard. Reload and try again.",
+    });
+  }
+}
+
+/**
  * Authenticate a WRITE to the layout, and refuse the callers who may never make
  * one.
  *
  * Shared by both mutating verbs because they share the reason, not merely the
- * code. Two copies of a precondition agree until one is edited, and the edit
- * that matters here is the one that relaxes it — an api-key refusal present on
- * the save and absent from the reset would let a key discard its minter's
- * arrangement while being unable to change it.
+ * code: an api-key refusal present on the save and absent from the reset would
+ * let a key discard its minter's arrangement while being unable to change it.
  *
  * 🔴 Refuses BEFORE the body is read, and before anything is parsed, resolved
- * or constructed. This is a precondition, not a defensive check: a caller that
- * can never perform the operation must be refused on that ground, and refused
- * first. Placed after the body, a malformed payload came back as a validation
- * error — telling a caller which FIELD it got wrong on a request it was never
- * allowed to make, and paying for the parse in order to say so.
- *
- * A dashboard arrangement is one person's personalization of their own admin
- * screen, and an API key has no screen. Refused rather than gated behind a
- * permission slug, because no grant would make it meaningful: the key would be
- * acting on the layout of whoever minted it. Reading stays open — it tells a
- * key nothing it could not already ask the registry.
- *
- * Read off the AUTH CONTEXT rather than the resolved caller, because that is
- * available here and the resolved caller is not: resolving one is a database
- * read, which is exactly the work this refusal exists to avoid doing.
+ * or constructed. A dashboard arrangement is one person's personalization of
+ * their own admin screen, and an API key has no screen. Reading stays open.
  */
 async function authenticateLayoutWrite(
   req: Request,
@@ -478,97 +414,14 @@ async function authenticateLayoutWrite(
   return auth;
 }
 
-export const putWidgetLayout = withErrorHandler(async (req: Request) => {
-  const auth = await authenticateLayoutWrite(req, "write");
-
-  // Bounded BEFORE it is buffered. `req.json()` reads the whole body first, so
-  // a quota checked on the parsed result has already paid for the memory and
-  // the parse it exists to prevent. The cap is the caller's own payload budget
-  // plus a small allowance for the envelope's other fields, so a body this
-  // reader accepts is one `layoutSizeProblem` can still refuse on its merits.
-  const body = await readBoundedJsonBody(req, MAX_LAYOUT_BYTES + 1024);
-  if (typeof body !== "object" || body === null || Array.isArray(body)) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "",
-          code: "INVALID_VALUE",
-          message: "Body must be { placements: Placement[], version: number }.",
-        },
-      ],
-    });
-  }
-  const rawPlacements = (body as Record<string, unknown>).placements;
-  const submitted = readPlacements(rawPlacements);
-  // Which placements NAMED a column, asked through the reader's own predicate
-  // so the two cannot disagree about what counts as naming one. An id missing
-  // from this set stated nothing, which is not the same as stating zero.
-  const statedColumns = new Set(
-    (Array.isArray(rawPlacements) ? rawPlacements : [])
-      .filter(statesColumn)
-      .map(placement => (placement as { id?: unknown }).id)
-      .filter((id): id is string => typeof id === "string")
-  );
-  // Read RAW, and resolved against the stored row further down. `undefined` is
-  // an omission rather than a value, and the two need different answers.
-  const sentColumnCount = (body as Record<string, unknown>).columnCount;
-  const expectedVersion = readVersion(body as Record<string, unknown>);
-  const submittedScope = readScope(body as Record<string, unknown>);
-  const writeArranges = readArranged(body as Record<string, unknown>);
-
-  // The caller's own quota, asked HERE — before the service, the role-slug
-  // resolution, the permission decisions and the stored row. It is a
-  // precondition and it is cheap, so nothing it protects should be paid for
-  // first. It measures only what the caller sent, so the answer depends on
-  // nothing hidden from them.
-  const tooLarge = layoutSizeProblem(submitted);
-  if (tooLarge !== undefined) {
-    throw NextlyError.validation({
-      errors: [{ path: "placements", code: "TOO_LARGE", message: tooLarge }],
-    });
-  }
-
-  const service = await getLayoutService();
-  const reader = await readCaller(auth);
-  const caller = readAccessCaller(reader);
-  // 🔴 The SAME two passes the GET makes, in the same order. The token below is
-  // a hash of the set the client was shown, so a write that derived it from a
-  // different set can never match: with a transient card filtered out of the
-  // GET and left in here, every save on an install that has any content would
-  // answer 409 and no reader could rearrange their dashboard at all.
-  const audience = await widgetAudience(caller);
-  const widgets = await widgetsWhoseConditionHolds(audience.visible, reader);
-  const visibleIds = new Set(widgets.map(widget => widget.id));
-
-  // 🔴 BEFORE the per-placement checks below, and before the write. The row's
-  // `version` guards the row; this guards the FILTER that shaped what the
-  // client was shown. Without it, a placement that was invisible when the
-  // client read and is visible now sits in neither the submission nor the
-  // carried-through set, and the write deletes it -- with `version` matching,
-  // because a permission grant does not touch the row.
-  //
-  // It also turns the opposite case into the right refusal: a placement that
-  // has just become INVISIBLE would otherwise be rejected below as naming an
-  // unavailable widget, telling the client its body is malformed when what it
-  // actually holds is a stale view.
-  const scope = visibilityToken(
-    widgets.map(widget => widget.id),
-    audience.heldActionGates
-  );
-  if (submittedScope !== scope) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message:
-        "The widgets available to you changed since you loaded the dashboard. Reload and try again.",
-    });
-  }
-
+/** Refuses a submission naming a widget this caller may not see, or an id twice. */
+function refuseUnknownOrRepeated(
+  submitted: readonly WidgetPlacement[],
+  visibleIds: ReadonlySet<string>
+): void {
   // Refused rather than silently dropped. A placement naming a widget this
-  // caller cannot see is not a stale client -- the client was handed a filtered
-  // list and is sending back something that was never in it. Accepting it would
-  // let any authenticated caller confirm a widget's existence by watching which
-  // ids survive a round trip, which is the same oracle the query endpoint
-  // collapses its two dead ends to avoid.
+  // caller cannot see was never in what they were handed; accepting it would
+  // let any caller confirm a widget's existence by watching which ids survive.
   const foreign = submitted.find(
     placement => !visibleIds.has(placement.widgetId)
   );
@@ -596,130 +449,247 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
       ],
     });
   }
+}
 
-  const stored = await service.getLayout(SCOPE_KIND, caller.userId);
-  const carried = carriedPlacements(stored.layout, visibleIds);
+/**
+ * Refuses a card SET to a width its widget does not allow.
+ *
+ * 🔴 Only a width that CHANGED. A stored width the widget has since stopped
+ * allowing is kept on purpose (it is drawn at the nearest allowed width, and
+ * comes back if the widget allows it again), so a card the reader did not
+ * touch must save as it was; refusing it would make an unrelated change to the
+ * dashboard impossible to save. The baseline is what this caller was shown.
+ */
+function refuseDisallowedWidths(
+  submitted: readonly WidgetPlacement[],
+  shown: readonly WidgetPlacement[],
+  widths: Readonly<Record<string, WidgetWidthFacts>>
+): void {
+  // Unchanged means the SAME card: same id, same widget, same width. A card
+  // whose id now names a different widget is a new card, and its width is
+  // judged against the widget it now draws.
+  const shownById = new Map(shown.map(p => [p.id, p]));
+  const unchanged = (placement: WidgetPlacement) => {
+    const before = shownById.get(placement.id);
+    return (
+      before !== undefined &&
+      before.widgetId === placement.widgetId &&
+      before.width === placement.width
+    );
+  };
+  const refused = submitted.find(
+    placement =>
+      !unchanged(placement) &&
+      !widths[placement.widgetId]?.allowedWidths.includes(placement.width)
+  );
+  if (refused) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "placements",
+          code: "INVALID_VALUE",
+          message: `"${refused.widgetId}" does not allow the width "${refused.width}".`,
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * Refuses a second card of a widget that allows one.
+ *
+ * Counted against what the caller was SHOWN, so an arrangement that already
+ * held more than one card of such a widget (rows written before widgets said
+ * how many they allow) can still be saved as it is; only a card ADDED beyond
+ * the widget's allowance is refused.
+ */
+function refuseExtraCards(
+  submitted: readonly WidgetPlacement[],
+  shown: readonly WidgetPlacement[],
+  widths: Readonly<Record<string, WidgetWidthFacts>>
+): void {
+  const count = (placements: readonly WidgetPlacement[]) => {
+    const counts = new Map<string, number>();
+    for (const p of placements) {
+      counts.set(p.widgetId, (counts.get(p.widgetId) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const shownCounts = count(shown);
+  for (const [widgetId, cards] of count(submitted)) {
+    if (widths[widgetId]?.allowsSeveral) continue;
+    if (cards > Math.max(1, shownCounts.get(widgetId) ?? 0)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "placements",
+            code: "INVALID_VALUE",
+            message: `"${widgetId}" allows one card on a dashboard.`,
+          },
+        ],
+      });
+    }
+  }
+}
+
+/**
+ * Refuses a write that would replace an arrangement the server could not read,
+ * unless the person confirmed exactly that.
+ *
+ * 🔴 The read never touches an unreadable row, and neither does a write the
+ * person did not confirm. A single-card write (a removal outside customise
+ * mode) is refused outright: it has nothing to merge into, and replacing the
+ * row is only ever a confirmed save. A save must say `replaceUnreadable: true`,
+ * which the admin sends only after asking. Enforced here, not left to the
+ * admin, so no client can overwrite the row by forgetting to ask.
+ */
+function refuseUnconfirmedReplacement(
+  unreadable: boolean,
+  arranges: boolean,
+  confirmed: boolean
+): void {
+  if (!unreadable || (arranges && confirmed)) return;
+  throw NextlyError.conflict({
+    reason: "state",
+    logContext: { storedLayout: "unreadable" },
+    message: arranges
+      ? "Your saved dashboard could not be loaded. Saving replaces it; confirm to save."
+      : "Your saved dashboard could not be loaded. Save it from customise mode first.",
+  });
+}
+
+export const putWidgetLayout = withErrorHandler(async (req: Request) => {
+  const auth = await authenticateLayoutWrite(req, "write");
+
+  // Bounded BEFORE it is buffered. The cap is the caller's own payload budget
+  // plus a small allowance for the envelope's other fields, so a body this
+  // reader accepts is one `layoutSizeProblem` can still refuse on its merits.
+  const body = await readBoundedJsonBody(req, MAX_LAYOUT_BYTES + 1024);
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "",
+          code: "INVALID_VALUE",
+          message: "Body must be { placements: Placement[], version: number }.",
+        },
+      ],
+    });
+  }
+  const fields = body as Record<string, unknown>;
+  // An earlier format's body has no width and no removed flag, and is refused
+  // here by the same rules a stored row is read with.
+  const submitted = readPlacements(fields.placements);
+  const expectedVersion = readVersion(fields.version);
+  const submittedScope = readScope(fields.scope);
+  // OPTIONAL, and absent reads as `true`: every save from customise mode is an
+  // arrangement, and the one write that is not -- a removal outside it -- is
+  // new enough to say so.
+  const writeArranges = readOptionalBoolean(fields, "arranged", true);
+  const replaceUnreadable = readOptionalBoolean(
+    fields,
+    "replaceUnreadable",
+    false
+  );
+
+  // The caller's own quota, asked HERE, before anything it protects is paid
+  // for. It measures only what the caller sent.
+  const tooLarge = layoutSizeProblem(submitted);
+  if (tooLarge !== undefined) {
+    throw NextlyError.validation({
+      errors: [{ path: "placements", code: "TOO_LARGE", message: tooLarge }],
+    });
+  }
+
+  const service = await getLayoutService();
+  const view = await visibleWidgets(auth);
+  refuseStaleScope(submittedScope, view.scope);
+  refuseUnknownOrRepeated(submitted, view.visibleIds);
+
+  const stored = await service.getLayout(SCOPE_KIND, view.caller.userId);
+  refuseUnconfirmedReplacement(
+    stored.unreadable,
+    writeArranges,
+    replaceUnreadable
+  );
+  const shown = visibleArrangement(stored.layout, view.visibleIds);
+  const widths = widthsOf(view.widgets);
+  refuseDisallowedWidths(submitted, shown, widths);
+  refuseExtraCards(submitted, shown, widths);
+
   // 🔴 MONOTONIC. A row a reader has arranged stays arranged whatever a later
-  // write says: a dismissal states `false` because IT is not an arrangement,
-  // and taking that at its word would demote a reader's own layout to the
-  // live defaults and discard every move they ever made. Only a row that was
-  // never arranged -- or no row -- takes the write's own statement.
+  // write says: a removal outside customise mode states `false` because IT is
+  // not an arrangement, and taking that at its word would demote a reader's
+  // own layout to the default and discard every move they ever made.
   const arranged =
     writeArranges ||
     (stored.layout !== undefined && layoutIsArranged(stored.layout));
 
-  // 🔴 An OMITTED count inherits the stored one; only a row that does not exist
-  // yet falls back to the default. Every client written before columns sends no
-  // `columnCount`, and defaulting on their behalf saved a four-column row as a
-  // three-column one -- after which `boundColumns` folds every card in the
-  // fourth column into the third, permanently, during an edit that touched
-  // neither. A value that was actually SENT is still coerced, because the two
-  // tolerances have to agree: an unsupported count becoming the default while a
-  // column was only bounded downward stored `{ columnCount: 5, column: 4 }`, a
-  // three-column row holding a card in column 4 that every reader reinterprets.
-  const submittedColumnCount =
-    sentColumnCount === undefined
-      ? readColumnCount(stored.layout?.columnCount)
-      : readColumnCount(sentColumnCount);
-
-  // 🔴 A placement that stated no column KEEPS the one it was handed. A client
-  // written before columns omits the coordinate on every placement as well as
-  // the count, so a row whose count is preserved while its coordinates are not
-  // holds four columns with every card moved into the first — an arrangement
-  // destroyed by an edit that names neither.
-  //
-  // The baseline is what this caller was SHOWN, which is the stored row's
-  // visible half or the visible defaults. A placement nothing handed them has
-  // nothing to inherit and keeps the reader's fallback.
-  const storedColumns = new Map(
-    visibleArrangement(stored.layout, widgets).map(placement => [
-      placement.id,
-      placement.column,
-    ])
-  );
-  const positioned = submitted.map(placement =>
-    statedColumns.has(placement.id)
-      ? placement
-      : {
-          ...placement,
-          column: storedColumns.get(placement.id) ?? placement.column,
-        }
-  );
-
-  const toStore = boundColumns(
-    mergePreservingHidden(positioned, carried),
-    submittedColumnCount
-  );
   const version = await service.saveLayout(
     SCOPE_KIND,
-    caller.userId,
-    toStore,
+    view.caller.userId,
+    mergePreservingHidden(
+      submitted,
+      wholeArrangement(stored.layout),
+      view.visibleIds
+    ),
     expectedVersion,
-    submittedColumnCount,
     arranged
   );
 
-  // `respondMutation`, not `respondData`: this is a write, and every write in
-  // this package answers `{ message, item }`. A bespoke top-level shape would
-  // be one the shared client parser cannot read at all.
-  // Sorted the way a GET sorts, not echoed in submission order. A valid PUT may
-  // list placements in any array order — only each `order` field is validated —
-  // and the stored row is normalized by `partitionPlacements` on the next read.
-  // Echoing the raw array made this response a SECOND representation of the
-  // same arrangement: a client trusting it to chain another edit without
-  // re-reading would render `[10, 0]` where a reload gives `[0, 10]`.
-  const echoed = boundColumns(positioned, submittedColumnCount).sort(
-    byPosition
-  );
-
+  // `respondMutation`, not `respondData`: every write in this package answers
+  // `{ message, item }`. The placements are echoed in the order they were
+  // stored, which is the order the next read answers.
   return respondMutation(
     "Dashboard layout saved.",
     {
-      placements: echoed,
-      // Echoed for the same reason the placements are: a client making a
-      // second edit without a round trip needs the count its coordinates mean
-      // something against, and this is the accepted one rather than the sent
-      // one.
-      columnCount: submittedColumnCount,
+      placements: submitted,
       version,
       source: "own" satisfies LayoutSource,
-      // Echoed so a client can make a second edit without a round trip. It is
-      // the token this write was checked against, which is still current: any
-      // change to it since would have to have happened during the write, and
-      // the next PUT will catch that on its own terms.
-      scope,
+      // The token this write was checked against, which is still current.
+      scope: view.scope,
     },
     { headers: OPAQUE_CONFIG_HEADERS }
   );
 });
 
 /**
- * DELETE `/api/dashboard/layout` — put the dashboard back to the registry's
- * own order.
+ * DELETE `/api/dashboard/layout?version=<n>&scope=<token>` -- return the reader
+ * to the default dashboard.
  *
- * Removes the row rather than writing the current defaults into it, and the
- * difference is the whole point. A written snapshot freezes today's defaults
- * into the reader's arrangement, so a widget added later, or a `defaultOrder`
- * a plugin changes later, never reaches them again — the reader would be
- * "reset" onto a layout that stops tracking the thing it was reset to. With no
- * row, resolution falls through to the live registry on every read, which is
- * what a default IS.
+ * Removes the row rather than writing the current default into it: a written
+ * snapshot would freeze today's default into the reader's arrangement, and a
+ * later change to the default would never reach them. With no row, every read
+ * computes the default afresh, which is what following it means.
  *
- * Refused for an API key on the same ground as the write: a dashboard
- * arrangement belongs to a person, and a key resetting one would be discarding
- * its minter's.
+ * 🔴 Guarded like a save. A reset is staged in one tab and saved later; the
+ * version and visibility token it was staged against travel with it, and the
+ * delete is refused as a conflict, removing nothing, when either has moved --
+ * so a stale tab cannot delete an arrangement another tab saved, cards it never
+ * saw included. Query parameters rather than a body, because a DELETE body is
+ * one some clients and proxies drop.
+ *
+ * Refused for an API key on the same ground as the write.
  */
 export const deleteWidgetLayout = withErrorHandler(async (req: Request) => {
   const auth = await authenticateLayoutWrite(req, "reset");
 
+  const query = new URL(req.url).searchParams;
+  const rawVersion = query.get("version");
+  const expectedVersion = readVersion(
+    rawVersion !== null && /^\d+$/.test(rawVersion)
+      ? Number(rawVersion)
+      : rawVersion
+  );
+  const submittedScope = readScope(query.get("scope") ?? undefined);
+
   const service = await getLayoutService();
-  const caller = readAccessCaller(await readCaller(auth));
-  await service.deleteLayout(SCOPE_KIND, caller.userId);
+  const view = await visibleWidgets(auth);
+  refuseStaleScope(submittedScope, view.scope);
+  await service.deleteLayout(SCOPE_KIND, view.caller.userId, expectedVersion);
 
   // No version echoed, because there is no row to hold one: the next read
-  // answers 0 and `source: "default"`, which is the state the caller asked to
-  // be in. Returning a version here would hand a client a number to send back
-  // in a guard that now has nothing to guard.
+  // answers 0 and `source: "default"`, which is the state the caller asked for.
   return respondAction(
     "Dashboard layout reset.",
     {},

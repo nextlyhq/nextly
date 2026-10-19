@@ -3,19 +3,14 @@
 /**
  * How a gesture performed on one card reaches the grid's live region.
  *
- * Two halves of one contract, together because neither is comprehensible
- * alone: the grid owns the region and the arrangement owns the subjects, and
- * the wiring between them has to survive a hook cycle.
- *
- * Extracted from the grid and the arrangement hook because both had grown past
- * what the complexity gate allows, and this is the concern they had each
- * acquired a piece of. It is also the natural seam: everything here is about
- * SAYING what happened, and nothing here decides what happens.
+ * The grid owns the region and the arrangement owns the subjects, and the
+ * wiring between them has to survive a hook cycle. Everything here is about
+ * SAYING what happened; nothing here decides what happens.
  *
  * @module components/features/widgets/edit/useArrangementAnnouncer
  */
 
-import { useCallback, useMemo, useRef, type RefObject } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import type { GridAnnouncer } from "../useGridAnnouncer";
 
@@ -27,39 +22,21 @@ import type { GridAnnouncer } from "../useGridAnnouncer";
  * gesture learned to speak.
  */
 export interface ArrangementAnnouncer {
-  column: (
-    title: string,
-    column: number,
-    columnCount: number,
-    position: number,
-    count: number
-  ) => void;
-  hidden: (title: string, hidden: boolean) => void;
+  moved: (title: string, from: number, to: number, count: number) => void;
+  width: (title: string, widthName: string) => void;
   removed: (title: string) => void;
-}
-
-export interface GridFocus {
-  /** Attached to the region that holds the cards. */
-  ref: RefObject<HTMLElement | null>;
-  /** Put focus there, for use when the element holding it is about to go. */
-  restore: () => void;
-}
-
-/**
- * Where focus lands when a card is taken out from under it.
- *
- * The LANDMARK rather than a neighbouring card: a dismissed card can be the
- * last one, and a reader who has just been told what happened is better served
- * landing on the region that holds the rest than on an arbitrary sibling.
- *
- * Its own hook for the same reason the relay is: it pairs a ref with the one
- * thing done to it, and the component that owns both ends should not have to
- * hold that pairing open in its body.
- */
-export function useGridFocus(): GridFocus {
-  const ref = useRef<HTMLElement>(null);
-  const restore = useCallback(() => ref.current?.focus(), []);
-  return { ref, restore };
+  restored: (title: string) => void;
+  reset: () => void;
+  /** Customise mode opened. */
+  entered: () => void;
+  /** Cancel threw the draft away. */
+  discarded: () => void;
+  /** A save landed. */
+  saved: () => void;
+  /** A save was refused: the dashboard moved elsewhere. */
+  refused: () => void;
+  /** A save failed; the draft is kept. */
+  saveFailed: () => void;
 }
 
 export interface AnnouncerRelay {
@@ -87,17 +64,18 @@ export function useAnnouncerRelay(): AnnouncerRelay {
 
   const announce = useMemo<ArrangementAnnouncer>(
     () => ({
-      column: (title, column, columnCount, position, count) =>
-        announcer.current?.announceColumn(
-          title,
-          column,
-          columnCount,
-          position,
-          count
-        ),
-      hidden: (title, hidden) =>
-        announcer.current?.announceHidden(title, hidden),
+      moved: (title, from, to, count) =>
+        announcer.current?.announceMoved(title, from, to, count),
+      width: (title, widthName) =>
+        announcer.current?.announceWidth(title, widthName),
       removed: title => announcer.current?.announceRemoved(title),
+      restored: title => announcer.current?.announceRestored(title),
+      reset: () => announcer.current?.announceReset(),
+      entered: () => announcer.current?.announceEntered(),
+      discarded: () => announcer.current?.announceDiscarded(),
+      saved: () => announcer.current?.announceSaved(),
+      refused: () => announcer.current?.announceRefused(),
+      saveFailed: () => announcer.current?.announceSaveFailed(),
     }),
     []
   );
@@ -107,63 +85,4 @@ export function useAnnouncerRelay(): AnnouncerRelay {
   }, []);
 
   return { announce, attach };
-}
-
-/**
- * The one card fact these two gestures need, named structurally.
- *
- * Not `ArrangedWidget`, which lives in the hook that calls this one: importing
- * it back would make the two modules circular for a shape whose whole content
- * is a title and a flag.
- */
-export interface PresenceRow {
-  placementId: string;
-  hidden: boolean;
-  widget: { title: string };
-}
-
-export interface PlacementPresence {
-  toggleHidden: (placementId: string) => void;
-  remove: (placementId: string) => void;
-}
-
-/**
- * Putting a card away and taking one off, each saying what it did.
- *
- * Both wrap the editor's own mutation rather than replacing it, and both read
- * the row BEFORE acting: a removed placement has no row to look up afterwards,
- * and a hidden one leaves the render the moment the draft updates.
- *
- * Both read from the DRAWN rows rather than from the stored placements, so the
- * sentence names what the reader is looking at. A placement whose declaration
- * this admin cannot resolve is skipped from the render, and announcing one by
- * id would name a card nobody can see.
- */
-export function useAnnouncedPresence(
-  rows: readonly PresenceRow[],
-  editor: PlacementPresence,
-  announce: ArrangementAnnouncer
-): PlacementPresence {
-  const toggleHidden = useCallback(
-    (placementId: string) => {
-      const row = rows.find(item => item.placementId === placementId);
-      editor.toggleHidden(placementId);
-      // The state it BECOMES. `row.hidden` is what the reader is looking at,
-      // so its negation is what the toggle just produced -- asking the editor
-      // again here would read the value that is about to be replaced.
-      if (row) announce.hidden(row.widget.title, !row.hidden);
-    },
-    [rows, editor, announce]
-  );
-
-  const remove = useCallback(
-    (placementId: string) => {
-      const row = rows.find(item => item.placementId === placementId);
-      editor.remove(placementId);
-      if (row) announce.removed(row.widget.title);
-    },
-    [rows, editor, announce]
-  );
-
-  return { toggleHidden, remove };
 }

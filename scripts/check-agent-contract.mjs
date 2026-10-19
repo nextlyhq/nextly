@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 
 import { load } from "js-yaml";
 
-import { SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems } from "./agent-skills.mjs";
+import { CLAUDE_COPY, SKILLS_HOME, USER_SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, skillTableNames, userSkillSeparation } from "./agent-skills.mjs";
 import { copies, copyDrift, repositoryFiles } from "./agent-instructions.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -523,11 +523,7 @@ export function routerDisagreements(routed, present) {
 
 /** Skill names the AGENTS.md router table names, read from its rows. */
 export function routedSkills(agentsMd) {
-  const names = new Set();
-  for (const row of agentsMd.matchAll(/^\|\s*`([a-z][a-z0-9-]*)`\s*\|/gm)) {
-    names.add(row[1]);
-  }
-  return names;
+  return skillTableNames(agentsMd);
 }
 
 /**
@@ -586,9 +582,42 @@ export function guidanceReferences(text) {
   return found;
 }
 
+/** The project templates `create-nextly-app` scaffolds from. */
+export const PROJECT_TEMPLATES = "templates";
+
+/**
+ * The repository path a guidance citation resolves to, or null when nothing
+ * can answer it.
+ *
+ * A project template is guidance for the project scaffolded from it, not for
+ * this repository. That project's `.agents/skills/` and `.claude/skills/` hold
+ * the bundled user skills, each copied from `USER_SKILLS_HOME`, and nothing
+ * else. So a template's citation resolves against those skills; read against
+ * this repository's root, it would land among the contributor skills instead.
+ *
+ * @param {string} file the citing file, relative to the repository
+ * @param {string} reference the cited path
+ * @param {string[]} bundled the user skills a scaffold writes
+ */
+export function guidanceTarget(file, reference, bundled) {
+  return file.startsWith(`${PROJECT_TEMPLATES}/`) ? scaffoldedSkillPath(reference, bundled) : reference;
+}
+
+/** Where a scaffolded project's skills-folder path comes from here, or null when no scaffold writes it. */
+function scaffoldedSkillPath(reference, bundled) {
+  const home = [SKILLS_HOME, CLAUDE_COPY].find(dir => `${reference}/`.startsWith(`${dir}/`));
+  if (home === undefined) return null;
+  // What follows the skills folder: empty or "/" for the folder itself, else "/<skill>/...".
+  const rest = reference.slice(home.length);
+  const skill = rest.split("/")[1];
+  return !skill || bundled.includes(skill) ? `${USER_SKILLS_HOME}${rest}` : null;
+}
+
 /**
  * The skills' own findings: the Claude Code copy out of step with the skills,
- * and a skill either harness would fail to load. The copy is generated, so a
+ * a skill either harness would fail to load, among the contributor skills or
+ * the skills for people building with Nextly, and a contributor skill that
+ * installing the user skills would also install. The copy is generated, so a
  * difference is fixed by running the generator, never by editing either side
  * into agreement by hand. A finding on the skills' own side — a link, or a
  * file where their directory should be — is not: a sync would copy what the
@@ -598,6 +627,8 @@ export function skillFindings(base = root) {
   return [
     ...skillCopyDrift(base).map(({ path, problem }) => ({ file: path, kind: "skills copy", claim: problem, fix: remedyFor(path) })),
     ...skillFrontmatterProblems(base).map(({ skill, problem }) => ({ file: `${SKILLS_HOME}/${skill}/SKILL.md`, kind: "skill", claim: problem })),
+    ...skillFrontmatterProblems(base, USER_SKILLS_HOME).map(({ skill, problem }) => ({ file: `${USER_SKILLS_HOME}/${skill}/SKILL.md`, kind: "skill", claim: problem })),
+    ...userSkillSeparation(base).problems.map(({ path, problem }) => ({ file: path, kind: "skill", claim: problem })),
   ];
 }
 
@@ -801,6 +832,7 @@ function main(base = root) {
   }
 
   // Every tracked file, for the narrow `.claude/...` scan above.
+  const bundled = userSkillSeparation(base).user;
   const guidanceMisses = new Map();
   for (const file of tracked) {
     if (GUIDANCE_SCAN_EXCLUDES.includes(file)) continue;
@@ -811,7 +843,8 @@ function main(base = root) {
       continue; // binary, or removed since `git ls-files` ran
     }
     for (const reference of guidanceReferences(text)) {
-      if (existsSync(join(base, reference))) continue;
+      const target = guidanceTarget(file, reference, bundled);
+      if (target !== null && existsSync(join(base, target))) continue;
       if (!guidanceMisses.has(reference)) guidanceMisses.set(reference, []);
       guidanceMisses.get(reference).push(file);
     }

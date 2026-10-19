@@ -13,8 +13,9 @@
  * @module domains/users/services/password-write
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, isNull, type SQL } from "drizzle-orm";
+import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 
+import { forgetSessionStanding } from "../../../auth/session/session-standing";
 import type { getDialectTables } from "../../../database/index";
 import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import type { UserUpdateData } from "../../../types/database-operations";
@@ -76,10 +77,18 @@ export interface PasswordRemoval {
  * Update the user row and delete every refresh token the account holds, both
  * inside the transaction `tx` belongs to.
  *
+ * The same update raises the account's session epoch, which ends the access
+ * tokens it already holds as well: every one carries the epoch it was signed
+ * at, and every place a session is read refuses one signed before this write
+ * (`auth/session/session-standing`). Deleting the refresh rows alone stops a
+ * session from renewing, and leaves each access token working until it
+ * expires, which for the Direct API's is thirty days.
+ *
  * Returns the number of user rows the update changed. With `unlessDeactivated`
  * the update is conditional on the account not being deactivated, and `when`
  * adds a condition of the caller's own to the same statement; a conditional
- * update that changes no row deletes nothing, so the caller refuses on a zero.
+ * update that changes no row deletes nothing and raises nothing, so the caller
+ * refuses on a zero.
  *
  * Also the write a deactivation goes through: it ends the account's sessions
  * for the same reason a new password does.
@@ -103,12 +112,24 @@ export async function updateUserEndingSessions(
   ];
   const updated = await tx
     .update(users)
-    .set(args.set)
+    .set({
+      ...args.set,
+      // Raised by the database in the same statement, so two writes ending
+      // the same account's sessions at once raise it twice rather than one
+      // of them being lost. Null on a row from before the column existed,
+      // which is epoch zero.
+      sessionEpoch: sql`coalesce(${users.sessionEpoch}, 0) + 1`,
+    })
     .where(and(...conditions));
   const changed = affectedRowCount(updated, dialect);
   if (conditions.length > 1 && changed === 0) return 0;
   await tx
     .delete(refreshTokens)
     .where(eq(refreshTokens.userId, String(args.userId)));
+  // This process stops answering from what it holds for the account now
+  // rather than when its cache entry would lapse. The write may not have
+  // committed yet, and a read in between keeps the old epoch, but only for
+  // the cache's lifetime, which is the bound every other instance has too.
+  forgetSessionStanding(args.userId);
   return changed;
 }

@@ -80,6 +80,11 @@ export const ROUTES = {
   // (`?from=&to=`), so a reader can send a colleague the exact comparison
   // rather than a description of how to reach it.
   COLLECTION_ENTRY_VERSIONS: "/admin/collections/[slug]/[id]/versions",
+  // A plugin's full-screen view of one entry. Any segment matches here, and
+  // the resolver keeps only a view the collection actually has; `versions` is
+  // registered first and so keeps its address, which is why the server
+  // reserves it.
+  COLLECTION_ENTRY_VIEW: "/admin/collections/[slug]/[id]/[view]",
 
   // Security & Roles routes
   SECURITY_ROLES: "/admin/security/roles",
@@ -91,6 +96,9 @@ export const ROUTES = {
   SINGLE_EDIT: "/admin/singles/[slug]",
   SINGLE_API: "/admin/singles/[slug]/api",
   SINGLE_VERSIONS: "/admin/singles/[slug]/versions",
+  // A plugin's full-screen view of a Single, on the same terms as the entry
+  // one above: `api` and `versions` are registered first and keep winning.
+  SINGLE_VIEW: "/admin/singles/[slug]/[view]",
 
   // Settings routes
   SETTINGS: "/admin/settings",

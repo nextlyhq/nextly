@@ -17,6 +17,13 @@ Next-only and lives in `nextly/runtime`. Nothing here forces `next` onto a
 headless or admin-only deployment — every `next` import is type-only and
 `next/navigation` is resolved lazily.
 
+**Which Nextly they read through.** `resolveContent`, `createContentRoute` and
+`createPublicContentRoute` read content, and take a `nextly` option. Without it, they use the instance already started in this process
+and throws "Nextly services not initialized" if there is none, which is the case
+on a new project's first public request. Pass the instance from
+`await getNextly({ config })` (`getNextly` from `nextly`, `config` from your
+`nextly.config.ts`) as `nextly`. The samples below leave it out for brevity.
+
 ## resolveContent — slug to a published entry
 
 `resolveContent(collection, slug, options?)` resolves a URL slug to a single
@@ -61,7 +68,11 @@ never been published is covered by `status`, but pending edits to an
 
 ```ts
 // The page as the editor last saved it, not as visitors see it.
-await resolveContent("posts", slug, { draft: true, overrideAccess: true });
+await resolveContent("posts", slug, {
+  draft: true,
+  overrideAccess: true,
+  trustedCollections: ["posts"],
+});
 ```
 
 The two layers are gated differently, and that difference is the important part:
@@ -96,7 +107,15 @@ await resolveContent("posts", slug);
 await resolveContent("posts", slug, { user: { id, role } });
 
 // Trusted read that ignores access rules (e.g. a preview route you gate yourself).
-await resolveContent("posts", slug, { overrideAccess: true, status: "all" });
+// `trustedCollections` is required with `overrideAccess: true`: it names the
+// collections the trust reaches as relationships are expanded. Others are read
+// as a visitor would read them. `TRUSTS_EVERY_COLLECTION` (from "nextly")
+// trusts all of them.
+await resolveContent("posts", slug, {
+  overrideAccess: true,
+  trustedCollections: ["posts"],
+  status: "all",
+});
 ```
 
 > An anonymous read hands the collection's `access.read` rule a real anonymous
@@ -110,10 +129,11 @@ await resolveContent("posts", slug, { overrideAccess: true, status: "all" });
 F1-cached — an enforced read is never cached, because its result depends on an
 access decision that a content-tag bust can't invalidate (a rule can answer
 differently without any entry being written). So a public site that wants cached pages should
-read its public content with `overrideAccess: true`; access-gated or member
-content runs fresh per request.
+read its public content with `overrideAccess: true` and the `trustedCollections`
+it may reach; access-gated or member content runs fresh per request.
 
-Other options: `slugField` (default `"slug"`), `depth`, `locale`,
+Other options: `nextly` (above), `trustedCollections` (required with
+`overrideAccess: true`), `slugField` (default `"slug"`), `depth`, `locale`,
 `richTextFormat`, `tags` (extra cache tags for populated relations),
 `revalidate` (a time-based safety net for cached reads), and `cacheScope` (a
 discriminator when distinct readers — per tenant or database — resolve the same

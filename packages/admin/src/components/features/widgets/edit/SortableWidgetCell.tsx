@@ -10,15 +10,24 @@
  *
  * ## Drag is the SECOND way to move a card, never the only one
  *
- * The Move up / Move down buttons in `WidgetEditControls` are what satisfy
- * WCAG 2.2 SC 2.5.7, which requires a single-pointer alternative to every
- * dragging movement. This handle is the affordance most people reach for
- * first; it is not the one that makes the feature usable. If the two ever
- * disagree, the buttons are correct.
+ * The moves in each card's menu (`CardActionsMenu`) are what satisfy WCAG 2.2
+ * SC 2.5.7, which requires a single-pointer alternative to every dragging
+ * movement. This handle is the affordance most people reach for first; it is
+ * not the one that makes the feature usable.
  *
- * The handle carries the drag listeners rather than the whole cell, so a reader
- * can still select text in a card, click a link inside it, and press the
- * controls above it while editing.
+ * ## Only the dragged card moves while dragging
+ *
+ * 🔴 Cards are different widths, and dnd-kit's sorting strategies preview a
+ * reorder by sliding each card into the rectangle its neighbour held, scaled
+ * to fit. With a quarter beside a full card that stretches one into the
+ * other's shape and draws a row the grid would never lay out. So the cards the
+ * reader is not holding stay where they are, the held card follows the
+ * pointer unscaled, and the list reorders once, on drop.
+ *
+ * The handle carries the drag listeners rather than the whole cell, so the
+ * card's other controls -- its width and its menu -- stay pressable while
+ * editing. The card's own links and controls are out of reach then
+ * (`CustomizingFence`): customising is about the arrangement.
  *
  * @module components/features/widgets/edit/SortableWidgetCell
  */
@@ -58,11 +67,17 @@ export function SortableWidgetCell({
     isDragging,
   } = useSortable({ id, disabled: !isEditing });
 
+  // The held card's own offset, translated only: a scale would stretch it to
+  // the shape of whichever card it is over. Every other card stays put.
+  const style = isDragging
+    ? { transform: CSS.Translate.toString(transform), transition }
+    : undefined;
+
   return (
     <div
       ref={setNodeRef}
       data-testid={testId}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      style={style}
       className={cn(
         className,
         // Lifted while dragging so it reads as picked up rather than as a hole
@@ -79,12 +94,9 @@ export function SortableWidgetCell({
           {...listeners}
           // `cursor-grab`, not `cursor-move`: this reorders within a list, it
           // does not move the card to an arbitrary point.
-          // 🔴 LEFT, not right. On the right it overlapped `WidgetEditControls`'
-          // Remove button — same corner, higher `z-index` — so the handle
-          // swallowed pointer input across most of a control the feature
-          // promises is ordinarily clickable. The toolbar's own content starts
-          // with a title that has room to spare, so the handle sits before it
-          // and the buttons keep the right edge to themselves.
+          // 🔴 LEFT, not right. The right end of a card's header holds its
+          // width and its menu, and a handle there at a higher `z-index`
+          // swallowed pointer input meant for them.
           className="absolute left-1 top-1 z-10 cursor-grab rounded p-1 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing"
           // Names the card, because a grid of identical handles is unusable
           // otherwise. dnd-kit supplies its own keyboard instructions through

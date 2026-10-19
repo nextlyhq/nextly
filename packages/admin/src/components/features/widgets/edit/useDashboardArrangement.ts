@@ -1,116 +1,76 @@
 "use client";
 
 /**
- * Which cards the grid draws, in what order, and everything editing them needs.
+ * Which cards the grid draws, in what order and at what width, and everything
+ * customising them needs.
  *
- * Extracted because the grid had accumulated six jobs — batching queries,
- * gating them, announcing outcomes, resolving the arrangement, holding edit
- * state and wiring drag — and the complexity gate said so before a reader
- * would have. The three that belong to the ARRANGEMENT live here; the grid
- * keeps the three that belong to drawing and fetching.
+ * The grid keeps the jobs that belong to drawing and fetching -- batching
+ * queries, gating them, announcing outcomes. The ones that belong to the
+ * ARRANGEMENT live here: resolving the list into cards, holding the draft, and
+ * the gestures that move, resize and reset it.
  *
  * @module components/features/widgets/edit/useDashboardArrangement
  */
 
 import type { Announcements, DragEndEvent } from "@dnd-kit/core";
-import { DEFAULT_COLUMN_COUNT } from "nextly/config";
 import { useCallback, useMemo } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
-import type { DashboardWidget } from "@admin/types/dashboard/widgets";
+import type {
+  DashboardWidget,
+  WidgetPlacement,
+  WidgetWidth,
+} from "@admin/types/dashboard/widgets";
 
 import {
+  positionInList,
   sortableAnnouncements,
   useSortableSensors,
   type AnnouncedItem,
 } from "../../entries/fields/structured/field-array-helpers";
 import {
-  columnFromDropData,
-  dropSide,
-  placementsByColumn,
-  resolveDrop,
-  type DropSide,
-  type DropTarget,
+  drawnPosition,
+  movePlacement,
+  movePlacementTo,
+  type IsDrawn,
+  type MoveDirection,
 } from "../layout-editor";
+import { WIDTH_NAMES, widthFromDeclaredSize } from "../sizes";
 
-import {
-  useAnnouncedPresence,
-  type ArrangementAnnouncer,
-} from "./useArrangementAnnouncer";
+import type { ArrangementAnnouncer } from "./useArrangementAnnouncer";
+import type { DashboardFocus } from "./useDashboardFocus";
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
+import type { SaveOptions, SaveOutcome } from "./useLayoutLifecycle";
 
-/** One card to draw: which placement put it there, and whether it is put away. */
+/** One card to draw: which placement put it there, and how wide it is. */
 export interface ArrangedWidget {
   placementId: string;
   widget: DashboardWidget;
-  hidden: boolean;
   /**
-   * The size the reader's arrangement stored, when it stored one.
+   * The width the reader's arrangement STORED, as stored.
    *
-   * A `string` rather than the size enum, for the reason every layout type is:
-   * it may have been written by a plugin built against a newer core, and the
-   * span helper already falls back on a value it does not recognise.
+   * A `string` for the reason the placement's is: it may name a width from a
+   * newer core. The cell draws it through `cardSpanClass`, which also applies
+   * the widget's allowed widths, so nothing here decides a drawn width.
    */
-  size?: string;
-  /** Which column this card is drawn in. Absent on a pre-column arrangement. */
-  column?: number;
+  width: string;
+  /** The widths the widget allows, when the read described it. */
+  allowedWidths?: readonly WidgetWidth[];
   /**
    * The settings this reader stored for this card, as stored.
    *
-   * Carried RAW rather than resolved, for the reason `size` is carried as a
-   * string: it may have been written against a newer core, or by a plugin whose
-   * settings have since changed, and the reading that turns it into values is
-   * the widget's declaration — which lives with the widget, not here. This
-   * layer's job is to keep a placement's answer attached to the card it
-   * answers for.
+   * Carried RAW rather than resolved: the reading that turns it into values is
+   * the widget's declaration, which lives with the widget, not here.
    */
   config?: Record<string, unknown>;
-  /**
-   * Its position within that column.
-   *
-   * Carried so the ONE grouping helper can order these rows, rather than the
-   * grid relying on the sequence they happen to arrive in.
-   */
-  order: number;
 }
 
 export interface DashboardArrangement {
-  /** The cards to draw, in the arrangement's order. */
+  /** The cards to draw, in the arrangement's order. Removed cards are not. */
   visible: ArrangedWidget[];
-  /**
-   * The same cards, grouped into the columns the grid renders.
-   *
-   * Derived from `visible` rather than resolved a second time: two answers to
-   * "which cards are drawn" drift, and the one nobody looks at is the one that
-   * goes wrong. Always `columnCount` buckets, empty ones included, because a
-   * column is a drop target only while the grid draws it.
-   */
-  columns: ArrangedWidget[][];
-  /** How many columns this reader arranged their dashboard into. */
-  columnCount: number;
   editor: LayoutEditor;
-  /**
-   * Swap one card with a named neighbour in the same column.
-   *
-   * `side` says whether that neighbour sits above or below, which is the same
-   * answer a drag reads off the pointer. The caller renders the column and
-   * already knows; resolving it here would be a second reading of the
-   * arrangement, free to disagree with the one the reader is looking at.
-   */
-  moveWithinColumn: (
-    placementId: string,
-    neighbourId: string,
-    side: DropSide
-  ) => void;
-  /**
-   * Move one card into `targetColumn`, named absolutely.
-   *
-   * The CLICKABLE route across columns. Dragging one there is the same
-   * capability, and WCAG 2.2 SC 2.5.7 asks for a single-pointer alternative to
-   * anything a drag achieves -- so this is not a convenience beside the drag,
-   * it is what makes the drag permissible.
-   */
-  moveColumn: (placementId: string, targetColumn: number) => void;
+  /** Whether a placement is one the grid draws, which is what positions count. */
+  isDrawn: IsDrawn;
   /**
    * Whether an arrangement has been READ — not whether it holds anything.
    *
@@ -123,338 +83,255 @@ export interface DashboardArrangement {
   sensors: ReturnType<typeof useSortableSensors>;
   handleDragEnd: (event: DragEndEvent) => void;
   /**
-   * What a screen reader hears while a card is being dragged.
-   *
-   * Pick-up, hover and cancel are spoken here, about the card by title and
-   * in column-and-position terms. The LANDING is deliberately not: the grid
-   * speaks that through its own live region, in the same sentence the Move
-   * buttons use, so a card moved by keyboard and one moved by button sound
-   * identical and no drop is read twice.
+   * What a screen reader hears while a card is being dragged: pick-up, hover
+   * and cancel, by title and position. The LANDING is spoken by the grid's own
+   * region, in the same sentence a menu move uses, so it is not read twice.
    */
   announcements: Announcements;
+  /** Move one card from its menu, saying where it went. */
+  moveCard: (placementId: string, direction: MoveDirection) => void;
+  /** Set one card's width from its menu, saying so. */
+  setCardWidth: (placementId: string, width: WidgetWidth) => void;
+  /** Put the default dashboard in the draft, saying nothing is saved yet. */
+  stageReset: () => void;
+  /** Open customise mode, with focus on its bar, saying what it means. */
+  begin: () => void;
+  /** Leave customise mode unsaved, with focus back on Customize, saying so. */
+  cancel: () => void;
   /**
-   * Put one card away, or bring it back, saying so.
-   *
-   * Wraps the editor's own mutation rather than being offered beside it: the
-   * arrangement is what holds the card's title, and an unannounced hide is a
-   * card that silently stops being rendered — indistinguishable, without sight,
-   * from the page having failed.
+   * Save the draft and say how that went; focus goes back to Customize once
+   * it has landed. A refused or failed save keeps the draft, and focus stays
+   * where the reader left it.
    */
-  toggleHidden: (placementId: string) => void;
-  /** Take one card off the dashboard, saying so. */
-  remove: (placementId: string) => void;
+  save: (options?: SaveOptions) => Promise<SaveOutcome>;
 }
 
-export type { ArrangementAnnouncer };
+/**
+ * The cards drawn before any arrangement has been read: the declarations, in
+ * their declared order, each at the width of its declared size.
+ */
+function declaredRows(declared: readonly DashboardWidget[]): ArrangedWidget[] {
+  return declared.map(widget => ({
+    placementId: widget.id,
+    widget,
+    width: widthFromDeclaredSize(widget.size),
+  }));
+}
+
+/** The arrangement's list resolved into the cards the grid draws. */
+function arrangedRows(
+  placements: readonly WidgetPlacement[],
+  byId: ReadonlyMap<string, DashboardWidget>,
+  factsFor: LayoutEditor["factsFor"]
+): ArrangedWidget[] {
+  const rows: ArrangedWidget[] = [];
+  for (const placement of placements) {
+    const widget = byId.get(placement.widgetId);
+    // A placement whose declaration this admin cannot resolve is SKIPPED rather
+    // than drawn as an empty cell: a plugin's client bundle can be absent, and
+    // a titled card with nothing under it reads as a product bug. A removed
+    // card is not drawn either; the add picker lists it to put back.
+    if (!widget || placement.removed) continue;
+    const allowed = factsFor(placement.widgetId)?.allowedWidths;
+    rows.push({
+      placementId: placement.id,
+      widget,
+      width: placement.width,
+      ...(allowed === undefined ? {} : { allowedWidths: allowed }),
+      ...(placement.config === undefined ? {} : { config: placement.config }),
+    });
+  }
+  return rows;
+}
+
+/**
+ * Entering, leaving and saving customise mode, each saying what happened and
+ * sending focus where the reader goes next.
+ *
+ * Its own hook beside the arrangement's, because these act on the MODE rather
+ * than on a card.
+ */
+function useCustomiseLifecycle(
+  editor: LayoutEditor,
+  announce: ArrangementAnnouncer,
+  focus: Pick<DashboardFocus, "request">
+): Pick<DashboardArrangement, "begin" | "cancel" | "save"> {
+  const begin = useCallback(() => {
+    editor.begin();
+    announce.entered();
+    focus.request({ kind: "bar" });
+  }, [editor, announce, focus]);
+
+  const cancel = useCallback(() => {
+    editor.cancel();
+    announce.discarded();
+    focus.request({ kind: "customize" });
+  }, [editor, announce, focus]);
+
+  const save = useCallback(
+    async (options?: SaveOptions): Promise<SaveOutcome> => {
+      const outcome = await editor.save(options);
+      announceSaveOutcome(announce, outcome);
+      // Only a save that landed ends the mode; a refused or failed one leaves
+      // the reader where they were, with their draft.
+      if (outcome === "saved") focus.request({ kind: "customize" });
+      return outcome;
+    },
+    [editor, announce, focus]
+  );
+
+  return { begin, cancel, save };
+}
+
+/** Say how a save went: each outcome has its own sentence. */
+function announceSaveOutcome(
+  announce: ArrangementAnnouncer,
+  outcome: SaveOutcome
+): void {
+  if (outcome === "saved") announce.saved();
+  else if (outcome === "refused") announce.refused();
+  else announce.saveFailed();
+}
 
 export function useDashboardArrangement(
   declared: DashboardWidget[],
   layout: UseDashboardLayoutResult,
-  announce: ArrangementAnnouncer
+  announce: ArrangementAnnouncer,
+  focus: Pick<DashboardFocus, "request">
 ): DashboardArrangement {
   // The DECLARATIONS, by id. The arrangement says which cards and in what
-  // order; this says what each one actually is. Two questions, two sources:
-  // the server owns the arrangement because only it can filter by permission
-  // authoritatively, and branding owns the declaration because that carries the
-  // archetype, the query and the component.
+  // order; this says what each one actually is.
   const byId = useMemo(
     () => new Map(declared.map(widget => [widget.id, widget])),
     [declared]
   );
 
-  // What an added card inherits. `size` and `height` on a resolved declaration
-  // ARE its declared defaults, so a card the reader adds arrives the geometry
-  // its author intended rather than an arbitrary one.
-  //
-  // 🔴 BOTH, not just the width. `defaultPlacements` copies a declared
-  // `defaultHeight` onto the server's initial placement, so returning only the
-  // size here meant removing a card and adding it back replaced a tall one with
-  // a card of no stated height -- and the next save persisted that, dropping a
-  // declared geometry permanently through a gesture that reads as undoable.
-  const geometryFor = useCallback(
-    (widgetId: string) => {
-      const declaration = byId.get(widgetId);
-      if (!declaration) return undefined;
-      return {
-        size: declaration.size,
-        ...(declaration.height === undefined
-          ? {}
-          : { height: declaration.height }),
-      };
-    },
+  // What a position counts: the cards the grid draws. Given to the editor so a
+  // move steps over a card nobody can see, and used for every announcement.
+  const isDrawn = useCallback<IsDrawn>(
+    placement => !placement.removed && byId.has(placement.widgetId),
     [byId]
   );
 
-  const editor = useLayoutEditor(layout, geometryFor);
+  const editor = useLayoutEditor(layout, isDrawn);
   const hasArrangement = layout.layout !== undefined;
 
-  const visible = useMemo(() => {
-    // No arrangement yet: draw the declarations in their declared order, which
-    // is exactly what this dashboard did before it could be arranged at all.
-    if (!hasArrangement) {
-      // Dealt across the columns exactly as the server's defaults are, so the
-      // dashboard a reader sees before they arrange anything matches the one
-      // they get the moment they save.
-      return declared.map((widget, index) => ({
-        placementId: widget.id,
-        widget,
-        hidden: false,
-        column: index % DEFAULT_COLUMN_COUNT,
-        order: index,
-      }));
-    }
-    const rows: ArrangedWidget[] = [];
-    for (const placement of editor.placements) {
-      const widget = byId.get(placement.widgetId);
-      // A placement whose declaration this admin cannot resolve is SKIPPED
-      // rather than drawn as an empty cell: the server filtered by permission
-      // and by the registry, but a plugin's client bundle can still be absent,
-      // and a titled card with nothing under it reads as a product bug.
-      if (!widget) continue;
-      // Hidden cards are drawn while editing — a reader cannot bring back
-      // something they cannot see.
-      if (placement.hidden && !editor.isEditing) continue;
-      rows.push({
-        placementId: placement.id,
-        widget,
-        hidden: placement.hidden,
-        ...(placement.size === undefined ? {} : { size: placement.size }),
-        ...(placement.column === undefined ? {} : { column: placement.column }),
-        ...(placement.config === undefined ? {} : { config: placement.config }),
-        order: placement.order,
-      });
-    }
-    return rows;
-  }, [hasArrangement, declared, editor.placements, editor.isEditing, byId]);
-
-  // The EDITOR's count, which is the draft's while editing and the saved one
-  // otherwise. Deriving a second answer here would draw the saved count while
-  // the reader is looking at the one they just chose.
-  const columnCount = editor.columnCount;
-
-  // 🔴 The SHARED helper, not a second grouping. An inline copy here is the
-  // path production takes while the unit tests exercise the helper, so the
-  // tests stay green while the shipped grid regresses -- and the two already
-  // disagreed, since the helper orders each bucket by `order` and a local copy
-  // took whatever sequence the rows arrived in.
-  const columns = useMemo(
-    () => placementsByColumn(visible, columnCount),
-    [visible, columnCount]
+  const visible = useMemo(
+    () =>
+      hasArrangement
+        ? arrangedRows(editor.placements, byId, editor.factsFor)
+        : declaredRows(declared),
+    [hasArrangement, declared, editor.placements, editor.factsFor, byId]
   );
 
-  /** The placements the grid actually draws, which is what a position counts. */
-  const renderedIds = useMemo(
-    () => new Set(visible.map(row => row.placementId)),
+  const titleOf = useCallback(
+    (placementId: string) =>
+      visible.find(row => row.placementId === placementId)?.widget.title,
     [visible]
   );
 
-  // The drag path and the button path move a card through the SAME function.
-  // Two implementations of "where does this land" agree until one is edited,
-  // and a grid whose drag and whose buttons disagreed would be impossible to
-  // reason about from either.
-  // The sensors alone are shared with every other sortable surface. The
-  // drop is NOT: a flat list resolves a drop to a pair of indices, which
-  // cannot express a column, so this hook keeps its own `handleDragEnd` below.
+  /**
+   * Say where a card went, counted among the drawn cards before and after.
+   *
+   * Both positions from the SAME pure rule the draft applies, so the sentence
+   * describes the move the reader is about to see rather than a second
+   * reckoning of it.
+   */
+  const announceMove = useCallback(
+    (placementId: string, after: readonly WidgetPlacement[]) => {
+      const title = titleOf(placementId);
+      const from = drawnPosition(editor.placements, placementId, isDrawn);
+      const to = drawnPosition(after, placementId, isDrawn);
+      if (title === undefined || !from || !to) return;
+      if (from.position !== to.position) {
+        announce.moved(title, from.position, to.position, to.count);
+      }
+    },
+    [titleOf, editor.placements, isDrawn, announce]
+  );
+
+  const moveCard = useCallback(
+    (placementId: string, direction: MoveDirection) => {
+      announceMove(
+        placementId,
+        movePlacement(editor.placements, placementId, direction, isDrawn)
+      );
+      editor.move(placementId, direction);
+      // Back to THIS card's menu, which is now somewhere else on the page: the
+      // reader who moved it can move it again without hunting for it.
+      focus.request({ kind: "menu", placementId });
+    },
+    [announceMove, editor, isDrawn, focus]
+  );
+
+  const setCardWidth = useCallback(
+    (placementId: string, width: WidgetWidth) => {
+      const title = titleOf(placementId);
+      editor.setWidth(placementId, width);
+      if (title !== undefined) announce.width(title, WIDTH_NAMES[width].name);
+    },
+    [titleOf, editor, announce]
+  );
+
+  const stageReset = useCallback(() => {
+    editor.stageReset();
+    announce.reset();
+  }, [editor, announce]);
+
+  const { begin, cancel, save } = useCustomiseLifecycle(
+    editor,
+    announce,
+    focus
+  );
+
+  // The sensors alone are shared with every other sortable surface.
   const sensors = useSortableSensors();
 
-  /**
-   * A card or a column as the announcements see it.
-   *
-   * 🔴 A column is recognised from the droppable's DATA, exactly as the drop
-   * handler recognises it, so the sentence a reader hears while hovering
-   * describes the same target the release will act on. Recognising it from
-   * the shape of the id instead would let a card named like a column be
-   * announced as one.
-   */
-  const describeItem = useCallback(
-    (item: AnnouncedItem): string | undefined => {
-      const column = columnFromDropData(item.data.current);
-      if (column !== undefined) return `column ${column + 1} of ${columnCount}`;
-      return visible.find(row => row.placementId === String(item.id))?.widget
-        .title;
-    },
-    [visible, columnCount]
-  );
-
-  /**
-   * Where a card sits, in the same terms the landing is announced in.
-   *
-   * Read from the DRAWN columns, the buckets the grid renders from, so the
-   * position a reader is told on pick-up counts the cards they can see.
-   */
-  const placeItem = useCallback(
-    (item: AnnouncedItem): string | undefined => {
-      const id = String(item.id);
-      const column = columns.findIndex(bucket =>
-        bucket.some(row => row.placementId === id)
-      );
-      if (column === -1) return undefined;
-      const position =
-        columns[column].findIndex(row => row.placementId === id) + 1;
-      return `column ${column + 1} of ${columnCount}, position ${position} of ${columns[column].length}`;
-    },
-    [columns, columnCount]
-  );
+  const rowIds = useMemo(() => visible.map(row => row.placementId), [visible]);
 
   const announcements = useMemo<Announcements>(
     () => ({
-      ...sortableAnnouncements({ describe: describeItem, place: placeItem }),
-      // The landing is spoken by `announceLanding` below, through the grid's
-      // own live region and in the Move buttons' sentence. Spoken here as
-      // well, a keyboard drop would be read twice in two wordings.
+      ...sortableAnnouncements({
+        describe: (item: AnnouncedItem) => titleOf(String(item.id)),
+        place: (item: AnnouncedItem) => positionInList(rowIds, String(item.id)),
+      }),
+      // The landing is spoken by `handleDragEnd` below, through the grid's own
+      // live region and in the menu's sentence. Spoken here as well, a
+      // keyboard drop would be read twice in two wordings.
       onDragEnd: () => undefined,
     }),
-    [describeItem, placeItem]
-  );
-
-  /**
-   * Say where a card ended up, in the terms the reader can verify.
-   *
-   * 🔴 Resolved AFTER the move, against the destination column's bucket. Read
-   * from the global sequence, a card dropped onto the second card of a short
-   * column announced "position 4 of 4" because cards in other columns precede
-   * it — a position and a total that describe nothing the reader can see.
-   */
-  const announceLanding = useCallback(
-    (title: string, placementId: string, target: DropTarget) => {
-      const settled = resolveDrop(
-        editor.placements,
-        placementId,
-        target,
-        columnCount
-      );
-      // 🔴 Counted over the cards the grid DRAWS, not over every stored
-      // placement. A placement whose declaration this admin cannot resolve is
-      // skipped from the render and still sits in `editor.placements`, so a
-      // column holding one announced "position 3 of 3" for a card the reader
-      // sees second of two — a position and a total describing a grid nobody
-      // is looking at.
-      const buckets = placementsByColumn(
-        settled.filter(p => renderedIds.has(p.id)),
-        columnCount
-      );
-      const column = buckets.findIndex(bucket =>
-        bucket.some(p => p.id === placementId)
-      );
-      if (column === -1) return;
-      const position = buckets[column].findIndex(p => p.id === placementId) + 1;
-      announce.column(
-        title,
-        column + 1,
-        columnCount,
-        position,
-        buckets[column].length
-      );
-    },
-    [editor.placements, columnCount, announce, renderedIds]
+    [titleOf, rowIds]
   );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const activeId = String(event.active.id);
       if (!event.over) return;
-      const moved = visible.find(row => row.placementId === activeId);
-      if (!moved) return;
-      // 🔴 Read from the droppable's DATA, not from the shape of its id. Only a
-      // column carries `widgetColumn`, so a card named like a column cannot be
-      // mistaken for one.
-      const droppedColumn = columnFromDropData(event.over.data.current);
-      const target: DropTarget | null =
-        droppedColumn !== undefined
-          ? { kind: "column", column: droppedColumn }
-          : {
-              kind: "card",
-              placementId: String(event.over.id),
-              // Which SIDE of that card the gesture ended on. A populated
-              // column disables its own droppable, so releasing below its last
-              // card resolves to that card and the side is the only thing
-              // saying the reader meant underneath it rather than above.
-              side: dropSide(
-                event.active.rect.current.translated,
-                event.over.rect
-              ),
-            };
-      if (target.kind === "card" && target.placementId === activeId) return;
-      editor.dropOn(activeId, target);
-      // 🔴 A drop onto a COLUMN has no neighbouring card to count from, and
-      // `findIndex` answers -1 for it. Announced from that, every empty-column
-      // drop claimed the card had gone to the last position in the whole
-      // dashboard, whichever column actually received it. The column target is
-      // parsed instead, and the announcement names the column.
-      announceLanding(moved.widget.title, activeId, target);
+      const overId = String(event.over.id);
+      // Released where it was picked up: nothing moved, and nothing is said.
+      if (overId === activeId) return;
+      announceMove(
+        activeId,
+        movePlacementTo(editor.placements, activeId, overId)
+      );
+      editor.moveTo(activeId, overId);
     },
-    [visible, editor, announceLanding]
-  );
-
-  /**
-   * Move one card into `targetColumn`.
-   *
-   * 🔴 An ABSOLUTE target, computed by the caller from the column the card is
-   * DRAWN in. A delta applied to the stored column is wrong for any card whose
-   * column is past the current count: folded into the last column for drawing,
-   * it would offer a Left that lands outside the dashboard and a label naming a
-   * column the reader cannot see.
-   */
-  const moveColumn = useCallback(
-    (placementId: string, targetColumn: number) => {
-      const moved = visible.find(row => row.placementId === placementId);
-      if (!moved) return;
-      if (targetColumn < 0 || targetColumn >= columnCount) return;
-      const target: DropTarget = { kind: "column", column: targetColumn };
-      editor.dropOn(placementId, target);
-      announceLanding(moved.widget.title, placementId, target);
-    },
-    [visible, editor, announceLanding, columnCount]
-  );
-
-  /**
-   * The button path: swap one card with a NAMED neighbour.
-   *
-   * Takes both ids rather than an index and a delta. The caller renders one
-   * column and knows which card sits next to which; an index handed back here
-   * would have to be re-resolved against the interleaved whole, which is the
-   * translation that moved the wrong card.
-   */
-  const moveWithinColumn = useCallback(
-    (placementId: string, neighbourId: string, side: DropSide) => {
-      const moved = visible.find(row => row.placementId === placementId);
-      if (!moved) return;
-      // The caller renders the column, so it knows whether the neighbour it
-      // named sits above or below — which is exactly the side the card lands
-      // on. Deriving it here would answer from the stored arrangement a second
-      // time, and the two readings are what already moved the wrong card.
-      const target: DropTarget = {
-        kind: "card",
-        placementId: neighbourId,
-        side,
-      };
-      editor.dropOn(placementId, target);
-      announceLanding(moved.widget.title, placementId, target);
-    },
-    [visible, editor, announceLanding]
-  );
-
-  // The two gestures that change whether a card is on the dashboard, each
-  // saying so. Their own hook because announcing is a subject rather than a
-  // step, and because this one had grown past what a reader can hold.
-  const { toggleHidden, remove } = useAnnouncedPresence(
-    visible,
-    editor,
-    announce
+    [announceMove, editor]
   );
 
   return {
     visible,
     editor,
-    columns,
-    columnCount,
-    moveWithinColumn,
-    moveColumn,
+    isDrawn,
     hasArrangement,
     sensors,
     announcements,
     handleDragEnd,
-    toggleHidden,
-    remove,
+    moveCard,
+    setCardWidth,
+    stageReset,
+    begin,
+    cancel,
+    save,
   };
 }

@@ -1,4 +1,5 @@
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
+import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
 import { SPENT_CHALLENGES_TABLE } from "../schemas/spent-challenges/table-name";
@@ -50,6 +51,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "failed_login_attempts" INTEGER NOT NULL DEFAULT 0,
       "locked_until" INTEGER,
       "must_change_password" INTEGER,
+      "session_epoch" INTEGER,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,
@@ -68,6 +70,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "password_reset_tokens" ("expires")`,
     `CREATE INDEX IF NOT EXISTS "prt_used_at_idx"
       ON "password_reset_tokens" ("used_at")`,
+    `CREATE INDEX IF NOT EXISTS "prt_token_hash_idx"
+      ON "password_reset_tokens" ("token_hash")`,
     `CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
@@ -78,6 +82,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "evt_expires_idx"
       ON "email_verification_tokens" ("expires")`,
+    `CREATE INDEX IF NOT EXISTS "evt_token_hash_idx"
+      ON "email_verification_tokens" ("token_hash")`,
     `CREATE TABLE IF NOT EXISTS "refresh_tokens" (
       "id" TEXT PRIMARY KEY,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
@@ -417,6 +423,62 @@ export function generateSqliteCoreTableStatements(): string[] {
     // without this one both cards scan the whole version history.
     `CREATE INDEX IF NOT EXISTS "nextly_versions_pending_edits_idx"
       ON "nextly_versions" ("is_autosave", "status", "version_no", "scope_slug", "updated_at", "id")`,
+    // "Last looked at" markers. Columns match schemas/version-views/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_version_views" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "part" TEXT,
+      "view_key" TEXT NOT NULL,
+      "version_no" INTEGER NOT NULL,
+      "previous_version_no" INTEGER,
+      "viewed_at" INTEGER NOT NULL,
+      "visit_started_at" INTEGER NOT NULL,
+      "created_at" INTEGER NOT NULL
+    )`,
+    // Over "view_key" alone: the digest is what one marker per person,
+    // document and part is enforced on.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_version_views_key_uidx"
+      ON "nextly_version_views" ("view_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_version_views_doc_idx"
+      ON "nextly_version_views" ("scope_kind", "scope_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_version_views_user_idx"
+      ON "nextly_version_views" ("user_id")`,
+    // The record of content events. Columns match
+    // schemas/content-events/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_content_events" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "subject_kind" TEXT NOT NULL,
+      "subject_slug" TEXT,
+      "subject_id" TEXT NOT NULL,
+      "kind" TEXT NOT NULL,
+      "ends_subject" INTEGER NOT NULL DEFAULT 0,
+      "ended_by" TEXT,
+      "actor_kind" TEXT NOT NULL,
+      "actor_id" TEXT,
+      "actor_principal_kind" TEXT,
+      "actor_name" TEXT,
+      "occurred_at" INTEGER NOT NULL,
+      "from_state" TEXT,
+      "to_state" TEXT,
+      "note" TEXT,
+      "version_no" INTEGER,
+      "payload" TEXT,
+      "definition_hash" TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_content_events_subject_idx"
+      ON "nextly_content_events" ("subject_kind", "subject_slug", "subject_id", "id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_content_events_ends_idx"
+      ON "nextly_content_events" ("ends_subject", "occurred_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_content_events_ended_by_idx"
+      ON "nextly_content_events" ("ended_by")`,
+    `CREATE TABLE IF NOT EXISTS "nextly_content_event_parts" (
+      "event_id" TEXT NOT NULL,
+      "part" TEXT NOT NULL,
+      PRIMARY KEY ("event_id", "part")
+    )`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -429,7 +491,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
-      "revision" INTEGER NOT NULL DEFAULT 0
+      "revision" INTEGER NOT NULL DEFAULT 0,
+      "kind" TEXT NOT NULL DEFAULT 'release'
     )`,
     `CREATE TABLE IF NOT EXISTS "nextly_release_members" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -440,6 +503,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "locale" TEXT,
       "action" TEXT NOT NULL,
       "member_key" TEXT NOT NULL,
+      "single_slot" INTEGER,
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
@@ -449,15 +513,44 @@ export function generateSqliteCoreTableStatements(): string[] {
     // appear on a database built by an earlier boot.
     `CREATE INDEX IF NOT EXISTS "nextly_releases_due_idx"
       ON "nextly_releases" ("state", "scheduled_at")`,
+    // A release is placed in time by its scheduled instant, or by the instant
+    // it went out once published; the calendar reads ranges of both.
+    `CREATE INDEX IF NOT EXISTS "nextly_releases_scheduled_idx"
+      ON "nextly_releases" ("scheduled_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_releases_published_idx"
+      ON "nextly_releases" ("published_at")`,
     // Over "member_key" alone: "locale" is nullable and SQLite treats NULL as
     // distinct from NULL, so a composite index over the source columns would
     // permit any number of unlocalized members for one document in one release.
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_release_members_key_uidx"
       ON "nextly_release_members" ("member_key")`,
+    // The one-member rule of a single release: a slot that is 1 for its
+    // member and NULL for every other, unique per release.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_release_members_single_uidx"
+      ON "nextly_release_members" ("release_id", "single_slot")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_doc_idx"
       ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "locale")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_release_idx"
       ON "nextly_release_members" ("release_id")`,
+    // Version pins. Columns match schemas/version-pins/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_version_pins" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "holder" TEXT NOT NULL,
+      "slot" TEXT NOT NULL,
+      "version_no" INTEGER NOT NULL,
+      "pin_key" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    // Over "pin_key" alone, for the reason "member_key" above is: the digest
+    // is what one slot per document per holder is enforced on.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_version_pins_key_uidx"
+      ON "nextly_version_pins" ("pin_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_version_pins_doc_idx"
+      ON "nextly_version_pins" ("scope_kind", "scope_slug", "entry_id")`,
     // Background jobs. Columns match schemas/jobs/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_jobs" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -578,6 +671,31 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "nsc_expires_at_idx"
       ON "${SPENT_CHALLENGES_TABLE}" ("expires_at")`,
+    // Each person's own notices. Columns match schemas/notices/sqlite.ts; each
+    // index is its own statement so a database built by an earlier boot still
+    // gains it.
+    `CREATE TABLE IF NOT EXISTS "${NOTICES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "kind" TEXT NOT NULL,
+      "subject_type" TEXT NOT NULL,
+      "subject_id" TEXT NOT NULL,
+      "occurrence" TEXT NOT NULL,
+      "dedupe_key" TEXT NOT NULL,
+      "data" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "read_at" INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_notices_dedupe_uidx"
+      ON "${NOTICES_TABLE}" ("dedupe_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_user_idx"
+      ON "${NOTICES_TABLE}" ("user_id", "read_at", "created_at", "id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_inbox_idx"
+      ON "${NOTICES_TABLE}" ("user_id", "created_at", "id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_subject_idx"
+      ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"
+      ON "${NOTICES_TABLE}" ("created_at")`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,

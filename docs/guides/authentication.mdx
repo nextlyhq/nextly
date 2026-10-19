@@ -17,7 +17,7 @@ There is no OAuth provider integration in the runtime. Authentication is local t
 
 Sessions use a two-token architecture:
 
-- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL, stateless verification (no database hit). Sent as the HTTP-only `nextly_session` cookie.
+- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL. Its signature is verified, and its account is checked to still be allowed to use it, read from the database at most once every five seconds per account (see [When an account may hold a session](#when-an-account-may-hold-a-session)). Sent as the HTTP-only `nextly_session` cookie.
 - **Refresh token** -- opaque random string, 7-day TTL, SHA-256 hashed in the database for revocation support. Sent as the HTTP-only `nextly_refresh` cookie, scoped to `/admin/api/auth` so that both refresh and sign-out receive it.
 
 When the access token expires, the admin UI silently refreshes it using the refresh token. Users only see a re-login prompt once the refresh token itself expires (7 days of inactivity by default). Every refresh consumes the old refresh token and issues a new one. A token whose row is gone is refused and logged as `refresh-token-not-found` (see [Refresh-token rotation](#refresh-token-rotation)).
@@ -26,11 +26,23 @@ Cookies are scoped to `/admin/*` so Nextly auth never collides with frontend app
 
 ### Reading the session in code
 
+Reading a session checks its account in the database, so Nextly must be
+initialised in the process first. Nextly's own routes start it themselves. In
+your own route, call `await getNextly({ config })` before `getSession` or
+`requireAuth`, or initialise Nextly at startup in `instrumentation.ts` with
+`createRegister(config)`. A session read in a process where Nextly has not
+been initialised fails with an internal error, and the server log names this
+fix, rather than answering without the check.
+
 ```typescript
 // app/api/my-route/route.ts
+import { getNextly } from "nextly";
 import { getSession } from "nextly/auth";
 
+import config from "../../../nextly.config";
+
 export async function GET(req: Request) {
+  await getNextly({ config });
   const result = await getSession(req, process.env.NEXTLY_SECRET ?? "");
 
   if (!result.authenticated) {
@@ -61,9 +73,13 @@ Custom user fields defined via `defineConfig({ users: { fields } })` are also su
 ### Requiring authentication
 
 ```typescript
+import { getNextly } from "nextly";
 import { requireAuth } from "nextly/auth";
 
+import config from "../../../nextly.config";
+
 export async function GET(req: Request) {
+  await getNextly({ config });
   // Throws AuthenticationError if no valid session.
   const user = await requireAuth(req, process.env.NEXTLY_SECRET ?? "");
   return Response.json({ email: user.email });
@@ -96,11 +112,29 @@ only. A refresh is not a password attempt, and neither is an external sign-in â€
 otherwise anyone who knew an address could lock its owner out of their provider
 by typing five wrong passwords.
 
-An account deactivated mid-session loses it at the next token refresh, which
-also deletes the refresh token and clears the cookies rather than leaving them
-to be retried. An access token already issued stays valid until it expires,
-within fifteen minutes; a token from the Direct API's `nextly.login()` is
-valid for 30 days and is not ended early.
+Deactivating an account, or an administrator setting its password, ends the
+sessions it already holds within ten seconds. Every access token issued to it
+before the change is refused wherever a session is read: `getSession` and
+`requireAuth`, `GET /auth/session`, a plugin's `ctx.auth.currentUser`, and the
+admin API. That includes a token from the Direct API's `nextly.login()`,
+which is otherwise valid for 30 days. The account's refresh tokens are
+deleted in the same change, so its next refresh is refused with
+`REFRESH_FAILED`. That answer clears no cookies: a missing refresh row is
+answered the same way as one another tab has just rotated, whose fresh
+cookies must survive. A client treats `REFRESH_FAILED` as signed out and
+sends the person to sign in again, as the admin does. Reactivating the
+account restores none of these sessions; its owner signs in again.
+
+The same applies when people change or reset their own password: their other
+sessions end with the old password.
+
+Each token carries a number the account's row also holds, and the change
+raises it, so the check compares the two rather than times. A server reads the
+row at most once every five seconds per account, so the instance that made
+the change refuses at once, and every other instance within the ten seconds.
+If the database cannot be read, the request fails rather than being answered
+as signed in or signed out. An installation upgrading to this release adds the
+column with `nextly migrate`, as for any new core column.
 
 A deactivation also outlasts the account's own links. While an administrator
 has an account switched off, following its verification link verifies the
@@ -135,13 +169,14 @@ See [plugin authentication](/docs/plugins/auth) for the full flow.
 
 ## Super-admin setup
 
-The first time someone visits `/admin`, the panel redirects them to `/admin/setup` (driven by `GET /api/auth/setup-status`). The form creates the first user, assigns the built-in `Super Admin` role, seeds the core permission rows, and logs the new admin in -- all in a single CSRF-protected request.
+The first time someone visits `/admin`, the panel redirects them to `/admin/setup` (driven by `GET /admin/api/auth/setup-status`). The form creates the first user, assigns the built-in `Super Admin` role, seeds the core permission rows, and logs the new admin in -- all in a single CSRF-protected request.
 
 A few things to note:
 
-- Setup is a one-shot. Once any user exists, `POST /api/auth/setup` returns `403 SETUP_COMPLETE`.
+- Setup is a one-shot. Once any user exists, `POST /admin/api/auth/setup` returns `403 SETUP_COMPLETE`.
 - Passwords are validated for strength (length, character classes) before hashing -- see `validatePasswordStrength` for the exact rules.
 - `Super Admin` is a system role that bypasses every permission check. Hand it out sparingly.
+- The last active super-admin can't be removed. Deleting them, deactivating them, or taking the role from them is refused with `409 CONFLICT` ("Make another user super-admin first"), whether the request comes from the admin, the REST API or the Direct API. A plugin may not make these writes to any super-admin account, so it gets `403 FORBIDDEN` instead. Only an active account holding the `Super Admin` role itself counts: not one that is a super-admin through a role built on it, since that role's inheritance can be edited away, and not a deactivated account. To remove that person, first give another user the `Super Admin` role. Two removals sent at once can't remove both of the last two.
 - For programmatic / test seeding, `seedSuperAdmin(adapter, { email, password, name? })` exists, but the recommended path is the setup wizard. It ships **no** default credentials -- `email` and `password` are required, and it throws a `VALIDATION_ERROR` if either is missing, so a known-weak default admin can never be created by accident. Pass throwaway values in tests and real, secret values anywhere else.
 
 ## Roles
@@ -153,6 +188,7 @@ The seeded `Super Admin` role bypasses every check. Other roles you create are g
 ### Checking roles in code
 
 ```typescript
+import { getNextly } from "nextly";
 import {
   getSession,
   hasRole,
@@ -160,7 +196,10 @@ import {
   hasAllRoles,
 } from "nextly/auth";
 
+import config from "../../../nextly.config";
+
 export async function GET(req: Request) {
+  await getNextly({ config });
   const result = await getSession(req, process.env.NEXTLY_SECRET ?? "");
   if (!result.authenticated) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -192,7 +231,7 @@ For the full RBAC reference (role hierarchy, the seeded permission inventory, si
 
 ## Code-defined access control
 
-You can attach access rules directly to collections and singles via `defineCollection({ access })`. Rules can be a boolean or a function that receives the request context -- they take precedence over database permissions, but Super Admin always bypasses everything.
+You can attach access rules directly to collections and singles via `defineCollection({ access })`. Rules can be a boolean or a function that receives the request context. A declared rule is what a signed-in user is judged by, so it checks the role's permission itself and only narrows from there; Super Admin always bypasses everything. Don't decide by a role's name: a custom role, or an API key, that holds the permission would be refused.
 
 ```typescript
 // src/collections/posts.ts
@@ -201,15 +240,13 @@ import { defineCollection } from "nextly/config";
 export default defineCollection({
   slug: "posts",
   access: {
-    // Boolean: any authenticated user can read
+    // Boolean: anyone, visitors included, can read
     read: true,
 
-    // Function: only admins and editors can create / update
-    create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-    update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-
-    // Function: only admins can delete
-    delete: ({ roles }) => roles.includes("admin"),
+    // Function: the caller's role holds the permission (`create-posts`, ...)
+    create: ({ permissions }) => permissions.includes("posts:create"),
+    update: ({ permissions }) => permissions.includes("posts:update"),
+    delete: ({ permissions }) => permissions.includes("posts:delete"),
   },
   fields: [
     // ...
@@ -246,7 +283,7 @@ When a request includes a `Bearer` token, the auth middleware:
 ```typescript
 // Client-side usage
 const response = await fetch(
-  "https://example.com/api/nextly/collections/posts/entries",
+  "https://example.com/admin/api/collections/posts/entries",
   {
     headers: {
       Authorization: "Bearer nx_live_<random>...",
@@ -265,9 +302,41 @@ Failed logins are tracked per-user. After 5 consecutive failures, the account is
 
 Every login response is held for at least 500ms regardless of whether the account exists. This prevents email enumeration via response timing.
 
-### Per-IP auth-rate-limit
+### Auth rate limit
 
-A separate per-IP envelope rate-limits `/auth/login`, `/auth/register`, `/auth/forgot-password`, `/auth/verify-email/resend`, `/auth/verify-email`, `/auth/reset-password`, `/auth/accept-invite`, `/auth/challenge/resolve` and `/auth/set-initial-password`, sharing one budget per IP (default: 30 requests/hour, configurable via `security.authRateLimit`). This stops credential-stuffing attacks from a single source even before per-user lockout kicks in.
+A separate rate limit guards `/auth/login`, `/auth/register`, `/auth/forgot-password`, `/auth/verify-email/resend`, `/auth/verify-email`, `/auth/reset-password`, `/auth/accept-invite`, `/auth/challenge/resolve` and `/auth/set-initial-password`. It stops credential stuffing before per-user lockout kicks in. The budget is 30 requests an hour by default, set with `security.authRateLimit`; `requestsPerHour: 0` turns it off. What it counts against depends on whether Nextly can read the client's address.
+
+**When the client address can be read**, every request from that address counts against one budget, across all of these routes. An address can be read only when `security.trustProxy` is `true` and the request came through a proxy that reports the client (see [Deployment](/docs/guides/deployment#client-addresses-and-the-auth-rate-limit)).
+
+**When it cannot**, which is every request while `security.trustProxy` is unset (the default), each request counts against the account it names instead:
+
+| Request | Counts against |
+|---|---|
+| Sign-in, registration, password-reset request, verification resend | The email address in the body, compared the way sign-in compares it (case and surrounding spaces ignored), whether or not an account has it. |
+| Password reset, email verification, invite acceptance, second-factor answer, initial-password set | The account the request's token belongs to. |
+| A body that names no address, or a token that belongs to no account | One shared account-less budget. |
+
+Sign-in is keyed on the `email` its body carries, which is what the built-in password strategy reads. A [custom strategy](/docs/plugins/auth#naming-the-account-to-the-sign-in-rate-limit) that signs people in from something else, such as a username or an OAuth code, names what it reads with `limitKey`, and its sign-ins are then keyed on that, in a budget of their own per name; rotating the `email` buys nothing. A strategy without `limitKey` leaves the limiter unable to tell which strategy will handle a sign-in, so sign-ins are keyed on the `email` they carry, one that carries none counts against the account-less budget below (30 an hour by default), and the server names that strategy at startup. Behind a proxy, `security.trustProxy` keeps every strategy's sign-in per client instead.
+
+Each account, and the account-less budget, gets the configured budget (30 an hour by default). All of these requests together are also held to a ceiling of 100 times that budget (3,000 an hour by default), so inventing addresses buys no extra attempts. A request whose address can be read never counts against the ceiling.
+
+These counts are kept per server process unless the app gives `rateLimit.store` a store object of its own that every instance shares, such as one backed by Redis ([`rateLimit`](/docs/configuration/nextly-config#ratelimit)). The built-in `"database"` [limit store](/docs/configuration/limit-store) does not count sign-in limits yet. On Vercel, or any deployment with more than one instance, each instance otherwise counts on its own, so every budget and the ceiling are multiplied by the number of instances. Configure a shared store object wherever the limits must hold as written.
+
+What happens when each is spent. Each refused request is answered with `429` and a `Retry-After` header saying when to try again. With Nextly's own counts, that is when the oldest counted request leaves the window (an hour by default). A store object of your own keeps its own window and reports when it resets. One without `consume` also counts the requests it refuses, so, depending on how it keeps its window, a client that keeps retrying can keep its budget spent.
+
+- **An account's budget:** requests naming that account are refused. Other accounts are unaffected until the ceiling is met.
+- **The account-less budget:** requests that name no account, or carry a token that matches none, are refused. Requests that name an account are unaffected.
+- **The ceiling:** every request whose address cannot be read is refused, whatever it names. Requests whose address can be read are unaffected.
+
+A request its own budget refuses can still count toward the ceiling, so the ceiling can be met by requests that are themselves refused:
+
+- On the token routes (password reset, email verification, invite acceptance, second-factor answer, initial-password set), a request that carries a token spends a ceiling place before the token is looked up, because that lookup is the work the ceiling bounds. It has spent it whether the token turns out to belong to an account or to none.
+- With a shared store object, two requests for the same account that arrive together can both pass the check for its last place, and the one then refused has spent a ceiling place.
+- With a store object that has no `consume`, every refused request counts toward the ceiling.
+
+Two limits remain while addresses cannot be read. Someone who knows an address can spend that one account's budget and hold its sign-in shut for the window. Someone sending requests at the ceiling's rate can hold every unreadable-address sign-in shut for as long as they keep it up. Making client addresses readable removes both.
+
+Nextly says when it is counting this way. Starting on Vercel with `security.trustProxy` unset logs a warning naming the setting. The first auth request that arrives with proxy headers (`x-forwarded-for`, `cf-connecting-ip` or `x-real-ip`) but still yields no address logs one warning per process, naming `security.trustProxy` and `TRUSTED_PROXY_IPS`.
 
 ### CSRF protection
 
@@ -281,7 +350,7 @@ Two refreshes presenting the same token get one rotation. The one that loses the
 
 ### Session revocation on password change and deactivation
 
-Every password write ends the account's sessions: an administrator setting it (`updateUser` or `PATCH /api/users/:id/password`), the user changing their own, a reset, accepting an invite, and setting an initial password. Deactivating an account does the same. Each deletes all of the account's refresh tokens in the same transaction as the write, forcing re-login on every device.
+Every password write ends the account's sessions: an administrator setting it (`updateUser` or `PATCH /admin/api/users/:id/password`), the user changing their own, a reset, accepting an invite, and setting an initial password. Deactivating an account does the same. Each deletes all of the account's refresh tokens in the same transaction as the write, forcing re-login on every device.
 
 ## Password management
 
@@ -345,24 +414,24 @@ openssl rand -base64 32
 
 | Method | Path                           | Description                                  |
 |--------|--------------------------------|----------------------------------------------|
-| GET    | `/api/auth/setup-status`       | Has the first user been created?             |
-| GET    | `/api/auth/session`            | Get the current session.                     |
-| GET    | `/api/auth/csrf`               | Mint a CSRF token.                           |
-| GET    | `/api/auth/pending`            | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
-| GET    | `/api/auth/ui`                 | The login page's provider buttons, challenge views and slots. |
-| POST   | `/api/auth/setup`              | Create the first super-admin (auto-logs in). |
-| POST   | `/api/auth/login`              | Email + password login.                      |
-| POST   | `/api/auth/challenge/resolve`  | Answer a second factor with the pending token. |
-| POST   | `/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. |
-| POST   | `/api/auth/logout`             | Revoke the current session.                  |
-| POST   | `/api/auth/refresh`            | Rotate access + refresh tokens.              |
-| POST   | `/api/auth/register`           | User registration.                           |
-| PATCH  | `/api/auth/change-password`    | Change password (auth required).             |
-| POST   | `/api/auth/forgot-password`    | Request a password-reset email.              |
-| POST   | `/api/auth/reset-password`     | Reset password with the email token.         |
-| POST   | `/api/auth/accept-invite`      | Set a password from an invite link.          |
-| POST   | `/api/auth/verify-email`       | Verify email with the email token.           |
-| POST   | `/api/auth/verify-email/resend`| Resend the verification email.               |
+| GET    | `/admin/api/auth/setup-status`       | Has the first user been created?             |
+| GET    | `/admin/api/auth/session`            | Get the current session.                     |
+| GET    | `/admin/api/auth/csrf`               | Mint a CSRF token.                           |
+| GET    | `/admin/api/auth/pending`            | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
+| GET    | `/admin/api/auth/ui`                 | The login page's provider buttons, challenge views and slots. |
+| POST   | `/admin/api/auth/setup`              | Create the first super-admin (auto-logs in). |
+| POST   | `/admin/api/auth/login`              | Email + password login.                      |
+| POST   | `/admin/api/auth/challenge/resolve`  | Answer a second factor with the pending token. |
+| POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. |
+| POST   | `/admin/api/auth/logout`             | Revoke the current session.                  |
+| POST   | `/admin/api/auth/refresh`            | Rotate access + refresh tokens.              |
+| POST   | `/admin/api/auth/register`           | User registration.                           |
+| PATCH  | `/admin/api/auth/change-password`    | Change password (auth required).             |
+| POST   | `/admin/api/auth/forgot-password`    | Request a password-reset email.              |
+| POST   | `/admin/api/auth/reset-password`     | Reset password with the email token.         |
+| POST   | `/admin/api/auth/accept-invite`      | Set a password from an invite link.          |
+| POST   | `/admin/api/auth/verify-email`       | Verify email with the email token.           |
+| POST   | `/admin/api/auth/verify-email/resend`| Resend the verification email.               |
 
 ## Next steps
 

@@ -21,6 +21,7 @@ import type {
   UploadResult,
   BulkDeleteResult,
   StorageReadOptions,
+  StoredFileEntry,
 } from "nextly/storage";
 import {
   fetchStoredBytes,
@@ -89,13 +90,14 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
 
   /**
    * Delete file from Uploadthing by its file key.
+   *
+   * A key already gone is not an error: UploadThing answers it with nothing
+   * deleted. A rejection is a failure (an outage, a refused token, a rate
+   * limit) that leaves the file publicly stored, so it reaches the caller,
+   * which retries it and names the file when it gives up.
    */
   async delete(filePath: string): Promise<void> {
-    try {
-      await this.utapi.deleteFiles([filePath], { keyType: "fileKey" });
-    } catch {
-      // Silently ignore deletion errors (file may already be gone)
-    }
+    await this.utapi.deleteFiles([filePath], { keyType: "fileKey" });
   }
 
   /**
@@ -215,6 +217,27 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
    * Uploadthing files are served from utfs.io CDN.
    * The URL is stored at upload time, so this reconstructs it from the key.
    */
+  /**
+   * Every uploaded file in the app, by its key, with the name it was uploaded
+   * under and when, a page at a time. A file still uploading, failed, or
+   * pending deletion is not a stored file.
+   */
+  async *list(): AsyncIterable<StoredFileEntry> {
+    const limit = 500;
+    for (let offset = 0; ; offset += limit) {
+      const page = await this.utapi.listFiles({ limit, offset });
+      for (const file of page.files) {
+        if (file.status !== "Uploaded") continue;
+        yield {
+          path: file.key,
+          name: file.name,
+          lastModified: new Date(file.uploadedAt),
+        };
+      }
+      if (!page.hasMore) return;
+    }
+  }
+
   getPublicUrl(filePath: string): string {
     // Uploadthing URLs follow the pattern: https://utfs.io/f/{fileKey}
     return `https://utfs.io/f/${filePath}`;

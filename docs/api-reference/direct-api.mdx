@@ -51,7 +51,7 @@ const invalid = await nextly.find({ collection: "nonexistent" });
 // Type error: collection slug not in the generated union.
 ```
 
-The generator writes a `payload-types.ts` (or whatever path you set in `typescript.outputFile`) that augments the runtime's `GeneratedTypes` interface via `declare module "nextly"`. See [Configuration → typescript](/docs/configuration/nextly-config) for the config surface.
+The generator writes a `nextly-types.ts` (or whatever path you set in `typescript.outputFile`) that augments the runtime's `GeneratedTypes` interface via `declare module "nextly"`. See [Configuration → typescript](/docs/configuration/nextly-config) for the config surface.
 
 ## Access control
 
@@ -301,8 +301,9 @@ buckets you get back are genuinely the largest. `truncated` is `true` when the
 cap left some out; a chart drawn from a capped set is not the whole picture, so
 show that rather than hiding it.
 
-Some fields cannot be grouped, and the refusal names the reason: a field with a
-read rule, any spelling of it, a password field, the owner column, a field
+Some fields cannot be grouped, and the refusal names the reason: a field whose
+read rule does not let the caller read it (or lets them read it only on some
+entries), under any spelling, a password field, the owner column, a field
 transformed by an `afterRead` hook, and anything stored as JSON. Buckets are the
 distinct values of a column, so grouping publishes the whole value set in one
 request where a `where` yields it one probe at a time.
@@ -547,7 +548,7 @@ The Direct API exposes auth operations as methods on the root `nextly` object. T
 
 ### login
 
-Verify credentials and issue a signed JWT. The token expiry is 30 days. The Direct API does **not** set cookies — that responsibility belongs to your route handler / server action wrapper.
+Verify credentials and issue a signed JWT. The token expiry is 30 days, and it ends earlier, within ten seconds, if the account is deactivated or an administrator sets its password ([Authentication](/docs/guides/authentication)). The Direct API does **not** set cookies — that responsibility belongs to your route handler / server action wrapper.
 
 ```typescript
 const result = await nextly.login({
@@ -695,7 +696,7 @@ The full TypeScript surface is generated from [`packages/nextly/src/direct-api/n
 | `less_than` | `<` | `{ price: { less_than: 50 } }` |
 | `less_than_equal` | `<=` | `{ price: { less_than_equal: 50 } }` |
 | `like` | SQL `LIKE` (case-sensitive) | `{ title: { like: "%hello%" } }` |
-| `contains` | Case-insensitive substring (`ILIKE`) | `{ title: { contains: "hello" } }` |
+| `contains` | Substring, ignoring case on every database; `%` and `_` are matched as typed | `{ title: { contains: "hello" } }` |
 | `search` | Alias for `contains` | `{ title: { search: "hello" } }` |
 | `in` | Value in array | `{ status: { in: ["draft", "published"] } }` |
 | `not_in` | Value not in array | `{ status: { not_in: ["archived"] } }` |

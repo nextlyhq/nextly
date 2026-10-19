@@ -63,7 +63,7 @@ async function signIn(
 export default definePlugin({
   name: "@acme/accounts",
   version: "1.0.0",
-  nextly: ">=0.0.0",
+  nextly: ">=0.0.2-alpha.67",
   init(ctx) {
     ctx.logger.info(`passwords up to ${ctx.security.passwords.ceiling} characters`);
     void signUp;

@@ -86,6 +86,9 @@ export type {
   PluginEmailTemplate,
   PluginFieldType,
   PluginFieldValidateArgs,
+  PluginFieldWrite,
+  PluginStoredValue,
+  PluginStoredValueTarget,
   PluginFieldInstance,
   PluginFieldIssue,
   PluginFieldValidationResult,
@@ -111,6 +114,8 @@ export type {
   PluginAdminQuerylessWidget,
   DeclarativeWidgetArchetype,
   PluginCollectionView,
+  PluginDocumentView,
+  PluginFieldTypeDocumentView,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";
@@ -124,6 +129,7 @@ export type {
   PluginRouteHandler,
   PluginRouteMount,
   PluginRouteRateLimit,
+  PluginRouteLimitKey,
   Middleware,
   RouteMethod,
 } from "./routes/route-types";

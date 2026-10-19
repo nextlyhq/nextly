@@ -23,6 +23,12 @@ export interface VerifiedUser {
    * been set again by the time its refresh row is written.
    */
   passwordUpdatedAt: Date | null;
+  /**
+   * The account's session epoch, read with the hash the password matched;
+   * absent when the lookup did not read it, in which case the sign-in judges
+   * against the epoch its own account read finds.
+   */
+  sessionEpoch?: number;
 }
 
 /**
@@ -50,6 +56,12 @@ export interface CredentialUserRow {
   deactivatedAt: Date | null;
   /** When the password was last set; null when it never has been. */
   passwordUpdatedAt: Date | null;
+  /**
+   * How many times the account's sessions have been ended. Null on a row
+   * from before the column existed, which is epoch zero. Absent from a lookup
+   * that does not read it, which says nothing about the epoch.
+   */
+  sessionEpoch?: number | null;
 }
 
 /** What a password sign-in needs from the database, and its limits. */
@@ -183,5 +195,10 @@ export async function verifyCredentials(
     isActive: user.isActive,
     mustChangePassword: user.mustChangePassword ?? false,
     passwordUpdatedAt: user.passwordUpdatedAt,
+    // Unread is not zero: read as zero, every password sign-in of an account
+    // whose sessions had ever been ended would be refused.
+    ...(user.sessionEpoch === undefined
+      ? {}
+      : { sessionEpoch: Number(user.sessionEpoch ?? 0) }),
   };
 }

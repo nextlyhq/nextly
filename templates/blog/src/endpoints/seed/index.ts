@@ -74,7 +74,7 @@ const TEMPLATE_ROLES = [
     slug: "author",
     name: "Author",
     description:
-      "Can draft and edit their own posts. Reads published posts and taxonomy.",
+      "Can draft and edit posts, but not publish or delete them. Reads taxonomy.",
     level: 10,
   },
 ] as const;
@@ -133,6 +133,15 @@ async function findUserByEmail(
 }
 
 /**
+ * The only posts permissions the author role is given. Named rather than
+ * withheld, so an action a site adds later (`manage-posts`, say) is not
+ * handed to authors by default. Access rules cannot tell an author's own post
+ * from anyone else's, so delete or publish would reach every post (see
+ * pickPermissionIdsForRoles).
+ */
+const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
+
+/**
  * Pick permission IDs appropriate for each role. Fetches the catalog of
  * auto-generated collection/single permissions (registered by Nextly
  * during collection sync) and slices it per role scope.
@@ -140,14 +149,16 @@ async function findUserByEmail(
  * - admin: every permission in the system (broad default - tighten via
  *   /admin/roles/<slug> after seeding).
  * - editor: content + media permissions.
- * - author: posts + media (create/read) and read-only access to the
- *   content taxonomy.
+ * - author: posts (create, read, update) + media and read-only access to
+ *   the content taxonomy. No delete or publish on posts: access rules
+ *   cannot tell an author's own post from anyone else's, so either
+ *   permission would reach every post. An editor publishes.
  *
  * Returns an empty array if fetching permissions fails; callers still
  * get a "at least one permission required" error from the core service
  * in that case and the role will be skipped with a warning.
  */
-async function pickPermissionIdsForRoles(
+export async function pickPermissionIdsForRoles(
   nextly: Nextly
 ): Promise<Record<string, string[]>> {
   const out: Record<string, string[]> = { admin: [], editor: [], author: [] };
@@ -171,7 +182,8 @@ async function pickPermissionIdsForRoles(
       .filter(p => {
         const resource = (p as { resource?: string }).resource;
         const action = (p as { action?: string }).action;
-        if (resource === "posts" || resource === "media") return true;
+        if (resource === "media") return true;
+        if (resource === "posts") return AUTHOR_POST_ACTIONS.has(action ?? "");
         if (
           (resource === "categories" || resource === "tags") &&
           action === "read"
@@ -422,8 +434,8 @@ async function resolveSeedMedia(
     }
     const arrayBuffer = await res.arrayBuffer();
     return { buffer: Buffer.from(arrayBuffer), source: "remote" };
-  } catch (err) {
-    // One network-level retry
+  } catch {
+    // One network-level retry: the first failure's reason is not needed to try again.
     try {
       const res = await attempt();
       if (!res.ok) {

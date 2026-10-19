@@ -57,12 +57,15 @@ export default defineSingle({
   ],
   access: {
     read: true,
-    update: ({ roles }) => roles.includes("admin"),
+    update: ({ permissions }) => permissions.includes("site-settings:update"),
   },
   hooks: {
     afterChange: [
       async ({ data }) => {
-        await fetch("/api/revalidate?tag=site-settings", { method: "POST" });
+        // Nextly invalidates its own cache tags on every write once the cache
+        // revalidator is registered (see ISR caching). Use hooks for side
+        // effects of your own.
+        console.info("site settings updated", data);
       },
     ],
   },
@@ -96,7 +99,7 @@ The Nextly admin panel ships with a Visual Schema Builder for creating singles w
 5. Configure access control and hooks through the UI.
 6. Click **Save**.
 
-The Schema Builder produces the same `SingleConfig` that code-first singles use. Builder-created singles can be exported to TypeScript at any time.
+The Schema Builder produces the same `SingleConfig` that code-first singles use. Unlike a collection, a builder-created single has no command that moves it into code.
 
 </Tab>
 </Tabs>
@@ -111,7 +114,7 @@ The Schema Builder produces the same `SingleConfig` that code-first singles use.
 | **Access control operations** | `create`, `read`, `update`, `delete` | `read`, `update` only |
 | **Hooks** | 8 hooks | 4 hooks (`beforeRead`, `afterRead`, `beforeChange`, `afterChange`) |
 | **Default table prefix** | None — uses slug as table name | `single_` (e.g. `single_site_settings`) |
-| **API endpoint** | `/api/[slug]` | `/api/singles/[slug]` |
+| **API endpoint** | `/admin/api/collections/[slug]/entries` | `/admin/api/singles/[slug]` |
 
 ## Single options
 
@@ -202,11 +205,12 @@ Singles only support `read` and `update` — there is no create or delete since 
 ```typescript
 access: {
   read: true,
-  update: ({ roles }) => roles.includes("admin"),
+  update: ({ permissions, collection }) =>
+    permissions.includes(`${collection}:update`),
 }
 ```
 
-Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. Code-defined access takes precedence; super-admin always bypasses checks. The `AccessControlContext` shape is the same as for [collections](/docs/configuration/collections#access-control).
+Each operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to database role/permission checks. A declared rule is what a signed-in user is judged by, so it checks the permission itself and narrows from there; don't decide by a role's name. Super-admin always bypasses checks. The `AccessControlContext` shape is the same as for [collections](/docs/configuration/collections#access-control).
 
 ## Hooks
 
@@ -247,8 +251,14 @@ What a `beforeChange` handler returns is written without being re-validated.
 hooks: {
   afterChange: [
     async ({ data }) => {
-      // Invalidate ISR / CDN caches when settings change
-      await fetch("/api/revalidate?tag=site-settings", { method: "POST" });
+      // Nextly's own cache tags are already invalidated on every write once
+      // the cache revalidator is registered (see ISR caching). Notify a
+      // system of your own here, with an absolute URL: a relative fetch
+      // throws on the server.
+      await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/my-webhook`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
     },
   ],
   afterRead: [
@@ -295,7 +305,7 @@ export default defineSingle({
   ],
   access: {
     read: true,
-    update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+    update: ({ permissions }) => permissions.includes("header:update"),
   },
 });
 ```

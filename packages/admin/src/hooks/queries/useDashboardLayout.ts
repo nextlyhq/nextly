@@ -54,17 +54,10 @@ const LAYOUT_PATH = "/dashboard/layout";
 
 /** What a save sends. Both guards, always — neither is optional server-side. */
 export interface SaveLayoutInput {
+  /** The WHOLE ordered list, removed cards included: the order is the array's. */
   placements: WidgetPlacement[];
   version: number;
   scope: string;
-  /**
-   * The column count this arrangement was made in.
-   *
-   * Sent WITH the placements rather than saved separately: a placement's
-   * `column` only means anything against a count, so two writes could leave a
-   * row whose cards name columns the count does not have.
-   */
-  columnCount: number;
   /**
    * Whether this write is the reader TAKING CHARGE of their arrangement.
    *
@@ -79,6 +72,24 @@ export interface SaveLayoutInput {
    * kind of write by forgetting to say which kind it is.
    */
   arranged: boolean;
+  /**
+   * The reader confirmed replacing a stored arrangement the server could not
+   * read. The server refuses a save over such a row without it, so it is sent
+   * only after the reader was asked.
+   */
+  replaceUnreadable?: boolean;
+}
+
+/**
+ * What a saved reset sends: the guards the reset was STAGED against.
+ *
+ * A reset is staged in customise mode and saved later, so the version and scope
+ * it travels with are the draft's, not whatever the last refetch produced. The
+ * server refuses the delete, removing nothing, when either has moved.
+ */
+export interface ResetLayoutInput {
+  version: number;
+  scope: string;
 }
 
 export interface UseDashboardLayoutResult {
@@ -92,7 +103,7 @@ export interface UseDashboardLayoutResult {
    */
   isUnavailable: boolean;
   save: UseMutationResult<unknown, Error, SaveLayoutInput>;
-  reset: UseMutationResult<unknown, Error, void>;
+  reset: UseMutationResult<unknown, Error, ResetLayoutInput>;
   /**
    * The write a standing dismiss performs, separate from the editor's save.
    *
@@ -123,18 +134,26 @@ export interface UseDashboardLayoutResult {
    * Whether a row exists for this reader to reset.
    *
    * 🔴 A non-zero VERSION, which is not the same as `source === "own"`. A row
-   * the service could not decode is reported as `source: "default"` — the
-   * dashboard falls back to the registry's order — while keeping its real,
-   * non-zero version. Asked of the source instead, the one control that could
-   * clear the bad row was hidden, and with an untouched draft Save is disabled
-   * too, so the reader had no way out and every read went on logging the same
-   * decode failure.
+   * the service could not decode is reported as `source: "unreadable"` — the
+   * dashboard falls back to the default — while keeping its real, non-zero
+   * version. Asked of `"own"` instead, the one control that could clear the
+   * bad row was hidden, and with an untouched draft Save is disabled too, so
+   * the reader had no way out and every read went on logging the same decode
+   * failure.
    *
    * Answered HERE rather than by each caller, because it is a fact about what
    * the read found and the subtlety above is one nobody should have to
    * re-derive.
    */
   hasStoredRow: boolean;
+  /**
+   * Whether the reader has a stored arrangement the server could not read.
+   *
+   * They are being shown the default in its place, and a save replaces the
+   * stored row only once they confirm it; any single-card write is refused
+   * until then.
+   */
+  isUnreadable: boolean;
   /**
    * Whether ANY write against this layout is in flight.
    *
@@ -159,8 +178,14 @@ export interface UseDashboardLayoutResult {
   reload: () => Promise<unknown>;
 }
 
-/** Whether a failed write was a lost race rather than a broken request. */
-function isConflictError(error: Error | null): boolean {
+/**
+ * Whether a failed write was a lost race rather than a broken request.
+ *
+ * Exported for a caller that has to tell the reader which of the two just
+ * happened to a write it made: the same rule the `isConflict` flag reads, so
+ * the two cannot disagree.
+ */
+export function isConflictError(error: Error | null): boolean {
   if (!error) return false;
   // The status is what the server actually distinguishes on; the message is
   // human copy that may be translated or reworded. Read the code where one is
@@ -318,7 +343,17 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
   const dismiss = useMutation(writeLayout);
 
   const reset = useMutation({
-    mutationFn: () => protectedApi.delete<unknown>(LAYOUT_PATH),
+    // Query parameters rather than a body: some clients and proxies drop a
+    // DELETE body, and the guards are what stop a stale tab deleting an
+    // arrangement another tab saved. `URLSearchParams` encodes the opaque
+    // scope token, which may hold characters a raw query string would mangle.
+    mutationFn: (input: ResetLayoutInput) =>
+      protectedApi.delete<unknown>(
+        `${LAYOUT_PATH}?${new URLSearchParams({
+          version: String(input.version),
+          scope: input.scope,
+        }).toString()}`
+      ),
     // Idempotent by design — deleting a row that is already gone is the same
     // answer — but retried silently it would still hide a server that is
     // failing, and the reader would watch a spinner rather than a message.
@@ -337,6 +372,7 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     dismiss,
     ...writeState(save, reset, dismiss),
     hasStoredRow: (query.data?.version ?? 0) > 0,
+    isUnreadable: query.data?.source === "unreadable",
     cached,
     reload: invalidate,
   };

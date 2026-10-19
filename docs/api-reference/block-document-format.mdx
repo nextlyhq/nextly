@@ -16,16 +16,10 @@ writing a page, or a build step reading one.
 This is the document format of `@nextlyhq/blocks-engine`. It is what the
 `blocks` field stores and what `@nextlyhq/blocks-react` renders.
 
-**The `@nextlyhq/plugin-page-builder` editor does not currently write this
-format.** Its canvas stores a different, internal shape — a single `root`
-container under a `version` key — and there is no adapter between the two. That
-editor is a proof of concept being replaced, and the replacement writes this
-format; until then, a document saved by that canvas will not validate here, and
-that is expected rather than a defect in either.
-
-So: use this specification for the `blocks` field, for the engine, for the
-renderer, and for anything you generate yourself. Do not use it to read what the
-legacy page-builder canvas has already saved.
+The `@nextlyhq/plugin-page-builder` editor writes this format too: its `pages`
+collection stores each page in a `blocks` field named `content`. Use this
+specification for that field, for the engine, for the renderer, and for anything
+you generate yourself.
 
 ## Checking a document
 

@@ -12,29 +12,388 @@ can put new pages live and retire old ones in the same moment.
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | No plugin required |
-| Admin | A **Releases** section with a calendar view, and an "Add to release" action on documents |
-| Permission | Scheduling requires publish access. A key scoped only to publishing releases can schedule without holding a general read grant |
+|            |                                                                                                                                                                                           |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Built in   | No plugin required                                                                                                                                                                        |
+| Admin      | A **Releases** section with a calendar view, and an "Add to release" action on documents                                                                                                  |
+| Permission | Scheduling requires publish access. A key scoped only to publishing releases can schedule without holding a general read grant. Renaming and deleting each have a permission of their own |
 
 ## What it is not
 
 <Callout type="warn">
-This is **scheduled publishing**, not an approval workflow. There are no review stages,
-transitions or assignees. If you need "editor submits, manager approves, then it goes
-live", that is not what a release does.
+  This is **scheduled publishing**, not an approval workflow. There are no
+  review stages, transitions or assignees. If you need "editor submits, manager
+  approves, then it goes live", that is not what a release does.
 </Callout>
 
 ## The shape of a release
 
-| Step | What happens |
-|---|---|
-| Create | An empty release with a name |
-| Add members | Each member names a document and an action, `publish` or `unpublish` |
-| Schedule | The release is given a time. Blocking problems are checked first |
-| Apply | On a background-jobs pass after that time, every member's action is applied |
-| Cancel | An unapplied release can be cancelled |
+| Step        | What happens                                                                |
+| ----------- | --------------------------------------------------------------------------- |
+| Create      | An empty release with a name                                                |
+| Add members | Each member names a document and an action, `publish` or `unpublish`        |
+| Schedule    | The release is given a time. Its documents are checked first                |
+| Apply       | On a background-jobs pass after that time, every member's action is applied |
+| Publish now | A draft or scheduled release is run at once instead of waiting for its time |
+| Cancel      | An unapplied release can be cancelled                                       |
+| Rename      | The title and description can be changed in any state                       |
+| Delete      | A draft, or a release cancelled before it was scheduled, can be deleted     |
+
+A document is checked when it is added, the same way over REST and from the Direct API. It
+must exist, and the person adding it must be allowed to read it. Its collection or Single
+must have drafts, since a release moves documents between draft and published. A Single is
+recorded by its own stored row, whatever id the caller passed. A trusted Direct API call
+(`overrideAccess`, the default) skips only the read permission. The document still has to
+exist and have drafts.
+
+### How many documents a release holds
+
+A release holds at most 200 documents. A release goes out all together, and 200 is the size
+measured to publish within one pass of the job runner on every supported database, so a full
+release on its own never waits for a second pass. The limit is per release: releases that
+share a document and come due in the same pass are settled together, as one piece, so such a
+group takes as long as all of its documents together. That includes releases scheduled for
+different times when the runner reaches them both after their times have passed. Adding a document to a full release is refused with a
+conflict that says no more fit, and the release's `can.addMember` is false.
+
+A release made before this limit and holding more than 200 keeps working: it runs as
+scheduled, and documents can be removed from it, but none can be added. The limit is
+exported as `RELEASE_MEMBER_LIMIT` from `nextly/schemas`.
+
+### Single-document releases
+
+A release has a kind, set when it is made and never changed:
+
+- `release`, the default, holds up to 200 documents;
+- `single` is one document scheduled on its own, and holds exactly that one.
+
+```ts
+const release = await nextly.releases.create({
+  title: "Launch post",
+  kind: "single",
+});
+```
+
+The database holds a single-document release to one document, so the rule holds even when two
+requests add documents to it at once. Adding a second document is refused with a conflict that says to
+put several documents in an ordinary release instead. A single-document release can't be
+scheduled before its document is added. Once it's scheduled, its document can't be taken out:
+cancel the release instead. Releases made before kinds existed read as
+`release`; `nextly migrate` adds the column without rewriting them. The `kind` option is
+experimental.
+
+## Publish now
+
+<Callout type="info">
+  Publish now is **experimental**: its name and answer may change before
+  releases are finished.
+</Callout>
+
+Publish now runs a draft or scheduled release straight away. It makes the same checks as
+scheduling, so a release that would stop part-way is refused before any document is written.
+Then it moves the release to the current time, unless its time has already come, and starts
+the job runner's releases run at once, the same run a scheduled time gets: every document is
+written as the person who added it, and the release goes out together.
+Publish now judges each member by its author, as the scheduled run does.
+
+|            |                                             |
+| ---------- | ------------------------------------------- |
+| REST       | `POST /api/releases/:id/publish`            |
+| Direct API | `nextly.releases.publishNow({ id })`        |
+| Permission | The same as scheduling: publishing releases |
+
+The answer is the release as it then stands. Usually that is `published`, or `blocked` if a
+document stopped it part-way. It is still `scheduled` when a very large release outlasts the
+request, when a releases run was already in progress, or when the run could not be started:
+the release is then due, and goes out with that run or the job runner's next pass.
+
+Like any releases run, it sends out every release whose time has come, not only this one, so
+a release that was already overdue goes out with it.
+
+## Releases that ran are final
+
+A **published** release is the record of what went live, and a **cancelled** one the record
+of a launch called off. Neither changes again: no documents are added or removed, it is not
+scheduled again, and Publish now refuses it. To try again, create a new release. Either can
+still be renamed. A published one is never deleted, and neither is a cancelled one that was
+ever scheduled.
+
+A **stopped** release has not run. Remove or fix the documents that stopped it, then schedule
+it again. Publish now refuses it until then, so the fix is checked before anything goes out.
+
+## Renaming and deleting a release
+
+<Callout type="info">
+  Renaming and deleting are **experimental**: their names and answers may change
+  before releases are finished.
+</Callout>
+
+A release's title and description can be changed in any state, by anyone holding
+`update-content-releases`. A draft, or a release cancelled before it was ever scheduled, can be
+deleted, documents and all, by anyone holding `delete-content-releases`.
+
+|            | Rename                                                        | Delete                           |
+| ---------- | ------------------------------------------------------------- | -------------------------------- |
+| REST       | `PATCH /api/releases/:id` with `title`, `description` or both | `DELETE /api/releases/:id`       |
+| Direct API | `nextly.releases.update({ id, title, description })`          | `nextly.releases.delete({ id })` |
+| Permission | `update-content-releases`                                     | `delete-content-releases`        |
+
+A rename answers with the release as it now reads, and a delete with the release as it was,
+each in the usual `{ message, item }` envelope. The title follows the rules creating a
+release uses: it can't be empty, and it can be at most 255 characters. A `description` of `null`
+clears it. A body that names any other field is refused, since a state is changed by its own
+route. A rename that changes nothing writes nothing.
+
+Only a release that never ran can be deleted: a draft, or one cancelled while it was still a
+draft. Each refusal answers `409 Conflict`, with the reason in the error's `data.reason`:
+
+| `reason`        | The release                         | What to do                           |
+| --------------- | ----------------------------------- | ------------------------------------ |
+| `committed`     | Is scheduled or stopped             | Cancel it to call it off; it is kept |
+| `published`     | Has been published                  | Nothing: it is kept for good         |
+| `was-scheduled` | Was cancelled after being scheduled | Nothing: it is kept as a record      |
+
+A cancelled release that was ever scheduled is kept because nothing stored says whether it began
+to run. One that stopped part-way, after some of its documents went live, and was then cancelled
+looks like any other cancelled release. Deleting a release that does not exist answers `404`.
+
+Both are recorded in the activity log, under `content-releases`, with who made the change.
+A change made through an API key is not recorded there yet.
+
+### Who holds the two permissions after an upgrade
+
+The two permissions are created the first time an existing site boots on a version that has
+them. Each is granted then to the roles that already held the power it splits off, so nobody
+gains or loses anything:
+
+- super-admins hold both;
+- every role holding `create-content-releases` gains `update-content-releases`, since renaming
+  was part of assembling a release;
+- every role holding `publish-content-releases` gains `delete-content-releases`, since a
+  release nobody wanted was abandoned by cancelling it.
+
+This happens once, when the permissions are created. If you take one away from a role you
+created, a restart doesn't give it back. The built-in roles are different: every boot brings
+each one back in line with its preset, so a permission its preset includes returns on the next
+restart. To keep a role without it, give people a role of your own instead.
+
+## Listing releases
+
+<Callout type="info">
+  Tabs, search, the day filter and paging are **experimental**: their names and
+  shapes may change before the releases list is finished.
+</Callout>
+
+The list is paged on the server, so its total and every page cover every release on the
+site, however many there are. It is read in one of four tabs, and each release is in exactly
+one of them:
+
+| Tab         | Holds                                           | Order                        |
+| ----------- | ----------------------------------------------- | ---------------------------- |
+| `upcoming`  | Scheduled releases that are not overdue         | Soonest first                |
+| `attention` | Stopped (`blocked`) releases, then overdue ones | Longest waiting first        |
+| `drafts`    | Releases not yet scheduled                      | Newest first                 |
+| `done`      | Published and cancelled releases                | Most recently finished first |
+
+A release is **overdue** when it is still scheduled more than 10 minutes after its time. A
+release a few minutes past its time is still upcoming: the job runner applies it on its next
+pass. One still waiting after 10 minutes is one the runner is not reaching, usually because
+no scheduler calls it (see below).
+
+Search matches text in the title or the description, ignoring case. It reads every release
+in the tab it searches, since no index can serve a match in the middle of a text; that is
+fast for the hundreds of releases a site keeps, and grows with the size of the history. The
+`done` tab is ordered by when each release finished, which no index serves either, so it too
+sorts every finished release it matches before taking a page. What you type is
+matched as written, so `50%` finds "50% off" and not "50 years". On SQLite, case is ignored for the letters A to Z only. On MySQL, search follows the
+collation of the releases table: the default `utf8mb4` collations ignore case, a
+case-sensitive one does not.
+
+Ties are broken by id, so a release appears on exactly one page even when several share a
+time. Releases scheduled with no tab and no `order` come soonest first; other listings
+without a tab come latest first.
+
+### Over REST
+
+`GET /api/releases` takes these query parameters:
+
+| Parameter                           | Meaning                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| `tab`                               | `upcoming`, `attention`, `drafts` or `done`. Not combined with `state`     |
+| `reason`                            | With `tab=attention`: `stopped` or `overdue`, to read one part of that tab |
+| `state`                             | One lifecycle state, when you need it rather than a tab                    |
+| `kind`                              | `release` to leave out single-document releases, or `single` for only them |
+| `search`                            | Text in the title or description, up to 200 characters                     |
+| `order`                             | `soonest` or `latest`. Only with no tab or with `upcoming`                 |
+| `page`                              | The page, from 1                                                           |
+| `limit`                             | Rows per page, 50 by default and at most 200                               |
+| `scheduledAfter`, `scheduledBefore` | A window on the scheduled time, as ISO 8601 instants                       |
+| `day`, `timezone`                   | `2026-03-29` in an IANA zone such as `Europe/Berlin`. Both or neither      |
+
+The answer is the standard list envelope. `meta.total` is the number of releases matching,
+across all pages. The page and the total are read one after the other, as on every paged list. A
+release that changes tab between the two reads (a scheduled release the drain publishes, say) can
+leave the page and the total one apart for that one response. The next request reads both again.
+
+```json
+{
+  "items": [
+    {
+      "id": "…",
+      "title": "Spring launch",
+      "state": "scheduled",
+      "can": {
+        "schedule": true,
+        "cancel": true,
+        "addMember": true,
+        "removeMember": true
+      }
+    }
+  ],
+  "meta": {
+    "total": 42,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 3,
+    "hasNext": true,
+    "hasPrev": false
+  }
+}
+```
+
+To count a tab without reading its releases, ask for one row and read `meta.total`:
+`GET /api/releases?tab=attention&limit=1`.
+
+### From the Direct API
+
+`nextly.releases.find()` takes the same filters and answers with the same `{ items, meta }`
+envelope as every other Direct API list:
+
+```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
+const { items, meta } = await nextly.releases.find({
+  tab: "upcoming",
+  search: "spring",
+  page: 1,
+  limit: 20,
+});
+// meta.total counts every matching release, across all pages
+
+const needsAttention = await nextly.releases.count({ tab: "attention" });
+const overdue = await nextly.releases.count({
+  tab: "attention",
+  reason: "overdue",
+});
+```
+
+`find()` is paged like every list: without a `limit` it returns the first 50 releases. To
+read every release, ask for each page in turn, up to `meta.totalPages` (at most 200 per
+page).
+
+`count()` takes the same tab, state, kind, window, search and day as `find()`, and gives the
+same number as its `meta.total` without reading the releases.
+
+The day filter returns the releases on that day in that zone, placed as the calendar
+places them (a published release where it went out, any other where it is scheduled), in
+every state, soonest first unless you pass an `order`. It is how a calendar's "+N more" reads a
+day in full:
+
+```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
+const { items, meta } = await nextly.releases.find({
+  day: { date: "2026-03-29", timezone: "Europe/Berlin" },
+});
+```
+
+Filtering by `containing` (one document's releases) still works, and still comes soonest
+first, in the order the releases will apply to that document. `tab`, `search`, `order`
+and `day` are refused alongside it.
+
+A release's documents (`GET /api/releases/:id/members`, `nextly.releases.listMembers()`)
+come back in the order they were added. Asking for the documents, the readiness or the blocking reasons of a release that
+does not exist answers `404`, not an empty list.
+
+## The calendar
+
+<Callout type="info">
+  The calendar read is **experimental**: its name and shape may change before
+  the releases list is finished.
+</Callout>
+
+A calendar read covers a window of days, at most six weeks, in a time zone you name. The
+zone decides which day each release falls on: a release at 23:30 in New York is on the next
+day in London. Days follow the zone's own clock, so a day is 23 hours long when the clocks go
+forward and 25 when they go back.
+
+A release is on the day of the time that says when it happens, whatever its state. A
+published release shows on the day it went out, which for a release the job runner reached
+late, or one published now, can be later than the day it was scheduled for. Every other
+release shows on the day of its scheduled time: a stopped one on the day it was due, and a
+cancelled one that had been scheduled on the day it would have run. A draft has no time and
+is on no day.
+
+Every day of the window comes back, in order, empty days included. Each day has the complete
+count of its releases, by state, and its first three releases in time order. To read the rest
+of a day, filter the list to it with the same date and zone (see the day filter above); its
+first three releases are the three the calendar sent.
+
+Over REST, `GET /api/releases/calendar` takes `from` and `to` (dates such as `2026-03-01`,
+both included), `timezone`, and optionally `kind`. From the Direct API:
+
+```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
+const calendar = await nextly.releases.calendar({
+  from: "2026-03-01",
+  to: "2026-04-11",
+  timezone: "Europe/Berlin",
+});
+```
+
+Both answer the same object, with one entry per day:
+
+```json
+{
+  "timezone": "Europe/Berlin",
+  "from": "2026-03-01",
+  "to": "2026-04-11",
+  "days": [
+    {
+      "date": "2026-03-29",
+      "total": 5,
+      "counts": {
+        "draft": 0,
+        "scheduled": 3,
+        "published": 1,
+        "cancelled": 0,
+        "blocked": 1
+      },
+      "releases": [
+        { "id": "…", "title": "Spring launch", "state": "published" }
+      ]
+    }
+  ]
+}
+```
+
+A window longer than 42 days, one whose `to` is before its `from`, a date that does not exist
+and a zone the server does not know are refused with `400`. Reading the calendar needs the
+same permission as reading the list. It reads every release in the window in one query, so a
+day's counts and the releases it shows always agree.
 
 ## Scheduling stores a time; a job runner applies it
 
@@ -47,9 +406,10 @@ shared secret the caller needs, and the two ways a scheduler ends up silently do
 Wire it there once and every scheduled release depends on it.
 
 <Callout type="warn">
-**With no scheduler configured, a release is never applied.** Its due time passes and the
-sweep that would carry it out never runs. A scheduler configured but refused, by the wrong
-path or a missing secret, leaves you in the same place.
+  **With no scheduler configured, a release is never applied.** Its due time
+  passes and the sweep that would carry it out never runs. A scheduler
+  configured but refused, by the wrong path or a missing secret, leaves you in
+  the same place.
 </Callout>
 
 What that does **not** mean is that the content change is invisible. A read consults the
@@ -63,11 +423,12 @@ The sweep is what applies it for real, writing as the member's own author, and i
 only thing that advances the release's own state.
 
 <Callout type="warn">
-What a reader sees and what the stored rows hold are therefore two different questions
-while a release is waiting for the sweep, and the second one has more cases than the first:
-overlapping releases, a member whose author is gone, and a pass that applied some members
-before failing on another. If you integrate against the database directly rather than
-through Nextly, read `apply-due-releases.ts` before relying on release state.
+  What a reader sees and what the stored rows hold are therefore two different
+  questions while a release is waiting for the sweep, and the second one has
+  more cases than the first: overlapping releases, a member whose author is
+  gone, and a pass that applied some members before failing on another. If you
+  integrate against the database directly rather than through Nextly, read
+  `apply-due-releases.ts` before relying on release state.
 </Callout>
 
 A pass is bounded, which is why a due release is not always applied by the next tick: it
@@ -79,14 +440,128 @@ applied on the first pass that actually **reaches and completes** it, which is n
 first pass after its due time. With a backlog, or several expensive releases due together,
 expect it a pass or two later. Treat the scheduled time as "not before", not as "at".
 
-## Blocking reasons
+A pass the host ends part-way, at a serverless function's time limit for example, keeps
+the documents it already wrote and settles none of their releases, so the next pass plans
+them again. A document that is already where the release leaves it in every language, and
+holds no working draft, is not written a second time: its hooks and outbox events do not run
+again, and the pass goes on to the documents still to go. A document that holds a working
+draft is still written, since putting that draft live is what the release is for, and so is
+one with a translation not yet where the release leaves it. The check reads the stored status,
+not what a read hook reports, and counts a document only for an author still allowed to
+publish (or take down) it: a release whose author has lost that permission fails that
+document and is not marked published, even when the document is already live.
 
-Before a release can be scheduled, it is checked for problems that would make it fail
-half-way — a member pointing at a document that no longer exists, for example. Those are
-reported as **blocking reasons** so they can be fixed while there is still time, rather
-than surfacing as a partial publish at 9am.
+## Checks before the moment
 
-An empty release has no blockers; there is nothing to go wrong.
+> **Needs the release after 0.0.2-alpha.67.**
+
+<Callout type="info">
+  Readiness, its problem codes and the action switch are **experimental**: their
+  names and shapes may change before releases are finished.
+</Callout>
+
+Every document in a release is checked while the release is being prepared, not only when it
+runs. The checks ask what the release's run would ask at its time: the run writes each document
+as the person who added it, through the ordinary publish, so the checks judge that person and
+that publish.
+
+**Hard problems** stop a release from being scheduled or published now:
+
+| Code                          | The document…                                                                                                                                              |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NO_AUTHOR`                   | has nobody recorded to act as                                                                                                                              |
+| `AUTHOR_GONE`                 | was added by a user who has since been deleted or deactivated                                                                                              |
+| `LOCALE_SCOPED`               | names one language, which a release cannot move on its own                                                                                                 |
+| `AUTHOR_MAY_NOT_ACT`          | was added by someone who may no longer publish it (or unpublish it)                                                                                        |
+| `DOCUMENT_GONE`               | no longer exists                                                                                                                                           |
+| `NO_LIFECYCLE`                | is in a collection or Single that no longer has a draft/published lifecycle                                                                                |
+| `COMPANION_WITHOUT_LIFECYCLE` | is in a collection localized before Draft/Published was enabled, whose translation table has no per-language status, so its languages cannot all be moved  |
+| `DRAFT_HELD_IN_LOCALE`        | has unreleased work saved in another language (`detail.locales` names them), which a release moving every language will not decide for                     |
+| `REQUIRED_FIELD_MISSING`      | is going live, or comes down with a pending change, and a required field is empty (`detail.fields` names them)                                             |
+| `FIELD_NOT_PERMITTED`         | would be written with a field its author may no longer write: a pending change it goes live or comes down with, or its status (`detail.fields` names them) |
+| `FIELD_INVALID`               | is going live, or comes down with a pending change, and another of its fields fails validation                                                             |
+
+A document **coming down** is judged only on its status and on a pending change its takedown folds in, so invalid live content can always be taken down.
+
+**Soft problems** are notes and stop nothing:
+
+| Code               | The document…                                                                                                                                                                                |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IN_OTHER_RELEASE` | is also in another scheduled release, named by `detail.releaseId`. `detail.winningReleaseId` is the one whose action stands once both have run, or `null` while this release has no time set |
+
+Ask for them with:
+
+|            |                                                    |
+| ---------- | -------------------------------------------------- |
+| REST       | `GET /api/releases/:id/readiness`                  |
+| Direct API | `nextly.releases.readiness({ releaseId })`         |
+| Permission | Reading releases. An unknown release answers `404` |
+
+```ts
+import type { Nextly } from "nextly";
+
+export async function hardProblems(nextly: Nextly, releaseId: string) {
+  const { hard } = await nextly.releases.readiness({ releaseId });
+  return hard.map(
+    problem => `${problem.code}: ${problem.scopeSlug}/${problem.entryId}`
+  );
+}
+```
+
+Each problem names its document (`memberId`, `scopeKind`, `scopeSlug`, `entryId`, `action`) and
+the check that found it (`source`). Hard problems come before soft ones, each in the order the
+documents were added. Every document is checked, however many the release holds, and the answer
+is given only once all of them are. The checks run on every request, so a problem someone fixed
+reads as fixed the next time you ask.
+
+### Refusals
+
+While a release has a hard problem, scheduling it and Publish now are refused, and so is
+adding a document with a hard problem to a release that is already scheduled (the release stays
+scheduled). The refusal is a `409 CONFLICT` whose `data.problems` names each problem by its code
+and the document it is about; `memberId` is `null` for a document that was being added. REST and
+the Direct API refuse alike: over REST it is the error envelope's `data`, and from the Direct API
+the thrown `NextlyError`'s `publicData`.
+
+```json
+{
+  "error": {
+    "code": "CONFLICT",
+    "message": "This release cannot be scheduled until the documents blocking it are fixed or removed.",
+    "requestId": "…",
+    "data": {
+      "problems": [{ "memberId": "…", "code": "REQUIRED_FIELD_MISSING" }]
+    }
+  }
+}
+```
+
+The run still checks everything again at the release's time. A problem that appears after
+scheduling stops the release then, and it is shown as stopped.
+
+### Blocking reasons
+
+`GET /api/releases/:id/blockers` and `nextly.releases.blockingReasons()` answer the three
+problems a stopped release is explained by: `NO_AUTHOR`, `AUTHOR_GONE` and `LOCALE_SCOPED`.
+They are the same findings readiness reports under those codes.
+
+### Switching a document between going live and coming down
+
+|            |                                                                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| REST       | `PATCH /api/releases/:id/members/:memberId` with `{ "action": "unpublish" }`                                                           |
+| Direct API | `nextly.releases.changeMemberAction({ releaseId, memberId, action })`                                                                  |
+| Permission | Creating releases, and your own permission for the new action on that document. Also publishing releases when the release is scheduled |
+
+The document's author does not change: the release still acts as the person who added it. In a
+scheduled release the new action is checked as that person, and a switch that would leave a hard
+problem, such as an author who may publish the document but not unpublish it, is refused with the
+same `409` and the release is left as it was.
+
+### What is not checked yet
+
+The checks run core's rules only. Other features will be able to add their own, such as
+approvals, later. Unpublished linked documents are not yet reported.
 
 ## One release covers every language
 
@@ -94,10 +569,11 @@ A member is the whole document. Adding a post to a release schedules that post i
 language it has.
 
 <Callout type="warn">
-Per-locale scheduling is **not** supported: adding a member that names a single locale is
-refused, and the admin only offers the action from a document's default locale. Each
-language does have its own published state — see [Localization](/docs/localization) — but
-that is publishing, not scheduling.
+  Per-locale scheduling is **not** supported: adding a member that names a
+  single locale is refused, and the admin only offers the action from a
+  document's default locale. Each language does have its own published state —
+  see [Localization](/docs/localization) — but that is publishing, not
+  scheduling.
 </Callout>
 
 ## Related

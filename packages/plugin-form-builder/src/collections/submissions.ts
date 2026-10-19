@@ -240,7 +240,8 @@ export function submissionsCollection(
     },
 
     // Access control with sensible defaults
-    // Public can create (submit forms), but only authenticated users can read/update/delete
+    // Public can create (submit forms); reading, updating and deleting need the
+    // matching permission on the caller's role (`read-form-submissions`, ...).
     // `create: true` — a visitor submits without an account. Reading, updating
     // and deleting are the shared defaults.
     access: accessWithDefaults(accessOverrides, { create: true }),

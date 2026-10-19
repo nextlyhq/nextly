@@ -32,6 +32,7 @@ export type ServiceType =
   | "dashboard"
   | "documentLock"
   | "translations"
+  | "notices"
   | "email"
   | "schema";
 

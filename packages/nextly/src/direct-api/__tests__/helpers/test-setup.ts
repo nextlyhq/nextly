@@ -87,10 +87,9 @@ export function createMockUserAccountService(): Record<string, Mock> {
     updateCurrentUser: vi.fn(),
     updatePasswordHash: vi.fn(),
     hasPassword: vi.fn(),
+    // Only the methods the service has: the linked-account ones went with
+    // the retired linked-account endpoints.
     getUserPasswordHashById: vi.fn(),
-    getAccounts: vi.fn(),
-    deleteUserAccount: vi.fn(),
-    unlinkAccountForUser: vi.fn(),
   });
 }
 

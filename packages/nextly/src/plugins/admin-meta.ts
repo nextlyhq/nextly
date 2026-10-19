@@ -31,6 +31,10 @@ import { isRouteError } from "./routes/route-error";
 import { settingsPermissionOf } from "./settings-permission";
 import { validatedAdminWidgets } from "./validate-admin-widgets";
 import { validatedClientConfig } from "./validate-client-config";
+import {
+  contributedDocumentViews,
+  type PublishedDocumentView,
+} from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
 import { validatePluginSlugs } from "./validate-slugs";
 
@@ -129,6 +133,11 @@ export interface PluginAdminMeta {
   schemaBuilderSlot?: string;
   /** Entry/single form toolbar slot component path — present only for enabled plugins. */
   entryFormToolbarSlot?: string;
+  /**
+   * @experimental Full-screen document views, each on the slug the admin
+   * routes it under or on a field type — present only for enabled plugins.
+   */
+  documentViews?: PublishedDocumentView[];
   /**
    * Custom field types — `type` → admin editor component path (so the admin
    * renders fields of these types) plus the picker presentation (label, hint,
@@ -440,6 +449,12 @@ export function buildPluginAdminMeta(
         meta.schemaBuilderSlot = admin.schemaBuilderSlot;
       if (admin.entryFormToolbarSlot)
         meta.entryFormToolbarSlot = admin.entryFormToolbarSlot;
+      // From the same reduction boot checks, so the admin is given exactly the
+      // views that passed it, on the slugs they route under.
+      const documentViews = contributedDocumentViews([plugin]).map(
+        ({ plugin: _owner, ...view }) => view
+      );
+      if (documentViews.length > 0) meta.documentViews = documentViews;
     }
 
     // Routes move to `whenEnabled` when the plugin is disabled, because

@@ -99,7 +99,12 @@ export function buildAuthRouterDeps(
     // from the registered NextlyConfig. Defaults to false (silent-success on
     // email conflict) when config is not yet initialised or the flag is
     // unset. The schema is already populated by sanitizeConfig.
-    revealRegistrationConflict: readRevealRegistrationConflict(getService),
+    revealRegistrationConflict: readAuthFlag(
+      getService,
+      "revealRegistrationConflict"
+    ),
+    // Off unless the app turns it on (staff-only by default).
+    allowRegistration: readAuthFlag(getService, "allowRegistration"),
     devAutoLogin: readDevAutoLogin(getService),
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
     ...readProxyTrustSettings(() => getService("config")),
@@ -141,7 +146,7 @@ export function buildAuthRouterDeps(
       const adapter = getService("adapter");
       const { eq } = await import("drizzle-orm");
       const result = await accountStateQuery(adapter.getDrizzle(), eq, userId);
-      return result[0] || null;
+      return toAccountState(result[0]);
     },
 
     fetchSessionRoles: async (userId: string): Promise<SessionRoles> => {
@@ -280,18 +285,17 @@ export function buildAuthRouterDeps(
       await deleteRefreshTokens(getService, eq(refreshTokens.userId, userId));
     },
 
-    getUserCount: async () => {
-      // Errors propagate intentionally. The user count gates two
-      // security-relevant decisions (setup-status reporting and the
-      // first-admin pre-check); collapsing an unknown count to 0 would
-      // both lie about setup state and risk a duplicate super-admin.
-      // Callers convert failures to a 503 envelope.
+    hasAdministrator: async () => {
+      // Errors propagate intentionally: this gates setup and setup-status,
+      // and collapsing an unknown answer to "no administrator" would both lie
+      // about setup state and risk a second super-admin. Callers convert
+      // failures to a 503 envelope. The same question the first-administrator
+      // grant asks, through the same query.
+      const { superAdminRoleHeld } = await import(
+        "../../domains/users/services/last-super-admin"
+      );
       const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const { count } = await import("drizzle-orm");
-      const result = await db.select({ count: count() }).from(schema.users);
-      return Number(result[0]?.count || 0);
+      return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
     },
 
     createSuperAdmin: async data => {
@@ -301,39 +305,54 @@ export function buildAuthRouterDeps(
       const { seedSuperAdmin } = await import(
         "../../database/seeders/super-admin"
       );
+      const { ServiceContainer } = await import("../../services/index");
+      const { isFirstAdministratorTaken } = await import(
+        "../../domains/users/services/last-super-admin"
+      );
       const adapter = getService("adapter");
 
       // Seed permissions first (seedSuperAdmin needs them to assign to the admin)
       await seedPermissions(adapter, { silent: true });
 
-      // seedSuperAdmin handles password hashing internally
+      // The account is created as setup's: it becomes the install's first
+      // administrator, through the grant made under the role row's lock, or
+      // is not created at all. Of setups racing on an empty install exactly
+      // one wins, and a loser's transaction rolls back before its account or
+      // `user.created` event exist. An address that already has an account,
+      // which may be a stranger's sign-up, is refused as a duplicate.
+      let created: { id: string | number };
+      try {
+        created = await new ServiceContainer(adapter).users.createLocalUser(
+          {
+            email: data.email,
+            name: data.name,
+            password: data.password,
+            isActive: true,
+            emailVerification: "admin-vouched",
+          },
+          undefined,
+          "setup"
+        );
+      } catch (error) {
+        if (isFirstAdministratorTaken(error)) return null;
+        throw error;
+      }
+
+      // The role's permissions; the account already holds the role.
       const result = await seedSuperAdmin(adapter, {
         email: data.email,
         password: data.password,
         name: data.name,
         silent: true,
+        assignRole: false,
       });
-
       if (!result.success) {
         throw new Error(
           result.errorMessages?.[0] || "Failed to create admin account"
         );
       }
 
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const { eq } = await import("drizzle-orm");
-      const users = await db
-        .select({ id: schema.users.id })
-        .from(schema.users)
-        .where(eq(schema.users.email, data.email.trim().toLowerCase()))
-        .limit(1);
-
-      return {
-        id: users[0]?.id || "",
-        email: data.email,
-        name: data.name,
-      };
+      return { id: String(created.id), email: data.email, name: data.name };
     },
 
     seedPermissions: async () => {
@@ -365,6 +384,20 @@ export function buildAuthRouterDeps(
         newPassword
       );
       return { email: result.email };
+    },
+
+    // Read-only lookups the auth limiter counts a token request against; each
+    // leaves its token usable for the handler that consumes it.
+    findTokenOwner: async (kind, token) => {
+      const authService = getService("authService");
+      switch (kind) {
+        case "reset":
+          return await authService.resetTokenOwner(token);
+        case "verification":
+          return await authService.verificationTokenOwner(token);
+        case "invite":
+          return await authService.inviteTokenOwner(token);
+      }
     },
 
     acceptInvite: async (token, newPassword) => {
@@ -439,6 +472,7 @@ export function buildAuthRouterDeps(
         image: u.image,
         mustChangePassword: u.mustChangePassword,
         passwordUpdatedAt: u.passwordUpdatedAt,
+        sessionEpoch: u.sessionEpoch,
       };
     },
   });
@@ -583,7 +617,7 @@ interface SessionRowDb {
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): LockableRead<AccountState[]>;
+        limit(count: number): LockableRead<AccountStateRow[]>;
       };
     };
   };
@@ -600,6 +634,21 @@ interface SessionRowAdapter {
 // Type only: the bridge loads drizzle-orm lazily, on first use.
 type Eq = typeof drizzleEq;
 
+/** The account-state read as the row holds it, before {@link toAccountState}. */
+type AccountStateRow = Omit<AccountState, "sessionEpoch"> & {
+  sessionEpoch: number | null;
+};
+
+/**
+ * The row as the gate and the mint read it. A row written before the session
+ * epoch column existed holds null there, which is epoch zero, where every
+ * account starts.
+ */
+function toAccountState(row: AccountStateRow | undefined): AccountState | null {
+  if (!row) return null;
+  return { ...row, sessionEpoch: Number(row.sessionEpoch ?? 0) };
+}
+
 /**
  * The account-state read, as one query for both its uses: the plain read the
  * gate makes, and the read under a row lock the session-row write makes.
@@ -614,6 +663,10 @@ function accountStateQuery(db: SessionRowDb, eq: Eq, userId: string) {
       emailVerified: users.emailVerified,
       mustChangePassword: users.mustChangePassword,
       passwordUpdatedAt: users.passwordUpdatedAt,
+      email: users.email,
+      name: users.name,
+      image: users.image,
+      sessionEpoch: users.sessionEpoch,
     })
     .from(users)
     .where(eq(users.id, userId))
@@ -643,7 +696,7 @@ function sessionRowTransaction(
         { dialect },
         "session"
       );
-      return rows[0] ?? null;
+      return toAccountState(rows[0]);
     },
     insertRefreshToken: async record => {
       await db.insert(refreshTokens).values(record);
@@ -718,26 +771,20 @@ function readServiceConfig(
 }
 
 /**
- * Read `auth.revealRegistrationConflict` from the NextlyConfig registered in
- * the DI container. Returns the spec default (false) when the container is
- * not yet initialised or the flag is unset.
+ * Read a boolean `auth.<name>` flag from the NextlyConfig registered in the DI
+ * container. Only `true` turns a flag on; an unset or non-boolean value, or a
+ * container not yet initialised, answers `false`, each flag's safe default.
  */
-function readRevealRegistrationConflict(
-  getService: (name: string) => unknown
+function readAuthFlag(
+  getService: (name: string) => unknown,
+  name: "revealRegistrationConflict" | "allowRegistration"
 ): boolean {
   try {
     const config = getService("config");
     if (config && typeof config === "object" && "auth" in config) {
       const auth = (config as { auth?: unknown }).auth;
-      if (
-        auth &&
-        typeof auth === "object" &&
-        "revealRegistrationConflict" in auth
-      ) {
-        return (
-          (auth as { revealRegistrationConflict?: unknown })
-            .revealRegistrationConflict === true
-        );
+      if (auth && typeof auth === "object" && name in auth) {
+        return (auth as Record<string, unknown>)[name] === true;
       }
     }
     return false;

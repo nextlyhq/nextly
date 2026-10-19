@@ -5,7 +5,7 @@
  * one widget can sit on a dashboard twice carrying different `config`, and a
  * setting that drives the query makes those two cards genuinely different
  * questions. Keyed by widget id, both questions filed into a single entry: the
- * later response overwrote the earlier one, `ArrangedColumns` read that one
+ * later response overwrote the earlier one, `ArrangedGrid` read that one
  * entry for both cards, and each reader's own choice was visible on neither.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

@@ -1,0 +1,60 @@
+---
+title: Notices
+description: Each admin user's own list of notices — what happened to their work that they should know about.
+---
+
+<Callout type="info">
+  Notices are **experimental**: their API may change before the feature is
+  finished.
+</Callout>
+
+A notice tells one person something about their work: for example, that a release they own
+stopped, or is late. Every admin user has their own list, not only super-admins, and nobody
+sees anyone else's.
+
+## What a notice is
+
+|       |                                                                                                                              |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------- |
+| For   | Exactly one person, who is the only one who can see it or mark it read                                                       |
+| About | One thing, such as a release, kept as a snapshot so the notice still reads correctly after that thing is deleted             |
+| Once  | A notice is stored once per occurrence: a release that stops twice gives two notices, and the same stop seen twice gives one |
+| Read  | Each notice records when its person first read it                                                                            |
+
+Notices are kept for as long as the [activity log](/docs/audit-log) keeps its records (90 days by
+default, set by `audit.retention`), and a person's notices are deleted with their account.
+
+## Reading notices
+
+Over REST, for the signed-in person. The person is always the one signed in: no request can name
+someone else. API keys are refused, since a notice belongs to a person's own inbox.
+
+| Request                                                               | Answer                                                           |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `GET /api/notices?unread=true&page=1&limit=20`                        | The standard list envelope, newest first. `limit` is at most 100 |
+| `GET /api/notices/count?unread=true`                                  | `{ "total": 3 }`                                                 |
+| `POST /api/notices/read` with `{ "ids": ["…"] }` or `{ "all": true }` | How many were marked. Ids that are not yours are ignored         |
+
+Each notice has its `title` and optional `body`, its `kind`, and its `subject`: its `type`, `id`,
+a `link` into the admin, and `gone: true` once the subject no longer exists.
+
+From server code, the Direct API does the same for a person you name:
+
+```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+const userId = "the person's user id";
+
+const { items, meta } = await nextly.notices.find({ userId, unread: true });
+const unread = await nextly.notices.count({ userId, unread: true });
+await nextly.notices.markRead({ userId, all: true });
+```
+
+## Before `nextly migrate`
+
+The notices table is created by `nextly migrate`. Until it has run, lists are empty and
+notices are not recorded, and the server logs one warning naming the table and the command.
+Nothing else stops working.

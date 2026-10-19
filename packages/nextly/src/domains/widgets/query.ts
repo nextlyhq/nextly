@@ -26,6 +26,7 @@ import {
   type TimeseriesInterval,
 } from "../collections/query/timeseries-interval";
 
+import { effectiveWidgetLimit } from "./query-limits";
 import {
   failUnavailableSourceOrOp,
   getSource,
@@ -33,11 +34,10 @@ import {
   type WidgetSource,
 } from "./sources";
 
-/** Nothing may return more rows than this, whatever the caller asked for. */
-export const MAX_WIDGET_LIMIT = 50;
-
-/** The default row count when a caller does not specify one, or specifies garbage. */
-const DEFAULT_WIDGET_LIMIT = 5;
+// The row limits and their one rule live in the import-free
+// `query-limits.ts`, so the browser reserves rows by the validator's own
+// answer. Re-exported, so this module's importers are unchanged.
+export { MAX_WIDGET_LIMIT } from "./query-limits";
 
 /** How deep a `where` clause may nest before validation itself gets expensive. */
 const MAX_WHERE_DEPTH = 8;
@@ -837,26 +837,6 @@ function assertValidStatus(
 }
 
 /**
- * Clamps rather than rejects: a widget asking for too much is a
- * configuration mistake, not an attack, and silently bounding it keeps the
- * card working instead of failing it outright.
- *
- * `Number.isFinite` is the guard, not `typeof q.limit === "number"`: `NaN`
- * IS `typeof "number"`, and every comparison against `NaN` (including
- * `Math.min`/`Math.max`) itself evaluates to `NaN`, so a plain
- * `Math.min(Math.max(NaN, 1), MAX)` returns `NaN` -- an unclamped, unbounded
- * `LIMIT NaN` reaching the compiler despite this function's entire purpose.
- * `Math.trunc` on the finite branch closes the neighbouring gap where a
- * fractional limit (`5.7`) passed the old numeric check unchanged.
- */
-function clampLimit(limit: unknown): number {
-  const requested = Number.isFinite(limit)
-    ? Math.trunc(limit as number)
-    : DEFAULT_WIDGET_LIMIT;
-  return Math.min(Math.max(requested, 1), MAX_WIDGET_LIMIT);
-}
-
-/**
  * Validate and normalize. Returns a query fully independent of the input.
  *
  * EVERY property of the caller's object is read exactly once, by
@@ -941,6 +921,6 @@ export function validateReadWidgetQuery(
     ...(sort ? { sort } : {}),
     ...(groupBy ? { groupBy } : {}),
     ...(timeline ?? {}),
-    limit: clampLimit(raw.limit),
+    limit: effectiveWidgetLimit(raw.limit),
   };
 }

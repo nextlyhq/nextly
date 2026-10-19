@@ -191,9 +191,18 @@ async function boot(surface: SurfaceName): Promise<{
     await current.adapter.executeQuery(statement);
   }
   if (!pluginCtx) throw new Error("the plugin's init did not run");
-  const created = await new ServiceContainer(
-    current.adapter
-  ).users.createLocalUser({
+  const users = new ServiceContainer(current.adapter).users;
+  // The install's first account is made its super-admin, which may not lose
+  // the role while it is the only one. The account under test is another, so
+  // the role writes below are the ones this file is about.
+  await users.createLocalUser({
+    email: "owner@example.com",
+    name: "Owner",
+    password: PASSWORD,
+    isActive: true,
+    emailVerification: "admin-vouched",
+  });
+  const created = await users.createLocalUser({
     email: EMAIL,
     name: "Window",
     password: PASSWORD,

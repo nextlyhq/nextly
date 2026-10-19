@@ -4040,11 +4040,6 @@
         "count": 1
       }
     },
-    "packages/plugin-page-builder/src/admin/BlocksField.tsx": {
-      "complexity_critical": {
-        "count": 1
-      }
-    },
     "packages/plugin-page-builder/src/core/url-policy.ts": {
       "crap_critical": {
         "count": 1
@@ -4313,7 +4308,6 @@
     "packages/nextly/src/dispatcher/handlers/single-dispatcher.ts:complexity",
     "packages/nextly/src/domains/field-groups/services/teardown-entity-field-group-data.ts:complexity",
     "packages/admin/src/pages/dashboard/roles.tsx:circular dependency",
-    "packages/plugin-page-builder/src/admin/BlocksField.tsx:complexity",
     "packages/admin/src/components/layout/sidebar/DualSidebar.tsx:complexity",
     "packages/admin/src/components/features/entries/EntryForm/EntrySystemHeader.tsx:complexity",
     "packages/builder/src/canvas.tsx:complexity",

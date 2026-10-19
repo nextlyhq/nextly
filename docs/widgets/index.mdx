@@ -55,8 +55,14 @@ content is bounded — it travels inside every dashboard load for every reader w
 the card, so it is for notes and a pointer to a runbook, not for the runbook itself. An
 external link opens in a new tab.
 
-Sizes are `sm`, `md`, `lg`, `xl` and `full`; heights are `short` and `tall`.
-Below the admin's `md` breakpoint every card is full width in one column and the dashboard is
+Sizes are `sm`, `md`, `lg`, `xl` and `full`; heights are `short` and `tall`. On the dashboard,
+cards sit in one ordered list, filling rows left to right and wrapping, and each card is one of
+five widths: `sm` is a quarter of the row, `md` a third, `lg` a half, `xl` two thirds and `full`
+the whole row. A card starts at the widget's `defaultSize`, and a reader can change its width from
+the card's menu to any size between the widget's `minSize` and `maxSize` (every size, when the
+widget declares neither). Widths follow the dashboard's own width rather than the window's: below
+1,024 pixels a quarter, third or half card is drawn at half width and a wider one at full width,
+and below 640 pixels every card is full width. Below the admin's `md` breakpoint the dashboard is
 read-only: arranging it is offered from `md` up, and the arrangement made there applies at every
 width.
 

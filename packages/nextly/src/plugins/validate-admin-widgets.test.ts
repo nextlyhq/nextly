@@ -11,8 +11,11 @@ import * as loggerModule from "../observability/logger";
 import { buildPluginAdminMeta } from "./admin-meta";
 import type { PluginDefinition } from "./plugin-context";
 import { resolvePlugins } from "./resolve";
+import { widthFacts } from "../domains/widgets/canonical";
+
 import {
   assertAdminWidgets,
+  contributedWidgetSummaries,
   resetArchetypeWarnings,
 } from "./validate-admin-widgets";
 
@@ -751,5 +754,40 @@ describe("a contributed widget draws the result its archetype can draw", () => {
         }),
       ])
     ).not.toThrow();
+  });
+});
+
+describe("a contributed widget's sizes in the server's summary", () => {
+  it("carry its smallest and largest, so a card is offered only the widths between", () => {
+    const [summary] = contributedWidgetSummaries([
+      withWidget({
+        id: "acme/half-up",
+        title: "Half and up",
+        component: "@acme/p/admin#HalfUp",
+        defaultSize: "lg",
+        minSize: "lg",
+        maxSize: "full",
+      }),
+    ]);
+    expect(summary).toMatchObject({ minSize: "lg", maxSize: "full" });
+    // Half to full, as the declaration says; not all five widths.
+    expect(widthFacts(summary!).allowedWidths).toEqual([
+      "half",
+      "twoThirds",
+      "full",
+    ]);
+  });
+
+  it("leave a widget that states no bounds every width", () => {
+    const [summary] = contributedWidgetSummaries([
+      withWidget({
+        id: "acme/any",
+        title: "Any",
+        component: "@acme/p/admin#Any",
+      }),
+    ]);
+    expect(summary).not.toHaveProperty("minSize");
+    expect(summary).not.toHaveProperty("maxSize");
+    expect(widthFacts(summary!).allowedWidths).toHaveLength(5);
   });
 });

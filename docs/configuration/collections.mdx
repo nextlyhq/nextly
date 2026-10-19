@@ -5,7 +5,7 @@ description: Define content types with multiple entries using collections.
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-A collection is a content type that stores multiple entries - blog posts, products, users, media files. Each collection maps to a database table, gets automatic REST endpoints under `/api/[slug]`, and appears in the admin panel with list and edit views.
+A collection is a content type that stores multiple entries - blog posts, products, users, media files. Each collection maps to a database table, gets automatic REST endpoints under `/admin/api/collections/[slug]/entries`, and appears in the admin panel with list and edit views.
 
 > **Source of truth:** the `CollectionConfig` interface and `defineCollection()` helper live in `packages/nextly/src/collections/config/define-collection.ts`. Hooks and access-control types are imported from `packages/nextly/src/shared/types/access.ts` and `packages/nextly/src/hooks/types.ts`.
 
@@ -52,9 +52,9 @@ export default defineCollection({
   },
   access: {
     read: true,
-    create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-    update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-    delete: ({ roles }) => roles.includes("admin"),
+    create: ({ permissions }) => permissions.includes("posts:create"),
+    update: ({ permissions }) => permissions.includes("posts:update"),
+    delete: ({ permissions }) => permissions.includes("posts:delete"),
   },
   hooks: {
     beforeChange: [
@@ -97,7 +97,7 @@ The Nextly admin panel ships with a Visual Schema Builder for creating collectio
 5. Configure admin options, access control, and hooks through the UI.
 6. Click **Save** to generate the collection.
 
-The Schema Builder produces the same `CollectionConfig` that code-first collections use; you can export a builder-created collection to TypeScript at any time.
+The Schema Builder produces the same `CollectionConfig` that code-first collections use. To move a builder-created collection into code, run `nextly db:sync --promote <slug>`. It appends the collection's slug and fields to `nextly.config.ts` as a commented-out snippet, and removes the builder's record; the table and its content stay. Nothing else is carried over: add the labels, admin options, access rules, hooks and options such as `status` back in code before you move the snippet into your `collections` array. There is no supported way back: once a code-first collection has been synced, the Schema Builder shows it read-only, and its structure is edited in code.
 
 </Tab>
 </Tabs>
@@ -162,7 +162,7 @@ Only `slug` and `fields` are required.
 | **Type** | `string` |
 | **Required** | Yes |
 
-Unique identifier used as the database table name (unless `dbName` is set), the API endpoint path (`/api/[slug]`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
+Unique identifier used as the database table name (unless `dbName` is set), the REST path (`/admin/api/collections/[slug]/entries`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
 
 ### `fields`
 
@@ -276,20 +276,7 @@ refused; index fewer, or narrower, fields. An explicit `name` may be at most
 | **Type** | `CustomEndpoint[]` |
 | **Default** | `undefined` |
 
-Additional REST endpoints mounted at `/api/[slug]/[path]`. Each entry is `{ path, method, handler }` where `handler` is a Web-API `(req: Request) => Response | Promise<Response>` function.
-
-```typescript
-endpoints: [
-  {
-    path: "/publish",
-    method: "post",
-    handler: async (req) => {
-      const { id } = await req.json();
-      return Response.json({ success: true });
-    },
-  },
-]
-```
+`defineCollection()` accepts and type-checks `endpoints`, each `{ path, method, handler }`, but no route serves them: neither the REST handler nor any other route calls these handlers, so a request to their path is answered as if they were not there. For logic of your own, add a Next.js route handler in your app and read and write through the [Direct API](/docs/api-reference/direct-api).
 
 ### `custom`
 
@@ -358,12 +345,14 @@ Available view overrides: `Edit`, `List`. Available injection points: `BeforeLis
 
 Each CRUD operation accepts a function (returning `boolean | Promise<boolean>`), a literal `boolean`, or can be omitted to fall back to the database role/permission system.
 
+A declared rule is the whole answer for a signed-in user: the role's permission is not checked beside it. So for staff and API keys a rule should check the permission for its operation itself, then narrow from there; a plugin-defined person, who holds no permissions, is admitted by a branch of its own. Don't decide by a role's name: a custom role holding the permission, and an API key whose roles carry none of the names, would be refused. See [Roles and Permissions](/docs/permissions#collection-access).
+
 ```typescript
 access: {
-  create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
+  create: ({ permissions }) => permissions.includes("posts:create"),
   read: true,
-  update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-  delete: ({ roles }) => roles.includes("admin"),
+  update: ({ permissions }) => permissions.includes("posts:update"),
+  delete: ({ permissions }) => permissions.includes("posts:delete"),
 }
 ```
 
@@ -372,14 +361,14 @@ The `AccessControlContext` passed to functions has the following shape:
 | Property | Type | Description |
 |---|---|---|
 | `user` | `MinimalUser \| null` | The authenticated user (or `null` for unauthenticated requests). |
-| `roles` | `string[]` | The user's role slugs (resolved from DB, includes inherited roles). |
+| `roles` | `string[]` | The user's role slugs (resolved from DB, includes inherited roles). Don't decide by these: check `permissions`. |
 | `permissions` | `string[]` | Effective permissions in `"resource:action"` format. |
 | `operation` | `"create" \| "read" \| "update" \| "delete"` | The operation being checked. |
 | `collection` | `string` | The collection slug. |
 
 **Rules:**
 
-- Code-defined access always takes precedence over database role/permission checks.
+- Code-defined access is what a signed-in user is judged by when it is declared, so it includes the permission check itself.
 - Omitting an operation falls back to the database role/permission system.
 - Super-admin always bypasses all access checks.
 

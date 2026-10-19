@@ -11,6 +11,7 @@
  */
 
 import { nextly } from "../../direct-api/nextly";
+import { NextlyError } from "../../errors";
 import { listRoleSlugsForUserStrict } from "../../services/lib/permissions";
 import type { RunAsDeps, RunAsUser } from "../../shared/lib/resolve-run-as";
 
@@ -18,7 +19,7 @@ import type { JobRegistry } from "./job-registry";
 import { DEFAULT_RETENTION_MS, resolveRetentionMs } from "./job-retention";
 import { JobsRepository, type JobsDatabase } from "./jobs-repository";
 import { SWEEP_KEY_PREFIX } from "./portable-key";
-import { runJobs, type RunJobsResult } from "./run-jobs";
+import { runJobs, type JobsStore, type RunJobsResult } from "./run-jobs";
 
 /**
  * The users read the identity resolver needs.
@@ -169,23 +170,116 @@ async function queueSweeps(
 ): Promise<void> {
   for (const definition of registry.sweeps()) {
     try {
-      await repository.enqueue({
-        slug: definition.slug,
-        input: null,
-        // Due immediately: the trigger firing IS the schedule. A future `runAt`
-        // would make the sweep wait for a tick after the one that queued it.
-        runAt: null,
-        // No principal. A sweep acts as nobody and resolves each item's own
-        // identity when it performs it; a user here would be an authority the
-        // sweep could lend to work that never asked for it.
-        runAsUserId: null,
-        dedupeKey: sweepDedupeKey(definition.slug),
-        now,
-      });
+      await queueSweep(repository, definition.slug, now);
     } catch (error) {
       logger?.(error, definition.slug);
     }
   }
+}
+
+/**
+ * Queue one sweep, or find the one already outstanding: its dedupe key keeps
+ * exactly one queued or running, so either way the answer is that row.
+ */
+function queueSweep(
+  repository: JobsRepository,
+  slug: string,
+  now: Date
+): Promise<{ id: string }> {
+  return repository.enqueue({
+    slug,
+    input: null,
+    // Due immediately: the trigger firing IS the schedule. A future `runAt`
+    // would make the sweep wait for a tick after the one that queued it.
+    runAt: null,
+    // No principal. A sweep acts as nobody and resolves each item's own
+    // identity when it performs it; a user here would be an authority the
+    // sweep could lend to work that never asked for it.
+    runAsUserId: null,
+    dedupeKey: sweepDedupeKey(slug),
+    now,
+  });
+}
+
+/**
+ * The parts of a pass both triggers share: the store, the identity reads and
+ * the Direct API a job's bound client wraps. One assembly, so a job run on
+ * demand runs exactly as it would in a pass.
+ */
+function passDeps(
+  adapter: JobsPassDatabase,
+  registry: JobRegistry,
+  store: JobsStore,
+  options: RunJobsPassOptions | undefined
+): Parameters<typeof runJobs>[0] {
+  return {
+    store,
+    registry,
+    runAs: options?.runAs ?? databaseRunAs(adapter),
+    now: options?.now,
+    runnerId: options?.runnerId,
+    batchSize: options?.batchSize,
+    maxDurationMs: options?.maxDurationMs,
+    leaseMs: options?.leaseMs,
+    random: options?.random,
+    // The real Direct API, resolved lazily per call so a job queued before the
+    // runtime finished booting still binds to a live one.
+    contentApi: nextly,
+  };
+}
+
+/**
+ * Run one queued job now, if no runner holds it.
+ *
+ * Through `runJobs` itself, with its candidates narrowed to this one row, so
+ * the claim, the lease and its renewal, the identity the job runs as and the
+ * recorded outcome are exactly a pass's: running now is another trigger, not a
+ * second runner. A job another runner holds, or one that is not pending and
+ * due, is not claimed, and the answer's `claimed` is 0. Bounded by
+ * `maxDurationMs` the way a pass is, and the handler receives that deadline.
+ */
+export function runJobNow(
+  adapter: JobsPassDatabase,
+  registry: JobRegistry,
+  jobId: string,
+  options?: RunJobsPassOptions
+): Promise<RunJobsResult> {
+  const repository = new JobsRepository(adapter);
+  const store: JobsStore = {
+    findDue: input => repository.findDue({ ...input, ids: [jobId] }),
+    claim: (id, runnerId, now, leaseMs) =>
+      repository.claim(id, runnerId, now, leaseMs),
+    markAttempt: (id, runnerId, attemptCount, now) =>
+      repository.markAttempt(id, runnerId, attemptCount, now),
+    finalize: input => repository.finalize(input),
+    renewLease: (id, runnerId, now, leaseMs) =>
+      repository.renewLease(id, runnerId, now, leaseMs),
+  };
+  return runJobs(passDeps(adapter, registry, store, options));
+}
+
+/**
+ * Run a sweep now, if no runner holds it.
+ *
+ * Queues the sweep's one outstanding row the way a pass does (or finds it),
+ * then runs it through {@link runJobNow}. When another runner is already
+ * running it, `claimed` is 0 and nothing ran here; that runner, or the next
+ * pass, does the work.
+ */
+export async function runSweepNow(
+  adapter: JobsPassDatabase,
+  registry: JobRegistry,
+  slug: string,
+  options?: RunJobsPassOptions
+): Promise<RunJobsResult> {
+  if (!registry.sweeps().some(definition => definition.slug === slug)) {
+    throw NextlyError.internal({
+      logContext: { reason: "not-a-registered-sweep", slug },
+    });
+  }
+  const now = (options?.now ?? (() => new Date()))();
+  const { id } = await queueSweep(new JobsRepository(adapter), slug, now);
+  return runJobNow(adapter, registry, id, options);
 }
 
 export async function runJobsPass(
@@ -205,20 +299,9 @@ export async function runJobsPass(
     options?.onSweepError
   );
 
-  const result = await runJobs({
-    store: repository,
-    registry,
-    runAs: options?.runAs ?? databaseRunAs(adapter),
-    now: options?.now,
-    runnerId: options?.runnerId,
-    batchSize: options?.batchSize,
-    maxDurationMs: options?.maxDurationMs,
-    leaseMs: options?.leaseMs,
-    random: options?.random,
-    // The real Direct API, resolved lazily per call so a job queued before the
-    // runtime finished booting still binds to a live one.
-    contentApi: nextly,
-  });
+  const result = await runJobs(
+    passDeps(adapter, registry, repository, options)
+  );
 
   // Prune AFTER the drain, and never in a way that can fail it. A queue without
   // this grows forever — a recurring workload writes one row per run, and every

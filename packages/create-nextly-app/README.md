@@ -143,9 +143,9 @@ Contributions of every size are welcome. Start with the [Contributing guide](htt
 
 ## Telemetry
 
-The Nextly CLI (`create-nextly-app` and `nextly`) collects anonymous usage data to help us improve the tool. No personal information, project contents, file paths, or secrets are collected. Telemetry is automatically disabled in CI, Docker, production, and non-interactive shells.
+The Nextly CLI (`create-nextly-app` and `nextly`) collects usage data under a random ID, to help us improve the tool: never your name, project contents, file paths or secrets. It is off in CI, Docker, production and non-interactive shells, and `nextly telemetry disable` turns it off.
 
-See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for the full list of what is and is not collected, and for instructions on opting out (`nextly telemetry disable` or `NEXTLY_TELEMETRY_DISABLED=1`).
+See [nextlyhq.com/docs/telemetry](https://nextlyhq.com/docs/telemetry) for the full list of what is and is not collected, and for the environment variable that also turns it off (`NEXTLY_TELEMETRY_DISABLED=1`).
 
 ## License
 

@@ -113,6 +113,12 @@ export const nextlyTables: TableDefinition[] = [
         type: "boolean",
       },
       {
+        // Nullable, as on the real table: unset reads as epoch zero, an
+        // account whose sessions no change has ended yet.
+        name: "session_epoch",
+        type: "integer",
+      },
+      {
         name: "password_hash",
         type: "text",
         nullable: false,
@@ -335,6 +341,10 @@ export const nextlyTables: TableDefinition[] = [
         name: "prt_used_at_idx",
         columns: ["used_at"],
       },
+      {
+        name: "prt_token_hash_idx",
+        columns: ["token_hash"],
+      },
     ],
   },
 
@@ -378,6 +388,10 @@ export const nextlyTables: TableDefinition[] = [
       {
         name: "evt_expires_idx",
         columns: ["expires"],
+      },
+      {
+        name: "evt_token_hash_idx",
+        columns: ["token_hash"],
       },
     ],
   },

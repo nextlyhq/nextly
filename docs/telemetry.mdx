@@ -3,9 +3,9 @@ title: Telemetry
 description: What Nextly's CLI collects, why, and how to opt out.
 ---
 
-Nextly collects anonymous usage data from its CLI tools (`create-nextly-app` and `nextly`) to understand which features are used, catch regressions, and make data-driven product decisions during alpha.
+Nextly collects usage data under a random ID from its CLI tools (`create-nextly-app` and `nextly`) to understand which features are used, catch regressions, and make data-driven product decisions during alpha.
 
-Telemetry is **anonymous**, **opt-out**, automatically disabled in CI, Docker, production, and non-interactive shells, and can be disabled permanently with one command or one environment variable.
+Telemetry never includes your name, project contents, file paths or secrets. It is **opt-out**, automatically disabled in CI, Docker, production, and non-interactive shells, and can be disabled permanently with one command or one environment variable. The random ID lasts between runs, and the `nextly` CLI also sends a hashed project ID with each event, so one install's events can be linked to each other, though never to an account or an email address.
 
 ## How to opt out
 
@@ -15,11 +15,12 @@ Any of these is enough. The first one you set wins.
 # Option 1: one-time command, persists in ~/.config/nextly/config.json
 nextly telemetry disable
 
-# Option 2: environment variable, per-session
-NEXTLY_TELEMETRY_DISABLED=1 next dev
+# Option 2: environment variable, per command (telemetry is sent only by the
+# `nextly` and `create-nextly-app` CLIs, never by your running app)
+NEXTLY_TELEMETRY_DISABLED=1 nextly migrate
 
 # Option 3: community standard (also respected by other tools)
-DO_NOT_TRACK=1 next dev
+DO_NOT_TRACK=1 nextly migrate
 ```
 
 ## What we collect
@@ -42,13 +43,13 @@ Every event includes this base context:
 
 | Event | Extra properties |
 |---|---|
-| `scaffold_started` | Flag presence booleans (`yes`, `demoData`, `skipInstall`, `useYalc`) |
+| `scaffold_started` | Flag presence booleans (`yes`, `skipInstall`, `useYalc`) |
 | `template_selected` | `template`, `approach` |
 | `database_selected` | `database` |
 | `install_started` | (none) |
 | `install_completed` | `duration_ms` |
 | `install_failed` | `duration_ms`, `error_code` |
-| `scaffold_completed` | `total_duration_ms`, `template`, `database`, `approach`, `demo_data` |
+| `scaffold_completed` | `total_duration_ms`, `template`, `database`, `approach` |
 | `scaffold_failed` | `stage`, `error_code`, `duration_ms` |
 
 ### `nextly` command events
@@ -79,7 +80,7 @@ Errors map to a fixed enum. Raw error messages and stack traces never leave your
 - Raw error messages or stack traces.
 - Next.js or Nextly config file contents.
 
-## How anonymous identity works
+## How the random ID works
 
 On first run, Nextly generates two random values:
 

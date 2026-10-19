@@ -127,8 +127,9 @@ export class PlainTextPasswordCleanup extends BaseService {
    * next is read, so no more than one page of values is held at once.
    *
    * Its refresh tokens go in the same transaction, so the account's sessions
-   * cannot be renewed. An access token already issued is not stored, and
-   * stays valid until it expires (fifteen minutes by default).
+   * cannot be renewed, and the same write raises its session epoch, so an
+   * access token already issued is refused within seconds wherever a session
+   * is read.
    */
   async clear(): Promise<number> {
     const { users } = this.tables;

@@ -8,14 +8,17 @@ export interface PasswordStrategyDeps {
    * failure leg (bad password / locked / unverified / inactive) — exactly as the
    * legacy login path did — and returns the user on success.
    *
-   * `passwordUpdatedAt`, when returned, is when the proven password was set; it
-   * is kept off the user the strategy hands on, and read back with
-   * {@link provenPasswordVersion}.
+   * `passwordUpdatedAt`, when returned, is when the proven password was set,
+   * and `sessionEpoch` the account's session epoch read with it; both are kept
+   * off the user the strategy hands on, and read back with
+   * {@link provenPasswordVersion} and {@link provenSessionEpoch}.
    */
   verify: (creds: {
     email: string;
     password: string;
-  }) => Promise<AuthUser & { passwordUpdatedAt?: Date | null }>;
+  }) => Promise<
+    AuthUser & { passwordUpdatedAt?: Date | null; sessionEpoch?: number }
+  >;
 }
 
 /**
@@ -27,6 +30,14 @@ export interface PasswordStrategyDeps {
  * login handler. Keyed weakly, so an entry lives as long as its login does.
  */
 const provenPasswordVersions = new WeakMap<AuthUser, Date | null>();
+
+/**
+ * The session epoch read with each proven password, keyed the same way. The
+ * stored password time has whole seconds on MySQL and SQLite, so a reset in
+ * the same second as the proof leaves it unchanged; the epoch it raised is
+ * what shows the proof is from before the reset.
+ */
+const provenSessionEpochs = new WeakMap<AuthUser, number>();
 
 /**
  * When the password `user` proved was set, if the built-in password strategy
@@ -42,6 +53,23 @@ export function provenPasswordVersion(user: AuthUser): Date | null | undefined {
 }
 
 /**
+ * The session epoch read with the password `user` proved, if the built-in
+ * password strategy authenticated it; `undefined` otherwise. The session the
+ * login issues is signed at it, and refused if the account's sessions were
+ * ended before its refresh row is written.
+ */
+export function provenSessionEpoch(user: AuthUser): number | undefined {
+  return provenSessionEpochs.get(user);
+}
+
+/**
+ * The built-in password strategies, known by identity rather than by name:
+ * an app's own strategy may also be called `password`, and its key must not
+ * become an account's.
+ */
+const accountKeyedStrategies = new WeakSet<AuthStrategy>();
+
+/**
  * @experimental The built-in `password` strategy. Returns `pass` when the request
  * carries no email/password (so another strategy can claim it), `authenticated`
  * on success, and re-throws the verifier's `NextlyError` on failure so the login
@@ -50,21 +78,42 @@ export function provenPasswordVersion(user: AuthUser): Date | null | undefined {
 export function createPasswordStrategy(
   deps: PasswordStrategyDeps
 ): AuthStrategy {
-  return {
+  const strategy: AuthStrategy = {
     name: "password",
+    // The email it signs in with, as every other flow names an account, so
+    // one address has one budget however it is attacked. It answers for every
+    // request: it runs last, and a request no strategy before it claims is
+    // one it is asked to authenticate.
+    limitKey: ({ body }) => ({
+      handles: true,
+      key: typeof body.email === "string" ? body.email : null,
+    }),
     async authenticate(input): Promise<AuthOutcome> {
       const { email, password } = input.body;
       if (typeof email !== "string" || typeof password !== "string") {
         return { type: "pass" };
       }
-      const { passwordUpdatedAt, ...user } = await deps.verify({
+      const { passwordUpdatedAt, sessionEpoch, ...user } = await deps.verify({
         email,
         password,
       });
       if (passwordUpdatedAt !== undefined) {
         provenPasswordVersions.set(user, passwordUpdatedAt);
       }
+      if (sessionEpoch !== undefined) {
+        provenSessionEpochs.set(user, sessionEpoch);
+      }
       return { type: "authenticated", user };
     },
   };
+  accountKeyedStrategies.add(strategy);
+  return strategy;
+}
+
+/**
+ * Whether `strategy` is a built-in password strategy, whose limit key is an
+ * account's email rather than a key of its own.
+ */
+export function namesAccountKey(strategy: AuthStrategy): boolean {
+  return accountKeyedStrategies.has(strategy);
 }

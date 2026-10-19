@@ -1,30 +1,35 @@
 "use client";
 /**
- * The draft mutations a reader performs while editing their dashboard.
+ * The draft mutations a reader performs while customising their dashboard.
  *
  * Lifted out of `useLayoutEditor` rather than left inline. Each is a small
  * closure, but a hook accumulating a dozen of them becomes a body nobody reads
  * end to end — and the mutations are the part where a mistake silently edits
- * the wrong card, so they are worth reading as a set.
+ * the wrong card, so they are worth reading as a set. Every one addresses its
+ * card by placement ID, through the pure rules in `layout-editor`.
  *
  * Every one goes through `mutatePlacements`, which owns the single decision
- * they all share: with no draft, do nothing. Spelled out per mutation it was
- * five copies of one null check, and the next one written slightly differently
- * would no-op when the draft is PRESENT rather than when it is absent.
+ * they all share: with no draft, do nothing.
  *
  * @module components/features/widgets/edit/usePlacementMutations
  */
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 
-import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
+import type {
+  WidgetPlacement,
+  WidgetWidth,
+  WidgetWidthFacts,
+} from "@admin/types/dashboard/widgets";
 
 import {
+  movePlacement,
   movePlacementTo,
   removePlacement,
+  restorePlacement,
   setPlacementConfig,
-  resolveDrop,
-  type DropTarget,
-  togglePlacementHidden,
+  setPlacementWidth,
+  type IsDrawn,
+  type MoveDirection,
 } from "../layout-editor";
 
 import type { LayoutDraft } from "./useLayoutEditor";
@@ -38,24 +43,28 @@ export interface PlacementMutations {
    * clearing one, since an emptied field arrives as an absent key.
    */
   setConfig: (placementId: string, config: Record<string, unknown>) => void;
-  move: (fromId: string, toId: string) => void;
-  dropOn: (activeId: string, target: DropTarget | null) => void;
-  toggleHidden: (placementId: string) => void;
+  /** Move one card to an end, or one step past its drawn neighbour. */
+  move: (placementId: string, direction: MoveDirection) => void;
+  /** A drag dropped `fromId` onto `toId`: it takes that card's position. */
+  moveTo: (fromId: string, toId: string) => void;
+  /** Set one card's width, when its widget allows that width. */
+  setWidth: (placementId: string, width: WidgetWidth) => void;
+  /** Take one card off the dashboard, keeping it in the list. */
   remove: (placementId: string) => void;
+  /** Put a removed card back where it was. */
+  restore: (placementId: string) => void;
 }
 
 export function usePlacementMutations(
   setDraft: Dispatch<SetStateAction<LayoutDraft | null>>,
-  columnCount: number
+  isDrawn: IsDrawn,
+  factsFor: (widgetId: string) => WidgetWidthFacts | undefined
 ): PlacementMutations {
   /**
    * Apply a change to the draft's placements, or do nothing without a draft.
    *
-   * Every mutation below was spelling this out: the same null check, the same
-   * spread, the same field. Five copies of one decision is five places for the
-   * next one to be written slightly differently, and the difference would be a
-   * mutation that silently no-ops when the draft is absent instead of when it
-   * is present.
+   * One place for the null check every mutation needs, so none of them can be
+   * written to no-op when the draft is PRESENT instead of when it is absent.
    */
   const mutatePlacements = useCallback(
     (change: (placements: WidgetPlacement[]) => WidgetPlacement[]) =>
@@ -68,30 +77,42 @@ export function usePlacementMutations(
   );
 
   const move = useCallback(
+    (placementId: string, direction: MoveDirection) =>
+      mutatePlacements(placements =>
+        movePlacement(placements, placementId, direction, isDrawn)
+      ),
+    [mutatePlacements, isDrawn]
+  );
+
+  const moveTo = useCallback(
     (fromId: string, toId: string) =>
       mutatePlacements(placements => movePlacementTo(placements, fromId, toId)),
     [mutatePlacements]
   );
 
-  const dropOn = useCallback(
-    (activeId: string, target: DropTarget | null) =>
-      mutatePlacements(placements =>
-        resolveDrop(placements, activeId, target, columnCount)
-      ),
-    [mutatePlacements, columnCount]
-  );
-
-  const toggleHidden = useCallback(
-    (placementId: string) =>
-      mutatePlacements(placements =>
-        togglePlacementHidden(placements, placementId)
-      ),
-    [mutatePlacements]
+  const setWidth = useCallback(
+    (placementId: string, width: WidgetWidth) =>
+      mutatePlacements(placements => {
+        // The allowed widths of THIS card's widget, read from the draft's own
+        // placement so a stale id cannot borrow another widget's list.
+        const placement = placements.find(p => p.id === placementId);
+        const allowed = placement
+          ? factsFor(placement.widgetId)?.allowedWidths
+          : undefined;
+        return setPlacementWidth(placements, placementId, width, allowed);
+      }),
+    [mutatePlacements, factsFor]
   );
 
   const remove = useCallback(
     (placementId: string) =>
       mutatePlacements(placements => removePlacement(placements, placementId)),
+    [mutatePlacements]
+  );
+
+  const restore = useCallback(
+    (placementId: string) =>
+      mutatePlacements(placements => restorePlacement(placements, placementId)),
     [mutatePlacements]
   );
 
@@ -103,5 +124,5 @@ export function usePlacementMutations(
     [mutatePlacements]
   );
 
-  return { move, dropOn, toggleHidden, remove, setConfig };
+  return { move, moveTo, setWidth, remove, restore, setConfig };
 }

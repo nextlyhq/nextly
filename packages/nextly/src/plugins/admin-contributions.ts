@@ -524,6 +524,54 @@ export interface PluginCollectionView {
   beforeEdit?: ComponentPath;
   /** Inject below the edit form. */
   afterEdit?: ComponentPath;
+  /**
+   * @experimental Full-screen views of one document, each at its own address
+   * under the document's: `/admin/collections/<slug>/<id>/<path>`, or
+   * `/admin/singles/<slug>/<path>` for a Single.
+   */
+  documentViews?: PluginDocumentView[];
+}
+
+/**
+ * @experimental A full-screen view of one document, contributed by a plugin.
+ *
+ * The admin keeps the document's own machinery around it: it loads the
+ * document, holds its soft lock, offers recovered unsaved work, asks before
+ * leaving with unsaved changes, and saves through the same actions the edit
+ * form uses. The view draws what it shows the author and nothing else, so a
+ * plugin never re-implements any of those.
+ *
+ * Refused at boot when its path is malformed, names one the document already
+ * uses (`versions`, `api`), or is claimed twice on one document.
+ */
+export interface PluginDocumentView {
+  /**
+   * The address segment after the document's own, in lowercase letters,
+   * digits and single dashes: `builder` gives `/admin/collections/pages/<id>/builder`.
+   */
+  path: string;
+  /** The view itself. */
+  component: ComponentPath;
+  /** What the admin calls the view where it offers a way in. */
+  label?: string;
+}
+
+/**
+ * @experimental A document view offered on every collection and Single that
+ * has a top-level field of one type, wherever that type is used — including
+ * collections created in the Schema Builder after boot, which no list of slugs
+ * could name.
+ *
+ * A plugin may scope a view only to a field type it contributes itself (boot
+ * refuses any other), so no plugin can add a screen to every document that has,
+ * say, a text field. A field inside a group or a repeater does not count.
+ *
+ * Which documents carry the field is not known at boot, so the path must be
+ * unique among every document view any plugin declares.
+ */
+export interface PluginFieldTypeDocumentView extends PluginDocumentView {
+  /** The field type, one of this plugin's own `contributes.fieldTypes`. */
+  fieldType: string;
 }
 
 /**
@@ -550,6 +598,11 @@ export interface PluginAdminContributions {
   widgets?: PluginAdminWidget[];
   /** Per-collection view overrides + injection points, keyed by slug. */
   views?: Record<string, PluginCollectionView>;
+  /**
+   * @experimental Document views offered wherever one of this plugin's own
+   * field types is used — see `PluginFieldTypeDocumentView`.
+   */
+  documentViews?: PluginFieldTypeDocumentView[];
   /**
    * Precompiled, `.nextly-admin`-scoped, token-driven CSS this plugin ships for
    * admin components whose utilities are not in the built-in safelist. A

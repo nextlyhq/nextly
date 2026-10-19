@@ -138,6 +138,9 @@ export type {
   PluginEmailTemplate,
   PluginFieldType,
   PluginFieldValidateArgs,
+  PluginFieldWrite,
+  PluginStoredValue,
+  PluginStoredValueTarget,
   PluginFieldInstance,
   PluginFieldIssue,
   PluginFieldValidationResult,
@@ -487,6 +490,7 @@ export type {
   PluginRouteHandler,
   PluginRouteMount,
   PluginRouteRateLimit,
+  PluginRouteLimitKey,
   Middleware,
   RouteMethod,
   AuthenticatedScope,
@@ -641,6 +645,7 @@ export {
  */
 export type {
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,
@@ -766,6 +771,7 @@ export {
   type QuerylessWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
+  type WidgetFieldChoice,
   type WidgetSourceFieldType,
   type WidgetSourceKind,
   type WidgetOp,

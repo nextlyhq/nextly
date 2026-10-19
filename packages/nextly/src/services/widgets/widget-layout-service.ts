@@ -14,8 +14,6 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq } from "drizzle-orm";
 
 import {
-  DEFAULT_COLUMN_COUNT,
-  type ColumnCount,
   readStoredLayout,
   serializeLayout,
   type StoredLayout,
@@ -189,14 +187,13 @@ export class WidgetLayoutService extends BaseService {
     scopeId: string,
     placements: readonly WidgetPlacement[],
     expectedVersion: number,
-    columnCount: ColumnCount = DEFAULT_COLUMN_COUNT,
     // Whether this write is a reader taking charge of the arrangement. The
     // caller resolves it -- including keeping an arranged row arranged -- and
     // this only records the answer; see `layoutIsArranged`.
     arranged = true
   ): Promise<number> {
     const id = layoutRowId(kind, scopeId);
-    const layout = serializeLayout(placements, columnCount, arranged);
+    const layout = serializeLayout(placements, arranged);
     const now = new Date();
 
     if (expectedVersion === NO_STORED_LAYOUT_VERSION) {
@@ -214,12 +211,7 @@ export class WidgetLayoutService extends BaseService {
         // Only a row that is now THERE makes this a lost race. `select` rather
         // than `getLayout`, because a row whose payload cannot be decoded still
         // occupies the primary key and still means this insert lost.
-        const existing = await this.db
-          .select({ id: this.table.id })
-          .from(this.table)
-          .where(eq(this.table.id, id))
-          .limit(1);
-        if (existing?.length) throw layoutConflict(error);
+        if (await this.rowExists(id)) throw layoutConflict(error);
         throw error;
       }
     }
@@ -239,25 +231,50 @@ export class WidgetLayoutService extends BaseService {
   }
 
   /**
-   * Removes one scope's arrangement, so reads fall back to the registry's own
-   * order again.
+   * Removes one scope's arrangement, so its reader follows the default
+   * dashboard again -- refusing if the row moved since the caller read it.
    *
-   * Idempotent, and that is the contract rather than an accident: resetting a
-   * dashboard that is already at its default is a request that has already been
-   * satisfied, so it answers the same way as one that removed a row. Reporting
-   * "nothing to delete" would make a client handle a state that is
-   * indistinguishable from success from the reader's side.
+   * 🔴 Guarded like every other write. A reset is staged in one tab and saved
+   * later; another tab may have saved an arrangement in between, and an
+   * unguarded delete would remove that newer arrangement, cards the stale tab
+   * never saw included. So the delete names the version it was staged against
+   * and the database settles it in the WHERE clause, as `saveLayout` does.
    *
-   * No version guard. Every other write on this table is a read-modify-write
-   * that a concurrent editor could silently overwrite, which is what `version`
-   * exists to catch — but this one carries no content to lose. A reset racing a
-   * save means one of them happened last, and both outcomes are states the
-   * reader asked for.
+   * A row that is already GONE is a reset that has already happened, which is
+   * the state the caller asked for, so it answers as a success. Only a row that
+   * is still there at another version is a conflict: that is the newer
+   * arrangement the guard exists to keep. `NO_STORED_LAYOUT_VERSION` means the
+   * caller believes there is no row, so any row found then is a newer one.
    */
-  async deleteLayout(kind: LayoutScopeKind, scopeId: string): Promise<void> {
-    await this.db
-      .delete(this.table)
-      .where(eq(this.table.id, layoutRowId(kind, scopeId)));
+  async deleteLayout(
+    kind: LayoutScopeKind,
+    scopeId: string,
+    expectedVersion: number
+  ): Promise<void> {
+    const id = layoutRowId(kind, scopeId);
+    if (expectedVersion !== NO_STORED_LAYOUT_VERSION) {
+      const result = await this.db
+        .delete(this.table)
+        .where(
+          and(eq(this.table.id, id), eq(this.table.version, expectedVersion))
+        );
+      if (affectedRowCount(result, this.dialect) > 0) return;
+    }
+    if (await this.rowExists(id)) throw layoutConflict();
+  }
+
+  /**
+   * Whether a row is stored under this id, whatever its payload holds. A row
+   * whose payload cannot be decoded still occupies the key, so this selects
+   * the id alone rather than reading the row through the decoder.
+   */
+  private async rowExists(id: string): Promise<boolean> {
+    const existing = await this.db
+      .select({ id: this.table.id })
+      .from(this.table)
+      .where(eq(this.table.id, id))
+      .limit(1);
+    return Boolean(existing?.length);
   }
 }
 

@@ -22,12 +22,17 @@
 import { dequal } from "dequal";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import {
+  SYSTEM_COLUMNS,
+  type SystemColumnEntity,
+} from "../../../lib/system-columns";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
+import { documentSystemKeys } from "../snapshot-system-keys";
 
 import { maskSecret } from "./mask-secret";
 import { reconcileById, type ItemMatch } from "./reconcile-list";
@@ -35,9 +40,11 @@ import { richTextNode } from "./rich-text-node";
 import { PLAINTEXT, sourceNode, type SourceSide } from "./source-node";
 import { diffText } from "./text-diff";
 import type {
+  DiffPathSegment,
   DiffStatus,
   FieldDiff,
   FieldDisplay,
+  HiddenFieldDiff,
   ListItemDiff,
   NodeMeta,
   RelationTarget,
@@ -46,21 +53,40 @@ import type {
 } from "./types";
 
 /** The engine's output; the caller stamps `from`/`to`/`locale`. */
-export type VersionDiffBody = Pick<VersionDiff, "hasChanges" | "fields">;
+export type VersionDiffBody = Pick<
+  VersionDiff,
+  "hasChanges" | "fields" | "incomplete"
+>;
 
 export interface ComputeDiffOptions {
   /** Drop every node that did not change (nested included). */
   modifiedOnly?: boolean;
+  /**
+   * Fields the caller's redaction removed from either snapshot: a top-level
+   * name, or a dotted path below it (`banner.secret`). Each is reported in its
+   * place as a hidden node rather than left out, so the reader learns it
+   * exists without learning anything about its values.
+   *
+   * @experimental
+   */
+  withheld?: ReadonlySet<string>;
+  /**
+   * Whether the caller's redaction applied each component's own read rules
+   * inside the snapshots. Without it, a component field that declares a read
+   * rule is left out, since nothing has judged it for this reader.
+   *
+   * @experimental
+   */
+  componentRulesApplied?: boolean;
+  /**
+   * The kind of document compared. A framework column belongs to some kinds
+   * only (a Single has no owner column), and a key that is not one of this
+   * kind's columns is a removed field. Defaults to `collection`.
+   *
+   * @experimental
+   */
+  entity?: SystemColumnEntity;
 }
-
-// Framework-managed columns on a top-level document, never user content.
-const SYSTEM_KEYS = new Set([
-  "id",
-  "createdAt",
-  "updatedAt",
-  "createdBy",
-  "status",
-]);
 
 // The only framework key on a NESTED ROW (a component instance or repeater
 // item). A plain group has no framework columns at all, so a group child named
@@ -69,10 +95,42 @@ const SYSTEM_KEYS = new Set([
 const ROW_SYSTEM_KEYS = new Set(["id"]);
 const NO_SYSTEM_KEYS = new Set<string>();
 
+// Every column the framework keeps on a document of each kind, under both
+// spellings. A key among them that the schema does not declare is a system
+// field (when it was first published, say), not a field the content type has
+// lost.
+function systemColumnKeys(entity: SystemColumnEntity): ReadonlySet<string> {
+  return new Set(
+    SYSTEM_COLUMNS.filter(column => column.appliesTo.includes(entity)).flatMap(
+      column => [column.name, column.camelName]
+    )
+  );
+}
+const SYSTEM_COLUMN_KEYS: Readonly<
+  Record<SystemColumnEntity, ReadonlySet<string>>
+> = {
+  collection: systemColumnKeys("collection"),
+  single: systemColumnKeys("single"),
+};
+const NOTHING_WITHHELD: ReadonlySet<string> = new Set();
+
 /** Where in the tree a walk is, which decides framework-key and redaction rules. */
 interface WalkContext {
   /** The top-level document object (framework columns live here). */
   top: boolean;
+  /** The framework columns this kind of document carries. */
+  systemColumns: ReadonlySet<string>;
+  /** Top-level keys this kind of document never treats as content. */
+  documentKeys: ReadonlySet<string>;
+  /** The containers this level sits inside, outermost first. */
+  path: DiffPathSegment[];
+  /**
+   * What the caller's redaction removed: top-level names, and dotted paths
+   * for nested levels.
+   */
+  withheld: ReadonlySet<string>;
+  /** Whether component read rules were applied before the walk. */
+  componentRulesApplied: boolean;
   /** A component-instance or repeater ROW object (its `id` is framework). */
   inRow: boolean;
   /**
@@ -216,9 +274,53 @@ function asText(value: unknown): string {
 }
 
 /** Whether a field declares a read-access rule (a function or a serialized rule). */
+/** The label a field declares, trimmed; null for none or a blank one. */
+function declaredLabelOf(field: FieldConfig): string | null {
+  const label = (field as { label?: unknown }).label;
+  return typeof label === "string" && label.trim() !== "" ? label.trim() : null;
+}
+
+/**
+ * The context one level down, inside `container`. A container contributes a
+ * heading when it has a name or a label; one with neither shows none on the
+ * form, so it adds none here.
+ */
+function inside(
+  container: FieldConfig,
+  ctx: WalkContext,
+  level: Pick<WalkContext, "top" | "inRow" | "inComponent">
+): WalkContext {
+  const name =
+    container.name !== undefined && container.name !== ""
+      ? container.name
+      : null;
+  const declaredLabel = declaredLabelOf(container);
+  const segment: DiffPathSegment[] =
+    name === null && declaredLabel === null
+      ? []
+      : [{ name, declaredLabel, type: container.type }];
+  return {
+    ...level,
+    systemColumns: ctx.systemColumns,
+    documentKeys: ctx.documentKeys,
+    path: [...ctx.path, ...segment],
+    // Every level: redaction names a nested field by its dotted path.
+    withheld: ctx.withheld,
+    componentRulesApplied: ctx.componentRulesApplied,
+  };
+}
+
 function hasReadAccessRule(field: FieldConfig): boolean {
   const read = (field as { access?: { read?: unknown } }).access?.read;
   return read !== undefined && read !== null;
+}
+
+/** The key redaction withholds a field under: its name, after its named containers. */
+function withheldKey(path: readonly DiffPathSegment[], name: string): string {
+  return [
+    ...path.flatMap(segment => (segment.name ? [segment.name] : [])),
+    name,
+  ].join(".");
 }
 
 // ---- relationship targets ---------------------------------------------------
@@ -452,7 +554,9 @@ function groupNode(
   // real empty container: it is diffed normally below, so its unknown-key pass
   // still withholds any stray stored value while a genuinely empty one shows
   // nothing rather than a false "schema unavailable" warning.
-  if (childFields === undefined) return unknownNode(meta.name, before, after);
+  if (childFields === undefined) {
+    return unknownNode(meta.name, before, after, meta.path, "removed");
+  }
   const fields = collectNodes(childFields, before, after, ctx);
   const changed = fields.some(n => n.status !== "unchanged");
   return {
@@ -595,10 +699,11 @@ function listNode(
   const { items: matches } = reconcileById(beforeArr, afterArr);
   // Every list item is a row (its `id` is framework metadata). A repeater's
   // rows keep the current component context; a component list descends into one.
-  const itemCtx: WalkContext =
-    field.type === "repeater"
-      ? { top: false, inRow: true, inComponent: ctx.inComponent }
-      : { top: false, inRow: true, inComponent: true };
+  const itemCtx = inside(field, ctx, {
+    top: false,
+    inRow: true,
+    inComponent: field.type === "repeater" ? ctx.inComponent : true,
+  });
   const items = matches.map(m => itemDiff(m, field, itemCtx));
   const changed = items.some(i => i.status !== "unchanged" || i.hasMoved);
   let status: DiffStatus = "unchanged";
@@ -611,7 +716,9 @@ function listNode(
 function unknownNode(
   key: string,
   before: unknown,
-  after: unknown
+  after: unknown,
+  path: DiffPathSegment[],
+  reason: NonNullable<UnknownFieldDiff["reason"]>
 ): UnknownFieldDiff {
   // Presence still classifies the change, but the value is never emitted: a
   // field gone from the schema has no findable access rule, so its history
@@ -620,6 +727,27 @@ function unknownNode(
     kind: "unknown",
     name: key,
     status: statusFromPresence(before, after, !dequal(before, after)),
+    reason,
+    path,
+  };
+}
+
+/** A field redaction withheld: named in its place, with nothing of its values. */
+function hiddenNode(
+  field: FieldConfig,
+  name: string,
+  ctx: WalkContext
+): HiddenFieldDiff {
+  const declaredLabel = declaredLabelOf(field);
+  return {
+    kind: "hidden",
+    reason: "no-access",
+    name,
+    label: declaredLabel ?? name,
+    declaredLabel,
+    type: field.type,
+    status: "unchanged",
+    path: ctx.path,
   };
 }
 
@@ -675,18 +803,24 @@ function nestedNode(
   // A named group's value is a nested object (no longer the top level) but has
   // no framework columns of its own, and it is not a component subtree.
   if (field.type === "group") {
-    return groupNode(meta, inlineFields(field) ?? [], before, after, {
-      top: false,
-      inRow: false,
-      inComponent: ctx.inComponent,
-    });
+    return groupNode(
+      meta,
+      inlineFields(field) ?? [],
+      before,
+      after,
+      inside(field, ctx, {
+        top: false,
+        inRow: false,
+        inComponent: ctx.inComponent,
+      })
+    );
   }
   // A component instance is a row (its `id` is framework) inside a component.
-  const componentCtx: WalkContext = {
+  const componentCtx = inside(field, ctx, {
     top: false,
     inRow: true,
     inComponent: true,
-  };
+  });
   return (
     componentSwapNode(meta, field, before, after, componentCtx) ??
     groupNode(
@@ -750,7 +884,14 @@ function diffField(
   rawAfter: unknown,
   ctx: WalkContext
 ): FieldDiff {
-  const meta: NodeMeta = { name, label: field.label ?? name, type: field.type };
+  const declaredLabel = declaredLabelOf(field);
+  const meta: NodeMeta = {
+    name,
+    label: declaredLabel ?? name,
+    declaredLabel,
+    path: ctx.path,
+    type: field.type,
+  };
   const before = normalizeStoredValue(field, rawBefore);
   const after = normalizeStoredValue(field, rawAfter);
 
@@ -788,46 +929,93 @@ function collectNodes(
 ): FieldDiff[] {
   const beforeObj = asObject(before);
   const afterObj = asObject(after);
-  const nodes: FieldDiff[] = [];
-  for (const field of fields) {
-    const name = field.name;
-    if (name === undefined || name === "") {
-      const inner = presentationalChildren(field);
-      if (inner) {
-        // A nameless container's children live flat on THIS object, so the
-        // level (top-ness, row-ness) is unchanged; only component-ness may.
-        const innerCtx: WalkContext = isComponentField(field)
-          ? { top: ctx.top, inRow: ctx.inRow, inComponent: true }
-          : { top: ctx.top, inRow: ctx.inRow, inComponent: ctx.inComponent };
-        nodes.push(...collectNodes(inner, beforeObj, afterObj, innerCtx));
-      }
-      continue;
-    }
-    if (field.type === "password") continue;
-    // Redaction never ran inside a component, so a field declaring a read rule
-    // there is omitted rather than risk exposing a value the caller may not read.
-    if (ctx.inComponent && hasReadAccessRule(field)) continue;
-    if (!(name in beforeObj) && !(name in afterObj)) continue;
-    nodes.push(diffField(field, name, beforeObj[name], afterObj[name], ctx));
-  }
+  return [
+    ...fields.flatMap(field => fieldNodes(field, beforeObj, afterObj, ctx)),
+    ...undeclaredNodes(fields, beforeObj, afterObj, ctx),
+  ];
+}
 
-  // Framework keys depend on the object: the document has the full set, a
-  // component/repeater row has only `id`, and a plain group has none (a group
-  // child named `id`/`status` is user content).
-  const systemKeys = ctx.top
-    ? SYSTEM_KEYS
-    : ctx.inRow
-      ? ROW_SYSTEM_KEYS
-      : NO_SYSTEM_KEYS;
+/** The nodes one declared field contributes at this level: none, one, or a nameless container's. */
+function fieldNodes(
+  field: FieldConfig,
+  beforeObj: Record<string, unknown>,
+  afterObj: Record<string, unknown>,
+  ctx: WalkContext
+): FieldDiff[] {
+  const name = field.name;
+  if (name === undefined || name === "") {
+    const inner = presentationalChildren(field);
+    if (!inner) return [];
+    // A nameless container's children live flat on THIS object, so the level
+    // (top-ness, row-ness) is unchanged; only component-ness may.
+    const innerCtx = inside(field, ctx, {
+      top: ctx.top,
+      inRow: ctx.inRow,
+      inComponent: isComponentField(field) ? true : ctx.inComponent,
+    });
+    return collectNodes(inner, beforeObj, afterObj, innerCtx);
+  }
+  if (field.type === "password") return [];
+  // Unless the caller's redaction judged component rules, a component field
+  // that declares one is left out: nothing has decided this reader may see it.
+  if (
+    ctx.inComponent &&
+    !ctx.componentRulesApplied &&
+    hasReadAccessRule(field)
+  ) {
+    return [];
+  }
+  // Withheld from either version: say so in place, and diff neither side. A
+  // rule that reads the document can deny one version only, and comparing the
+  // side that is left would still say the field came or went. Below the top
+  // level, redaction names a field by its dotted path (`banner.secret`),
+  // components included, since their own read rules run before the diff.
+  if (ctx.withheld.has(withheldKey(ctx.path, name))) {
+    return [hiddenNode(field, name, ctx)];
+  }
+  if (!(name in beforeObj) && !(name in afterObj)) return [];
+  return [diffField(field, name, beforeObj[name], afterObj[name], ctx)];
+}
+
+/**
+ * Keys a snapshot holds at this level that no declared field consumes: system
+ * fields first, then the fields the content type no longer has, so a removed
+ * field never sits among the ones a reader is working with.
+ */
+function undeclaredNodes(
+  fields: FieldConfig[],
+  beforeObj: Record<string, unknown>,
+  afterObj: Record<string, unknown>,
+  ctx: WalkContext
+): FieldDiff[] {
+  const ignored = frameworkKeysAt(ctx);
   const consumed = topLevelNames(fields);
   const keys = new Set([...Object.keys(beforeObj), ...Object.keys(afterObj)]);
+  const system: FieldDiff[] = [];
+  const removed: FieldDiff[] = [];
   for (const key of keys) {
-    if (consumed.has(key) || systemKeys.has(key) || key.startsWith("_")) {
-      continue;
-    }
-    nodes.push(unknownNode(key, beforeObj[key], afterObj[key]));
+    if (consumed.has(key) || ignored.has(key) || key.startsWith("_")) continue;
+    const isSystem = ctx.top && ctx.systemColumns.has(key);
+    const node = unknownNode(
+      key,
+      beforeObj[key],
+      afterObj[key],
+      ctx.path,
+      isSystem ? "system" : "removed"
+    );
+    (isSystem ? system : removed).push(node);
   }
-  return nodes;
+  return [...system, ...removed];
+}
+
+/**
+ * Framework keys depend on the object: the document has the full set, a
+ * component/repeater row has only `id`, and a plain group has none (a group
+ * child named `id`/`status` is user content).
+ */
+function frameworkKeysAt(ctx: WalkContext): ReadonlySet<string> {
+  if (ctx.top) return ctx.documentKeys;
+  return ctx.inRow ? ROW_SYSTEM_KEYS : NO_SYSTEM_KEYS;
 }
 
 /** Every name consumed at the top level, following nameless containers down. */
@@ -842,6 +1030,17 @@ function topLevelNames(fields: FieldConfig[]): Set<string> {
     if (inner) for (const name of topLevelNames(inner)) names.add(name);
   }
   return names;
+}
+
+/** Whether any node, at any depth, is a field redaction withheld. */
+function containsHidden(nodes: readonly FieldDiff[]): boolean {
+  return nodes.some(
+    node =>
+      node.kind === "hidden" ||
+      (node.kind === "group" && containsHidden(node.fields)) ||
+      (node.kind === "list" &&
+        node.items.some(item => containsHidden(item.fields)))
+  );
 }
 
 // ---- pruning for modifiedOnly ----------------------------------------------
@@ -881,10 +1080,21 @@ export function computeVersionDiff(
     top: true,
     inRow: false,
     inComponent: false,
+    systemColumns: SYSTEM_COLUMN_KEYS[opts.entity ?? "collection"],
+    documentKeys: documentSystemKeys(opts.entity ?? "collection"),
+    path: [],
+    withheld: opts.withheld ?? NOTHING_WITHHELD,
+    componentRulesApplied: opts.componentRulesApplied === true,
   });
   const hasChanges = nodes.some(n => n.status !== "unchanged");
-  if (!opts.modifiedOnly) return { hasChanges, fields: nodes };
+  // Read before pruning: a field withheld inside a group, a repeater row or a
+  // component is a hidden node at that depth, and `modifiedOnly` drops it with
+  // the other unchanged nodes, so the flag is what still tells the reader.
+  const incomplete = containsHidden(nodes);
+  if (!opts.modifiedOnly) return { hasChanges, incomplete, fields: nodes };
 
+  // Changed nodes only. A hidden field's change cannot be known, so it is not
+  // listed as one; `incomplete` tells the reader the comparison left it out.
   const fieldsOut = nodes.filter(n => n.status !== "unchanged").map(pruneNode);
-  return { hasChanges, fields: fieldsOut };
+  return { hasChanges, incomplete, fields: fieldsOut };
 }

@@ -190,6 +190,63 @@ describe("useWidgetQueries", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("keeps the server's unavailable code on a failed slot, and only that code", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: false, error: "Unavailable.", code: "unavailable" },
+        { ok: false, error: "Something else.", code: "teapot" },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "core/forbidden",
+            query: countQuery("collection:secret"),
+          },
+          { placementId: "core/odd", query: countQuery("collection:posts") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.slots["core/odd"]).toBeDefined());
+    // The card can only say "Not available to you" if the code survives the parse...
+    expect(result.current.slots["core/forbidden"]).toEqual({
+      ok: false,
+      error: "Unavailable.",
+      code: "unavailable",
+    });
+    // ...and a code it does not know is not passed on as if it meant something.
+    expect(result.current.slots["core/odd"]).toEqual({
+      ok: false,
+      error: "Something else.",
+    });
+  });
+
+  it("drops the unavailable code from a refusal with no usable message", async () => {
+    // A slot missing its message is a broken answer that may recover; kept, the code would hide
+    // that behind the unavailable state, which offers no Retry.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: false, error: "", code: "unavailable" }],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/broken", query: countQuery("collection:posts") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["core/broken"]).toBeDefined()
+    );
+    const slot = result.current.slots["core/broken"];
+    expect(slot?.ok).toBe(false);
+    expect(slot).not.toHaveProperty("code");
+  });
+
   it("issues no request at all when there is nothing to ask", async () => {
     const { result } = renderHook(() => useWidgetQueries([]), { wrapper });
 
@@ -632,6 +689,94 @@ describe("useWidgetQueries", () => {
       });
     });
 
+    it("carries a column's value labels through", async () => {
+      // Rebuilt from checked fields, so labels it did not read would be lost here, and a row
+      // would print `needs_review` where the server said "Needs review".
+      const fields = [
+        {
+          name: "stage",
+          type: "string",
+          choices: [{ value: "needs_review", label: "Needs review" }],
+        },
+      ];
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "list", items: [{ stage: "needs_review" }], fields },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "list", items: [{ stage: "needs_review" }], fields },
+      });
+    });
+
+    it.each([
+      ["a value that is not a string", { value: 3, label: "Three" }],
+      ["an empty label", { value: "done", label: "" }],
+      ["a label of spaces", { value: "done", label: "   " }],
+    ])("drops value labels with %s but keeps the column", async (_, choice) => {
+      // Presentation, so a broken list costs the labels, not the column or the rows.
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ stage: "done" }],
+            fields: [{ name: "stage", label: "Stage", choices: [choice] }],
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ stage: "done" }],
+          fields: [{ name: "stage", label: "Stage" }],
+        },
+      });
+    });
+
+    it("carries a grouped result's field through", async () => {
+      const field = {
+        name: "stage",
+        label: "Stage",
+        type: "string",
+        choices: [{ value: "done", label: "Done" }],
+      };
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "done", count: 2 }],
+            field,
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "groupBy",
+          buckets: [{ value: "done", count: 2 }],
+          field,
+        },
+      });
+    });
+
+    it("keeps the buckets when the grouped field is malformed", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "done", count: 2 }],
+            field: { label: "no name" },
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "groupBy", buckets: [{ value: "done", count: 2 }] },
+      });
+    });
+
     it("drops malformed column descriptions without losing the rows", async () => {
       // A malformed heading costs the columns and nothing more. The rows are
       // the answer, and refusing the whole result over its headings would turn
@@ -970,5 +1115,48 @@ describe("useWidgetQueries, a malformed timeline point", () => {
     await waitFor(() =>
       expect(result.current.cellSlots.p1?.trend?.ok).toBe(false)
     );
+  });
+});
+
+describe("the tier an answer was fetched at", () => {
+  it("travels with the cached answer, to a card that returns while it is still in flight", async () => {
+    // A card asked at small leaves before its answer lands, and comes back wider: the new
+    // render takes over the request already in flight. The answer it receives is the small one,
+    // so it must know that, or it never asks for the rows it is missing.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retryDelay: 0, gcTime: 60_000 } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    let answer: (body: unknown) => void = () => {};
+    vi.mocked(protectedApi.post).mockImplementation(
+      () => new Promise(resolve => (answer = resolve))
+    );
+    const list: WidgetQuery = {
+      source: "collection:posts",
+      op: "list",
+      limit: 8,
+    };
+    const asked = (tier: "small" | "medium") => [
+      {
+        placementId: "p1",
+        query: list,
+        sized: { query: { ...list, limit: tier === "small" ? 4 : 9 }, tier },
+      },
+    ];
+
+    const left = renderHook(() => useWidgetQueries(asked("small")), {
+      wrapper: shared,
+    });
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
+    left.unmount();
+
+    const back = renderHook(() => useWidgetQueries(asked("medium")), {
+      wrapper: shared,
+    });
+    answer({ results: [{ ok: true, result: { op: "list", items: [] } }] });
+    await waitFor(() => expect(back.result.current.slots.p1).toBeDefined());
+    expect(back.result.current.fetchedTierFor("p1")).toBe("small");
   });
 });

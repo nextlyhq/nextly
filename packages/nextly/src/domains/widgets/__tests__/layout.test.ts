@@ -1,26 +1,28 @@
 /**
- * What a stored dashboard arrangement may hold, and -- the half that is easy to
- * get backwards -- what it must NOT refuse.
+ * What a stored dashboard arrangement may hold, how earlier formats are read,
+ * and -- the half that is easy to get backwards -- what it must NOT refuse.
  */
 import { describe, expect, it } from "vitest";
 
-import type { WidgetDefinition } from "../definition";
 import {
-  DEFAULT_COLUMN_COUNT,
   LAYOUT_SCHEMA_VERSION,
   MAX_CONFIG_DEPTH,
   MAX_PLACEMENTS,
+  MAX_STORED_PLACEMENTS,
+  applyRetirements,
   defaultPlacements,
-  resolvePlacementIds,
   layoutSizeProblem,
-  visibilityToken,
   mergePreservingHidden,
   partitionPlacements,
   placementProblem,
   readPlacements,
   readStoredLayout,
+  resolvePlacementIds,
   serializeLayout,
+  visibilityToken,
   type WidgetPlacement,
+  type WidgetRetirement,
+  type WidgetRetirements,
 } from "../layout";
 
 /** A placement that satisfies every rule, for a test to break one field of. */
@@ -30,784 +32,963 @@ function placement(
   return {
     id: "p1",
     widgetId: "core/team",
-    column: 0,
-    order: 0,
-    hidden: false,
+    width: "half",
+    removed: false,
     ...patch,
   };
 }
 
-function widget(patch: Partial<WidgetDefinition>): WidgetDefinition {
-  return {
-    id: "core/team",
-    title: "Team",
-    archetype: "custom",
-    defaultSize: "full",
-    component: "core#TeamSummary",
-    ...patch,
-  } as WidgetDefinition;
+/** A current-format card. */
+function card(
+  id: string,
+  widgetId = `core/${id}`,
+  patch: Partial<WidgetPlacement> = {}
+): WidgetPlacement {
+  return { id, widgetId, width: "full", removed: false, ...patch };
+}
+
+/** A stored row of the columns format, as earlier releases wrote it. */
+function columnsRow(
+  placements: Array<Record<string, unknown>>,
+  extra: Record<string, unknown> = {}
+): string {
+  return JSON.stringify({
+    schemaVersion: 2,
+    columnCount: 3,
+    placements,
+    ...extra,
+  });
 }
 
 describe("placement shape", () => {
-  it.each([
-    ["a non-object", 42, /must be an object/],
-    ["a null", null, /must be an object/],
-    ["a blank id", placement({ id: "   " }), /non-empty "id"/],
-    ["a missing id", placement({ id: undefined }), /non-empty "id"/],
-    ["a blank widgetId", placement({ widgetId: "" }), /non-empty "widgetId"/],
-    ["a string order", placement({ order: "1" }), /"order" must be a finite/],
-    [
-      "a NaN order",
-      placement({ order: Number.NaN }),
-      /"order" must be a finite/,
-    ],
-    [
-      "an infinite order",
-      placement({ order: Number.POSITIVE_INFINITY }),
-      /"order" must be a finite/,
-    ],
-    [
-      "a missing hidden",
-      placement({ hidden: undefined }),
-      /"hidden" must be a boolean/,
-    ],
-    ["a truthy hidden", placement({ hidden: 1 }), /"hidden" must be a boolean/],
-    [
-      "a numeric size",
-      placement({ size: 3 }),
-      /"size", when given, must be a string/,
-    ],
-    [
-      "a numeric height",
-      placement({ height: 3 }),
-      /"height", when given, must be a string/,
-    ],
-    [
-      "an array config",
-      placement({ config: [] }),
-      /"config", when given, must be an object/,
-    ],
-  ])("refuses %s", (_label, value, expected) => {
-    const problem = placementProblem(value);
-    expect(problem).toBeDefined();
-    // The diagnostic is asserted, not merely its presence: several of these
-    // fixtures could be refused by a DIFFERENT rule than the one they are here
-    // to exercise, and a bare `toBeDefined()` would stay green if the rule
-    // under test were deleted.
-    expect(problem).toMatch(expected);
+  it("accepts a placement in the current format", () => {
+    expect(placementProblem(placement())).toBeUndefined();
   });
 
-  it("accepts a size this core has never heard of", () => {
-    // 🔴 THE rule this module exists to get right. `size` is seeded from a
-    // widget's `defaultSize`, and that widget may come from a plugin built
-    // against a NEWER core -- so a stored layout can legitimately name a size
-    // outside `WIDGET_SIZES`. Refusing it here would throw on read and destroy
-    // the reader's entire saved dashboard over one card, while the admin that
-    // draws it already survives the same value by falling back to `full`.
-    expect(placementProblem(placement({ size: "xxl" }))).toBeUndefined();
-    expect(placementProblem(placement({ height: "enormous" }))).toBeUndefined();
+  it("accepts each of the five widths and nothing else", () => {
+    for (const width of ["quarter", "third", "half", "twoThirds", "full"]) {
+      expect(placementProblem(placement({ width }))).toBeUndefined();
+    }
+    for (const width of ["sm", "lg", "Full", "", 6, undefined]) {
+      expect(placementProblem(placement({ width }))).toMatch(/"width"/);
+    }
+  });
+
+  it("requires removed to be a boolean", () => {
+    expect(placementProblem(placement({ removed: "no" }))).toMatch(/"removed"/);
+  });
+
+  it("refuses a placement in the columns format", () => {
+    // An admin built before this format sends column, order, hidden and size.
+    // It has no width and no removed flag, so it is refused rather than stored
+    // half-understood.
+    expect(
+      placementProblem({
+        id: "p1",
+        widgetId: "core/team",
+        column: 0,
+        order: 0,
+        hidden: false,
+        size: "md",
+      })
+    ).toMatch(/"width"/);
   });
 
   it("accepts a widgetId that names nothing", () => {
-    // Whether a widget exists is a question about the LIVE registry, asked on
-    // every read. Freezing it here would refuse a layout naming a plugin that
-    // is merely disabled today.
+    // Whether a widget exists is the live registry's question, asked on every
+    // read; refusing here would freeze the answer at save time.
     expect(
-      placementProblem(placement({ widgetId: "gone/away" }))
+      placementProblem(placement({ widgetId: "gone/never-was" }))
     ).toBeUndefined();
   });
 
-  it("accepts a negative and a fractional order", () => {
-    expect(placementProblem(placement({ order: -5 }))).toBeUndefined();
-    expect(placementProblem(placement({ order: 1.5 }))).toBeUndefined();
+  it("requires an id and a widget id with real text", () => {
+    expect(placementProblem(placement({ id: " " }))).toMatch(/"id"/);
+    expect(placementProblem(placement({ widgetId: "" }))).toMatch(/"widgetId"/);
+    expect(placementProblem("p1")).toMatch(/object/);
   });
 });
 
 describe("reading placements", () => {
   it("keeps only the fields core stores", () => {
-    const [read] = readPlacements([
-      placement({ config: { a: 1 }, smuggled: "nope" }),
+    expect(
+      readPlacements([
+        placement({ config: { range: 7 }, column: 2, extra: "dropped" }),
+      ])
+    ).toEqual([
+      {
+        id: "p1",
+        widgetId: "core/team",
+        width: "half",
+        removed: false,
+        config: { range: 7 },
+      },
     ]);
-    expect(read).toEqual({
-      id: "p1",
-      widgetId: "core/team",
-      column: 0,
-      order: 0,
-      hidden: false,
-      config: { a: 1 },
-    });
-    expect(read).not.toHaveProperty("smuggled");
   });
 
   it("names the index of the offending placement", () => {
     expect(() =>
-      readPlacements([placement(), placement({ order: "x" })])
+      readPlacements([placement(), placement({ width: "wide" })])
     ).toThrow(/placements\[1\]/);
   });
 
   it("refuses a non-array", () => {
-    expect(() => readPlacements({})).toThrow(/"placements" must be an array/);
+    expect(() => readPlacements({})).toThrow(/must be an array/);
   });
 });
 
 describe("reading a stored row", () => {
-  it("round-trips what it serialized", () => {
-    const placements: WidgetPlacement[] = [
-      {
-        id: "a",
-        widgetId: "core/team",
-        column: 1,
-        order: 0,
-        hidden: true,
-        size: "md",
-      },
+  it("round-trips what it serialized, in order", () => {
+    const placements = [
+      card("b", "core/b", { width: "quarter", config: { n: 1 } }),
+      card("a", "core/a", { removed: true }),
     ];
-    expect(readStoredLayout(serializeLayout(placements)).placements).toEqual(
-      placements
-    );
+    const read = readStoredLayout(serializeLayout(placements));
+    expect(read.schemaVersion).toBe(LAYOUT_SCHEMA_VERSION);
+    expect(read.placements).toEqual(placements);
+    expect(read.unarranged).toBeUndefined();
   });
 
-  it.each([
-    ["unparseable JSON", "{not json"],
-    ["a JSON array", "[]"],
-    ["a JSON scalar", "7"],
-  ])("throws on %s", (_label, raw) => {
-    expect(() => readStoredLayout(raw)).toThrow();
+  it("keeps the unarranged mark through a round trip", () => {
+    expect(
+      readStoredLayout(serializeLayout([card("a")], false)).unarranged
+    ).toBe(true);
   });
 
   it("throws on a schema version this core did not write", () => {
-    // The ONE closed vocabulary in the module, and legitimate because core
-    // wrote the value itself. A higher version means the row came from a newer
-    // core and holds fields the next write would silently drop.
-    const newer = JSON.stringify({
-      schemaVersion: LAYOUT_SCHEMA_VERSION + 1,
-      placements: [],
-    });
-    expect(() => readStoredLayout(newer)).toThrow();
+    for (const schemaVersion of [0, 4, "3", undefined]) {
+      expect(() =>
+        readStoredLayout(JSON.stringify({ schemaVersion, placements: [] }))
+      ).toThrow();
+    }
+  });
+
+  it("throws on text that is not a JSON object", () => {
+    expect(() => readStoredLayout("{not json")).toThrow();
+    expect(() => readStoredLayout("[]")).toThrow();
+    expect(() => readStoredLayout("null")).toThrow();
+  });
+
+  it("throws on a current-format row holding a placement it cannot read", () => {
     expect(() =>
-      readStoredLayout(JSON.stringify({ placements: [] }))
+      readStoredLayout(
+        JSON.stringify({
+          schemaVersion: LAYOUT_SCHEMA_VERSION,
+          placements: [placement({ width: "huge" })],
+        })
+      )
     ).toThrow();
   });
 });
 
-describe("a placement's column, when it states one", () => {
-  const base = { id: "p1", widgetId: "core/a", order: 0, hidden: false };
+describe("a columns-format row becomes one ordered list", () => {
+  // Three columns, two rows. Positions were announced row by row: across the
+  // tops of the columns, then the next row down.
+  const stored = [
+    { id: "c0r1", widgetId: "w/a", column: 0, order: 10, hidden: false },
+    { id: "c2r0", widgetId: "w/b", column: 2, order: 0, hidden: false },
+    { id: "c1r1", widgetId: "w/c", column: 1, order: 10, hidden: true },
+    { id: "c0r0", widgetId: "w/d", column: 0, order: 0, hidden: false },
+    { id: "c1r0", widgetId: "w/e", column: 1, order: 0, hidden: false },
+  ];
 
-  it("REFUSES a column that is present and not a number", () => {
-    // 🔴 Absent and malformed are different answers, and without a rule they
-    // collapse into one. A client sending `column: "2"` fails the "did this
-    // state a column" predicate, becomes a 0, and is then read as an OMISSION
-    // — so a broken client is silently told nothing and has its card kept
-    // where it was, or moved to the first column.
-    expect(placementProblem({ ...base, column: "2" })).toMatch(/column/);
-  });
-
-  it("REFUSES a column JSON cannot carry", () => {
-    // The reason `order` uses `Number.isFinite` rather than a typeof check:
-    // NaN and the infinities are numbers that serialize to `null` and come
-    // back failing this same rule, so accepting one writes a row that can
-    // never be read.
-    expect(placementProblem({ ...base, column: Number.NaN })).toMatch(/column/);
+  it("orders the cards across the tops of the columns, then the next row", () => {
     expect(
-      placementProblem({ ...base, column: Number.POSITIVE_INFINITY })
-    ).toMatch(/column/);
+      readStoredLayout(columnsRow(stored)).placements.map(p => p.id)
+    ).toEqual(["c0r0", "c1r0", "c2r0", "c0r1", "c1r1"]);
   });
 
-  it("ACCEPTS a placement that states no column at all", () => {
-    // 🔴 The control, and the reason this is not simply a required field. A
-    // client written before columns sends none, and that payload is supported
-    // — the layout endpoint keeps the column such a card already had.
-    expect(placementProblem(base)).toBeUndefined();
+  it("keeps every card, its id and its widget", () => {
+    const read = readStoredLayout(columnsRow(stored)).placements;
+    expect(read).toHaveLength(stored.length);
+    expect(new Set(read.map(p => `${p.id}=${p.widgetId}`))).toEqual(
+      new Set(stored.map(p => `${p.id}=${p.widgetId}`))
+    );
   });
 
-  it("ACCEPTS a column that is a finite number", () => {
-    // The other control: a rule refusing everything would satisfy both
-    // refusals above and reject every well-formed request.
-    expect(placementProblem({ ...base, column: 2 })).toBeUndefined();
+  it("keeps a hidden card as a removed one", () => {
+    const read = readStoredLayout(columnsRow(stored)).placements;
+    expect(read.find(p => p.id === "c1r1")?.removed).toBe(true);
+    expect(read.filter(p => p.removed)).toHaveLength(1);
+  });
+
+  it("maps each stored size to the width of the same span", () => {
+    const sizes = ["sm", "md", "lg", "xl", "full"];
+    const read = readStoredLayout(
+      columnsRow(
+        sizes.map((size, order) => ({
+          id: size,
+          widgetId: "w/a",
+          column: 0,
+          order,
+          hidden: false,
+          size,
+        }))
+      )
+    ).placements;
+    expect(read.map(p => p.width)).toEqual([
+      "quarter",
+      "third",
+      "half",
+      "twoThirds",
+      "full",
+    ]);
+  });
+
+  it("reads a missing or unknown size as full", () => {
+    const read = readStoredLayout(
+      columnsRow([
+        { id: "none", widgetId: "w/a", column: 0, order: 0, hidden: false },
+        {
+          id: "odd",
+          widgetId: "w/b",
+          column: 0,
+          order: 1,
+          hidden: false,
+          size: "xxl",
+        },
+      ])
+    ).placements;
+    expect(read.map(p => p.width)).toEqual(["full", "full"]);
+  });
+
+  it("depends only on the stored text, never on what a widget declares now", () => {
+    // `readStoredLayout` is handed no widget at all: there is nothing for a
+    // widget's current default to reach it through, so the same row reads the
+    // same way whatever the widgets declare. Two reads agree exactly.
+    const raw = columnsRow(stored);
+    expect(readStoredLayout(raw)).toEqual(readStoredLayout(raw));
+  });
+
+  it("keeps every card's settings, and drops column, order and height", () => {
+    const read = readStoredLayout(
+      columnsRow([
+        {
+          id: "x",
+          widgetId: "w/a",
+          column: 1,
+          order: 3,
+          hidden: false,
+          size: "lg",
+          height: "tall",
+          config: { range: 30, nested: { a: [1, 2] } },
+        },
+      ])
+    ).placements;
+    expect(read).toEqual([
+      {
+        id: "x",
+        widgetId: "w/a",
+        width: "half",
+        removed: false,
+        config: { range: 30, nested: { a: [1, 2] } },
+      },
+    ]);
+  });
+
+  it("keeps a columns-format row's unarranged mark", () => {
+    expect(
+      readStoredLayout(columnsRow(stored, { unarranged: true })).unarranged
+    ).toBe(true);
+    expect(readStoredLayout(columnsRow(stored)).unarranged).toBeUndefined();
+  });
+
+  it("reads a placement with no column as the first column", () => {
+    const read = readStoredLayout(
+      columnsRow([
+        { id: "b", widgetId: "w/b", column: 1, order: 0, hidden: false },
+        { id: "a", widgetId: "w/a", order: 0, hidden: false },
+      ])
+    ).placements;
+    expect(read.map(p => p.id)).toEqual(["a", "b"]);
+  });
+
+  it("converts once: converting the converted row changes nothing", () => {
+    const once = readStoredLayout(columnsRow(stored));
+    const twice = readStoredLayout(serializeLayout(once.placements));
+    expect(twice.placements).toEqual(once.placements);
+  });
+});
+
+describe("a flat first-format row becomes one ordered list", () => {
+  const raw = (placements: Array<Record<string, unknown>>) =>
+    JSON.stringify({ schemaVersion: 1, placements });
+
+  it("reads it rather than throwing on its version", () => {
+    expect(() => readStoredLayout(raw([]))).not.toThrow();
+  });
+
+  it("keeps the order the reader saw", () => {
+    const read = readStoredLayout(
+      raw([
+        { id: "c", widgetId: "w/c", order: 20, hidden: false },
+        { id: "a", widgetId: "w/a", order: 0, hidden: true, size: "sm" },
+        { id: "b", widgetId: "w/b", order: 10, hidden: false },
+      ])
+    ).placements;
+    expect(read.map(p => p.id)).toEqual(["a", "b", "c"]);
+    expect(read[0]).toMatchObject({ removed: true, width: "quarter" });
+  });
+
+  it("goes through the columns reading first, ties included", () => {
+    // Four cards at one order: the columns format dealt them across three
+    // columns (0, 1, 2, 0), and reading those rows across puts the fourth
+    // beside the first. Kept step for step, so a row reads as it always did.
+    const read = readStoredLayout(
+      raw(
+        ["a", "b", "c", "d"].map(id => ({
+          id,
+          widgetId: `w/${id}`,
+          order: 0,
+          hidden: false,
+        }))
+      )
+    ).placements;
+    expect(read.map(p => p.id)).toEqual(["a", "d", "b", "c"]);
+  });
+
+  it("is never read as unarranged", () => {
+    expect(
+      readStoredLayout(
+        JSON.stringify({ schemaVersion: 1, placements: [], unarranged: true })
+      ).unarranged
+    ).toBeUndefined();
+  });
+});
+
+describe("retired widgets", () => {
+  // Shaped on the catalogue's own retirements: generated count and health
+  // cards become Count for their collection; Collections and Singles become
+  // one Content card.
+  const count: WidgetRetirement = {
+    successor: "core/count",
+    identity: placement => String(placement.config?.collection ?? ""),
+    allowedWidths: ["quarter", "third", "half", "twoThirds"],
+  };
+  const content: WidgetRetirement = {
+    successor: "core/content",
+    allowedWidths: ["half", "twoThirds", "full"],
+  };
+  const retirements: WidgetRetirements = new Map([
+    ["gen/count", count],
+    ["gen/health", count],
+    ["core/collections", content],
+    ["core/singles", content],
+  ]);
+  const of = (collection: string) => ({ collection });
+
+  it("leaves a current-format row with nothing to map exactly as it was", () => {
+    const placements = [card("a"), card("b")];
+    expect(applyRetirements(placements, retirements)).toBe(placements);
+  });
+
+  it("maps a retired widget to its successor, keeping the card", () => {
+    const read = readStoredLayout(
+      serializeLayout([
+        card("x", "core/collections", { width: "half", removed: true }),
+        card("y"),
+      ]),
+      retirements
+    ).placements;
+    expect(read).toEqual([
+      card("x", "core/content", { width: "half", removed: true }),
+      card("y"),
+    ]);
+  });
+
+  it("maps in a row of every format", () => {
+    const v1 = JSON.stringify({
+      schemaVersion: 1,
+      placements: [
+        { id: "x", widgetId: "core/singles", order: 0, hidden: false },
+      ],
+    });
+    const v2 = columnsRow([
+      { id: "x", widgetId: "core/singles", column: 0, order: 0, hidden: false },
+    ]);
+    const v3 = serializeLayout([card("x", "core/singles")]);
+    for (const raw of [v1, v2, v3]) {
+      expect(readStoredLayout(raw, retirements).placements[0]?.widgetId).toBe(
+        "core/content"
+      );
+    }
+  });
+
+  it("merges cards that become the same successor for the same collection, and only those", () => {
+    const merged = applyRetirements(
+      [
+        card("posts-count", "gen/count", { config: of("posts") }),
+        card("products-health", "gen/health", { config: of("products") }),
+        card("posts-health", "gen/health", { config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged.map(p => [p.id, p.widgetId, p.config])).toEqual([
+      ["posts-count", "core/count", of("posts")],
+      ["products-health", "core/count", of("products")],
+    ]);
+  });
+
+  it("gives a merged card the first card's id, position and settings, and the larger width the successor allows", () => {
+    const merged = applyRetirements(
+      [
+        card("lead"),
+        card("first", "gen/count", { width: "quarter", config: of("posts") }),
+        card("between"),
+        // Full is wider still, but Count does not allow it: two thirds wins.
+        card("second", "gen/health", { width: "full", config: of("posts") }),
+        card("third", "gen/count", { width: "twoThirds", config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged).toEqual([
+      card("lead"),
+      card("first", "core/count", { width: "twoThirds", config: of("posts") }),
+      card("between"),
+    ]);
+  });
+
+  it("keeps the widest carried width when the successor allows none of them", () => {
+    // Count allows no full width. The merged card keeps the reader's widest
+    // choice, as every stored card keeps a width its widget stops allowing:
+    // the admin draws it at the nearest width Count allows, and the choice
+    // returns if Count allows it again. Picking an allowed width here would
+    // be a second nearest-width rule beside the admin's.
+    const merged = applyRetirements(
+      [
+        card("first", "gen/count", { width: "full", config: of("posts") }),
+        card("second", "gen/health", { width: "full", config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged.map(p => [p.id, p.widgetId, p.width])).toEqual([
+      ["first", "core/count", "full"],
+    ]);
+  });
+
+  it("merges into a successor card the layout already holds, which keeps everything it had", () => {
+    const existing = card("content", "core/content", {
+      width: "twoThirds",
+      config: { tab: "singles" },
+    });
+    const merged = applyRetirements(
+      [
+        // Retired, and BEFORE the existing card: the existing one still keeps
+        // its own id and position.
+        card("cols", "core/collections", { width: "full" }),
+        card("mid"),
+        existing,
+        card("sing", "core/singles", { width: "half" }),
+      ],
+      retirements
+    );
+    expect(merged).toEqual([card("mid"), existing]);
+  });
+
+  it("merges into the first of several matching successor cards, leaving the others", () => {
+    // A widget may be placed more than once with other settings: two Count
+    // cards for Posts already stand, and a retired Posts health card joins the
+    // first of them in the order. The second is not touched.
+    const first = card("first", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "drafts" },
+    });
+    const second = card("second", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "published" },
+    });
+    const merged = applyRetirements(
+      [first, second, card("health", "gen/health", { config: of("posts") })],
+      retirements
+    );
+    expect(merged).toEqual([{ ...first, removed: false }, second]);
+  });
+
+  it("takes the removed state from the cards in the merge, not from the matching card left out of it", () => {
+    // 🔴 The separating case. The first Count card and the retired card were
+    // both removed; the second Count card is visible but takes no part in the
+    // merge. Judging "every card removed" across all three would bring the
+    // first card back, an extra card nobody asked for.
+    const first = card("first", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "drafts" },
+    });
+    const second = card("second", "core/count", {
+      config: { ...of("posts"), filter: "published" },
+    });
+    const merged = applyRetirements(
+      [
+        first,
+        second,
+        card("health", "gen/health", { removed: true, config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged).toEqual([first, second]);
+  });
+
+  it("removes a merged card only when every card merged into it was removed", () => {
+    const merge = (cols: boolean, sing: boolean, existing?: boolean) =>
+      applyRetirements(
+        [
+          card("cols", "core/collections", { removed: cols }),
+          card("sing", "core/singles", { removed: sing }),
+          ...(existing === undefined
+            ? []
+            : [card("content", "core/content", { removed: existing })]),
+        ],
+        retirements
+      ).find(p => p.widgetId === "core/content")?.removed;
+    for (const cols of [true, false]) {
+      for (const sing of [true, false]) {
+        expect(merge(cols, sing)).toBe(cols && sing);
+        for (const existing of [true, false]) {
+          expect(merge(cols, sing, existing)).toBe(cols && sing && existing);
+        }
+      }
+    }
+  });
+
+  it("merges either way round, the first in the order winning", () => {
+    const colsFirst = applyRetirements(
+      [card("cols", "core/collections"), card("sing", "core/singles")],
+      retirements
+    );
+    const singFirst = applyRetirements(
+      [card("sing", "core/singles"), card("cols", "core/collections")],
+      retirements
+    );
+    expect(colsFirst.map(p => p.id)).toEqual(["cols"]);
+    expect(singFirst.map(p => p.id)).toEqual(["sing"]);
+  });
+
+  it("follows a chain of retirements to the widget that exists now", () => {
+    // Retired in one release, its successor retired again in a later one: a
+    // row nobody saved in between still reaches the current widget, once.
+    const chain: WidgetRetirements = new Map<string, WidgetRetirement>([
+      ["core/old", { successor: "core/replacement" }],
+      [
+        "core/replacement",
+        {
+          successor: "core/current",
+          settings: placement => ({ ...placement.config, migrated: true }),
+        },
+      ],
+    ]);
+    const read = readStoredLayout(
+      serializeLayout([card("x", "core/old", { config: { k: 1 } })]),
+      chain
+    );
+    expect(read.placements).toEqual([
+      card("x", "core/current", { config: { k: 1, migrated: true } }),
+    ]);
+    // Reading the result again changes nothing.
+    expect(
+      readStoredLayout(serializeLayout(read.placements), chain).placements
+    ).toEqual(read.placements);
+  });
+
+  it("stops at a cycle in the map rather than looping", () => {
+    const cycle: WidgetRetirements = new Map<string, WidgetRetirement>([
+      ["core/a", { successor: "core/b" }],
+      ["core/b", { successor: "core/a" }],
+    ]);
+    const mapped = applyRetirements([card("x", "core/a")], cycle);
+    expect(mapped).toHaveLength(1);
+    expect(["core/a", "core/b"]).toContain(mapped[0]?.widgetId);
+  });
+
+  it("maps the same row the same way every time, and a mapped row maps to itself", () => {
+    const raw = columnsRow([
+      { id: "a", widgetId: "core/singles", column: 1, order: 0, hidden: true },
+      {
+        id: "b",
+        widgetId: "core/collections",
+        column: 0,
+        order: 0,
+        hidden: false,
+      },
+    ]);
+    const first = readStoredLayout(raw, retirements);
+    expect(readStoredLayout(raw, retirements)).toEqual(first);
+    expect(
+      readStoredLayout(serializeLayout(first.placements), retirements)
+        .placements
+    ).toEqual(first.placements);
+    // Row-major: "b" (column 0) comes first and keeps its id.
+    expect(first.placements).toEqual([card("b", "core/content")]);
   });
 });
 
 describe("the default arrangement", () => {
-  it("follows the declared order and materializes it as finite numbers", () => {
+  it("follows the declared order", () => {
     const placements = defaultPlacements([
-      widget({ id: "core/c", defaultOrder: 20 }),
-      widget({ id: "core/a", defaultOrder: 0 }),
-      widget({ id: "core/b", defaultOrder: 10 }),
+      { id: "w/c", defaultOrder: 30 },
+      { id: "w/a", defaultOrder: 10 },
+      { id: "w/b", defaultOrder: 20 },
     ]);
-    expect(placements.map(p => p.widgetId)).toEqual([
-      "core/a",
-      "core/b",
-      "core/c",
-    ]);
-    // Finite, because `defaultOrder`'s own "unstated" sentinel is
-    // POSITIVE_INFINITY, which JSON turns into `null` and the shape rules then
-    // refuse -- a layout that could be written and never read.
-    for (const p of placements) expect(Number.isFinite(p.order)).toBe(true);
+    expect(placements.map(p => p.widgetId)).toEqual(["w/a", "w/b", "w/c"]);
   });
 
   it("puts a widget that states no order after every widget that does", () => {
     const placements = defaultPlacements([
-      widget({ id: "core/unstated" }),
-      widget({ id: "core/last", defaultOrder: 9999 }),
+      { id: "w/none" },
+      { id: "w/huge", defaultOrder: Number.MAX_VALUE },
+      { id: "w/first", defaultOrder: -5 },
     ]);
     expect(placements.map(p => p.widgetId)).toEqual([
-      "core/last",
-      "core/unstated",
-    ]);
-    // Asserted HERE and not only in the test above, because this is the one
-    // arrangement where the sentinel could leak: a widget stating no order
-    // carries POSITIVE_INFINITY through the comparator, and materializing that
-    // straight into a placement writes a row JSON turns into `null`. Every
-    // widget in the previous test states an order, so its finiteness check
-    // cannot see this at all.
-    for (const p of placements) expect(Number.isFinite(p.order)).toBe(true);
-  });
-
-  it("keeps widgets that state NO order in DECLARATION order", () => {
-    // 🔴 The guarantee `defaultOrder` documents: omit it and your card keeps
-    // the position it was declared in. `Array.prototype.sort` is stable, so
-    // equal elements hold their input order, and the admin's comparator rests
-    // on the same property — every widget shipping today states no order, so
-    // they all compare equal. Any tie-break, on the id or on anything else,
-    // rearranges every default dashboard holding plugin widgets and makes core
-    // answer the ordering question differently from the admin.
-    const declared = defaultPlacements([
-      widget({ id: "core/c" }),
-      widget({ id: "core/a" }),
-      widget({ id: "core/b" }),
-    ]);
-    expect(declared.map(p => p.widgetId)).toEqual([
-      "core/c",
-      "core/a",
-      "core/b",
-    ]);
-    // The control: declaring them in another order gives that order back, so
-    // this is the input being preserved rather than a sequence that happens to
-    // match. A comparator sorting by id answers "core/a, core/b, core/c" to
-    // both, and the first assertion alone cannot tell the two apart.
-    const reordered = defaultPlacements([
-      widget({ id: "core/b" }),
-      widget({ id: "core/c" }),
-      widget({ id: "core/a" }),
-    ]);
-    expect(reordered.map(p => p.widgetId)).toEqual([
-      "core/b",
-      "core/c",
-      "core/a",
+      "w/first",
+      "w/huge",
+      "w/none",
     ]);
   });
 
-  it("still lets a STATED order override the declaration order", () => {
-    // The control in the other direction: a comparator returning 0 for every
-    // pair would preserve declaration order perfectly and ignore the field.
+  it("keeps widgets that state NO order in declaration order", () => {
+    const ids = ["w/d", "w/b", "w/a", "w/c"];
+    expect(
+      defaultPlacements(ids.map(id => ({ id }))).map(p => p.widgetId)
+    ).toEqual(ids);
+  });
+
+  it("names each default placement after its widget, so reads are identical", () => {
+    const placements = defaultPlacements([{ id: "w/a" }, { id: "w/b" }]);
+    expect(placements.map(p => p.id)).toEqual(["w/a", "w/b"]);
+    expect(defaultPlacements([{ id: "w/a" }, { id: "w/b" }])).toEqual(
+      placements
+    );
+  });
+
+  it("places each card at its widget's default width, or full", () => {
+    expect(
+      defaultPlacements([
+        { id: "w/a", defaultWidth: "quarter" },
+        { id: "w/b" },
+      ]).map(p => [p.width, p.removed])
+    ).toEqual([
+      ["quarter", false],
+      ["full", false],
+    ]);
+  });
+
+  it("survives its own round trip", () => {
     const placements = defaultPlacements([
-      widget({ id: "core/a", defaultOrder: 30 }),
-      widget({ id: "core/z", defaultOrder: 10 }),
+      { id: "w/a", defaultWidth: "third" },
     ]);
-    expect(placements.map(p => p.widgetId)).toEqual(["core/z", "core/a"]);
-  });
-
-  it("names each default placement after its widget, so reads are idempotent", () => {
-    const once = defaultPlacements([widget({ id: "core/team" })]);
-    const twice = defaultPlacements([widget({ id: "core/team" })]);
-    expect(once).toEqual(twice);
-    expect(once[0].id).toBe("core/team");
-  });
-
-  it("leaves room to insert between two neighbours in a column", () => {
-    // `order` sequences a COLUMN, not the dashboard, so the two placements to
-    // compare are the ones dealt into the same column — which, with the
-    // round-robin deal, are DEFAULT_COLUMN_COUNT apart in declared order.
-    const placements = defaultPlacements(
-      Array.from({ length: DEFAULT_COLUMN_COUNT + 1 }, (_unused, i) =>
-        widget({ id: `core/${i}`, defaultOrder: i })
-      )
-    );
-    const first = placements[0];
-    const below = placements[DEFAULT_COLUMN_COUNT];
-    expect(below.column).toBe(first.column);
-    expect(below.order - first.order).toBeGreaterThan(1);
-  });
-
-  it("deals the first widgets ACROSS the columns, not down one", () => {
-    // 🔴 The property that decides whether a reader sees the widgets that were
-    // declared first. Filling column 0 before starting column 1 puts the
-    // second-most-important card below the fold on a wide screen while two
-    // columns sit empty beside it.
-    const placements = defaultPlacements(
-      Array.from({ length: DEFAULT_COLUMN_COUNT }, (_unused, i) =>
-        widget({ id: `core/${i}`, defaultOrder: i })
-      )
-    );
-    expect(new Set(placements.map(p => p.column)).size).toBe(
-      DEFAULT_COLUMN_COUNT
-    );
-    // 🔴 And `order` stays a GLOBAL sequence rather than restarting per column.
-    // Numbering within a column collides across them, and these positions are
-    // materialized twice — over the whole registry and over the set a caller
-    // may see — so a collision reorders a reader's dashboard the moment they
-    // gain a permission.
-    expect(new Set(placements.map(p => p.order)).size).toBe(
-      DEFAULT_COLUMN_COUNT
+    expect(readStoredLayout(serializeLayout(placements)).placements).toEqual(
+      placements
     );
   });
 });
 
 describe("partitioning by what a reader may see", () => {
-  const stored: WidgetPlacement[] = [
-    { id: "p2", widgetId: "core/visible", column: 0, order: 20, hidden: false },
-    { id: "p1", widgetId: "core/secret", column: 0, order: 10, hidden: false },
-    {
-      id: "p0",
-      widgetId: "core/visible-2",
-      column: 0,
-      order: 0,
-      hidden: false,
-    },
-  ];
+  const row = [card("a"), card("hidden1"), card("b"), card("hidden2")];
+  const visible = new Set(["core/a", "core/b"]);
 
-  it("returns the visible half sorted by order", () => {
-    const { visible } = partitionPlacements(
-      stored,
-      new Set(["core/visible", "core/visible-2"])
-    );
-    expect(visible.map(p => p.id)).toEqual(["p0", "p2"]);
+  it("returns the visible half in the arrangement's order", () => {
+    expect(
+      partitionPlacements(
+        [card("b"), card("x"), card("a")],
+        visible
+      ).visible.map(p => p.id)
+    ).toEqual(["b", "a"]);
   });
 
   it("returns the invisible half rather than discarding it", () => {
-    // The half a whole-snapshot PUT has to carry back. Discarding it here is
-    // how a reader loses a card permanently by opening the dashboard once
-    // while a permission of theirs was narrowed.
-    const { invisible } = partitionPlacements(
-      stored,
-      new Set(["core/visible", "core/visible-2"])
-    );
-    expect(invisible.map(p => p.widgetId)).toEqual(["core/secret"]);
+    expect(partitionPlacements(row, visible).invisible.map(p => p.id)).toEqual([
+      "hidden1",
+      "hidden2",
+    ]);
   });
 
-  it("keeps a hidden placement visible to its owner", () => {
-    // `hidden` is the reader's own choice to put a card away, so it must come
-    // back to them -- otherwise nothing could ever put it back.
-    const { visible } = partitionPlacements(
-      [{ id: "p", widgetId: "core/x", column: 0, order: 0, hidden: true }],
-      new Set(["core/x"])
-    );
-    expect(visible).toHaveLength(1);
+  it("keeps a removed card visible to its owner", () => {
+    expect(
+      partitionPlacements([card("a", "core/a", { removed: true })], visible)
+        .visible
+    ).toHaveLength(1);
   });
 });
 
-describe("merging a write with what the writer could not see", () => {
-  const invisible: WidgetPlacement[] = [
-    {
-      id: "hidden-1",
-      widgetId: "core/secret",
-      column: 0,
-      order: 5,
-      hidden: false,
-    },
-  ];
+describe("merging a write with the cards the writer could not see", () => {
+  const visible = new Set(["core/a", "core/b", "core/c"]);
 
-  it("carries the invisible placements through", () => {
+  it("puts each carried card back after the card it followed", () => {
+    // Stored: a, H1, b, H2, c. The writer moves c to the front. H1 still
+    // follows a and H2 still follows b, wherever they went.
+    const stored = [card("a"), card("H1"), card("b"), card("H2"), card("c")];
     const merged = mergePreservingHidden(
-      [{ id: "p1", widgetId: "core/team", column: 0, order: 0, hidden: false }],
-      invisible
+      [card("c"), card("a"), card("b")],
+      stored,
+      visible
     );
-    expect(merged.map(p => p.widgetId)).toEqual(["core/team", "core/secret"]);
+    expect(merged.map(p => p.id)).toEqual(["c", "a", "H1", "b", "H2"]);
   });
 
-  it("re-keys a carried placement rather than refusing the write", () => {
-    // Refusing would answer differently depending on whether a hidden
-    // placement happens to hold that id -- an oracle for the existence of a
-    // card this caller must not know about.
+  it("keeps carried cards that came before every visible card at the start", () => {
     const merged = mergePreservingHidden(
-      [
-        {
-          id: "hidden-1",
-          widgetId: "core/team",
-          column: 0,
-          order: 0,
-          hidden: false,
-        },
-      ],
-      invisible
+      [card("b"), card("a")],
+      [card("H0"), card("a"), card("b")],
+      visible
+    );
+    expect(merged.map(p => p.id)).toEqual(["H0", "b", "a"]);
+  });
+
+  it("puts a carried card whose neighbour was not sent at the end", () => {
+    const merged = mergePreservingHidden(
+      [card("b")],
+      [card("a"), card("H1"), card("b"), card("H2")],
+      visible
+    );
+    expect(merged.map(p => p.id)).toEqual(["b", "H2", "H1"]);
+  });
+
+  it("carries every card back, settings and all", () => {
+    const hidden = card("H", "core/h", {
+      width: "quarter",
+      removed: true,
+      config: { k: "v" },
+    });
+    const merged = mergePreservingHidden(
+      [card("a")],
+      [card("a"), hidden],
+      visible
+    );
+    expect(merged).toContainEqual(hidden);
+  });
+
+  it("re-keys a carried card rather than refusing the write", () => {
+    const merged = mergePreservingHidden(
+      [card("same", "core/a")],
+      [card("same", "core/hidden")],
+      visible
     );
     expect(merged).toHaveLength(2);
     expect(new Set(merged.map(p => p.id)).size).toBe(2);
-    // The carried placement survives with all of its own content intact.
-    const carried = merged.find(p => p.widgetId === "core/secret");
-    expect(carried).toMatchObject({ order: 5, hidden: false });
-    expect(carried?.id).not.toBe("hidden-1");
+    // The caller's card keeps its id; the carried one (first in the stored
+    // row, so still first) is the one re-keyed.
+    expect(merged).toEqual([
+      card("same~2", "core/hidden"),
+      card("same", "core/a"),
+    ]);
+  });
+
+  it("drops the latest carried cards past the stored ceiling, never the caller's", () => {
+    const submitted = Array.from({ length: MAX_PLACEMENTS }, (_, i) =>
+      card(`v${i}`, "core/a")
+    );
+    const hidden = Array.from({ length: MAX_STORED_PLACEMENTS }, (_, i) =>
+      card(`h${i}`, "core/h")
+    );
+    const merged = mergePreservingHidden(submitted, hidden, visible);
+    expect(merged).toHaveLength(MAX_STORED_PLACEMENTS);
+    expect(merged.filter(p => p.widgetId === "core/a")).toHaveLength(
+      MAX_PLACEMENTS
+    );
+    expect(merged.some(p => p.id === "h0")).toBe(true);
+    expect(merged.some(p => p.id === `h${MAX_STORED_PLACEMENTS - 1}`)).toBe(
+      false
+    );
   });
 });
 
 describe("the size ceiling", () => {
   it("accepts an ordinary layout", () => {
-    expect(layoutSizeProblem(defaultPlacements([widget({})]))).toBeUndefined();
+    expect(layoutSizeProblem([card("a"), card("b")])).toBeUndefined();
   });
 
   it("refuses more placements than a dashboard could mean", () => {
-    const many = Array.from({ length: MAX_PLACEMENTS + 1 }, (_, i) => ({
-      id: `p${i}`,
-      widgetId: "core/team",
-      column: 0,
-      order: i,
-      hidden: false,
-    }));
-    expect(layoutSizeProblem(many)).toMatch(/at most 200 placements/);
+    const many = Array.from({ length: MAX_PLACEMENTS + 1 }, (_, i) =>
+      card(`p${i}`)
+    );
+    expect(layoutSizeProblem(many)).toMatch(/at most/);
   });
 
   it("measures BYTES, not characters", () => {
-    // MySQL's TEXT limit is bytes, and a `config` of CJK or emoji is three to
-    // four times its own `.length`. A layout that passes a character count and
-    // fails a byte count is the one that truncates on one dialect.
-    const wide = [
-      {
-        id: "p",
-        widgetId: "core/team",
-        column: 0,
-        order: 0,
-        hidden: false,
-        config: { note: "\u{1F600}".repeat(9000) },
-      },
-    ];
-    expect(JSON.stringify(wide).length).toBeLessThan(32 * 1024);
-    expect(layoutSizeProblem(wide)).toMatch(/bytes/);
+    // A multi-byte payload under the character count but over the byte limit.
+    const wide = "\u{1F600}".repeat(9000);
+    expect(
+      layoutSizeProblem([card("a", "core/a", { config: { wide } })])
+    ).toMatch(/bytes/);
   });
 });
 
 describe("the visibility token", () => {
   it("depends on the sets, not the order they were registered in", () => {
-    // A hot reload re-registers the same widgets in a different order. If that
-    // moved the token, every write would be refused with nothing changed.
-    expect(visibilityToken(["b", "a"], ["y", "x"])).toBe(
-      visibilityToken(["a", "b"], ["x", "y"])
+    expect(visibilityToken(["a", "b"], ["x"])).toBe(
+      visibilityToken(["b", "a"], ["x"])
     );
   });
 
   it("moves when a widget becomes visible or stops being", () => {
-    const before = visibilityToken(["core/a"], []);
-    expect(visibilityToken(["core/a", "core/gated"], [])).not.toBe(before);
-    expect(visibilityToken([], [])).not.toBe(before);
+    expect(visibilityToken(["a"], [])).not.toBe(
+      visibilityToken(["a", "b"], [])
+    );
   });
 
   it("moves when a shortcut's gate is gained or lost, with the widgets unchanged", () => {
-    // The workspace payload withholds the shortcuts a reader may not see, and
-    // the token is what tells the admin to read it again.
-    const before = visibilityToken(["core/tools"], []);
-    expect(visibilityToken(["core/tools"], ["publish-notes"])).not.toBe(before);
+    expect(visibilityToken(["a"], [])).not.toBe(visibilityToken(["a"], ["g"]));
   });
 
   it("cannot mistake a held gate for a widget id", () => {
-    expect(visibilityToken(["publish-notes"], [])).not.toBe(
-      visibilityToken([], ["publish-notes"])
-    );
+    expect(visibilityToken(["x"], [])).not.toBe(visibilityToken([], ["x"]));
   });
 
   it("does not carry the ids it was built from", () => {
-    // It is echoed to the client, and the id list is the one thing this
-    // endpoint must never hand back -- it names every widget the caller may see.
-    const token = visibilityToken(
-      ["core/secret-project"],
-      ["publish-secret-project"]
-    );
+    const token = visibilityToken(["core/secret-widget"], []);
     expect(token).not.toContain("secret");
-    expect(token.length).toBeLessThan(20);
-  });
-});
-
-describe("declared geometry on a default placement", () => {
-  it("carries the widget's size and height", () => {
-    // A placement that omits its own size is not a persisted arrangement: the
-    // first save would store a row with no `size`, so a later change to the
-    // plugin's `defaultSize` silently resizes what the reader was told is
-    // their saved layout.
-    const [placement] = defaultPlacements([
-      widget({ id: "core/a", defaultSize: "md", defaultHeight: "tall" }),
-    ]);
-    expect(placement.size).toBe("md");
-    expect(placement.height).toBe("tall");
-  });
-
-  it("omits height when the widget declares none", () => {
-    const [placement] = defaultPlacements([widget({ id: "core/a" })]);
-    expect(placement).not.toHaveProperty("height");
-  });
-
-  it("survives its own round trip", () => {
-    // The geometry it seeds must satisfy the shape rules it will be read back
-    // through, or the first save writes a row the next read refuses.
-    const placements = defaultPlacements([
-      widget({ id: "core/a", defaultSize: "lg", defaultHeight: "short" }),
-    ]);
-    expect(readStoredLayout(serializeLayout(placements)).placements).toEqual(
-      placements
-    );
+    expect(token).toHaveLength(16);
   });
 });
 
 describe("config nesting", () => {
-  /** An object nested `depth` levels deep. */
-  function nest(depth: number): Record<string, unknown> {
-    let node: Record<string, unknown> = {};
-    for (let i = 0; i < depth - 1; i += 1) node = { child: node };
-    return node;
-  }
+  const nested = (depth: number): Record<string, unknown> => {
+    let value: Record<string, unknown> = {};
+    for (let i = 1; i < depth; i += 1) value = { next: value };
+    return value;
+  };
 
   it("accepts ordinary settings", () => {
     expect(
-      placementProblem(placement({ config: nest(MAX_CONFIG_DEPTH) }))
+      placementProblem(placement({ config: { range: 7 } }))
+    ).toBeUndefined();
+  });
+
+  it("accepts settings exactly at the limit", () => {
+    expect(
+      placementProblem(placement({ config: nested(MAX_CONFIG_DEPTH) }))
     ).toBeUndefined();
   });
 
   it("refuses a config deeper than the limit", () => {
     expect(
-      placementProblem(placement({ config: nest(MAX_CONFIG_DEPTH + 2) }))
-    ).toMatch(/nest at most/);
+      placementProblem(placement({ config: nested(MAX_CONFIG_DEPTH + 1) }))
+    ).toMatch(/nest/);
   });
 
   it("refuses a depth that would crash the serializer", () => {
-    // The failure this exists for: `JSON.parse` accepts a structure thousands
-    // of levels deep and `JSON.stringify` throws `RangeError` on the same
-    // value, so a body under every byte and count limit became an internal 500
-    // on the way back out.
-    const deep = nest(20_000);
-    expect(() => JSON.stringify(deep)).toThrow(RangeError);
-    expect(placementProblem(placement({ config: deep }))).toMatch(
-      /nest at most/
+    expect(placementProblem(placement({ config: nested(20_000) }))).toMatch(
+      /nest/
     );
   });
 
   it("counts depth through arrays as well as objects", () => {
-    let node: unknown = "leaf";
-    for (let i = 0; i < MAX_CONFIG_DEPTH + 4; i += 1) node = [node];
-    expect(placementProblem(placement({ config: { a: node } }))).toMatch(
-      /nest at most/
+    let value: unknown = [];
+    for (let i = 0; i < MAX_CONFIG_DEPTH + 1; i += 1) value = [value];
+    expect(placementProblem(placement({ config: { list: value } }))).toMatch(
+      /nest/
     );
   });
 });
 
-describe("a v1 arrangement survives the move to columns", () => {
-  // 🔴 The stored row is a USER'S arrangement, and the reader throws on a
-  // version it does not know rather than resetting — so shipping v2 without a
-  // migrator turns every saved dashboard into an internal error. Reading a v1
-  // row must produce a v2 layout, not a refusal.
-  const V1 = JSON.stringify({
-    schemaVersion: 1,
-    placements: [
-      { id: "a", widgetId: "w-a", column: 0, order: 0, hidden: false },
-      { id: "b", widgetId: "w-b", column: 0, order: 10, hidden: false },
-      { id: "c", widgetId: "w-c", column: 0, order: 20, hidden: true },
-    ],
-  });
-
-  it("reads a v1 row rather than throwing on its version", () => {
-    const layout = readStoredLayout(V1);
-    expect(layout.schemaVersion).toBe(LAYOUT_SCHEMA_VERSION);
-    expect(layout.placements).toHaveLength(3);
-  });
-
-  it("gives every placement a column, and keeps the order the reader saw", () => {
-    // The arrangement is the one thing a user actually authored here, so the
-    // migration may add a coordinate but must not reorder anything.
-    const { placements } = readStoredLayout(V1);
-    expect(placements.map(p => p.widgetId)).toEqual(["w-a", "w-b", "w-c"]);
-    for (const p of placements) expect(typeof p.column).toBe("number");
-  });
-
-  it("keeps a hidden placement hidden across the migration", () => {
-    // 🔴 The control. A migration that rebuilt placements from defaults would
-    // satisfy both assertions above while silently un-hiding a card the user
-    // had put away — the one field whose loss is invisible until it reappears.
-    const { placements } = readStoredLayout(V1);
-    expect(placements.find(p => p.widgetId === "w-c")?.hidden).toBe(true);
-  });
-});
-
 describe("two placements may not share an id", () => {
-  const at = (
-    id: string,
-    widgetId: string,
-    order: number
-  ): WidgetPlacement => ({
-    id,
-    widgetId,
-    column: 0,
-    order,
-    hidden: false,
-  });
-
   it("names the id that repeats", () => {
     expect(
-      resolvePlacementIds([
-        at("a", "core/one", 0),
-        at("b", "core/two", 1),
-        at("a", "core/three", 2),
-      ]).duplicate
+      resolvePlacementIds([card("a"), card("b"), card("a", "core/c")]).duplicate
     ).toBe("a");
   });
 
-  it("says nothing about a set whose ids are all distinct", () => {
+  it("says nothing about a set whose ids are all distinct, or an empty one", () => {
     expect(
-      resolvePlacementIds([at("a", "core/one", 0), at("b", "core/two", 1)])
-        .duplicate
+      resolvePlacementIds([card("a"), card("b")]).duplicate
     ).toBeUndefined();
-  });
-
-  it("says nothing about an empty set", () => {
     expect(resolvePlacementIds([]).duplicate).toBeUndefined();
   });
 
   it("answers the refusal and the repair in ONE pass", () => {
-    // The endpoint reads `duplicate` and a reader reads `placements`. Asking
-    // twice is what lets the two ends drift into disagreeing.
-    const answer = resolvePlacementIds([
-      at("a", "core/one", 0),
-      at("a", "core/two", 1),
-    ]);
+    const answer = resolvePlacementIds([card("a"), card("a", "core/two")]);
     expect(answer.duplicate).toBe("a");
     expect(new Set(answer.placements.map(p => p.id)).size).toBe(2);
     expect(answer.rekeyed).toEqual(["a"]);
   });
 
-  it("leaves the FIRST holder of the id untouched", () => {
-    const answer = resolvePlacementIds([
-      at("a", "core/one", 0),
-      at("a", "core/two", 1),
-    ]);
-    expect(answer.placements[0]).toEqual(at("a", "core/one", 0));
-    expect(answer.placements[1]?.id).not.toBe("a");
-  });
-
-  it("keeps everything the re-keyed placement carried except its id", () => {
-    const answer = resolvePlacementIds([
-      at("a", "core/one", 0),
-      { ...at("a", "core/two", 5), column: 1, hidden: true, size: "md" },
-    ]);
-    expect(answer.placements[1]).toMatchObject({
-      widgetId: "core/two",
-      column: 1,
-      order: 5,
-      hidden: true,
-      size: "md",
+  it("leaves the FIRST holder of the id untouched, and the repeat's fields but its id", () => {
+    const repeat = card("a", "core/two", {
+      width: "third",
+      removed: true,
+      config: { n: 1 },
     });
+    const answer = resolvePlacementIds([card("a"), repeat]);
+    expect(answer.placements[0]).toEqual(card("a"));
+    expect(answer.placements[1]).toEqual({ ...repeat, id: "a~2" });
   });
 
   it("gives a repeat the SAME id every time it resolves the same set", () => {
-    // 🔴 The property that makes resolving on read safe. A freshly minted id
-    // would differ on every read, so a client round-tripping what it was handed
-    // submits an id the server no longer knows -- and the write path, which
-    // inherits a placement's column BY ID for a client that states none, misses
-    // its lookup and moves that card to the first column.
-    const input = [at("a", "core/one", 0), at("a", "core/two", 1)];
-    const first = resolvePlacementIds(input).placements.map(p => p.id);
-    const second = resolvePlacementIds(input).placements.map(p => p.id);
-    expect(first).toEqual(second);
-    expect(first[1]).not.toBe("a");
+    // 🔴 What makes resolving on read safe: a freshly minted id would differ
+    // on every read, so a client round-tripping what it was handed would
+    // submit an id the server no longer knows.
+    const input = [card("a"), card("a", "core/two")];
+    expect(resolvePlacementIds(input).placements).toEqual(
+      resolvePlacementIds(input).placements
+    );
   });
 
   it("steps past an id that is already taken rather than colliding with it", () => {
     const answer = resolvePlacementIds([
-      at("a", "core/one", 0),
-      at("a~2", "core/two", 1),
-      at("a", "core/three", 2),
+      card("a"),
+      card("a~2", "core/two"),
+      card("a", "core/three"),
     ]);
     expect(new Set(answer.placements.map(p => p.id)).size).toBe(3);
   });
 
-  it("resolves against a seed of ids claimed elsewhere", () => {
-    const answer = resolvePlacementIds(
-      [at("a", "core/one", 0)],
-      new Set(["a"])
-    );
+  it("resolves against a seed of ids claimed elsewhere, without changing the seed", () => {
+    const seed = new Set(["a"]);
+    const answer = resolvePlacementIds([card("a")], seed);
     expect(answer.placements[0]?.id).not.toBe("a");
     expect(answer.duplicate).toBe("a");
-  });
-
-  it("does not mutate the seed it was given", () => {
-    const seed = new Set(["a"]);
-    resolvePlacementIds([at("a", "core/one", 0)], seed);
     expect([...seed]).toEqual(["a"]);
   });
 });
 
 describe("resolving a repeat cannot disclose a hidden placement", () => {
   const visibleIds = new Set(["core/seen"]);
-  const seen: WidgetPlacement = {
-    id: "shared",
-    widgetId: "core/seen",
-    column: 0,
-    order: 10,
-    hidden: false,
-  };
-  const unseen: WidgetPlacement = {
-    id: "shared",
-    widgetId: "core/hidden",
-    column: 0,
-    order: 0,
-    hidden: false,
-  };
+  const seen = card("shared", "core/seen");
+  const unseen = card("shared", "core/hidden");
 
   it("hands the visible placement the SAME id whether or not a hidden one shares it", () => {
-    // 🔴 Resolved across the whole row, the hidden placement would claim
-    // "shared" -- it sorts first -- and the visible one would come back re-keyed
-    // whenever it existed. The id a caller is handed would then answer whether a
-    // card they may not know about is there, and default placement ids are
-    // widget ids, so the probe space is guessable.
+    // 🔴 Resolved across the whole row, the hidden placement (which comes
+    // first) would claim "shared" and the visible one would come back re-keyed
+    // whenever it existed -- an answer about a card the caller may not know of.
     const withHidden = partitionPlacements([unseen, seen], visibleIds).visible;
     const withoutHidden = partitionPlacements([seen], visibleIds).visible;
-
-    expect(withHidden.map(p => p.id)).toEqual(withoutHidden.map(p => p.id));
+    expect(withHidden).toEqual(withoutHidden);
     expect(withHidden[0]?.id).toBe("shared");
   });
 
-  it("still keeps the ids WITHIN the visible half distinct", () => {
-    const twice = partitionPlacements(
-      [seen, { ...seen, order: 20, widgetId: "core/seen" }],
-      visibleIds
-    ).visible;
-    expect(twice).toHaveLength(2);
-    expect(new Set(twice.map(p => p.id)).size).toBe(2);
-  });
-
-  it("keeps the ids within the invisible half distinct too", () => {
-    const carried = partitionPlacements(
-      [unseen, { ...unseen, order: 5 }],
-      visibleIds
-    ).invisible;
-    expect(new Set(carried.map(p => p.id)).size).toBe(2);
+  it("still keeps the ids WITHIN each half distinct", () => {
+    expect(
+      new Set(
+        partitionPlacements([seen, seen], visibleIds).visible.map(p => p.id)
+      ).size
+    ).toBe(2);
+    expect(
+      new Set(
+        partitionPlacements([unseen, unseen], visibleIds).invisible.map(
+          p => p.id
+        )
+      ).size
+    ).toBe(2);
   });
 });
 
 describe("a stored row that holds one id twice", () => {
-  const collided: WidgetPlacement[] = [
-    { id: "same", widgetId: "core/first", column: 0, order: 0, hidden: false },
-    { id: "same", widgetId: "core/second", column: 1, order: 5, hidden: false },
-  ];
+  const collided = [card("same", "core/first"), card("same", "core/second")];
 
-  it("is read WITHOUT being rewritten, so the whole-row view stays honest", () => {
+  it("is read WITHOUT being rewritten, and the repeat is reported", () => {
     // The resolution belongs to `partitionPlacements`, which knows what this
-    // caller may see. This layer only reports.
+    // caller may see. This layer only reports, so the row is findable in a log.
     const read = readStoredLayout(serializeLayout(collided));
     expect(read.placements.map(p => p.id)).toEqual(["same", "same"]);
-  });
-
-  it("reports the repeated id, so the row is findable in a log", () => {
-    expect(
-      readStoredLayout(serializeLayout(collided)).duplicatePlacementIds
-    ).toEqual(["same"]);
+    expect(read.duplicatePlacementIds).toEqual(["same"]);
   });
 
   it("CONTROL: a sound row reports nothing", () => {
-    const sound: WidgetPlacement[] = [
-      { id: "a", widgetId: "core/first", column: 0, order: 0, hidden: false },
-      { id: "b", widgetId: "core/second", column: 0, order: 1, hidden: false },
-    ];
-    const read = readStoredLayout(serializeLayout(sound));
-    expect(read.placements).toEqual(sound);
-    expect(read.duplicatePlacementIds).toBeUndefined();
+    expect(
+      readStoredLayout(serializeLayout([card("a"), card("b")]))
+        .duplicatePlacementIds
+    ).toBeUndefined();
   });
 
-  it("reports a v1 row's repeat too, which leaves by the other branch", () => {
+  it("reports a repeat in a row of an earlier format too", () => {
     const raw = JSON.stringify({
       schemaVersion: 1,
       placements: [

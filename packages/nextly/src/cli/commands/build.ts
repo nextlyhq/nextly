@@ -29,27 +29,23 @@
 
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { assertValidCollectionConfig } from "../../collections/config/validate-config";
-import {
-  TypeGenerator,
-  type TypeGeneratorOptions,
-} from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { describeError } from "../../errors/index";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
-import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
 import {
   assertPluginFieldDeclarations,
   describeDeclarationFailure,
 } from "../../shared/lib/assert-plugin-field-declarations";
+import { generatedZodDir } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import type { SingleConfig } from "../../singles/config/types";
 import { assertValidSingleConfig } from "../../singles/config/validate-single";
@@ -69,6 +65,7 @@ import {
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
+import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
 import {
   convertToComponentRecords,
@@ -721,7 +718,8 @@ async function generateAllFiles(
     });
 
     const zodSchemas = zodGenerator.generateAllSchemas(records);
-    const zodDir = resolve(cwd, config.db.schemasDir, "zod");
+    // schemasDir/zod, fitted to the app's layout as `generate:types` fits it.
+    const zodDir = generatedZodDir(cwd, config.db.schemasDir);
     await ensureDir(zodDir);
 
     for (const schema of zodSchemas) {
@@ -743,34 +741,20 @@ async function generateAllFiles(
   if (options.types !== false) {
     logger.debug("Generating TypeScript types...");
 
-    const typeGeneratorOptions: TypeGeneratorOptions = {
-      includeComments: true,
-      generateInputTypes: true,
-      generateConfig: true,
-      generateModuleAugmentation: true,
-    };
-
-    // The same names `generate:types` narrows `PermissionSlug` and `EventName`
-    // to. Without them the build writes those types as bare `string`, so a
-    // deployment build would widen what a development run had narrowed.
-    const { permissionSlugs, eventNames } = collectCodegenNames(
+    // The same writer `generate:types` uses, so a deployment build writes the
+    // file a development run wrote: the same narrowed names, the same path.
+    const typesFilePath = await writeGeneratedTypesFile({
+      cwd,
+      outputFile: config.typescript.outputFile,
       config,
-      config.plugins ?? []
-    );
-
-    const typeGenerator = new TypeGenerator(typeGeneratorOptions);
-    const typesFile = typeGenerator.generateTypesFile(
-      records,
-      singleRecords,
-      componentRecords,
-      userFieldRecords,
-      permissionSlugs,
-      eventNames
-    );
-
-    const typesFilePath = resolve(cwd, config.typescript.outputFile);
-    await ensureDir(dirname(typesFilePath));
-    await writeFile(typesFilePath, typesFile.code, "utf-8");
+      plugins: config.plugins ?? [],
+      collections: records,
+      singles: singleRecords,
+      components: componentRecords,
+      userFields: userFieldRecords,
+      moduleAugmentation: true,
+      warn: message => logger.warn(message),
+    });
     result.typesFile = typesFilePath;
     logger.debug(`Written types: ${typesFilePath}`);
   }

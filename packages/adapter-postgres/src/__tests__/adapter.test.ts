@@ -515,6 +515,39 @@ describe("PostgresAdapter", () => {
       expect(mockClient.release).toHaveBeenCalled();
     });
 
+    it("returns a rolled-back client to the pool for reuse", async () => {
+      await expect(
+        adapter.transaction(async () => {
+          throw new Error("test error");
+        })
+      ).rejects.toThrow();
+
+      // No error: node-postgres keeps the client and hands it out again.
+      // The last release is the transaction's; connecting made one of its own.
+      expect(mockClient.release).toHaveBeenCalled();
+      expect(mockClient.release.mock.calls.at(-1)?.[0]).toBeUndefined();
+    });
+
+    it("discards a client whose ROLLBACK failed instead of pooling it", async () => {
+      // A client the ROLLBACK did not reach may still be inside the
+      // transaction; pooled, it would put the next request's statements in it.
+      const rollbackFailure = new Error("connection terminated");
+      mockClient.query.mockImplementation((statement: string) =>
+        statement === "ROLLBACK"
+          ? Promise.reject(rollbackFailure)
+          : Promise.resolve({ rows: [], rowCount: 0 })
+      );
+
+      await expect(
+        adapter.transaction(async () => {
+          throw new Error("test error");
+        })
+      ).rejects.toThrow();
+
+      // An argument: node-postgres destroys the client rather than reusing it.
+      expect(mockClient.release).toHaveBeenCalledWith(rollbackFailure);
+    });
+
     it("should support isolation level option", async () => {
       await adapter.transaction(async () => {}, {
         isolationLevel: "serializable",

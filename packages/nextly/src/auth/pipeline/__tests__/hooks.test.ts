@@ -56,13 +56,18 @@ describe("AuthHookRegistry", () => {
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
 
-  it("lets afterAuthenticate change the user's details", async () => {
-    // The control: only the identity is fixed.
+  it("hands the details afterAuthenticate changed to the hooks after it", async () => {
+    // The control for the identity check above: only the id is fixed here.
+    // The details a hook returns reach the later hooks, and no further: the
+    // session is signed with the checked account's email, name and image
+    // (`handlers/__tests__/issue-session-account-state.test.ts`).
     const reg = new AuthHookRegistry();
     reg.add({ afterAuthenticate: u => ({ ...u, name: "Renamed" }) });
+    reg.add({ afterAuthenticate: u => ({ ...u, image: `${u.name}.png` }) });
     expect(await reg.runAfterAuthenticate(user, {} as never)).toEqual({
       ...user,
       name: "Renamed",
+      image: "Renamed.png",
     });
   });
 
@@ -77,18 +82,22 @@ describe("AuthHookRegistry", () => {
         roleIds: ["super-admin"],
         email: "x@evil.test",
         typ: "pending-auth",
+        sev: 99,
         tenant: "acme",
       }),
     });
     const out = await reg.runCustomizeClaims(
-      { sub: "u1", email: "a@b.c", roleIds: ["editor"] },
+      { sub: "u1", email: "a@b.c", roleIds: ["editor"], sev: 2 },
       user,
       {} as never
     );
+    // The session epoch too: a hook setting it would sign a token that
+    // outlives the change that ended the account's sessions.
     expect(out).toEqual({
       sub: "u1",
       email: "a@b.c",
       roleIds: ["editor"],
+      sev: 2,
       tenant: "acme",
     });
   });

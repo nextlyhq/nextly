@@ -9,7 +9,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_COLUMN_COUNT,
   LAYOUT_SCHEMA_VERSION,
   dismissalsApplied,
   layoutIsArranged,
@@ -25,9 +24,8 @@ function placement(
   return {
     id: widgetId,
     widgetId,
-    column: 0,
-    order: 0,
-    hidden: false,
+    width: "full",
+    removed: false,
     ...patch,
   };
 }
@@ -40,11 +38,7 @@ describe("whether a stored row was arranged", () => {
 
   it("reads a row a dismissal wrote as not arranged", () => {
     const row = readStoredLayout(
-      serializeLayout(
-        [placement("a", { hidden: true })],
-        DEFAULT_COLUMN_COUNT,
-        false
-      )
+      serializeLayout([placement("a", { removed: true })], false)
     );
     expect(layoutIsArranged(row)).toBe(false);
   });
@@ -54,9 +48,11 @@ describe("whether a stored row was arranged", () => {
     // their silence any other way would replace readers' own arrangements with
     // the live defaults the moment this shipped.
     const legacy = JSON.stringify({
-      schemaVersion: LAYOUT_SCHEMA_VERSION,
-      columnCount: DEFAULT_COLUMN_COUNT,
-      placements: [placement("a")],
+      schemaVersion: 2,
+      columnCount: 3,
+      placements: [
+        { id: "a", widgetId: "a", column: 0, order: 0, hidden: false },
+      ],
     });
     expect(layoutIsArranged(readStoredLayout(legacy))).toBe(true);
   });
@@ -75,7 +71,6 @@ describe("whether a stored row was arranged", () => {
     // expensive direction to be wrong in.
     const odd = JSON.stringify({
       schemaVersion: LAYOUT_SCHEMA_VERSION,
-      columnCount: DEFAULT_COLUMN_COUNT,
       placements: [placement("a")],
       unarranged: "yes",
     });
@@ -85,22 +80,21 @@ describe("whether a stored row was arranged", () => {
 
 describe("a reader's dismissals over the live defaults", () => {
   const defaults = [
-    placement("a", { order: 0, column: 0 }),
-    placement("b", { order: 10, column: 1 }),
-    placement("new", { order: 20, column: 2 }),
+    placement("a", { width: "half" }),
+    placement("b", { width: "third" }),
+    placement("new"),
   ];
 
   it("hides the widgets the row hid, and nothing else", () => {
     const row = readStoredLayout(
       serializeLayout(
-        [placement("a", { hidden: true }), placement("b")],
-        DEFAULT_COLUMN_COUNT,
+        [placement("a", { removed: true }), placement("b")],
         false
       )
     );
 
     expect(
-      dismissalsApplied(defaults, row).map(p => [p.widgetId, p.hidden])
+      dismissalsApplied(defaults, row).map(p => [p.widgetId, p.removed])
     ).toEqual([
       ["a", true],
       ["b", false],
@@ -109,21 +103,20 @@ describe("a reader's dismissals over the live defaults", () => {
     ]);
   });
 
-  it("takes its positions from the defaults, never from the row", () => {
-    // 🔴 The row was written against an EARLIER registry. Its orders are that
-    // registry's indices, so reading them back would put a card where a plugin
-    // has since stopped declaring it -- and could tie with a widget that did
-    // not exist when the row was written.
+  it("takes positions and widths from the defaults, never from the row", () => {
+    // 🔴 The row was written against an EARLIER default. Reading its order or
+    // widths back would keep a reader who never arranged anything on a
+    // dashboard the default has since moved away from.
     const row = readStoredLayout(
       serializeLayout(
-        [placement("b", { order: 999, column: 2, hidden: true })],
-        DEFAULT_COLUMN_COUNT,
+        [placement("new"), placement("b", { width: "quarter", removed: true })],
         false
       )
     );
 
-    const b = dismissalsApplied(defaults, row).find(p => p.widgetId === "b");
-    expect(b).toMatchObject({ order: 10, column: 1, hidden: true });
+    const applied = dismissalsApplied(defaults, row);
+    expect(applied.map(p => p.widgetId)).toEqual(["a", "b", "new"]);
+    expect(applied[1]).toMatchObject({ width: "third", removed: true });
   });
 
   it("returns the defaults unchanged for a reader with no row", () => {

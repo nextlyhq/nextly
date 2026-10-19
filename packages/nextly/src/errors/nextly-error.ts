@@ -1,7 +1,12 @@
 import { isDbError, type DbErrorKind } from "../database/errors";
 
 import { NEXTLY_ERROR_STATUS, type NextlyErrorCode } from "./error-codes";
-import type { PublicData, ValidationPublicData } from "./public-data";
+import type {
+  PublicData,
+  ReleaseNotDeletablePublicData,
+  ReleaseProblemsPublicData,
+  ValidationPublicData,
+} from "./public-data";
 
 /**
  * Default mapping from DbErrorKind to NextlyError contract. Used by
@@ -361,6 +366,12 @@ export class NextlyError extends Error {
     // for state conflicts where "refresh and try again" would misdirect the
     // caller (a disabled endpoint, an in-flight delivery, and so on).
     message?: string;
+    /**
+     * What a caller needs to act on the conflict: for a release refused over
+     * its documents, the problems by code and member; for a release that
+     * cannot be deleted, the reason.
+     */
+    data?: ReleaseProblemsPublicData | ReleaseNotDeletablePublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
@@ -369,6 +380,7 @@ export class NextlyError extends Error {
       publicMessage:
         opts?.message ??
         "The resource has changed since you last loaded it. Please refresh and try again.",
+      publicData: opts?.data,
       cause: opts?.cause,
       logContext: { reason: opts?.reason, ...opts?.logContext },
     });

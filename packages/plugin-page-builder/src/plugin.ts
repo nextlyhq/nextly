@@ -25,6 +25,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
@@ -48,9 +49,11 @@ import {
   USAGE_BACKFILL_STATE_SLUG,
   usageBackfillStateCollection,
 } from "./collections/usage-backfill-state";
-import { registerComponentCycleGuard } from "./component-cycle-guard";
+import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
-import { blocksFieldType } from "./fields/blocksField";
+import { componentUsageIndex } from "./component-usage";
+import type { CompositionSetup } from "./fields/blocks-composition";
+import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
@@ -60,6 +63,7 @@ import {
   patternLibraryRoute,
   type ComponentStore,
 } from "./library-route";
+import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
@@ -745,6 +749,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
   let installed: BackfillHost | null = null;
 
   /**
+   * How the blocks field judges composition, once the plugin is installed.
+   * Until then only a document's own rules run: nothing is installed to read
+   * the library through.
+   */
+  let composition: CompositionSetup | undefined;
+
+  /**
    * The installed context, or a refusal naming why it is missing.
    *
    * Throwing beats defaulting here. Every plausible default is a claim about a
@@ -835,26 +846,79 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         layoutsCollection: ctx.self.collections[LAYOUTS_SLUG] ?? LAYOUTS_SLUG,
       });
 
-      // Refuse a component write that closes a reference cycle. Registered
-      // beside the delete guard because both refuse a write over the component
-      // graph, and separately because they ask different questions of it: that
-      // one is about what still USES a component, this one about what the
-      // component itself would end up using.
-      registerComponentCycleGuard({
-        ctx,
-        // The collection components actually live in, resolved the way the
-        // readiness notice resolves it: a configured store is named literally,
-        // and the plugin's own collection follows the host's rename.
-        componentsCollection:
-          componentStoreOf(opts).collection ??
-          ctx.self.collections[COMPONENTS_SLUG] ??
-          COMPONENTS_SLUG,
-        documentField: componentStoreOf(opts).field,
-        // The SAME bounds the renderer draws under. Read under different ones,
-        // the walk would follow references inside a document the page never
-        // renders, or stop short of ones it does.
+      // How a blocks value is judged as a reader would receive it: where
+      // components live, the caps, who places a component, and where to say
+      // so when some of those could not be judged. Set here because the
+      // resolved slugs exist only once the plugin is installed; the field type
+      // was declared before that and reads this through a getter.
+      const componentIndex =
+        ctx.self.collections[COMPONENT_USAGE_INDEX_SLUG] ??
+        COMPONENT_USAGE_INDEX_SLUG;
+      composition = {
+        store: {
+          // The collection components actually live in, resolved the way the
+          // readiness notice resolves it: a configured store is named
+          // literally, and the plugin's own collection follows the host's
+          // rename.
+          collection:
+            componentStoreOf(opts).collection ??
+            ctx.self.collections[COMPONENTS_SLUG] ??
+            COMPONENTS_SLUG,
+          field: componentStoreOf(opts).field,
+        },
+        // The SAME bounds the renderer draws under. Judged under different
+        // ones, a save would refuse a page the renderer draws, or pass one it
+        // cuts short.
         limits: opts.limits ?? DEFAULT_LIMITS,
-      });
+        // Off where the host turned component readiness off, which is the
+        // setting for a renderer drawing components from its own
+        // `resolveComponents` source: no collection stands for that source, so
+        // a document composed against this store would be judged by
+        // definitions it is not drawn with.
+        composesDocuments: opts.componentReadiness !== false,
+        hostsOf: indexHostFinder({
+          nextly: () => requireInstalled().nextly(),
+          indexCollection: componentIndex,
+          health: () =>
+            usageHealthService(requireInstalled).read(
+              componentUsageIndex,
+              componentIndex
+            ),
+        }),
+        onUnjudged: unjudged =>
+          ctx.logger.warn(
+            `[page-builder] a component save could not be judged inside ${
+              unjudged.listIncomplete
+                ? `${String(unjudged.count)} or more`
+                : String(unjudged.count)
+            } of the documents that place it: ${unjudged.reasons.join("; ")}`,
+            { componentId: unjudged.componentId }
+          ),
+        // The refusal names no document, so the operator is told which.
+        onHostsBroken: broken =>
+          ctx.logger.warn(
+            `[page-builder] a component save was refused because it would break ${String(broken.hosts.length)} of the documents that place it`,
+            { componentId: broken.componentId, hosts: broken.hosts }
+          ),
+        onHostsStillBroken: found =>
+          ctx.logger.warn(
+            `[page-builder] a component save left ${String(found.hosts.length)} document(s) that already break a lock inside it no worse; they need repairing where they are stored`,
+            { componentId: found.componentId, hosts: found.hosts }
+          ),
+        onLockedExposures: found =>
+          ctx.logger.warn(
+            `[page-builder] a component exposes ${String(found.exposures.length)} field(s) a contentOnly lock holds; placements cannot change them. Remove each exposure, or loosen the lock on its slot.`,
+            {
+              componentId: found.componentId,
+              exposures: found.exposures.map(entry => ({
+                id: entry.exposureId,
+                label: entry.label,
+                slot: entry.slot,
+                holder: entry.holderType,
+              })),
+            }
+          ),
+      };
 
       registerClassUsageMaintenance({
         ctx,
@@ -890,6 +954,10 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
       registerReadinessNotice(ctx, opts);
+      // A blocks field below the top level has no Page Builder to open, and the
+      // operator should learn that from the log before an author meets it in
+      // the form.
+      warnNestedBlocksFields(ctx.config, message => ctx.logger.warn(message));
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no
@@ -979,7 +1047,9 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       // Built against the configured breakpoints, so a document write is
       // validated against the same set the canvas draws with. With none
       // configured this is the empty set, which the engine treats permissively.
-      fieldTypes: [blocksFieldType(siteBreakpoints(configStyle))],
+      fieldTypes: [
+        blocksFieldType(siteBreakpoints(configStyle), () => composition),
+      ],
       // The one read the insert panel makes. A route rather than a collection
       // read from the browser, because the index it serves has two sources —
       // stored rows and, later, patterns a plugin declares in code — and only a
@@ -1089,6 +1159,17 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // with no design entry, so grouping them elsewhere would mean widening
         // that list — a change to the admin's navigation model, and a larger
         // question than where three links go.
+        // The editor is a full-screen view of the document, offered wherever a
+        // blocks field is used — including collections the Schema Builder adds
+        // later — and opened by the field's card at that address.
+        documentViews: [
+          {
+            path: BUILDER_VIEW_PATH,
+            fieldType: BLOCKS_TYPE,
+            component: BUILDER_VIEW_COMPONENT,
+            label: "Page Builder",
+          },
+        ],
         menu: [
           {
             label: "Patterns",

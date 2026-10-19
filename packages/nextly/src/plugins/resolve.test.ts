@@ -117,6 +117,29 @@ describe("assertPluginManifests", () => {
       },
     }) as unknown as PluginDefinition;
 
+  it("refuses two document views on one path, on the list it is given", () => {
+    // A transformer can add a plugin after boot's first look, so the check
+    // has to travel with the list that will actually initialize.
+    const viewOn = (name: string) =>
+      ({
+        name,
+        version: "1.0.0",
+        nextly: ">=0.0.1",
+        contributes: {
+          admin: {
+            views: {
+              pages: {
+                documentViews: [{ path: "builder", component: `${name}#View` }],
+              },
+            },
+          },
+        },
+      }) as unknown as PluginDefinition;
+    expect(() =>
+      assertPluginManifests([viewOn("@acme/one"), viewOn("@acme/two")])
+    ).toThrow(NextlyError);
+  });
+
   it("REFUSES a secret path the settings schema does not have", () => {
     // The reason this set is re-run after transforms. A path that matches
     // nothing is not inert: `ctx.settings` then stores the credential it names

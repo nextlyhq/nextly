@@ -14,36 +14,109 @@ import {
   DEFAULT_LIMITS,
   DOCUMENT_FORMAT_VERSION,
   MAX_ENVELOPE_ENTRIES,
+  type DocumentLimits,
 } from "@nextlyhq/blocks-engine";
 import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  registerComponentCycleGuard,
-  type CycleGuardContext,
+  componentCycleRefusal,
+  MOST_COMPOSED_NODES,
+  type ComponentSource,
 } from "./component-cycle-guard";
 
 const COMPONENTS = "nx_pb_components";
 const FIELD = "content";
 
-/** A hook registry that records what was registered and runs it. */
-function context() {
-  const registered: { type: string; collection: string }[] = [];
-  let handler: ((context: unknown) => unknown) | null = null;
-  const ctx: CycleGuardContext = {
-    hooks: {
-      on: (type, collection, given) => {
-        registered.push({ type, collection });
-        handler = given;
-      },
-    },
+/**
+ * Run a save through the judgement the way field validation does.
+ *
+ * The cases are written as the writes that reach a component — an update
+ * naming its stored id, the document it carries, the status it names, and the
+ * store behind it — and this hands the judgement what validation hands it for
+ * such a write. A status-only publish is validated on the document it PROMOTES,
+ * the pending draft over the live row, so that is the document judged here.
+ */
+function context(limits: DocumentLimits = DEFAULT_LIMITS) {
+  const run = async (write: unknown): Promise<undefined> => {
+    const { originalData, data, req } = write as {
+      originalData?: { id?: unknown };
+      data?: Record<string, unknown>;
+      req?: { nextly?: FakeApi };
+    };
+    const self = originalData?.id;
+    if (typeof self !== "string") return undefined;
+    const fields = data ?? {};
+    const nextStatus =
+      typeof fields.status === "string" ? fields.status : undefined;
+    const source = sourceOver(req?.nextly);
+    const judged = await documentJudged(fields, self, nextStatus, source);
+    if (judged === undefined) return undefined;
+    const document = judged.document;
+    const refusal = await componentCycleRefusal({
+      self,
+      document,
+      nextStatus,
+      source,
+      limits,
+      // A save's own allowance, as the field validator hands one.
+      work: { left: MOST_COMPOSED_NODES },
+    });
+    if (refusal !== null) throw NextlyError.conflict({ message: refusal });
+    return undefined;
   };
-  const run = async (hookContext: unknown): Promise<unknown> => {
-    if (handler === null) throw new Error("nothing was registered");
-    return handler(hookContext);
-  };
-  return { ctx, registered, run };
+  return { run };
 }
+
+/**
+ * The document validation judges for a write, or `undefined` where it judges
+ * none: the field the write carries, or — for a status-only publish — the
+ * pending draft that publish promotes. A write that leaves the field alone and
+ * promotes nothing is not validated for it at all.
+ */
+async function documentJudged(
+  fields: Record<string, unknown>,
+  self: string,
+  nextStatus: string | undefined,
+  source: ComponentSource
+): Promise<{ document: unknown } | undefined> {
+  if (Object.hasOwn(fields, FIELD)) return { document: fields[FIELD] };
+  if (nextStatus !== "published") return undefined;
+  const pending = await source(self, true);
+  return pending.kind === "document"
+    ? { document: pending.document }
+    : undefined;
+}
+
+/**
+ * The store as the judgement reads it: one form of one component by id, a
+ * missing row as absent, and any other failure as unreadable. With no store,
+ * the library holds nothing but the document being saved.
+ */
+function sourceOver(nextly: FakeApi | undefined): ComponentSource {
+  if (nextly === undefined) return async () => ({ kind: "absent" });
+  return async (id, draft) => {
+    try {
+      const row = await nextly.findByID({
+        id,
+        draft,
+        depth: 0,
+        overrideAccess: true,
+      });
+      if (row === null || row === undefined) return { kind: "absent" };
+      return {
+        kind: "document",
+        document: (row as Record<string, unknown>)[FIELD],
+      };
+    } catch (error) {
+      return NextlyError.isNotFound(error)
+        ? { kind: "absent" }
+        : { kind: "unreadable" };
+    }
+  };
+}
+
+type FakeApi = ReturnType<typeof api>["nextly"];
 
 /** A component document placing the ids given. */
 const places = (...ids: string[]) => ({
@@ -131,10 +204,6 @@ function api(rows: {
   unreadable?: readonly string[];
   /** Ids the store no longer holds, which the real API answers by throwing. */
   deleted?: readonly string[];
-  /** An id whose read answers with a row claiming to be another. */
-  redirect?: Record<string, string>;
-  /** Ids whose read answers with a row carrying no `id` at all, as an `afterRead` can. */
-  stripId?: readonly string[];
   /** Ids answered with a WHOLE document, for shapes `places()` cannot express. */
   documents?: Record<string, unknown>;
 }) {
@@ -149,7 +218,7 @@ function api(rows: {
     if (rows.unreadable?.includes(id) === true) {
       throw new Error("this row could not be read");
     }
-    // What the real Direct API does for a row that is not there: it THROWS
+    // What the store's by-id read does for a row that is not there: it THROWS
     // NOT_FOUND unless errors are disabled, rather than answering null.
     if (rows.deleted?.includes(id) === true) {
       throw NextlyError.notFound({ message: `no component ${id}` });
@@ -190,14 +259,7 @@ function api(rows: {
       if (whole !== undefined) return { id: a.id, [FIELD]: whole };
       const ids = documentFor(a.id, a.draft === true);
       if (ids === undefined) return null;
-      // A hook may also remove the id entirely, which leaves a response that
-      // cannot be confirmed as the subject's document.
-      if (rows.stripId?.includes(a.id) === true) {
-        return { [FIELD]: places(...ids) };
-      }
-      // A hook may answer with a row that is not the one asked for.
-      const answeredAs = rows.redirect?.[a.id] ?? a.id;
-      return { id: answeredAs, [FIELD]: places(...ids) };
+      return { id: a.id, [FIELD]: places(...ids) };
     },
     create: async () => ({}),
     delete: async () => ({}),
@@ -205,14 +267,6 @@ function api(rows: {
   };
   return { nextly, asked };
 }
-
-const register = (ctx: CycleGuardContext) =>
-  registerComponentCycleGuard({
-    ctx,
-    componentsCollection: COMPONENTS,
-    documentField: FIELD,
-    limits: DEFAULT_LIMITS,
-  });
 
 /**
  * An UPDATE of `id`, whose incoming document places `ids`.
@@ -291,20 +345,8 @@ const gatedPlacement = (id: string) => ({
 const SPENDS_THE_ALLOWANCE = 30_000;
 
 describe("saving a component that would reference itself", () => {
-  it("registers on beforeChange, for the components collection only", () => {
-    // Named rather than the wildcard: a wildcard registration would walk the
-    // component graph on every write the site performs.
-    const c = context();
-    register(c.ctx);
-
-    expect(c.registered).toEqual([
-      { type: "beforeChange", collection: COMPONENTS },
-    ]);
-  });
-
   it("refuses, naming the chain the author has to break", async () => {
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["cc"], cc: ["a"] } });
 
     // `cc` is redacted: the author's document places `b`, and `cc` was reached
@@ -317,7 +359,6 @@ describe("saving a component that would reference itself", () => {
 
   it("refuses a component placed inside itself", async () => {
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: {} });
 
     await expect(c.run(saving("a", ["a"], nextly))).rejects.toThrow(/a → a/);
@@ -327,7 +368,6 @@ describe("saving a component that would reference itself", () => {
     // The control. Without it, a guard that refused everything would satisfy
     // every refusal case here.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["cc"], cc: [] } });
 
     await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
@@ -338,7 +378,6 @@ describe("saving a component that would reference itself", () => {
     // a pending edit that references something the stored row does not — and
     // the loop renders as soon as that edit is published.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: [] }, draft: { b: ["a"] } });
 
     await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
@@ -346,22 +385,15 @@ describe("saving a component that would reference itself", () => {
     );
   });
 
-  it("reads as the SYSTEM, without expanding what it does not use", async () => {
-    // A component this author cannot see still renders on the page, so a chain
-    // running through it is a chain that closes; read as the author it would be
-    // invisible and the loop permitted. Depth 0 because the document is read
-    // off the row and expanding relationships fetches every referenced row.
+  it("reads only the PREVIEW form for a save that names no status", async () => {
+    // Core stores a status-less save as a working draft and leaves the live row
+    // alone, so reading the live graph as well would judge a form this write
+    // does not change.
     const c = context();
-    register(c.ctx);
     const { nextly, asked } = api({ stored: { b: [] } });
 
     await c.run(saving("a", ["b"], nextly));
 
-    expect(asked.every(a => a.override === true)).toBe(true);
-    expect(asked.every(a => a.depth === 0)).toBe(true);
-    // The PREVIEW form only. This save names no status, so core stores it as a
-    // working draft and the live row keeps the document it has — reading the
-    // live graph as well would judge a form this write does not change.
     expect(asked.map(a => a.draft)).toEqual([true]);
   });
 
@@ -369,7 +401,6 @@ describe("saving a component that would reference itself", () => {
     // The counterpart: a publish writes the live row and consumes the pending
     // draft, so the document lands in both forms and both are judged.
     const c = context();
-    register(c.ctx);
     const { nextly, asked } = api({ stored: { b: [] } });
 
     await c.run(publishing("a", ["b"], nextly));
@@ -382,7 +413,6 @@ describe("saving a component that would reference itself", () => {
     // what a definition with no loop looks like too. Refusing fails towards not
     // saving, which the author can retry; the other direction admits the loop.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["cc"] }, unreadable: ["cc"] });
 
     await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
@@ -395,7 +425,6 @@ describe("saving a component that would reference itself", () => {
     // as a placeholder. That is not a loop, and refusing the save would make a
     // deleted component un-saveable-around.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: {} });
 
     await expect(c.run(saving("a", ["gone"], nextly))).resolves.toBeUndefined();
@@ -403,14 +432,13 @@ describe("saving a component that would reference itself", () => {
 
   it("treats a component the store no longer holds as absent, not as unreadable", async () => {
     /*
-     * The Direct API THROWS `NOT_FOUND` for a missing row rather than answering
-     * null. Caught as a failure, a saved reference to a component somebody
-     * deleted made the graph unknown — so every subsequent save of that
-     * component was refused until the reference was taken out by hand, for a
-     * state the renderer draws as a missing-component placeholder.
+     * A row that is not there is ABSENCE, not a failed read. Read as a failure,
+     * a saved reference to a component somebody deleted would make the graph
+     * unknown — so every later save of that component would be refused until
+     * the reference was taken out by hand, for a state the renderer draws as a
+     * missing-component placeholder.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["gone"] }, deleted: ["gone"] });
 
     await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
@@ -424,7 +452,6 @@ describe("saving a component that would reference itself", () => {
      * together, and a save that closes nothing is refused.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       stored: { b: ["cc"], cc: [] },
       draft: { b: [], cc: ["a"] },
@@ -438,7 +465,6 @@ describe("saving a component that would reference itself", () => {
     // seeing a loop that is entirely inside one of them. Published here, so the
     // write reaches the live form the loop is in.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       stored: { b: ["cc"], cc: ["a"] },
       draft: { b: [], cc: [] },
@@ -458,7 +484,6 @@ describe("saving a component that would reference itself", () => {
      * refuse an edit an author is entitled to make.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["a"] }, draft: { b: [] } });
 
     await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
@@ -469,7 +494,6 @@ describe("saving a component that would reference itself", () => {
     // than a hole: the very same document is refused by the write that puts it
     // in front of readers.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["a"] }, draft: { b: [] } });
 
     await expect(c.run(publishing("a", ["b"], nextly))).rejects.toThrow(
@@ -490,7 +514,6 @@ describe("saving a component that would reference itself", () => {
      * cycle is assembled out of a document no public read can reach.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["a"] }, draft: { b: [] } });
 
     await expect(
@@ -502,28 +525,10 @@ describe("saving a component that would reference itself", () => {
     // The control. Without it, skipping a form for every unpublish would
     // satisfy the case above and let an unpublish close a preview loop.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: [] }, draft: { b: ["a"] } });
 
     await expect(c.run(unpublishing("a", ["b"], nextly))).rejects.toThrow(
       /a → b → a/
-    );
-  });
-
-  it("refuses a by-id read whose answer carries no id at all", async () => {
-    /*
-     * An `afterRead` hook can strip `id`. Accepted, a lookup for `b` retargeted
-     * to an acyclic row would stand in for `b`'s placements and the chain
-     * through the real `b` would be approved. `recordOf` in
-     * `class-usage-runtime.ts` already refuses every response whose id is not
-     * the subject's, for the same reason.
-     */
-    const c = context();
-    register(c.ctx);
-    const { nextly } = api({ stored: { b: [] }, stripId: ["b"] });
-
-    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
-      /could not all be read/
     );
   });
 
@@ -532,7 +537,6 @@ describe("saving a component that would reference itself", () => {
     // caller is denied. Printing it would hand them an identifier for the price
     // of a save they already know fails.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["secret"], secret: ["a"] } });
 
     const refused = await c
@@ -548,7 +552,6 @@ describe("saving a component that would reference itself", () => {
     // Otherwise the number of ellipses counts them out, which reports the shape
     // of the part of the graph being withheld.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       stored: { b: ["p1"], p1: ["p2"], p2: ["p3"], p3: ["a"] },
     });
@@ -571,7 +574,6 @@ describe("saving a component that would reference itself", () => {
      * A → B → A.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ documents: { b: exposesItsPlacement("cc") } });
 
     await expect(
@@ -590,7 +592,6 @@ describe("saving a component that would reference itself", () => {
     // overrides on a placement. Otherwise every instance the inspector has ever
     // edited would be unsavable.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       documents: { b: exposesItsPlacement("cc") },
       stored: { cc: [] },
@@ -619,7 +620,6 @@ describe("saving a component that would reference itself", () => {
      * the walk alone makes a supported shape unsavable.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       documents: { b: exposesItsPlacement("cc") },
       stored: { cc: ["a"], d: [] },
@@ -644,7 +644,6 @@ describe("saving a component that would reference itself", () => {
      * supplies `a → b → … → a`, and the composition agrees here.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       documents: { b: exposesItsPlacement("cc") },
       stored: { cc: ["a"], d: [] },
@@ -672,7 +671,6 @@ describe("saving a component that would reference itself", () => {
      * documents names the other twice and no walk over ids can see it.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       documents: {
         bb: {
@@ -718,7 +716,6 @@ describe("saving a component that would reference itself", () => {
     // Without this, refusing whenever a placement carries a nested override
     // would satisfy the case above and make every composed override unsavable.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       documents: {
         bb: {
@@ -768,7 +765,6 @@ describe("saving a component that would reference itself", () => {
      * — or by a write that skipped it — reaches the live library unexamined.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       stored: { a: [], b: ["a"] },
       draft: { a: ["b"] },
@@ -783,7 +779,6 @@ describe("saving a component that would reference itself", () => {
     // The control. Without it a guard that refused every publish would satisfy
     // the case above.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       stored: { a: [], b: [] },
       draft: { a: ["b"] },
@@ -792,120 +787,6 @@ describe("saving a component that would reference itself", () => {
     await expect(
       c.run(publishingPending("a", nextly))
     ).resolves.toBeUndefined();
-  });
-
-  it("refuses when a by-id read answers with a row claiming another identity", async () => {
-    // A `beforeOperation` hook can rewrite the id the query uses and an
-    // `afterRead` hook can replace the response, so a lookup for `b` may answer
-    // with an unrelated acyclic row — and the loop through the real `b` would be
-    // approved on the strength of it.
-    const c = context();
-    register(c.ctx);
-    const { nextly } = api({
-      stored: { b: [], cc: [] },
-      redirect: { b: "cc" },
-    });
-
-    await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
-      /could not all be read/
-    );
-  });
-
-  it("allows a bulk write that cannot change the reference graph", async () => {
-    // The transaction refusal is about needing a graph READ. A bulk rename or
-    // status change carries no document, so there is nothing to read and
-    // nothing to refuse.
-    const c = context();
-    register(c.ctx);
-    const { nextly } = api({ stored: {} });
-
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: { title: "Renamed in bulk" },
-        req: { nextly },
-        executor: {},
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it("allows a bulk create the store has not named yet", async () => {
-    // Nothing can reference a row that does not exist, so the ordinary create
-    // path allows it — and being inside a transaction does not change that.
-    const c = context();
-    register(c.ctx);
-    const { nextly } = api({ stored: {} });
-
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "create",
-        data: { [FIELD]: places("b") },
-        req: { nextly },
-        executor: {},
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it("refuses inside a caller-owned transaction rather than skipping the check", async () => {
-    // The Direct API takes no executor, so a read here waits on the connection
-    // the open transaction holds while that transaction waits on this hook.
-    // Skipping would let exactly the writes this exists for through, on the
-    // path that writes many at once.
-    const c = context();
-    register(c.ctx);
-    const { nextly } = api({ stored: {} });
-
-    await expect(
-      c.run({ ...saving("a", ["a"], nextly), executor: {} })
-    ).rejects.toThrow(/bulk operation/);
-  });
-
-  it("leaves a create alone when the store has not named the row yet", async () => {
-    // Nothing can already reference a row that does not exist, so no chain can
-    // lead back to it — and there is no id to compare against in any case.
-    const c = context();
-    register(c.ctx);
-    const { nextly, asked } = api({ stored: { b: ["cc"], cc: [] } });
-
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "create",
-        data: { [FIELD]: places("b") },
-        req: { nextly },
-      })
-    ).resolves.toBeUndefined();
-    // And it does not pay for a walk it cannot use.
-    expect(asked).toEqual([]);
-  });
-
-  it("leaves a create alone, even when the caller supplied an id", async () => {
-    /*
-     * The supplied id is NOT the identity the row gets: every write path spreads
-     * `stripImmutableSystemFields` over a freshly generated `id`, and `id` is
-     * declared `writableByClient: false`. So a component referencing the
-     * supplied value closes no loop through the row being created — it gets a
-     * different id, which nothing references — and refusing here reports a chain
-     * through a component the author never placed.
-     */
-    const c = context();
-    register(c.ctx);
-    const { nextly, asked } = api({ stored: { b: ["mine"] } });
-
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "create",
-        data: { id: "mine", [FIELD]: places("b") },
-        req: { nextly },
-      })
-    ).resolves.toBeUndefined();
-    // And it costs no reads at all: nothing can reference an id the write is
-    // about to mint, so there is no graph to walk.
-    expect(asked).toEqual([]);
   });
 
   it("refuses a document that names ITSELF without reading the library", async () => {
@@ -917,7 +798,6 @@ describe("saving a component that would reference itself", () => {
      * up to the whole budget — each of which runs the site's hooks.
      */
     const c = context();
-    register(c.ctx);
     const { nextly, asked } = api({ stored: { b: [], cc: [] } });
 
     await expect(c.run(saving("a", ["b", "a", "cc"], nextly))).rejects.toThrow(
@@ -936,7 +816,6 @@ describe("saving a component that would reference itself", () => {
      * component the way to save a loop into it. The walk's proof stands.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       stored: { x: ["y"], b: ["cc"], cc: ["a"] },
       unreadable: ["y"],
@@ -959,7 +838,6 @@ describe("saving a component that would reference itself", () => {
      * applies to the same graph, using the walk, which has no such cap.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       stored: { b: ["cc"], cc: ["d"], d: ["e"], e: ["f"], f: ["a"] },
     });
@@ -973,7 +851,6 @@ describe("saving a component that would reference itself", () => {
     // Inside the cap the composition reaches the loop itself, so the case above
     // is about the cap rather than about a chain the guard cannot follow at all.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: ["cc"], cc: ["d"], d: ["a"] } });
 
     await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
@@ -993,7 +870,6 @@ describe("saving a component that would reference itself", () => {
      * break the loop first.
      */
     const c = context();
-    register(c.ctx);
     // The stored draft carries a real loop, so a guard that judged it would
     // refuse — which is what makes this fixture discriminating.
     const { nextly, asked } = api({ stored: { a: ["b"], b: ["a"] } });
@@ -1015,7 +891,6 @@ describe("saving a component that would reference itself", () => {
     // The field's PRESENCE is what separates the two, so this one must refuse.
     // Otherwise the case above passes on a fixture whose draft was never judged.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { a: ["b"], b: ["a"] } });
 
     await expect(c.run(publishingPending("a", nextly))).rejects.toThrow(
@@ -1038,13 +913,7 @@ describe("saving a component that would reference itself", () => {
      * Registered with a small bound instead of building a document of five
      * thousand nodes: the property is a bound being APPLIED, not its value.
      */
-    const c = context();
-    registerComponentCycleGuard({
-      ctx: c.ctx,
-      componentsCollection: COMPONENTS,
-      documentField: FIELD,
-      limits: { ...DEFAULT_LIMITS, maxNodes: 4 },
-    });
+    const c = context({ ...DEFAULT_LIMITS, maxNodes: 4 });
     const { nextly } = api({ documents: { b: oversized(12) } });
 
     await expect(c.run(saving("a", ["b"], nextly))).rejects.toThrow(
@@ -1055,13 +924,7 @@ describe("saving a component that would reference itself", () => {
   it("CONTROL: the same definition under a bound that FITS is allowed", async () => {
     // One difference — the bound — and the opposite outcome, so the refusal above
     // is attributable to it rather than to a definition the guard cannot read.
-    const c = context();
-    registerComponentCycleGuard({
-      ctx: c.ctx,
-      componentsCollection: COMPONENTS,
-      documentField: FIELD,
-      limits: { ...DEFAULT_LIMITS, maxNodes: 5000 },
-    });
+    const c = context({ ...DEFAULT_LIMITS, maxNodes: 5000 });
     const { nextly } = api({ documents: { b: oversized(12) } });
 
     await expect(c.run(saving("a", ["b"], nextly))).resolves.toBeUndefined();
@@ -1082,7 +945,6 @@ describe("saving a component that would reference itself", () => {
      * nothing — which is not the same as finding nothing.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       documents: {
         bb: {
@@ -1135,7 +997,6 @@ describe("saving a component that would reference itself", () => {
      * they already know will fail.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       documents: {
         b: {
@@ -1209,7 +1070,6 @@ describe("saving a component that would reference itself", () => {
     // itself. So the redaction above is about where the id came from rather than
     // about `cc` never being printable.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { cc: ["a"] } });
 
     await expect(c.run(saving("a", ["cc"], nextly))).rejects.toThrow(
@@ -1228,7 +1088,6 @@ describe("saving a component that would reference itself", () => {
      * past what this will compose and the save would be refused as unestablished.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: [] } });
     const many: Record<
       string,
@@ -1276,7 +1135,6 @@ describe("saving a component that would reference itself", () => {
        * looks like.
        */
       const c = context();
-      register(c.ctx);
       const { nextly } = api({ stored: { b: [] } });
       const wide = (count: number) => {
         const variants: Record<
@@ -1350,7 +1208,6 @@ describe("saving a component that would reference itself", () => {
      * already in hand.
      */
     const c = context();
-    register(c.ctx);
     const { nextly, asked } = api({ stored: {} });
 
     await expect(
@@ -1385,7 +1242,6 @@ describe("saving a component that would reference itself", () => {
     // case above is about the gate rather than about a fixture that never closed
     // a loop at all.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: {} });
 
     await expect(c.run(saving("a", ["a"], nextly))).rejects.toThrow(/a → a/);
@@ -1403,7 +1259,6 @@ describe("saving a component that would reference itself", () => {
      * the ids it installs.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({
       documents: {
         bb: {
@@ -1471,23 +1326,17 @@ describe("saving a component that would reference itself", () => {
      * Completeness is not required to believe an id that was FOUND. A truncated
      * survey makes an ABSENT id uncertain and a present one no less present.
      *
-     * Asserted with NO Direct API, because that is the only configuration where
-     * the two behaviours differ. Demanding completeness made this document read
-     * as not naming itself, and the decline for a missing Direct API was then the
-     * next thing to run — so the write was permitted.
+     * Asserted over an EMPTY library, because that is where the two behaviours
+     * differ: demanding completeness made this document read as not naming
+     * itself, and nothing else in the library could then show the loop — so the
+     * write was permitted.
      *
      * With the id believed, the composition is consulted and cannot get through
      * the subject's OWN forest under this bound. That refuses — and it is a
      * different case from a neighbour it could not supply, which reports
      * `missing` and is left to the walk that can read it.
      */
-    const c = context();
-    registerComponentCycleGuard({
-      ctx: c.ctx,
-      componentsCollection: COMPONENTS,
-      documentField: FIELD,
-      limits: { ...DEFAULT_LIMITS, maxNodes: 3 },
-    });
+    const c = context({ ...DEFAULT_LIMITS, maxNodes: 3 });
 
     await expect(
       c.run({
@@ -1501,17 +1350,15 @@ describe("saving a component that would reference itself", () => {
     ).rejects.toThrow(/a → a/);
   });
 
-  it("refuses a self-naming VARIANT among many others, with no Direct API", async () => {
+  it("refuses a self-naming VARIANT among many others, reading nothing else", async () => {
     /*
-     * The self check runs ahead of the decline for a missing Direct API, so a
-     * document naming itself through a variant must be caught here or the write
-     * is simply permitted.
+     * The self check runs before the library is read, so a document naming
+     * itself through a variant is caught from the document alone.
      *
      * Sixty-five harmless variants are declared before the one that closes the
      * loop. Every selection is composed, so it is found wherever it sits.
      */
     const c = context();
-    register(c.ctx);
     const many: Record<
       string,
       { label: string; overrides: Record<string, unknown> }
@@ -1563,7 +1410,6 @@ describe("saving a component that would reference itself", () => {
      * handles it, and does so here too, which is why this still reaches the store.
      */
     const c = context();
-    register(c.ctx);
     const { nextly, asked } = api({ stored: { b: [] } });
 
     await expect(
@@ -1608,7 +1454,6 @@ describe("saving a component that would reference itself", () => {
      * hiding and revealing alike — fit one save's allowance many times over.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: [] } });
     const many: Record<
       string,
@@ -1653,7 +1498,6 @@ describe("saving a component that would reference itself", () => {
        * and the refusal names what the author can change.
        */
       const c = context();
-      register(c.ctx);
       const { nextly } = api({ documents: { b: oversized(4_900) } });
       const many: Record<
         string,
@@ -1676,7 +1520,7 @@ describe("saving a component that would reference itself", () => {
     SPENDS_THE_ALLOWANCE
   );
 
-  it("refuses a variant that REVEALS a gated self-placement, with no Direct API", async () => {
+  it("refuses a variant that REVEALS a gated self-placement, reading nothing else", async () => {
     /*
      * The case no prediction caught. The node places the component itself and is
      * condition-gated, so the default selection composes cleanly. A variant sets
@@ -1688,11 +1532,10 @@ describe("saving a component that would reference itself", () => {
      * reports nothing, and a scan of what it WRITES has to model the resolver to
      * get it right. Composing every selection needs neither.
      *
-     * Asserted with no Direct API, because that is where a miss is a persisted
-     * cycle rather than a deferred question.
+     * Asserted over an empty library, because there a miss is a persisted cycle
+     * with nothing else in the library to show it.
      */
     const c = context();
-    register(c.ctx);
 
     await expect(
       c.run({
@@ -1739,7 +1582,6 @@ describe("saving a component that would reference itself", () => {
      * real for every reader who selects that variant.
      */
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: [] } });
 
     await expect(
@@ -1757,7 +1599,6 @@ describe("saving a component that would reference itself", () => {
     // The control: it is the variant's TARGET that decides, not the presence of
     // a variant. Otherwise any component offering one would be unsavable.
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: { b: [], other: [] } });
 
     await expect(
@@ -1771,57 +1612,13 @@ describe("saving a component that would reference itself", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("leaves a write carrying no document alone", async () => {
-    // A patch that does not touch the blocks field changes no reference, and
-    // whether a value is a legal document is the field's own validation to say.
-    const c = context();
-    register(c.ctx);
-    const { nextly, asked } = api({ stored: {} });
-
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: { title: "Renamed" },
-        req: { nextly },
-      })
-    ).resolves.toBeUndefined();
-    expect(asked).toEqual([]);
-  });
-
-  it("leaves the write alone when the request carries no Direct API", async () => {
-    // There is nothing to ask with, and a guard that refused every write it
-    // could not evaluate would make the collection unwritable on any path that
-    // shapes its context differently. The document must not name ITSELF here:
-    // that case needs no library and is refused below, so using it would make
-    // this test pass for a reason it is not about.
-    const c = context();
-    register(c.ctx);
-
-    await expect(
-      c.run({
-        collection: COMPONENTS,
-        operation: "update",
-        originalData: { id: "a" },
-        data: { [FIELD]: places("b") },
-        req: {},
-      })
-    ).resolves.toBeUndefined();
-  });
-
-  it("refuses a self-reference even with NO Direct API to ask with", async () => {
+  it("refuses a self-reference before reading anything else", async () => {
     /*
-     * The decline above is for the graph READS. This question needs none: the
-     * submitted document names the id it is being stored under, so the loop is
-     * closed by the document alone and no row in the library can reopen it.
-     *
-     * Left to the decline, an internal or early-runtime write — any path that
-     * shapes its context without a Direct API — could persist `a → a` while the
-     * guard is registered and reports nothing.
+     * This question needs no read: the submitted document names the id it is
+     * being stored under, so the loop is closed by the document alone and no
+     * row in the library can reopen it.
      */
     const c = context();
-    register(c.ctx);
 
     await expect(
       c.run({
@@ -1835,7 +1632,7 @@ describe("saving a component that would reference itself", () => {
   });
 
   it(
-    "refuses a self-naming component it cannot compose under every variant, with no Direct API",
+    "refuses a self-naming component it cannot compose under every variant, reading nothing else",
     async () => {
       /*
        * The self-placement is condition-gated, so no selection composed closes a
@@ -1845,7 +1642,6 @@ describe("saving a component that would reference itself", () => {
        * there is no walk behind the check to decide instead.
        */
       const c = context();
-      register(c.ctx);
       const large = oversized(4_000);
       const many: Record<
         string,
@@ -1884,7 +1680,6 @@ describe("saving a component that would reference itself", () => {
        * another save's worth of work.
        */
       const c = context();
-      register(c.ctx);
       const { nextly } = api({ stored: {} });
       const large = oversized(2_000);
       const many: Record<
@@ -1926,7 +1721,6 @@ describe("saving a component that would reference itself", () => {
        * only then meet the loop.
        */
       const c = context();
-      register(c.ctx);
       const large = oversized(3_000);
       const many: Record<
         string,
@@ -1981,11 +1775,10 @@ describe("saving a component that would reference itself", () => {
     SPENDS_THE_ALLOWANCE
   );
 
-  it("refuses one its own VARIANT installs, still with no Direct API", async () => {
+  it("refuses one its own VARIANT installs, still reading nothing else", async () => {
     // The same question, through the other way a document can name itself: the
     // stored id is harmless and the variant's preset is what closes the loop.
     const c = context();
-    register(c.ctx);
 
     await expect(
       c.run({
@@ -2007,7 +1800,6 @@ describe("saving a component that would reference itself", () => {
     for (let i = 0; i < 400; i += 1)
       chain[`c${String(i)}`] = [`c${String(i + 1)}`];
     const c = context();
-    register(c.ctx);
     const { nextly } = api({ stored: chain });
 
     await expect(c.run(saving("a", ["c0"], nextly))).rejects.toThrow(
@@ -2028,7 +1820,6 @@ describe("saving a component that would reference itself", () => {
      * READ COUNT: the outcome cannot tell the two apart.
      */
     const c = context();
-    register(c.ctx);
     const many = Array.from({ length: 400 }, (_, i) => `c${String(i)}`);
     const { nextly, asked } = api({
       stored: Object.fromEntries(many.map(id => [id, []])),
@@ -2046,7 +1837,6 @@ describe("saving a component that would reference itself", () => {
     // components both place a third pays for it twice, and a loop among other
     // components never ends.
     const c = context();
-    register(c.ctx);
     const { nextly, asked } = api({
       stored: { b: ["shared"], cc: ["shared"], shared: [] },
     });

@@ -32,18 +32,22 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
+  translatedColumnsOnCompanion,
 } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
-import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
+import {
+  createApplyDesiredSchema,
+  movedOnto,
+} from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -53,10 +57,8 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -70,12 +72,7 @@ import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { withSessionCacheHeaders } from "../../routeHandler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import {
-  getI18nArchiveDdl,
-  getI18nArchiveIndexRepairDdl,
-} from "../../schemas/nextly-i18n-archive";
 import type { ServiceContainer } from "../../services";
-import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
@@ -85,6 +82,7 @@ import {
 } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -108,7 +106,7 @@ import {
   parseWhereParam,
   requireBody,
   requireParam,
-  stripOwnerColumnsFromWhere,
+  readClientWhere,
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
@@ -122,12 +120,14 @@ import {
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
-  listVersionsForDocument,
+  respondVersionPage,
+  markVersionSeenForDocument,
   setVersionLabelForDocument,
   userFromParams,
   autosaveForDocument,
   getAutosaveForDocument,
   requireSnapshotBody,
+  readComparisonParams,
 } from "./versions-methods";
 
 type CollectionsHandlerType = CollectionsHandler;
@@ -231,19 +231,15 @@ export const COLLECTION_VERSION_METHODS: Record<
   MethodHandler<CollectionsHandlerType>
 > = {
   listEntryVersions: {
-    execute: async (_svc, p) => {
-      const result = await listVersionsForDocument({
-        scopeKind: "collection",
-        slug: String(p.collectionName ?? ""),
-        entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
-        limit: p.limit !== undefined ? Number(p.limit) : undefined,
-        cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
-        locale: p.locale !== undefined ? String(p.locale) : undefined,
-      });
-      return respondList(result.items, result.meta);
-    },
+    execute: async (_svc, p) =>
+      respondVersionPage(
+        {
+          scopeKind: "collection",
+          slug: String(p.collectionName ?? ""),
+          entryId: String(p.entryId ?? ""),
+        },
+        p
+      ),
   },
   setEntryVersionLabel: {
     execute: async (_svc, p, body) => {
@@ -259,6 +255,19 @@ export const COLLECTION_VERSION_METHODS: Record<
         params: p,
       });
       return respondMutation("Version renamed.", row);
+    },
+  },
+  markEntryVersionSeen: {
+    execute: async (_svc, p) => {
+      const seen = await markVersionSeenForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondMutation("Marked as seen.", seen);
     },
   },
   restoreEntryVersion: {
@@ -361,11 +370,11 @@ export const COLLECTION_VERSION_METHODS: Record<
         entryId: String(p.entryId ?? ""),
         user: userFromParams(p),
         authenticatedScope: readAuthenticatedScope(p),
-        from: Number(p.from),
-        to: Number(p.to),
-        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+        ...readComparisonParams(p),
       });
-      return respondDoc(diff);
+      // Private to the caller: a comparison from where this person last
+      // looked differs from one person to the next.
+      return withSessionCacheHeaders(respondDoc(diff));
     },
   },
 };
@@ -597,44 +606,24 @@ const COLLECTIONS_METHODS: Record<
         builderOwned: true,
       };
 
-      const pipelinePreview = await previewDesiredSchema({
-        desired,
-        db,
-        dialect,
-      });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(
-        pipelinePreview,
-        {
-          tableName,
-          currentFields,
-          newFields: fields as FieldDefinition[],
+      return respondData(
+        await builderSchemaPreviewBody({
+          desired,
           db,
           dialect,
-        }
+          slug: p.collectionName,
+          tableName,
+          builtBy: "collection",
+          entity: collection,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          requestedLocalized: previewLocalized,
+          // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
+          // version to echo back on Apply; JSON omits an undefined one and the guard would reject
+          // the first save as version-less.
+          schemaVersion: collection.schemaVersion ?? 1,
+        })
       );
-
-      // Forward rename candidates from the same pipeline preview run
-      // (the pipeline already detected them).
-      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
-
-      // previewSchemaChanges returns a custom preview payload
-      // (legacyShape plus renamed plus schemaVersion) with no CRUD
-      // analog. We spread legacyShape into a new object so the resulting
-      // body has at least the renamed/schemaVersion fields, never empty.
-      // Cast through `unknown` because SchemaPreviewResult is a sealed
-      // shape with no string index signature; respondData's generic
-      // requires a Record<string, unknown> for spread compatibility.
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
-      return respondData({
-        ...legacyAsRecord,
-        renamed,
-        // Normalize legacy rows (schema_version NULL) to 1 so the editor always
-        // receives a concrete version to echo back on apply; otherwise JSON
-        // omits an undefined value and the guard rejects the first save as
-        // version-less. Mirrors the single-dispatcher preview.
-        schemaVersion: collection.schemaVersion ?? 1,
-      });
     },
   },
   // Apply confirmed schema changes via the in-process schema service.
@@ -847,6 +836,10 @@ const COLLECTIONS_METHODS: Record<
             uiTargetSlug: p.collectionName,
             // Stated rather than relying on the default, so the default stops being load-bearing.
             uiTargetKind: "collection" as const,
+            // A field becoming translated keeps its value as this language's; the apply moves it
+            // after its prompts and refusals, before it drops the main column.
+            defaultLocale:
+              getConfigFromDI()?.localization?.defaultLocale ?? "en",
           });
         },
         // The optimistic-lock check now runs up front via
@@ -864,6 +857,22 @@ const COLLECTIONS_METHODS: Record<
           }
           return out;
         },
+      });
+
+      // A field leaving translation has preconditions of its own, asked before the push alters
+      // anything.
+      await archiveFieldsLeavingTranslation({
+        // This builder made the table, which decides the column bounds compared.
+        builtBy: "collection",
+        tableName,
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        adapter,
+        entity: String(p.collectionName),
+        kind: "collection",
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
       });
 
       const result = await apply(desired, "ui", {
@@ -903,6 +912,7 @@ const COLLECTIONS_METHODS: Record<
             // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
             builtBy: "collection" as const,
             slug: p.collectionName,
+            kind: "collection",
             tableName,
             dialect,
             defaultLocale,
@@ -927,27 +937,23 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               oldFields
             ).then(cols => cols.map(c => c.name)),
+            // Added to the companion, with their values, by the apply before its drop.
+            joinedBefore: movedOnto(result, tableName),
+            // Taken as they are: an earlier apply that moved a value and stopped before the
+            // registry recorded it left its companion column in place.
+            presentOnCompanion: companionExists
+              ? await translatedColumnsOnCompanion(adapter, {
+                  tableName,
+                  fields: newFields,
+                  builtBy: "collection",
+                })
+              : undefined,
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is
           // single-statement on some drivers, e.g. sqlite).
           if (plan.needsArchive) {
-            for (const stmt of getI18nArchiveDdl(dialect)) {
-              await adapter.executeQuery(stmt);
-            }
-            // MySQL's table DDL cannot restore an index the table is missing, and
-            // index-only drift produces no reconcile operations, so the repair runs
-            // here. Tolerated rather than checked first: attempting it and accepting
-            // "duplicate key name" is one round trip instead of two, and the same
-            // tolerance the schema executor already applies.
-            const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
-            if (indexRepair) {
-              try {
-                await adapter.executeQuery(indexRepair);
-              } catch (err) {
-                if (!isIdempotencyError(err)) throw err;
-              }
-            }
+            await ensureI18nArchive(adapter, dialect);
           }
           // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
           // would make a half-finished localization ENABLE look like success, because the planner
@@ -1204,7 +1210,7 @@ const COLLECTIONS_METHODS: Record<
         depth:
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
-        where: parseWhereParam(p.where),
+        where: parseWhereParam(p.where, p.whereBrackets),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         sort,
         status,
@@ -1256,7 +1262,7 @@ const COLLECTIONS_METHODS: Record<
         // own grant would disclose how many rows exist beyond it.
         authenticatedScope: readAuthenticatedScope(p),
         search: p.search,
-        where: parseWhereParam(p.where),
+        where: parseWhereParam(p.where, p.whereBrackets),
         status,
         // i18n M4: keep count in parity with listEntries' locale-scoped filtering.
         locale: p.locale,
@@ -1589,13 +1595,11 @@ const COLLECTIONS_METHODS: Record<
           // The request this operation's hooks are told about.
           request,
           collectionName: p.collectionName,
-          // Strip owner-column conditions from the request body so a caller
-          // cannot target rows by the system owner column via `body.where`
-          // (mirrors parseWhereParam on the query-string path). The service's
-          // own owner constraint is added separately and is unaffected; a where
-          // that was only an owner filter becomes {} and stays bounded by the
-          // collection's access rules.
-          where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
+          // The body filter is checked as the query-string one is: a malformed
+          // filter, or one naming the owner column, is refused with a 400
+          // before any row is matched. `b.where` was checked to be an object
+          // above, so the check always returns it.
+          where: readClientWhere(b.where) ?? {},
           data: b.data,
           actor: readAuthenticatedActor(p),
           userId: p._authenticatedUserId

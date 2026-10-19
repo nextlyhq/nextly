@@ -1,5 +1,5 @@
 /**
- * Refusing a component write that would make the library reference itself.
+ * Refusing a component save that would make the library reference itself.
  *
  * A component may place other components, so the library is a directed graph.
  * Closing a loop in it is not a crash — the resolver detects one, draws what it
@@ -7,21 +7,27 @@
  * is a gap in the middle of otherwise-correct content, on every page placing
  * anything on the loop.
  *
- * ## Why this refuses where the readiness notice reports
+ * ## Why it refuses, rather than reporting
  *
- * `component-readiness-hook.ts` is the other write-time rule in this plugin and
- * it never refuses. Its reasons do not transfer. It runs post-commit, where a
- * throw is filed as a side-effect warning rather than as a refusal; and the
- * state it reports — a page published before its components — is an ordinary
- * step an author is about to leave anyway.
+ * The asymmetry that decides it is WHO SEES THE DAMAGE. An author publishing a
+ * page before its components is shown their own page with a hole in it, so the
+ * mistake and the person who can fix it are in the same place. An author saving
+ * a component that closes a loop is shown nothing at all — the gap appears
+ * afterwards, on pages other people own. A notice there is a warning nobody is
+ * positioned to act on.
  *
- * Neither holds here. `beforeChange` runs while the write can still be
- * refused, and a loop is not a step towards anything. The asymmetry that
- * decides it is WHO SEES THE DAMAGE: an author publishing a page early is shown
- * their own page with a hole in it, so the mistake and the person who can fix
- * it are in the same place. An author saving a component that closes a loop is
- * shown nothing at all — the gap appears afterwards, on pages other people own.
- * A notice there is a warning nobody is positioned to act on.
+ * ## Where it runs
+ *
+ * In the blocks field's validation, which every write path runs — the editor,
+ * the API, a batch, and an import that skips hooks. A hook would not do: an
+ * import that skips hooks never calls one, and a hook has no read on the
+ * write's own transaction, so two rows of one batch could each pass against a
+ * library without the other.
+ *
+ * Validation hands it the write's id and a read of stored component documents
+ * on that write's connection (`PluginFieldWrite.readStored`), so the library
+ * this judges is the one the write sees: rows the same batch wrote are in it,
+ * and no read hook or access rule hides a component that still renders.
  *
  * ## Why a live walk rather than the usage index
  *
@@ -29,48 +35,26 @@
  * adjacency table this wants. Its maintenance runs POST-COMMIT and can
  * undercount — a document that still references something reading as
  * referencing nothing — and an undercount here is a MISSED cycle, so the index
- * is permissive in exactly the concurrent case this guard exists for. It can be
- * an optimisation once that is closed; it cannot be the boundary.
+ * is permissive in exactly the concurrent case this exists for. It can be an
+ * optimisation once that is closed; it cannot be the boundary.
  *
  * ## What this does NOT close, stated rather than implied
  *
- * A write that runs NO USER HOOKS. `skipHooks: true` is a documented import
- * option, and the transaction writers set `runHooks: !skipHooks` over the whole
- * collection-level and field-level phase — so the high-performance import path
- * can store a component referencing itself without this handler being called at
- * all, and ordinary document validation does not look across rows. Nothing a
- * plugin can register closes that: the invariant needs a write boundary that is
- * not skippable, which is a core capability rather than a hook.
+ * Two saves closing a loop between them AT THE SAME MOMENT, in two separate
+ * transactions. Each reads the library as committed before the other, and
+ * nothing serializes them; closing that needs a lock the two writes share.
  *
- * Two saves closing a loop between them AT THE SAME MOMENT. This walk runs
- * before its own write commits and takes no lock the other write contends for,
- * and a plugin hook has no transaction to enlist in — the same window
- * `layout-component-guard.ts` records for its own scan. What it removes is the
- * ordinary case, which is a save made against a library read that has since
- * gone stale; what remains is a true simultaneity, and closing that needs a
- * boundary the two writes share.
+ * A `beforeChange` hook REPLACING the document after validation has judged it.
+ * Core validates before that phase, so what this covers is the document as
+ * validated.
  *
- * A later hook REPLACING the document after this has approved it. This is a
- * collection-level `beforeChange` handler, and core is not finished
- * transforming at that point: `runBeforeChange` applies a stored hook's result
- * after the code hooks, and the mutation service then runs the field-level
- * `beforeChange` phase over "the final stored value". Either can write a
- * document this never saw. No plugin can be last — `HOOK_TYPES` declares no
- * phase after that field pass — so what this covers is the document as
- * submitted, and closing the rest needs a core phase that runs once every
- * transform has produced the value being written.
- *
- * A LOCALIZED component store. These reads name no locale, so they answer in
- * the default language; a component whose French document references what its
- * default one does not would not be seen. Covering it means reading every
- * configured locale, which multiplies the reads per save by the locale count,
- * and that cost is worth deciding deliberately rather than absorbing here.
+ * A LOCALIZED component store. The read is refused for a localized field, so
+ * such a store answers "unreadable" and every save of it is refused — loudly,
+ * rather than judging the default language alone.
  *
  * @module component-cycle-guard
  */
 import {
-  COMPONENT_INSTANCE_TYPE,
-  DOCUMENT_FORMAT_VERSION,
   componentReach,
   componentReachIn,
   componentReferencesFrom,
@@ -80,32 +64,18 @@ import {
   type DocumentLimits,
   type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
-import { NextlyError } from "@nextlyhq/plugin-sdk";
+import type { PluginFieldWrite } from "@nextlyhq/plugin-sdk";
 
-import type { ClassUsageDirectApi } from "./class-usage-runtime";
-
-/**
- * How many DISTINCT components one walk will read before giving up.
- *
- * A bound on the reads, which nothing else supplies: the walk follows only what
- * the saved document reaches, and that is normally a handful, but a library is
- * sized at three thousand entries and nothing stops one component reaching a
- * large share of them.
- *
- * Charged per DISTINCT component per lifecycle form, by the reader every read
- * goes through — so a component reached by twenty placements costs one, and the
- * lookahead that resolves a placement cannot outrun the bound before the walk
- * that follows it gets a turn.
- *
- * Exceeding it REFUSES, because a prefix of the graph that did not meet the
- * subject is exactly what a graph with no loop looks like. That is the
- * expensive direction of the fail-closed choice and it is deliberate: the other
- * one admits the loop this exists to stop.
- */
-const MOST_COMPONENTS_READ = 100;
-
-/** The Direct API surface this needs, aliased rather than described again. */
-export type CycleGuardDirectApi = ClassUsageDirectApi;
+import {
+  composeWithReads,
+  documentReader,
+  heldLibrary,
+  hostPlacing,
+  STOPPED_SHORT,
+  type ComponentSource,
+  type DocumentReader,
+  type HeldLibrary,
+} from "./composition-reading";
 
 /**
  * What composing the subject established, as three facts rather than two.
@@ -117,126 +87,112 @@ export type CycleGuardDirectApi = ClassUsageDirectApi;
  */
 type CompositionVerdict = "cycle" | "none" | "indeterminate";
 
-/** The plugin context this needs, named structurally. */
-export interface CycleGuardContext {
-  hooks: {
-    on(
-      type: string,
-      collection: string,
-      handler: (context: unknown) => unknown
-    ): void;
-  };
-}
-
-/** What one registration needs to know. */
-export interface CycleGuardOptions {
-  ctx: CycleGuardContext;
+/** Where the components live, as the write path addresses them. */
+export interface ComponentStoreAddress {
   /** The RESOLVED slug components are stored under; a host may rename it. */
-  componentsCollection: string;
+  readonly collection: string;
   /** The field on that collection holding the component's document. */
-  documentField: string;
-  /** The site's caps, so the walk reads a document under the same bound the canvas does. */
-  limits: DocumentLimits;
+  readonly field: string;
 }
 
 /**
- * Refuse a component write that closes a reference cycle.
+ * Component documents read through a write's own connection.
  *
- * Registered on the components collection by name rather than on the wildcard:
- * this asks one question about one collection, and a wildcard registration
- * would walk the component graph on every write the site performs.
+ * A read that fails for any reason establishes nothing, which is not the same
+ * as a row that is not there — so it answers `unreadable`, and the walk refuses
+ * rather than reading the gap as "places nothing".
  */
-export function registerComponentCycleGuard(options: CycleGuardOptions): void {
-  options.ctx.hooks.on("beforeChange", options.componentsCollection, context =>
-    refuseACycle(options, context)
-  );
+export function storedComponentSource(
+  write: PluginFieldWrite,
+  store: ComponentStoreAddress
+): ComponentSource {
+  return async (id, draft) => {
+    try {
+      const read = await write.readStored({
+        collection: store.collection,
+        id,
+        field: store.field,
+        form: draft ? "draft" : "published",
+      });
+      return read.kind === "absent"
+        ? { kind: "absent" }
+        : { kind: "document", document: read.value };
+    } catch {
+      return { kind: "unreadable" };
+    }
+  };
 }
 
-/** One write, refused or allowed to proceed. */
-async function refuseACycle(
-  options: CycleGuardOptions,
-  context: unknown
-): Promise<void> {
-  const self = subjectOf(context);
-  // Nothing addressable. Left alone rather than refused: a CREATE has no stored
-  // row, and the id it will be stored under is minted by the write itself — so
-  // it is not a row anything can already reference and no chain can lead back
-  // to it. See {@link subjectOf} for why a supplied id is not that id.
-  if (self === null) return;
+/** The judgement's own settings: the caps every walk and composition read under. */
+interface CycleGuardOptions {
+  readonly limits: DocumentLimits;
+}
 
-  // Carries no document AND promotes nothing, so it cannot move an edge. A bulk
-  // rename or a metadata edit is this. Whether a malformed value is a legal one
-  // is the field's own validation to answer, and refusing here would report a
-  // shape problem as a reference problem.
-  //
-  // The status this write will persist decides BOTH which forms it reaches and
-  // whether a document-less write is graph-neutral.
-  const submitted = submittedDocument(context, options);
-  const next = nextStatusOf(context);
-  if (submitted === "absent" && next === undefined) return;
+/** What one save asks: which component, what it stores, and how it is read. */
+export interface CycleQuestion {
+  /** The id the component is stored under. */
+  readonly self: string;
+  /** The document this write stores. */
+  readonly document: unknown;
+  /** The status the write names, which decides the lifecycle forms it changes. */
+  readonly nextStatus: string | undefined;
+  readonly source: ComponentSource;
+  /** The site's caps, so the walk reads a document under the same bound the canvas does. */
+  readonly limits: DocumentLimits;
+  /**
+   * The save's ONE allowance, shared with every other composition the save
+   * performs, so the bound is on the save rather than on each check.
+   */
+  readonly work: WorkAllowance;
+}
 
-  // The field IS in this patch and carries no document. What lands therefore
-  // holds no references at all, so it can close no loop whatever the status does
-  // — and judging the pending draft instead would refuse the write for a chain
-  // that this very write REMOVES. An author clearing a component to break a
-  // legacy loop would be told to break it first.
-  if (submitted === "empty") return;
-
-  // AFTER the checks above, so a write that cannot change the reference graph is
-  // not refused for being in a transaction. None of them needs a graph read, so
-  // none of them is refused.
-  //
-  // For a write that DOES need one, the transaction is a refusal rather than a
-  // skip: the Direct API takes no executor, so a read here checks out a second
-  // connection and waits on the one the open transaction holds — while that
-  // transaction waits on this hook. Skipping instead would let exactly the
-  // writes this exists for through, on the path that writes many at once.
-  if (insideACallerTransaction(context)) {
-    throw refusal(
-      `This component cannot be saved in a bulk operation, because whether it ` +
-        `would end up referencing itself cannot be checked safely there. Save ` +
-        `it on its own and the check will run.`
-    );
+/**
+ * The sentence refusing this save, or `null` when it closes no loop.
+ *
+ * A document that is not a forest names nothing, so it closes nothing: whether
+ * it is a legal value is the field's own validation to answer, and refusing here
+ * would report a shape problem as a reference problem.
+ */
+export async function componentCycleRefusal(
+  question: CycleQuestion
+): Promise<string | null> {
+  const { self, document, source, limits, work } = question;
+  if (!isForest(document)) return null;
+  try {
+    // Decided from the document in hand, before any read: the one loop that
+    // takes no library to see costs nothing to refuse.
+    const options: CycleGuardOptions = { limits };
+    refuseASelfReference({ document }, self, options, work);
+    await refuseIfReached({
+      options,
+      source,
+      self,
+      document,
+      forms: formsChangedBy(question.nextStatus),
+      work,
+    });
+    return null;
+  } catch (error) {
+    if (error instanceof CycleRefusal) return error.message;
+    throw error;
   }
+}
 
-  // ONE allowance for every composition this save performs, so the bound is on
-  // the save rather than on each check that composes.
-  const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
-
-  // Decided from the document in hand, so it is decided BEFORE the declines
-  // below. Those exist for the graph READS, and this question needs none.
-  refuseASelfReference(submitted, self, options, work);
-
-  const nextly = directApiOf(context);
-  // No Direct API to ask with. A guard that refused every write it could not
-  // evaluate would make the collection unwritable on any path that shapes its
-  // context differently, and this is a data-integrity guard rather than an
-  // authorisation one.
-  if (nextly === null) return;
-
-  const held = await documentPutLive(submitted, self, options, nextly);
-  // Nothing goes live that this write supplies. Nothing changes and nothing is
-  // judged, rather than a refusal for a row this could not find.
-  if (held === null) return;
-
-  await refuseIfReached({
-    options,
-    nextly,
-    self,
-    document: held.document,
-    forms: formsChangedBy(next),
-    work,
-  });
+/** Whether a value carries a forest the composition can walk. */
+function isForest(document: unknown): boolean {
+  return (
+    typeof document === "object" &&
+    document !== null &&
+    Array.isArray((document as { nodes?: unknown }).nodes)
+  );
 }
 
 /**
  * Refuse a submitted document that closes a loop on the subject by itself.
  *
- * Separate from the walk because it needs no library at all, which is what lets
- * it run ahead of every decline the graph reads require. A write on a path that
- * shapes its context differently — an early-runtime write, an internal one with
- * no Direct API bound — could otherwise persist the one loop that takes no
- * library to see, with the guard registered and reporting nothing.
+ * Separate from the walk because it needs no library at all, so it runs before
+ * the first read: a document that names itself is refused for the price of the
+ * document already in hand.
  *
  * The chain is the subject twice over, so there is nothing to redact: both ids
  * are the one the author is saving.
@@ -265,8 +221,8 @@ function refuseASelfReference(
     own: [],
   };
   if (composed === "cycle") throw cycleRefusal(walked, self);
-  // Not cleared either. On the path with no Direct API there is no walk behind
-  // this to decide instead, so a composition that could not finish refuses here.
+  // Not cleared either. The survey found the document naming itself, so a
+  // composition that could not finish has not shown that the placement resolves.
   throw indeterminateRefusal(walked, self, work);
 }
 
@@ -315,55 +271,21 @@ function composesOnItself(
   return "none";
 }
 
-/**
- * The document this write puts live, or `null` where it puts none there.
- *
- * A status-only publish carries no document of its own and is NOT graph-neutral:
- * core promotes the whole pending working draft into the live row
- * (`draft-published-split.integration.test.ts`, "promotes the whole working
- * draft to the live row when the publish omits its fields"). What goes live is
- * that draft, so that is the document to judge — a cycle written into a draft
- * before this guard existed, or through a write that skipped it, would otherwise
- * reach the live library on a publish this never inspected.
- *
- * Refuses where the subject's own stored document cannot be read, because a
- * document this could not read is not a document it can clear.
- */
-async function documentPutLive(
-  submitted: { readonly document: unknown } | "absent",
-  self: string,
-  options: CycleGuardOptions,
-  nextly: CycleGuardDirectApi
-): Promise<{ readonly document: unknown } | null> {
-  if (submitted !== "absent") return { document: submitted.document };
-
-  const promoted = await pendingDocument(self, options, nextly);
-  if (promoted.kind === "absent") return null;
-  if (promoted.kind === "unreadable") {
-    throw refusal(
-      `This component cannot be saved: its own stored document could not be ` +
-        `read, so whether it would end up referencing itself could not be ` +
-        `established.`
-    );
-  }
-  return { document: promoted.document };
-}
-
 /** Walk each named form, and refuse on the first that does not come back clean. */
 async function refuseIfReached(args: {
   options: CycleGuardOptions;
-  nextly: CycleGuardDirectApi;
+  source: ComponentSource;
   self: string;
   document: unknown;
   forms: readonly boolean[];
   work: WorkAllowance;
 }): Promise<void> {
-  const { options, nextly, self, document, forms, work } = args;
+  const { options, source, self, document, forms, work } = args;
   for (const draft of forms) {
     // One reader per FORM. A component's published and draft documents are
     // different documents, so a cache shared across the two would answer the
     // second walk with the first one's reading.
-    const read = documentReader(options, nextly, draft);
+    const read = documentReader(source, draft);
     const walked = await walkFrom(document, self, options, read);
     if (walked.reach.kind === "unknown") throw unreadableRefusal();
 
@@ -473,7 +395,7 @@ interface WalkOutcome {
    * The ids the SUBMITTED document names, and only those.
    *
    * The redaction allowlist, so it must not be the walk's enriched reach. That
-   * list grows by reading other definitions with `overrideAccess: true` — a
+   * list grows by reading other definitions as the system — a
    * placement's selected variant can install an id that lives in a definition
    * this author cannot open — and naming such an id in a refusal hands out an
    * identifier the author could not otherwise obtain. What the author already
@@ -491,15 +413,15 @@ function selfNamedIn(
   // survey makes an ABSENT id uncertain and a PRESENT one no less present. The
   // walk it feeds already refuses an unread forest for the absent direction, so
   // demanding completeness here only threw away evidence — and threw it away on
-  // the path that runs before the guard can ask the library anything.
+  // the step that runs before the library is read at all.
   return survey.ids.includes(self);
 }
 
 /**
  * Whether the submitted document closes a loop on the subject by itself.
  *
- * Answerable with no library at all, which is why it is asked before the guard
- * declines a write it cannot read the graph for.
+ * Answerable with no library at all, which is why it is asked before the first
+ * read.
  */
 function namesItself(
   document: unknown,
@@ -584,10 +506,7 @@ async function composesACycle(
   // across the selections: a definition read for one is the same document under
   // the next, and the resolver follows only what a selection references, so
   // entries no selection reaches cost nothing but the read already paid for.
-  const library: HeldLibrary = {
-    held: new Map<string, unknown>([[self, document]]),
-    missing: new Set<string>(),
-  };
+  const library = heldLibrary(new Map([[self, document]]));
 
   let indeterminate = false;
   for (const variant of selections) {
@@ -626,7 +545,7 @@ async function composesACycle(
  * selections that found no loop is exactly what a component with no loop looks
  * like.
  */
-const MOST_COMPOSED_NODES = 250_000;
+export const MOST_COMPOSED_NODES = 250_000;
 
 /**
  * Every selection a reader can receive, or `null` where they cannot be listed.
@@ -648,34 +567,6 @@ function everySelection(
   if (!Array.isArray((document as { nodes?: unknown }).nodes)) return null;
   return [undefined, ...named];
 }
-
-/** What the walk and the composition have read so far, shared across selections. */
-interface HeldLibrary {
-  readonly held: Map<string, unknown>;
-  readonly missing: Set<string>;
-}
-
-/**
- * The reasons that mean the composition STOPPED rather than finished.
- *
- * A limit reached is not a report about references: the resolver stopped
- * descending, so whatever lies past it was never looked at and a loop there is
- * invisible to the composition — while the walk, which has no such cap, can have
- * proven it. Reading these as "no loop" is what lets a chain longer than
- * `MAX_COMPOSED_DEPTH` clear a refusal the insert panel still applies.
- *
- * The other non-`cycle` reasons are deliberately NOT here, because they describe
- * a placement the reader sees resolved-as-absent rather than an unfinished
- * search. `missing` is what drives the read loop below and means absent once it
- * survives a read; `malformed` names no component at all; and `unreadable` is a
- * definition the RENDERER declines, so it draws a placeholder and no reader can
- * see a loop through it. The composition and the reader agree in all three.
- */
-const STOPPED_SHORT: readonly string[] = [
-  "composed-depth",
-  "node-depth",
-  "budget",
-];
 
 /** How one composition of the subject ended, and what it left standing. */
 interface ComposedOnce {
@@ -700,7 +591,7 @@ function composeSubject(
   work: WorkAllowance
 ): ComposedOnce {
   const { unresolved, loopsClosed } = resolveComponentInstances(
-    hostPlacing(self, variant) as never,
+    hostPlacing(self, variant),
     lookup as never,
     { limits: options.limits, work }
   );
@@ -723,103 +614,27 @@ async function composesUnder(
   library: HeldLibrary,
   work: WorkAllowance
 ): Promise<CompositionVerdict> {
-  const { held } = library;
-  // HELD until the reads are exhausted, rather than answered with on sight. A
-  // capped branch rules nothing out, and another branch may still compose a loop
-  // — so a `cycle` this can prove beats a limit it cannot see past, which is the
-  // rule `componentReach` already follows for a branch it could not read.
-  let stoppedShort = false;
-
-  const lookup = {
-    has: (id: string) => held.has(id),
-    get: (id: string) => held.get(id),
-  };
-  for (let round = 0; round <= MOST_COMPONENTS_READ; round += 1) {
-    // Every round composes again from the top, so every round is charged. The
-    // early answer is the optimisation the loop above makes, for the same reason.
-    if (work.left <= 0) return "indeterminate";
-    const composed = composeSubject(self, variant, lookup, options, work);
-    if (composed.reached === "cycle") return "cycle";
-    if (composed.reached === "stopped") stoppedShort = true;
-
-    const wanted = stillWanted(composed.unresolved, library);
-    // Nothing further to supply. Every placement this selection resolves was
-    // composed — so this is `none` only where nothing stopped the descent.
-    if (wanted.length === 0) return stoppedShort ? "indeterminate" : "none";
-    if (!(await supply(wanted, read, library))) return "indeterminate";
-  }
-  return "indeterminate";
-}
-
-/**
- * What the composition asked for and the library has not answered yet.
- *
- * Derived from what the COMPOSITION reached rather than from a second traversal
- * predicting it: the resolver names every instance it could not expand, so the
- * set to read is the one the render itself needs.
- */
-function stillWanted(
-  unresolved: readonly { readonly componentId: string }[],
-  library: HeldLibrary
-): readonly string[] {
-  return unresolved
-    .map(one => one.componentId)
-    .filter(
-      id => id !== "" && !library.held.has(id) && !library.missing.has(id)
-    );
-}
-
-/**
- * Read each wanted definition into the library; `false` where one could not be.
- *
- * An absent row is RECORDED rather than refused: the resolver draws a placement
- * of something nobody supplied as missing, and that is not a loop. A read that
- * fails, or one past the budget, is the case a caller cannot conclude from.
- */
-async function supply(
-  wanted: readonly string[],
-  read: DocumentReader,
-  library: HeldLibrary
-): Promise<boolean> {
-  for (const id of wanted) {
-    const answer = await read(id);
-    if (answer.kind === "unreadable") return false;
-    if (answer.kind === "absent") {
-      library.missing.add(id);
-      continue;
-    }
-    library.held.set(id, answer.document);
-  }
-  return true;
-}
-
-/** A page that places one component, so the resolver is asked about it. */
-function hostPlacing(self: string, variant?: string): unknown {
-  return {
-    formatVersion: DOCUMENT_FORMAT_VERSION,
-    kind: "page",
-    nodes: [
-      {
-        id: "cycle-guard-subject",
-        type: COMPONENT_INSTANCE_TYPE,
-        version: 1,
-        // The selection spelled as ABSENT rather than as `undefined`, which a
-        // reader's own placement of no variant is: an explicit `variant` key
-        // holding `undefined` is a different record, and the resolver reads the
-        // props it is given rather than the ones this meant.
-        props:
-          variant === undefined
-            ? { componentId: self }
-            : { componentId: self, variant },
-      },
-    ],
-  };
+  const composed = await composeWithReads({
+    host: hostPlacing(self, variant),
+    library,
+    read,
+    limits: options.limits,
+    work,
+    stopAtLoop: true,
+  });
+  // A loop outranks every limit: a composition that closed one has shown it,
+  // whatever else stopped it. A capped branch or a read that failed rules
+  // nothing out, so either leaves the question open rather than answered.
+  if (composed.loopsClosed.size > 0) return "cycle";
+  return composed.incomplete || composed.stoppedShort
+    ? "indeterminate"
+    : "none";
 }
 
 /**
  * The loop as the SAVING AUTHOR may be told it.
  *
- * The walk reads with `overrideAccess: true`, because a component this author
+ * The walk reads as the system, with no access rule, because a component this author
  * cannot see still renders and a chain through it still closes. The MESSAGE
  * cannot inherit that: printing every id in a system-level path tells a caller
  * who may update A the identifier of a component they are denied read access to,
@@ -889,44 +704,8 @@ function namedPath(
  * overlay, a `draft: true` read answers with the live row for every component,
  * so the preview graph IS the live graph and judging one judges both.
  */
-function formsChangedBy(next: string | undefined): readonly boolean[] {
+export function formsChangedBy(next: string | undefined): readonly boolean[] {
   return next === "published" ? [false, true] : [true];
-}
-
-/**
- * The document a write that promotes will put live, for one carrying none.
- *
- * Read through the same overlay a preview does — core's own words for it are
- * "the overlay returns the draft (or the live row when none exists)" — so a
- * publish with no pending draft judges the live document it is re-publishing.
- * That costs one read and answers `none` for any library without a loop, which
- * is the cheap direction; the alternative is not noticing a promoted cycle.
- */
-async function pendingDocument(
-  self: string,
-  options: CycleGuardOptions,
-  nextly: CycleGuardDirectApi
-): Promise<ReadDocument> {
-  return readComponent(self, options, nextly, true);
-}
-
-/**
- * Whether this write names a status, and so reaches the live row.
- *
- * The VALUE rather than the key, which is what core reads: `intendedStatus` is
- * `finalData.status` and the transition is skipped where that is `undefined`, so
- * a payload carrying the key with no value is status-less to core and must be
- * status-less here.
- *
- * Read at this moment, which is the same limit the module header already records
- * for the document: a later `beforeChange` handler can add or remove `status`
- * after this has judged, and no plugin can be last.
- */
-function nextStatusOf(context: unknown): string | undefined {
-  const data = fieldOf(context, "data");
-  if (data === undefined) return undefined;
-  const status = data.status;
-  return typeof status === "string" ? status : undefined;
 }
 
 /**
@@ -1044,247 +823,14 @@ async function reachableFrom(
 }
 
 /**
- * One form of one component's stored document, or why it is not available.
+ * A refusal raised inside the judgement and turned into the sentence it carries.
  *
- * A discriminated result rather than the document with sentinels beside it: a
- * stored document is `unknown`, and a union with `unknown` in it collapses to
- * `unknown` — so every sentinel comparison would type-check against anything.
+ * Its own class so the entry can tell the judgement's own refusals from a
+ * failure it should not swallow.
  */
-type ReadDocument =
-  | { readonly kind: "document"; readonly document: unknown }
-  /** No such row. The resolver draws a placement of it as missing, not as a loop. */
-  | { readonly kind: "absent" }
-  /** Read, and not establishable as this component's document. */
-  | { readonly kind: "unreadable" };
+class CycleRefusal extends Error {}
 
-/** Reads one component's document, once per walk. */
-type DocumentReader = (id: string) => Promise<ReadDocument>;
-
-/**
- * Reads each component's document ONCE per walk.
- *
- * The cache is what keeps the placement pass affordable: computing a document's
- * edges reads every definition it places, and the walk then visits those same
- * definitions. Without it a library where many components place one shared
- * component would read that component once per placement.
- *
- * It also makes the answer consistent. A definition read twice in one walk could
- * come back differently — a concurrent write, a hook answering from a cache —
- * and a graph assembled from two readings of one component is a graph no reader
- * ever receives.
- */
-function documentReader(
-  options: CycleGuardOptions,
-  nextly: CycleGuardDirectApi,
-  draft: boolean
-): DocumentReader {
-  const held = new Map<string, ReadDocument>();
-  return async id => {
-    const seen = held.get(id);
-    if (seen !== undefined) return seen;
-    // The budget is charged HERE, at the one place every read passes through,
-    // rather than by whichever walk happens to ask. Two walks ask now — the
-    // graph traversal, and the lookahead that resolves a placement against the
-    // definition it places — and the lookahead runs FIRST. Charged only by the
-    // traversal, a document holding more distinct placements than this could
-    // issue one read per placement before anything counted them: the node cap
-    // admits five thousand, so a single save meant a few thousand sequential
-    // reads and only then a refusal for exceeding a bound of a hundred.
-    //
-    // Refused rather than cached, so every id past the bound refuses too — an
-    // entry here would spend the budget on remembering that it had run out.
-    if (held.size >= MOST_COMPONENTS_READ) return { kind: "unreadable" };
-    const read = await readComponent(id, options, nextly, draft);
-    held.set(id, read);
-    return read;
-  };
-}
-
-/**
- * One form of one component: what it places, absent, or unreadable.
- *
- * A read that raises NOT FOUND is ABSENCE rather than failure. The Direct API
- * throws for a missing row unless errors are disabled, and a saved document
- * referencing a component somebody deleted is an ordinary state the renderer
- * draws as a missing-component placeholder. Read as unreadable it would make the
- * graph unknown and refuse every save of that component until the reference was
- * taken out by hand.
- *
- * The returned row must also BE the component asked for. A by-id read is not
- * guaranteed to answer with the row requested — a `beforeOperation` hook can
- * rewrite the id the query uses and an `afterRead` hook can replace the
- * response — so a redirected lookup for one component could answer with an
- * unrelated acyclic row, and the loop through the real one would be approved.
- */
-async function readComponent(
-  id: string,
-  options: CycleGuardOptions,
-  nextly: CycleGuardDirectApi,
-  draft: boolean
-): Promise<ReadDocument> {
-  let row: unknown;
-  try {
-    row = await nextly.findByID({
-      collection: options.componentsCollection,
-      id,
-      // Every lifecycle state. A draft-only component is one an author can
-      // still place from the panel, so a chain through it is a real chain.
-      status: "all",
-      draft,
-      // The document is read off the row itself; expanding relationships would
-      // fetch every referenced row's whole content for a value this discards.
-      depth: 0,
-      overrideAccess: true,
-    });
-  } catch (error) {
-    if (NextlyError.isNotFound(error)) return { kind: "absent" };
-    // Anything else establishes nothing, which is not the same as a row that is
-    // not there.
-    return { kind: "unreadable" };
-  }
-  if (row === null || row === undefined) return { kind: "absent" };
-  if (!isRowFor(row, id)) return { kind: "unreadable" };
-  if (typeof row !== "object") return { kind: "unreadable" };
-  // The DOCUMENT, not the ids it names. What a document reaches depends on the
-  // definitions it places, so the caller resolves that with every read in hand.
-  return {
-    kind: "document",
-    document: (row as Record<string, unknown>)[options.documentField],
-  };
-}
-
-/**
- * Whether a returned row is the component that was asked for.
- *
- * Equality on the id, and nothing else satisfies it — a row carrying NO `id` at
- * all included. A looser rule, accepting a key-less row on the grounds that the
- * read was addressed by id anyway, admits exactly the case an `afterRead` hook
- * can manufacture: a lookup for B retargeted to an acyclic C
- * whose response omits `id` would be read as B's placements, and the chain
- * through the real B approved.
- *
- * The same package already decided this, in the same direction, for the same
- * reason. `recordOf` in `class-usage-runtime.ts` requires `record.id ===
- * subject.entityKey` and says why in its own docblock: a read hook can retarget
- * the query and another can rewrite the answer, so a response that cannot be
- * confirmed as the subject's is refused rather than used. Two rules for one
- * question is how they come to disagree.
- *
- * The cost is the one that docblock names: a components collection whose
- * `afterRead` strips or rewrites `id` cannot have this guard evaluated, and
- * every save on it is refused for an unreadable graph. That is a loud,
- * diagnosable refusal rather than a silently approved cycle.
- */
-function isRowFor(row: unknown, id: string): boolean {
-  if (typeof row !== "object" || row === null) return false;
-  return (row as Record<string, unknown>).id === id;
-}
-
-/**
- * The document this write carries, and which KIND of nothing where it carries none.
- *
- * `absent` is a patch that does not mention the field, so the stored document
- * survives the write and a promotion puts that document live. `empty` is a patch
- * that mentions it and supplies no document — a cleared field — so what lands
- * names nothing. The two look identical from the field's value and lead to
- * opposite answers, which is why they are separate sentinels rather than one.
- *
- * The incoming value rather than the stored one, which is the point of asking at
- * write time: the stored copy is the version being replaced, and it is the new
- * placements that can close a loop.
- *
- * The DOCUMENT rather than the ids it names, because what a document reaches
- * depends on the definitions it places — see {@link reachableFrom}.
- */
-function submittedDocument(
-  context: unknown,
-  options: CycleGuardOptions
-): { readonly document: unknown } | "absent" | "empty" {
-  const data = fieldOf(context, "data");
-  if (data === undefined) return "absent";
-  // PRESENCE, not truthiness. Core selects the columns an update writes with the
-  // same question (`hasOwnProperty` over the patch), so a field carrying `null`
-  // is one this write STORES rather than one it leaves alone — and the two need
-  // opposite treatment below.
-  if (!Object.hasOwn(data, options.documentField)) return "absent";
-  const document = data[options.documentField];
-  if (typeof document !== "object" || document === null) return "empty";
-  const nodes = (document as { nodes?: unknown }).nodes;
-  if (!Array.isArray(nodes)) return "empty";
-  // Wrapped, because a bare `unknown` in a union with the sentinels collapses to
-  // `unknown` and every comparison against it would then type-check.
-  return { document };
-}
-
-/**
- * The id this write will be stored under, or `null` when there is no such id
- * yet.
- *
- * The STORED row only. An update carries it as `originalData`, and the incoming
- * data is a patch that need not repeat it.
- *
- * `data.id` is deliberately NOT a fallback, and that is not an omission. A
- * client-supplied id is never the identity a row is stored under: every write
- * path spreads `stripImmutableSystemFields(finalData, "collection")` over a
- * freshly generated `id`, and `id` is declared `writableByClient: false`, so the
- * value is discarded on create and on update alike. Judging a create against it
- * refuses a real chain that happens to run through whatever the caller typed,
- * while the row being written gets an id nothing references — a refusal whose
- * reported path names a component the author never placed.
- *
- * So a CREATE is left alone entirely. Nothing can already reference an id the
- * write is about to mint, so no chain can lead back to it and there is no cycle
- * a create can close.
- */
-function subjectOf(context: unknown): string | null {
-  const original = fieldOf(context, "originalData");
-  return original === undefined ? null : idIn(original);
-}
-
-/** A usable id on a record, or null. */
-function idIn(record: Record<string, unknown>): string | null {
-  const id = record.id;
-  return typeof id === "string" && id !== "" ? id : null;
-}
-
-/** One record-valued field of the hook context. */
-function fieldOf(
-  context: unknown,
-  name: string
-): Record<string, unknown> | undefined {
-  if (typeof context !== "object" || context === null) return undefined;
-  const value = (context as Record<string, unknown>)[name];
-  if (typeof value !== "object" || value === null) return undefined;
-  return value as Record<string, unknown>;
-}
-
-/** Whether this hook is running inside a transaction its caller owns. */
-function insideACallerTransaction(context: unknown): boolean {
-  return (
-    typeof context === "object" &&
-    context !== null &&
-    (context as { executor?: unknown }).executor !== undefined
-  );
-}
-
-/** The Direct API the request carries, or null. */
-function directApiOf(context: unknown): CycleGuardDirectApi | null {
-  const req = fieldOf(context, "req");
-  if (req === undefined) return null;
-  const nextly = req.nextly;
-  return typeof nextly === "object" && nextly !== null
-    ? (nextly as CycleGuardDirectApi)
-    : null;
-}
-
-/**
- * A refusal an author actually sees.
- *
- * A typed CONFLICT rather than a bare `Error`: the mutation service files an
- * untyped throw as a code-less failure and the envelope rebuilds it as an
- * internal error, so the author would be shown the generic unexpected-error
- * message and none of the chain named here.
- */
+/** A refusal an author actually sees. */
 function refusal(message: string): Error {
-  return NextlyError.conflict({ message });
+  return new CycleRefusal(message);
 }

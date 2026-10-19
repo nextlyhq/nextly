@@ -3,6 +3,10 @@ import { useEffect, useRef } from "react";
 import { pluginSurfaceSection } from "@admin/lib/navigation/section-resolvers";
 import { autoRegisterPluginComponents } from "@admin/lib/plugins/component-registry";
 import {
+  clearDocumentViews,
+  registerDocumentViews,
+} from "@admin/lib/plugins/document-view-registry";
+import {
   registerPluginPages,
   clearPluginPages,
   pluginPagePath,
@@ -18,13 +22,13 @@ function routeSignature(routes: string[]): string {
 /**
  * Every component path a plugin's admin-meta entry can resolve by string:
  * pages, settings, the header slot (both spellings), the schema-builder and
- * form-toolbar slots, and custom field-type editors. All of them render
- * through the component registry, so their modules must be imported even for
- * a plugin that contributes no collections — the field-type and slot kinds
- * are delivered via branding rather than collection admin.components, and
- * nothing else would trigger their import. The import-map codegen in
- * `nextly` collects the same kinds; the parity test there fails when the two
- * disagree.
+ * form-toolbar slots, document views, and custom field-type editors. All of
+ * them render through the component registry, so their modules must be
+ * imported even for a plugin that contributes no collections — the field-type,
+ * slot and document-view kinds are delivered via branding rather than
+ * collection admin.components, and nothing else would trigger their import.
+ * The import-map codegen in `nextly` collects the same kinds; the parity test
+ * there fails when the two disagree.
  */
 function pluginComponentPaths(plugin: PluginMetadata): string[] {
   const headerSlot = plugin.header?.slot ?? plugin.headerSlot;
@@ -36,6 +40,9 @@ function pluginComponentPaths(plugin: PluginMetadata): string[] {
     // The toolbar slot renders inside the entry form's provider, so it is
     // resolved on the same pages the schema-builder slot is.
     plugin.entryFormToolbarSlot,
+    // A document view is a whole screen resolved by string, and its plugin
+    // may contribute nothing else that would trigger the module's import.
+    ...(plugin.documentViews ?? []).map(view => view.component),
     ...(plugin.fieldTypes ?? []).map(fieldType => fieldType.component),
     // Falsy rather than only `undefined`, matching the codegen collector
     // exactly: an empty component path names no module, and the two halves
@@ -75,6 +82,25 @@ function registerPluginRoutes(plugin: PluginMetadata, slug: string): string[] {
 }
 
 /**
+ * Registers one plugin's document views and returns the signature entries
+ * describing them. They join the page signature because they are routes too:
+ * a deep link to a view resolves before admin-meta has loaded, and only the
+ * re-resolution that a changed signature triggers lets it render.
+ */
+function registerPluginDocumentViews(plugin: PluginMetadata): string[] {
+  const views = plugin.documentViews ?? [];
+  registerDocumentViews(views);
+  return views.map(view =>
+    JSON.stringify([
+      "document-view",
+      "slug" in view ? view.slug : `field:${view.fieldType}`,
+      view.path,
+      view.component,
+    ])
+  );
+}
+
+/**
  * Registers plugin-contributed admin pages into the client route registry
  * whenever the admin-meta plugin list changes, and triggers auto-registration
  * of their component modules (so `PluginSlot` can resolve them).
@@ -94,6 +120,7 @@ export function usePluginPageRegistration(
 
   useEffect(() => {
     clearPluginPages();
+    clearDocumentViews();
 
     const componentPaths: string[] = [];
     const registeredRoutes: string[] = [];
@@ -103,6 +130,7 @@ export function usePluginPageRegistration(
     for (const plugin of plugins ?? []) {
       const slug = pluginSlug(plugin.name);
       registeredRoutes.push(...registerPluginRoutes(plugin, slug));
+      registeredRoutes.push(...registerPluginDocumentViews(plugin));
       componentPaths.push(...pluginComponentPaths(plugin));
     }
 

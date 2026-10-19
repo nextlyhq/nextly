@@ -19,6 +19,15 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+// These tests read a session with no database behind it. Whether the account
+// may still use its token is the session check's own question, covered by
+// `auth/session/__tests__/session-standing.test.ts` and, on each dialect,
+// `session-cutoff.integration.test.ts`; here every account may.
+vi.mock("../../session/session-standing", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../session/session-standing")>()),
+  sessionTokenIsCurrent: async () => true,
+}));
+
 import { COOKIE_NAMES } from "../../cookies/cookie-config";
 import { buildClaims } from "../../jwt/claims";
 import { signAccessToken } from "../../jwt/sign";
@@ -45,6 +54,10 @@ function usableState(overrides: Partial<AccountState> = {}): AccountState {
     lockedUntil: null,
     emailVerified: new Date("2026-01-01T00:00:00Z"),
     passwordUpdatedAt: null,
+    email: PLUGIN_USER.email,
+    name: PLUGIN_USER.name ?? null,
+    image: null,
+    sessionEpoch: 0,
     ...overrides,
   };
 }
@@ -203,6 +216,7 @@ describe("handleSession determineUser gate", () => {
       name: "Cookie User",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
     });
     const token = await signAccessToken(claims, SECRET, 900);
 

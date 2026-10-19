@@ -14,6 +14,18 @@ import type {
   WithSessionRowTransaction,
 } from "../session-row";
 
+/**
+ * The identity and session epoch an account read returns besides the state
+ * the gate judges, for fixtures whose case is about that state. A session is
+ * signed with these, so a case about the signed identity sets its own.
+ */
+export const fixtureIdentity = {
+  email: "a@b.c",
+  name: null,
+  image: null,
+  sessionEpoch: 0,
+};
+
 export interface FakeSessionRows {
   withSessionRowTransaction: WithSessionRowTransaction;
   /** Every operation, in the order the transactions ran them. */

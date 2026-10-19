@@ -1,6 +1,16 @@
+/**
+ * The claim a session token carries its account's session epoch in: the
+ * number on the user row that rises whenever the account's sessions are
+ * ended. A token signed at an older number is refused where a session is read
+ * (`auth/session/session-standing`).
+ */
+export const SESSION_EPOCH_CLAIM = "sev";
+
 // Standard JWT claims that are excluded from session user data. `typ` is here
 // because a custom user field of that name would otherwise be spread into the
-// claims and read as a token kind.
+// claims and read as a token kind, and the session epoch for the same reason:
+// a custom field of that name would decide which tokens stay valid, and a
+// login hook may not set it either (`auth/pipeline/hooks.ts`).
 export const JWT_INTERNAL_CLAIMS = [
   "iat",
   "exp",
@@ -10,6 +20,7 @@ export const JWT_INTERNAL_CLAIMS = [
   "aud",
   "iss",
   "typ",
+  SESSION_EPOCH_CLAIM,
 ] as const;
 
 /**
@@ -32,6 +43,8 @@ export interface NextlyJwtPayload {
   name: string;
   image: string | null;
   roleIds: string[];
+  /** The session epoch the token was signed at; absent on older tokens. */
+  sev?: number;
 
   // Custom user fields from user_ext table (spread dynamically)
   [key: string]: unknown;
@@ -43,6 +56,14 @@ export interface BuildClaimsInput {
   name: string;
   image: string | null;
   roleIds: string[];
+  /**
+   * The account's session epoch as the user row holds it now. Every core
+   * caller passes it. Optional so code that builds its own claims keeps
+   * compiling: left out, it is zero, so the token works until the account's
+   * sessions are first ended and is refused from then on, which errs toward
+   * signing the person out rather than keeping them in.
+   */
+  sessionEpoch?: number;
   customFields?: Record<string, unknown>;
 }
 
@@ -57,6 +78,7 @@ export function buildClaims(input: BuildClaimsInput): Record<string, unknown> {
     name: input.name,
     image: input.image,
     roleIds: input.roleIds,
+    [SESSION_EPOCH_CLAIM]: input.sessionEpoch ?? 0,
   };
 
   // Spread custom user fields (from user_ext table)

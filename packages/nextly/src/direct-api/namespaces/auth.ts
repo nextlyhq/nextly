@@ -91,6 +91,12 @@ export async function login(
     name: user.name || "",
     image: user.image ?? null,
     roleIds: [],
+    // Read with the password this sign-in proved. The token lives thirty
+    // days, so this is what lets a deactivation or a password set end it:
+    // every place a session is read refuses a token at an older epoch. Core's
+    // own credential lookup reads every column, so the epoch is always there;
+    // left unread it would be signed as zero, which errs toward refusing.
+    sessionEpoch: verified.sessionEpoch,
   });
   const token = await signAccessToken(claims, secret, maxAge);
 

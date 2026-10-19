@@ -38,6 +38,7 @@ import {
 } from "./collection-widgets";
 import type { WidgetDefinition } from "./definition";
 import { publishableWidgets } from "./publish";
+import { allowedWidths, widthFromSize, type WidgetWidth } from "./widths";
 
 /**
  * The part of a widget that layout resolution needs, from either channel.
@@ -76,8 +77,25 @@ export interface CanonicalWidget {
   collection?: string;
   requiredPermission?: string | readonly string[];
   defaultSize?: string;
+  /**
+   * The smallest and largest size the declaration allows, carried so the
+   * widths a card may take come from the declaration rather than a guess.
+   * Strings, as `defaultSize` is: a newer plugin's value is one this core
+   * reads as "no bound" rather than refuses.
+   */
+  minSize?: string;
+  maxSize?: string;
   defaultHeight?: string;
   defaultOrder?: number;
+  /**
+   * The widths a card of this widget may take, the width a new one starts at,
+   * and whether a dashboard may hold more than one, when the declaration
+   * states them in those terms. Absent, each is derived from the sizes above
+   * by {@link widthFacts}, which is the one place they are read.
+   */
+  allowedWidths?: readonly WidgetWidth[];
+  defaultWidth?: WidgetWidth;
+  allowsSeveral?: boolean;
   /**
    * How long the widget stays, and the condition it stays under.
    *
@@ -123,32 +141,34 @@ function gatesOf(widget: CanonicalWidget): readonly unknown[] {
   return widget.actionGates ?? [];
 }
 
+/**
+ * The optional fields a registration's summary carries, copied only when the
+ * declaration states them, so an unstated field is absent rather than
+ * `undefined` and the merge's fallbacks read it as unstated.
+ */
+const REGISTRATION_FIELDS = [
+  "requiredPermission",
+  "defaultSize",
+  "minSize",
+  "maxSize",
+  "defaultHeight",
+  "defaultOrder",
+  "lifecycle",
+  "visibleWhen",
+  "dismissible",
+] as const satisfies ReadonlyArray<
+  keyof WidgetDefinition & keyof CanonicalWidget
+>;
+
 /** The summary of one registered widget. */
 function fromRegistration(definition: WidgetDefinition): CanonicalWidget {
+  const stated = REGISTRATION_FIELDS.filter(
+    field => definition[field] !== undefined
+  ).map(field => [field, definition[field]]);
   return {
     id: definition.id,
-    ...(definition.requiredPermission === undefined
-      ? {}
-      : { requiredPermission: definition.requiredPermission }),
     actionGates: actionGatesOf(definition.actions),
-    ...(definition.defaultSize === undefined
-      ? {}
-      : { defaultSize: definition.defaultSize }),
-    ...(definition.defaultHeight === undefined
-      ? {}
-      : { defaultHeight: definition.defaultHeight }),
-    ...(definition.defaultOrder === undefined
-      ? {}
-      : { defaultOrder: definition.defaultOrder }),
-    ...(definition.lifecycle === undefined
-      ? {}
-      : { lifecycle: definition.lifecycle }),
-    ...(definition.visibleWhen === undefined
-      ? {}
-      : { visibleWhen: definition.visibleWhen }),
-    ...(definition.dismissible === undefined
-      ? {}
-      : { dismissible: definition.dismissible }),
+    ...(Object.fromEntries(stated) as Partial<CanonicalWidget>),
   };
 }
 
@@ -229,6 +249,10 @@ function mergeCanonical(
   // divergence this function exists to prevent.
   const dismissible = registration.dismissible ?? contribution.dismissible;
   return {
+    // The contribution's explicit width terms, field by field, wherever the
+    // registration states none: spread first, so any the registration states
+    // replace them below, as `dismissible` falls back.
+    ...widthTermsOf(contribution),
     // The registration wholesale first: id, `requiredPermission` and
     // `defaultSize` are its to state, including by stating nothing.
     ...registration,
@@ -376,4 +400,56 @@ export function allWidgets(): CanonicalWidget[] {
  */
 export function declaredWidgets(): CanonicalWidget[] {
   return allWidgets().filter(widget => widget.generated !== true);
+}
+
+/** A summary's explicit width terms, and nothing else. */
+function widthTermsOf(
+  widget: CanonicalWidget
+): Pick<CanonicalWidget, "allowedWidths" | "defaultWidth" | "allowsSeveral"> {
+  return {
+    ...(widget.allowedWidths === undefined
+      ? {}
+      : { allowedWidths: widget.allowedWidths }),
+    ...(widget.defaultWidth === undefined
+      ? {}
+      : { defaultWidth: widget.defaultWidth }),
+    ...(widget.allowsSeveral === undefined
+      ? {}
+      : { allowsSeveral: widget.allowsSeveral }),
+  };
+}
+
+/** What the dashboard needs to know about a widget's widths. */
+export interface WidgetWidthFacts {
+  /** The widths a card may be set to, narrowest first. Never empty. */
+  allowedWidths: readonly WidgetWidth[];
+  /** The width a new card starts at. */
+  defaultWidth: WidgetWidth;
+  /** Whether one dashboard may hold more than one card of this widget. */
+  allowsSeveral: boolean;
+}
+
+/**
+ * The ONE reading of a widget's widths, for the default arrangement, the
+ * layout read and the check on a write alike.
+ *
+ * Explicit width terms win where a declaration states them. Otherwise the
+ * allowed widths are the declared size range and the default width is the
+ * declared default size, each through `widths.ts`'s one mapping. A widget
+ * allows one card unless it says otherwise.
+ *
+ * The default width is NOT forced into the allowed list here: the registry
+ * already refuses a default outside the range, and a width the widget does not
+ * allow is drawn at the nearest one it does, as any stored width is.
+ */
+export function widthFacts(widget: CanonicalWidget): WidgetWidthFacts {
+  const allowed =
+    widget.allowedWidths !== undefined && widget.allowedWidths.length > 0
+      ? widget.allowedWidths
+      : allowedWidths(widget.minSize, widget.maxSize);
+  return {
+    allowedWidths: allowed,
+    defaultWidth: widget.defaultWidth ?? widthFromSize(widget.defaultSize),
+    allowsSeveral: widget.allowsSeveral ?? false,
+  };
 }

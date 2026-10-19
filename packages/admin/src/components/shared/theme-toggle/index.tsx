@@ -20,7 +20,7 @@ const OPTIONS = [
  * Theme Toggle
  *
  * Top-bar control to switch between light, dark, and system appearance. Selecting an option
- * applies and persists it immediately via next-themes. The trigger shows the active mode's
+ * applies and persists it immediately through the admin's theme provider. The trigger shows the active mode's
  * icon and matches the sibling header icon buttons.
  */
 export function ThemeToggle(): React.ReactElement {

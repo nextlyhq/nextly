@@ -30,6 +30,7 @@ import type {
   WidgetSize,
   WidgetStatCell,
   WidgetChrome,
+  WidgetWidth,
 } from "nextly/config";
 
 /*
@@ -129,58 +130,78 @@ export interface DashboardWidget {
    * Whether this reader may send the card away from the card itself.
    *
    * Carried through because the CONTROL is drawn per card, outside edit mode,
-   * and the cell has no other way to know a card offers one. Hiding is what it
-   * performs -- the placement stays in the arrangement marked hidden -- so a
-   * dismissed card is recoverable from the same controls as any other.
+   * and the cell has no other way to know a card offers one. Removing is what
+   * it performs -- the placement stays in the arrangement marked removed -- so
+   * a dismissed card is recoverable from the same controls as any other.
    */
   dismissible?: boolean;
 }
 
 /**
- * One card's place in a reader's arrangement.
+ * The five widths a card may be drawn at, narrowest first: core's own type,
+ * from `nextly/config`, so a width core adds or renames reaches every table
+ * keyed by it here as a type error rather than a card drawn wrongly.
+ */
+export type { WidgetWidth };
+
+/**
+ * What the server says about one widget's widths, for this reader.
  *
- * 🔴 `size` and `height` are `string`, not the size/height unions, and that is
- * load-bearing rather than sloppy. A placement's geometry is seeded from a
- * widget's declaration, and that widget may come from a plugin built against a
- * NEWER core — so a stored arrangement can legitimately name a size this admin
- * has never heard of. `widgetSpanClass` already survives one by falling back;
- * a narrower type here would be a promise this client cannot keep, and would
- * push the lie into every consumer.
+ * The admin never works a width out for itself: which widths a card may take,
+ * where a new card starts and whether a second card of the widget may be added
+ * are all answered by the server from the widget's declaration.
+ */
+export interface WidgetWidthFacts {
+  /** Narrowest first, never empty. */
+  allowedWidths: WidgetWidth[];
+  /** The width a newly added card starts at. */
+  defaultWidth: WidgetWidth;
+  /** Whether the widget may be placed more than once. */
+  allowsSeveral: boolean;
+}
+
+/**
+ * One card in a reader's arrangement. Its position is its index in the list.
+ *
+ * 🔴 `width` is `string`, not {@link WidgetWidth}, and that is load-bearing
+ * rather than sloppy. A newer core may store a width this admin has never heard
+ * of, so the type promises only what this client can keep; the grid draws an
+ * unknown width full, through the one function that decides a drawn width.
  */
 export interface WidgetPlacement {
   /** Opaque, and unique within a layout. Not a widget id, except by default. */
   id: string;
   widgetId: string;
   /**
-   * Which column this card sits in, 0-based.
-   *
-   * Optional on the wire because a row written before columns existed carries
-   * none, and the server migrates those on read rather than refusing them — so
-   * a client that treats absent as column 0 agrees with the server instead of
-   * inventing a second answer.
+   * The width the reader chose, kept as stored even when the widget no longer
+   * allows it: the grid draws the nearest allowed width instead, and the stored
+   * choice comes back if the widget allows it again.
    */
-  column?: number;
-  order: number;
-  hidden: boolean;
-  size?: string;
-  height?: string;
+  width: string;
+  /**
+   * A removed card stays in the list, width and settings included, so it can
+   * be put back exactly where it was. It is not drawn.
+   */
+  removed: boolean;
   config?: Record<string, unknown>;
 }
 
+/** Which arrangement a read handed the reader. */
+export type DashboardLayoutSource = "own" | "default" | "unreadable";
+
 /** What `GET /api/dashboard/layout` answers. */
 export interface DashboardLayoutResponse {
+  /** The reader's cards, IN ORDER: the array order is the dashboard's order. */
   placements: WidgetPlacement[];
   /**
-   * How many columns this reader's arrangement is drawn in.
+   * Every widget this reader may see, with the widths its cards may take.
    *
-   * The SERVER's answer, not a client default: the count decides which column
-   * a placement's coordinate names, so drawing a stored arrangement in a count
-   * the client picked would render something the reader never arranged — and
-   * then save it back on their next edit.
+   * Keyed by widget id. A placement whose widget is missing here is drawn at
+   * its stored width and offers no width choice.
    */
-  columnCount?: number;
+  widgets: Record<string, WidgetWidthFacts>;
   /**
-   * Widget ids this reader may see and has not placed.
+   * Widget ids this reader may add: not placed, or allowed several times.
    *
    * The server's answer, not something to re-derive here: it is the only party
    * that filters by permission authoritatively. A newly installed widget is
@@ -188,9 +209,19 @@ export interface DashboardLayoutResponse {
    * what makes it reachable at all.
    */
   available: string[];
+  /**
+   * The default dashboard as this reader would see it, in order.
+   *
+   * Computed by the server, so a staged reset draws exactly the dashboard the
+   * reader returns to once the reset is saved.
+   */
+  defaultPlacements: WidgetPlacement[];
   version: number;
-  /** Which layer the arrangement came from: their own row, or the registry. */
-  source: "own" | "default";
+  /**
+   * Which layer the arrangement came from: their own row, the default, or the
+   * default shown in place of a stored row the server could not read.
+   */
+  source: DashboardLayoutSource;
   /**
    * An opaque token for the set of widgets this reader could see when the
    * arrangement was read. Echoed back on write; a mismatch is a 409.

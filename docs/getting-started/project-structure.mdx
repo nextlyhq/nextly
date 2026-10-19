@@ -13,36 +13,44 @@ Here is the structure of a project scaffolded with `create-nextly-app` (Blank te
 my-nextly-app/
 ├── src/
 │   ├── app/
+│   │   ├── (frontend)/
+│   │   │   ├── components/           # Components for the public site
+│   │   │   └── page.tsx              # Home page
 │   │   ├── admin/
 │   │   │   ├── [[...params]]/
 │   │   │   │   ├── page.tsx          # Admin panel UI (client component)
 │   │   │   │   └── layout.tsx        # Admin layout — injects branding CSS
 │   │   │   └── api/
-│   │   │       └── [[...params]]/
-│   │   │           └── route.ts      # Admin API catch-all handler
+│   │   │       ├── [[...params]]/
+│   │   │       │   └── route.ts      # Admin API catch-all handler
+│   │   │       └── media/
+│   │   │           └── [[...path]]/
+│   │   │               └── route.ts  # The admin media library's API (permission-checked)
 │   │   ├── api/
 │   │   │   ├── health/
 │   │   │   │   └── route.ts          # Health check endpoint
-│   │   │   ├── media/
-│   │   │   │   └── [[...path]]/
-│   │   │   │       └── route.ts      # Media upload + serving
-│   │   │   ├── media-folders/
-│   │   │   │   └── route.ts          # Media folder management
-│   │   │   └── [[...params]]/
-│   │   │       └── route.ts          # REST API catch-all
+│   │   │   └── media/
+│   │   │       └── [[...path]]/
+│   │   │           └── route.ts      # Public media reads (no writes)
 │   │   ├── layout.tsx                # Root layout
-│   │   ├── page.tsx                  # Home page
 │   │   ├── globals.css               # Global styles
 │   │   └── favicon.ico
+│   ├── lib/
+│   │   └── site-url.ts               # The public site's origin, for links and metadata
 │   └── types/
 │       └── generated/
-│           └── nextly-types.ts       # Auto-generated TypeScript types
-├── public/
-│   └── uploads/                      # Default local-disk media storage
+│           └── nextly-types.ts       # Generated TypeScript types
+├── data/                             # The SQLite database, when you chose SQLite
+├── public/                           # Static files; uploads land in public/uploads/
 ├── nextly.config.ts                  # Nextly configuration
 ├── next.config.ts                    # Next.js configuration
+├── .agents/skills/                   # Skills for coding agents (see Coding agents)
+├── .claude/skills/                   # The same skills, where Claude Code reads them
+├── AGENTS.md                         # Instructions for coding agents (CLAUDE.md points to it)
+├── CLAUDE.md
 ├── eslint.config.mjs
 ├── postcss.config.mjs
+├── pnpm-workspace.yaml               # Lets pnpm build native dependencies
 ├── tsconfig.json
 ├── package.json
 ├── .env                              # Environment variables (gitignored)
@@ -111,7 +119,7 @@ const nextConfig: NextConfig = {
 export default nextConfig;
 ```
 
-The Blank template ships with all dialect adapters listed; remove the ones you aren't using to keep the dev server tree clean.
+A scaffolded project lists only the adapter and driver for the database you chose. When adding Nextly by hand, list the ones you use.
 
 ### `.env`
 
@@ -120,7 +128,7 @@ Environment variables for database connection and authentication. The CLI genera
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `DB_DIALECT` | Yes | Database type (`postgresql`, `mysql`, `sqlite`) |
-| `DATABASE_URL` | Yes (PG/MySQL) | Database connection string. SQLite falls back to `file:./data/nextly.db` |
+| `DATABASE_URL` | Yes for PostgreSQL and MySQL; for SQLite, for the CLI's database commands | Database connection string. For SQLite, a file URL such as `file:./data/nextly.db`; the CLI's database commands need it on every dialect |
 | `NEXTLY_SECRET` | Yes (production) | Secret for JWT signing and session encryption. Min 32 chars; the CLI auto-generates a base64 value |
 | `NEXT_PUBLIC_APP_URL` | Yes (production) | Public URL of your app, used by metadata and the admin |
 
@@ -134,11 +142,12 @@ The admin panel lives here as a standard Next.js route. The catch-all `[[...para
 
 - **`page.tsx`** -- Renders the admin panel UI. This is a client component that imports `RootLayout`, `QueryProvider`, and `ErrorBoundary` from `@nextlyhq/admin`.
 - **`layout.tsx`** -- Reads `admin.branding` from `nextly.config.ts` and injects the generated CSS so logos and colors apply on every admin page.
-- **`api/[[...params]]/route.ts`** -- The admin API. Handles all CRUD operations for collections, singles, users, roles, permissions, and media.
+- **`api/[[...params]]/route.ts`** -- The admin API. Handles all CRUD operations for collections, singles, users, roles and permissions.
+- **`api/media/[[...path]]/route.ts`** -- The media library's API. Every operation is checked against the caller's media permissions, except fetching the raw bytes of a publicly servable file such as a web font, which a browser does without a session.
 
 ### `src/app/api/`
 
-Public REST API routes. The catch-all `[[...params]]/route.ts` dispatches every endpoint Nextly ships -- collections, singles, auth, image sizes, email -- through one handler that reads your config. Health, media, and media-folders are split into their own routes for clarity. See [REST API](/docs/api-reference/rest-api) for every endpoint.
+Public routes: a health check and media reads. A new project has no `/api` catch-all, so Nextly's endpoints are served under `/admin/api` by the admin route above. To serve the REST API under `/api` as well, add the catch-all described in [REST API](/docs/api-reference/rest-api).
 
 ### `public/uploads/`
 
@@ -146,24 +155,42 @@ Default media store when no storage adapter is configured in `nextly.config.ts`.
 
 ### `src/types/generated/`
 
-Auto-generated TypeScript types for your content schema. The output path is configured in `nextly.config.ts` under `typescript.outputFile`. In development the types are regenerated automatically when you save `nextly.config.ts`; in production run:
+Generated TypeScript types for your content schema. The output path is configured in `nextly.config.ts` under `typescript.outputFile`. Saving `nextly.config.ts` in development syncs the database but does not rewrite this file: regenerate it after each code-first schema change, in the same change. `generate:types` reads only `nextly.config.ts`, so it does not cover collections built in the Visual Schema Builder until they are moved into code (below):
 
 ```bash
-pnpm nextly generate:types
+pnpm types:generate
+```
+
+If your app keeps its code at the root rather than under `src/`, the generated files follow it: types go to `types/generated/` and schemas to `db/schemas/collections/zod/`, with no `src/` folder created. That holds while `typescript.outputFile` and `db.schemasDir` are left at their defaults; a path you set is used as written.
+
+### Generated Zod schemas
+
+`generate:types` also writes a Zod schema for each collection, in `zod/` under `db.schemasDir` (`src/db/schemas/collections/zod/` by default). They import Zod from `nextly/zod`, a re-export of the Zod Nextly itself uses, so they compile whether or not your app depends on `zod`, with npm, pnpm, Yarn (Plug'n'Play too) or Bun.
+
+To combine them with your own Zod code, import `z` from `nextly/zod` as well, so both use one Zod instance:
+
+```ts title="src/lib/post-form.ts"
+import { z } from "nextly/zod";
+
+import { PostsCreateInputSchema } from "../db/schemas/collections/zod";
+
+export const PostFormSchema = PostsCreateInputSchema.extend({
+  acceptTerms: z.literal(true),
+});
 ```
 
 ### Schema files (Visual Schema Builder)
 
-When you create collections through the Visual Schema Builder, Nextly writes the generated TypeScript schema files alongside your project under the directory configured in `nextly.config.ts` -- by default `./src/db/schemas/`. Those files are regular `defineCollection()` exports you can commit to version control. Code-first collections live in `nextly.config.ts` (or wherever you import them from); the two approaches coexist freely.
+Collections you create through the Visual Schema Builder are stored in the database, and no TypeScript file is generated for them. In development the admin also writes every change to `ui-schema.json` (the file `db.uiSchemaFile` names), which `nextly migrate:create` reads: commit it with the migration (see [Production migrations](/docs/guides/production-migrations#commit-ui-schemajson)). To move a collection into code, run `nextly db:sync --promote <slug>`. Code-first collections live in `nextly.config.ts` (or wherever you import them from); the two approaches coexist freely.
 
 ## Code-First vs Visual Schema Builder: Where Content Is Defined
 
 | Approach | Where collections are defined | Schema location |
 | --- | --- | --- |
-| **Code-First** | `nextly.config.ts` (or files you import from it) | Generated during `pnpm nextly migrate` (production) or auto-synced on save (dev) |
-| **Visual Schema Builder** | Admin panel at `/admin/builder/collections` | TypeScript files written to disk under `./src/db/schemas/` |
+| **Code-First** | `nextly.config.ts` (or files you import from it) | Auto-synced on save in development; in production, a migration you create with `nextly migrate:create` and apply with `nextly migrate` |
+| **Visual Schema Builder** | Admin panel at `/admin/builder/collections` | Stored in the database, and written to `ui-schema.json` in development for `migrate:create` |
 
-Both approaches produce the same result: database tables, admin UI, REST endpoints, and Direct API access. You can mix them -- define some collections in config and create others through the Visual Schema Builder.
+Both feed the same core runtime for the supported field set: database tables, admin UI, REST endpoints, and Direct API access. Two differences remain. A collection made in the Visual Schema Builder cannot carry access functions, field rules or hooks written as functions, because a function cannot be stored in the database (it can carry Nextly's pre-built hooks, such as auto-slug, which run on every write); and `nextly generate:types` writes types only for what your config defines. You can mix them -- define some collections in config and create others through the Visual Schema Builder.
 
 ## Next Steps
 

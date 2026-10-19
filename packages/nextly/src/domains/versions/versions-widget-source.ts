@@ -58,6 +58,7 @@ import {
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
+import { isKeptOffDashboard } from "../widgets/kept-off-dashboard";
 import type { WidgetQuery } from "../widgets/query";
 import type { WidgetResult, WidgetResultField } from "../widgets/result";
 import { refuseUnconsumedQueryFields } from "../widgets/sources";
@@ -386,12 +387,19 @@ async function resolveVersions(
       logContext: { reason: "content-registry-unreachable" },
     });
   }
+  // Bounded by what the dashboard shows as well as by what the caller may read: a collection or
+  // Single kept off the dashboard has no edits counted or listed here, for any caller. Narrowed
+  // AFTER the shared snapshot rather than inside it, because that snapshot also decides
+  // visibility outside the dashboard.
   const readableSlugs = [
     ...(await readableEntities(
       [...scope.kinds.keys()],
       readAccessCaller(caller)
     )),
-  ];
+  ].filter(slug => {
+    const kind = scope.kinds.get(slug);
+    return kind === undefined || !isKeptOffDashboard(kind, slug);
+  });
 
   if (query.op === "count") {
     // 🔴 No pre-authorization aggregate decides anything here any more. Counting

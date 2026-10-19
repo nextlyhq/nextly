@@ -223,7 +223,13 @@ describe("who may open PluginSettingsPage", () => {
 
     renderWithProviders(<PluginSettingsPage params={{ slug: "acme-pay" }} />);
     expect(screen.queryByText("pay settings panel")).not.toBeInTheDocument();
-    expect(navigateTo).toHaveBeenCalledWith("/admin");
+    // Refused where it was asked for, not by a silent trip to the dashboard.
+    expect(
+      screen.getByRole("heading", {
+        name: "You don't have access to this page",
+      })
+    ).toBeInTheDocument();
+    expect(navigateTo).not.toHaveBeenCalled();
   });
 
   it.each([

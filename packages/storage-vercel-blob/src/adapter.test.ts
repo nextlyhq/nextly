@@ -46,6 +46,7 @@ vi.mock("@vercel/blob", () => {
      * tell apart from the others.
      */
     head: vi.fn(),
+    list: vi.fn(),
     BlobNotFoundError: NotFound,
     BlobAccessError: Access,
   };
@@ -231,6 +232,79 @@ describe("VercelBlobStorageAdapter — reading bytes back", () => {
     await adapter.read("f.woff2", { maxBytes: 4242 });
     expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[3]).toMatchObject({
       maxBytes: 4242,
+    });
+  });
+});
+
+/*
+ * A media record keeps the original's stored path and URL but only the URL of
+ * the thumbnail made at upload, so a delete works the thumbnail's path out
+ * from them: on Vercel Blob it relies on a stored path being the blob's own
+ * URL, the empty prefix. This holds the adapter to that.
+ */
+describe("VercelBlobStorageAdapter — a stored path is its URL", () => {
+  const adapter = new VercelBlobStorageAdapter({
+    token: "vercel_blob_rw_test_dummy_token_for_unit_tests",
+    collections: { media: true },
+  });
+
+  it("returns the blob's URL as its path, for the original and its thumbnail", async () => {
+    for (const filename of ["photo.png", "thumb_photo.png"]) {
+      const result = await adapter.upload(Buffer.from("x"), {
+        filename,
+        mimeType: "image/png",
+        collection: "media",
+      });
+
+      expect(result.path).toBe(result.url);
+      expect(adapter.getPublicUrl(result.path)).toBe(result.url);
+    }
+  });
+});
+
+// Searching the store for left-behind files reads every page of it, and
+// names each blob by its URL, which is its stored path here.
+describe("VercelBlobStorageAdapter — list", () => {
+  const adapter = new VercelBlobStorageAdapter({
+    token: "vercel_blob_rw_test_dummy_token_for_unit_tests",
+    collections: { media: true },
+  });
+
+  it("names every blob on every page, by URL and upload time", async () => {
+    const { list } = await import("@vercel/blob");
+    const time = new Date("2026-10-18T10:00:00Z");
+    const blob = (name: string) => ({
+      url: `https://test.public.blob.vercel-storage.com/${name}`,
+      pathname: name,
+      size: 1,
+      uploadedAt: time,
+    });
+    vi.mocked(list)
+      .mockResolvedValueOnce({
+        blobs: [blob("photo-2.png")],
+        hasMore: true,
+        cursor: "next",
+      } as never)
+      .mockResolvedValueOnce({
+        blobs: [blob("thumb_x-1.png")],
+        hasMore: false,
+      } as never);
+
+    const listed = [];
+    for await (const entry of adapter.list()) listed.push(entry);
+
+    expect(listed).toEqual([
+      {
+        path: "https://test.public.blob.vercel-storage.com/photo-2.png",
+        lastModified: time,
+      },
+      {
+        path: "https://test.public.blob.vercel-storage.com/thumb_x-1.png",
+        lastModified: time,
+      },
+    ]);
+    expect(vi.mocked(list).mock.calls[1]?.[0]).toMatchObject({
+      cursor: "next",
     });
   });
 });

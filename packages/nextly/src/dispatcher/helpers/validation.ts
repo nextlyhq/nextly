@@ -8,11 +8,18 @@
  * logic.
  */
 
+import {
+  filterShapeProblems,
+  refuseFilterProblems,
+  type FilterProblem,
+} from "../../domains/collections/query/filter-shape";
 import { NextlyError } from "../../errors";
 import type { RichTextOutputFormat } from "../../lib/rich-text-html";
 import type { StatusOption } from "../../lib/status-filter";
 import { readSelectParam } from "../../query/select-param";
 import type { WhereFilter } from "../../services/collections/query-operators";
+import { parseWhereQuery } from "../../services/collections/query-parser";
+import { toSnakeCase } from "../../shared/lib/case-conversion";
 import type { Params } from "../types";
 
 // ============================================================
@@ -84,11 +91,6 @@ export const parseSelectParam = (
 };
 
 /**
- * Parse a JSON-encoded where clause from a query string parameter.
- * The key[op]=value query-param format is parsed elsewhere via
- * `parseWhereQuery` -- this helper handles the JSON form.
- */
-/**
  * System owner column (both the snake_case name and the camelCase alias). It is
  * stripped from response payloads, so a client must not be able to filter, sort,
  * or otherwise address rows by it either — otherwise a caller who knows/guesses
@@ -97,72 +99,117 @@ export const parseSelectParam = (
 export const OWNER_QUERY_COLUMNS = new Set(["created_by", "createdBy"]);
 
 /**
- * Remove any owner-column condition from a client-supplied `where` tree
- * (recursing through `and`/`or`), so a REST caller cannot filter/count by the
- * system owner column, which is stamped by the write path rather than being
- * something a reader may query on.
+ * Whether a filter key reaches the owner column. Judged by its first segment
+ * under the same snake_case mapping the condition builder resolves a column
+ * by, so `CreatedBy` — which that mapping turns into `created_by` — is caught
+ * as well as the two documented spellings.
  */
-const stripOwnerFromWhere = (node: unknown): unknown => {
-  if (Array.isArray(node)) {
-    return node
-      .map(stripOwnerFromWhere)
-      .filter(
-        n => n != null && (typeof n !== "object" || Object.keys(n).length > 0)
+function namesOwnerColumn(key: string): boolean {
+  const head = key.split(".")[0];
+  return (
+    OWNER_QUERY_COLUMNS.has(head) || OWNER_QUERY_COLUMNS.has(toSnakeCase(head))
+  );
+}
+
+/**
+ * Every place a client filter names the system owner column, as a refusal.
+ *
+ * A dotted key like `created_by.any` still targets the owner column, because
+ * the query builder keys on the first path segment, so the first segment is
+ * what is compared — not just the exact key.
+ */
+function ownerColumnProblems(
+  node: unknown,
+  path: string,
+  into: FilterProblem[]
+): void {
+  if (!node || typeof node !== "object" || Array.isArray(node)) return;
+  for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+    const at = `${path}.${key}`;
+    if ((key === "and" || key === "or") && Array.isArray(value)) {
+      value.forEach((child, i) =>
+        ownerColumnProblems(child, `${at}.${i}`, into)
       );
-  }
-  if (node && typeof node === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(
-      node as Record<string, unknown>
-    )) {
-      // Drop an owner-column filter. A dotted key like `created_by.any` still
-      // targets the owner column because the query builder keys on the first
-      // path segment (`column.split(".")[0]`), so match on that segment — not
-      // just the exact key — or the dotted form would slip through.
-      if (OWNER_QUERY_COLUMNS.has(key.split(".")[0])) continue;
-      if (key === "and" || key === "or") {
-        const arr = stripOwnerFromWhere(value);
-        if (Array.isArray(arr) && arr.length > 0) out[key] = arr;
-      } else {
-        out[key] = value; // a field condition — its op object is not a field
-      }
+    } else if (namesOwnerColumn(key)) {
+      into.push({
+        path: at,
+        code: "FIELD_NOT_FILTERABLE",
+        message:
+          "Entries cannot be filtered by who created them. That column is never returned, so it cannot be used to choose rows either.",
+      });
     }
-    return out;
   }
-  return node;
-};
+}
 
-export const parseWhereParam = (
-  whereParam?: string
-): WhereFilter | undefined => {
-  if (!whereParam) return undefined;
-
-  try {
-    const parsed: unknown = JSON.parse(whereParam);
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      Array.isArray(parsed)
-    ) {
-      return undefined;
-    }
-    return stripOwnerFromWhere(parsed) as WhereFilter;
-  } catch {
-    return undefined;
-  }
+/**
+ * A client-supplied `where`, checked: refused unless it is a well-formed
+ * filter that names no owner column.
+ *
+ * Refused rather than repaired. Removing the part the server will not use —
+ * which is what happened to an owner condition here before — runs the read
+ * under a wider filter than the caller wrote: `or: [{ createdBy: … }]` became
+ * no condition at all, and every row matched. Covers the request-body path
+ * (the bulk-update-by-query handler reads `body.where` directly) as well as
+ * {@link parseWhereParam}. Returns `undefined` unchanged.
+ */
+export const readClientWhere = (where: unknown): WhereFilter | undefined => {
+  if (where === undefined) return undefined;
+  const problems = filterShapeProblems(where, { allowTranslated: true });
+  ownerColumnProblems(where, "where", problems);
+  refuseFilterProblems(problems);
+  return where as WhereFilter;
 };
 
 /**
- * Strip owner-column conditions from an already-parsed client `where` object.
- * The JSON query-string path goes through {@link parseWhereParam}; this covers
- * the request-body path (e.g. the bulk-update-by-query handler reads
- * `body.where` directly) so a client cannot target rows by the system owner
- * column via the body either. Returns `undefined` unchanged.
+ * The filter a REST request carries, from a JSON `where` parameter or from
+ * bracket parameters (`where[title][equals]=…`, forwarded unparsed as
+ * `whereBrackets` by the route parser), checked by {@link readClientWhere}.
+ *
+ * A parameter that is present and cannot be parsed answers 400. It used to be
+ * read as no filter, so a typo in the JSON returned every row the caller could
+ * see instead of the few they asked for. A filter given both ways is refused
+ * too: the bracket conditions used to be dropped whenever a JSON `where` was
+ * present, so the read ran under part of what the caller wrote.
  */
-export const stripOwnerColumnsFromWhere = (
-  where: WhereFilter | undefined
-): WhereFilter | undefined =>
-  where === undefined ? undefined : (stripOwnerFromWhere(where) as WhereFilter);
+export const parseWhereParam = (
+  whereParam?: string,
+  whereBrackets?: string
+): WhereFilter | undefined => {
+  if (whereBrackets) {
+    if (whereParam !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "where",
+            code: "FILTER_GIVEN_TWICE",
+            message:
+              "Give the filter once: either a JSON where parameter or where[field][operator] parameters, not both.",
+          },
+        ],
+      });
+    }
+    return readClientWhere(parseWhereQuery(new URLSearchParams(whereBrackets)));
+  }
+  if (!whereParam) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(whereParam);
+  } catch {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "where",
+          code: "FILTER_INVALID_JSON",
+          message:
+            'The where parameter is not valid JSON. Send a JSON object of field conditions, such as {"status":{"equals":"published"}}.',
+        },
+      ],
+      logContext: { param: "where" },
+    });
+  }
+  return readClientWhere(parsed);
+};
 
 // ============================================================
 // Rich text format validation

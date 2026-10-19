@@ -1,4 +1,13 @@
-import { describe, it, expect } from "vitest";
+import { vi, describe, it, expect } from "vitest";
+
+// These tests read a session with no database behind it. Whether the account
+// may still use its token is the session check's own question, covered by
+// `auth/session/__tests__/session-standing.test.ts` and, on each dialect,
+// `session-cutoff.integration.test.ts`; here every account may.
+vi.mock("../session-standing", async importOriginal => ({
+  ...(await importOriginal<typeof import("../session-standing")>()),
+  sessionTokenIsCurrent: async () => true,
+}));
 
 import { COOKIE_NAMES } from "../../cookies/cookie-config";
 import {

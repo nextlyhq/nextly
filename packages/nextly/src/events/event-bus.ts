@@ -15,6 +15,8 @@
  * @module events/event-bus
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { GeneratedTypes } from "../direct-api/types/shared";
 
 /** Minimal logger shape used for isolated-failure diagnostics. */
@@ -42,7 +44,12 @@ export interface EventEnvelope<P = unknown> {
   payload: P;
 }
 
-/** Observe-only event handler. Return value is ignored (cannot modify/abort). */
+/**
+ * Observe-only event handler. What it returns cannot modify or abort the
+ * event. A promise it returns is still what it is waited for by: the plugin
+ * lifecycle command waits for the handlers of what a plugin's `onInstall` or
+ * `onUninstall` set off, and only for the work their promises cover.
+ */
 export type EventHandler<P = unknown> = (
   event: EventEnvelope<P>
 ) => void | Promise<void>;
@@ -78,7 +85,16 @@ export function isReservedEventName(name: EventName): boolean {
 export class EventBus {
   private handlers: Map<EventName, Set<EventHandler>> = new Map();
   private declaredEvents: Set<EventName> = new Set();
-  private inFlight: Set<Promise<void>> = new Set();
+  /**
+   * Every async handler still running, with the cause it is traced to when
+   * it has one: the work run under {@link runCaused} emitted its event,
+   * directly or through the handlers of events it emitted. One registry, so
+   * "what is running" and "what is running for this cause" are read from the
+   * same entries.
+   */
+  private readonly inFlight = new Map<Promise<void>, symbol | undefined>();
+  /** The cause the calling async context runs under, when it has one. */
+  private readonly causes = new AsyncLocalStorage<symbol>();
   private logger: EventLogger | undefined;
 
   /**
@@ -137,6 +153,10 @@ export class EventBus {
     if (!set || set.size === 0) return;
 
     const envelope: EventEnvelope<P> = { name, payload };
+    // The emitter's cause, if it runs under one. Each handler is called here,
+    // in the emitter's async context, so its own work inherits that cause,
+    // and what it emits in turn, however late, is traced to it too.
+    const cause = this.causes.getStore();
     // Snapshot so handlers that (un)subscribe during dispatch don't mutate the
     // set we're iterating.
     for (const handler of [...set]) {
@@ -149,7 +169,7 @@ export class EventBus {
           const tracked: Promise<void> = Promise.resolve(result).catch(err => {
             this.logError(name, err);
           });
-          this.inFlight.add(tracked);
+          this.inFlight.set(tracked, cause);
           void tracked.finally(() => {
             this.inFlight.delete(tracked);
           });
@@ -161,13 +181,60 @@ export class EventBus {
   }
 
   /**
+   * Run `work` so that every event it emits, and every event the handlers of
+   * those emit in turn, is traced to `cause`, for {@link settleCaused}.
+   */
+  runCaused<T>(cause: symbol, work: () => T): T {
+    return this.causes.run(cause, work);
+  }
+
+  /**
+   * Await the handlers traced to `cause` until none is running, for at most
+   * `timeoutMs`, for a caller about to tear the runtime down under them: the
+   * plugin lifecycle command, after a plugin's `onInstall` or `onUninstall`.
+   * A handler chain the work set off is drained however long it is, while a
+   * producer started anywhere else, such as a plugin's `init()`, is not
+   * waited for, since one its plugin stops only in `destroy()` would never let
+   * the bus empty. Resolves true when every traced handler finished in time.
+   *
+   * Only work a handler returns is waited for: a handler is in flight while
+   * the promise it returned is pending. One that returns nothing and leaves
+   * work to a timer, or to a promise it does not return, has finished as far
+   * as the bus can tell, and what that work emits later is not waited for.
+   */
+  async settleCaused(cause: symbol, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const pending = [...this.inFlight]
+        .filter(([, traced]) => traced === cause)
+        .map(([promise]) => promise);
+      if (pending.length === 0) return true;
+      const left = deadline - Date.now();
+      if (left <= 0) return false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const late = new Promise<false>(resolve => {
+        timer = setTimeout(() => resolve(false), left);
+      });
+      try {
+        const finished = await Promise.race([
+          Promise.allSettled(pending).then(() => true),
+          late,
+        ]);
+        if (!finished) return false;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  /**
    * Await all in-flight async handlers. **Testing aid** — production emit is
-   * fire-and-forget. Drains repeatedly so handler chains that emit again settle
-   * too.
+   * fire-and-forget. Drains repeatedly so handler chains that emit again
+   * settle too.
    */
   async settle(): Promise<void> {
     while (this.inFlight.size > 0) {
-      await Promise.all([...this.inFlight]);
+      await Promise.all([...this.inFlight.keys()]);
     }
   }
 

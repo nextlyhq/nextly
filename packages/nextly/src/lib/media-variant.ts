@@ -1,4 +1,7 @@
-import { getBaseUrl } from "./get-base-url";
+import { getNextlyLogger } from "../observability/logger";
+import { env } from "../shared/lib/env";
+
+import { getPublicOrigin } from "./get-base-url";
 
 /**
  * Media variant helpers
@@ -7,11 +10,11 @@ import { getBaseUrl } from "./get-base-url";
  *
  *   - `getMediaVariant(media, "card")` — pick a sized image variant URL
  *     from a Media record without cracking open the `sizes` JSON.
- *   - `toAbsoluteMediaUrl(url)` / `absolutizeMediaUrls(row)` — prefix
- *     storage-relative URLs (`/uploads/...` from the local adapter) with
- *     `NEXT_PUBLIC_APP_URL` so API consumers (mobile clients, external
- *     services, edge workers) can resolve them. Cloud-adapter URLs
- *     (S3/Vercel Blob/R2) are already absolute and pass through unchanged.
+ *   - `normalizeMediaUrls(row)` — a row's URLs as stored: the local
+ *     adapter's own base (`/uploads/...` by default) or a cloud adapter's
+ *     absolute URL, with `sizes` parsed whatever the dialect.
+ *   - `toPublicMediaUrl(url)` — an absolute URL for a consumer outside the
+ *     app, resolved against a public origin and never a guessed one.
  *
  * Variant selection rules (in order):
  *   1. If `media.sizes[name]` exists, return its URL.
@@ -113,46 +116,68 @@ export function getSmallestMediaVariant(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// URL absolutization
+// URLs as stored, and a public URL for a consumer outside the app
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Compute the base URL used to absolutize relative media URLs. Thin
- * wrapper around the shared `getBaseUrl` helper so this module re-exports
- * a domain-named alias for callers reasoning about media specifically.
- */
-export function getMediaBaseUrl(): string {
-  return getBaseUrl();
-}
-
-/**
  * Return `true` when the URL is already absolute (`http(s)://`) or
- * protocol-relative (`//`). These come from cloud storage adapters and
- * must not be re-prefixed.
+ * protocol-relative (`//`), as cloud storage adapters write them.
  */
 function isAbsoluteUrl(url: string): boolean {
   return /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(url);
 }
 
 /**
- * Prefix a relative media URL with `baseUrl`. Absolute / protocol-relative
- * URLs are returned unchanged. `null` / `undefined` / `""` pass through.
- *
- * `baseUrl` is resolved lazily — the env-backed default fires only when a
- * relative URL actually needs prefixing. Pass-through cases (absolute
- * URLs and nullish inputs) do not access the env, so callers in
- * contexts that have not booted env validation can still rely on the
- * "absolute URLs pass through" contract.
+ * Prefix a relative media URL with `baseUrl`. Absolute and protocol-relative
+ * URLs are returned unchanged; `null`, `undefined` and `""` pass through.
  */
 export function toAbsoluteMediaUrl<T extends string | null | undefined>(
   url: T,
-  baseUrl?: string
+  baseUrl: string
 ): T {
   if (!url) return url;
   if (isAbsoluteUrl(url)) return url;
-  const resolvedBase = baseUrl ?? getMediaBaseUrl();
   const path = url.startsWith("/") ? url : `/${url}`;
-  return `${resolvedBase}${path}` as T;
+  return `${baseUrl.replace(/\/+$/, "")}${path}` as T;
+}
+
+/**
+ * A media URL for a consumer that hands it to something outside the app, an
+ * email or a feed, where a path cannot resolve.
+ *
+ * The local storage adapter writes URLs on its own `baseUrl`, a path
+ * (`/uploads/...`) by default, which every page of the app resolves on
+ * whatever host serves it. Here a relative URL is resolved against the public
+ * origin Nextly uses for the absolute links it sends: `options.baseUrl` (an
+ * email's settings, or a site's own base), else `NEXT_PUBLIC_APP_URL`. A URL
+ * already absolute, as cloud adapters write them, is returned unchanged.
+ *
+ * With neither set, nothing is guessed: in development the relative URL is
+ * returned with a warning naming both settings, and in production, which
+ * refuses to start without `NEXT_PUBLIC_APP_URL`, the error is logged and
+ * `null` returned, so the consumer leaves the medium out rather than send a
+ * path that cannot resolve.
+ *
+ * @experimental
+ */
+export function toPublicMediaUrl<T extends string | null | undefined>(
+  url: T,
+  options: { baseUrl?: string | null } = {}
+): T | null {
+  if (!url || isAbsoluteUrl(url)) return url;
+  const origin = getPublicOrigin(options.baseUrl);
+  if (origin) return toAbsoluteMediaUrl(url, origin);
+  const payload = {
+    message:
+      "A media URL is relative and no public origin is set to make it absolute. Set the email settings' `baseUrl`, or `NEXT_PUBLIC_APP_URL`, to the address the app is served on.",
+    url,
+  };
+  if (env.NODE_ENV === "production") {
+    getNextlyLogger().error(payload);
+    return null;
+  }
+  getNextlyLogger().warn(payload);
+  return url;
 }
 
 type MediaSizes = Record<
@@ -186,43 +211,49 @@ function normalizeSizes(value: unknown): MediaSizes {
 }
 
 /**
- * Apply `toAbsoluteMediaUrl` to every URL field on a media row, including
- * the nested `sizes` variants. Returns a new object — does not mutate.
+ * A media row with its URLs as stored: the local adapter's own base followed
+ * by the file's path, or a cloud adapter's absolute URL. Returns a new object
+ * and does not mutate.
  *
- * Tolerates `sizes` arriving as a JSON-encoded string (SQLite) and
- * normalises it to an object in the output so downstream API consumers
- * see a uniform shape regardless of dialect. `baseUrl` is lazily resolved
- * for the same reason as `toAbsoluteMediaUrl`.
+ * Tolerates `sizes` arriving as a JSON-encoded string (SQLite) and normalises
+ * it to an object, so API consumers see one shape whatever the dialect.
  */
-export function absolutizeMediaUrls<
+export function normalizeMediaUrls<
   T extends {
     url?: string | null;
     thumbnailUrl?: string | null;
     sizes?: MediaSizes | string;
   },
->(row: T, baseUrl?: string): T {
-  const hasSizesKey = "sizes" in row;
-  const normalizedSizes = normalizeSizes(row.sizes);
-
-  let absolutizedSizes: MediaSizes = normalizedSizes;
-  if (normalizedSizes) {
-    absolutizedSizes = Object.fromEntries(
-      Object.entries(normalizedSizes).map(([name, variant]) => [
-        name,
-        variant && typeof variant === "object"
-          ? {
-              ...variant,
-              url: toAbsoluteMediaUrl(variant.url ?? null, baseUrl),
-            }
-          : variant,
-      ])
-    );
+>(row: T): T {
+  const read: T = { ...row };
+  if (typeof row.url === "string") read.url = fromSiteRoot(row.url);
+  if (typeof row.thumbnailUrl === "string") {
+    read.thumbnailUrl = fromSiteRoot(row.thumbnailUrl);
   }
-
+  if (!("sizes" in row)) return read;
+  const sizes = normalizeSizes(row.sizes);
   return {
-    ...row,
-    url: toAbsoluteMediaUrl(row.url ?? null, baseUrl),
-    thumbnailUrl: toAbsoluteMediaUrl(row.thumbnailUrl ?? null, baseUrl),
-    ...(hasSizesKey ? { sizes: absolutizedSizes } : {}),
+    ...read,
+    sizes: sizes
+      ? Object.fromEntries(
+          Object.entries(sizes).map(([name, variant]) => [
+            name,
+            typeof variant?.url === "string"
+              ? { ...variant, url: fromSiteRoot(variant.url) }
+              : variant,
+          ])
+        )
+      : sizes,
   };
+}
+
+/**
+ * A URL as a page reads it from the site's root. A local storage `baseUrl`
+ * written without its leading slash (`uploads`) stores `uploads/<key>`,
+ * which a page at `/admin/media` would resolve to `/admin/media/uploads/...`;
+ * an absolute, protocol-relative or root-relative URL is returned unchanged.
+ */
+function fromSiteRoot(url: string): string {
+  if (!url || isAbsoluteUrl(url) || url.startsWith("/")) return url;
+  return `/${url}`;
 }

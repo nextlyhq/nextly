@@ -47,6 +47,13 @@ export interface DraftSplitEligibilityInput {
    * a `null` map is never reached while still eligible.
    */
   componentSchemas: ComponentSchemas | null;
+  /**
+   * The entity's kind, and whether the document itself is localized, for the
+   * rule only a Single applies yet: see `localized-component`. A caller that
+   * passes neither, as the collection paths do, is judged without it.
+   */
+  entityKind?: "collection" | "single";
+  documentLocalized?: boolean;
 }
 
 /** Why the split does not run for a collection that asked for it. */
@@ -56,7 +63,14 @@ export type DraftSplitDisabledReason =
   /** A password field is reachable from the collection or one of its components. */
   | "password-field"
   /** A component the fields reference has no record in the registry. */
-  | "unresolvable-component";
+  | "unresolvable-component"
+  /**
+   * A Single that is not localized reaches a localized component. Its working
+   * draft is keyed with no language, while the component stores a value per
+   * language, so one draft would hold several languages' edits and a publish
+   * could write one language's into another's.
+   */
+  | "localized-component";
 
 export interface DraftSplitEligibility {
   eligible: boolean;
@@ -134,6 +148,16 @@ export function evaluateDraftSplitEligibility(
       componentSlug: withPassword[0],
     };
   }
+  if (input.entityKind === "single" && input.documentLocalized === false) {
+    const localized = schemas.find(([, schema]) => schema.localized);
+    if (localized) {
+      return {
+        eligible: false,
+        reason: "localized-component",
+        componentSlug: localized[0],
+      };
+    }
+  }
   // A FRESH object rather than the shared constant. Every eligible caller would
   // otherwise hold the same reference, so one of them mutating its verdict
   // would change every later eligible verdict for the lifetime of the process —
@@ -183,6 +207,13 @@ export interface SchemaEligibilityCollection {
   fields: FieldConfig[];
   /** Names the entity in the warning an unresolvable component emits. */
   slug?: string;
+  /** Whether the document itself is localized; see `entityKind`. */
+  localized?: boolean;
+  /**
+   * The entity's kind. A Single passes it, with `localized`, so a schema read
+   * reports the `localized-component` rule its writes apply.
+   */
+  entityKind?: "collection" | "single";
 }
 
 /**
@@ -243,6 +274,8 @@ export async function schemaDraftSplit(
     draftsVersioningEnabled,
     fields: collection.fields,
     componentSchemas,
+    entityKind: collection.entityKind,
+    documentLocalized: collection.localized === true,
   });
   if (
     result.reason === "unresolvable-component" &&

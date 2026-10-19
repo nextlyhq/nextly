@@ -15,9 +15,10 @@
  * contributions, so without a declared position core's cards would sit BELOW
  * every plugin's, which is not the dashboard anyone has today.
  *
- * The `custom` ones carry `chrome: "none"`. Each already draws a titled section
- * with its own rules, loading skeleton and error state; framed by `WidgetCard`
- * each would gain a second heading above its own. `title` is still required and
+ * Collections, Singles and Team draw inside the shared frame like every other
+ * card, so they read as one product. The other `custom` ones still carry
+ * `chrome: "none"` until each moves into the frame: each draws a titled section
+ * with its own rules, loading skeleton and error state. `title` is still required and
  * still meaningful -- it is what names the card in the layout editor, where a
  * reader chooses what to show. Stated as a property of that group rather than
  * as a count, because the count was written as "all four" and was wrong by two
@@ -75,7 +76,7 @@ export const CORE_WIDGET_COMPONENT_PREFIX = "core#";
  * between two of these later without renumbering the rest -- the reason
  * `defaultOrder` is a number and not an index.
  */
-export const CORE_WIDGETS: readonly WidgetDefinition[] = [
+const CORE_WIDGET_LITERALS = [
   {
     id: "core/seed-demo-content",
     title: "Get started",
@@ -84,6 +85,8 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: its offer is laid out across the row.
+    minSize: "full",
     defaultOrder: 0,
     component: "core#SeedDemoContentCard",
     /*
@@ -117,6 +120,8 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: its steps are laid out across the row.
+    minSize: "full",
     // Between the seed offer and the first content card. Both are transient and
     // both address a reader who has just arrived, so they sit together rather
     // than with the cards that stay.
@@ -143,8 +148,9 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     title: "Collections",
     description: "Entry counts per collection, grouped by what provides them.",
     archetype: "custom",
-    chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: a grid of collection cards, which needs at least half the row.
+    minSize: "lg",
     defaultOrder: 10,
     component: "core#CollectionQuickLinks",
     /*
@@ -163,8 +169,9 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     title: "Singles",
     description: "The project's singles.",
     archetype: "custom",
-    chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: a grid of Single cards, which needs at least half the row.
+    minSize: "lg",
     defaultOrder: 20,
     component: "core#SinglesQuickLinks",
     /*
@@ -184,16 +191,20 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
       "One click to an empty entry form, for the collections this reader may create in.",
     archetype: "custom",
     defaultSize: "full",
+    // The narrowest width it still draws at: a row of create buttons, which wraps from a third.
+    minSize: "md",
     defaultOrder: 15,
     component: "core#QuickCreate",
   },
   {
     id: "core/team",
     title: "Team",
-    description: "How many users and roles the project has.",
+    // Tier-neutral: a small card draws the people alone, and a reader may see only one count.
+    description: "Your project's team at a glance.",
     archetype: "custom",
-    chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: two counters side by side, which need at least a third.
+    minSize: "md",
     defaultOrder: 30,
     component: "core#TeamSummary",
   },
@@ -213,6 +224,8 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
       "The documents most recently left with unpublished edits, newest first.",
     archetype: "list",
     defaultSize: "md",
+    // The narrowest width it still draws at: a list whose rows need at least a third.
+    minSize: "md",
     defaultOrder: 35,
     /*
      * Two fields, because the `list` archetype draws the first two and silently
@@ -249,6 +262,8 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     description: "Scheduled releases that have not shipped yet, soonest first.",
     archetype: "list",
     defaultSize: "md",
+    // The narrowest width it still draws at: a list whose rows need at least a third.
+    minSize: "md",
     defaultOrder: 40,
     /*
      * 🔴 The ONLY core card with a gate, and the asymmetry is deliberate rather
@@ -310,7 +325,28 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: a feed whose rows need at least a third.
+    minSize: "md",
     defaultOrder: 45,
     component: "core#RecentActivity",
   },
-] as const;
+] as const satisfies readonly WidgetDefinition[];
+
+/**
+ * Core's widgets, as every reader of a definition sees them.
+ *
+ * The same array as `CORE_WIDGET_LITERALS`, typed as definitions: callers
+ * read optional fields (`requiredPermission`, `chrome`, `lifecycle`) that a
+ * literal type would only have on the entries that set them.
+ */
+export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
+
+/**
+ * The id of one of core's widgets.
+ *
+ * Read from the list itself, kept literal by `as const` above, so a widget
+ * added, renamed or removed there changes this with no second edit: a plugin
+ * offering an alternative to a built-in is checked against the widgets core
+ * actually has.
+ */
+export type CoreWidgetId = (typeof CORE_WIDGET_LITERALS)[number]["id"];

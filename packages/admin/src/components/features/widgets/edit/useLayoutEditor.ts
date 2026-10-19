@@ -1,276 +1,206 @@
 "use client";
 
 /**
- * The arrangement a reader is editing, and the one write that commits it.
+ * The arrangement a reader is customising, and the one write that commits it.
  *
- * ## Why edit mode batches instead of saving each gesture
+ * ## Why customise mode batches instead of saving each gesture
  *
  * Every write is guarded twice — by `version`, which catches another tab, and
  * by `scope`, which catches the visible widget set moving underneath the
  * snapshot in hand. Both refuse with a 409 whose only remedy is to re-read, and
- * re-reading DISCARDS whatever is in progress. Saving on every drag would
- * therefore turn each gesture into its own chance to lose the arrangement, and
- * a reader dragging four cards would run that risk four times instead of once.
+ * re-reading DISCARDS whatever is in progress. Saving on every move would
+ * therefore turn each gesture into its own chance to lose the arrangement.
  *
- * So the editor holds a local copy, every gesture edits that, and Save commits
- * it in one PUT. Cancel throws it away. This is also what Backstage, Grafana,
- * Metabase and Azure Portal do; WordPress is the one that autosaves, and it has
- * no per-placement configuration to lose when a conflict forces a reload.
+ * So the editor holds a draft — the ordered list as read, plus the reader's
+ * staged changes — every gesture edits that, and Save commits it in one PUT.
+ * Cancel throws it away and the dashboard is the one that was opened.
  *
  * @module components/features/widgets/edit/useLayoutEditor
  */
 
-import { DEFAULT_COLUMN_COUNT, MAX_PLACEMENTS } from "nextly/config";
+import { MAX_PLACEMENTS } from "nextly/config";
 import { useCallback, useMemo, useState } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
-import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
+import type {
+  WidgetPlacement,
+  WidgetWidthFacts,
+} from "@admin/types/dashboard/widgets";
 
-import { addPlacement, draftDiffers, type DropTarget } from "../layout-editor";
+import { addPlacement, hasChanges, type IsDrawn } from "../layout-editor";
 
-import { useLayoutLifecycle } from "./useLayoutLifecycle";
-import { usePlacementMutations } from "./usePlacementMutations";
+import { useLayoutLifecycle, type LayoutLifecycle } from "./useLayoutLifecycle";
+import {
+  usePlacementMutations,
+  type PlacementMutations,
+} from "./usePlacementMutations";
 
-/** Where a card's declared geometry comes from when it is added. */
-export interface WidgetGeometrySource {
-  (widgetId: string): { size?: string; height?: string } | undefined;
-}
-
-export interface LayoutEditor {
-  /** Whether the reader is editing. Cards are only manipulable while true. */
+export interface LayoutEditor extends PlacementMutations, LayoutLifecycle {
+  /** Whether the reader is customising. Cards are only manipulable while true. */
   isEditing: boolean;
-  /** The arrangement to DRAW — the local copy while editing, else the server's. */
+  /** The list to DRAW from — the draft while customising, else the server's. */
   placements: WidgetPlacement[];
-  /** Widget ids offered by the "add" picker. */
-  available: string[];
   /**
-   * Whether this arrangement already holds as many cards as a write may carry.
+   * Widget ids the picker offers as NEW cards: ones this reader may see that
+   * are not in the draft, and ones that allow several cards.
+   */
+  available: string[];
+  /** The widths each widget allows, as the server answered them. */
+  factsFor: (widgetId: string) => WidgetWidthFacts | undefined;
+  /**
+   * Whether the list already holds as many cards as a write may carry.
    *
    * 🔴 Exposed rather than left for the picker to compute, and refused in
-   * {@link LayoutEditor.add} rather than only rendered. An install declaring
-   * more widgets than one submission may hold offers the surplus through
-   * `available`, so every one of those buttons built a draft the server was
-   * always going to refuse -- and the reader met a generic "could not be
-   * saved" with nothing naming a limit they had not knowingly reached.
+   * {@link LayoutEditor.add} rather than only rendered: a draft past the limit
+   * is one the server was always going to refuse.
    */
   atCapacity: boolean;
   hasUnsavedChanges: boolean;
+  /** Whether the draft holds a staged reset to the default dashboard. */
+  isResetStaged: boolean;
   isSaving: boolean;
   /**
    * Whether any write against this layout is in flight, including one this
-   * editor did not start.
-   *
-   * What the controls are DISABLED on. `isSaving` stays what the Save button
-   * READS, because a dismissal settling is not this reader's arrangement being
-   * saved and saying so would be untrue.
+   * editor did not start. What the controls are DISABLED on.
    */
   isWriting: boolean;
   /**
-   * Whether the last commit lost a race, on either guard.
-   *
-   * The recovery is one action for both causes, so this is one flag: re-read,
-   * which necessarily discards the local copy.
+   * Whether the last commit lost a race, on either guard. The recovery is one
+   * action for both causes: re-read, which necessarily discards the draft.
    */
   isConflict: boolean;
-  begin: () => void;
-  cancel: () => void;
-  save: () => void;
-  reset: () => void;
   /**
    * The remedy a conflict offers: take the server's arrangement, discard this
    * one.
    *
    * 🔴 THREE pieces of state, because a conflict is three and clearing one
-   * leaves the other two contradicting the reader. Re-reading alone refetched
-   * an arrangement the editor then declined to show — `placements` prefers the
-   * draft — while the failed mutation kept `isConflict` true, so the alert
-   * stayed up saying to reload beneath a button that had just been pressed. The
-   * action has to do everything its own copy promises.
+   * leaves the other two contradicting the reader: the draft (which would
+   * otherwise keep being drawn over the refetched arrangement), the failed
+   * mutations (which keep the alert up), and the query.
    */
   reload: () => void;
-  /** Move by IDENTITY: the placement `fromId` takes the position of `toId`. */
-  move: (fromId: string, toId: string) => void;
-  /**
-   * Apply a drag that may have crossed columns.
-   *
-   * A named operation rather than a placements setter, for the same reason
-   * every other mutation here is one: a setter lets a caller write an arbitrary
-   * draft, and the invariants this module keeps -- ids unique, order dense,
-   * columns in range -- would then be enforced nowhere.
-   */
-  dropOn: (activeId: string, target: DropTarget | null) => void;
-  /**
-   * Choose how many columns the dashboard is drawn in.
-   *
-   * Placements are NOT rewritten here. A card whose column falls outside the
-   * new count is folded into the last one for drawing, and its stored column
-   * is left alone -- so widening the dashboard again puts it back where the
-   * reader had it, rather than where a narrower view happened to show it.
-   */
-  setColumnCount: (columnCount: number) => void;
-  /**
-   * The count the dashboard is being drawn in RIGHT NOW.
-   *
-   * The draft's while editing, the saved one otherwise. Published rather than
-   * re-derived by each consumer: a second derivation would answer the saved
-   * count while the reader is looking at a different one, and the card that
-   * landed in a column they cannot see would be nobody's fault in particular.
-   */
-  columnCount: number;
-  toggleHidden: (placementId: string) => void;
-  /** Records what a reader chose for one card's settings. */
-  setConfig: (placementId: string, config: Record<string, unknown>) => void;
-  remove: (placementId: string) => void;
+  /** Append a new card of this widget, at its default width. */
   add: (widgetId: string) => void;
 }
 
 /**
  * An arrangement being edited, and the guards it is a modification of.
  *
- * One object, so a placement list can never be sent against a version and a
- * scope it was not derived from.
+ * One object, so a list can never be sent against a version and a scope it was
+ * not derived from.
  */
 export interface LayoutDraft {
   placements: WidgetPlacement[];
   version: number;
   scope: string;
-  /** The count being edited, which may differ from the one last saved. */
-  columnCount: number;
+  /**
+   * The default list a staged reset put in the draft, or `null`.
+   *
+   * Kept so Save can tell an untouched staged reset (which is the saved RESET,
+   * a delete) from a default the reader went on to change (which is their own
+   * arrangement now, and a write).
+   */
+  stagedReset: WidgetPlacement[] | null;
+}
+
+/**
+ * The widgets the picker may offer as new cards, against the DRAFT.
+ *
+ * Every widget the read says this reader may see, the server's own `available`
+ * order first: a widget not in the draft, or one that allows several cards.
+ * Asked of the draft rather than taken from `available` alone, because a card
+ * added a moment ago is placed now, and a staged reset can take out a widget
+ * the server counted as placed when it answered.
+ */
+function offerable(
+  draft: readonly WidgetPlacement[],
+  served: readonly string[],
+  widgets: Readonly<Record<string, WidgetWidthFacts>>
+): string[] {
+  const placed = new Set(draft.map(placement => placement.widgetId));
+  return [...new Set([...served, ...Object.keys(widgets)])].filter(widgetId =>
+    Object.hasOwn(widgets, widgetId)
+      ? widgets[widgetId].allowsSeveral || !placed.has(widgetId)
+      : // A served id the width map does not describe is still the server's
+        // answer to "may add": kept while unplaced, as it always was.
+        !placed.has(widgetId)
+  );
 }
 
 export function useLayoutEditor(
   layout: UseDashboardLayoutResult,
-  geometryFor: WidgetGeometrySource
+  isDrawn: IsDrawn
 ): LayoutEditor {
-  // `null` means "not editing" and a draft means "editing", so the two facts
-  // cannot disagree the way a separate boolean and an array would — there is no
-  // state in which the reader is editing and there is nothing to edit.
-  //
-  // 🔴 The GUARDS are captured with the placements, not read at save time. They
-  // are what the reader's arrangement is a modification OF, so they belong to
-  // the snapshot the way the placements do. Read fresh at save, the query's own
-  // `refetchOnWindowFocus` defeated them: another tab saves, this tab regains
-  // focus and refetches, `version` advances underneath an untouched draft, and
-  // the save then succeeds against the NEW version — silently overwriting the
-  // other tab with an arrangement built from a version that no longer exists.
-  // The guard was configured out of existence by the refresh policy beside it.
+  // `null` means "not customising" and a draft means "customising", so the two
+  // facts cannot disagree the way a separate boolean and an array would.
   const [draft, setDraft] = useState<LayoutDraft | null>(null);
 
   const server = useMemo(
     () => layout.layout?.placements ?? [],
     [layout.layout]
   );
+  const widgets = useMemo(() => layout.layout?.widgets ?? {}, [layout.layout]);
 
-  const { begin, cancel, save, reset } = useLayoutLifecycle(
-    layout,
-    draft,
-    setDraft
+  const factsFor = useCallback(
+    (widgetId: string) =>
+      Object.hasOwn(widgets, widgetId) ? widgets[widgetId] : undefined,
+    [widgets]
   );
+
+  const lifecycle = useLayoutLifecycle(layout, draft, setDraft);
+  const mutations = usePlacementMutations(setDraft, isDrawn, factsFor);
 
   const reload = useCallback(() => {
     // The draft goes first: it is the thing the reader was warned they would
     // lose, and it is what stands between the refetched arrangement and being
-    // drawn.
+    // drawn. BOTH mutations, because `isConflict` reads both errors.
     setDraft(null);
-    // BOTH mutations, because `isConflict` reads both errors — a reset can lose
-    // the same race a save can, and clearing only the save left a conflict
-    // raised by the other one permanently on screen.
     layout.save.reset();
     layout.reset.reset();
     void layout.reload();
   }, [layout]);
 
-  // BOTH paths move by identity, through one function. The drag handler gets
-  // ids from dnd-kit and the buttons read them off the row they render for, so
-  // neither has to translate a position in the FILTERED view into a position in
-  // the stored array — which is exactly the translation that was wrong: with an
-  // unresolvable placement between two visible ones, a view index moved the
-  // wrong card and persisted it.
-  // The reader's own count, from the SERVER's answer. `resolveDrop` clamps a
-  // target against it, so a count guessed here would let a drop land in a
-  // column the dashboard does not draw.
-  // The DRAFT's count while editing, the saved one otherwise. A drop resolved
-  // against the saved count while the reader is looking at a different one
-  // would land a card in a column they cannot see.
-  const columnCount =
-    draft?.columnCount ?? layout.layout?.columnCount ?? DEFAULT_COLUMN_COUNT;
-
-  const setColumnCount = useCallback(
-    (next: number) =>
-      setDraft(current =>
-        current ? { ...current, columnCount: next } : current
-      ),
-    []
-  );
-
-  const { move, dropOn, toggleHidden, remove, setConfig } =
-    usePlacementMutations(setDraft, columnCount);
-
   const add = useCallback(
     (widgetId: string) =>
       setDraft(current => {
         if (!current) return current;
-        // The capacity refusal lives in `addPlacement`, which is the one path
-        // every add takes and is pure, so it can be asserted directly. Stating
-        // it again here would be a second answer to drift from.
+        // The capacity refusal lives in `addPlacement`, the one path every add
+        // takes. A widget the read did not describe starts full, which is how
+        // the server reads a widget that says nothing.
+        const width = factsFor(widgetId)?.defaultWidth ?? "full";
         return {
           ...current,
-          placements: addPlacement(
-            current.placements,
-            widgetId,
-            geometryFor(widgetId)
-          ),
+          placements: addPlacement(current.placements, widgetId, width),
         };
       }),
-    [geometryFor]
+    [factsFor]
   );
 
   const placements = draft?.placements ?? server;
 
-  // What the picker offers, recomputed against the DRAFT rather than taken from
-  // the server's answer. `available` was true when the read landed; a card the
-  // reader has just added is placed now, and one they have just removed is
-  // offerable again. Reading the server's list would keep offering a card that
-  // is already on the grid.
-  const available = useMemo(() => {
-    const placed = new Set(placements.map(placement => placement.widgetId));
-    const offered = layout.layout?.available ?? [];
-    const removed = server
-      .map(placement => placement.widgetId)
-      .filter(widgetId => !placed.has(widgetId));
-    return [...new Set([...offered, ...removed])].filter(
-      widgetId => !placed.has(widgetId)
-    );
-  }, [placements, layout.layout, server]);
+  const available = useMemo(
+    () => offerable(placements, layout.layout?.available ?? [], widgets),
+    [placements, layout.layout, widgets]
+  );
 
   return {
+    ...lifecycle,
+    ...mutations,
     isEditing: draft !== null,
     placements,
     available,
+    factsFor,
     atCapacity: placements.length >= MAX_PLACEMENTS,
+    // A staged reset is a change even when the default happens to match the
+    // reader's own list: saving it stops them following their own row.
     hasUnsavedChanges:
       draft !== null &&
-      draftDiffers(
-        server,
-        layout.layout?.columnCount ?? DEFAULT_COLUMN_COUNT,
-        draft.placements,
-        draft.columnCount
-      ),
+      (draft.stagedReset !== null || hasChanges(server, draft.placements)),
+    isResetStaged: draft?.stagedReset != null,
     isSaving: layout.save.isPending || layout.reset.isPending,
     isWriting: layout.isWriting,
     isConflict: layout.isConflict,
-    begin,
-    cancel,
-    save,
-    reset,
     reload,
-    move,
-    dropOn,
-    setColumnCount,
-    columnCount,
-    toggleHidden,
-    setConfig,
-    remove,
     add,
   };
 }

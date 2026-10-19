@@ -81,34 +81,51 @@ describe("system permission slugs", () => {
     expect(Array.from(new Set(undeclared))).toEqual([]);
   });
 
-  it("seeds the three release authorities, and keeps scheduling separate", () => {
+  it("seeds the five release authorities, and keeps scheduling separate", () => {
     // A release is ASSEMBLED and then COMMITTED, and those are different
     // powers. Creating one and choosing its members changes nothing a reader
     // can see; scheduling it is the act that puts content live later. Folding
     // them into a single permission would mean anyone who may draft a release
     // may also publish the site's content at a time of their choosing.
+    // Renaming and deleting are each their own, enforced by the release
+    // service's `update` and `delete`.
     const releaseSlugs = SYSTEM_PERMISSIONS.filter(
       p => p.resource === "content-releases"
     ).map(p => p.slug);
 
     expect(releaseSlugs.sort()).toEqual([
       "create-content-releases",
+      "delete-content-releases",
       "publish-content-releases",
       "read-content-releases",
+      "update-content-releases",
     ]);
   });
 
-  it("does not seed a release permission nothing enforces yet", () => {
-    // The control for the case above, and the reason it is exactly three.
-    // Seeding `update-releases` or `delete-releases` now would teach the admin
-    // a vocabulary the server ignores: the surfaces that would check them do
-    // not exist. They arrive with those surfaces.
-    const releaseActions = SYSTEM_PERMISSIONS.filter(
-      p => p.resource === "content-releases"
-    ).map(p => p.action);
+  it("grants the two newer release permissions to the holders of the power each splits off", () => {
+    // Declared as data, so the rule the seed applies on an upgrade is stated
+    // here as well as exercised (`release-permissions-upgrade` runs it on
+    // every dialect): rename went with assembling, deleting an unwanted
+    // release with the authority that could cancel it.
+    const rule = Object.fromEntries(
+      SYSTEM_PERMISSIONS.filter(p => p.resource === "content-releases").map(
+        p => [p.slug, p.grantOnCreationToHoldersOf ?? null]
+      )
+    );
 
-    expect(releaseActions).not.toContain("update");
-    expect(releaseActions).not.toContain("delete");
+    expect(rule).toEqual({
+      "read-content-releases": null,
+      "create-content-releases": null,
+      "publish-content-releases": null,
+      "update-content-releases": {
+        action: "create",
+        resource: "content-releases",
+      },
+      "delete-content-releases": {
+        action: "publish",
+        resource: "content-releases",
+      },
+    });
   });
 
   it("does NOT reserve the word a site would use for press releases", () => {

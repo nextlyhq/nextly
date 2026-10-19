@@ -131,7 +131,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export default definePlugin({
   name: "@acme/nextly-plugin-thing",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.63",
+  nextly: ">=0.0.2-alpha.67",
   async onInstall(ctx) {
     // After the plugin's migrations, so its tables exist.
     ctx.logger.info("installed");
@@ -148,7 +148,20 @@ calls `onInstall`; `nextly plugins uninstall <name>` calls `onUninstall` and the
 the DOWN of each applied module, newest first. Each boots the app from your config to
 build the hook's context, and only when the plugin declares the hook. Write both so
 they can run again: an install that failed part-way is repaired by running it again,
-which calls `onInstall` again.
+which calls `onInstall` again, and an uninstall that stopped part-way is finished by
+running it again, which calls `onUninstall` again. A plugin counts as installed only
+once `nextly plugins install` has finished on that database: a production boot
+refuses it before then while it is enabled, and so does the install of a plugin that depends on it.
+`nextly plugins install --all` installs every enabled plugin in your config, its
+dependencies first, and stops at the first that fails.
+
+A disabled plugin (`enabled: false`) is not installed, by `--all` or by name, and a
+production boot does not require it to be: you can keep a plugin disabled, never
+installed, and boot. Its tables exist, because its schema still applies, but its
+`onInstall` runs only when you enable it and run `nextly plugins install <name>`.
+Once you enable it, a production boot refuses it until that install has run. A
+disabled plugin that was uninstalled, or whose uninstall stopped part way, is still
+refused, as an enabled one is.
 
 ## Inspecting
 

@@ -501,17 +501,20 @@ describe("MediaService", () => {
   describe("deleteMedia", () => {
     it("should delete media with thumbnail cleanup", async () => {
       const mediaId = "media-delete-001";
+      // Stored as adapters store files, in a date folder with a key of each
+      // one's own: a path with no folder is the one case where the end of
+      // the thumbnail's URL happens to be its path.
       await testDb.db.insert(testDb.schema.media).values({
         id: mediaId,
-        filename: "test.jpg",
+        filename: "2026/10/a1-test.jpg",
         originalFilename: "test.jpg",
         mimeType: "image/jpeg",
         size: 1024000,
         width: 1920,
         height: 1080,
         duration: null,
-        url: "https://test.com/test.jpg",
-        thumbnailUrl: "https://test.com/thumb_test.jpg",
+        url: "https://test.com/2026/10/a1-test.jpg",
+        thumbnailUrl: "https://test.com/2026/10/b2-thumb_test.jpg",
         altText: null,
         caption: null,
         tags: null,
@@ -530,8 +533,14 @@ describe("MediaService", () => {
       // The bucket travels with the path: `storage.delete(path, "media")`.
       // A single-argument assertion passes only while the call has exactly one,
       // so it silently stopped describing this call when the bucket was added.
-      expect(mockStorageDelete).toHaveBeenCalledWith("test.jpg", "media");
-      expect(mockStorageDelete).toHaveBeenCalledWith("thumb_test.jpg", "media");
+      expect(mockStorageDelete).toHaveBeenCalledWith(
+        "2026/10/a1-test.jpg",
+        "media"
+      );
+      expect(mockStorageDelete).toHaveBeenCalledWith(
+        "2026/10/b2-thumb_test.jpg",
+        "media"
+      );
 
       const check = await mediaService.getMediaById(mediaId);
       expect(check.success).toBe(false);

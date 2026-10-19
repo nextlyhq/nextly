@@ -3,7 +3,7 @@ title: Visual Schema Builder
 description: Design Collections, Singles, and Field Groups visually with drag-and-drop instead of writing code.
 ---
 
-The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Field Groups that the code-first approach produces, plus the matching TypeScript types. Every entity it saves is also written into the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`), which you commit — that is what `nextly migrate:create` reads, and for Singles and Field Groups it is the only artifact carrying them, since neither writes a migration file of its own. Only the Collections Builder writes one. See [Persistence](#persistence) and [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production). You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
+The **Visual Schema Builder** is Nextly's drag-and-drop schema designer. It produces the same registered Collections, Singles, and Field Groups that the code-first approach produces. It writes no TypeScript: `nextly generate:types` reads your config only, so entities made here get no generated types. Every entity it saves is also written into the UI-schema manifest (`db.uiSchemaFile`, default `./ui-schema.json`), which you commit — that is what `nextly migrate:create` reads, and for Singles and Field Groups it is the only artifact carrying them, since neither writes a migration file of its own. Only the Collections Builder writes one. See [Persistence](#persistence) and [Builder entities and production](/docs/guides/production-migrations#builder-entities-and-production). You can switch between the Visual Schema Builder and code-first definitions at any time — they are interchangeable per entity.
 
 The Schema Builder has three variants that share the same canvas, palette, and field editor:
 
@@ -34,7 +34,7 @@ The field palette groups field types into five categories, in this order:
 | Relational | Relationship                                                    |
 | Structured | Repeater, Group, Component                                      |
 
-This is the picker grouping inside the admin UI. The reference docs in [Fields](/docs/configuration/fields) group fields slightly differently (Basic / Selection / Media / Relationship / Layout / Component / Advanced / Virtual) so the prose can talk about families that don't all map to a single picker tab — for example, the `join` field is a code-first virtual field with no picker entry.
+This is the picker grouping inside the admin UI. The reference docs in [Fields](/docs/configuration/fields) group fields slightly differently (Basic / Selection / Media / Relationship / Layout / Component / Advanced) so the prose can talk about families that don't all map to a single picker tab.
 
 ### Field editor
 
@@ -51,7 +51,7 @@ Conditional visibility supports type-aware operators (`equals`, `notEquals`, `co
 
 ### Settings dialog
 
-The toolbar's Settings button opens a Basics / Advanced modal that edits entity-level metadata: name, slug, description, sidebar icon, admin group (Collections) or category (Components), sort order, and an `i18n` flag. Per-collection lifecycle hooks are configured in code via the `hooks` array on `defineCollection()`; the Visual Schema Builder does not currently expose a hooks editor in the UI.
+The toolbar's Settings button opens a Basics / Advanced modal that edits entity-level metadata: name, slug, description, sidebar icon, admin group (Collections) or category (Components), sort order, and an `i18n` flag. Hooks written as functions belong to collections defined in code, in the `hooks` object on `defineCollection()`, with an array of functions per phase, such as `hooks: { beforeChange: [...] }`: a function cannot be stored with a collection made here. A collection made here can carry Nextly's pre-built hooks (auto-slug, audit fields and unique validation) as stored settings, and they run on every write, but the Visual Schema Builder has no editor for them today.
 
 ## Field types
 
@@ -145,12 +145,12 @@ See [Branding > Schema Builder visibility](/docs/admin/branding#schema-builder-v
 
 Both approaches produce the same registered entities. Pick by workflow:
 
-| Aspect             | Visual Schema Builder                                         | Code-first                          |
-| ------------------ | ------------------------------------------------------------- | ----------------------------------- |
-| Speed to prototype | Drag-and-drop                                                 | Write config, run `nextly db:sync`  |
-| Source of truth    | DB row (Singles / Components) or generated file (Collections) | Hand-written TypeScript file        |
-| Lifecycle hooks    | Configure in code via `hooks` array                           | Configure in code via `hooks` array |
-| Team workflow      | Editors and non-developers can iterate                        | Developers own the schema           |
+| Aspect             | Visual Schema Builder                                         | Code-first                               |
+| ------------------ | ------------------------------------------------------------- | ---------------------------------------- |
+| Speed to prototype | Drag-and-drop                                                 | Write config, run `nextly db:sync`       |
+| Source of truth    | DB row (Singles / Components) or generated file (Collections) | Hand-written TypeScript file             |
+| Lifecycle hooks    | Pre-built hooks only, stored with the collection; no editor   | Any hook function, in the `hooks` object |
+| Team workflow      | Editors and non-developers can iterate                        | Developers own the schema                |
 
 You can mix both — define core collections in code and let editors prototype new ones in the Schema Builder, or vice versa.
 

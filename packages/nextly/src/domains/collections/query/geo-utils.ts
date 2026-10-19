@@ -234,76 +234,30 @@ function toMeters(value: number, unit: string = "m"): number {
  * ```
  */
 export function parseNearQuery(value: string): NearQuery | null {
-  if (!value || typeof value !== "string") {
-    return null;
-  }
+  const parts = geoParts(value, 3, 5);
+  if (!parts) return null;
+  const point = geoPoint(parts);
+  if (!point) return null;
 
-  const parts = value.split(",").map(p => p.trim());
-
-  // Minimum: longitude, latitude, maxDistance
-  if (parts.length < 3) {
-    return null;
-  }
-
-  const longitude = parseFloat(parts[0]);
-  const latitude = parseFloat(parts[1]);
-
-  // Validate coordinates
-  if (isNaN(longitude) || isNaN(latitude)) {
-    return null;
-  }
-
-  if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
-    return null;
-  }
-
-  // Parse distance values and optional unit
-  let maxDistance: number;
+  // longitude,latitude,max | ...,max,unit | ...,max,min | ...,max,min,unit
+  const maxDistance = strictNumber(parts[2]);
   let minDistance = 0;
   let unit = "m";
-
-  // Determine format based on parts length and content
-  if (parts.length === 3) {
-    // longitude,latitude,maxDistance
-    maxDistance = parseFloat(parts[2]);
-  } else if (parts.length === 4) {
-    // Could be: lng,lat,max,unit OR lng,lat,max,min
-    const fourthPart = parts[3];
-    if (UNIT_TO_METERS[fourthPart.toLowerCase()]) {
-      // It's a unit
-      maxDistance = parseFloat(parts[2]);
-      unit = fourthPart;
-    } else {
-      // It's minDistance
-      maxDistance = parseFloat(parts[2]);
-      minDistance = parseFloat(parts[3]);
-    }
-  } else if (parts.length >= 5) {
-    // longitude,latitude,maxDistance,minDistance,unit
-    maxDistance = parseFloat(parts[2]);
-    minDistance = parseFloat(parts[3]);
+  if (parts.length === 4) {
+    if (isUnit(parts[3])) unit = parts[3];
+    else minDistance = strictNumber(parts[3]);
+  } else if (parts.length === 5) {
+    minDistance = strictNumber(parts[3]);
+    if (!isUnit(parts[4])) return null;
     unit = parts[4];
-  } else {
-    return null;
   }
 
-  // Validate distances
-  if (isNaN(maxDistance) || maxDistance < 0) {
-    return null;
-  }
-
-  if (isNaN(minDistance) || minDistance < 0) {
-    minDistance = 0;
-  }
-
-  // Convert to meters
-  maxDistance = toMeters(maxDistance, unit);
-  minDistance = toMeters(minDistance, unit);
+  if (!(maxDistance >= 0) || !(minDistance >= 0)) return null;
 
   return {
-    point: { longitude, latitude },
-    maxDistance,
-    minDistance,
+    point,
+    maxDistance: toMeters(maxDistance, unit),
+    minDistance: toMeters(minDistance, unit),
   };
 }
 
@@ -328,43 +282,63 @@ export function parseNearQuery(value: string): NearQuery | null {
  * ```
  */
 export function parseWithinQuery(value: string): WithinQuery | null {
-  if (!value || typeof value !== "string") {
-    return null;
-  }
+  const parts = geoParts(value, 3, 4);
+  if (!parts) return null;
+  const center = geoPoint(parts);
+  if (!center) return null;
 
-  const parts = value.split(",").map(p => p.trim());
-
-  // Minimum: longitude, latitude, radius
-  if (parts.length < 3) {
-    return null;
-  }
-
-  const longitude = parseFloat(parts[0]);
-  const latitude = parseFloat(parts[1]);
-  let radius = parseFloat(parts[2]);
-  const unit = parts[3] || "m";
-
-  // Validate
-  if (isNaN(longitude) || isNaN(latitude) || isNaN(radius)) {
-    return null;
-  }
-
-  if (longitude < -180 || longitude > 180 || latitude < -90 || latitude > 90) {
-    return null;
-  }
-
-  if (radius <= 0) {
-    return null;
-  }
-
-  // Convert to meters
-  radius = toMeters(radius, unit);
+  const radius = strictNumber(parts[2]);
+  if (!(radius > 0)) return null;
+  if (parts.length === 4 && !isUnit(parts[3])) return null;
 
   return {
     type: "circle",
-    center: { longitude, latitude },
-    radius,
+    center,
+    radius: toMeters(radius, parts[3] ?? "m"),
   };
+}
+
+/**
+ * The comma-separated parts of a geo operand, or `null` when it has fewer or
+ * more than its format allows.
+ *
+ * Bounded at both ends: parts past the last one a format names used to be
+ * ignored, so the read ran a different spatial filter from the one written.
+ */
+function geoParts(value: string, min: number, max: number): string[] | null {
+  if (!value || typeof value !== "string") return null;
+  const parts = value.split(",").map(p => p.trim());
+  return parts.length >= min && parts.length <= max ? parts : null;
+}
+
+/** The point an operand starts with, or `null` when it is not on the globe. */
+function geoPoint(
+  parts: string[]
+): { longitude: number; latitude: number } | null {
+  const longitude = strictNumber(parts[0]);
+  const latitude = strictNumber(parts[1]);
+  if (!(longitude >= -180 && longitude <= 180)) return null;
+  if (!(latitude >= -90 && latitude <= 90)) return null;
+  return { longitude, latitude };
+}
+
+/**
+ * A number written in full, or `NaN`. `parseFloat` reads a leading number and
+ * drops the rest, so `5abc` used to be read as 5.
+ */
+function strictNumber(part: string): number {
+  return /^[+-]?(\d+\.?\d*|\.\d+)$/.test(part) ? Number(part) : Number.NaN;
+}
+
+/**
+ * Whether a part names a unit this module converts. An unknown one used to
+ * be read as metres, which changed the distance without saying so.
+ */
+function isUnit(part: string): boolean {
+  return Object.prototype.hasOwnProperty.call(
+    UNIT_TO_METERS,
+    part.toLowerCase()
+  );
 }
 
 // ============================================================================
@@ -467,7 +441,10 @@ export function applyGeoFilters<T extends Record<string, unknown>>(
         const { matches, distance } = matchesNearQuery(point, nearQuery);
 
         if (matches && distances) {
-          const entryId = String((entry[idField] as string | number | boolean | null | undefined) ?? "");
+          const entryId = String(
+            (entry[idField] as string | number | boolean | null | undefined) ??
+              ""
+          );
           if (entryId) {
             distances.set(entryId, distance);
           }
@@ -504,8 +481,18 @@ export function sortByDistance<T extends Record<string, unknown>>(
   order: "asc" | "desc" = "asc"
 ): T[] {
   return [...entries].sort((a, b) => {
-    const distA = distances.get(String((a[idField] as string | number | boolean | null | undefined) ?? "")) ?? Infinity;
-    const distB = distances.get(String((b[idField] as string | number | boolean | null | undefined) ?? "")) ?? Infinity;
+    const distA =
+      distances.get(
+        String(
+          (a[idField] as string | number | boolean | null | undefined) ?? ""
+        )
+      ) ?? Infinity;
+    const distB =
+      distances.get(
+        String(
+          (b[idField] as string | number | boolean | null | undefined) ?? ""
+        )
+      ) ?? Infinity;
     return order === "asc" ? distA - distB : distB - distA;
   });
 }

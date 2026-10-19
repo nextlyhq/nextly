@@ -51,8 +51,7 @@ Source: `packages/nextly/src/shared/lib/env.ts`.
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DB_DIALECT` | Yes | `postgresql` | Database dialect: `postgresql`, `mysql`, or `sqlite`. |
-| `DATABASE_URL` | Yes (PostgreSQL/MySQL) | — | Full database connection URL. Required for `postgresql` and `mysql`; optional for `sqlite` (paired with `SQLITE_PATH`). Validated as a URL. |
-| `SQLITE_PATH` | Optional (SQLite only) | `file:./data/nextly.db` (factory default) | SQLite file path; alternative to `DATABASE_URL` for the `sqlite` dialect. |
+| `DATABASE_URL` | Yes for PostgreSQL and MySQL; for SQLite, for the CLI's database commands | — | Full database connection URL; for `sqlite`, a `file:` URL. The running app falls back to `file:./data/nextly.db` on SQLite, but the CLI commands that use the database (`migrate`, `db:sync`) require it on every dialect. Validated as a URL. |
 | `DB_POOL_MAX` | No | `20` | Max connections in the pool. Min: 1. |
 | `DB_POOL_MIN` | No | `2` | Min connections in the pool. Min: 0. |
 | `DB_POOL_IDLE_TIMEOUT` | No | `30000` | Idle connection timeout in milliseconds. Min: 1000. |
@@ -71,8 +70,6 @@ DATABASE_URL=mysql://root:root@localhost:3306/nextly_dev
 
 # SQLite (development / single-instance only)
 DATABASE_URL=file:./dev.db
-# or
-SQLITE_PATH=./dev.db
 ```
 
 ---
@@ -285,7 +282,7 @@ These env vars are read by middleware and security helpers. None are part of the
 
 | Variable | Required | Default | Description | Read by |
 |---|---|---|---|---|
-| `TRUSTED_PROXY_IPS` | No | empty | Comma-separated CIDR list of trusted reverse-proxy IPs. Combined with `security.trustProxy: true`, controls which `X-Forwarded-For` values are honoured for client-IP resolution (rate limiting, refresh-token binding, audit logging). | `packages/nextly/src/utils/get-trusted-client-ip.ts` |
+| `TRUSTED_PROXY_IPS` | No | empty | Comma-separated list of trusted reverse-proxy IPs: IPv4 CIDR ranges or addresses, and exact IPv6 addresses (IPv6 ranges are not supported and are ignored). Combined with `security.trustProxy: true`, controls which `X-Forwarded-For` values are honoured for client-IP resolution (rate limiting, refresh-token binding, audit logging): the listed hops are skipped, reading from the right, to reach the client. Needed only for hops in front of your own proxy, such as a load balancer; see [Client addresses and the auth rate limit](/docs/guides/deployment#client-addresses-and-the-auth-rate-limit). | `packages/nextly/src/utils/get-trusted-client-ip.ts` |
 
 ---
 
@@ -302,7 +299,7 @@ Nextly's RBAC layer ships a hybrid (in-memory LRU + database) permission cache. 
 The database permission cache benefits from periodic cleanup. A typical daily cron:
 
 ```bash
-0 2 * * * curl -X POST http://localhost:3000/api/auth/cache/cleanup
+0 2 * * * curl -X POST http://localhost:3000/admin/api/auth/cache/cleanup
 ```
 
 ---

@@ -1,30 +1,30 @@
 ---
 title: REST API
-description: HTTP REST API for browser code, mobile apps, and third-party integrations. Mounted under /api/ via a single Next.js catch-all route handler.
+description: HTTP REST API for browser code, mobile apps, and third-party integrations. Served under /admin/api/ by a single Next.js catch-all route handler.
 ---
 
 The REST API exposes the same operations as the [Direct API](/docs/api-reference/direct-api) over HTTP. Every collection, single, user, role, permission, media file, email template, API key, and more is reachable through standard HTTP methods. Use it whenever your code does **not** run in a trusted Node.js context — browser apps, mobile clients, third-party services.
 
 ## Setup
 
-Create a single Next.js catch-all route handler that delegates to Nextly. The dynamic handlers cover collections, singles, auth, dashboard, schema, email, RBAC, media, API keys, and the rest of the surface:
+A scaffolded project already has this route. It is a single Next.js catch-all that delegates to Nextly, and its dynamic handlers cover collections, singles, auth, dashboard, schema, email, RBAC, media, API keys, and the rest of the surface. Adding Nextly to an existing app, create it at `admin/api/[[...params]]/route.ts` in your app directory: `src/app/` as below, or the root `app/` in a project without `src/` (Next.js ignores `src/app` when a root `app` exists), where the config import is one `../` shorter:
 
-```typescript title="app/api/[[...params]]/route.ts"
+```typescript title="src/app/admin/api/[[...params]]/route.ts"
 import { createDynamicHandlers } from "nextly/runtime";
-import nextlyConfig from "../../../nextly.config";
+import nextlyConfig from "../../../../../nextly.config";
 
 const handlers = createDynamicHandlers({ config: nextlyConfig });
 
 export const { GET, POST, PUT, PATCH, DELETE, OPTIONS } = handlers;
 ```
 
-The health endpoint and media-streaming endpoint can be exported at their own routes if you want to opt out of catch-all coverage:
+The health endpoint and media-streaming endpoint can be exported at their own routes if you want to opt out of catch-all coverage. Put them in the same app directory as the catch-all: `app/api/health/route.ts` in a project with a root `app/`.
 
-```typescript title="app/api/health/route.ts"
+```typescript title="src/app/api/health/route.ts"
 export { GET, HEAD } from "nextly/api/health";
 ```
 
-All API endpoints are served under `/api/`.
+Every endpoint below is served under `/admin/api/`, except the health route at `/api/health`. Keep the handler at `/admin/api`: the admin panel calls it there, and the session cookies are scoped to `/admin`, so a browser session never reaches a handler mounted anywhere else. An API key works on any mount, but the paths on this page assume the scaffold's. The global [`rateLimit`](/docs/configuration/nextly-config#ratelimit) applies to every one of them, counting each by who is asking: a signed-in session, an API key, or the client's address.
 
 ## Authentication
 
@@ -32,10 +32,10 @@ Two authentication mechanisms are supported.
 
 ### Cookie auth (browser sessions)
 
-When a user logs in through `/api/auth/login` (or completes the `/admin/setup` wizard), the runtime sets two HTTP-only cookies:
+When a user logs in through `/admin/api/auth/login` (or completes the `/admin/setup` wizard), the runtime sets two HTTP-only cookies:
 
 - `nextly_session` — short-lived JWT used for every authenticated request, scoped to `/admin`.
-- `nextly_refresh` — long-lived token, scoped to `/admin/api/auth` so that only the auth endpoints receive it: `/api/auth/refresh` rotates it and `/api/auth/logout` deletes its row.
+- `nextly_refresh` — long-lived token, scoped to `/admin/api/auth` so that only the auth endpoints receive it: `/admin/api/auth/refresh` rotates it and `/admin/api/auth/logout` deletes its row.
 
 Browsers send these automatically. There is no header for you to set; just call `fetch` with `credentials: "include"` if your frontend lives on a different origin.
 
@@ -44,11 +44,11 @@ Browsers send these automatically. There is no header for you to set; just call 
 Send the API key as a Bearer token:
 
 ```bash
-curl https://example.com/api/collections/posts/entries \
+curl https://example.com/admin/api/collections/posts/entries \
   -H "Authorization: Bearer nx_live_<random>..."
 ```
 
-API keys are managed via `POST /api/api-keys` (admin UI). There is **no** `X-API-Key` header — `Authorization: Bearer <key>` is the only supported form.
+API keys are managed via `POST /admin/api/api-keys` (admin UI). There is **no** `X-API-Key` header — `Authorization: Bearer <key>` is the only supported form.
 
 ## Response envelopes
 
@@ -177,134 +177,134 @@ For rate-limited responses (`code: "RATE_LIMITED"`, status 429) the runtime also
 
 ## Endpoint inventory
 
-The catch-all dispatches every URL under `/api/` to one of these endpoint groups. Auth column shows whether a session cookie or API key is required.
+The catch-all dispatches every URL under `/admin/api/` to one of these endpoint groups; the health route is its own route at `/api/health`. Auth column shows whether a session cookie or API key is required.
 
 | Method | Path | Description | Auth |
 |---|---|---|---|
 | `GET` / `HEAD` | `/api/health` | Liveness + DB probe. | Public |
-| `GET` | `/api/auth/setup-status` | Whether the setup wizard has run. | Public |
-| `POST` | `/api/auth/setup` | Run the first-boot setup wizard (creates super admin). | Public, one-shot |
-| `GET` | `/api/auth/session` | Current session info from the cookie. | Cookie |
-| `GET` | `/api/auth/csrf` | CSRF token (when applicable). | Public |
-| `GET` | `/api/auth/ui` | Login page UI: provider buttons, challenge views, slots. | Public |
-| `GET` | `/api/auth/pending` | Which second factor an interrupted sign-in left outstanding; 204 when none is, or its attempt budget is spent. | Public |
-| `POST` | `/api/auth/login` | Email + password login. Sets cookies. | Public |
-| `POST` | `/api/auth/challenge/resolve` | Answer a second factor with the pending token. Sets cookies. | Pending token |
-| `POST` | `/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. Sets cookies. | Pending token |
-| `POST` | `/api/auth/logout` | Delete the session's refresh token and clear cookies. | Cookie |
-| `POST` | `/api/auth/refresh` | Rotate the access token. | Cookie |
-| `POST` | `/api/auth/register` | Public registration. | Public |
-| `POST` | `/api/auth/forgot-password` | Send password-reset email. | Public |
-| `POST` | `/api/auth/reset-password` | Consume reset token and set new password. | Public |
-| `POST` | `/api/auth/accept-invite` | Consume invite token and set a password. | Public |
-| `POST` | `/api/auth/verify-email` | Consume email-verification token. | Public |
-| `POST` | `/api/auth/verify-email/resend` | Resend the verification email. | Public |
-| `PATCH` | `/api/auth/change-password` | Change current user's password. | Cookie |
-| `GET` | `/api/me` | Current user profile. | Cookie / Bearer |
-| `PATCH` | `/api/me` | Update current user profile. | Cookie / Bearer |
-| `GET` | `/api/me/permissions` | Resolved permissions for current user. | Cookie / Bearer |
-| `GET` | `/api/users` | List users. | `read-users` |
-| `POST` | `/api/users` | Create user. | `create-users` |
-| `GET` | `/api/users/{id}` | Get user. | `read-users` |
-| `PATCH` | `/api/users/{id}` | Update user. | `update-users` |
-| `DELETE` | `/api/users/{id}` | Delete user. | `delete-users` |
-| `PATCH` | `/api/users/{id}/password` | Set password hash directly. | `update-users` |
-| `GET` | `/api/users/{id}/roles` | List user roles. | `read-roles` |
-| `POST` | `/api/users/{id}/roles` | Assign role to user. | `update-users` |
-| `DELETE` | `/api/users/{id}/roles/{roleId}` | Unassign role. | `update-users` |
-| `GET` | `/api/roles` | List roles. | `read-roles` |
-| `POST` | `/api/roles` | Create role. | `create-roles` |
-| `GET` | `/api/roles/{id}` | Get role. | `read-roles` |
-| `PATCH` | `/api/roles/{id}` | Update role. | `update-roles` |
-| `DELETE` | `/api/roles/{id}` | Delete role. | `delete-roles` |
-| `GET` | `/api/roles/{id}/permissions` | List role permissions. | `read-roles` or `read-permissions` |
-| `POST` | `/api/roles/{id}/permissions` | Add permission to role. | `update-roles` |
-| `PATCH` | `/api/roles/{id}/permissions` | Replace all role permissions. | `update-roles` |
-| `DELETE` | `/api/roles/{id}/permissions/{permissionId}` | Remove permission from role. | `update-roles` |
-| `GET` | `/api/roles/{id}/children` | List child roles (inheritance). | `read-roles` |
-| `POST` | `/api/roles/{id}/children` | Add child role. | `update-roles` |
-| `DELETE` | `/api/roles/{id}/children/{childId}` | Remove child role. | `update-roles` |
-| `GET` | `/api/roles/{id}/parents` | List ancestor roles. | `read-roles` |
-| `GET` | `/api/permissions` | List permissions. | `read-permissions` (or `read-roles`) |
-| `POST` | `/api/permissions` | Create permission. | `create-permissions` |
-| `GET` | `/api/permissions/{id}` | Get permission. | `read-permissions` (or `read-roles`) |
-| `PATCH` | `/api/permissions/{id}` | Update permission. | `update-permissions` |
-| `DELETE` | `/api/permissions/{id}` | Delete permission. | `delete-permissions` |
-| `GET` | `/api/collections` | List collection definitions. | Authenticated |
-| `POST` | `/api/collections` | Create collection (Schema Builder). | `manage-settings` |
-| `GET` | `/api/collections/{slug}` | Get collection definition. | `read-{slug}` |
-| `PATCH` | `/api/collections/{slug}` | Update collection definition. | `manage-settings` |
-| `DELETE` | `/api/collections/{slug}` | Delete collection. | `manage-settings` |
-| `GET` | `/api/collections/schema/{slug}` | Get enriched schema (with component fields). | `read-{slug}` |
-| `POST` | `/api/collections/schema/{slug}/preview` | Dry-run schema diff. | `manage-settings` |
-| `POST` | `/api/collections/schema/{slug}/apply` | Apply confirmed schema changes. | `manage-settings` |
-| `GET` | `/api/collections/{slug}/entries` | List entries. | `read-{slug}` |
-| `POST` | `/api/collections/{slug}/entries` | Create entry. | `create-{slug}` |
-| `GET` | `/api/collections/{slug}/entries/{id}` | Get entry by ID. | `read-{slug}` |
-| `PATCH` | `/api/collections/{slug}/entries/{id}` | Update entry. | `update-{slug}` |
-| `DELETE` | `/api/collections/{slug}/entries/{id}` | Delete entry. | `delete-{slug}` |
-| `GET` | `/api/collections/{slug}/entries/count` | Count entries matching a query. | `read-{slug}` |
-| `POST` | `/api/collections/{slug}/entries/{id}/duplicate` | Duplicate entry. | `create-{slug}` |
-| `POST` | `/api/collections/{slug}/entries/bulk-delete` | Bulk delete by IDs. | `delete-{slug}` |
-| `POST` | `/api/collections/{slug}/entries/bulk-update` | Bulk update by IDs. | `update-{slug}` |
-| `PATCH` | `/api/collections/{slug}/entries` | Bulk update by query. | `update-{slug}` |
-| `GET` | `/api/singles` | List singles. | Authenticated |
-| `POST` | `/api/singles` | Create single (Schema Builder). | `manage-settings` |
-| `GET` | `/api/singles/{slug}` | Get single content. | `read-{slug}` |
-| `PATCH` | `/api/singles/{slug}` | Update single content. | `update-{slug}` |
-| `DELETE` | `/api/singles/{slug}` | Delete UI-created single. | `manage-settings` |
-| `GET` | `/api/singles/{slug}/schema` | Get single schema. | `read-{slug}` |
-| `PATCH` | `/api/singles/{slug}/schema` | Update single schema (Schema Builder). | `manage-settings` |
-| `POST` | `/api/singles/schema/{slug}/preview` | Dry-run single schema diff. | `manage-settings` |
-| `POST` | `/api/singles/schema/{slug}/apply` | Apply single schema changes. | `manage-settings` |
-| `GET` | `/api/field-groups` | List field group definitions. | Authenticated |
-| `POST` | `/api/field-groups` | Create field group. | `manage-settings` |
-| `GET` | `/api/field-groups/{slug}` | Get field group. | Authenticated |
-| `PATCH` | `/api/field-groups/{slug}` | Update field group. | `manage-settings` |
-| `DELETE` | `/api/field-groups/{slug}` | Delete field group. | `manage-settings` |
-| `POST` | `/api/field-groups/schema/{slug}/preview` | Dry-run field group schema diff. | `manage-settings` |
-| `POST` | `/api/field-groups/schema/{slug}/apply` | Apply field group schema changes. | `manage-settings` |
-| `POST` | `/api/email/send` | Send a raw email. | Authenticated |
-| `POST` | `/api/email/send-with-template` | Send a templated email. | Authenticated |
-| `GET` | `/api/email-providers` | List providers. | `read-email-providers` |
-| `POST` | `/api/email-providers` | Create provider. | `create-email-providers` |
-| `GET` | `/api/email-providers/{id}` | Get provider. | `read-email-providers` |
-| `PATCH` | `/api/email-providers/{id}` | Update provider. | `update-email-providers` |
-| `DELETE` | `/api/email-providers/{id}` | Delete provider. | `delete-email-providers` |
-| `PATCH` | `/api/email-providers/{id}/default` | Set default provider. | `update-email-providers` |
-| `POST` | `/api/email-providers/{id}/test` | Send a test email. | `read-email-providers` |
-| `GET` | `/api/email-templates` | List templates. | `read-email-templates` |
-| `POST` | `/api/email-templates` | Create template. | `create-email-templates` |
-| `GET` | `/api/email-templates/layout` | Get shared header/footer. | `read-email-templates` |
-| `PATCH` | `/api/email-templates/layout` | Update shared header/footer. | `update-email-templates` |
-| `GET` | `/api/email-templates/{id}` | Get template. | `read-email-templates` |
-| `PATCH` | `/api/email-templates/{id}` | Update template. | `update-email-templates` |
-| `DELETE` | `/api/email-templates/{id}` | Delete template. | `delete-email-templates` |
-| `POST` | `/api/email-templates/{id}/preview` | Render template with sample data. | `read-email-templates` |
-| `GET` | `/api/user-fields` | List user field definitions. | `read-settings` |
-| `POST` | `/api/user-fields` | Create user field. | `create-settings` |
-| `PATCH` | `/api/user-fields/reorder` | Reorder user fields. | `update-settings` |
-| `GET` | `/api/user-fields/{id}` | Get user field. | `read-settings` |
-| `PATCH` | `/api/user-fields/{id}` | Update user field. | `update-settings` |
-| `DELETE` | `/api/user-fields/{id}` | Delete user field. | `delete-settings` |
-| `GET` | `/api/api-keys` | List API keys for current user. | Cookie (session-only) |
-| `POST` | `/api/api-keys` | Create API key. | Cookie (session-only) |
-| `GET` | `/api/api-keys/{id}` | Get API key metadata. | Cookie (session-only) |
-| `PATCH` | `/api/api-keys/{id}` | Update name/description. | Cookie (session-only) |
-| `DELETE` | `/api/api-keys/{id}` | Revoke API key. | Cookie (session-only) |
-| `GET` | `/api/dashboard/stats` | Admin dashboard stats. | Cookie |
-| `GET` | `/api/dashboard/recent-entries` | Recent activity. | Cookie |
-| `GET` | `/api/dashboard/activity` | Activity feed. | Cookie |
-| `GET` | `/api/schema/journal` | Schema migration journal (super-admin only). | Cookie + super admin |
-| `GET` / `PATCH` | `/api/general-settings` | Project-wide settings. | `manage-settings` |
-| `GET` | `/api/image-sizes` | List image-size presets. | Cookie |
-| `POST` | `/api/image-sizes` | Create image-size preset. | `manage-settings` |
-| `PATCH` | `/api/image-sizes/{id}` | Update preset. | `manage-settings` |
-| `DELETE` | `/api/image-sizes/{id}` | Delete preset. | `manage-settings` |
+| `GET` | `/admin/api/auth/setup-status` | Whether the setup wizard has run. | Public |
+| `POST` | `/admin/api/auth/setup` | Run the first-boot setup wizard (creates super admin). | Public, one-shot |
+| `GET` | `/admin/api/auth/session` | Current session info from the cookie. | Cookie |
+| `GET` | `/admin/api/auth/csrf` | CSRF token (when applicable). | Public |
+| `GET` | `/admin/api/auth/ui` | Login page UI: provider buttons, challenge views, slots. | Public |
+| `GET` | `/admin/api/auth/pending` | Which second factor an interrupted sign-in left outstanding; 204 when none is, or its attempt budget is spent. | Public |
+| `POST` | `/admin/api/auth/login` | Email + password login. Sets cookies. | Public |
+| `POST` | `/admin/api/auth/challenge/resolve` | Answer a second factor with the pending token. Sets cookies. | Pending token |
+| `POST` | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. Sets cookies. | Pending token |
+| `POST` | `/admin/api/auth/logout` | Delete the session's refresh token and clear cookies. | Cookie |
+| `POST` | `/admin/api/auth/refresh` | Rotate the access token. | Cookie |
+| `POST` | `/admin/api/auth/register` | Public registration. | Public |
+| `POST` | `/admin/api/auth/forgot-password` | Send password-reset email. | Public |
+| `POST` | `/admin/api/auth/reset-password` | Consume reset token and set new password. | Public |
+| `POST` | `/admin/api/auth/accept-invite` | Consume invite token and set a password. | Public |
+| `POST` | `/admin/api/auth/verify-email` | Consume email-verification token. | Public |
+| `POST` | `/admin/api/auth/verify-email/resend` | Resend the verification email. | Public |
+| `PATCH` | `/admin/api/auth/change-password` | Change current user's password. | Cookie |
+| `GET` | `/admin/api/me` | Current user profile. | Cookie / Bearer |
+| `PATCH` | `/admin/api/me` | Update current user profile. | Cookie / Bearer |
+| `GET` | `/admin/api/me/permissions` | Resolved permissions for current user. | Cookie / Bearer |
+| `GET` | `/admin/api/users` | List users. | `read-users` |
+| `POST` | `/admin/api/users` | Create user. | `create-users` |
+| `GET` | `/admin/api/users/{id}` | Get user. | `read-users` |
+| `PATCH` | `/admin/api/users/{id}` | Update user. | `update-users` |
+| `DELETE` | `/admin/api/users/{id}` | Delete user. | `delete-users` |
+| `PATCH` | `/admin/api/users/{id}/password` | Set password hash directly. | `update-users` |
+| `GET` | `/admin/api/users/{id}/roles` | List user roles. | `read-roles` |
+| `POST` | `/admin/api/users/{id}/roles` | Assign role to user. | `update-users` |
+| `DELETE` | `/admin/api/users/{id}/roles/{roleId}` | Unassign role. | `update-users` |
+| `GET` | `/admin/api/roles` | List roles. | `read-roles` |
+| `POST` | `/admin/api/roles` | Create role. | `create-roles` |
+| `GET` | `/admin/api/roles/{id}` | Get role. | `read-roles` |
+| `PATCH` | `/admin/api/roles/{id}` | Update role. | `update-roles` |
+| `DELETE` | `/admin/api/roles/{id}` | Delete role. | `delete-roles` |
+| `GET` | `/admin/api/roles/{id}/permissions` | List role permissions. | `read-roles` or `read-permissions` |
+| `POST` | `/admin/api/roles/{id}/permissions` | Add permission to role. | `update-roles` |
+| `PATCH` | `/admin/api/roles/{id}/permissions` | Replace all role permissions. | `update-roles` |
+| `DELETE` | `/admin/api/roles/{id}/permissions/{permissionId}` | Remove permission from role. | `update-roles` |
+| `GET` | `/admin/api/roles/{id}/children` | List child roles (inheritance). | `read-roles` |
+| `POST` | `/admin/api/roles/{id}/children` | Add child role. | `update-roles` |
+| `DELETE` | `/admin/api/roles/{id}/children/{childId}` | Remove child role. | `update-roles` |
+| `GET` | `/admin/api/roles/{id}/parents` | List ancestor roles. | `read-roles` |
+| `GET` | `/admin/api/permissions` | List permissions. | `read-permissions` (or `read-roles`) |
+| `POST` | `/admin/api/permissions` | Create permission. | `create-permissions` |
+| `GET` | `/admin/api/permissions/{id}` | Get permission. | `read-permissions` (or `read-roles`) |
+| `PATCH` | `/admin/api/permissions/{id}` | Update permission. | `update-permissions` |
+| `DELETE` | `/admin/api/permissions/{id}` | Delete permission. | `delete-permissions` |
+| `GET` | `/admin/api/collections` | List collection definitions. | Authenticated |
+| `POST` | `/admin/api/collections` | Create collection (Schema Builder). | `manage-settings` |
+| `GET` | `/admin/api/collections/{slug}` | Get collection definition. | `read-{slug}` |
+| `PATCH` | `/admin/api/collections/{slug}` | Update collection definition. | `manage-settings` |
+| `DELETE` | `/admin/api/collections/{slug}` | Delete collection. | `manage-settings` |
+| `GET` | `/admin/api/collections/schema/{slug}` | Get enriched schema (with component fields). | `read-{slug}` |
+| `POST` | `/admin/api/collections/schema/{slug}/preview` | Dry-run schema diff. | `manage-settings` |
+| `POST` | `/admin/api/collections/schema/{slug}/apply` | Apply confirmed schema changes. | `manage-settings` |
+| `GET` | `/admin/api/collections/{slug}/entries` | List entries. | `read-{slug}` |
+| `POST` | `/admin/api/collections/{slug}/entries` | Create entry. | `create-{slug}` |
+| `GET` | `/admin/api/collections/{slug}/entries/{id}` | Get entry by ID. | `read-{slug}` |
+| `PATCH` | `/admin/api/collections/{slug}/entries/{id}` | Update entry. | `update-{slug}` |
+| `DELETE` | `/admin/api/collections/{slug}/entries/{id}` | Delete entry. | `delete-{slug}` |
+| `GET` | `/admin/api/collections/{slug}/entries/count` | Count entries matching a query. | `read-{slug}` |
+| `POST` | `/admin/api/collections/{slug}/entries/{id}/duplicate` | Duplicate entry. | `create-{slug}` |
+| `POST` | `/admin/api/collections/{slug}/entries/bulk-delete` | Bulk delete by IDs. | `delete-{slug}` |
+| `POST` | `/admin/api/collections/{slug}/entries/bulk-update` | Bulk update by IDs. | `update-{slug}` |
+| `PATCH` | `/admin/api/collections/{slug}/entries` | Bulk update by query. | `update-{slug}` |
+| `GET` | `/admin/api/singles` | List singles. | Authenticated |
+| `POST` | `/admin/api/singles` | Create single (Schema Builder). | `manage-settings` |
+| `GET` | `/admin/api/singles/{slug}` | Get single content. | `read-{slug}` |
+| `PATCH` | `/admin/api/singles/{slug}` | Update single content. | `update-{slug}` |
+| `DELETE` | `/admin/api/singles/{slug}` | Delete UI-created single. | `manage-settings` |
+| `GET` | `/admin/api/singles/{slug}/schema` | Get single schema. | `read-{slug}` |
+| `PATCH` | `/admin/api/singles/{slug}/schema` | Update single schema (Schema Builder). | `manage-settings` |
+| `POST` | `/admin/api/singles/schema/{slug}/preview` | Dry-run single schema diff. | `manage-settings` |
+| `POST` | `/admin/api/singles/schema/{slug}/apply` | Apply single schema changes. | `manage-settings` |
+| `GET` | `/admin/api/field-groups` | List field group definitions. | Authenticated |
+| `POST` | `/admin/api/field-groups` | Create field group. | `manage-settings` |
+| `GET` | `/admin/api/field-groups/{slug}` | Get field group. | Authenticated |
+| `PATCH` | `/admin/api/field-groups/{slug}` | Update field group. | `manage-settings` |
+| `DELETE` | `/admin/api/field-groups/{slug}` | Delete field group. | `manage-settings` |
+| `POST` | `/admin/api/field-groups/schema/{slug}/preview` | Dry-run field group schema diff. | `manage-settings` |
+| `POST` | `/admin/api/field-groups/schema/{slug}/apply` | Apply field group schema changes. | `manage-settings` |
+| `POST` | `/admin/api/email/send` | Send a raw email. | Authenticated |
+| `POST` | `/admin/api/email/send-with-template` | Send a templated email. | Authenticated |
+| `GET` | `/admin/api/email-providers` | List providers. | `read-email-providers` |
+| `POST` | `/admin/api/email-providers` | Create provider. | `create-email-providers` |
+| `GET` | `/admin/api/email-providers/{id}` | Get provider. | `read-email-providers` |
+| `PATCH` | `/admin/api/email-providers/{id}` | Update provider. | `update-email-providers` |
+| `DELETE` | `/admin/api/email-providers/{id}` | Delete provider. | `delete-email-providers` |
+| `PATCH` | `/admin/api/email-providers/{id}/default` | Set default provider. | `update-email-providers` |
+| `POST` | `/admin/api/email-providers/{id}/test` | Send a test email. | `read-email-providers` |
+| `GET` | `/admin/api/email-templates` | List templates. | `read-email-templates` |
+| `POST` | `/admin/api/email-templates` | Create template. | `create-email-templates` |
+| `GET` | `/admin/api/email-templates/layout` | Get shared header/footer. | `read-email-templates` |
+| `PATCH` | `/admin/api/email-templates/layout` | Update shared header/footer. | `update-email-templates` |
+| `GET` | `/admin/api/email-templates/{id}` | Get template. | `read-email-templates` |
+| `PATCH` | `/admin/api/email-templates/{id}` | Update template. | `update-email-templates` |
+| `DELETE` | `/admin/api/email-templates/{id}` | Delete template. | `delete-email-templates` |
+| `POST` | `/admin/api/email-templates/{id}/preview` | Render template with sample data. | `read-email-templates` |
+| `GET` | `/admin/api/user-fields` | List user field definitions. | `read-settings` |
+| `POST` | `/admin/api/user-fields` | Create user field. | `create-settings` |
+| `PATCH` | `/admin/api/user-fields/reorder` | Reorder user fields. | `update-settings` |
+| `GET` | `/admin/api/user-fields/{id}` | Get user field. | `read-settings` |
+| `PATCH` | `/admin/api/user-fields/{id}` | Update user field. | `update-settings` |
+| `DELETE` | `/admin/api/user-fields/{id}` | Delete user field. | `delete-settings` |
+| `GET` | `/admin/api/api-keys` | List API keys for current user. | Cookie (session-only) |
+| `POST` | `/admin/api/api-keys` | Create API key. | Cookie (session-only) |
+| `GET` | `/admin/api/api-keys/{id}` | Get API key metadata. | Cookie (session-only) |
+| `PATCH` | `/admin/api/api-keys/{id}` | Update name/description. | Cookie (session-only) |
+| `DELETE` | `/admin/api/api-keys/{id}` | Revoke API key. | Cookie (session-only) |
+| `GET` | `/admin/api/dashboard/stats` | Admin dashboard stats. | Cookie |
+| `GET` | `/admin/api/dashboard/recent-entries` | Recent activity. | Cookie |
+| `GET` | `/admin/api/dashboard/activity` | Activity feed. | Cookie |
+| `GET` | `/admin/api/schema/journal` | Schema migration journal (super-admin only). | Cookie + super admin |
+| `GET` / `PATCH` | `/admin/api/general-settings` | Project-wide settings. | `manage-settings` |
+| `GET` | `/admin/api/image-sizes` | List image-size presets. | Cookie |
+| `POST` | `/admin/api/image-sizes` | Create image-size preset. | `manage-settings` |
+| `PATCH` | `/admin/api/image-sizes/{id}` | Update preset. | `manage-settings` |
+| `DELETE` | `/admin/api/image-sizes/{id}` | Delete preset. | `manage-settings` |
 
 The slug-based permissions use the pattern `{action}-{slug}` so a `posts` collection requires `read-posts`, `create-posts`, etc.
 
-A plugin may serve its own endpoints, and they are not listed here. `/api/forms`, `/api/forms/{slug}` and `/api/forms/{slug}/submit` are served by [`@nextlyhq/plugin-form-builder`](/docs/plugins/form-builder) at those exact addresses, and answer only when it is installed. They were once built in, which never worked without the plugin either: the collections they read are declared by it.
+A plugin may serve its own endpoints, and they are not listed here. `/admin/api/forms`, `/admin/api/forms/{slug}` and `/admin/api/forms/{slug}/submit` are served by [`@nextlyhq/plugin-form-builder`](/docs/plugins/form-builder) at those exact addresses, and answer only when it is installed. They were once built in, which never worked without the plugin either: the collections they read are declared by it.
 
 ## Per-section detail
 
@@ -349,7 +349,7 @@ When the database probe fails the runtime emits the canonical error envelope at 
 
 ```bash
 # Login
-curl -i -X POST http://localhost:3000/api/auth/login \
+curl -i -X POST http://localhost:3000/admin/api/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com","password":"secure-password"}'
 ```
@@ -358,30 +358,30 @@ A successful login responds 200 with the action envelope `{ message, user, token
 
 ```bash
 # Register
-curl -X POST http://localhost:3000/api/auth/register \
+curl -X POST http://localhost:3000/admin/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email":"new@example.com","password":"secure-password","name":"New User"}'
 ```
 
 ```bash
 # Forgot password
-curl -X POST http://localhost:3000/api/auth/forgot-password \
+curl -X POST http://localhost:3000/admin/api/auth/forgot-password \
   -H "Content-Type: application/json" \
   -d '{"email":"user@example.com"}'
 ```
 
-The `forgot-password` endpoint always returns 200 to avoid leaking which addresses exist. The reset email contains the token; consume it with `POST /api/auth/reset-password`.
+The `forgot-password` endpoint always returns 200 to avoid leaking which addresses exist. The reset email contains the token; consume it with `POST /admin/api/auth/reset-password`.
 
 ```bash
 # Reset password
-curl -X POST http://localhost:3000/api/auth/reset-password \
+curl -X POST http://localhost:3000/admin/api/auth/reset-password \
   -H "Content-Type: application/json" \
   -d '{"token":"<token-from-email>","password":"new-secure-password"}'
 ```
 
 ```bash
 # Change password (authenticated)
-curl -X PATCH http://localhost:3000/api/auth/change-password \
+curl -X PATCH http://localhost:3000/admin/api/auth/change-password \
   -H "Content-Type: application/json" \
   -b "nextly_session=..." \
   -d '{"currentPassword":"old","newPassword":"new-secure"}'
@@ -389,7 +389,7 @@ curl -X PATCH http://localhost:3000/api/auth/change-password \
 
 ```bash
 # Verify email
-curl -X POST http://localhost:3000/api/auth/verify-email \
+curl -X POST http://localhost:3000/admin/api/auth/verify-email \
   -H "Content-Type: application/json" \
   -d '{"token":"<token-from-email>"}'
 ```
@@ -397,10 +397,10 @@ curl -X POST http://localhost:3000/api/auth/verify-email \
 The setup wizard is a one-shot path that runs only when no super admin exists:
 
 ```bash
-curl http://localhost:3000/api/auth/setup-status
+curl http://localhost:3000/admin/api/auth/setup-status
 # {"ok":true,"completed":false}
 
-curl -X POST http://localhost:3000/api/auth/setup \
+curl -X POST http://localhost:3000/admin/api/auth/setup \
   -H "Content-Type: application/json" \
   -d '{"email":"admin@example.com","name":"Admin","password":"strong-password"}'
 ```
@@ -412,7 +412,7 @@ Re-running setup after the first super admin exists returns a 409.
 List:
 
 ```bash
-curl "http://localhost:3000/api/collections/posts/entries?limit=10&page=1&sort=-createdAt&where[status][equals]=published"
+curl "http://localhost:3000/admin/api/collections/posts/entries?limit=10&page=1&sort=-createdAt&where[status][equals]=published"
 ```
 
 ```json
@@ -434,7 +434,7 @@ curl "http://localhost:3000/api/collections/posts/entries?limit=10&page=1&sort=-
 Get by ID:
 
 ```bash
-curl "http://localhost:3000/api/collections/posts/entries/abc-123?depth=2"
+curl "http://localhost:3000/admin/api/collections/posts/entries/abc-123?depth=2"
 ```
 
 ```json
@@ -450,7 +450,7 @@ curl "http://localhost:3000/api/collections/posts/entries/abc-123?depth=2"
 Create:
 
 ```bash
-curl -X POST "http://localhost:3000/api/collections/posts/entries" \
+curl -X POST "http://localhost:3000/admin/api/collections/posts/entries" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"title":"New Post","content":"Hello!","status":"draft"}'
@@ -466,7 +466,7 @@ curl -X POST "http://localhost:3000/api/collections/posts/entries" \
 Update (PATCH a single field set; everything not in the body is left alone):
 
 ```bash
-curl -X PATCH "http://localhost:3000/api/collections/posts/entries/abc-123" \
+curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"status":"published"}'
@@ -475,28 +475,28 @@ curl -X PATCH "http://localhost:3000/api/collections/posts/entries/abc-123" \
 Delete:
 
 ```bash
-curl -X DELETE "http://localhost:3000/api/collections/posts/entries/abc-123" \
+curl -X DELETE "http://localhost:3000/admin/api/collections/posts/entries/abc-123" \
   -H "Authorization: Bearer nx_live_..."
 ```
 
 Count:
 
 ```bash
-curl "http://localhost:3000/api/collections/posts/entries/count?where[status][equals]=published"
+curl "http://localhost:3000/admin/api/collections/posts/entries/count?where[status][equals]=published"
 # {"total": 42}
 ```
 
 Duplicate:
 
 ```bash
-curl -X POST "http://localhost:3000/api/collections/posts/entries/abc-123/duplicate" \
+curl -X POST "http://localhost:3000/admin/api/collections/posts/entries/abc-123/duplicate" \
   -H "Authorization: Bearer nx_live_..."
 ```
 
 Bulk delete (status 200, partial success in body):
 
 ```bash
-curl -X POST "http://localhost:3000/api/collections/posts/entries/bulk-delete" \
+curl -X POST "http://localhost:3000/admin/api/collections/posts/entries/bulk-delete" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"ids":["post-1","post-2","post-3"]}'
@@ -515,7 +515,7 @@ curl -X POST "http://localhost:3000/api/collections/posts/entries/bulk-delete" \
 Bulk update by IDs:
 
 ```bash
-curl -X POST "http://localhost:3000/api/collections/posts/entries/bulk-update" \
+curl -X POST "http://localhost:3000/admin/api/collections/posts/entries/bulk-update" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"ids":["post-1","post-2"],"data":{"status":"archived"}}'
@@ -524,7 +524,7 @@ curl -X POST "http://localhost:3000/api/collections/posts/entries/bulk-update" \
 Bulk update by query (PATCH on the collection root with a `where` clause in the body):
 
 ```bash
-curl -X PATCH "http://localhost:3000/api/collections/posts/entries" \
+curl -X PATCH "http://localhost:3000/admin/api/collections/posts/entries" \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"where":{"status":{"equals":"draft"}},"data":{"status":"archived"}}'
@@ -535,19 +535,19 @@ curl -X PATCH "http://localhost:3000/api/collections/posts/entries" \
 List metadata for every registered single:
 
 ```bash
-curl http://localhost:3000/api/singles
+curl http://localhost:3000/admin/api/singles
 ```
 
 Get the actual content:
 
 ```bash
-curl http://localhost:3000/api/singles/site-settings
+curl http://localhost:3000/admin/api/singles/site-settings
 ```
 
 Update content:
 
 ```bash
-curl -X PATCH http://localhost:3000/api/singles/site-settings \
+curl -X PATCH http://localhost:3000/admin/api/singles/site-settings \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{"siteName":"My New Site","maintenanceMode":false}'
@@ -558,7 +558,7 @@ curl -X PATCH http://localhost:3000/api/singles/site-settings \
 Both endpoints accept an authenticated request (cookie or API key). The body matches the Direct API arguments documented in [Direct API → Email](/docs/api-reference/direct-api#email).
 
 ```bash
-curl -X POST http://localhost:3000/api/email/send \
+curl -X POST http://localhost:3000/admin/api/email/send \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{
@@ -567,7 +567,7 @@ curl -X POST http://localhost:3000/api/email/send \
     "html": "<p>Welcome to Nextly</p>"
   }'
 
-curl -X POST http://localhost:3000/api/email/send-with-template \
+curl -X POST http://localhost:3000/admin/api/email/send-with-template \
   -H "Authorization: Bearer nx_live_..." \
   -H "Content-Type: application/json" \
   -d '{
@@ -579,19 +579,19 @@ curl -X POST http://localhost:3000/api/email/send-with-template \
 
 ### Media
 
-The media collection is just a normal collection (`/api/collections/media/entries`) with extra plumbing for binary uploads. The `POST /api/collections/media/entries` endpoint accepts `multipart/form-data` with the file under `file` and any other fields alongside.
+The media collection is just a normal collection (`/admin/api/collections/media/entries`) with extra plumbing for binary uploads. The `POST /admin/api/collections/media/entries` endpoint accepts `multipart/form-data` with the file under `file` and any other fields alongside.
 
-Image-size presets are managed under `/api/image-sizes`. The `regeneration-status` and `regenerate` sub-routes return a "coming soon" placeholder today (see [`packages/nextly/src/routeHandler.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/routeHandler.ts)).
+Image-size presets are managed under `/admin/api/image-sizes`. The `regeneration-status` and `regenerate` sub-routes return a "coming soon" placeholder today (see [`packages/nextly/src/routeHandler.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/routeHandler.ts)).
 
 ### API keys
 
-`/api/api-keys/*` is session-only — these endpoints **do not** accept Bearer authentication, so an attacker with a stolen key cannot mint new keys with it. Manage keys from the admin UI or via cookie-authenticated requests.
+`/admin/api/api-keys/*` is session-only — these endpoints **do not** accept Bearer authentication, so an attacker with a stolen key cannot mint new keys with it. Manage keys from the admin UI or via cookie-authenticated requests.
 
 ```bash
-curl http://localhost:3000/api/api-keys -b "nextly_session=..."
+curl http://localhost:3000/admin/api/api-keys -b "nextly_session=..."
 ```
 
-`POST /api/api-keys` returns the new key value once at creation; it is hashed on the server and never displayed again.
+`POST /admin/api/api-keys` returns the new key value once at creation; it is hashed on the server and never displayed again.
 
 ## Query parameters
 
@@ -714,7 +714,7 @@ async function fetchPosts(page = 1) {
     depth: "1",
   });
 
-  const response = await fetch(`/api/collections/posts/entries?${params}`, {
+  const response = await fetch(`/admin/api/collections/posts/entries?${params}`, {
     credentials: "include",
   });
   const json = await response.json();
@@ -728,7 +728,7 @@ The route handler ships with built-in defences:
 
 - **Rate limiting** on auth write endpoints (per IP) and global per-IP / per-key limits configured in `nextly.config.ts`.
 - **CORS** controlled by `NEXTLY_ALLOWED_ORIGINS` and the `security` config.
-- **Cache headers** (`no-store`) on every `/api/auth/*` response to keep tokens out of caches.
+- **Cache headers** (`no-store`) on every `/admin/api/auth/*` response to keep tokens out of caches.
 - **Super-admin protection** so non-super-admins cannot grant the super-admin role.
 - **Trusted proxy / forwarded-for** filtering when `trustProxy` is on.
 

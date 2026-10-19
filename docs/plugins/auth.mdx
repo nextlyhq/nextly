@@ -1,6 +1,6 @@
 ---
 title: Auth extensibility
-description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth/SSO), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
+description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
 ---
 
 > **Alpha (`0.x`) — `@experimental`.** The auth-extensibility surface (D71/D57) is
@@ -21,7 +21,7 @@ piecemeal:
 
 The built-in email/password login is itself just the `password` strategy, always
 present and run last; it cannot be disabled. A sign-in that starts with a
-redirect — OAuth, SSO — is not a strategy: see
+redirect, such as OAuth, is not a strategy: see
 [signing in with an external provider](#worked-example-signing-in-with-an-external-provider).
 
 ## Strategies are opt-in (the trust boundary)
@@ -43,6 +43,41 @@ export default defineConfig({
 Hooks, challenges, and UI follow normal contribution rules (active as soon as the
 plugin is installed). Strategies don't — that's deliberate (secure-by-default).
 
+## Naming the account to the sign-in rate limit
+
+> **Needs the release after 0.0.2-alpha.67.**
+
+When Nextly cannot read a client's address, which is every request while `security.trustProxy` is unset, the [auth rate limit](/docs/guides/authentication#auth-rate-limit) counts a request against the account it names. For a sign-in that is the `email` its body carries, which is what the built-in `password` strategy reads. A strategy that signs people in from something else should tell the limiter what it reads, with `limitKey` (`@experimental`):
+
+```ts
+import type { AuthStrategy } from "@nextlyhq/plugin-sdk";
+
+export const usernameStrategy: AuthStrategy = {
+  name: "username",
+  async authenticate({ body }) {
+    if (typeof body.username !== "string") return { type: "pass" };
+    // Look the account up by its trimmed, lowercased username and check the
+    // password here.
+    return { type: "fail" };
+  },
+  // Named the way the lookup above names it, so spellings it treats as one
+  // share one budget.
+  limitKey: ({ body }) =>
+    typeof body.username === "string"
+      ? { handles: true, key: body.username.trim().toLowerCase() }
+      : { handles: false },
+};
+```
+
+- Return `{ handles: false }` for a request your strategy does not handle; the next strategy is asked. The first that handles a request decides its budget, whatever later strategies would say.
+- Take the key from the request alone: never look the account up. An unknown and a known name are then limited alike, so the limiter's answer never tells a caller which names exist.
+- For a credential that names nobody until it is looked up, such as an OAuth code, return the credential itself as the key.
+- A key of `null` counts the request against the budget shared by requests that name no account. So does an answer that throws or rejects; it never lets the request past the limiter.
+- Each strategy's keys are its own: a `username` key of `ann` and an email of `ann` are separate budgets. Keys are stored as a fixed-size HMAC under the install's secret, so a shared store never holds the credential.
+- A request a strategy handles spends a place of the ceiling before its key is known, as a password-reset request does.
+
+A strategy without `limitKey` could claim any request, so once the limiter reaches one in `auth.strategies`, the request is limited by the `email` it carries, as before. The server names each such strategy at startup while the limit is on.
+
 ## Worked example: signing in with an external provider
 
 A provider whose sign-in starts with a redirect does not fit the strategy chain,
@@ -55,7 +90,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export const googleAuth = definePlugin({
   name: "@acme/google-auth",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.63",
+  nextly: ">=0.0.2-alpha.67",
   // Finishing a login signs in whichever account the plugin names, so it is
   // declared where an operator reviews the plugin.
   capabilities: { auth: { login: true } },

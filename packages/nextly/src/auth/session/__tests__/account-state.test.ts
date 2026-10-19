@@ -10,6 +10,11 @@ const ok: AccountState = {
   lockedUntil: null,
   emailVerified: new Date("2026-01-01T00:00:00Z"),
   passwordUpdatedAt: null,
+  // Read with the state, though the gate does not judge them.
+  email: "a@b.c",
+  name: null,
+  image: null,
+  sessionEpoch: 0,
 };
 
 function reasonOf(fn: () => void): string | undefined {

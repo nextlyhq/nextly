@@ -198,7 +198,7 @@ async function resolveReleases(
 ): Promise<WidgetResult> {
   refuseUnconsumed(query);
 
-  const rows = await service().find(
+  const { rows } = await service().find(
     {
       state: "scheduled",
       scheduledAfter: new Date(),
@@ -228,10 +228,11 @@ async function resolveReleases(
  * boot paths funnel through — so a dev-server hot reload republishes exactly
  * once rather than colliding with the previous boot's registration.
  *
- * `supports` names `list` and nothing else. There is no count endpoint on the
- * releases service, and counting by fetching every row is the full scan
- * `find`'s own limit docblock warns against; declaring an op this source cannot
- * answer would put the refusal in front of a reader rather than here.
+ * `supports` names `list` and nothing else. This source answers one fixed
+ * question, the next releases due, and the service's `count` answers a
+ * different one (how many a tab of the list holds); declaring an op this
+ * source does not answer would put the refusal in front of a reader rather
+ * than here.
  */
 export function registerReleasesWidgetSource(): void {
   registerSystemSource(

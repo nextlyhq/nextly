@@ -8,13 +8,26 @@
  * `@tanstack/react-query`, and neither can come from the yalc store, so a yalc
  * install that only runs `yalc add` leaves those peers unresolved.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installDependencies } from "../installers/dependencies";
 import type { DatabaseConfig, ProjectInfo } from "../types";
 
 const execa = vi.hoisted(() => vi.fn().mockResolvedValue({ stdout: "" }));
 vi.mock("execa", () => ({ execa }));
+
+// The approvals write real files; their behaviour has its own test. Here only
+// whether, and when, the installer asks for them matters.
+const approveNativeBuilds = vi.hoisted(() =>
+  vi.fn().mockResolvedValue(["Approved the build scripts of esbuild."])
+);
+vi.mock("../installers/native-build-approvals", () => ({
+  approveNativeBuilds,
+}));
 
 const projectInfo = { packageManager: "pnpm" } as ProjectInfo;
 const database = { adapter: "@nextlyhq/adapter-postgres" } as DatabaseConfig;
@@ -93,6 +106,153 @@ describe("installDependencies (existing project)", () => {
   });
 });
 
+describe("installDependencies (existing project, what reading the config needs)", () => {
+  beforeEach(() => {
+    execa.mockReset();
+    execa.mockResolvedValue({ stdout: "" });
+    approveNativeBuilds.mockClear();
+  });
+
+  // A failing install below replaces execa's implementation; the next block
+  // must start from a working one.
+  afterEach(() => {
+    execa.mockReset();
+    execa.mockResolvedValue({ stdout: "" });
+  });
+
+  const run = (packageManager: ProjectInfo["packageManager"]) =>
+    installDependencies(
+      "/tmp/project",
+      { packageManager } as ProjectInfo,
+      database,
+      false,
+      false
+    );
+
+  // `nextly` takes esbuild as an optional peer, so nothing installs it for the
+  // app. npm then left it nested under drizzle-kit, where Nextly cannot load
+  // it, and `nextly.config.ts` was never read.
+  it.each([
+    ["npm", ["install", "--save-dev"]],
+    ["pnpm", ["add", "--save-dev"]],
+    ["yarn", ["add", "--dev"]],
+    ["bun", ["add", "--dev"]],
+  ] as const)(
+    "installs esbuild as a dev dependency of the app with %s",
+    async (pm, devArgs) => {
+      await run(pm);
+
+      const devInstall = execa.mock.calls.find(
+        ([cmd, args]: [string, string[]]) =>
+          cmd === pm && args.some(arg => arg.startsWith("esbuild"))
+      );
+      expect(devInstall?.[1].slice(0, devArgs.length)).toEqual([...devArgs]);
+      expect(devInstall?.[1]).toContain("esbuild@^0.28.1");
+    }
+  );
+
+  // An app may already require esbuild itself, in dependencies when production
+  // runs migrations on boot. A --save-dev install would move it to
+  // devDependencies, where a production install omits it.
+  it("leaves an esbuild the app already declares as it is", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "nextly-deps-"));
+    try {
+      await writeFile(
+        join(dir, "package.json"),
+        JSON.stringify({ dependencies: { esbuild: "^0.25.0" } }) + "\n"
+      );
+
+      await installDependencies(
+        dir,
+        { packageManager: "npm" } as ProjectInfo,
+        database,
+        false,
+        false
+      );
+
+      expect(
+        execa.mock.calls.some(([, args]: [string, string[]]) =>
+          args.some(arg => arg.startsWith("esbuild"))
+        )
+      ).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["pnpm", "bun"] as const)(
+    "approves %s's native builds before anything is installed",
+    async pm => {
+      await run(pm);
+
+      // `pnpm --version` printed nothing here, so the version is unknown.
+      expect(approveNativeBuilds).toHaveBeenCalledWith(
+        "/tmp/project",
+        pm,
+        undefined
+      );
+      const approvedAt = approveNativeBuilds.mock.invocationCallOrder[0];
+      const firstAddAt =
+        execa.mock.invocationCallOrder[
+          execa.mock.calls.findIndex(
+            ([, args]: [string, string[]]) => args[0] === "add"
+          )
+        ];
+      expect(approvedAt).toBeLessThan(firstAddAt);
+    }
+  );
+
+  it("returns what the approvals changed, so the caller can say it", async () => {
+    expect(await run("pnpm")).toEqual([
+      "Approved the build scripts of esbuild.",
+    ]);
+  });
+
+  it("asks pnpm for its version only on pnpm", async () => {
+    await run("npm");
+
+    expect(approveNativeBuilds).toHaveBeenCalledWith(
+      "/tmp/project",
+      "npm",
+      undefined
+    );
+    expect(execa.mock.calls.some(([cmd]: [string]) => cmd === "pnpm")).toBe(
+      false
+    );
+  });
+
+  it("names the command to run when the install fails", async () => {
+    execa.mockImplementation(async (cmd: string, args: string[]) => {
+      if (args[0] === "add") {
+        throw Object.assign(new Error("Command failed with exit code 1"), {
+          shortMessage: "Command failed with exit code 1: pnpm add nextly",
+        });
+      }
+      return { stdout: "" };
+    });
+
+    await expect(run("pnpm")).rejects.toThrow(/pnpm add .*nextly/);
+    await expect(run("pnpm")).rejects.toThrow(/run create-nextly-app again/i);
+  });
+
+  // What the approvals changed or kept is printed after a successful install;
+  // a failed one must carry it, since a kept version-scoped rule is exactly
+  // what makes pnpm stop.
+  it("carries what the approvals said into a failed install's message", async () => {
+    approveNativeBuilds.mockResolvedValueOnce([
+      "Kept the app's own esbuild@0.28.1 rule.",
+    ]);
+    execa.mockImplementation(async (_cmd: string, args: string[]) => {
+      if (args[0] === "add") throw new Error("ERR_PNPM_IGNORED_BUILDS");
+      return { stdout: "" };
+    });
+
+    await expect(run("pnpm")).rejects.toThrow(
+      /Kept the app's own esbuild@0\.28\.1 rule\./
+    );
+  });
+});
+
 describe("installDependencies (fresh plugin scaffold)", () => {
   beforeEach(() => {
     execa.mockClear();
@@ -113,6 +273,23 @@ describe("installDependencies (fresh plugin scaffold)", () => {
 
     expect(linkedViaYalc()).toContain("@nextlyhq/plugin-sdk");
     expect(linkedViaYalc()).toContain("nextly");
+  });
+
+  // The blog registers the form builder, whose peer @nextlyhq/plugin-sdk Yarn
+  // never installs on its own. A yalc scaffold omits both from package.json
+  // and relies on this install to link them, so both have to be linked here.
+  it("links the form builder and its plugin-sdk peer for the blog", async () => {
+    await installDependencies(
+      "/tmp/blog",
+      projectInfo,
+      database,
+      /* useYalc */ true,
+      /* isFreshProject */ true,
+      "blog"
+    );
+
+    expect(linkedViaYalc()).toContain("@nextlyhq/plugin-form-builder");
+    expect(linkedViaYalc()).toContain("@nextlyhq/plugin-sdk");
   });
 
   it("leaves the app scaffold's yalc set unchanged", async () => {

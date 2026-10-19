@@ -1,3 +1,4 @@
+import { decodeJwt } from "jose";
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -10,11 +11,20 @@ import {
 
 import { fakeSessionRows, type FakeSessionRows } from "./session-row-fake";
 
+/** The identity the user row holds: what the session claims are judged against. */
+const CHECKED = {
+  email: "a@b.c",
+  name: "Ada",
+  image: "/avatars/ada.png",
+  sessionEpoch: 0,
+};
+
 interface State {
   isActive: boolean;
   lockedUntil: Date | null;
   emailVerified: Date | null;
   passwordUpdatedAt?: Date | null;
+  sessionEpoch?: number;
 }
 
 /**
@@ -29,6 +39,7 @@ function deps(
   const rows = fakeSessionRows(async userId => ({
     userId,
     passwordUpdatedAt: null,
+    ...CHECKED,
     ...lockedState,
   }));
   return {
@@ -44,6 +55,7 @@ function deps(
     fetchAccountState: vi.fn(async (userId: string) => ({
       userId,
       passwordUpdatedAt: null,
+      ...CHECKED,
       ...state,
     })),
     fetchSessionRoles: vi.fn(async () => ({
@@ -158,6 +170,80 @@ describe("mintSession", () => {
   });
 });
 
+describe("mintSession's identity claims", () => {
+  const usable = {
+    isActive: true,
+    lockedUntil: null,
+    emailVerified: new Date(),
+  };
+
+  it.each([
+    ["email", { email: "someone-else@evil.test" }],
+    ["name", { name: "Not Ada" }],
+    ["image", { image: "https://evil.test/a.png" }],
+  ] as const)(
+    "signs the checked account's %s, not the one an afterAuthenticate hook returned",
+    async (claim, altered) => {
+      // The user handed to the mint is what the hooks returned. The account
+      // the gate checked is the row, so a hook rewriting a detail must not
+      // put it into the session readers trust as the signed-in person.
+      const minted = await mintSession(
+        { ...user, name: "Ada", image: CHECKED.image, ...altered },
+        deps(usable),
+        req,
+        { strategy: "test" }
+      );
+
+      const claims = decodeJwt(minted.body.accessToken);
+      expect(claims[claim]).toBe(CHECKED[claim]);
+      expect(minted.body.user[claim]).toBe(CHECKED[claim]);
+    }
+  );
+
+  it("signs the checked account's details when the hook changed none", async () => {
+    // The control: the same values arrive whichever copy is read, so the
+    // cases above fail only where the two copies differ.
+    const minted = await mintSession(
+      { ...user, name: CHECKED.name, image: CHECKED.image },
+      deps(usable),
+      req,
+      { strategy: "test" }
+    );
+
+    expect(decodeJwt(minted.body.accessToken)).toMatchObject({
+      sub: "u1",
+      email: CHECKED.email,
+      name: CHECKED.name,
+      image: CHECKED.image,
+    });
+  });
+});
+
+describe("mintSession and an account read without the session identity", () => {
+  it("refuses, rather than signing a session with no identity or epoch", async () => {
+    // A caller assembling the auth deps may still return the older account
+    // shape. Signed anyway, the session would carry no email and epoch zero,
+    // and every check after the account's first change would refuse it.
+    const d = deps({
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: new Date(),
+    });
+    d.fetchAccountState = vi.fn(async (userId: string) => ({
+      userId,
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: new Date(),
+      passwordUpdatedAt: null,
+    })) as never;
+
+    await expect(
+      mintSession(user, d, req, { strategy: "test" })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(d.rows.insertRefreshToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("mintSession against a revocation during the mint", () => {
   const usable = {
     isActive: true,
@@ -206,6 +292,44 @@ describe("mintSession against a revocation during the mint", () => {
       "password-changed"
     );
     expect(d.rows.committed).toHaveLength(0);
+  });
+
+  it("refuses when the sessions were ended after the first gate, within the same second", async () => {
+    // A password set in the same second as the first read leaves the stored
+    // time unchanged on MySQL and SQLite, so the epoch is what shows the
+    // revocation. Missed, the refresh row written here would outlive it.
+    const d = deps(usable, { ...usable, sessionEpoch: 1 });
+
+    await expect(
+      mintSession(user, d, req, { strategy: "test" })
+    ).rejects.toMatchObject({ code: "AUTH_INVALID_CREDENTIALS" });
+    expect(d.rows.committed).toHaveLength(0);
+  });
+
+  it("judges against the epoch the sign-in proved, not a later read", async () => {
+    // The password was proven at epoch 0; the gate's own read already sees
+    // the epoch a same-second reset raised. Comparing with the gate's read
+    // would pass, and sign in the old password's holder.
+    const d = deps({ ...usable, sessionEpoch: 1 });
+
+    await expect(
+      mintSession(user, d, req, {
+        strategy: "password",
+        passwordUpdatedAt: usable.passwordUpdatedAt,
+        sessionEpoch: 0,
+      })
+    ).rejects.toSatisfy(NextlyError.is);
+    expect(d.rows.committed).toHaveLength(0);
+  });
+
+  it("signs the epoch it compares under the lock", async () => {
+    // The control: unchanged, the session is issued, carrying that epoch.
+    const d = deps({ ...usable, sessionEpoch: 3 });
+
+    const minted = await mintSession(user, d, req, { strategy: "test" });
+
+    expect(decodeJwt(minted.body.accessToken).sev).toBe(3);
+    expect(d.rows.committed).toHaveLength(1);
   });
 
   it("judges against the password version the sign-in proved, not a later read", async () => {

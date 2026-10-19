@@ -1,5 +1,4 @@
 import { container } from "@nextly/di/container";
-import type { NextlyServiceConfig } from "@nextly/di/register";
 import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
@@ -13,6 +12,8 @@ import {
   hasAnyPermission,
 } from "@nextly/services/lib/permissions";
 
+import { presentedApiKey } from "../../middleware/rest-callers";
+import { currentRestLimitGate } from "../../middleware/rest-limit-gate";
 // getSession from ../session is a backward-compat wrapper that delegates
 // to the new jose-based session/get-session.ts module internally.
 import {
@@ -22,12 +23,15 @@ import {
 } from "../authenticated-scope";
 import { getSession } from "../session";
 
-import { authRateLimiter } from "./rate-limiter";
+import { apiKeyRateLimitRefusal } from "./api-key-budget";
+import { createErrorResponse, type ErrorResponse } from "./error-response";
 
-/** Fallback maximum requests per sliding window (1 000 req/hour). */
-const DEFAULT_RATE_LIMIT = 1_000;
-/** Fallback sliding window size in milliseconds (1 hour). */
-const DEFAULT_RATE_WINDOW_MS = 3_600_000;
+export { apiKeyRateLimitRefusal } from "./api-key-budget";
+export {
+  createErrorResponse,
+  createJsonErrorResponse,
+  type ErrorResponse,
+} from "./error-response";
 
 /**
  * Safely get the RBACAccessControlService from the DI container.
@@ -66,69 +70,6 @@ function getApiKeyService(): ApiKeyService | undefined {
     // DI container not initialized yet — safe to ignore
   }
   return undefined;
-}
-
-/**
- * Safely get the registered Nextly config from the DI container.
- *
- * Returns `undefined` if the container is not yet initialized (e.g., during
- * early bootstrap). Callers fall back to module-level defaults when `undefined`
- * is returned.
- */
-function getConfig(): NextlyServiceConfig | undefined {
-  try {
-    if (container.has("config")) {
-      return container.get<NextlyServiceConfig>("config");
-    }
-  } catch {
-    // DI container not initialized yet — safe to ignore
-  }
-  return undefined;
-}
-
-/**
- * Standardized error response structure.
- *
- * The optional `headers` field carries HTTP response headers that should be
- * forwarded to the client (e.g. rate-limit headers on 429 responses). It is
- * stripped from the JSON body by `createJsonErrorResponse()`; callers do not
- * need to handle it separately.
- */
-export interface ErrorResponse {
-  success: false;
-  statusCode: number;
-  message: string;
-  error: string;
-  data: null;
-  /**
-   * Machine-readable error code (e.g. "TOKEN_EXPIRED", "AUTH_REQUIRED").
-   * Included in the JSON body so clients can distinguish "needs refresh"
-   * from "fully unauthenticated" without parsing the human-readable message.
-   */
-  code?: string;
-  /** Optional HTTP response headers (e.g. Retry-After, X-RateLimit-*). Excluded from JSON body. */
-  headers?: Record<string, string>;
-}
-
-/**
- * Create standardized error responses
- */
-export function createErrorResponse(
-  statusCode: number,
-  message: string,
-  error?: string,
-  headers?: Record<string, string>,
-  code?: string
-): ErrorResponse {
-  return {
-    success: false,
-    statusCode,
-    message,
-    error: error || message,
-    data: null,
-    ...(code && { code }),
-    ...(headers && { headers }),
-  };
 }
 
 /**
@@ -183,45 +124,6 @@ export interface AuthContext {
 }
 
 /**
- * The 429 an API key has earned, or `null` when it is still within budget.
- *
- * Extracted so the decision — read config, ask the limiter, shape the refusal —
- * is one thing in one place rather than a third of `requireApiKeyAuth`.
- *
- * The limiter is resolved per call rather than captured at import: config is
- * registered after this module loads, so one bound at module scope would be the
- * in-memory limiter forever — silently, and only in production, where boot
- * order differs from a test's.
- */
-async function apiKeyRateLimitRefusal(
-  keyId: string
-): Promise<ErrorResponse | null> {
-  const cfg = getConfig();
-  const limit = cfg?.apiKeys?.rateLimit.requestsPerHour ?? DEFAULT_RATE_LIMIT;
-  const windowMs = cfg?.apiKeys?.rateLimit.windowMs ?? DEFAULT_RATE_WINDOW_MS;
-
-  const rl = await authRateLimiter(cfg?.rateLimit?.store).check(
-    keyId,
-    limit,
-    windowMs
-  );
-  if (rl.allowed) return null;
-
-  return createErrorResponse(
-    429,
-    "Too Many Requests",
-    "Rate limit exceeded for this API key",
-    {
-      "Retry-After": String(
-        Math.ceil((rl.resetAt.getTime() - Date.now()) / 1000)
-      ),
-      "X-RateLimit-Limit": String(limit),
-      "X-RateLimit-Remaining": "0",
-    }
-  );
-}
-
-/**
  * API key authentication middleware.
  *
  * Validates an `Authorization: Bearer nx_live_...` header and resolves the
@@ -264,16 +166,14 @@ export async function requireApiKeyAuth(req: Request): Promise<
   | ErrorResponse
   | null
 > {
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return null; // No API key attempted
-  }
+  // No header, or an empty key after "Bearer ": no API key attempted.
+  const rawKey = presentedApiKey(req);
+  if (rawKey === null) return null;
 
-  const rawKey = authHeader.slice(7).trim(); // "Bearer ".length === 7
-  if (!rawKey) {
-    return null; // Malformed header — empty key after "Bearer "
-  }
-
+  // The REST limit already looked this key up for this request, and spent its
+  // budget when it resolved: its answer stands, so the key is neither looked
+  // up again nor counted twice.
+  const known = currentRestLimitGate(req)?.knownKey(rawKey);
   const apiKeyService = getApiKeyService();
   if (!apiKeyService) {
     // Service unavailable during early bootstrap — key was attempted but cannot
@@ -287,7 +187,9 @@ export async function requireApiKeyAuth(req: Request): Promise<
   }
 
   // 3. Hash and look up the key — returns null for not-found, revoked, or expired
-  const keyAuth = await apiKeyService.authenticateApiKey(rawKey);
+  const keyAuth = known
+    ? known.resolved
+    : await apiKeyService.authenticateApiKey(rawKey);
   if (!keyAuth) {
     // Key was present but invalid/expired/revoked — explicit 401, do NOT fall through
     return createErrorResponse(
@@ -300,8 +202,10 @@ export async function requireApiKeyAuth(req: Request): Promise<
   // 4. Rate limit check — enforced after auth, before permission resolution.
   //    Limits come from defineConfig().apiKeys.rateLimit when available;
   //    module-level constants are the fallback for unconfigured deployments.
-  const overLimit = await apiKeyRateLimitRefusal(keyAuth.id);
-  if (overLimit) return overLimit;
+  if (!known?.debited) {
+    const overLimit = await apiKeyRateLimitRefusal(keyAuth.id);
+    if (overLimit) return overLimit;
+  }
 
   // 5. Resolve effective permissions and roles for this token type
   const [grants, roles] = await Promise.all([
@@ -449,6 +353,23 @@ export async function requirePermission(
     return authResult;
   }
 
+  return authorizeCaller(authResult, action, resource);
+}
+
+/**
+ * `requirePermission`'s decision, for a caller a gate has already
+ * authenticated.
+ *
+ * Authenticating a request again is not free: each authentication of an API
+ * key spends a slot of the key's rate limit. A gate that must authenticate
+ * before it can know which permission to ask for judges the caller it already
+ * holds here, so the request is counted once.
+ */
+export async function authorizeCaller(
+  authResult: AuthContext,
+  action: string,
+  resource: string
+): Promise<AuthContext | ErrorResponse> {
   // API key auth: use pre-resolved permissions instead of DB lookup.
   // The permissions were already resolved by resolveApiKeyPermissions()
   // based on the key's token type (read-only → only read-* slugs, etc.).
@@ -508,6 +429,17 @@ export async function requireAnyPermission(
     return authResult;
   }
 
+  return authorizeCallerForAny(authResult, permissions);
+}
+
+/**
+ * `requireAnyPermission`'s decision, for a caller a gate has already
+ * authenticated, so the request is counted once (see `authorizeCaller`).
+ */
+export async function authorizeCallerForAny(
+  authResult: AuthContext,
+  permissions: Array<{ action: string; resource: string }>
+): Promise<AuthContext | ErrorResponse> {
   // API key auth: check against pre-resolved permissions
   if (authResult.authMethod === "api-key") {
     const hasAny = permissions.some(({ action, resource }) =>
@@ -640,25 +572,6 @@ async function apiKeyEntityRuleRefusal(
 /** Whether an action names an operation an entity access rule can declare. */
 function isAccessOperation(action: string): action is AccessOperation {
   return ACCESS_OPERATIONS.some(operation => operation === action);
-}
-
-/**
- * Create JSON error response.
- *
- * Any `headers` on the `ErrorResponse` are forwarded as HTTP response headers
- * and excluded from the JSON body (so clients never see an unexpected
- * `headers` field in the payload).
- */
-export function createJsonErrorResponse(error: ErrorResponse): Response {
-  const { headers: extraHeaders, ...bodyPayload } = error;
-  const responseHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...extraHeaders,
-  };
-  return new Response(JSON.stringify({ data: bodyPayload }), {
-    status: error.statusCode,
-    headers: responseHeaders,
-  });
 }
 
 /**

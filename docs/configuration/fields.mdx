@@ -26,7 +26,7 @@ const fields = [
 
 ## Field categories
 
-Eight categories partition the field inventory.
+Seven categories partition the field inventory.
 
 | Category | Fields |
 |---|---|
@@ -37,7 +37,6 @@ Eight categories partition the field inventory.
 | [Layout](#layout) | `repeater`, `group` |
 | [Component](#component-1) | `component` |
 | [Advanced](#advanced) | `json` |
-| [Virtual](#virtual) | `join` |
 
 The "Common options across fields" section at the bottom lists the shared properties (name, label, required, admin, access, hooks, validate, custom).
 
@@ -784,60 +783,9 @@ json({
 
 ---
 
-## Virtual
-
-### join
-
-Display reverse relationships — entries from another collection that reference the current document. Join fields are read-only and do **not** store data; they query at read time.
-
-```typescript
-{
-  name: "posts",
-  type: "join",
-  collection: "posts",
-  on: "category",
-}
-```
-
-There is no helper function for `join` — declare it as a plain object with `type: "join"`.
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `type` | `"join"` | — | **Required.** Field type literal. |
-| `name` | `string` | — | **Required.** Field identifier (no DB column is created). |
-| `collection` | `string` | — | **Required.** Collection containing the referencing field. |
-| `on` | `string` | — | **Required.** Field name in `collection` that references this document. Supports dot notation (e.g. `"metadata.author"`). |
-| `where` | `Record<string, unknown>` | — | Additional filter for joined entries (Nextly Where syntax). |
-| `defaultLimit` | `number` | `10` | Max entries to display. Set `0` to display all. |
-| `defaultSort` | `string` | — | Sort field. Prefix with `-` for descending. |
-| `maxDepth` | `number` | `1` | Population depth for relationships in joined entries. |
-| `label` | `string` | Auto | Display label. |
-| `admin.allowNavigation` | `boolean` | `true` | Make entries clickable links. |
-| `admin.allowCreate` | `boolean` | `false` | Show a "Create New" button (pre-fills the relationship). |
-| `admin.defaultColumns` | `string[]` | — | Columns to display in the list. |
-
-```typescript
-// On a Categories collection — show all posts in this category
-{
-  name: "posts",
-  type: "join",
-  label: "Posts in this Category",
-  collection: "posts",
-  on: "category",
-  defaultSort: "-createdAt",
-  admin: {
-    defaultColumns: ["title", "status", "createdAt"],
-  },
-}
-```
-
-**Gotchas:** join fields are **read-only**; the related entries are still edited from their own collection's edit page. Only `name`, `label`, and `admin` are common with other field types — `required`, `unique`, `defaultValue`, `validate`, `access`, and `hooks` do not apply.
-
----
-
 ## Common options across fields
 
-Every field type (except `join`, which is virtual) inherits the following from `BaseFieldConfig`. Where a specific field's reference table above doesn't repeat them, they still apply.
+Every field type inherits the following from `BaseFieldConfig`. Where a specific field's reference table above doesn't repeat them, they still apply.
 
 ### Identity
 
@@ -897,14 +845,14 @@ Field-level access control — granular permissions per CRUD operation.
 text({
   name: "internalNotes",
   access: {
-    create: ({ req }) => req.user?.role === "admin",
-    read: ({ req }) => req.user?.role === "admin",
-    update: ({ req }) => req.user?.role === "admin",
+    create: ({ permissions }) => permissions.includes("users:update"),
+    read: ({ permissions }) => permissions.includes("users:update"),
+    update: ({ permissions }) => permissions.includes("users:update"),
   },
 });
 ```
 
-Each function receives `{ req, id?, data? }` and returns `boolean | Promise<boolean>`. Field-level access is checked **in addition to** collection/single access.
+Each function receives `{ req, id?, data?, permissions, roles, principal }` and returns `boolean | Promise<boolean>`. `permissions` is the caller's, as `resource:action`; decide by it rather than by a role's name. Field-level access is checked **in addition to** collection/single access.
 
 ### `hooks`
 

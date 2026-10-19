@@ -9,6 +9,7 @@ import { ServiceDispatcher } from "@nextly/services/dispatcher";
 
 import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
+import { setSessionStandingBoot } from "../auth/session/session-standing";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import {
   isServicesRegistered,
@@ -17,6 +18,11 @@ import {
   shutdownServices,
 } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
+import {
+  localizationKey,
+  recordRegisteredLocalization,
+  registeredLocalization,
+} from "../di/registered-localization";
 import { awaitBootMigrations } from "../init/boot-migrations-gate";
 import { buildServiceConfig } from "../init/build-service-config";
 import {
@@ -237,40 +243,31 @@ export function getHandlerConfig(): SanitizedNextlyConfig | null {
 }
 
 /**
- * The `localization` block, as it stood in the ROUTE config when services
- * were last known to match it. Null until the first observation.
- */
-let _registeredLocalization: string | null = null;
-
-/** The comparable form of a config's localization block. */
-function localizationKey(config: SanitizedNextlyConfig | null): string {
-  return JSON.stringify(config?.localization ?? null);
-}
-
-/**
  * Whether the stored config's `localization` block has moved since services
  * were registered from it.
  *
- * Compared against the route config's OWN previous value rather than the
- * container's: what `registerServices` stores is the plugin-transformed
- * config, so an app whose plugin supplies or normalizes `localization` would
- * show a difference that re-registering can never remove — every request
- * would tear the services down and rebuild the adapter, forever.
+ * Compared against the block the registering boot was HANDED, recorded in
+ * `di/registered-localization`, rather than the container's: what
+ * `registerServices` stores is the plugin-transformed config, so an app whose
+ * plugin supplies or normalizes `localization` would show a difference that
+ * re-registering can never remove — every request would tear the services
+ * down and rebuild the adapter, forever.
  *
- * Callers reach this only once services are already registered, and this
- * module records a baseline whenever IT registers them — so no recorded value
- * means some other path did (an `instrumentation.ts` boot). Those services
- * captured whatever `localization` was current when that path ran, which is
- * not observable from here: the config may have been edited before this route
- * module ever saw a request. Unverifiable is treated as changed, costing one
- * rebuild on the first request of such a process. It cannot loop, because the
- * rebuild records this same route config as the baseline and every later
- * request then compares equal.
+ * Both boots record it: this module whenever IT registers the services, and
+ * `getNextly`, which an app's server code, an `instrumentation.ts` and the
+ * admin's component check call. A record from `getNextly` describes the
+ * config those services were really built from, so a config edited before
+ * this route module saw a request still reads as changed, and an unchanged
+ * one does not cost a rebuild that would disconnect the adapter under other
+ * requests. Only a registration that recorded nothing is unverifiable, and
+ * that is treated as changed, costing one rebuild. It cannot loop, because the
+ * rebuild records this same route config and every later request then
+ * compares equal.
  */
 function localizationBlockChanged(stored: SanitizedNextlyConfig): boolean {
-  const current = localizationKey(stored);
-  if (_registeredLocalization === null) return true;
-  return _registeredLocalization !== current;
+  const registered = registeredLocalization();
+  if (registered === undefined) return true;
+  return registered !== localizationKey(stored);
 }
 
 /**
@@ -299,7 +296,7 @@ export const _localizationBlockChangedForTest = localizationBlockChanged;
 export function _recordRegisteredLocalizationForTest(
   config: SanitizedNextlyConfig | null
 ): void {
-  _registeredLocalization = localizationKey(config);
+  recordRegisteredLocalization(config);
 }
 
 /**
@@ -406,6 +403,13 @@ export async function ensureServicesInitialized(): Promise<void> {
 // The in-flight recovery/registration pass concurrent callers await.
 let _initInFlight: Promise<void> | null = null;
 
+// A session read needs the database to say whether the account may still use
+// its token, and some routes authenticate before anything has booted. The
+// check starts the services through this boot, and only for a token whose
+// signature has already verified, so a request without one still boots
+// nothing (`auth/session/session-standing`).
+setSessionStandingBoot(ensureServicesInitialized);
+
 async function initializeServicesOnce(): Promise<void> {
   // Dev-only staleness recovery: services register ONCE per process, but
   // editing nextly.config.ts re-evaluates the route module, which stores the
@@ -470,7 +474,7 @@ async function initializeServicesOnce(): Promise<void> {
     await registerServices(serviceConfig);
     // Services now match the block this config was registered from, so that
     // is the value a later request compares against.
-    _registeredLocalization = localizationKey(nextlyConfig);
+    recordRegisteredLocalization(nextlyConfig);
 
     // Seed built-in email templates (password-reset, welcome, etc.)
     // This mirrors init.ts runPostInitTasks() so external apps using

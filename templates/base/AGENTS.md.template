@@ -112,6 +112,8 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   collection or on any of its fields?**
 
   ```ts
+  import { cachedFind, nextlyTags } from "nextly/runtime";
+
   // NO read rule, on the collection OR its fields — the result is identical for
   // every reader, so one shared entry is correct and gets the full ISR benefit.
   // `find()` always returns the list envelope `{ items, meta }`, so a detail route takes the
@@ -183,6 +185,35 @@ Both are generated from the pages the site publishes, so they cannot describe a
 page that does not exist. Neither is version-stamped: they describe the CURRENT
 release, so check the version above before trusting a detail against an older
 pin.
+
+## Skills for Nextly tasks
+
+If this project has `.agents/skills/`, it holds skills for common Nextly
+tasks, and `.claude/skills/` holds the same files for Claude Code. Load the
+one that matches a task before starting it. They were written for the Nextly
+release this project was created with.
+
+Each skill names the Nextly release it was checked against in its
+frontmatter, as `metadata.nextly-version`. The command below installs skills
+written for `{{skillsVersion}}`. Restore them as they were released only when
+`.agents/skills/nextly-install/SKILL.md` exists, its `metadata.nextly-version`
+is exactly `{{skillsVersion}}`, and `{{execCommand}} nextly --version` prints
+exactly `{{skillsVersion}}`:
+
+```bash
+npx skills add 'nextlyhq/nextly#v{{skillsTag}}' --skill '*' --agent claude-code codex cursor --copy -y
+```
+
+It rewrites both folders, so edits made to a skill there are replaced.
+`{{skillsTag}}` is the release of `create-nextly-app` that made this project,
+whose tag publishes these skills. Releases up to 0.0.2-alpha.66 publish no
+skills for building apps: installing from one of those tags brings the skills
+Nextly's own contributors use, so never put an older version in its place.
+
+Otherwise, with no skills or with skills for a different release than this
+project runs, do not run the command above: it would install skills written
+for another release. See <https://nextlyhq.com/docs/guides/coding-agents> for
+skills that match.
 
 ## Conventions worth keeping
 
