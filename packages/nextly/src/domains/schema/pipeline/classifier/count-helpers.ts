@@ -151,6 +151,21 @@ function extractRows<T>(raw: unknown, dialect: SupportedDialect): T[] {
 }
 
 /**
+ * Every row a raw read returns, from each dialect's result shape: a reader shaped like an
+ * adapter's `executeQuery`, for code that holds only the Drizzle handle.
+ */
+export async function queryRows<T>(
+  db: unknown,
+  dialect: SupportedDialect,
+  text: string
+): Promise<T[]> {
+  const query = sql.raw(text);
+  return dialect === "sqlite"
+    ? (db as { all(q: unknown): T[] }).all(query)
+    : extractRows<T>(await (db as PgMysqlExecute).execute(query), dialect);
+}
+
+/**
  * How many rows of a companion `<table>_locales` hold a value in each of `columns`, for each
  * language except `excludeLocale`, in one grouped query. A language with no value in a column is
  * absent from that column's answer.
