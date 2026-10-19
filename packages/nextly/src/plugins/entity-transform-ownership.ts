@@ -38,6 +38,11 @@ import {
   type ColumnOrigin,
   type SupportedDialect,
 } from "../domains/schema/services/field-column-descriptor";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../domains/singles/services/resolve-single-table-name";
 import { NextlyError } from "../errors/nextly-error";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import { validateFieldGroupConfig } from "../field-groups/config/validate-field-group";
@@ -362,11 +367,50 @@ function storageOf(
 }
 
 /**
- * The entity-level settings that decide its tables, as the desired schema
- * reads them: its table's name, the `status` column Draft/Published adds,
- * and the `_locales` companion localization adds.
+ * The entity-level settings that decide its tables: its table's name, the
+ * `status` column Draft/Published adds, and the `_locales` companion
+ * localization adds.
  */
 const TABLE_SETTINGS = ["dbName", "status", "localized"] as const;
+
+type TableSetting = (typeof TABLE_SETTINGS)[number];
+
+/**
+ * The table each kind's definition is stored in, by the resolvers the schema
+ * pipeline names tables with. A component's table follows its slug alone.
+ */
+const TABLE_OF: Record<
+  EntityKind,
+  (slug: string, dbName: string | undefined) => string
+> = {
+  collection: (slug, dbName) => resolveCollectionTableName(slug, dbName),
+  single: (slug, dbName) => resolveSingleTableName({ slug, dbName }),
+  component: slug => resolveComponentTableName(slug),
+};
+
+/**
+ * The table settings as the schema pipeline reads them, so a transform that
+ * restates them in an equivalent form changes nothing: a `dbName` by the
+ * table it resolves to, and `status` and `localized` as on only when `true`,
+ * so an explicit `false` reads as the unset setting it is.
+ */
+function tableSettingsOf(
+  kind: EntityKind,
+  slug: string,
+  definition: Record<string, unknown>
+): Record<TableSetting, unknown> {
+  const dbName = definition.dbName;
+  return {
+    // A `dbName` that is not a string is compared as written: no resolver
+    // reads one, so nothing says which table it means.
+    dbName:
+      dbName === undefined || typeof dbName === "string"
+        ? TABLE_OF[kind](slug, dbName)
+        : dbName,
+    status: definition.status === true,
+    localized: definition.localized === true,
+  };
+}
 
 /**
  * Who, other than the transforming plugin, keeps data in the entity's
@@ -391,10 +435,12 @@ function tableKeeper(
  * whose column or companion table holds data, while another plugin keeps
  * data there: its owner, or a plugin that added a field to it. The owner
  * moving its own table, or a plugin moving the app's, would carry that
- * plugin's stored values along.
+ * plugin's stored values along. Settings are compared as the pipeline reads
+ * them, so restating one in an equivalent form is not a change.
  */
 function assertTableKept(
   slug: string,
+  kind: EntityKind,
   ledger: OwnershipLedger,
   before: Record<string, unknown>,
   after: Record<string, unknown>,
@@ -402,8 +448,10 @@ function assertTableKept(
 ): void {
   const keeper = tableKeeper(ledger, plugin);
   if (keeper === undefined) return;
+  const was = tableSettingsOf(kind, slug, before);
+  const now = tableSettingsOf(kind, slug, after);
   const changed = TABLE_SETTINGS.find(
-    setting => !isDeepStrictEqual(before[setting], after[setting])
+    setting => !isDeepStrictEqual(was[setting], now[setting])
   );
   if (changed === undefined) return;
   throw refusal(
@@ -689,7 +737,7 @@ export function settleTransform(
   plugin: TransformingPlugin
 ): OwnershipLedger {
   const { slug, kind } = entity;
-  assertTableKept(slug, ledger, before, after, plugin);
+  assertTableKept(slug, kind, ledger, before, after, plugin);
   assertUniqueIndexesKept(slug, ledger, before, after, plugin);
   assertFieldsKept(slug, kind, ledger, before, after, plugin);
   const behaviour = settleBehaviour(slug, ledger, after, plugin);
