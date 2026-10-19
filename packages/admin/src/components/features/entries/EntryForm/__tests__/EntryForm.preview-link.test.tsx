@@ -18,9 +18,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
 
-const { headerProps, mintArgs, localization, settings } = vi.hoisted(() => ({
+const { headerProps, localization, settings } = vi.hoisted(() => ({
   headerProps: vi.fn(),
-  mintArgs: vi.fn(),
   localization: { current: { defaultLocale: "en" } },
   settings: { current: { siteUrl: "https://site.example" } },
 }));
@@ -44,15 +43,6 @@ vi.mock("@admin/hooks/useLocalization", () => ({
 
 vi.mock("@admin/hooks/queries/useGeneralSettings", () => ({
   useGeneralSettings: () => ({ data: settings.current }),
-}));
-
-vi.mock("@admin/hooks/usePreviewLink", () => ({
-  DEFAULT_PREVIEW_ROUTE: "/api/preview",
-  buildPreviewUrl: () => "https://site.example/api/preview?token=t",
-  usePreviewLink: (args: unknown) => {
-    mintArgs(args);
-    return { mutate: vi.fn(), isPending: false };
-  },
 }));
 
 import { EntryForm } from "../EntryForm";
@@ -104,6 +94,9 @@ describe("EntryForm wires the shareable link into its header", () => {
     renderForm();
 
     expect(lastHeaderProps().isLinkAvailable).toBe(false);
+    // Nothing to share either: a document with no resolvable language is
+    // exactly the one a link must not be minted for.
+    expect(lastHeaderProps().shareDocument).toBeUndefined();
   });
 
   it("mints against the resolved language, never the editor's sentinel", () => {
@@ -111,13 +104,11 @@ describe("EntryForm wires the shareable link into its header", () => {
     // absent locale claim authorizes every locale.
     renderForm();
 
-    expect(mintArgs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        collection: "posts",
-        entryId: "e1",
-        locale: "en",
-      })
-    );
+    expect(lastHeaderProps().shareDocument).toEqual({
+      collection: "posts",
+      entryId: "e1",
+      locale: "en",
+    });
   });
 
   it("passes no site url, because the browser is not where one is known", () => {
@@ -127,20 +118,18 @@ describe("EntryForm wires the shareable link into its header", () => {
     // admin's own origin standing in for the site's.
     renderForm();
 
-    expect(mintArgs).toHaveBeenCalledWith(
-      expect.not.objectContaining({ siteUrl: expect.anything() })
-    );
-    expect(mintArgs).toHaveBeenCalledWith(
-      expect.not.objectContaining({ previewRoute: expect.anything() })
-    );
+    const shared = lastHeaderProps().shareDocument;
+    expect(shared).not.toHaveProperty("siteUrl");
+    expect(shared).not.toHaveProperty("previewRoute");
   });
 
-  it("hands the header a handler rather than only a flag", () => {
-    // `PreviewActions` requires both; a flag with no handler renders nothing,
-    // which would look exactly like the feature being unavailable.
+  it("hands the header the document to share rather than only a flag", () => {
+    // The header needs both: a flag with no document opens a popover with
+    // nothing to make links for, which would look exactly like the feature
+    // being unavailable.
     renderForm();
 
-    expect(typeof lastHeaderProps().onCopyLink).toBe("function");
+    expect(lastHeaderProps().shareDocument).toBeDefined();
   });
 });
 
