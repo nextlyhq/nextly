@@ -40,9 +40,9 @@
  * **Which rows.** The callers, rules, actions and targets are crossed in full,
  * and each row is sent to every door that can ask it (`table.ts`, `asks`). A
  * door with no way to name a caller or a target is left out of that row, and
- * the answer file shows `.` there. Unpublish is asked nowhere: every rule here
- * says the same to publish and unpublish, so it would repeat the publish rows.
- * Without the access-control service, the read of a collection, a Single and a
+ * the answer file shows `.` there. Publish and unpublish are each asked of a
+ * collection, since they need permissions of their own, and each is judged on
+ * top of the update rule. Without the access-control service, the read of a collection, a Single and a
  * related row is asked by a visitor, a user with and without the permission
  * and a role-based key, under no rule, a rule returning `true`, one returning
  * `false` and one returning `null`: the callers and rules whose answer a
@@ -54,12 +54,10 @@
  * booted, so for that door the gates are built without it, as a boot without
  * the service builds them.
  *
- * **One dialect per file.** The REST catch-all keeps one dispatcher per
- * process, built on the adapter of the first instance that served a request,
- * so a second instance booted in the same file would answer some routes from
- * the first one's database. Each dialect therefore runs in a file of its own,
- * which Vitest gives a fresh module graph, and shares one booted instance
- * across every row.
+ * **One dialect per file.** Each dialect runs in a file of its own, which
+ * Vitest gives a fresh module graph, and shares one booted instance across
+ * every row, so the cases of one dialect are seeded once and a failure names
+ * the dialect it came from.
  *
  * **What a cell says.** `A` allowed, `R` refused, an HTTP status for a refusal
  * or failure that carried one, `E` a failure that carried none, `=<value>` a
