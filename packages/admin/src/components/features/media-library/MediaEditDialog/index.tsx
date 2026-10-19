@@ -39,7 +39,7 @@ import {
   Trash2,
   Download,
 } from "@admin/components/icons";
-import { formatFileSize } from "@admin/lib/media-utils";
+import { copyableMediaUrl, formatFileSize } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
 
@@ -206,7 +206,7 @@ function ImageSizesDisplay({
   const [copiedUrl, setCopiedUrl] = React.useState<string | null>(null);
 
   const handleCopyUrl = React.useCallback((url: string, name: string) => {
-    void navigator.clipboard.writeText(url);
+    void navigator.clipboard.writeText(copyableMediaUrl(url));
     setCopiedUrl(name);
     setTimeout(() => setCopiedUrl(null), 2000);
   }, []);

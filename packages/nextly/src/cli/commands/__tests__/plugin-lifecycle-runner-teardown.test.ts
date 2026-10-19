@@ -179,13 +179,46 @@ describe("the lifecycle hook's boot is torn down", () => {
     ]);
   });
 
-  it("even while a plugin keeps emitting until it is destroyed", async () => {
-    // A producer its plugin stops only in `destroy()` never lets the bus
-    // empty, so waiting for every handler on it would hold the command open
-    // for good. Only the handlers running when the hook returns are waited
-    // for, and the teardown that stops the producer still runs.
-    // Each tick's handler emits the next before it finishes, as a producer
-    // does, so some handler is always running until the producer stops.
+  it("drains the follow-up events a handler of the hook's emits", async () => {
+    // A handler that emits a second event before it finishes sets off more
+    // of the hook's own work, which a teardown must not cut off either.
+    const bus = getEventBus();
+    const first = async () => {
+      await new Promise(resolve => setTimeout(resolve, 2));
+      bus.emit("account.erased", {});
+    };
+    const second = async () => {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      calls.push("follow-up finished");
+    };
+    bus.on("account.deleted", first);
+    bus.on("account.erased", second);
+    onInstall.mockImplementation(async () => {
+      calls.push("onInstall");
+      bus.emit("account.deleted", { id: "acc_1" });
+    });
+
+    try {
+      await runPluginInstall("@acme/fx", {}, context);
+    } finally {
+      bus.off("account.deleted", first);
+      bus.off("account.erased", second);
+    }
+
+    expect(calls).toEqual([
+      "register",
+      "onInstall",
+      "follow-up finished",
+      "destroy",
+      "clear",
+      "disconnect",
+    ]);
+  });
+
+  it("is not held open by a producer a plugin started outside its hook", async () => {
+    // A producer its plugin starts in init() and stops in destroy() never
+    // lets the bus empty; started outside the hook, it is not waited for, and
+    // the teardown that stops it runs.
     const bus = getEventBus();
     let producing = true;
     const handler = async () => {
@@ -193,10 +226,7 @@ describe("the lifecycle hook's boot is torn down", () => {
       if (producing) bus.emit("tick", {});
     };
     bus.on("tick", handler);
-    onInstall.mockImplementation(async () => {
-      calls.push("onInstall");
-      bus.emit("tick", {});
-    });
+    bus.emit("tick", {});
 
     try {
       await runPluginInstall("@acme/fx", {}, context);
@@ -214,6 +244,29 @@ describe("the lifecycle hook's boot is torn down", () => {
       "disconnect",
     ]);
   }, 5_000);
+
+  it("and fails the hook when what it set off was still running at the time limit", async () => {
+    // The wait is bounded, and a command that went on to drop the plugin's
+    // tables would cut that work off; the runtime is still torn down.
+    const settleRunning = vi
+      .spyOn(getEventBus(), "settleCaused")
+      .mockResolvedValue(false);
+    try {
+      await expect(runPluginInstall("@acme/fx", {}, context)).rejects.toThrow(
+        /still running/
+      );
+    } finally {
+      settleRunning.mockRestore();
+    }
+
+    expect(calls).toEqual([
+      "register",
+      "onInstall",
+      "destroy",
+      "clear",
+      "disconnect",
+    ]);
+  });
 
   it("when the hook throws", async () => {
     onInstall.mockImplementation(async () => {

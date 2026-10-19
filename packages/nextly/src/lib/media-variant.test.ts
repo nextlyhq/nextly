@@ -74,6 +74,31 @@ describe("normalizeMediaUrls", () => {
   });
 
   // SQLite stores `media.sizes` as TEXT, and the driver returns it unparsed.
+  // A local storage `baseUrl` written without its leading slash (`uploads`)
+  // stores `uploads/<key>`, which a page at `/admin/media` would resolve to
+  // `/admin/media/uploads/<key>`. Read as a path from the site's root.
+  it("reads a URL stored without its leading slash from the site's root", () => {
+    const row = normalizeMediaUrls({
+      url: "uploads/2026/10/a.png",
+      thumbnailUrl: "uploads/2026/10/a-thumb.png",
+      sizes: { small: { url: "uploads/2026/10/a-small.webp", width: 4 } },
+    });
+
+    expect(row.url).toBe("/uploads/2026/10/a.png");
+    expect(row.thumbnailUrl).toBe("/uploads/2026/10/a-thumb.png");
+    expect(row.sizes?.small?.url).toBe("/uploads/2026/10/a-small.webp");
+  });
+
+  it.each([
+    "/uploads/2026/10/a.png",
+    "https://cdn.example.com/a.png",
+    "//cdn.example.com/a.png",
+  ])("leaves %s as it is", url => {
+    const row = normalizeMediaUrls({ url, thumbnailUrl: url, sizes: null });
+    expect(row.url).toBe(url);
+    expect(row.thumbnailUrl).toBe(url);
+  });
+
   describe("string-encoded sizes (SQLite)", () => {
     it("parses a JSON-encoded sizes string into an object", () => {
       const sizes = {

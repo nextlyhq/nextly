@@ -25,6 +25,9 @@ export interface UserContext {
   /** User email */
   email?: string;
 
+  /** The user's display name, kept with the history events of their writes. */
+  name?: string;
+
   /** Singular authorized role. */
   role?: string;
 

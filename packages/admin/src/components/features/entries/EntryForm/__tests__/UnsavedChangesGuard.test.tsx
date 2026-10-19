@@ -396,6 +396,22 @@ describe("moving between a document and its own views", () => {
       "/admin/collections/pages/1/builder?field=hero",
       "/admin/collections/pages/1/builder?field=body",
     ],
+    // History opens beside the document, with the form still mounted.
+    [
+      "an entry into its history beside it",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1?history=1",
+    ],
+    [
+      "one version of the history to another",
+      "/admin/collections/pages/1?history=1&version=2",
+      "/admin/collections/pages/1?history=1&version=3",
+    ],
+    [
+      "a Single into a version in its history",
+      "/admin/singles/home",
+      "/admin/singles/home?history=1&version=4",
+    ],
   ])("stays, without asking, from %s", async (_case, from, to) => {
     // The same page answers both addresses and keeps the same form mounted,
     // so nothing unsaved is left behind.

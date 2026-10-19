@@ -92,6 +92,11 @@ import {
   uniqueColumnsToKeep,
 } from "./live-uniques";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
+import {
+  type ColumnMovedToCompanion,
+  operationsToJudge,
+  planCompanionMoves,
+} from "./moved-to-companion";
 import { assertPreCleanupAccepted } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
@@ -211,6 +216,13 @@ export interface PipelineResult {
   renamesApplied: number;
   error?: { code: string; message: string; details?: unknown };
   partiallyApplied?: boolean;
+  /**
+   * The main-table columns whose values this apply moved to a companion before dropping them
+   * (`planJoiningMovesForApply`), by table, column and field. Absent when nothing moved.
+   */
+  movedToCompanion?: readonly (ColumnMovedToCompanion & {
+    fieldName: string;
+  })[];
   // F10 PR 6: per-change-kind diff counts. Set on success only;
   // absent on failure (the failure may have happened before the diff
   // was even computed). Mirrors the same shape persisted to the
@@ -632,6 +644,12 @@ export class PushSchemaPipeline {
     uiTargetSlug?: string;
     /** Which entity kind `uiTargetSlug` names, so the journal row records it accurately. */
     uiTargetKind?: "collection" | "single" | "component";
+    /**
+     * The default language of a translated entity, whose companion rows take the value of a field
+     * this apply makes translated. Absent, no value is moved, and such a field's drop is asked
+     * about as any other.
+     */
+    defaultLocale?: string;
   }): Promise<PipelineResult> {
     const { db, dialect, source, promptChannel, databaseName } = args;
     // Resolved once, before anything reads it. A desired schema is consumed by TWO builders — the
@@ -784,8 +802,23 @@ export class PushSchemaPipeline {
           : { kept: allOperations, skipped: [] as Operation[] };
       logSkippedLockedOps(skippedLockedOps);
 
-      // Phase B: rename detection + prompt + resolution application.
-      const candidates = this.deps.renameDetector.detect(operations, dialect);
+      // A field this apply makes translated still has its value on the main table, which the diff
+      // drops: the value moves to the default language's companion row first. Planned here, from
+      // the live tables, so every caller of the apply moves it the same way; only a column whose
+      // move is planned leaves the drop unjudged, so one that cannot be moved stays a drop to ask
+      // about. The moves run in Phase C, after every refusal and before the first drop.
+      const moves = await planCompanionMoves(
+        desired,
+        operations,
+        db,
+        dialect,
+        args.defaultLocale
+      );
+
+      // Phase B: rename detection + prompt + resolution application. A column moved to the
+      // companion is dropped without being judged: its value is moved before the drop.
+      const judged = operationsToJudge(operations, moves.moved);
+      const candidates = this.deps.renameDetector.detect(judged, dialect);
 
       // F5 PR 5: count callbacks bound to the live DB. RealClassifier uses
       // them to populate add_not_null_with_nulls events with the actual
@@ -793,7 +826,7 @@ export class PushSchemaPipeline {
       // orchestrator owns DB access here so the classifier itself stays
       // pure (DI surface).
       const classificationResult = await this.deps.classifier.classify({
-        operations,
+        operations: judged,
         countNulls: (table, column) =>
           countNullsHelper(db, dialect, table, column),
         countRows: table => countRowsHelper(db, dialect, table),
@@ -1080,7 +1113,7 @@ export class PushSchemaPipeline {
             tx,
             withoutSqliteDropsLeftToRebuild(resolvedOps, dialect),
             dialect,
-            constraints.before
+            [...constraints.before, ...moves.statements]
           );
         } catch (err) {
           // A refusal is not a failed statement. The pre-resolution phase can decline to start —
@@ -1544,6 +1577,7 @@ export class PushSchemaPipeline {
         success: true,
         statementsExecuted,
         renamesApplied: dispatchResult.confirmedRenames.length,
+        ...(moves.moved.length > 0 ? { movedToCompanion: moves.moved } : {}),
         // F10 PR 6: surface the diff counts so the dispatcher can
         // render an admin toast like "1 field added, 1 renamed".
         summary,
