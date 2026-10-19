@@ -197,10 +197,38 @@ Links last **one hour** by default and at most **seven days**. Asking for
 longer is refused rather than quietly shortened, because an editor who believes
 a link lasts a week and finds it dead is worse off than one who was told no.
 
-To invalidate **every** outstanding link at once — including sessions already
-open — raise the site's preview generation by revoking. That requires
-`manage settings`, because the effect is site-wide: one editor revoking would
-otherwise break every other editor's links.
+Every link is recorded when it is made, so each one can be listed and revoked
+on its own. A document's live links show who made each, when it ends and how
+many times it was opened. Revoking one stops only that link: its next opening
+is refused, and so is every page of a session it already opened. Anyone who
+may share a preview of an entry or Single may list its links and revoke any of
+them, theirs or a colleague's. Nobody else may, and an API key may not.
+
+To end **every** link of one entry or Single at once, revoke all of that
+document's links. To invalidate **every** outstanding link on the site —
+including sessions already open — raise the site's preview generation by
+revoking. That requires `manage settings`, because the effect is site-wide:
+one editor revoking would otherwise break every other editor's links.
+
+Links made before an upgrade to this version were not recorded, so they can't
+be listed, counted or revoked one by one. They keep working until they expire,
+at most seven days later, and the list shows one row for them, with that latest
+end and a revoke-all that ends them too.
+
+Recording needs the `nextly_preview_links` table. On an existing database, run
+`nextly migrate` after upgrading: until then, sharing a new link is refused
+with that remedy, while older links keep working.
+
+These endpoints are `@experimental` until the screen that drives them settles:
+
+| Request | Does |
+| --- | --- |
+| `GET /admin/api/preview-links?collection=…&entryId=…` or `?single=…` | Lists one document's live links |
+| `POST /admin/api/preview-links/:id/revoke` with the document in the body | Revokes one link |
+| `POST /admin/api/preview-links/revoke` with the document in the body | Revokes all of that document's links |
+
+`POST /admin/api/preview-links/revoke` with no body is the site-wide revoke, as
+before.
 
 ### What a reviewer can and cannot see
 

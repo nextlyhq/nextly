@@ -20,6 +20,7 @@ import {
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
+  PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
   type RetentionGateStore,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../retention/gate";
@@ -54,6 +55,10 @@ const DRAIN_PASS: Record<
   oneTimeSecrets: {
     input: { oneTimeSecrets: true },
     claims: ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
+  },
+  previewLinks: {
+    input: { previewLinks: true },
+    claims: PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
   },
 };
 

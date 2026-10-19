@@ -1,8 +1,20 @@
 /**
- * Preview links: minting one, and revoking all of them.
+ * Preview links: minting one, listing a document's live links, and revoking
+ * one link, every link of one document, or every link on the site.
  *
- *   POST /api/nextly/preview-links          -> mint a link for one entry
- *   POST /api/nextly/preview-links/revoke   -> invalidate every link ever issued
+ *   POST /api/nextly/preview-links               -> mint a link for one document
+ *   GET  /api/nextly/preview-links?…             -> a document's live links
+ *   POST /api/nextly/preview-links/:id/revoke    -> revoke one link
+ *   POST /api/nextly/preview-links/revoke {doc}  -> revoke one document's links
+ *   POST /api/nextly/preview-links/revoke        -> invalidate every link ever issued
+ *
+ * The list, revoke-one and per-document revoke-all are `@experimental` until
+ * the screen that drives them settles.
+ *
+ * **Minting, listing and revoking a document's links are one decision**, made
+ * by `authorizePreviewSharer`: a person who may share a preview of that entry
+ * or Single. Listing and revoking need nothing more than sharing does, because
+ * a person who may hand out a link may see who else has and take any back.
  *
  * **Minting is gated on `update` for the collection, not on `publish`.**
  * Someone who can edit an entry already sees its draft in the admin, so sharing
@@ -20,10 +32,19 @@
 import { z } from "zod";
 
 import {
+  listLiveLinks,
+  olderLinksEnd,
+  previewLinkDocument,
+  recordPreviewLink,
+  revokeDocumentLinks,
+  revokeRecordedLink,
+  type PreviewLinkDocument,
+} from "../auth/preview/preview-link-records";
+import {
+  MAX_PREVIEW_TTL_SECONDS,
   signPreviewToken,
   type PreviewTokenScope,
 } from "../auth/preview/preview-token";
-import { buildUserContext } from "../auth/user-context";
 import { container, getService } from "../di";
 import type { NextlyServiceConfig } from "../di/register";
 import {
@@ -45,41 +66,33 @@ import {
 import { resolvePreviewViewports } from "../domains/collections/services/preview-viewports";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import { resolvePreviewSiteUrl } from "../domains/preview/site-url";
-import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { env } from "../lib/env";
 import { previewSessionReachesFrame } from "../runtime/preview/preview-frame-policy";
 import type { GeneralSettingsService } from "../services/general-settings/general-settings-service";
-import { resolveRoleSlugs } from "../services/lib/permissions";
 
 import {
-  assertEntryPreviewable,
-  assertSinglePreviewable,
+  authorizePreviewSharer,
+  type PreviewSharedDocument,
 } from "./preview-access";
 import {
   loadSingleForPreview,
   previewDeclarationFor,
   singlePreviewDeclarationFor,
 } from "./preview-url";
-import { respondMutation } from "./response-shapes";
-import {
-  requireRouteCollectionAccess,
-  requireRoutePermission,
-} from "./route-auth";
+import { respondList, respondMutation } from "./response-shapes";
+import { requireRoutePermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 /**
- * The upper bound on how long a link stays usable.
- *
- * A preview link is a bearer credential that travels by email and chat, so its
- * lifetime is the window in which a forwarded message is still a working key.
- * A caller may ask for less; asking for more is refused rather than clamped,
- * because silently shortening a link an editor believes lasts a week is worse
- * than telling them it does not.
+ * The upper bound on how long a link stays usable; see
+ * {@link MAX_PREVIEW_TTL_SECONDS}. A caller may ask for less; asking for more is
+ * refused rather than clamped, because silently shortening a link an editor
+ * believes lasts a week is worse than telling them it does not.
  */
-const MAX_TTL_SECONDS = 7 * 24 * 60 * 60;
+const MAX_TTL_SECONDS = MAX_PREVIEW_TTL_SECONDS;
 
 /**
  * What a mint request may name: ONE collection entry, or ONE Single.
@@ -487,7 +500,7 @@ async function respondWithPreviewLink(
     await settingsService()
   ).getPreviewTokenGeneration();
 
-  const { token, expiresAt } = await signPreviewToken(
+  const { token, expiresAt, issuedAt, linkId } = await signPreviewToken(
     scope,
     previewSigningSecret(),
     {
@@ -497,9 +510,25 @@ async function respondWithPreviewLink(
       // recipient sees fields the sharer cannot — which makes a link a way to
       // read past your own permissions by sending one to yourself.
       minter,
+      // Every link minted now is recorded, so it can be listed, counted and
+      // revoked on its own.
+      recorded: true,
       ...(ttlSeconds === undefined ? {} : { ttlSeconds }),
     }
   );
+
+  // Before the token leaves this process. A failed write means no link: an
+  // unrecorded new link could not be revoked on its own, and a link the
+  // editor could not take back is not one to hand out. The row's end is the
+  // token's own `exp`, so the list states when the link actually stops.
+  await recordPreviewLink({
+    id: linkId,
+    scope,
+    createdBy: minter,
+    createdAt: issuedAt,
+    expiresAt,
+    generation,
+  });
 
   const settings = await (await settingsService()).getSettings();
   const url = previewLinkUrl({
@@ -540,12 +569,18 @@ async function respondWithPreviewLink(
     actorUserId: minter,
     metadata: {
       ...auditScope(scope),
+      // The recorded link's id, which its revocation names too, so the trail
+      // can say which credential a revocation ended.
+      linkId,
       generation,
       expiresAt: expiresAt.toISOString(),
     },
   });
 
   return respondMutation("Preview link created", {
+    // The id the list and revoke-one name this link by. The token is shown
+    // only here: it is the credential, and it is never stored.
+    id: linkId,
     token,
     url,
     expiresAt: expiresAt.toISOString(),
@@ -568,71 +603,6 @@ async function respondWithPreviewLink(
      */
     viewports: await resolvePreviewViewports(declaration?.breakpoints),
   });
-}
-
-/**
- * Who is asking, resolved the one way both mint paths must resolve it.
- *
- * An API key is authorized on the grants stamped on the KEY, never on its
- * owner's roles. Without that distinction the probe resolves the owner's RBAC —
- * including a super-admin bypass — so a key holding `update-*` but not `read-*`
- * would mint a link on the strength of an account that can read, handing out a
- * bearer credential for a document the key itself may not fetch.
- *
- * Shared rather than derived per call site: an entry link and a Single link
- * confer the same kind of credential, so a difference in who they think is
- * asking would be a difference in who can obtain one.
- */
-/**
- * Refuse to mint from an API key.
- *
- * A preview link records WHOSE permissions the draft is rendered through, and a
- * key names no person. It is authorized on the grants stamped on the KEY —
- * deliberately, so a narrow key cannot mint on the strength of its owner's
- * account — but the only identity it could record is that owner, whose access
- * is exactly what the key was scoped away from. The link would then render
- * under permissions the request never had: a key allowed to update a document
- * while denied one of its fields would hand its recipient that field.
- *
- * Refused rather than approximated. The honest alternative is to record the KEY
- * and evaluate field rules against its own grants, which means teaching the
- * field-level registry to take a grant set instead of resolving one from a user
- * id — a change to a primitive every read and write shares.
- *
- * Shared by BOTH mints rather than written at one: an entry link and a Single
- * link hand out the same kind of credential, and a rule applied to one of them
- * is a rule with a way around it.
- */
-function refuseApiKeyMint(auth: { authMethod: "session" | "api-key" }): void {
-  if (auth.authMethod === "api-key") {
-    throw NextlyError.forbidden({
-      logContext: {
-        reason: "preview-link-minted-by-api-key",
-        remedy:
-          "A preview link records whose permissions the draft is rendered " +
-          "through, and a key names no person. Mint it from a signed-in " +
-          "session.",
-      },
-    });
-  }
-}
-
-async function callerFor(
-  auth: Awaited<ReturnType<typeof requireRouteCollectionAccess>>
-): Promise<{ user: UserContext }> {
-  const roles = await resolveRoleSlugs(auth);
-  return {
-    user: buildUserContext({
-      claims: auth.claims,
-      id: auth.userId,
-      name: auth.userName,
-      email: auth.userEmail,
-      roles,
-    }),
-  };
-  // No `actor`. It existed to judge an API KEY on its own stamped grants, and
-  // both mints now refuse a key outright — which is strictly stronger than
-  // judging one correctly, so nothing is lost but the branch.
 }
 
 /**
@@ -685,10 +655,15 @@ async function mintForSingle(
 ): Promise<Response> {
   const { single, locale, ttlSeconds } = args;
 
-  const auth = await requireRouteCollectionAccess(req, "update", single);
-  // Booted first because the gate below resolves services from the container,
-  // and on a cold process the permission lookup itself needs them registered.
-  await getCachedNextly();
+  // Who may share this Single, asked the one way the list and revocations ask
+  // it: a person, not a key, with `update` on its slug and read and edit of
+  // the Single itself in the translation the token will name. Runs before
+  // anything is signed and before the trusted read below, so a refused caller
+  // reaches neither.
+  const { auth, grant: singleGrant } = await authorizePreviewSharer(req, {
+    single,
+    ...(locale === undefined ? {} : { locale }),
+  });
 
   // An unscoped token covers EVERY translation, which on a localized Single is
   // a grant over drafts nobody authorized — the admin resolves a locale before
@@ -735,18 +710,6 @@ async function mintForSingle(
       },
     });
   }
-
-  // The Single's own gate, against the real document, in the TRANSLATION the
-  // token will name. Runs before anything is signed and before the trusted
-  // read below, so a refused caller reaches neither.
-  refuseApiKeyMint(auth);
-  const { user } = await callerFor(auth);
-  const singleGrant = await assertSinglePreviewable(single, locale, user, {
-    // The route above ran the coarse gate for `update` on this Single, so
-    // repeating it here would ask a question already answered. The preview
-    // RENDER passes `false`: it has no route gate at all.
-    routeAuthorized: true,
-  });
 
   const declaration = await singlePreviewDeclarationFor(single);
 
@@ -819,50 +782,15 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
 
   const { collection, entryId } = parsed.data;
 
-  // The gate is per COLLECTION, so a caller who may edit posts cannot mint a
-  // link into a collection they have no access to by naming it here.
-  const auth = await requireRouteCollectionAccess(req, "update", collection);
-
-  // A link is minted BY A PERSON, and an API key is not one.
-  //
-  // The token records who to render the draft as, and the page then judges
-  // every field by that person's rules. A key is authorized on the grants
-  // stamped on the KEY — deliberately, so a narrow key cannot mint on the
-  // strength of its owner's account — but the only identity it could record is
-  // that owner, whose access is exactly what the key was scoped away from. The
-  // link would then render under permissions the request never had: a key
-  // allowed to update an entry but denied one of its fields would hand its
-  // recipient that field.
-  //
-  // Refused rather than approximated. The honest alternative is to record the
-  // KEY and evaluate field rules against its own grants, which means teaching
-  // the field-level registry to take a grant set instead of resolving one from
-  // a user id — a change to a primitive every read and write shares, not
-  // something to infer from a preview link.
-  refuseApiKeyMint(auth);
-
-  // That gate is one granularity coarser than what it hands out: it answers
-  // "may this caller edit this COLLECTION", while the token names one ENTRY
-  // and confers a read of it. Where a collection carries a row-level rule the
-  // two diverge, and the coarse answer alone would let a caller bounded to
+  // Who may share this entry, asked the one way the list and revocations ask
+  // it: a person, not a key, with `update` on the collection, who may read
+  // the entry INCLUDING one never published and may edit it, which is what
+  // the draft overlay requires before surfacing the working draft the token
+  // hands out. A coarse collection answer alone would let a caller bounded to
   // their own documents mint a working credential for someone else's.
-  //
-  // So the entry is authorized here too, against the gate that serves the real
-  // read. Booted first because that gate resolves services from the container,
-  // and on a cold process the permission lookup itself needs them registered.
-  await getCachedNextly();
-  const { user } = await callerFor(auth);
-  // Authorized through the gate that serves collection reads and writes, so the
-  // verdict here is the verdict the bearer's own read will reach. It asks two
-  // questions the previous by-id probe could not express: whether the entry is
-  // visible at all INCLUDING one never published, and whether this caller may
-  // edit it — which is what the draft overlay requires before surfacing the
-  // working draft the token hands out.
-  const entryGrant = await assertEntryPreviewable(collection, entryId, user, {
-    // The route above ran the coarse gate for `update` on this collection, so
-    // repeating it here would ask a question already answered. The preview
-    // RENDER passes `false`: it has no route gate at all.
-    routeAuthorized: true,
+  const { auth, grant: entryGrant } = await authorizePreviewSharer(req, {
+    collection,
+    entryId,
   });
 
   // Refused BEFORE a token is signed, because a link that cannot land is worse
@@ -947,12 +875,255 @@ export const mintPreviewLink = withErrorHandler(async (req: Request) => {
 });
 
 /**
+ * The one document a list or revocation names: an entry, or a Single.
+ *
+ * Strict, so a misspelt key is refused rather than ignored. That matters most
+ * for revoke-all, where a body that names no document is the site-wide revoke:
+ * a typo must not quietly become the most destructive request the endpoint
+ * answers.
+ */
+const documentSchema = z.union([
+  z
+    .object({
+      collection: z.string().min(1),
+      entryId: z.string().min(1),
+      locale: z.string().min(1).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      single: z.string().min(1),
+      locale: z.string().min(1).optional(),
+    })
+    .strict(),
+]);
+
+function parseDocument(input: unknown): PreviewSharedDocument {
+  const parsed = documentSchema.safeParse(input);
+  if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  return parsed.data;
+}
+
+/** The record's view of a requested document, which has no locale. */
+function recordDocument(document: PreviewSharedDocument): PreviewLinkDocument {
+  return previewLinkDocument(
+    "single" in document
+      ? { kind: "single", single: document.single }
+      : { collection: document.collection, entryId: document.entryId }
+  );
+}
+
+/** The audit trail's view of a requested document, which has no locale. */
+function auditDocument(
+  document: PreviewSharedDocument
+): Record<string, unknown> {
+  return auditScope(
+    "single" in document
+      ? { kind: "single", single: document.single }
+      : { collection: document.collection, entryId: document.entryId }
+  );
+}
+
+/** A live link, as the list shows it. */
+interface ListedPreviewLink {
+  kind: "link";
+  id: string;
+  locale: string | null;
+  createdBy: { id: string; name: string | null } | null;
+  createdAt: string;
+  expiresAt: string;
+  openCount: number;
+  lastOpenedAt: string | null;
+}
+
+/**
+ * The one row standing for every link made before links were recorded. They
+ * carry no id, so they can only be revoked all together, and this is the
+ * latest moment any of them could still work.
+ */
+interface OlderPreviewLinks {
+  kind: "older";
+  latestEnd: string;
+}
+
+/**
+ * GET /api/nextly/preview-links?collection=…&entryId=…  or  ?single=…
+ *
+ * @experimental The live links of one document, newest first: who made each,
+ * when it ends and how many times it was opened. While links made before
+ * links were recorded may still be alive, one more item of `kind: "older"`
+ * says so. Auth: the person may share a preview of that document.
+ */
+export const listPreviewLinks = withErrorHandler(async (req: Request) => {
+  const params = new URL(req.url).searchParams;
+  const document = parseDocument(
+    Object.fromEntries(
+      ["collection", "entryId", "single", "locale"]
+        .map(key => [key, params.get(key)] as const)
+        .filter((pair): pair is readonly [string, string] => pair[1] !== null)
+    )
+  );
+  await authorizePreviewSharer(req, document);
+
+  const now = new Date();
+  const generation = await (
+    await settingsService()
+  ).getPreviewTokenGeneration();
+  const live = await listLiveLinks(recordDocument(document), generation, now);
+  const olderEnd = await olderLinksEnd(now);
+
+  const items: Array<ListedPreviewLink | OlderPreviewLinks> = [
+    ...live.map(
+      (link): ListedPreviewLink => ({
+        kind: "link",
+        id: link.id,
+        locale: link.locale,
+        createdBy: link.createdBy,
+        createdAt: link.createdAt.toISOString(),
+        expiresAt: link.expiresAt.toISOString(),
+        openCount: link.openCount,
+        lastOpenedAt: link.lastOpenedAt?.toISOString() ?? null,
+      })
+    ),
+    ...(olderEnd === null
+      ? []
+      : [{ kind: "older" as const, latestEnd: olderEnd.toISOString() }]),
+  ];
+
+  // One document's links are few: the list is the whole of them.
+  return respondList(items, {
+    total: items.length,
+    page: 1,
+    limit: items.length,
+    totalPages: 1,
+    hasNext: false,
+    hasPrev: false,
+  });
+});
+
+/**
+ * POST /api/nextly/preview-links/:id/revoke  with the document in the body
+ *
+ * @experimental Revokes one link of that document, which stops at once on its
+ * next opening and on every page of a session it already opened. Any person
+ * who may share the document may revoke any of its links, not only their own.
+ * An id that is not one of that document's links answers not found, the same
+ * as one that never existed, so ids cannot be probed across documents.
+ */
+export async function revokePreviewLink(
+  req: Request,
+  routeParams: Record<string, string>
+): Promise<Response> {
+  return withErrorHandler(async (request: Request) => {
+    // Set by the route parser from the path; a request reaching here without
+    // one names no link.
+    const linkId = routeParams.linkId;
+    if (typeof linkId !== "string" || linkId.length === 0) {
+      throw NextlyError.notFound({
+        logContext: { reason: "preview-link-revoke-without-id" },
+      });
+    }
+    const body: unknown = await request.json().catch(() => undefined);
+    const document = parseDocument(body);
+    const { auth } = await authorizePreviewSharer(request, document);
+
+    const now = new Date();
+    const outcome = await revokeRecordedLink(
+      linkId,
+      recordDocument(document),
+      auth.userId,
+      now
+    );
+    if (outcome === "absent") {
+      throw NextlyError.notFound({
+        logContext: { reason: "preview-link-not-of-document", linkId },
+      });
+    }
+
+    await auditWriter().write({
+      kind: "preview-link-revoked",
+      actorUserId: auth.userId,
+      metadata: { ...auditDocument(document), linkId },
+    });
+
+    return respondMutation("Preview link revoked", {
+      id: linkId,
+      revokedAt: now.toISOString(),
+    });
+  })(req);
+}
+
+/**
+ * Revoke every link of one document: what `POST /revoke` does when its body
+ * names one. Behind the sharer rule, because it reaches only that document.
+ */
+async function revokeDocumentPreviewLinks(
+  req: Request,
+  document: PreviewSharedDocument
+): Promise<Response> {
+  const { auth } = await authorizePreviewSharer(req, document);
+  const revoked = await revokeDocumentLinks(
+    recordDocument(document),
+    auth.userId,
+    new Date()
+  );
+
+  await auditWriter().write({
+    kind: "preview-links-revoked",
+    actorUserId: auth.userId,
+    metadata: {
+      // Present for one document, absent for the site-wide revoke: what this
+      // revocation reached.
+      ...auditDocument(document),
+      revoked,
+    },
+  });
+
+  return respondMutation("Preview links revoked", { revoked });
+}
+
+/**
+ * Whether a revoke body names no document: absent, empty, or `{}`, which is
+ * what the site-wide revoke has always been sent.
+ */
+function namesNoDocument(body: unknown): boolean {
+  return (
+    body === undefined ||
+    body === null ||
+    (typeof body === "object" &&
+      !Array.isArray(body) &&
+      Object.keys(body).length === 0)
+  );
+}
+
+/**
  * POST /api/nextly/preview-links/revoke
  *
- * Invalidates every preview link ever issued, including sessions already in
- * flight. Auth: `manage settings`, because the generation is site-wide.
+ * With no document in the body: invalidates every preview link ever issued,
+ * including sessions already in flight. Auth: `manage settings`, because the
+ * generation is site-wide. Unchanged for every existing caller.
+ *
+ * With a document in the body (`@experimental`): revokes every link of that
+ * document, recorded or made before links were recorded. Auth: the person may
+ * share a preview of that document.
  */
 export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
+  const text = await req.text();
+  let body: unknown;
+  if (text.trim().length > 0) {
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw NextlyError.invalidInput({
+        message: "The request body is not valid JSON.",
+        logContext: { reason: "preview-links-revoke-body-unreadable" },
+      });
+    }
+  }
+  if (!namesNoDocument(body)) {
+    return revokeDocumentPreviewLinks(req, parseDocument(body));
+  }
+
   const auth = await requireRoutePermission(req, "manage", "settings");
   const generation = await (await settingsService()).revokeAllPreviewTokens();
 

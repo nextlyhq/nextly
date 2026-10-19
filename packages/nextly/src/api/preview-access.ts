@@ -1,5 +1,6 @@
 /**
- * Access gate for minting a preview link.
+ * Access gate for sharing a preview: minting a link, and listing or revoking a
+ * document's links, which {@link authorizePreviewSharer} decides as one rule.
  *
  * A preview token is a bearer credential: whoever holds it reads the entry it
  * names, with no session of their own, and the runtime consumes it with
@@ -23,6 +24,7 @@
  * @module api/preview-access
  */
 
+import { buildUserContext } from "../auth/user-context";
 import { getService } from "../di";
 import {
   previewCallerAuthorized,
@@ -35,6 +37,10 @@ import {
 import type { UserContext } from "../domains/singles/types";
 import { errorFromServiceEnvelope } from "../errors/from-service-envelope";
 import { NextlyError } from "../errors/nextly-error";
+import { getCachedNextly } from "../init";
+import { resolveRoleSlugs } from "../services/lib/permissions";
+
+import { requireRouteCollectionAccess } from "./route-auth";
 
 /**
  * Turn a read outcome into a verdict, keeping "denied" and "could not ask"
@@ -263,4 +269,109 @@ export async function assertSinglePreviewable(
     // translation on the strength of one having been checked.
     ...(locale === undefined ? {} : { locale }),
   });
+}
+
+/**
+ * The one document a sharing request names: an entry, or a Single.
+ *
+ * The locale is the translation the request concerns; a Single's gate is run
+ * against it, as the mint's is.
+ */
+export type PreviewSharedDocument =
+  | { collection: string; entryId: string; locale?: string }
+  | { single: string; locale?: string };
+
+/** The authenticated route caller, as `requireRouteCollectionAccess` returns it. */
+type RouteCaller = Awaited<ReturnType<typeof requireRouteCollectionAccess>>;
+
+/** A request authorized to share one document's previews. */
+export interface AuthorizedSharer {
+  auth: RouteCaller;
+  user: UserContext;
+  grant: AuthorizedPreviewCaller;
+}
+
+/**
+ * Refuse a preview-link action from an API key.
+ *
+ * A preview link records WHOSE permissions the draft is rendered through, and a
+ * key names no person. It is authorized on the grants stamped on the KEY —
+ * deliberately, so a narrow key cannot act on the strength of its owner's
+ * account — but the only identity it could record is that owner, whose access
+ * is exactly what the key was scoped away from. Listing and revoking a
+ * document's links are refused to a key for the same reason minting is: they
+ * are the one decision, "may this person share this document".
+ */
+function refuseApiKey(auth: { authMethod: "session" | "api-key" }): void {
+  if (auth.authMethod === "api-key") {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "preview-link-action-by-api-key",
+        remedy:
+          "A preview link records whose permissions the draft is rendered " +
+          "through, and a key names no person. Act from a signed-in session.",
+      },
+    });
+  }
+}
+
+async function callerFor(auth: RouteCaller): Promise<UserContext> {
+  const roles = await resolveRoleSlugs(auth);
+  return buildUserContext({
+    claims: auth.claims,
+    id: auth.userId,
+    name: auth.userName,
+    email: auth.userEmail,
+    roles,
+  });
+}
+
+/**
+ * Whether this request may share previews of the document it names: the ONE
+ * rule that minting a link, listing a document's links, revoking one of them
+ * and revoking all of them each ask.
+ *
+ * One function rather than one check per endpoint, because they are one
+ * question. A person who may hand out a link to a document may see who else
+ * has and may take any of them back; a person who may not do the first may do
+ * none of them. Four copies would agree only until one was edited, and the
+ * copy that drifted would be a way to list or revoke links on a document its
+ * caller could not share.
+ *
+ * In order: a session with `update` on the collection or Single (the route's
+ * coarse gate), never a key, and then read and edit of that very entry or
+ * Single as that person. Every refusal is `forbidden`, with nothing changed.
+ *
+ * @throws {NextlyError} `forbidden` when the request may not share it.
+ */
+export async function authorizePreviewSharer(
+  req: Request,
+  document: PreviewSharedDocument
+): Promise<AuthorizedSharer> {
+  const slug = "single" in document ? document.single : document.collection;
+  // The gate is per COLLECTION or Single, so a caller who may edit posts
+  // cannot act on another collection's links by naming it here.
+  const auth = await requireRouteCollectionAccess(req, "update", slug);
+  refuseApiKey(auth);
+
+  // Booted first because the gates below resolve services from the container,
+  // and on a cold process the permission lookup itself needs them registered.
+  await getCachedNextly();
+  const user = await callerFor(auth);
+
+  // The route above ran the coarse gate for `update`, so it is the redundant
+  // one these skip. A preview RENDER passes `false`: it has no route gate.
+  const grant =
+    "single" in document
+      ? await assertSinglePreviewable(document.single, document.locale, user, {
+          routeAuthorized: true,
+        })
+      : await assertEntryPreviewable(
+          document.collection,
+          document.entryId,
+          user,
+          { routeAuthorized: true }
+        );
+
+  return { auth, user, grant };
 }

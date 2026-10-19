@@ -479,6 +479,28 @@ export function generateSqliteCoreTableStatements(): string[] {
       "part" TEXT NOT NULL,
       PRIMARY KEY ("event_id", "part")
     )`,
+    // Recorded preview links. Columns match schemas/preview-links/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_preview_links" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "document_kind" TEXT NOT NULL,
+      "document_slug" TEXT NOT NULL,
+      "entry_id" TEXT,
+      "locale" TEXT,
+      "created_by" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "created_at" INTEGER NOT NULL,
+      "expires_at" INTEGER NOT NULL,
+      "generation" INTEGER NOT NULL,
+      "revoked_at" INTEGER,
+      "revoked_by" TEXT REFERENCES "users"("id") ON DELETE SET NULL,
+      "open_count" INTEGER NOT NULL DEFAULT 0,
+      "last_opened_at" INTEGER
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_document_idx"
+      ON "nextly_preview_links" ("document_kind", "document_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_expires_idx"
+      ON "nextly_preview_links" ("expires_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_preview_links_created_by_idx"
+      ON "nextly_preview_links" ("created_by")`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,

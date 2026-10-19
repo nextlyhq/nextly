@@ -109,6 +109,23 @@ vi.mock("../domains/audit/audit-log-writer", () => ({
   buildAuditLogWriter: () => ({ write: auditWrite }),
 }));
 
+/*
+ * The recorded-links store, mocked so what the endpoints ASK of it is
+ * observable. What it does with a real row is covered by the integration suite
+ * on every dialect.
+ */
+const records = vi.hoisted(() => ({
+  recordPreviewLink: vi.fn(),
+  revokeDocumentLinks: vi.fn(),
+}));
+vi.mock("../auth/preview/preview-link-records", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../auth/preview/preview-link-records")
+  >()),
+  recordPreviewLink: records.recordPreviewLink,
+  revokeDocumentLinks: records.revokeDocumentLinks,
+}));
+
 vi.mock("../lib/env", () => ({
   env: { NEXTLY_SECRET: "a-test-secret-value" },
 }));
@@ -181,6 +198,8 @@ beforeEach(() => {
   });
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
+  records.recordPreviewLink.mockResolvedValue(undefined);
+  records.revokeDocumentLinks.mockResolvedValue(2);
   getSettings.mockResolvedValue({ siteUrl: "https://site.example" });
   previewDeclaration.mockResolvedValue({ urlTemplate: "/{slug}" });
   previewConfig = undefined;
@@ -1194,9 +1213,12 @@ describe("mintPreviewLink", () => {
     // The canonical mutation envelope, so a direct-API caller reads `.item`.
     expect(Object.keys(body).sort()).toEqual(["item", "message"]);
     const item = body.item as Record<string, unknown>;
+    // `id` names the recorded link for the list and revoke-one; the token
+    // itself is shown only here.
     expect(Object.keys(item).sort()).toEqual([
       "embeddable",
       "expiresAt",
+      "id",
       "token",
       "url",
       "viewports",
@@ -1375,6 +1397,68 @@ describe("revokePreviewLinks", () => {
 
     expect(response.status).toBe(403);
     expect(revokeAll).not.toHaveBeenCalled();
+  });
+
+  it("treats an absent body as the site-wide revoke, as it always has", async () => {
+    await revokePreviewLinks(
+      new Request("http://x/api/nextly/preview-links/revoke", {
+        method: "POST",
+      })
+    );
+    expect(revokeAll).toHaveBeenCalledTimes(1);
+    expect(records.revokeDocumentLinks).not.toHaveBeenCalled();
+  });
+
+  it("refuses a body that names no document it can read, rather than revoking the site", async () => {
+    const response = await revokePreviewLinks(
+      post({ colection: "pages" }, "http://x/api/nextly/preview-links/revoke")
+    );
+    expect(response.status).toBe(400);
+    expect(revokeAll).not.toHaveBeenCalled();
+    expect(records.revokeDocumentLinks).not.toHaveBeenCalled();
+    expect(requireRoutePermission).not.toHaveBeenCalled();
+  });
+
+  it("revokes one document's links behind the sharer's rule, not manage settings", async () => {
+    const response = await revokePreviewLinks(
+      post(
+        { collection: "pages", entryId: "7" },
+        "http://x/api/nextly/preview-links/revoke"
+      )
+    );
+    expect(response.status).toBe(200);
+    expect(requireRouteCollectionAccess).toHaveBeenCalledWith(
+      expect.anything(),
+      "update",
+      "pages"
+    );
+    expect(requireRoutePermission).not.toHaveBeenCalled();
+    expect(revokeAll).not.toHaveBeenCalled();
+    expect(records.revokeDocumentLinks).toHaveBeenCalledWith(
+      { kind: "entry", collection: "pages", entryId: "7" },
+      "u1",
+      expect.any(Date)
+    );
+  });
+
+  it("refuses a key one document's revoke-all, and revokes nothing", async () => {
+    (
+      requireRouteCollectionAccess as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
+      userId: "u1",
+      permissions: [],
+      roles: [],
+      authMethod: "api-key",
+      apiKeyId: "key-1",
+    });
+    const response = await revokePreviewLinks(
+      post(
+        { collection: "pages", entryId: "7" },
+        "http://x/api/nextly/preview-links/revoke"
+      )
+    );
+    expect(response.status).toBe(403);
+    expect(records.revokeDocumentLinks).not.toHaveBeenCalled();
   });
 
   it("returns the generation it moved to", async () => {
@@ -1566,6 +1650,46 @@ describe("the audit trail a preview link leaves", () => {
     );
 
     expect(response.status).not.toBe(200);
+    expect(auditWrite).not.toHaveBeenCalled();
+  });
+});
+
+describe("mintPreviewLink records the link it hands out", () => {
+  it("records the token's own id and end, before answering", async () => {
+    const data = await mintedData();
+    const token = String(data.token);
+    const verified = await verifyPreviewToken(token, SECRET, {
+      generation: 0,
+    });
+    expect(verified.valid).toBe(true);
+    if (!verified.valid) return;
+    // A recorded token, naming the row the store was asked to write.
+    expect(verified.linkId).toBe(data.id);
+    expect(records.recordPreviewLink).toHaveBeenCalledTimes(1);
+    expect(records.recordPreviewLink).toHaveBeenCalledWith({
+      id: data.id,
+      scope: { collection: "pages", entryId: "7" },
+      createdBy: "u1",
+      createdAt: verified.issuedAt,
+      expiresAt: verified.expiresAt,
+      generation: 0,
+    });
+  });
+
+  it("hands out no token when the link cannot be recorded", async () => {
+    records.recordPreviewLink.mockRejectedValueOnce(
+      NextlyError.serviceUnavailable({
+        publicMessage: "Run `nextly migrate`.",
+        logMessage: "missing table",
+      })
+    );
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+    const text = await response.text();
+    expect(response.status).toBe(503);
+    expect(text).not.toContain("token");
+    // Nothing recorded as minted either: no credential exists.
     expect(auditWrite).not.toHaveBeenCalled();
   });
 });

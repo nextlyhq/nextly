@@ -45,6 +45,17 @@ const PREVIEW_KEY_BYTES = 32;
 /** How long a preview link lives when the caller states no preference. */
 export const DEFAULT_PREVIEW_TTL_SECONDS = 60 * 60;
 
+/**
+ * The upper bound on how long a link stays usable.
+ *
+ * A preview link is a bearer credential that travels by email and chat, so its
+ * lifetime is the window in which a forwarded message is still a working key.
+ * Here rather than beside the mint because it also bounds how long a link made
+ * before links were recorded can still be alive: the older-links row and the
+ * per-document cutoff both end that long after recording began.
+ */
+export const MAX_PREVIEW_TTL_SECONDS = 7 * 24 * 60 * 60;
+
 /** The single document a preview token authorizes, and nothing else. */
 /** One entry of a collection. */
 export interface PreviewEntryScope {
@@ -133,6 +144,17 @@ export interface SignPreviewTokenOptions {
    * to exercise revocation.
    */
   generation: number;
+  /**
+   * Whether this link is recorded, one row per link, so it can be listed,
+   * counted and revoked on its own.
+   *
+   * A recorded token carries `rec: 1`, and every check of it also asks its
+   * row; a token without the claim is a link from before links were recorded
+   * and is judged without one. Opt-in rather than the default so the signer
+   * stays pure: whether a row was written is the caller's to know, and a token
+   * claiming a row that does not exist would simply never open.
+   */
+  recorded?: boolean;
 }
 
 export type PreviewVerifyResult =
@@ -155,6 +177,18 @@ export type PreviewVerifyResult =
        */
       minter?: string;
       expiresAt: Date;
+      /**
+       * When the link was minted, from its `iat`. A link from before links
+       * were recorded is ended by a per-document revoke-all through this, as
+       * it has no row to mark.
+       */
+      issuedAt: Date;
+      /**
+       * The recorded link's id (the token's `jti`), present exactly when the
+       * token says it is recorded. Absent means a link from before links were
+       * recorded, which no row describes.
+       */
+      linkId?: string;
     }
   /** Signature, audience, shape, or anything else that makes it not a token. */
   | { valid: false; reason: "invalid" }
@@ -179,7 +213,14 @@ export async function signPreviewToken(
   scope: PreviewTokenScope,
   secret: string,
   options: SignPreviewTokenOptions
-): Promise<{ token: string; expiresAt: Date }> {
+): Promise<{
+  token: string;
+  expiresAt: Date;
+  /** When the token says it was minted, to the second. */
+  issuedAt: Date;
+  /** The token's `jti`, which identifies a recorded link's row. */
+  linkId: string;
+}> {
   // A locale that is present but unusable must not be minted. Verification
   // reads an unreadable `loc` as ABSENT, and an absent locale deliberately
   // covers every locale — so an empty string would quietly widen a
@@ -243,6 +284,7 @@ export async function signPreviewToken(
   const ttlSeconds = options.ttlSeconds ?? DEFAULT_PREVIEW_TTL_SECONDS;
   const issuedAt = Math.floor(Date.now() / 1000);
   const expiresAt = issuedAt + ttlSeconds;
+  const linkId = randomBytes(16).toString("hex");
 
   // An entry scope is signed WITHOUT a `kind` claim, byte-identical to what
   // this signer produced before Singles existed. That keeps the common token
@@ -259,6 +301,7 @@ export async function signPreviewToken(
     // token as a session. It is a redaction basis and nothing more.
     mnt: options.minter,
     gen: options.generation,
+    ...(options.recorded === true ? { rec: 1 } : {}),
   })
     .setProtectedHeader({ alg: ALGORITHM })
     .setAudience(PREVIEW_AUDIENCE)
@@ -269,12 +312,17 @@ export async function signPreviewToken(
         ? `single:${scope.single}`
         : `${scope.collection}:${scope.entryId}`
     )
-    .setJti(randomBytes(16).toString("hex"))
+    .setJti(linkId)
     .setIssuedAt(issuedAt)
     .setExpirationTime(expiresAt)
     .sign(previewKey(secret));
 
-  return { token, expiresAt: new Date(expiresAt * 1000) };
+  return {
+    token,
+    expiresAt: new Date(expiresAt * 1000),
+    issuedAt: new Date(issuedAt * 1000),
+    linkId,
+  };
 }
 
 /** Whether a decoded claim value is a usable, non-empty string. */
@@ -313,6 +361,28 @@ function decodeScope(
   const entryId = readString(payload.eid);
   if (collection === null || entryId === null) return null;
   return { collection, entryId };
+}
+
+/**
+ * When a verified payload was minted, and the recorded link it names if it
+ * names one; `null` when either is unreadable.
+ *
+ * Present-but-unreadable `rec` is refused for the reason a locale is: read as
+ * absent, a token naming a row would be judged as one from before links were
+ * recorded, which no revoke-one can reach. A recorded token with no id names
+ * no row to judge it by, so it is refused too.
+ */
+function decodeLink(
+  payload: Record<string, unknown>
+): { issuedAt: Date; linkId?: string } | null {
+  if (typeof payload.iat !== "number") return null;
+  const issuedAt = new Date(payload.iat * 1000);
+
+  const recordClaim = payload.rec;
+  if (recordClaim === undefined) return { issuedAt };
+  if (recordClaim !== 1) return null;
+  const linkId = readString(payload.jti);
+  return linkId === null ? null : { issuedAt, linkId };
 }
 
 /**
@@ -375,11 +445,16 @@ export async function verifyPreviewToken(
 
   const minter = readString(payload.mnt);
 
+  const link = decodeLink(payload);
+  if (link === null) return { valid: false, reason: "invalid" };
+
   return {
     valid: true,
     scope: locale === null ? scope : { ...scope, locale },
     ...(minter === null ? {} : { minter }),
     expiresAt,
+    issuedAt: link.issuedAt,
+    ...(link.linkId === undefined ? {} : { linkId: link.linkId }),
   };
 }
 

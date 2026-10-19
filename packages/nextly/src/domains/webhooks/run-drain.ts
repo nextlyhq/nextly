@@ -33,6 +33,7 @@ import {
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   NOTICES_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
+  PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
 import {
@@ -45,6 +46,10 @@ import {
   ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
   pruneOneTimeSecrets,
 } from "../../plugins/security/one-time-secrets-prune";
+import {
+  PREVIEW_LINKS_SWEEP_INTERVAL_MS,
+  prunePreviewLinks,
+} from "../../auth/preview/preview-link-records";
 
 /** Hard cap on rounds so a persistently-retrying backlog can't loop unbounded. */
 const DEFAULT_MAX_ROUNDS = 100;
@@ -96,6 +101,12 @@ export interface RunDrainDeps {
      * keep a subject and data in clear.
      */
     oneTimeSecrets?: boolean;
+    /**
+     * Sweep recorded preview links long past their end, for the secrets
+     * sweep's reason: an install that goes quiet makes no write that offers
+     * the pass.
+     */
+    previewLinks?: boolean;
     // The content-events sweep deletes each batch in a transaction of its own.
     prune: PruneDeps & { adapter: ContentEventsPruneDb };
     gate: RetentionGateStore;
@@ -127,6 +138,8 @@ export interface RunDrainResult {
     emailDeliveries: number;
     /** Plugins' one-purpose secrets removed on this call. */
     oneTimeSecrets: number;
+    /** Recorded preview links long past their end removed on this call. */
+    previewLinks: number;
     /** Notices past the activity log's window removed on this call. */
     notices: number;
     /**
@@ -196,6 +209,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       auth: 0,
       emailDeliveries: 0,
       oneTimeSecrets: 0,
+      previewLinks: 0,
       notices: 0,
       contentEvents: 0,
     },
@@ -309,6 +323,20 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
             )
           : false;
       if (secretsTurn) heldTurns.add(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
+
+      // Recorded preview links, claimed with the others for the reason the
+      // secrets sweep is.
+      const previewLinksTurn =
+        retention.previewLinks === true && !deadlineSpent()
+          ? await claimRetentionPass(
+              retention.gate,
+              PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
+              PREVIEW_LINKS_SWEEP_INTERVAL_MS
+            )
+          : false;
+      if (previewLinksTurn) {
+        heldTurns.add(PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY);
+      }
 
       // Notices keep the activity log's window, so they ride its policy, on a
       // drain marker of their own.
@@ -583,6 +611,32 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
         result.pruned.oneTimeSecrets = swept.removed;
         if (swept.started) {
           heldTurns.delete(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
+        }
+      }
+
+      // Recorded preview links, after the secrets and on the same terms: the
+      // sweep stops between batches at the deadline, and the turn is kept only
+      // if a batch was attempted.
+      if (previewLinksTurn && !deadlineSpent()) {
+        // Mirrors the secrets sweep above deliberately: the same deadline,
+        // the same quiet failure and the same rule for keeping the turn.
+        // fallow-ignore-next-line code-duplication
+        const swept = await prunePreviewLinks(retention.prune.adapter, now(), {
+          deadline: deadline?.getTime(),
+          clock: () => now().getTime(),
+        }).catch((error: unknown) => {
+          // Quietly, as the secrets sweep: a database not yet updated has no
+          // table, and a drain whose deliveries succeeded must not reject.
+          warnQuietly(
+            retention.prune.logger,
+            "Preview links retention pass failed",
+            { error: error instanceof Error ? error.message : "unknown error" }
+          );
+          return { removed: 0, started: true };
+        });
+        result.pruned.previewLinks = swept.removed;
+        if (swept.started) {
+          heldTurns.delete(PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY);
         }
       }
     } finally {

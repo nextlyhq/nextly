@@ -204,8 +204,10 @@ export interface ListDeliveriesParams {
 
 /**
  * Summary of one manual/scheduled drain pass (the `item` of the drain mutation
- * envelope). Mirrors the backend `RunDrainResult`.
+ * envelope). Mirrors the backend `RunDrainResult`, which the admin cannot
+ * import across the package boundary, so the two are alike by design.
  */
+// fallow-ignore-next-line code-duplication
 export interface RunDrainResult {
   rounds: number;
   eventsProcessed: number;

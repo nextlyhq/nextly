@@ -407,3 +407,84 @@ describe("tokens minted before the scope gained a kind", () => {
     });
   });
 });
+
+describe("recorded links", () => {
+  it("names its row by the token's id when it is recorded", async () => {
+    const { token, linkId, issuedAt } = await signPreviewToken(
+      SCOPE,
+      TEST_SECRET,
+      { generation: GENERATION, minter: "minter-1", recorded: true }
+    );
+    const result = await verifyPreviewToken(token, TEST_SECRET, {
+      generation: GENERATION,
+    });
+    expect(result.valid).toBe(true);
+    if (!result.valid) return;
+    expect(result.linkId).toBe(linkId);
+    expect(linkId).toMatch(/^[0-9a-f]{32}$/);
+    expect(result.issuedAt.getTime()).toBe(issuedAt.getTime());
+  });
+
+  it("names no row for a link made before links were recorded", async () => {
+    const { token } = await signPreviewToken(SCOPE, TEST_SECRET, {
+      generation: GENERATION,
+      minter: "minter-1",
+    });
+    const result = await verifyPreviewToken(token, TEST_SECRET, {
+      generation: GENERATION,
+    });
+    expect(result.valid).toBe(true);
+    if (!result.valid) return;
+    expect(result.linkId).toBeUndefined();
+    expect(result.issuedAt).toBeInstanceOf(Date);
+  });
+
+  it("refuses a record claim it cannot read, rather than judging the link as older", async () => {
+    // Read as absent, `rec: "yes"` would make a recorded link one no
+    // revoke-one can reach. Signed with the real derived key, so the refusal
+    // is about the claim and nothing else.
+    const key = new Uint8Array(
+      hkdfSync("sha256", TEST_SECRET, "", "nextly:preview-token:v1", 32)
+    );
+    const now = Math.floor(Date.now() / 1000);
+    const forged = await new SignJWT({
+      col: SCOPE.collection,
+      eid: SCOPE.entryId,
+      mnt: "minter-1",
+      gen: GENERATION,
+      rec: "yes",
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setAudience("nextly:preview")
+      .setJti("0123456789abcdef0123456789abcdef")
+      .setIssuedAt(now)
+      .setExpirationTime(now + 60)
+      .sign(key);
+    const control = await new SignJWT({
+      col: SCOPE.collection,
+      eid: SCOPE.entryId,
+      mnt: "minter-1",
+      gen: GENERATION,
+      rec: 1,
+    })
+      .setProtectedHeader({ alg: "HS256" })
+      .setAudience("nextly:preview")
+      .setJti("0123456789abcdef0123456789abcdef")
+      .setIssuedAt(now)
+      .setExpirationTime(now + 60)
+      .sign(key);
+
+    expect(
+      await verifyPreviewToken(forged, TEST_SECRET, { generation: GENERATION })
+    ).toEqual({ valid: false, reason: "invalid" });
+    // Positive control: the same token with a readable claim verifies.
+    expect(
+      await verifyPreviewToken(control, TEST_SECRET, {
+        generation: GENERATION,
+      })
+    ).toMatchObject({
+      valid: true,
+      linkId: "0123456789abcdef0123456789abcdef",
+    });
+  });
+});
