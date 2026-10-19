@@ -199,5 +199,7 @@ describe("the owner registry", () => {
       "@nextlyhq/plugin-accounts"
     );
     expect(absentPluginFor("newsletter-welcome")).toBeNull();
+    // Only the plugin's own slugs: a site's template sharing the prefix is the site's.
+    expect(absentPluginFor("accounts-newsletter")).toBeNull();
   });
 });
