@@ -17,6 +17,8 @@
  * @module domains/releases/early-stop
  * @experimental
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { container } from "../../di/container";
 import { getNextlyLogger } from "../../observability/logger";
 
@@ -25,6 +27,22 @@ import type { ReleaseRecheckTarget } from "./release-recheck";
 /** The part of the releases service this calls. */
 interface EarlyStop {
   stopOnHardProblems(target: ReleaseRecheckTarget): Promise<unknown>;
+}
+
+/** Set while a release's own run writes its documents. */
+const releaseRun = new AsyncLocalStorage<true>();
+
+/**
+ * Perform `write` as part of a release's own run, whose writes are not events
+ * for the early stop.
+ *
+ * The run checks each document as it writes it and stops what it cannot
+ * apply itself, keeping a release's documents together. A stop raised by its
+ * own write would land between two of its documents, after some were applied
+ * and before the rest: the split the run exists to avoid.
+ */
+export function asReleaseRun<T>(write: () => Promise<T>): Promise<T> {
+  return releaseRun.run(true, write);
 }
 
 /**
@@ -42,7 +60,9 @@ interface EarlyStop {
 export async function stopReleasesHolding(
   target: ReleaseRecheckTarget
 ): Promise<void> {
-  // A boot without releases has nothing scheduled to stop.
+  // A boot without releases has nothing scheduled to stop, and a release's
+  // own run decides what it stops.
+  if (releaseRun.getStore() === true) return;
   if (!container.has("releasesService")) return;
   try {
     await container

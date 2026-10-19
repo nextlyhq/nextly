@@ -52,6 +52,7 @@
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
+import { asReleaseRun } from "./early-stop";
 import { planReleaseMaterialisation } from "./plan-release-materialisation";
 import type { MaterialisationAction } from "./plan-release-materialisation";
 import type {
@@ -548,10 +549,15 @@ async function writeAndConfirm(
     // Called ON the object rather than through an extracted reference: a
     // mutations implementation that is a class method would lose `this` and
     // fail at a point that looks like the write being refused.
+    //
+    // As the release's own run, so the write is not taken for an event that
+    // stops this release between two of its documents (`asReleaseRun`).
     const input = { ref: action.ref, user };
-    await (action.effect === "publish"
-      ? deps.mutations.publish(input)
-      : deps.mutations.unpublish(input));
+    await asReleaseRun(() =>
+      action.effect === "publish"
+        ? deps.mutations.publish(input)
+        : deps.mutations.unpublish(input)
+    );
   } catch (error) {
     // A rejection is not proof the write did not land. Ask the document — and
     // if THAT cannot be answered, report the failure, which is the safe
