@@ -23,6 +23,7 @@ import {
   type TranslationSurface,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import { restoredValue } from "./generate-down";
 
 interface PreconditionAdapter {
   executeQuery<T = unknown>(sql: string): Promise<T[]>;
@@ -56,9 +57,11 @@ function withArticle(word: string): string {
  *
  * - Required: an entry with no default-language value, either no companion row in that language or
  *   NULL there, would be left without one.
- * - Unique: two entries holding the same default-language value would share it. Compared as the
- *   database's unique index will compare them, so MySQL's case-insensitive collation counts
- *   "Code" and "code" as one value, as its index does.
+ * - Unique: two entries would share one value. Judged on the values the move writes
+ *   (`restoredValue`): an entry's default-language value, or, for an entry with no row in that
+ *   language, its first language's by code. Compared as the database's unique index will compare
+ *   them, so MySQL's case-insensitive collation counts "Code" and "code" as one value, as its
+ *   index does.
  */
 export async function refusalsForConstrainedFieldsLeaving(args: {
   adapter: PreconditionAdapter;
@@ -95,12 +98,20 @@ export async function refusalsForConstrainedFieldsLeaving(args: {
     );
     return Number(row?.n ?? 0);
   };
-  /** How many entries share the commonest repeated default-language value; the value is never read. */
+  /** How many entries would share the commonest repeated value; the value is never read. */
   const sharing = async (col: string) => {
+    const shared = restoredValue(
+      {
+        dialect,
+        mainTable: args.tableName,
+        companionTable: `${args.tableName}_locales`,
+        defaultLocale: args.defaultLocale,
+      },
+      `${companion}.${col}`
+    );
     const [row] = await adapter.executeQuery<{ n: number | string }>(
-      `SELECT COUNT(*) AS n FROM ${companion} ` +
-        `WHERE ${q("_locale", dialect)} = ${locale} AND ${col} IS NOT NULL ` +
-        `GROUP BY ${col} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT 1`
+      `SELECT COUNT(*) AS n FROM (SELECT ${shared} AS v FROM ${main}) s ` +
+        `WHERE s.v IS NOT NULL GROUP BY s.v HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT 1`
     );
     return Number(row?.n ?? 0);
   };
@@ -159,11 +170,12 @@ function uniqueRefusal(
   return refusal(
     `fields.${name}`,
     "UNIQUE_FIELD_LEAVES_OVER_DUPLICATES",
-    `${entries(count)} share ${withArticle(language)} value for ${name}, which must be unique once it is shared.`,
+    `${entries(count)} would share a value for ${name}, which must be unique once it is shared. ` +
+      `Each entry keeps its ${language} value, or another language's when it has no ${language} one.`,
     [
       surface === "builder"
-        ? `Give them their own ${language} values, or turn off Unique, and save again.`
-        : `Give them their own ${language} values, or remove \`unique\`, and run \`nextly migrate:create\` again.`,
+        ? "Give them their own values, or turn off Unique, and save again."
+        : "Give them their own values, or remove `unique`, and run `nextly migrate:create` again.",
     ]
   );
 }
