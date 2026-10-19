@@ -15,7 +15,10 @@ import {
   removeOrphanThumbnails,
   type OrphanRemoval,
 } from "../../domains/media/orphan-thumbnails";
-import { filesKeptByOthers } from "../../domains/media/remove-stored-files";
+import {
+  errorForLog,
+  filesKeptByOthers,
+} from "../../domains/media/remove-stored-files";
 import { StoredFileSearchReader } from "../../domains/media/stored-file-search";
 import {
   storedFilesOf,
@@ -77,16 +80,13 @@ export async function referencedStoredPaths(
 }
 
 /**
- * Whether a media item refers to a file now, asked of the media table for
- * that one file, by the search every delete keeps files by
+ * Which of a batch of files a media item refers to now, asked of the media
+ * table for those files, by the search every delete keeps files by
  * (`filesKeptByOthers`), and `null` when the table cannot be read.
  */
 function referencedNowIn(adapter: DrizzleAdapter): ReferencedNow {
   const { search } = new StoredFileSearchReader(adapter, consoleLogger);
-  return async path => {
-    const kept = await filesKeptByOthers(search, [path], []);
-    return kept === null ? null : kept.has(path);
-  };
+  return paths => filesKeptByOthers(search, paths, []);
 }
 
 /**
@@ -224,8 +224,9 @@ function sayRemoval(result: OrphanRemoval, say: (line: string) => void): void {
   for (const path of result.kept) {
     say(`Kept ${path}: a media item refers to it now.`);
   }
-  for (const { path, reason } of result.failed) {
-    say(`Could not remove ${path}: ${reason}`);
+  for (const { path, error } of result.failed) {
+    // What the storage said can quote a signed URL or a token.
+    say(`Could not remove ${path}: ${errorForLog(error)}`);
   }
   if (result.stopped.length > 0) {
     say(
@@ -243,25 +244,30 @@ function sayRemoval(result: OrphanRemoval, say: (line: string) => void): void {
  * config, such as a local-disk plugin given a relative path, resolves that
  * path when the config loads, against the process's directory.
  *
- * The CLI read `.env` from where it was run, before --cwd, and a database
- * named there may be another project's: a file in use in this project's
- * storage would read as left behind against it. So with another `.env` there
- * --apply is refused, and a listing warns; the project's own `.env` sets what
- * nothing has set yet.
+ * The database settings were read before --cwd: from `.env` where the CLI
+ * was run, from the shell or from a parent process, and may be another
+ * project's, against which a file in use in this project's storage would
+ * read as left behind. So from another directory --apply is refused, and a
+ * listing warns when that directory has its own `.env`; the project's own
+ * `.env` sets what nothing has set yet.
  */
 function enterProject(cwd: string, apply: boolean, logger: Logger): boolean {
   const ranIn = process.cwd();
   if (cwd !== ranIn) {
+    // The database settings may come from another project's `.env`, from
+    // the shell or from a parent process, none of which a `.env` loaded now
+    // replaces: nothing ties them to this project, so nothing is removed.
+    if (apply) {
+      logger.error(
+        `The database settings were read before --cwd named ${cwd}, so they may be another project's. Nothing was changed. Run the command from ${cwd} to remove files.`
+      );
+      return false;
+    }
     const loaded = path.join(ranIn, ".env");
     if (existsSync(loaded)) {
-      const warning = `The environment was read from ${loaded}, not from ${cwd}, so the database it names may be another project's.`;
-      if (apply) {
-        logger.error(
-          `${warning} Nothing was changed. Run the command from ${cwd} to remove files.`
-        );
-        return false;
-      }
-      logger.warn(warning);
+      logger.warn(
+        `The environment was read from ${loaded}, not from ${cwd}, so the database it names may be another project's.`
+      );
     }
     const projectEnv = path.join(cwd, ".env");
     if (existsSync(projectEnv)) loadEnvFile({ path: projectEnv });

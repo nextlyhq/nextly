@@ -48,9 +48,11 @@ const key = (name: string, folder = "") =>
  */
 const askedOf =
   (referenced: () => Promise<MediaReferences>): ReferencedNow =>
-  async file => {
+  async files => {
     const now = await referenced();
-    return now.unlocated.length > 0 ? null : now.paths.has(file);
+    return now.unlocated.length > 0
+      ? null
+      : new Set(files.filter(file => now.paths.has(file)));
   };
 
 /** What the media table refers to: these stored paths, all located. */
@@ -387,7 +389,7 @@ describe("nextly media orphans", () => {
       prefix: "media",
       exclusive: true,
       referenced: async () => refs(),
-      referencedNow: async () => false,
+      referencedNow: async () => new Set(),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -491,19 +493,19 @@ describe("nextly media orphans", () => {
   });
 
   // An item can come to refer to a listed file while earlier ones go: each
-  // is asked about just before its own removal, not once for a batch.
-  it("asks about each file just before removing it", async () => {
+  // batch is asked about just before its own removals, in one search.
+  it("asks about each batch of files just before removing it", async () => {
     const bucket = new Bucket("s3");
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 120; i++) {
       bucket.put({
         path: key(`thumb_${i}.png`, "media/"),
         lastModified: TWO_HOURS_AGO,
       });
     }
-    const events: string[] = [];
+    const events: Array<{ ask: string[] } | { remove: string }> = [];
     const remove = bucket.delete.bind(bucket);
     bucket.delete = async (file: string) => {
-      events.push(`delete ${file}`);
+      events.push({ remove: file });
       return remove(file);
     };
 
@@ -512,9 +514,9 @@ describe("nextly media orphans", () => {
       prefix: "media",
       exclusive: true,
       referenced: async () => refs(),
-      referencedNow: async file => {
-        events.push(`ask ${file}`);
-        return false;
+      referencedNow: async files => {
+        events.push({ ask: [...files] });
+        return new Set();
       },
       apply: true,
       say: () => {},
@@ -523,13 +525,31 @@ describe("nextly media orphans", () => {
 
     expect(code).toBe(0);
     expect(bucket.files.size).toBe(0);
-    const removed = events
-      .filter(event => event.startsWith("delete "))
-      .map(event => event.slice("delete ".length));
-    expect(removed).toHaveLength(3);
-    expect(events).toEqual(
-      removed.flatMap(file => [`ask ${file}`, `delete ${file}`])
-    );
+    const asks = events.filter(event => "ask" in event);
+    expect(asks).toHaveLength(Math.ceil(120 / 50));
+    // Each file goes after the ask that named it, and before the next ask.
+    let asked = new Set<string>();
+    for (const event of events) {
+      if ("ask" in event) asked = new Set(event.ask);
+      else expect(asked.has(event.remove)).toBe(true);
+    }
+  });
+
+  // What the storage said can quote a signed URL.
+  it("names a failed removal without the secrets in the storage's error", async () => {
+    const layout = inBucket("s3");
+    (layout.storage as Bucket).delete = async () => {
+      throw new Error(
+        "refused https://bucket.example/x.png?X-Amz-Signature=signed-secret"
+      );
+    };
+
+    const { code, said } = await run(layout, true);
+
+    expect(code).toBe(1);
+    expect(said).toContain(`Could not remove ${layout.orphan}`);
+    expect(said).toContain("https://bucket.example/x.png");
+    expect(said).not.toMatch(/secret/);
   });
 
   // Between the listing and the removal an item can come to refer to it.

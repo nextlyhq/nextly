@@ -132,6 +132,8 @@ describe("nextly media orphans, as the CLI runs it", () => {
       },
     ];
 
+    // Run from inside the project, as --apply needs.
+    process.chdir(dir);
     await createProgram().parseAsync([
       "node",
       "nextly",
@@ -171,6 +173,8 @@ describe("nextly media orphans, as the CLI runs it", () => {
       },
     ];
 
+    // Run from inside the project, as --apply needs.
+    process.chdir(dir);
     await createProgram().parseAsync([
       "node",
       "nextly",
@@ -199,6 +203,8 @@ describe("nextly media orphans, as the CLI runs it", () => {
       },
     ];
 
+    // Run from inside the project, as --apply needs.
+    process.chdir(dir);
     await createProgram().parseAsync([
       "node",
       "nextly",
@@ -269,6 +275,37 @@ describe("nextly media orphans, as the CLI runs it", () => {
       path.join(elsewhere, ".env"),
       "DATABASE_URL=file:other.db\n"
     );
+    process.chdir(elsewhere);
+
+    await createProgram().parseAsync([
+      "node",
+      "nextly",
+      "--cwd",
+      dir,
+      "media",
+      "orphans",
+      "--apply",
+    ]);
+
+    expect(exits).toEqual([1]);
+    expect(media.deleted).toEqual([]);
+    expect(seen.calls).not.toContain("select media");
+  });
+
+  // The database settings may come from the shell or a parent process as
+  // well, which nothing ties to the project --cwd names.
+  it("removes nothing when run from another directory, with no .env there", async () => {
+    const media = bucketWithOrphan("media");
+    seen.storage = [
+      {
+        name: "s3-media",
+        type: "s3",
+        collections: { media: { prefix: "media" } },
+        adapter: media.adapter,
+      },
+    ];
+    const elsewhere = path.join(dir, "no-env-here");
+    await mkdir(elsewhere);
     process.chdir(elsewhere);
 
     await createProgram().parseAsync([

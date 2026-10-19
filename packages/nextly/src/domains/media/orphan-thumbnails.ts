@@ -231,7 +231,8 @@ export interface OrphanRemoval {
   removed: string[];
   /** Referred to again by the time it would have been removed. */
   kept: string[];
-  failed: Array<{ path: string; reason: string }>;
+  /** With what the storage threw, which can quote a signed URL. */
+  failed: Array<{ path: string; error: unknown }>;
   /**
    * Not tried: whether an item refers to the first of these could not be
    * said just before its removal, so none of them was removed.
@@ -240,18 +241,25 @@ export interface OrphanRemoval {
 }
 
 /**
- * Whether a media item refers to `path` now: `true` or `false`, or `null`
- * when that cannot be said, as when the media table cannot be read.
+ * Of `paths`, the ones a media item refers to now, or `null` when that
+ * cannot be said, as when the media table cannot be read.
  */
-export type ReferencedNow = (path: string) => Promise<boolean | null>;
+export type ReferencedNow = (
+  paths: readonly string[]
+) => Promise<ReadonlySet<string> | null>;
+
+/** How many listed files are asked about at once, just before their removal. */
+const RECHECK_BATCH = 50;
 
 /**
  * Removes each of `orphans` that is still unreferenced just before its
- * removal, asked of `referencedNow` for that file then, not at the listing:
- * an item can come to refer to a listed file in between, as an upload or an
- * import commits. Stops, and removes no more, once an ask cannot be
- * answered. An item that comes to refer to a file between its ask and its
- * removal is not seen; nothing short of a lock on references closes that.
+ * removal, asked of `referencedNow` then, not at the listing: an item can
+ * come to refer to a listed file in between, as an upload or an import
+ * commits. Asked for a batch of {@link RECHECK_BATCH} files at a time, in
+ * one search, rather than once per file. Stops, and removes no more, once an
+ * ask cannot be answered. An item that comes to refer to a file while its
+ * batch is being removed is not seen; nothing short of a lock on references
+ * closes that.
  */
 export async function removeOrphanThumbnails(
   adapter: IStorageAdapter,
@@ -264,24 +272,24 @@ export async function removeOrphanThumbnails(
     failed: [],
     stopped: [],
   };
-  for (const [index, path] of orphans.entries()) {
-    const referenced = await referencedNow(path);
+  for (let start = 0; start < orphans.length; start += RECHECK_BATCH) {
+    const batch = orphans.slice(start, start + RECHECK_BATCH);
+    const referenced = await referencedNow(batch);
     if (referenced === null) {
-      result.stopped = orphans.slice(index);
+      result.stopped = orphans.slice(start);
       break;
     }
-    if (referenced) {
-      result.kept.push(path);
-      continue;
-    }
-    try {
-      await adapter.delete(path);
-      result.removed.push(path);
-    } catch (error) {
-      result.failed.push({
-        path,
-        reason: error instanceof Error ? error.message : String(error),
-      });
+    for (const path of batch) {
+      if (referenced.has(path)) {
+        result.kept.push(path);
+        continue;
+      }
+      try {
+        await adapter.delete(path);
+        result.removed.push(path);
+      } catch (error) {
+        result.failed.push({ path, error });
+      }
     }
   }
   return result;
