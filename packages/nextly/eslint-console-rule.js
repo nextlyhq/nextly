@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
  *   holds. The test pins those numbers, so a call added to a pending file fails, and a file
  *   leaves the list once it is converted. It only shrinks.
  */
-export const CONSOLE_ALLOWLIST = JSON.parse(
+const CONSOLE_ALLOWLIST = JSON.parse(
   readFileSync(
     join(
       dirname(fileURLToPath(import.meta.url)),
@@ -39,7 +39,7 @@ export const CONSOLE_ALLOWLIST = JSON.parse(
 );
 
 /** The paths `no-console` does not apply to, terminal and pending alike. */
-export const CONSOLE_ALLOWLIST_PATHS = [
+const CONSOLE_ALLOWLIST_PATHS = [
   ...Object.keys(CONSOLE_ALLOWLIST.terminal),
   ...Object.keys(CONSOLE_ALLOWLIST.pending),
 ];

@@ -34,36 +34,34 @@ interface ConsoleAllowlist {
   pending: ReadonlyMap<string, number>;
 }
 
-/** Read as JSON, as the ESLint config reads it, and narrowed rather than asserted. */
-function readAllowlist(): ConsoleAllowlist {
-  const parsed: unknown = JSON.parse(
-    readFileSync(join(packageRoot, ALLOWLIST_FILE), "utf8")
-  );
-  if (
-    typeof parsed !== "object" ||
-    parsed === null ||
-    !("terminal" in parsed) ||
-    !("pending" in parsed) ||
-    typeof parsed.terminal !== "object" ||
-    parsed.terminal === null ||
-    typeof parsed.pending !== "object" ||
-    parsed.pending === null
-  ) {
-    throw new TypeError(
-      `${ALLOWLIST_FILE} must hold a "terminal" and a "pending" object`
-    );
+/** An object section of the allowlist, or a TypeError naming it. */
+function section(parsed: unknown, name: "terminal" | "pending"): object {
+  const value: unknown =
+    typeof parsed === "object" && parsed !== null
+      ? (parsed as Record<string, unknown>)[name]
+      : undefined;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${ALLOWLIST_FILE} must hold a "${name}" object`);
   }
+  return value;
+}
+
+/** Terminal entries are permanent, so each one says why. */
+function readTerminal(parsed: unknown): ReadonlyMap<string, string> {
   const terminal = new Map<string, string>();
-  for (const [path, reason] of Object.entries(parsed.terminal)) {
-    // A terminal entry is permanent, so it says why.
+  for (const [path, reason] of Object.entries(section(parsed, "terminal"))) {
     if (typeof reason !== "string" || reason.trim() === "") {
       throw new TypeError(`${ALLOWLIST_FILE}: ${path} must give its reason`);
     }
     terminal.set(path, reason);
   }
+  return terminal;
+}
+
+/** A converted file leaves the list rather than sitting at zero. */
+function readPending(parsed: unknown): ReadonlyMap<string, number> {
   const pending = new Map<string, number>();
-  for (const [path, count] of Object.entries(parsed.pending)) {
-    // A converted file leaves the list rather than sitting at zero.
+  for (const [path, count] of Object.entries(section(parsed, "pending"))) {
     if (typeof count !== "number" || !Number.isInteger(count) || count < 1) {
       throw new TypeError(
         `${ALLOWLIST_FILE}: ${path} must map to a positive integer, got ${String(count)}`
@@ -71,7 +69,15 @@ function readAllowlist(): ConsoleAllowlist {
     }
     pending.set(path, count);
   }
-  return { terminal, pending };
+  return pending;
+}
+
+/** Read as JSON, as the ESLint config reads it, and narrowed rather than asserted. */
+function readAllowlist(): ConsoleAllowlist {
+  const parsed: unknown = JSON.parse(
+    readFileSync(join(packageRoot, ALLOWLIST_FILE), "utf8")
+  );
+  return { terminal: readTerminal(parsed), pending: readPending(parsed) };
 }
 
 const ALLOWLIST = readAllowlist();
