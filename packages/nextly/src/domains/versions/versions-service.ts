@@ -24,6 +24,7 @@ import { recordWriteEvent } from "../content-events/write-event";
 
 import type { PartVersion } from "./comparison-baselines";
 import type { VersionsDbApi } from "./db-api";
+import { lockDocument } from "./history-locks";
 import {
   VersionsRepository,
   type AutosaveWriteResult,
@@ -127,7 +128,23 @@ export class VersionsService {
   ): Promise<VersionRow> {
     await this.get(ref, versionNo);
     await this.db.transaction(async tx => {
-      await new VersionsRepository(tx).updateLabel(ref, versionNo, label);
+      // Under the document's lock, which retention's own pass waits for, the
+      // version is read again: one pruned since the read above is refused
+      // rather than named in history while no row takes the name.
+      await lockDocument(tx, ref);
+      const repo = new VersionsRepository(tx);
+      if (!(await repo.findByVersionNo(ref, versionNo))) {
+        throw NextlyError.notFound({
+          logContext: {
+            reason: "version-pruned-while-naming",
+            scopeKind: ref.scopeKind,
+            scopeSlug: ref.scopeSlug,
+            entryId: ref.entryId,
+            versionNo,
+          },
+        });
+      }
+      await repo.updateLabel(ref, versionNo, label);
       // Collections and Singles keep a record of content events; a page's
       // history keeps none yet.
       if (

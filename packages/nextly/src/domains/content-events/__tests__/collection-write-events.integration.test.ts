@@ -270,5 +270,34 @@ describe.each(getConfiguredTestDialects())(
       });
       expect((read.data as { title?: string }).title).toBe("kept");
     }, 120_000);
+
+    it("rolls a whole batch back when an item's event cannot be written", async () => {
+      await boot(dialect);
+      // An install that has not migrated since the record arrived.
+      await current!.adapter.executeQuery("DROP TABLE nextly_content_events");
+      const service = current!.getService("collectionService") as unknown as {
+        createMany: (
+          slug: string,
+          rows: Record<string, unknown>[],
+          ctx: Record<string, unknown>
+        ) => Promise<{ failed: number }>;
+      };
+
+      // The batch's default `stopOnError: false` reports an ordinary failure
+      // per item and carries on; a write without its event must not.
+      const result = await service
+        .createMany("posts", [{ title: "one" }, { title: "two" }], {
+          overrideAccess: true,
+          user: ANA,
+        })
+        .catch(() => ({ failed: -1 }));
+
+      expect(result.failed).not.toBe(0);
+      const posts = await current!
+        .getService("collectionRegistryService")
+        .getCollectionBySlug("posts");
+      // Nothing committed: no row stands without the event it needed.
+      expect(await current!.adapter.select(posts!.tableName)).toEqual([]);
+    }, 120_000);
   }
 );

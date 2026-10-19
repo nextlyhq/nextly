@@ -915,17 +915,24 @@ export class CollectionMutationService extends BaseService {
    * transaction, whatever the collection's webhook settings: history is the
    * document's own record, not a delivery.
    */
-  private recordHistoryEvent(
+  private async recordHistoryEvent(
     tx: TransactionContext,
     collection: string,
     id: string,
     event: Omit<WriteEventInput, "subject">
   ): Promise<{ id: string }> {
-    return recordWriteEvent(
-      tx,
-      { adapter: this.adapter },
-      { subject: { kind: "collection", slug: collection, id }, ...event }
-    );
+    try {
+      return await recordWriteEvent(
+        tx,
+        { adapter: this.adapter },
+        { subject: { kind: "collection", slug: collection, id }, ...event }
+      );
+    } catch (err) {
+      // A change never stands without its event: the batch and transaction
+      // loops must abort the transaction, not keep its write as a soft
+      // per-item failure.
+      throw markWriteIntegrityFailure(err);
+    }
   }
 
   /** A save in this document's history; see `recordSaveEvent`. */
@@ -939,7 +946,10 @@ export class CollectionMutationService extends BaseService {
       tx,
       { adapter: this.adapter },
       { subject: { kind: "collection", slug: collection, id }, ...save }
-    );
+    ).catch(err => {
+      // See `recordHistoryEvent`: the transaction must not keep the write.
+      throw markWriteIntegrityFailure(err);
+    });
   }
 
   /** This document's status moves in its history; see `recordTransitionEvents`. */
@@ -960,7 +970,10 @@ export class CollectionMutationService extends BaseService {
       { adapter: this.adapter },
       { subject: { kind: "collection", slug: collection, id }, ...write },
       moves
-    );
+    ).catch(err => {
+      // See `recordHistoryEvent`: the transaction must not keep the write.
+      throw markWriteIntegrityFailure(err);
+    });
   }
 
   /**

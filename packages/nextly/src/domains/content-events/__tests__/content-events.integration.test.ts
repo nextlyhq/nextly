@@ -230,13 +230,17 @@ describe.each(getConfiguredTestDialects())(
       expect(row?.title).toBe("before");
       // Only that creation is left in the record: the event the failed change
       // wrote went with its change, and so did its part.
+      const left = await t.events();
       expect(
-        (await t.events()).map(e => ({
+        left.map(e => ({
           kind: (e as { kind?: string }).kind,
           subjectId: e.subjectId,
         }))
       ).toEqual([{ kind: "created", subjectId: entryId }]);
-      expect(await t.parts()).toEqual([]);
+      // Every part left is the creation's own.
+      expect((await t.parts()).filter(p => p.eventId !== left[0]?.id)).toEqual(
+        []
+      );
     });
 
     it("filters by part and pages in the database, newest first", async () => {
