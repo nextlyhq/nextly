@@ -90,7 +90,26 @@ describe("a breakdown card's groups at each tier", () => {
   it("describes the groups it draws, not the ones it left out", () => {
     drawAt("small", groups(6));
     expect(
-      within(screen.getByRole("img")).getByText(/^3 categories\./)
+      within(screen.getByRole("img")).getByText(/^Entries by author: 3 groups,/)
     ).toBeInTheDocument();
+  });
+});
+
+describe("which groups a tier cuts", () => {
+  it("cuts after ordering, so a tie at the edge keeps the first label", () => {
+    // Authors 3 and 4 tie for the last place a small card draws, and the server lists 4 first.
+    // Ordered by count and then label BEFORE the cut, the card draws Author 3, and its table
+    // and its "1 more group" agree on which group was left out.
+    drawAt("small", {
+      op: "groupBy",
+      buckets: [
+        { value: "Author 1", count: 100 },
+        { value: "Author 2", count: 90 },
+        { value: "Author 4", count: 50 },
+        { value: "Author 3", count: 50 },
+      ],
+    });
+    expect(drawnGroups()).toEqual(["Author 1", "Author 2", "Author 3"]);
+    expect(screen.getByText("1 more group")).toBeInTheDocument();
   });
 });

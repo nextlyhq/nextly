@@ -151,7 +151,7 @@ describe("the bars archetype", () => {
     );
   });
 
-  it("carries a text alternative naming the largest bucket", () => {
+  it("carries a text alternative naming the group with the most", () => {
     // What a screen reader is given INSTEAD of the shapes. Without it the card
     // announces a title and then a run of unlabelled elements.
     draw(
@@ -162,7 +162,7 @@ describe("the bars archetype", () => {
     );
     const graphic = screen.getByRole("img");
     expect(graphic).toHaveAccessibleName(/Entries by status/);
-    expect(graphic).toHaveAccessibleDescription(/Largest: Published, 128/);
+    expect(graphic).toHaveAccessibleDescription(/Most: Published, 128/);
   });
 
   it("puts every bucket in a real table, with the count beside it", () => {
