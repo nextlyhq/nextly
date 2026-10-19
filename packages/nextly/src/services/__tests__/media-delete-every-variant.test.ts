@@ -203,6 +203,20 @@ async function referencedNow(id: string): Promise<string[]> {
   return row ? storedFilesOf(row).paths.sort() : [];
 }
 
+/** A second item with the same stored files as `id`, as an import can make. */
+async function copyOf(
+  id: string,
+  folderId: string | null = null
+): Promise<string> {
+  const [row] = await db.db
+    .select()
+    .from(db.schema.media)
+    .where(eq(db.schema.media.id, id));
+  const copy = `copy-of-${id}`;
+  await db.db.insert(db.schema.media).values({ ...row, id: copy, folderId });
+  return copy;
+}
+
 describe("deleting a media item", () => {
   it("leaves nothing of it on local disk", async () => {
     onLocalDisk();
@@ -257,7 +271,85 @@ describe("deleting a media item", () => {
   });
 });
 
+// Nothing makes a stored path one item's alone: an import can copy a
+// record, and a content-addressed adapter gives one file one key.
+describe("a file another item also refers to", () => {
+  it("stays when one of the items is deleted, and goes with the last", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const copy = await copyOf(id);
+    const before = await onDisk();
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+    expect(await onDisk()).toEqual(before);
+
+    expect((await service.deleteMedia(copy)).success).toBe(true);
+    expect(await onDisk()).toEqual([]);
+  });
+
+  it("stays when a folder holding one of the items is deleted", async () => {
+    onLocalDisk();
+    const folder = await new MediaFolderService(
+      db.adapter,
+      testLogger
+    ).createFolder({
+      name: "shared",
+      createdBy: "user-1",
+    });
+    const id = await uploadPhoto(folder.data!.id);
+    await copyOf(id);
+    const before = await onDisk();
+
+    const result = await new MediaFolderService(
+      db.adapter,
+      testLogger
+    ).deleteFolder(folder.data!.id, true);
+
+    expect(result.success).toBe(true);
+    expect(await onDisk()).toEqual(before);
+  });
+});
+
 describe("a file the delete cannot remove", () => {
+  // What the storage says can carry a signed URL or a token.
+  it("is named without the secrets in the storage's error", async () => {
+    const bucket = new Bucket("s3");
+    initializeMediaStorage({
+      plugins: [
+        {
+          name: "s3",
+          type: "s3",
+          collections: { media: true },
+          adapter: bucket,
+        },
+      ],
+    });
+    const id = await uploadPhoto();
+    let calls = 0;
+    vi.spyOn(bucket, "delete").mockImplementation(async () => {
+      calls++;
+      if (calls === 1) {
+        throw new Error(
+          "refused https://key-id:key-secret@bucket.example/x.png?X-Amz-Signature=signed-secret"
+        );
+      }
+      throw { token: "token-secret" };
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect((await service.deleteMedia(id)).success).toBe(true);
+
+    const said = warn.mock.calls
+      .map(args =>
+        args
+          .map(arg => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+          .join(" ")
+      )
+      .join("\n");
+    expect(said).toContain("https://bucket.example/x.png");
+    expect(said).not.toMatch(/secret/);
+  });
+
   // The first removal fails, with three files after it, so a delete that
   // stopped at the failure would leave them stored.
   it("is named, with its item, the rest still go, and the delete still succeeds", async () => {

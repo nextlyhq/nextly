@@ -1,3 +1,5 @@
+import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
+
 import { isTransientError, withRetry } from "../../storage/retry";
 
 import { storedFilesOf, type MediaFilesRecord } from "./stored-files";
@@ -29,6 +31,18 @@ export function storedPathForLog(pathOrUrl: string): string {
   }
 }
 
+/**
+ * What a storage failure said, as a log may show it: an error's message with
+ * every URL in it shortened as {@link storedPathForLog} shortens one, and
+ * nothing of a thrown value that is not an error, which can hold anything.
+ */
+function errorForLog(error: unknown): string {
+  if (!(error instanceof Error)) return "the storage failed without an error";
+  return error.message.replace(/[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/gi, url =>
+    storedPathForLog(url)
+  );
+}
+
 /** A stored file that could not be removed, by its path, so it can be found. */
 export function warnNotRemoved(
   filePath: string,
@@ -37,7 +51,7 @@ export function warnNotRemoved(
 ): void {
   console.warn(
     `[MediaService] Could not remove ${storedPathForLog(filePath)} of media ${mediaId}:`,
-    error instanceof Error ? error.message : error
+    errorForLog(error)
   );
 }
 
@@ -52,8 +66,49 @@ export function warnUnlocated(url: string, mediaId: string): void {
 }
 
 /**
+ * The media rows that may share a stored file with `records`: by the
+ * original's stored path, or by a URL either names as its original or its
+ * thumbnail. Nothing makes a stored path one item's alone, since an import
+ * can copy a record and a content-addressed adapter gives one file one key.
+ * Asked after the records' own rows are gone, so it finds only others.
+ */
+export function rowsSharingFilesWith(
+  records: readonly MediaFilesRecord[]
+): WhereClause {
+  const urls = [
+    ...new Set(
+      records.flatMap(record =>
+        record.thumbnailUrl ? [record.url, record.thumbnailUrl] : [record.url]
+      )
+    ),
+  ];
+  return {
+    or: [
+      {
+        column: "filename",
+        op: "IN",
+        value: [...new Set(records.map(record => record.filename))],
+      },
+      { column: "url", op: "IN", value: urls },
+      { column: "thumbnailUrl", op: "IN", value: urls },
+    ],
+  };
+}
+
+/** The columns {@link storedFilesOf} reads, for a query that only needs them. */
+export const STORED_FILE_COLUMNS = ["filename", "url", "thumbnailUrl", "sizes"];
+
+/** Every stored path the given rows refer to. */
+export function pathsReferencedBy(
+  rows: readonly MediaFilesRecord[]
+): Set<string> {
+  return new Set(rows.flatMap(row => storedFilesOf(row).paths));
+}
+
+/**
  * Removes every file stored for a deleted item: the original, every image
- * size and the thumbnail made at upload. Each is removed on its own, retried
+ * size and the thumbnail made at upload, except any of them in `kept`, the
+ * files another item still refers to. Each is removed on its own, retried
  * on a transient failure, so one that fails leaves the others to go, and is
  * named in the log with its item, so the leftover can be found. Never throws:
  * the record is already gone, and a storage failure must not fail its delete.
@@ -61,27 +116,30 @@ export function warnUnlocated(url: string, mediaId: string): void {
 export async function removeStoredFiles(
   storage: StoredFileRemover,
   record: MediaFilesRecord,
-  mediaId: string
+  mediaId: string,
+  kept: ReadonlySet<string> = new Set()
 ): Promise<void> {
   const { paths, unlocated } = storedFilesOf(record);
   for (const url of unlocated) warnUnlocated(url, mediaId);
   await Promise.all(
-    paths.map(async filePath => {
-      try {
-        await withRetry(() => storage.delete(filePath, "media"), {
-          maxAttempts: 3,
-          baseDelayMs: 500,
-          shouldRetry: isTransientError,
-          onRetry: (err, attempt) => {
-            console.warn(
-              `[MediaService] Delete retry ${attempt} for ${storedPathForLog(filePath)}:`,
-              err instanceof Error ? err.message : err
-            );
-          },
-        });
-      } catch (error) {
-        warnNotRemoved(filePath, mediaId, error);
-      }
-    })
+    paths
+      .filter(filePath => !kept.has(filePath))
+      .map(async filePath => {
+        try {
+          await withRetry(() => storage.delete(filePath, "media"), {
+            maxAttempts: 3,
+            baseDelayMs: 500,
+            shouldRetry: isTransientError,
+            onRetry: (err, attempt) => {
+              console.warn(
+                `[MediaService] Delete retry ${attempt} for ${storedPathForLog(filePath)}:`,
+                errorForLog(err)
+              );
+            },
+          });
+        } catch (error) {
+          warnNotRemoved(filePath, mediaId, error);
+        }
+      })
   );
 }

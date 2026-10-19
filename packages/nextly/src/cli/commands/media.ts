@@ -91,6 +91,9 @@ export async function mediaOrphans(options: {
   now?: Date;
 }): Promise<number> {
   const { storage, say, apply } = options;
+  // Before the media table is read: a storage that cannot list its files
+  // cannot be searched, however its records read.
+  if (!storage.list) return sayUnlistable(storage, say);
   const references = await options.referenced();
   // A thumbnail in use that no path here can match may be any listed file,
   // so where there is one nothing is removed: the matches are listed.
@@ -101,12 +104,7 @@ export async function mediaOrphans(options: {
     exclusive: options.exclusive && unlocated === 0,
     now: options.now,
   });
-  if (!search.listable) {
-    say(
-      `The media storage (${storage.getType()}) cannot list its files, so it cannot be searched for left-behind thumbnails. Nothing was changed.`
-    );
-    return 1;
-  }
+  if (!search.listable) return sayUnlistable(storage, say);
   const hours = ORPHAN_MIN_AGE_MS / 3_600_000;
   if (search.tooRecent > 0) {
     say(
@@ -142,6 +140,17 @@ export async function mediaOrphans(options: {
   );
   sayRemoval(result, say);
   return result.failed.length > 0 || result.stopped.length > 0 ? 1 : 0;
+}
+
+/** Says the storage cannot be searched, and answers the exit code, 1. */
+function sayUnlistable(
+  storage: IStorageAdapter,
+  say: (line: string) => void
+): number {
+  say(
+    `The media storage (${storage.getType()}) cannot list its files, so it cannot be searched for left-behind thumbnails. Nothing was changed.`
+  );
+  return 1;
 }
 
 /**

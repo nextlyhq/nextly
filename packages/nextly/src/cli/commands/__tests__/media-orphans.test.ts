@@ -510,11 +510,17 @@ describe("nextly media orphans", () => {
       { list: undefined }
     );
 
-    const { code, said } = await run({ ...layout, storage }, true);
+    let scans = 0;
+    const { code, said } = await run({ ...layout, storage }, true, async () => {
+      scans++;
+      return refs(layout.referenced);
+    });
 
     expect(code).toBe(1);
     expect(said).toMatch(/cannot list its files/);
     expect(await layout.stored()).toContain(layout.orphan);
+    // Known before the media table is read.
+    expect(scans).toBe(0);
   });
 });
 

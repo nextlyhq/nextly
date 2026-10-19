@@ -41,7 +41,10 @@ import { and, eq, isNull } from "drizzle-orm";
 import { getMediaStorage } from "@nextly/storage";
 
 import {
+  pathsReferencedBy,
   removeStoredFiles,
+  rowsSharingFilesWith,
+  STORED_FILE_COLUMNS,
   storedPathForLog,
   warnUnlocated,
 } from "../domains/media/remove-stored-files";
@@ -134,7 +137,11 @@ type StoredMediaRecord = MediaFilesRecord & { id: string };
  * Removes the stored files of media rows a cascading folder delete removed,
  * once they are gone. Never throws.
  */
-type RemoveStoredFiles = (records: StoredMediaRecord[]) => Promise<void>;
+type RemoveStoredFiles = (
+  records: StoredMediaRecord[],
+  /** Files another item still refers to, which stay. */
+  kept: ReadonlySet<string>
+) => Promise<void>;
 
 /**
  * Every file of each item, as a delete of that item removes them, one item
@@ -142,10 +149,10 @@ type RemoveStoredFiles = (records: StoredMediaRecord[]) => Promise<void>;
  * storage every file of every item together, and a refused or throttled
  * request leaves its file stored.
  */
-const removeEveryStoredFile: RemoveStoredFiles = async records => {
+const removeEveryStoredFile: RemoveStoredFiles = async (records, kept) => {
   const storage = getMediaStorage();
   for (const record of records) {
-    await removeStoredFiles(storage, record, record.id);
+    await removeStoredFiles(storage, record, record.id, kept);
   }
 };
 
@@ -171,9 +178,9 @@ function removalFrom(
   if (typeof cleanup === "function") {
     // The rows are already gone: a failure is named, never thrown, so it
     // cannot stop the rest of the cascade.
-    return async records => {
+    return async (records, kept) => {
       try {
-        await cleanup(records);
+        await cleanup(records, kept);
       } catch (error) {
         console.warn(
           "[MediaFolderService] Could not remove the files of the deleted items:",
@@ -182,11 +189,11 @@ function removalFrom(
       }
     };
   }
-  return async records => {
+  return async (records, kept) => {
     const filePaths: string[] = [];
     for (const record of records) {
       const { paths, unlocated } = storedFilesOf(record);
-      filePaths.push(...paths);
+      filePaths.push(...paths.filter(filePath => !kept.has(filePath)));
       for (const url of unlocated) warnUnlocated(url, record.id);
     }
     if (filePaths.length === 0) return;
@@ -849,18 +856,26 @@ export class MediaFolderService extends BaseService {
       const inChunk = {
         and: [{ column: "id", op: "IN" as const, value: chunk }],
       };
-      const removed = await this.adapter.transaction(async tx => {
-        for (const id of chunk) await tx.lockRow("media", id);
+      const { removed, kept } = await this.adapter.transaction(async tx => {
+        // Locked and read in one statement, the chunk's rows at once.
         const current = await tx.select<StoredMediaRecord>("media", {
           where: inChunk,
+          forUpdate: true,
         });
-        if (current.length > 0) await tx.delete("media", inChunk);
-        return current;
+        if (current.length === 0)
+          return { removed: current, kept: new Set<string>() };
+        await tx.delete("media", inChunk);
+        // The files another item still refers to, read once these are gone.
+        const sharing = await tx.select<MediaFilesRecord>("media", {
+          columns: STORED_FILE_COLUMNS,
+          where: rowsSharingFilesWith(current),
+        });
+        return { removed: current, kept: pathsReferencedBy(sharing) };
       });
       // After the statement, so this only ever names rows that are gone, and
       // inside an enclosing SQLite transaction after that commits.
       await this.afterCommit(() => revalidateMedia(chunk));
-      await this.afterCommit(() => removeFiles(removed));
+      await this.afterCommit(() => removeFiles(removed, kept));
     }
   }
 
