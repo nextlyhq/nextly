@@ -39,6 +39,7 @@ import {
   revokeApiKey,
 } from "./api/api-keys";
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
+import { handleContentEventsRequest } from "./api/content-events";
 import {
   getDashboardOnboarding,
   getDashboardStats,
@@ -406,6 +407,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "translations",
   "schema",
   "email",
+  "contentEvents",
 ]);
 
 /**
@@ -719,6 +721,8 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   // Version history is guarded by the same per-collection read permission as
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
+  // The entry's content events, guarded the same way.
+  "listEntryEvents",
   "getEntryVersion",
   "getEntryVersionDiff",
   // Restoring writes the document, so the route parser marks it an `update`
@@ -751,6 +755,8 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   "updateSingleDocument",
   // Read-only history for the document, guarded by the same read permission.
   "listSingleVersions",
+  // The document's content events, guarded the same way.
+  "listSingleEvents",
   "getSingleVersion",
   "getSingleVersionDiff",
   // A write, authorized as an update of the document.
@@ -821,6 +827,9 @@ const ROLE_AWARE_READ_METHODS = new Set([
   "listSingleVersions",
   "getSingleVersion",
   "getSingleVersionDiff",
+  // A document's events run the same document gate, which reads roles.
+  "listEntryEvents",
+  "listSingleEvents",
 ]);
 
 /**
@@ -903,6 +912,7 @@ async function resolveAuthorization(
       const action =
         method === "getSingleDocument" ||
         method === "listSingleVersions" ||
+        method === "listSingleEvents" ||
         method === "getSingleVersion" ||
         method === "getSingleVersionDiff" ||
         method === "getSingleAutosave" ||
@@ -1402,6 +1412,13 @@ async function handleServiceRequest(
   // the stream reaches it consumed.
   if (service === "releases") {
     return handleReleaseRequest(req, method, routeParams);
+  }
+
+  // ==================== CONTENT EVENTS BY SUBJECT ====================
+  // A subject's events read by subject (a release's, or a deleted
+  // document's). The handler owns its authorization.
+  if (service === "contentEvents") {
+    return handleContentEventsRequest(req);
   }
 
   // ==================== JOBS DIRECT DISPATCH ====================
@@ -2098,6 +2115,10 @@ const SESSION_PRIVATE_METHODS = new Set([
   "listSingleVersions",
   "getEntryVersionDiff",
   "getSingleVersionDiff",
+  // Whether a document's events are readable depends on who asks, so neither
+  // the list nor the refusal is shared between callers.
+  "listEntryEvents",
+  "listSingleEvents",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from

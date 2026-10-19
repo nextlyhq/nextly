@@ -1,0 +1,53 @@
+/**
+ * `GET /content-events?subject=…`: a subject's events, read by subject.
+ *
+ * For what has no entry route to nest under: a release, and a document that
+ * has been deleted. A live document reads here too, through the same gate as
+ * its own `…/events` route. The read decides access; this handler only
+ * authenticates and resolves who is asking.
+ *
+ * @module api/content-events
+ * @experimental
+ */
+
+import { apiKeyScopeFrom } from "../auth/authenticated-scope";
+import { getCachedNextly } from "../init";
+import { resolveRoleSlugs } from "../services/lib/permissions";
+
+import { respondList, withSessionCacheHeaders } from "./response-shapes";
+import { requireRouteAuthentication } from "./route-auth";
+import {
+  parseSubjectEventsQuery,
+  parseSubjectParam,
+  readSubjectEvents,
+} from "./subject-events";
+import { withErrorHandler } from "./with-error-handler";
+
+export const handleContentEventsRequest = withErrorHandler(
+  async (request: Request): Promise<Response> => {
+    // Booted before authenticating: on a cold process the permission lookup
+    // itself needs the services registered.
+    await getCachedNextly();
+    const auth = await requireRouteAuthentication(request);
+    const params = Object.fromEntries(new URL(request.url).searchParams);
+    const subject = parseSubjectParam(params);
+    const query = parseSubjectEventsQuery(params);
+    // Role slugs, so a code-defined rule judges the caller it would on any
+    // other read; an API key is judged by its own scope.
+    const roles = await resolveRoleSlugs(auth);
+    const result = await readSubjectEvents(subject, query, {
+      user: {
+        id: auth.userId,
+        name: auth.userName,
+        email: auth.userEmail,
+        roles,
+        role: roles?.[0],
+      },
+      ...(auth.authMethod === "api-key"
+        ? { authenticatedScope: apiKeyScopeFrom(auth) }
+        : {}),
+    });
+    // Private to the caller: whether a subject is readable depends on who asks.
+    return withSessionCacheHeaders(respondList(result.items, result.meta));
+  }
+);

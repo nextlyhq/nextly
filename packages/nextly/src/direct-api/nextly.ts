@@ -86,6 +86,7 @@ import { runAsCaller } from "./namespaces/helpers";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
+  createContentEventsNamespace,
   createJobsNamespace,
   createNoticesNamespace,
   createReleasesNamespace,
@@ -101,6 +102,7 @@ import {
   createUsersNamespace,
   type AccessNamespace,
   type ApiKeysNamespace,
+  type ContentEventsNamespace,
   type JobsNamespace,
   type NoticesNamespace,
   type ReleasesNamespace,
@@ -271,6 +273,8 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** @experimental A person's own notices. */
   public readonly notices: NoticesNamespace;
+  /** @experimental A subject's content events: a document's or a release's. */
+  public readonly contentEvents: ContentEventsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
 
@@ -301,6 +305,7 @@ export class Nextly implements NextlyContext {
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
     this.notices = createNoticesNamespace();
+    this.contentEvents = createContentEventsNamespace(this);
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -924,6 +929,10 @@ export const nextly = {
     markRead: (args: Parameters<NoticesNamespace["markRead"]>[0]) =>
       requireNextly().notices.markRead(args),
   },
+
+  contentEvents: {
+    list: args => requireNextly().contentEvents.list(args),
+  } satisfies ContentEventsNamespace,
 
   // Checked against the namespace's own type, so a method added there and
   // not delegated here is a compile error rather than a gap a caller finds.
