@@ -43,7 +43,6 @@ import {
   UserMutationService,
   type CreateExternalUserData,
   type UserMutationResponse,
-  type UserWriteCaller,
 } from "./users/user-mutation-service";
 import {
   UserQueryService,
@@ -169,15 +168,9 @@ export class UsersService extends BaseService {
       emailVerification?: "admin-vouched" | "pending";
       [key: string]: unknown;
     },
-    actor?: RequestActor,
-    /**
-     * Who the account is made for. Only the app's own provisioning (the
-     * default) can make the install's first administrator; a self-registration
-     * never does.
-     */
-    caller?: UserWriteCaller
+    actor?: RequestActor
   ): Promise<UserMutationResponse> {
-    return this.mutationService.createLocalUser(userData, actor, caller);
+    return this.mutationService.createLocalUser(userData, actor);
   }
 
   /**

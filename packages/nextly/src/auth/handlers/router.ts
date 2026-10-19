@@ -107,8 +107,6 @@ export interface AuthRouterDeps {
    * (trades enumeration risk for UX).
    */
   revealRegistrationConflict: boolean;
-  /** Whether strangers may register (`auth.allowRegistration`); off by default. */
-  allowRegistration: boolean;
   /**
    * Dev-only auto-login config (config.admin.devAutoLogin). Hard-blocked
    * at runtime when isProduction is true. When set, the session handler
@@ -255,12 +253,12 @@ export interface AuthRouterDeps {
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
 
-  hasAdministrator: () => Promise<boolean>;
+  getUserCount: () => Promise<number>;
   createSuperAdmin: (data: {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string } | null>;
+  }) => Promise<{ id: string; email: string; name: string }>;
   seedPermissions: () => Promise<void>;
 
   // These throw NextlyError on failure and return the success-case data

@@ -17,10 +17,8 @@
  *
  * @module domains/users/services/last-super-admin
  */
-import { randomUUID } from "node:crypto";
-
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray, ne, type Column, type SQL } from "drizzle-orm";
+import { and, eq, ne, type Column, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { roleAssignmentInForce } from "../../../services/lib/role-assignments";
@@ -77,11 +75,6 @@ export interface LastSuperAdminTables {
   userRoles: { userId: Column; roleId: Column; expiresAt: Column };
 }
 
-/** The tables the first-administrator questions read, with role inheritance. */
-export interface FirstAdministratorTables extends LastSuperAdminTables {
-  roleInherits: { parentRoleId: Column; childRoleId: Column };
-}
-
 /**
  * Refuse, inside `tx`'s transaction, a removal that would leave the install
  * without an active super-admin.
@@ -120,58 +113,9 @@ export async function refuseRemovingLastSuperAdmin(
   userId: string | number,
   removal: SuperAdminRemoval
 ): Promise<void> {
-  const { userRoles } = tables;
+  const { roles, users, userRoles } = tables;
   const target = String(userId);
 
-  const superAdminRoleId = await lockSuperAdminRole(tx, tables, dialect);
-  // No role, no super-admin to protect.
-  if (superAdminRoleId === undefined) return;
-
-  // The active accounts holding, in force, the `super-admin` role itself.
-  const holders = (who: SQL) =>
-    superAdminHolders(tx, tables, [superAdminRoleId], who, {
-      activeOnly: true,
-    });
-
-  const held = await latestRows(holders(eq(userRoles.userId, target)), dialect);
-  if (held.length === 0) return;
-  if (keepsTheRole(removal, superAdminRoleId)) return;
-
-  const others = await latestRows(
-    holders(ne(userRoles.userId, target)).limit(1),
-    dialect
-  );
-  if (others.length > 0) return;
-
-  throw NextlyError.conflict({
-    reason: "state",
-    message: LAST_SUPER_ADMIN_MESSAGE,
-    logContext: {
-      refusal: "last-active-super-admin",
-      removal: removal.kind,
-      userId: target,
-    },
-  });
-}
-
-/**
- * Lock the `super-admin` role's row inside `tx`'s transaction, and return its
- * id, or `undefined` when the role does not exist. Exported for the
- * first-administrator grant, which takes it before its transaction writes
- * anything (grantFirstAdministratorInTx).
- *
- * Every write that adds or removes the install's administrator takes this lock
- * first, so they take it in one order and run one at a time: on PostgreSQL
- * `FOR NO KEY UPDATE`, which leaves a concurrent grant's foreign-key check free
- * to proceed; on MySQL `FOR UPDATE`; on SQLite none, since its write
- * transactions open with `BEGIN IMMEDIATE` and so run one at a time already.
- */
-export async function lockSuperAdminRole(
-  tx: LastSuperAdminTx,
-  tables: LastSuperAdminTables,
-  dialect: SupportedDialect
-): Promise<string | undefined> {
-  const { roles } = tables;
   const roleRow = tx
     .select({ id: roles.id })
     .from(roles)
@@ -183,183 +127,44 @@ export async function lockSuperAdminRole(
       : await roleRow.for(
           dialect === "postgresql" ? "no key update" : "update"
         );
-  return superAdmin ? String(superAdmin.id) : undefined;
-}
+  // No role, no super-admin to protect.
+  if (!superAdmin) return;
+  const superAdminRoleId = String(superAdmin.id);
 
-/**
- * The accounts holding one of `roleIds` in force, narrowed by `who`, and to
- * active accounts when `activeOnly` is set.
- */
-function superAdminHolders(
-  tx: LastSuperAdminTx,
-  tables: LastSuperAdminTables,
-  roleIds: readonly string[],
-  who: SQL | undefined,
-  { activeOnly }: { activeOnly: boolean }
-): FilteredRead {
-  const { users, userRoles } = tables;
-  return tx
-    .select({ userId: userRoles.userId, roleId: userRoles.roleId })
-    .from(userRoles)
-    .innerJoin(users, eq(users.id, userRoles.userId))
-    .where(
-      and(
-        who,
-        inArray(userRoles.roleId, [...roleIds]),
-        roleAssignmentInForce(userRoles, new Date()),
-        activeOnly ? eq(users.isActive, true) : undefined
-      )
-    );
-}
+  // The active accounts holding, in force, the `super-admin` role itself.
+  const now = new Date();
+  const holders = (who: SQL) =>
+    tx
+      .select({ userId: userRoles.userId, roleId: userRoles.roleId })
+      .from(userRoles)
+      .innerJoin(users, eq(users.id, userRoles.userId))
+      .where(
+        and(
+          who,
+          eq(userRoles.roleId, superAdminRoleId),
+          roleAssignmentInForce(userRoles, now),
+          eq(users.isActive, true)
+        )
+      );
+  const latest = (read: LockableRead): PromiseLike<Rows> =>
+    dialect === "sqlite" ? read : read.for("share");
 
-/**
- * A read of the latest committed rows. Locking on PostgreSQL and MySQL, where
- * a plain read under MySQL's repeatable read could answer from a snapshot that
- * predates a racing write's commit; plain on SQLite, whose write transactions
- * already run one at a time.
- */
-function latestRows(
-  read: LockableRead,
-  dialect: SupportedDialect
-): PromiseLike<Rows> {
-  return dialect === "sqlite" ? read : read.for("share");
-}
+  const held = await latest(holders(eq(userRoles.userId, target)));
+  if (held.length === 0) return;
+  if (keepsTheRole(removal, superAdminRoleId)) return;
 
-/**
- * Whether anyone holds the `super-admin` role in force, read without a lock.
- *
- * A cheap answer for skipping the first-administrator grant on an install that
- * already has one. It decides nothing that matters: the grant itself checks
- * again under the role row's lock (grantFirstAdministratorInTx).
- */
-export async function superAdminRoleHeld(
-  db: LastSuperAdminTx,
-  tables: FirstAdministratorTables
-): Promise<boolean> {
-  const { roles } = tables;
-  const [role] = await db
-    .select({ id: roles.id })
-    .from(roles)
-    .where(eq(roles.slug, SUPER_ADMIN_ROLE_SLUG))
-    .limit(1);
-  if (!role) return false;
-  const conferring = await rolesConferringSuperAdmin(
-    db,
-    tables,
-    String(role.id)
-  );
-  const held = await superAdminHolders(db, tables, conferring, undefined, {
-    activeOnly: false,
-  }).limit(1);
-  return held.length > 0;
-}
+  const others = await latest(holders(ne(userRoles.userId, target)).limit(1));
+  if (others.length > 0) return;
 
-/**
- * The roles that make their holder a super-admin: the role itself and every
- * role that inherits it, at any depth.
- *
- * The same edges the permission check resolves a holder's roles along
- * (PermissionChecker.resolveRoles), walked the other way: a holder of a role
- * has every role below it in `role_inherits`, so an administrator whose
- * authority comes through such a role is an administrator, and must close
- * setup and the first-administrator grant like a direct holder does.
- */
-async function rolesConferringSuperAdmin(
-  db: LastSuperAdminTx,
-  tables: FirstAdministratorTables,
-  superAdminRoleId: string
-): Promise<string[]> {
-  const { roleInherits } = tables;
-  const conferring = new Set([superAdminRoleId]);
-  let frontier = [superAdminRoleId];
-  while (frontier.length > 0) {
-    const parents = (await db
-      .select({ parentRoleId: roleInherits.parentRoleId })
-      .from(roleInherits)
-      .where(inArray(roleInherits.childRoleId, frontier))) as Array<{
-      parentRoleId: unknown;
-    }>;
-    frontier = [];
-    for (const { parentRoleId } of parents) {
-      const id = String(parentRoleId);
-      if (conferring.has(id)) continue;
-      conferring.add(id);
-      frontier.push(id);
-    }
-  }
-  return [...conferring];
-}
-
-const FIRST_ADMINISTRATOR_TAKEN = "first-administrator-taken";
-
-/**
- * The refusal of a setup whose account could not become the install's first
- * administrator, because one already exists or another setup won the grant.
- * Thrown before the account's transaction commits, so nothing is created.
- */
-export function firstAdministratorTaken(): NextlyError {
-  return NextlyError.conflict({
+  throw NextlyError.conflict({
     reason: "state",
-    logContext: { reason: FIRST_ADMINISTRATOR_TAKEN },
+    message: LAST_SUPER_ADMIN_MESSAGE,
+    logContext: {
+      refusal: "last-active-super-admin",
+      removal: removal.kind,
+      userId: target,
+    },
   });
-}
-
-/** Whether `error` is that refusal. */
-export function isFirstAdministratorTaken(error: unknown): boolean {
-  return (
-    NextlyError.is(error) &&
-    error.logContext?.reason === FIRST_ADMINISTRATOR_TAKEN
-  );
-}
-
-/** The slice of a Drizzle transaction the first-administrator grant writes through. */
-export interface FirstAdministratorTx extends LastSuperAdminTx {
-  insert(table: unknown): { values(row: unknown): PromiseLike<unknown> };
-}
-
-/**
- * Make `userId` the install's first administrator, inside `tx`'s transaction,
- * when nobody holds the `super-admin` role yet. Returns whether it did.
- *
- * For an account the app itself provisions on an install with no
- * administrator: how a fresh install gets one. The caller takes the role row's
- * lock with lockSuperAdminRole before its transaction writes anything, the
- * order every removal takes it in, and passes the role id here once the
- * account is inserted. Of two accounts provisioned at once on an empty install
- * exactly one is then granted; a check made before the insert, and a grant
- * made after its commit, let both through. Taking the lock after the insert
- * instead deadlocks on MySQL, where the holders read below can wait on the
- * other transaction's uncommitted account while it waits on the lock. Any
- * in-force holder counts, active or not, so a racing grant to an account that
- * is not yet active still counts as the one.
- */
-export async function grantFirstAdministratorInTx(
-  tx: FirstAdministratorTx,
-  tables: FirstAdministratorTables,
-  dialect: SupportedDialect,
-  superAdminRoleId: string,
-  userId: string | number
-): Promise<boolean> {
-  // An administrator through a role that inherits `super-admin` counts too.
-  const conferring = await rolesConferringSuperAdmin(
-    tx,
-    tables,
-    superAdminRoleId
-  );
-  const held = await latestRows(
-    superAdminHolders(tx, tables, conferring, undefined, {
-      activeOnly: false,
-    }).limit(1),
-    dialect
-  );
-  if (held.length > 0) return false;
-  await tx.insert(tables.userRoles).values({
-    id: randomUUID(),
-    userId: String(userId),
-    roleId: superAdminRoleId,
-    expiresAt: null,
-  });
-  return true;
 }
 
 /**

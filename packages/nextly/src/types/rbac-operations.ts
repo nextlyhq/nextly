@@ -255,10 +255,6 @@ export interface RBACDatabaseInstance {
   insert: (table: unknown) => {
     values: (data: unknown) => {
       onConflictDoNothing?: () => Promise<void>;
-      // MySQL's builder, which has no ON CONFLICT DO NOTHING.
-      onDuplicateKeyUpdate?: (config: {
-        set: Record<string, unknown>;
-      }) => Promise<void>;
     } & Promise<void>;
   };
   update: (table: unknown) => {

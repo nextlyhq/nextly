@@ -30,13 +30,6 @@ export async function seedSuperAdmin(
     password: string;
     name?: string;
     silent?: boolean;
-    /**
-     * Whether the seeder gives the account the Super Admin role itself. True
-     * by default. False for setup, whose account already holds it through the
-     * first-administrator grant its creation made, and which only needs the
-     * role's permissions ensured here.
-     */
-    assignRole?: boolean;
   }
 ): Promise<SeederResult> {
   // `name` keeps a harmless display default; credentials never do.
@@ -49,7 +42,6 @@ export async function seedSuperAdmin(
     password,
     name = "Super Admin",
     silent = false,
-    assignRole = true,
   } = options || {};
 
   // Fail closed: require real credentials rather than falling back to a
@@ -79,7 +71,6 @@ export async function seedSuperAdmin(
   }
 
   const container = new ServiceContainer(adapter as DrizzleAdapter);
-
   const roleService = container.roles;
   const permissionService = container.permissions;
   const rolePermissionService = container.rolePermissions;
@@ -208,18 +199,7 @@ export async function seedSuperAdmin(
       created += assignedCount;
     }
 
-    // Step 5: Assign Super Admin role to user, unless the caller leaves that
-    // to the first-administrator grant.
-    if (!assignRole) {
-      return {
-        success: true,
-        created,
-        skipped,
-        errors,
-        total: created + skipped + errors,
-        errorMessages,
-      };
-    }
+    // Step 5: Assign Super Admin role to user
     log("\n Assigning Super Admin role to user...");
     const userRoleResult = await userRoleService.assignRoleToUser(
       userId,

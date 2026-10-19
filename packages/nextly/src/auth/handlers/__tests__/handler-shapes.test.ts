@@ -781,7 +781,6 @@ describe("register handler: respondAction shape", () => {
   it("silent-success path returns generic message (no email echo, no user)", async () => {
     const deps = {
       allowedOrigins: ALLOWED_ORIGINS,
-      allowRegistration: true,
       revealRegistrationConflict: false,
       loginStallTimeMs: 0,
       registerUser: vi.fn().mockResolvedValue({
@@ -808,7 +807,6 @@ describe("register handler: respondAction shape", () => {
   it("reveal-on success path returns 201 with user", async () => {
     const deps = {
       allowedOrigins: ALLOWED_ORIGINS,
-      allowRegistration: true,
       revealRegistrationConflict: true,
       loginStallTimeMs: 0,
       registerUser: vi.fn().mockResolvedValue({
@@ -832,8 +830,8 @@ describe("register handler: respondAction shape", () => {
 });
 
 describe("setup-status handler: respondData shape", () => {
-  it("when no administrator exists, returns { isSetup: false, requiresInitialUser: true }", async () => {
-    const deps = { hasAdministrator: vi.fn().mockResolvedValue(false) };
+  it("when no users exist, returns { isSetup: false, requiresInitialUser: true }", async () => {
+    const deps = { getUserCount: vi.fn().mockResolvedValue(0) };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
     );
@@ -845,8 +843,8 @@ describe("setup-status handler: respondData shape", () => {
     expect(body).not.toHaveProperty("isSetupComplete");
   });
 
-  it("when an administrator exists, returns { isSetup: true, requiresInitialUser: false }", async () => {
-    const deps = { hasAdministrator: vi.fn().mockResolvedValue(true) };
+  it("when at least one user exists, returns { isSetup: true, requiresInitialUser: false }", async () => {
+    const deps = { getUserCount: vi.fn().mockResolvedValue(1) };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
     );
@@ -856,12 +854,12 @@ describe("setup-status handler: respondData shape", () => {
     expect(body).toEqual({ isSetup: true, requiresInitialUser: false });
   });
 
-  // A transient DB failure during hasAdministrator must surface as 503, not
+  // A transient DB failure during getUserCount must surface as 503, not
   // collapse to `{ isSetup: false }` -- the bootstrap-gate must never
   // synthesise a default on incomplete data.
-  it("when hasAdministrator throws, returns 503 SERVICE_UNAVAILABLE envelope (not isSetup:false)", async () => {
+  it("when getUserCount throws, returns 503 SERVICE_UNAVAILABLE envelope (not isSetup:false)", async () => {
     const deps = {
-      hasAdministrator: vi.fn().mockRejectedValue(new Error("connection lost")),
+      getUserCount: vi.fn().mockRejectedValue(new Error("connection lost")),
     };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
@@ -886,7 +884,7 @@ describe("setup handler: respondAction shape", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       trustProxy: false,
       trustedProxyIps: [],
-      hasAdministrator: vi.fn().mockResolvedValue(false),
+      getUserCount: vi.fn().mockResolvedValue(0),
       createSuperAdmin: vi.fn().mockResolvedValue({
         id: "u1",
         email: "a@example.com",
@@ -945,7 +943,7 @@ describe("setup handler: respondAction shape", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       trustProxy: false,
       trustedProxyIps: [],
-      hasAdministrator: vi.fn().mockResolvedValue(false),
+      getUserCount: vi.fn().mockResolvedValue(0),
       createSuperAdmin,
       fetchSessionRoles: vi.fn(),
       seedPermissions: vi.fn(),
@@ -984,7 +982,7 @@ describe("setup handler: respondAction shape", () => {
 
   // Security: an unknown user count must never be treated as 0 -- a second
   // super-admin must not be creatable on the assumption that setup is open.
-  it("when hasAdministrator throws, returns 503 envelope and does NOT create a user", async () => {
+  it("when getUserCount throws, returns 503 envelope and does NOT create a user", async () => {
     const createSuperAdmin = vi.fn();
     const deps = {
       secret: SECRET,
@@ -994,7 +992,7 @@ describe("setup handler: respondAction shape", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       trustProxy: false,
       trustedProxyIps: [],
-      hasAdministrator: vi.fn().mockRejectedValue(new Error("connection lost")),
+      getUserCount: vi.fn().mockRejectedValue(new Error("connection lost")),
       createSuperAdmin,
       fetchSessionRoles: vi.fn(),
       seedPermissions: vi.fn(),

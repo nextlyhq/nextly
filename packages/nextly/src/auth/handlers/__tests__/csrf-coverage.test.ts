@@ -65,9 +65,9 @@ function makeStubDeps(
     withSessionRowTransaction: unreachable as never,
     deleteRefreshTokenByHash: unreachable as never,
     deleteAllRefreshTokensForUser: unreachable as never,
-    // hasAdministrator has to answer false so setup does not short-circuit with
+    // getUserCount has to return 0 so setup does not short-circuit with
     // SETUP_COMPLETE before reaching the CSRF check.
-    hasAdministrator: async () => false,
+    getUserCount: async () => 0,
     createSuperAdmin: unreachable as never,
     seedPermissions: unreachable as never,
     registerUser: unreachable as never,

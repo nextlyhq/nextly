@@ -47,6 +47,7 @@ import {
 } from "../../shared/lib/run-adapter-transaction";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
+import { normalizeAccountEmail } from "../credentials/account-email";
 import { passwordCredentialDeps } from "../credentials/credential-deps";
 import { verifyCredentials } from "../credentials/verify-credentials";
 import { ChallengeRegistry } from "../pipeline/challenge";
@@ -99,12 +100,7 @@ export function buildAuthRouterDeps(
     // from the registered NextlyConfig. Defaults to false (silent-success on
     // email conflict) when config is not yet initialised or the flag is
     // unset. The schema is already populated by sanitizeConfig.
-    revealRegistrationConflict: readAuthFlag(
-      getService,
-      "revealRegistrationConflict"
-    ),
-    // Off unless the app turns it on (staff-only by default).
-    allowRegistration: readAuthFlag(getService, "allowRegistration"),
+    revealRegistrationConflict: readRevealRegistrationConflict(getService),
     devAutoLogin: readDevAutoLogin(getService),
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
     ...readProxyTrustSettings(() => getService("config")),
@@ -285,17 +281,18 @@ export function buildAuthRouterDeps(
       await deleteRefreshTokens(getService, eq(refreshTokens.userId, userId));
     },
 
-    hasAdministrator: async () => {
-      // Errors propagate intentionally: this gates setup and setup-status,
-      // and collapsing an unknown answer to "no administrator" would both lie
-      // about setup state and risk a second super-admin. Callers convert
-      // failures to a 503 envelope. The same question the first-administrator
-      // grant asks, through the same query.
-      const { superAdminRoleHeld } = await import(
-        "../../domains/users/services/last-super-admin"
-      );
+    getUserCount: async () => {
+      // Errors propagate intentionally. The user count gates two
+      // security-relevant decisions (setup-status reporting and the
+      // first-admin pre-check); collapsing an unknown count to 0 would
+      // both lie about setup state and risk a duplicate super-admin.
+      // Callers convert failures to a 503 envelope.
       const adapter = getService("adapter");
-      return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
+      const db = adapter.getDrizzle();
+      const schema = getDialectTables();
+      const { count } = await import("drizzle-orm");
+      const result = await db.select({ count: count() }).from(schema.users);
+      return Number(result[0]?.count || 0);
     },
 
     createSuperAdmin: async data => {
@@ -305,54 +302,39 @@ export function buildAuthRouterDeps(
       const { seedSuperAdmin } = await import(
         "../../database/seeders/super-admin"
       );
-      const { ServiceContainer } = await import("../../services/index");
-      const { isFirstAdministratorTaken } = await import(
-        "../../domains/users/services/last-super-admin"
-      );
       const adapter = getService("adapter");
 
       // Seed permissions first (seedSuperAdmin needs them to assign to the admin)
       await seedPermissions(adapter, { silent: true });
 
-      // The account is created as setup's: it becomes the install's first
-      // administrator, through the grant made under the role row's lock, or
-      // is not created at all. Of setups racing on an empty install exactly
-      // one wins, and a loser's transaction rolls back before its account or
-      // `user.created` event exist. An address that already has an account,
-      // which may be a stranger's sign-up, is refused as a duplicate.
-      let created: { id: string | number };
-      try {
-        created = await new ServiceContainer(adapter).users.createLocalUser(
-          {
-            email: data.email,
-            name: data.name,
-            password: data.password,
-            isActive: true,
-            emailVerification: "admin-vouched",
-          },
-          undefined,
-          "setup"
-        );
-      } catch (error) {
-        if (isFirstAdministratorTaken(error)) return null;
-        throw error;
-      }
-
-      // The role's permissions; the account already holds the role.
+      // seedSuperAdmin handles password hashing internally
       const result = await seedSuperAdmin(adapter, {
         email: data.email,
         password: data.password,
         name: data.name,
         silent: true,
-        assignRole: false,
       });
+
       if (!result.success) {
         throw new Error(
           result.errorMessages?.[0] || "Failed to create admin account"
         );
       }
 
-      return { id: String(created.id), email: data.email, name: data.name };
+      const db = adapter.getDrizzle();
+      const schema = getDialectTables();
+      const { eq } = await import("drizzle-orm");
+      const users = await db
+        .select({ id: schema.users.id })
+        .from(schema.users)
+        .where(eq(schema.users.email, normalizeAccountEmail(data.email)))
+        .limit(1);
+
+      return {
+        id: users[0]?.id || "",
+        email: data.email,
+        name: data.name,
+      };
     },
 
     seedPermissions: async () => {
@@ -771,20 +753,26 @@ function readServiceConfig(
 }
 
 /**
- * Read a boolean `auth.<name>` flag from the NextlyConfig registered in the DI
- * container. Only `true` turns a flag on; an unset or non-boolean value, or a
- * container not yet initialised, answers `false`, each flag's safe default.
+ * Read `auth.revealRegistrationConflict` from the NextlyConfig registered in
+ * the DI container. Returns the spec default (false) when the container is
+ * not yet initialised or the flag is unset.
  */
-function readAuthFlag(
-  getService: (name: string) => unknown,
-  name: "revealRegistrationConflict" | "allowRegistration"
+function readRevealRegistrationConflict(
+  getService: (name: string) => unknown
 ): boolean {
   try {
     const config = getService("config");
     if (config && typeof config === "object" && "auth" in config) {
       const auth = (config as { auth?: unknown }).auth;
-      if (auth && typeof auth === "object" && name in auth) {
-        return (auth as Record<string, unknown>)[name] === true;
+      if (
+        auth &&
+        typeof auth === "object" &&
+        "revealRegistrationConflict" in auth
+      ) {
+        return (
+          (auth as { revealRegistrationConflict?: unknown })
+            .revealRegistrationConflict === true
+        );
       }
     }
     return false;

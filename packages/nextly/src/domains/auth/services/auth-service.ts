@@ -237,21 +237,15 @@ export class AuthService extends BaseService {
         fastDrainScheduler,
         retentionRunner
       );
-      newUser = await userService.createLocalUser(
-        {
-          email: userData.email,
-          name: userData.name ?? "User",
-          password: userData.password,
-          // Self-registration: the person supplied this address and nothing has
-          // established it is theirs. The verification email sent below is what
-          // proves it, and until then the account stays unverified.
-          emailVerification: "pending",
-        },
-        undefined,
-        // A stranger's registration never makes the install's administrator,
-        // whoever was there before it.
-        "self-registration"
-      );
+      newUser = await userService.createLocalUser({
+        email: userData.email,
+        name: userData.name ?? "User",
+        password: userData.password,
+        // Self-registration: the person supplied this address and nothing has
+        // established it is theirs. The verification email sent below is what
+        // proves it, and until then the account stays unverified.
+        emailVerification: "pending",
+      });
     } catch (error) {
       if (NextlyError.is(error)) {
         throw error;
