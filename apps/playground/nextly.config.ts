@@ -31,6 +31,7 @@ import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
+import { HistoryNotes } from "./src/collections/history-notes";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { TranslatedPages } from "./src/collections/translated-pages";
@@ -100,6 +101,10 @@ export default defineConfig({
     // collection with a translated blocks field; registered for the e2e run
     // only, by the same switch as the style fixture below.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatedPages] : []),
+    // The history browser test needs a document with a group and an embedded
+    // field group, so a past version can be read in that layout; registered
+    // for the e2e run only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [HistoryNotes] : []),
   ],
   // Announcement is the localized single WITH the draft/published lifecycle,
   // registered for the same reason Authors is: so the per-language publish

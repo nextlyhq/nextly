@@ -23,14 +23,15 @@ import type { Logger } from "../shared/types";
  * the match after one of them. The domain needs at least one dot and a
  * top-level label of letters or punycode (`xn--p1ai`), so `user@localhost`
  * in a URL and an `@scope/pkg` specifier are left alone. Letters and digits
- * are any script's, so an internationalized address (`jöhn@bücher.de`) is
- * matched whole rather than missed or cut in two. A domain literal
- * (`john@[192.0.2.1]`, `john@[IPv6:2001:db8::1]`) is an address too, while
- * an index such as `arr@[0]` is not. Bounded on both sides so a longer run
- * of address characters is not split into a match.
+ * are any script's, combining marks included (`जॉन@example.com`), so an
+ * internationalized address (`jöhn@bücher.de`) is matched whole rather than
+ * missed or cut in two; a punycode label matches in any letter case. A
+ * domain literal (`john@[192.0.2.1]`, `john@[IPv6:2001:db8::1]`) is an
+ * address too, while an index such as `arr@[0]` is not. Bounded on both sides
+ * so a longer run of address characters is not split into a match.
  */
 const EMAIL_PATTERN =
-  /(?<![\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.)+"|[\p{L}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?\.)+(?:xn--[A-Za-z0-9-]+|\p{L}{2,})|\[(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]*[A-Za-z0-9]:[^[\]\s\\]+)\])(?![\p{L}\p{N}-])/gu;
+  /(?<![\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-])("(?:[^"\\\r\n]|\\.)+"|[\p{L}\p{M}\p{N}!#$%&'*+/=?^_`{|}~.-]+)@((?:[\p{L}\p{N}](?:[\p{L}\p{M}\p{N}-]*[\p{L}\p{M}\p{N}])?\.)+(?:[Xx][Nn]--[A-Za-z0-9-]+|\p{L}[\p{L}\p{M}]+)|\[(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9-]*[A-Za-z0-9]:[^[\]\s\\]+)\])(?![\p{L}\p{M}\p{N}-])/gu;
 
 /** Whether this environment's logs mask addresses. */
 export function emailMaskingEnabled(nodeEnv: string | undefined): boolean {
@@ -81,6 +82,15 @@ export function maskEmailsInText(text: string): string {
  */
 export function maskEmails<T>(value: T): T {
   return maskValue(value, new WeakMap()) as T;
+}
+
+/**
+ * `value` as it may be written now: masked outside development and test, as
+ * it was given otherwise. The one place a writer asks both questions, so no
+ * two writers can come to answer "is this masked?" differently.
+ */
+export function maskEmailsWhenActive<T>(value: T): T {
+  return emailMaskingActive() ? maskEmails(value) : value;
 }
 
 function maskValue(value: unknown, seen: WeakMap<object, unknown>): unknown {

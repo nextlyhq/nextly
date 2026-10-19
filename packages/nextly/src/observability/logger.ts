@@ -8,7 +8,7 @@
  * Full observability design (dev-vs-prod formatting, scrub list, audit log,
  */
 
-import { emailMaskingActive, maskEmails } from "./mask-emails";
+import { maskEmailsWhenActive } from "./mask-emails";
 
 export interface NextlyLogger {
   error(payload: object): void;
@@ -60,7 +60,7 @@ export function setNextlyLogger(logger: NextlyLogger | undefined): void {
 
 /** A payload as it may be written: masked of addresses outside dev and test. */
 function writable(payload: object): object {
-  return emailMaskingActive() ? maskEmails(payload) : payload;
+  return maskEmailsWhenActive(payload);
 }
 
 /**

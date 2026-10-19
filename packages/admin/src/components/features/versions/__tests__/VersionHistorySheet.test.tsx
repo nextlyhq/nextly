@@ -148,7 +148,7 @@ function reachable(element: Element | null): boolean {
 
 /**
  * Renders the panel with a document context and returns a reader for what it
- * publishes. The restore TRIGGER lives in the banner now, so a test that wants
+ * publishes. The restore TRIGGER lives in the title bar now, so a test that wants
  * to exercise restoring asks the panel for it rather than clicking a control
  * this component no longer renders.
  */
@@ -562,6 +562,52 @@ describe("VersionHistorySheet", () => {
     ).toBeInTheDocument();
   });
 
+  it("hands the document what a version is compared with, unknown while older pages remain", async () => {
+    // Version 3 is the oldest LOADED, with more history beyond it: its
+    // predecessor exists but has not arrived, so it must not be presented as
+    // the first version, its changes left unmarked.
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: true } }] },
+        hasNextPage: true,
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    const { setViewing } = renderPublishing();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() =>
+      expect(setViewing.mock.calls.at(-1)?.[0]).toMatchObject({
+        versionNo: 3,
+        comparedWith: { kind: "unknown" },
+      })
+    );
+  });
+
+  it("hands the document the version before, once it is loaded", async () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(1)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    const { setViewing } = renderPublishing();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    // Version 2 was pruned: the version before 3 is 1.
+    await waitFor(() =>
+      expect(setViewing.mock.calls.at(-1)?.[0]).toMatchObject({
+        comparedWith: { kind: "version", versionNo: 1 },
+      })
+    );
+  });
+
   it("hands the chosen version to the document rather than previewing it", async () => {
     useVersionsMock.mockReturnValue(
       listState({
@@ -611,7 +657,7 @@ describe("VersionHistorySheet", () => {
     const { published } = renderPublishing({ canRestore: true });
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
-    // The control is in the banner over the version; this panel supplies the
+    // The control is in the title bar over the version; this panel supplies the
     // permission and the trigger.
     await waitFor(() => expect(published()?.canRestore).toBe(true));
     expect(
@@ -669,9 +715,9 @@ describe("VersionHistorySheet", () => {
     await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
   });
 
-  // Whether restore is offered before the version has finished loading is now
-  // the banner's decision (`restoreDisabled`), because the banner is where the
-  // control is. Covered by HistoricalDocumentBanner's own suite.
+  // Whether restore is offered before the version has finished loading is
+  // decided where the control is (`restoreDisabled`, in `useVersionActions`),
+  // and covered by the header's own suite.
 
   it("warns from the live document's status, not the version's", async () => {
     // The selected version's status describes the past; whether this change is
@@ -813,7 +859,7 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
       returnToCurrent: () => void;
     };
 
-    // The banner cannot clear this panel's selection itself, so it asks. Going
+    // Back to current cannot clear this panel's selection itself, so it asks. Going
     // back must leave no row marked active for a version off screen.
     expect(screen.getByRole("button", { name: /Version 3/ })).toHaveAttribute(
       "aria-current",
@@ -963,7 +1009,7 @@ describe("VersionHistorySheet — the comparison where the page steps aside", ()
     );
   }
 
-  it("hands the banner the comparison on a narrow window, and settles", async () => {
+  it("hands the version the comparison on a narrow window, and settles", async () => {
     answerMediaQueries(false);
     const seen: { restore: RestoreAffordance | null } = { restore: null };
     render(<Editor onPublished={r => (seen.restore = r)} />);
@@ -973,7 +1019,7 @@ describe("VersionHistorySheet — the comparison where the page steps aside", ()
     await waitFor(() => expect(seen.restore?.compare).toBeTypeOf("function"));
   });
 
-  it("hands the banner the comparison with current on a narrow window", async () => {
+  it("hands the version the comparison with current on a narrow window", async () => {
     answerMediaQueries(false);
     const seen: { restore: RestoreAffordance | null } = { restore: null };
     render(<Editor onPublished={r => (seen.restore = r)} />);

@@ -905,14 +905,6 @@
         "count": 1
       }
     },
-    "packages/admin/src/hooks/useAutoSave.ts": {
-      "crap_critical": {
-        "count": 1
-      },
-      "crap_high": {
-        "count": 1
-      }
-    },
     "packages/admin/src/hooks/useAutoSlug.ts": {
       "crap_moderate": {
         "count": 1
@@ -925,20 +917,6 @@
     },
     "packages/admin/src/hooks/useCurrentUserPermissions.ts": {
       "complexity_moderate": {
-        "count": 1
-      }
-    },
-    "packages/admin/src/hooks/useDraftRecovery.ts": {
-      "complexity_critical": {
-        "count": 1
-      },
-      "crap_critical": {
-        "count": 1
-      },
-      "crap_high": {
-        "count": 1
-      },
-      "crap_moderate": {
         "count": 1
       }
     },
@@ -4467,7 +4445,6 @@
     "packages/nextly/src/cli/commands/telemetry.ts:circular dependency",
     "packages/ui/src/styles/contrast/__tests__/ink-utilities.test.ts:complexity",
     "packages/plugin-seo/src/sitemap.ts:complexity",
-    "packages/admin/src/hooks/useDraftRecovery.ts:complexity",
     "packages/ui/src/components/tree-view.tsx:complexity",
     "packages/ui/scripts/check-server-safe-artifacts.ts:complexity",
     "packages/nextly/src/cli/commands/init.ts:circular dependency",
