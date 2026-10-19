@@ -70,7 +70,10 @@ import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
 
 import type { ReleaseMutations, ReleaseWrite } from "./apply-due-releases";
-import { recordMemberApplied } from "./releases-repository";
+import {
+  forgetMemberApplied,
+  recordMemberApplied,
+} from "./releases-repository";
 
 /**
  * The status an unpublish lands on.
@@ -96,12 +99,19 @@ export function createReleaseMutations(deps: {
     const locale = ref.locale ?? EVERY_LOCALE;
 
     // Marks the member only when the write stored the status this action
-    // names; a hook that changed it means the action did not happen.
+    // names; a hook that changed it means the action did not happen. Any
+    // write to this document while the receipt is pinned reaches here,
+    // including one a hook makes after the action's own write committed, so a
+    // write that leaves another status takes the mark back: the document no
+    // longer carries the action, whatever an earlier write recorded.
     const record = async (
       tx: TransactionContext,
       written: WrittenState
     ): Promise<void> => {
-      if (written.status !== status) return;
+      if (written.status !== status) {
+        await forgetMemberApplied(tx, receipt.memberId);
+        return;
+      }
       await recordMemberApplied(tx, {
         id: receipt.memberId,
         revision: receipt.revision,

@@ -653,6 +653,43 @@ describe("applyDueReleases", () => {
     expect([...marks.values()]).toEqual([1, 1]);
   });
 
+  it("asks the schedule before accepting a mark, so a POSTPONED release is not reported applied", async () => {
+    // Marked for the revision this pass planned against, but postponed since
+    // the plan was loaded: the mark describes the old schedule.
+    const marked: string[] = [];
+    const publish = vi.fn(async () => {});
+    const result = await applyDueReleases(
+      deps({
+        releases: [release({ id: "r1", revision: 4 })],
+        members: [member({ id: "a", entryId: "e1" })],
+        marks: new Map([["a", 4]]),
+        rescheduledTo: new Date("2099-01-01T00:00:00.000Z"),
+        mutations: { publish },
+        marked,
+      })
+    );
+
+    expect(publish).not.toHaveBeenCalled();
+    expect(result.outcomes[0]?.failure).toBe("RELEASE_NO_LONGER_SCHEDULED");
+    expect(marked).toEqual([]);
+  });
+
+  it("settles a release fenced on the revision and instant the pass PLANNED against", async () => {
+    // The repository refuses the settlement of a release moved since, so the
+    // fence it is handed has to be the plan's, not whatever the row says now.
+    const settle = vi.fn(async () => true);
+    const d = deps({ releases: [release({ id: "r1", revision: 7 })] });
+    await applyDueReleases({
+      ...d,
+      repository: { ...d.repository, markReleasePublished: settle },
+    });
+
+    expect(settle).toHaveBeenCalledWith("r1", NOW, {
+      revision: 7,
+      scheduledAt: PAST,
+    });
+  });
+
   it("counts members ALREADY marked for the current revision as applied, without writing", async () => {
     const marked: string[] = [];
     const publish = vi.fn(async () => {});

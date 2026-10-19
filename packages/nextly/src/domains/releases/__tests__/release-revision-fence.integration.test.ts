@@ -534,18 +534,51 @@ describe.each(getConfiguredTestDialects())(
         0
       );
 
-      expect(await repo.markReleasePublished(release.id, new Date())).toBe(
-        true
-      );
+      const planned = { revision: 1, scheduledAt: PAST };
+      expect(
+        await repo.markReleasePublished(release.id, new Date(), planned)
+      ).toBe(true);
       const published = await readRelease(repo, release.id);
       expect(published.state).toBe("published");
       expect(published.revision).toBe(2);
 
       // A second pass is refused by the state fence and moves nothing.
-      expect(await repo.markReleasePublished(release.id, new Date())).toBe(
-        false
-      );
+      expect(
+        await repo.markReleasePublished(release.id, new Date(), planned)
+      ).toBe(false);
       expect((await readRelease(repo, release.id)).revision).toBe(2);
+    });
+
+    it("refuses to publish a release moved since the drain planned against it", async () => {
+      // Still scheduled, so the state fence alone would admit it: postponed
+      // after the plan was loaded, it must keep its new schedule.
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({ title: "Spring" });
+      await repo.scheduleRelease(
+        release.id,
+        PAST,
+        "UTC",
+        RELEASE_SCHEDULABLE_FROM,
+        0
+      );
+      const planned = { revision: 1, scheduledAt: PAST };
+      const later = new Date(PAST.getTime() + 86_400_000);
+      await repo.scheduleRelease(
+        release.id,
+        later,
+        "UTC",
+        RELEASE_SCHEDULABLE_FROM,
+        1
+      );
+
+      expect(
+        await repo.markReleasePublished(release.id, new Date(), planned)
+      ).toBe(false);
+      const kept = await readRelease(repo, release.id);
+      expect(kept.state).toBe("scheduled");
+      expect(kept.scheduledAt?.getTime()).toBe(later.getTime());
+      expect(kept.revision).toBe(2);
     });
   }
 );

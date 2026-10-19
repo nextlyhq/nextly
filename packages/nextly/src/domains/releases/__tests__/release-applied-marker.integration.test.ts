@@ -32,7 +32,10 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { applyDueReleases } from "../apply-due-releases";
-import type { ReleaseMutations } from "../apply-due-releases";
+import type {
+  ApplyDueReleasesDeps,
+  ReleaseMutations,
+} from "../apply-due-releases";
 import { createReleaseMutations } from "../release-mutations";
 import { ReleasesRepository } from "../releases-repository";
 
@@ -56,6 +59,9 @@ const PAGES = "pages";
 const HIDDEN = "hidden";
 const SHOWN = "shown";
 const STRIPPED = "stripped";
+const FLIPPED = "flipped";
+/** When set, the next publish of a `flipped` document is written back to draft. */
+let flipBack = false;
 const SETTINGS = "banner";
 const PAST = new Date("2020-01-01T00:00:00Z");
 const LATER_PAST = new Date("2021-01-01T00:00:00Z");
@@ -89,6 +95,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
   beforeChanges = 0;
   hang = null;
   hangBeforeWrite = 1;
+  flipBack = false;
   current = await createTestNextly({
     dialect,
     collections: [
@@ -138,6 +145,31 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
               ...(data as Record<string, unknown>),
               status: "draft",
             }),
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: FLIPPED,
+        status: true,
+        access: open,
+        hooks: {
+          // Once armed, writes a just-published document back to a draft,
+          // after the publish has committed.
+          afterChange: [
+            async ({ data }: { data?: unknown }) => {
+              const doc = data as { id?: string; status?: string };
+              if (!flipBack || doc.status !== "published" || !doc.id) return;
+              flipBack = false;
+              await handlerOf(current as TestNextly).updateEntry(
+                {
+                  collectionName: FLIPPED,
+                  entryId: doc.id,
+                  overrideAccess: true,
+                },
+                { status: "draft" }
+              );
+            },
           ],
         },
         fields: [text({ name: "title" })],
@@ -245,10 +277,13 @@ const mutationsOf = (t: TestNextly): ReleaseMutations =>
 /** One materialisation pass, as the drain job performs it. */
 function materialise(
   t: TestNextly,
-  mutations: ReleaseMutations = mutationsOf(t)
+  mutations: ReleaseMutations = mutationsOf(t),
+  repository: ApplyDueReleasesDeps["repository"] = new ReleasesRepository(
+    t.adapter
+  )
 ) {
   return applyDueReleases({
-    repository: new ReleasesRepository(t.adapter),
+    repository,
     mutations,
     runAs: {
       findUser: async id => ({ id, isActive: true }),
@@ -286,6 +321,19 @@ async function killedInsideWrite(t: TestNextly): Promise<void> {
       ? changes > before
       : beforeChanges >= hangBeforeWrite
   );
+}
+
+/** The repository's port methods, bound, so a case can replace one of them. */
+function bound(repo: ReleasesRepository): ApplyDueReleasesDeps["repository"] {
+  return {
+    findDueReleases: now => repo.findDueReleases(now),
+    listMembersOf: ids => repo.listMembersOf(ids),
+    isStillDueAt: (id, at) => repo.isStillDueAt(id, at),
+    isMemberApplied: (id, revision) => repo.isMemberApplied(id, revision),
+    markReleasePublished: (id, at, planned) =>
+      repo.markReleasePublished(id, at, planned),
+    blockReleases: entries => repo.blockReleases(entries),
+  };
 }
 
 async function until(condition: () => boolean): Promise<void> {
@@ -501,6 +549,75 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("keeps a postponed release's new schedule when every member was already marked", async () => {
+      // A pass wrote every document and was ended before it could settle the
+      // release, so every member is marked. The next pass plans against the
+      // old schedule, and the release is postponed before it settles.
+      const t = await boot(dialect);
+      const ids = await drafts(t, 3);
+      const releaseId = await dueRelease(t, ids);
+      const real = new ReleasesRepository(t.adapter);
+      let settling = false;
+      void materialise(t, mutationsOf(t), {
+        ...bound(real),
+        markReleasePublished: () => {
+          settling = true;
+          return never();
+        },
+      });
+      await until(() => settling);
+      expect(
+        (await real.listMembersOf([releaseId])).every(
+          m => m.appliedRevision !== null
+        )
+      ).toBe(true);
+
+      const later = new Date("2099-01-01T00:00:00Z");
+      changes = 0;
+      const result = await materialise(t, mutationsOf(t), {
+        ...bound(real),
+        markReleasePublished: async (id, at, planned) => {
+          await scheduleAsItStands(real, releaseId, later, "UTC");
+          return real.markReleasePublished(id, at, planned);
+        },
+      });
+
+      expect(changes).toBe(0);
+      expect(result.published).toBe(0);
+      const [kept] = await real.findReleases({ ids: [releaseId] });
+      expect(kept?.state).toBe("scheduled");
+      expect(kept?.scheduledAt?.getTime()).toBe(later.getTime());
+    });
+
+    it("does not take an earlier mark as applied once the release is postponed after the plan", async () => {
+      // Postponed after this pass loaded the release but before it reached the
+      // marked members: the schedule is asked before the mark is accepted.
+      const t = await boot(dialect);
+      const ids = await drafts(t, 3);
+      const releaseId = await dueRelease(t, ids);
+      await killedAfter(t, 2);
+      const real = new ReleasesRepository(t.adapter);
+      const later = new Date("2099-01-01T00:00:00Z");
+
+      const result = await materialise(t, mutationsOf(t), {
+        ...bound(real),
+        listMembersOf: async releaseIds => {
+          const members = await real.listMembersOf(releaseIds);
+          await scheduleAsItStands(real, releaseId, later, "UTC");
+          return members;
+        },
+      });
+
+      const marked = result.outcomes.filter(o => o.failure === null);
+      expect(marked).toEqual([]);
+      expect(
+        result.outcomes.every(o => o.failure === "RELEASE_NO_LONGER_SCHEDULED")
+      ).toBe(true);
+      const [kept] = await real.findReleases({ ids: [releaseId] });
+      expect(kept?.state).toBe("scheduled");
+      expect(kept?.scheduledAt?.getTime()).toBe(later.getTime());
+    });
+
     it("leaves every member as it was on an ordinary write", async () => {
       // No receipt is pinned outside the drain, so an editor's write, even a
       // publish of a document the release holds, records and clears nothing.
@@ -680,6 +797,31 @@ describe.each(getConfiguredTestDialects())(
       expect(result).toMatchObject({ failed: 0, applied: 1, published: 1 });
       expect(await storedStatus(t, HIDDEN, id)).toBe("published");
       expect(await stateOf(t, releaseId)).toBe("published");
+    });
+
+    it("does not settle a release whose document a hook wrote back after the publish", async () => {
+      // The publish commits with its mark; an `afterChange` hook then writes
+      // the document back to a draft. That write is for the same document, so
+      // it takes the mark back, and the release is not settled with the
+      // document in the opposite state.
+      const t = await boot(dialect);
+      const id = await entry(t, FLIPPED, "draft");
+      const releaseId = await dueRelease(t, [id], {
+        scopeKind: "collection",
+        scopeSlug: FLIPPED,
+      });
+      flipBack = true;
+
+      const result = await materialise(t);
+
+      expect(await storedStatus(t, FLIPPED, id)).toBe("draft");
+      expect(result.failed).toBe(1);
+      expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
+      expect(await stateOf(t, releaseId)).toBe("scheduled");
+      const [member] = await new ReleasesRepository(t.adapter).listMembersOf([
+        releaseId,
+      ]);
+      expect(member?.appliedRevision).toBeNull();
     });
 
     it("does not count a write a hook kept from storing the status", async () => {

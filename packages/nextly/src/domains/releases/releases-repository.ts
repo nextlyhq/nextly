@@ -422,6 +422,22 @@ export function memberAppliedFor(
 }
 
 /**
+ * Take a member's applied mark back, inside the transaction of a write that
+ * left its document without the member's action: a hook that writes the
+ * document back after the action's own write committed, say. Idempotent.
+ */
+export async function forgetMemberApplied(
+  tx: Pick<ReleasesTxApi, "updateCount">,
+  memberId: string
+): Promise<void> {
+  await tx.updateCount(
+    MEMBERS,
+    { appliedRevision: null },
+    { and: [{ column: "id", op: "=", value: memberId }] }
+  );
+}
+
+/**
  * Mark a member applied for `revision`, inside the transaction of the content
  * write that applied it, so the mark commits exactly when the write does: a
  * write that rolls back leaves no mark, and one that commits cannot be left
@@ -1367,8 +1383,20 @@ export class ReleasesRepository {
    * by its state fence, which never admits `published`; the bump keeps "every
    * move raises the revision" true without an exception a later reader would
    * have to know about.
+   *
+   * And fenced on `planned`, the revision and instant the pass planned
+   * against, the pair `blockReleases` fences on. State alone admits a release
+   * POSTPONED after the plan was loaded: it is still `scheduled`, so a pass
+   * whose actions were applied, or already marked applied, for the old
+   * schedule would mark it published and lose the new one. Any move since
+   * the plan raised the revision, so this matches nothing and the release
+   * keeps the schedule it was given.
    */
-  async markReleasePublished(id: string, at: Date): Promise<boolean> {
+  async markReleasePublished(
+    id: string,
+    at: Date,
+    planned: { revision: number; scheduledAt: Date }
+  ): Promise<boolean> {
     const moved = await this.db.transaction(tx =>
       this.advanceRevision(tx, id, ["scheduled"], {
         set: {
@@ -1376,6 +1404,10 @@ export class ReleasesRepository {
           publishedAt: at,
           updatedAt: at,
         },
+        where: [
+          { column: "revision", op: "=", value: planned.revision },
+          { column: "scheduledAt", op: "=", value: planned.scheduledAt },
+        ],
       })
     );
     return moved !== null;

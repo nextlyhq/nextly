@@ -45,3 +45,24 @@ export async function scheduleAsItStands(
     row.revision
   );
 }
+
+/**
+ * Mark a release published, fenced on the revision and instant it has now,
+ * as a drain that planned against it this moment would. Throws when the
+ * release is not there or has no instant, for the reason the helper above
+ * does.
+ */
+export async function publishAsItStands(
+  repo: ReleasesRepository,
+  id: string,
+  at: Date
+): Promise<boolean> {
+  const [row] = await repo.findReleases({ ids: [id] });
+  if (row?.scheduledAt == null) {
+    throw new Error(`no scheduled release ${id} to publish`);
+  }
+  return repo.markReleasePublished(id, at, {
+    revision: row.revision,
+    scheduledAt: row.scheduledAt,
+  });
+}

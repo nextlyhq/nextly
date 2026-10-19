@@ -42,3 +42,11 @@ published because the document already read as live, and a read hook that rewrit
 changes nothing. `nextly migrate` and boot add one nullable column, `applied_revision`, to
 `nextly_release_members` on every dialect; no row is rewritten. It is internal: release
 members returned by the Direct API and REST do not include it.
+
+Compatibility: `applyDueReleases`, exported from the package root, is experimental, and its
+dependency ports change. A custom `repository` passed to it must now provide
+`isMemberApplied(memberId, revision)`, return `appliedRevision` on the rows from
+`listMembersOf`, and accept the planned `{ revision, scheduledAt }` fence as the third argument
+of `markReleasePublished`; custom `mutations` no longer provide `applied`, and their `publish`
+and `unpublish` receive a `receipt`. The built-in drain job (`createReleasesDrainJob`) needs no
+change.

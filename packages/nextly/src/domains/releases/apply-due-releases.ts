@@ -130,7 +130,16 @@ export interface ApplyDueReleasesDeps {
     isStillDueAt(releaseId: string, scheduledAt: Date): Promise<boolean>;
     /** Whether the member's own write marked it applied for `revision`. */
     isMemberApplied(memberId: string, revision: number): Promise<boolean>;
-    markReleasePublished(id: string, at: Date): Promise<boolean>;
+    /**
+     * Settle a release, fenced on the revision and instant this pass planned
+     * against, so a release moved since the plan (postponed, say) is refused
+     * and keeps its new schedule.
+     */
+    markReleasePublished(
+      id: string,
+      at: Date,
+      planned: { revision: number; scheduledAt: Date }
+    ): Promise<boolean>;
     /**
      * Stop a COMPONENT of releases nothing about retrying could fix, atomically.
      *
@@ -364,6 +373,15 @@ export interface ApplyDueReleasesResult {
   outcomes: MaterialisationOutcome[];
 }
 
+/**
+ * Apply every release whose instant has arrived; see the module note.
+ *
+ * @experimental Its dependency ports may change while releases settle. A
+ * caller passing its own `repository` provides `isMemberApplied`, returns
+ * `appliedRevision` from `listMembersOf`, and takes the planned fence in
+ * `markReleasePublished`; the built-in drain job (`createReleasesDrainJob`)
+ * needs nothing.
+ */
 export async function applyDueReleases(
   deps: ApplyDueReleasesDeps
 ): Promise<ApplyDueReleasesResult> {
@@ -450,7 +468,16 @@ export async function applyDueReleases(
     plan,
     heldOpen,
     applied,
-    now
+    now,
+    // The revision and instant each release was planned against, so settling
+    // refuses one that moved since.
+    new Map(
+      releases.flatMap(r =>
+        r.scheduledAt
+          ? [[r.id, { revision: r.revision, scheduledAt: r.scheduledAt }]]
+          : []
+      )
+    )
   );
 
   const deferred = plan.actions.length - outcomes.length;
@@ -491,7 +518,17 @@ async function applyOne(
   // Applied by its own write on an earlier pass, for the release as it now
   // stands: that write already judged its author, its permissions and the
   // document, and writing it again would only replay its hooks and events.
-  if (action.applied) return { ...base, failure: null };
+  // The schedule is still asked first: the mark matched the revision this pass
+  // PLANNED against, and a release postponed or cancelled since must not be
+  // reported applied on the strength of it.
+  if (action.applied) {
+    return (
+      (await scheduleRefusal(deps, action, base)) ?? {
+        ...base,
+        failure: null,
+      }
+    );
+  }
 
   // The read seam answers DOCUMENT-WIDE members only. `findDueDecisions`
   // filters `locale IS NULL` because per-locale lifecycle lives on the
@@ -517,17 +554,33 @@ async function applyOne(
     return { ...base, failure: identity.failure, ...identity.detail };
   }
 
-  // Cancelling is the one thing a person does to a release between a drain
-  // reading it and the drain acting on it, and the fence on
-  // `markReleasePublished` comes too late: it stops the row being marked
-  // published and cannot un-publish the documents. Checked per ACTION rather
-  // than once per pass, so a cancel is honoured for every document not yet
-  // written rather than only for releases the pass had not started.
-  //
-  // Wrapped because it is a database read on the ordinary path, and an
-  // unwrapped one here aborted the entire pass: a transient connection failure
-  // on the FIRST action skipped every later action and every unrelated due
-  // release, so one blip looked exactly like a quiet night.
+  const refused = await scheduleRefusal(deps, action, base);
+  if (refused !== null) return refused;
+
+  return writeAndConfirm(deps, action, identity.user, base);
+}
+
+/**
+ * Why this action may no longer go ahead on its release's schedule, or null
+ * while the release is still due at the instant this pass planned against.
+ *
+ * Cancelling or postponing is the one thing a person does to a release between
+ * a drain reading it and the drain acting on it, and the fence on
+ * `markReleasePublished` comes too late: it stops the row being marked
+ * published and cannot un-publish the documents. Checked per ACTION rather
+ * than once per pass, so a cancel is honoured for every document not yet
+ * written rather than only for releases the pass had not started.
+ *
+ * Never a rejection: it is a database read on the ordinary path, and an
+ * unwrapped one aborted the entire pass, so a transient connection failure on
+ * the FIRST action skipped every later action and every unrelated due release,
+ * and one blip looked exactly like a quiet night.
+ */
+async function scheduleRefusal(
+  deps: ApplyDueReleasesDeps,
+  action: MaterialisationAction,
+  base: Omit<MaterialisationOutcome, "failure">
+): Promise<MaterialisationOutcome | null> {
   let stillDue: boolean;
   try {
     stillDue = await deps.repository.isStillDueAt(
@@ -541,11 +594,7 @@ async function applyOne(
       detail: messageOf(error),
     };
   }
-  if (!stillDue) {
-    return { ...base, failure: "RELEASE_NO_LONGER_SCHEDULED" };
-  }
-
-  return writeAndConfirm(deps, action, identity.user, base);
+  return stillDue ? null : { ...base, failure: "RELEASE_NO_LONGER_SCHEDULED" };
 }
 
 /**
@@ -806,7 +855,8 @@ async function dischargeSettledComponents(
   plan: ReturnType<typeof planReleaseMaterialisation>,
   heldOpen: ReadonlySet<string>,
   applied: ReadonlySet<string>,
-  now: () => Date
+  now: () => Date,
+  planned: ReadonlyMap<string, { revision: number; scheduledAt: Date }>
 ): Promise<{ published: number; undischarged: number }> {
   let published = 0;
   // Discharged by COMPONENT, for the reason the planner states: splitting one
@@ -856,13 +906,35 @@ async function dischargeSettledComponents(
       continue;
     }
     finalizedComponents += 1;
-    for (const id of settleable) {
-      // A FRESH clock, not the pass's start. `publishedAt` is defined as the
-      // moment materialisation completed, and `at` was captured before members
-      // were loaded, identities resolved and every content mutation run — on a
-      // slow pass or a large due set that difference is substantial.
-      if (await deps.repository.markReleasePublished(id, now())) published += 1;
-    }
+    published += await settleReleases(deps, settleable, now, planned);
   }
   return { published, undischarged };
+}
+
+/**
+ * Mark these releases published, each fenced on the revision and instant this
+ * pass planned against, and say how many moved.
+ */
+async function settleReleases(
+  deps: ApplyDueReleasesDeps,
+  ids: readonly string[],
+  now: () => Date,
+  planned: ReadonlyMap<string, { revision: number; scheduledAt: Date }>
+): Promise<number> {
+  let published = 0;
+  for (const id of ids) {
+    const fence = planned.get(id);
+    // Every due release has an instant (`findDueReleases`); one without is
+    // not settled rather than settled unfenced.
+    if (fence === undefined) continue;
+    // A FRESH clock, not the pass's start. `publishedAt` is defined as the
+    // moment materialisation completed, and the pass's start was captured
+    // before members were loaded, identities resolved and every content
+    // mutation run — on a slow pass or a large due set that difference is
+    // substantial.
+    if (await deps.repository.markReleasePublished(id, now(), fence)) {
+      published += 1;
+    }
+  }
+  return published;
 }
