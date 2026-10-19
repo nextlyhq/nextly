@@ -1,3 +1,5 @@
+import { NextlyError } from "../../../errors/nextly-error";
+
 import {
   castText,
   ddlType,
@@ -6,7 +8,11 @@ import {
   nullSafeDiffers,
   q,
 } from "./ddl-types";
-import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
+import type {
+  ArchiveOwner,
+  CompanionCopyRef,
+  CompanionMigrationSpec,
+} from "./types";
 
 const ARCHIVE = "nextly_i18n_archive";
 
@@ -154,16 +160,36 @@ function restoreTargetType(
 /**
  * Copies every non-default language's value of one companion column into the localization
  * archive, where `nextly i18n:restore` reads it back. One row per (entry, language), the value
- * cast to text, recorded under the entity's slug and the column's name.
+ * cast to text, recorded under the entity's slug and kind and the column's name.
  *
  * Safe to run more than once: a value is written only when it differs from the newest row already
  * archived for that entry, language and field. A second run of the same change adds nothing, while
  * a value that changed since it was last archived is archived again, and a restore takes the newest
  * row. A value with nothing archived before and nothing to keep (NULL) is not written.
  */
+/**
+ * The owner an archive row is recorded under. A statement that archives without knowing the
+ * entity's kind would file the values where another entity of the same slug reads them, so it is
+ * refused rather than given a default.
+ */
+export function archiveOwnerOf(
+  slug: string,
+  kind: ArchiveOwner["kind"] | undefined
+): ArchiveOwner {
+  if (kind === undefined) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "an archive write needs the entity's kind as well as its slug",
+        slug,
+      },
+    });
+  }
+  return { slug, kind };
+}
+
 function buildArchiveNonDefaultStatement(
   ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
-  collection: string,
+  owner: ArchiveOwner,
   columnName: string
 ): string {
   const { dialect, companionTable, defaultLocale } = ref;
@@ -173,7 +199,8 @@ function buildArchiveNonDefaultStatement(
   // The value archived last for this entry, language and field, or NULL when there is none.
   const newest =
     `(SELECT ${archived}.${q("value", dialect)} FROM ${q(ARCHIVE, dialect)} ${archived} ` +
-    `WHERE ${archived}.${q("collection", dialect)} = ${lit(collection)} ` +
+    `WHERE ${archived}.${q("collection", dialect)} = ${lit(owner.slug)} ` +
+    `AND ${archived}.${q("entity_kind", dialect)} = ${lit(owner.kind)} ` +
     // Cast, because the parent id mirrors the main table's id and can be a uuid where the archive
     // keeps text, and PostgreSQL compares the two only explicitly. Exact, because the archive and
     // the companion may carry different collations (see `exactText`).
@@ -183,8 +210,8 @@ function buildArchiveNonDefaultStatement(
     `ORDER BY ${archived}.${q("id", dialect)} DESC LIMIT 1)`;
   return (
     `INSERT INTO ${q(ARCHIVE, dialect)} ` +
-    `(${q("collection", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
-    `SELECT ${lit(collection)}, ${source}.${q("_parent", dialect)}, ${source}.${q("_locale", dialect)}, ${lit(columnName)}, ${value} ` +
+    `(${q("collection", dialect)}, ${q("entity_kind", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
+    `SELECT ${lit(owner.slug)}, ${lit(owner.kind)}, ${source}.${q("_parent", dialect)}, ${source}.${q("_locale", dialect)}, ${lit(columnName)}, ${value} ` +
     `FROM ${q(companionTable, dialect)} ${source} WHERE ${source}.${q("_locale", dialect)} <> ${lit(defaultLocale)} ` +
     `AND ${nullSafeDiffers(exactText(newest, dialect), exactText(value, dialect), dialect)}`
   );
@@ -199,10 +226,10 @@ function buildArchiveNonDefaultStatement(
  */
 export function buildFieldLeavesTranslationArchiveStatement(
   ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
-  collection: string,
+  owner: ArchiveOwner,
   columnName: string
 ): string {
-  return buildArchiveNonDefaultStatement(ref, collection, columnName);
+  return buildArchiveNonDefaultStatement(ref, owner, columnName);
 }
 
 /**
@@ -219,14 +246,14 @@ export function buildFieldLeavesTranslationArchiveStatement(
  */
 export function buildFieldLeavesTranslationStatements(
   ref: CompanionCopyRef,
-  collection: string,
+  owner: ArchiveOwner,
   columnName: string,
   options: { archive?: boolean } = {}
 ): string[] {
   return [
     ...(options.archive === false
       ? []
-      : [buildArchiveNonDefaultStatement(ref, collection, columnName)]),
+      : [buildArchiveNonDefaultStatement(ref, owner, columnName)]),
     ...buildDefaultLocaleRestoreStatements(ref, [columnName]),
   ];
 }
@@ -241,6 +268,7 @@ export function buildLocalizationDownStatements(
     companionTable,
     defaultLocale,
     collection,
+    kind,
     columns,
   } = spec;
   const stmts: string[] = [];
@@ -284,7 +312,7 @@ export function buildLocalizationDownStatements(
     stmts.push(
       buildArchiveNonDefaultStatement(
         { dialect, companionTable, defaultLocale },
-        collection,
+        archiveOwnerOf(collection, kind),
         c.name
       )
     );

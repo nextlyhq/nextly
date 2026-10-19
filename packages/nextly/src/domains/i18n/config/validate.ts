@@ -8,6 +8,15 @@ import type { LocalizationConfig } from "./types";
 const LOCALE_CODE_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /**
+ * Whether a string could be a configured locale code: the pattern, and none of
+ * the spellings read as instructions rather than languages. The one rule for
+ * anything that stores a language code, so nothing keeps a looser copy of it.
+ */
+export function isConfigurableLocaleCode(code: string): boolean {
+  return LOCALE_CODE_PATTERN.test(code) && !isReservedLocaleCode(code);
+}
+
+/**
  * Validate a `LocalizationConfig`, throwing a descriptive Error on any problem:
  * non-empty locales, unique codes, `defaultLocale` ∈ codes, and every `fallbackLocale`
  * reference resolves to a real code. Called from `defineConfig` / `validateNextlyConfig`.

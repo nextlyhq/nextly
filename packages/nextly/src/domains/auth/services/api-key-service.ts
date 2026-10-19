@@ -15,6 +15,8 @@
  * - The `nx_live_` prefix allows instant identification in logs/configs.
  * - Expiry is enforced at validation time; expired keys return `null` from
  *   `authenticateApiKey()` and result in a `401` response.
+ * - A key whose creator is deactivated returns `null` the same way, until the
+ *   creator is reactivated. A new password for the creator does not stop it.
  *
  * ## Key Format
  *
@@ -38,6 +40,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq, inArray, isNull } from "drizzle-orm";
 
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
+import { accountIsActive } from "../../../auth/session/session-standing";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
 import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
@@ -1011,6 +1014,8 @@ export class ApiKeyService extends BaseService {
    * `Authorization: Bearer nx_live_...` header. Designed for the hot path:
    * - Single SELECT with 5 columns, no JOIN
    * - Unique index hit on `keyHash` (O(1) lookup)
+   * - The creator's active flag from the per-process account-standing cache,
+   *   which reads the user row at most once per few seconds per person
    * - Fire-and-forget `lastUsedAt` update (not awaited)
    *
    * Returns `null` for any failure case (not found, revoked, expired) so the
@@ -1073,6 +1078,13 @@ export class ApiKeyService extends BaseService {
           : null;
 
     if (isKeyExpired(expiresAt)) return null;
+
+    // A key acts with its creator's authority, so it is refused while the
+    // creator is deactivated and works again once they are reactivated. Read
+    // through the account-standing cache sessions use, so a deactivation is
+    // refused at once on the instance that made it and within the cache's
+    // lifetime elsewhere. A failed read throws rather than admitting the key.
+    if (!(await accountIsActive(row.userId))) return null;
 
     // Fire-and-forget lastUsedAt update — not awaited; latency on every auth
     // request is unacceptable, and a missed update is non-critical.

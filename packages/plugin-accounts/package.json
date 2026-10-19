@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-accounts",
-  "version": "0.0.2-alpha.66",
+  "version": "0.0.2-alpha.68",
   "private": true,
   "description": "Site accounts for Nextly: visitors who sign up, sign in and keep their own account, never staff",
   "license": "MIT",
@@ -48,10 +48,10 @@
     "zod": "^4.6.2"
   },
   "peerDependencies": {
-    "@nextlyhq/admin": "0.0.2-alpha.66",
+    "@nextlyhq/admin": "0.0.2-alpha.68",
     "@nextlyhq/plugin-sdk": "workspace:*",
     "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
-    "nextly": "0.0.2-alpha.66",
+    "nextly": "0.0.2-alpha.68",
     "react": "^18.0.0 || ^19.0.0"
   },
   "peerDependenciesMeta": {

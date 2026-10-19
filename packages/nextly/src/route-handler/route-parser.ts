@@ -779,8 +779,28 @@ function parseCollectionEntryVersionRoutes(
     return null;
   }
 
-  // `versions/{versionNo}/restore` is a write, and the only path here deeper
-  // than a version number.
+  // `versions/{versionNo}/seen` records that the caller was shown the version.
+  // PUT because it is idempotent, and authorized as a read of one entry
+  // (`single`): it changes only the caller's own "last looked at" marker,
+  // never the document or its history, so reading the document is what it
+  // needs.
+  if (
+    additionalParams.length === 3 &&
+    additionalParams[2] === "seen" &&
+    httpMethod === "PUT"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    routeParams.versionNo = additionalParams[1] ?? "";
+    return {
+      service: "collections",
+      operation: "single",
+      method: "markEntryVersionSeen",
+      routeParams,
+    };
+  }
+
+  // `versions/{versionNo}/restore` is a write.
   if (
     additionalParams.length === 3 &&
     additionalParams[2] === "restore" &&
@@ -954,6 +974,15 @@ const SINGLE_VERSION_SUBRESOURCES = new Map<
   ],
 ]);
 
+/** Actions on one version of a Single (`versions/{versionNo}/{action}`). */
+const SINGLE_VERSION_ACTIONS = new Map<
+  string,
+  { operation: OperationType; method: string }
+>([
+  ["restore POST", { operation: "update", method: "restoreSingleVersion" }],
+  ["seen PUT", { operation: "single", method: "markSingleVersionSeen" }],
+]);
+
 function parseSingleVersionRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -966,23 +995,19 @@ function parseSingleVersionRoutes(
     return null;
   }
 
-  // `versions/{versionNo}/restore` is a write, and the only path here deeper
-  // than a version number.
-  if (
-    subId &&
-    additionalParams.length === 1 &&
-    additionalParams[0] === "restore" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = id;
-    routeParams.versionNo = subId;
-    return {
-      service: "singles",
-      // Restoring writes the document, so it is authorized as an update.
-      operation: "update",
-      method: "restoreSingleVersion",
-      routeParams,
-    };
+  // `versions/{versionNo}/{action}`: an action on one version, matched from
+  // the table above. Restoring writes the document, so it is an update;
+  // marking a version seen changes only the caller's own marker, so it is a
+  // read of the document (see the collection parser).
+  if (subId && additionalParams.length === 1) {
+    const action = SINGLE_VERSION_ACTIONS.get(
+      `${additionalParams[0]} ${httpMethod.toUpperCase()}`
+    );
+    if (action) {
+      routeParams.slug = id;
+      routeParams.versionNo = subId;
+      return { service: "singles", ...action, routeParams };
+    }
   }
 
   // The named sub-resources of a Single's history, matched from the table above
@@ -1981,8 +2006,12 @@ function parseApiKeyRoutes(
  * `api/releases`, beside the handler that enforces it.
  */
 interface ReleaseRoute {
-  /** Whether the path carries a release id. */
-  id: boolean;
+  /**
+   * Whether the path carries a release id, or the word a read of the whole
+   * set is named by in that place. Release ids are UUIDs, so a word never
+   * names a release.
+   */
+  id: boolean | string;
   /** The segment after the id, or `null` for none. */
   subresource: string | null;
   /** Whether the path carries a fourth segment, such as a member id. */
@@ -2009,6 +2038,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "create",
     method: "createRelease",
   },
+  // The calendar, a read of every release in a window of days. Before the
+  // route that reads one release by id, so the word is not taken for an id.
+  {
+    id: "calendar",
+    subresource: null,
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "releaseCalendar",
+  },
   {
     id: true,
     subresource: null,
@@ -2016,6 +2055,25 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "GET",
     operation: "single",
     method: "getRelease",
+  },
+  // A release's own title and description, and the release itself. `PATCH`
+  // changes only those two fields: a state is moved by the routes below,
+  // never by a body.
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "PATCH",
+    operation: "update",
+    method: "updateRelease",
+  },
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "DELETE",
+    operation: "delete",
+    method: "deleteRelease",
   },
   {
     id: true,
@@ -2040,6 +2098,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "DELETE",
     operation: "delete",
     method: "removeReleaseMember",
+  },
+  // Switching a document between going live and coming down: a change to the
+  // member, so the member's own path, with the new action in the body.
+  {
+    id: true,
+    subresource: "members",
+    subId: true,
+    verb: "PATCH",
+    operation: "update",
+    method: "changeReleaseMemberAction",
   },
   // Scheduling and cancelling are separate routes rather than one `PATCH` with a
   // state in the body: they are the two directions of the authority the seed
@@ -2086,6 +2154,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "list",
     method: "listReleaseBlockers",
   },
+  // Every problem the release's documents have, hard and soft. Its own route
+  // for the reason `blockers` is: answering it checks every document.
+  {
+    id: true,
+    subresource: "readiness",
+    subId: false,
+    verb: "GET",
+    operation: "single",
+    method: "getReleaseReadiness",
+  },
 ];
 
 /**
@@ -2111,14 +2189,17 @@ function parseReleaseRoutes(
 
   const route = RELEASE_ROUTES.find(
     candidate =>
-      candidate.id === Boolean(id) &&
+      (typeof candidate.id === "string"
+        ? candidate.id === id
+        : candidate.id === Boolean(id)) &&
       candidate.subresource === (subresource ?? null) &&
       candidate.subId === Boolean(subId) &&
       candidate.verb === httpMethod
   );
   if (!route) return null;
 
-  if (id) routeParams.releaseId = id;
+  // A word in the id's place names the route, not a release.
+  if (id && route.id === true) routeParams.releaseId = id;
   if (subId) routeParams.memberId = subId;
 
   return {

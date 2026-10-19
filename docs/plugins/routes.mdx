@@ -3,8 +3,6 @@ title: HTTP routes
 description: Add HTTP endpoints from a plugin — namespaced, secure by default, with typed middleware.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** `principal` and `ctx.principal`, and the cross-site forgery check (see the warning below).
-
 A plugin can contribute HTTP routes through `contributes.routes`. Each route is mounted
 under your plugin's namespace and is **secure by default** (D25/D28).
 
@@ -139,10 +137,6 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
   session or API key, and refuses a request with nobody of that kind unless
   `required: false`. It cannot be combined with `public` or `requiredPermission`.
   See [Signed-in people of your own kind](/docs/plugins/signed-in-people).
-
-<Callout type="warn">
-**Needs the release after 0.0.2-alpha.66. 0.0.2-alpha.66 does not have this protection.** On 0.0.2-alpha.66 a plugin route's writes get no origin or CSRF check at all, and `csrf` is not a route option. Until the next release, a route that browsers write to with the session cookie must check the request's `Origin` header itself.
-</Callout>
 
 A write the session cookie authenticates is also checked for cross-site forgery. Left
 unset, `csrf` checks only the request's origin, which a same-origin write passes;

@@ -341,6 +341,16 @@ export {
   widthFromSize,
   type WidgetWidth,
 } from "./domains/widgets/widths";
+// The row count a widget query runs at, its one rule, and the most rows a card
+// draws. The admin decides a card's rows from them before any data arrives, so
+// it asks the validator's own question. From `query-limits.ts`, which has no
+// imports.
+export {
+  DEFAULT_WIDGET_LIMIT,
+  MAX_WIDGET_LIMIT,
+  MAX_WIDGET_ROWS,
+  effectiveWidgetLimit,
+} from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this
 // tuple is what stops the browser silently erasing a kind core has started to
@@ -362,6 +372,7 @@ export {
 } from "./domains/collections/query/timeseries-interval";
 export type { TimeseriesInterval } from "./domains/collections/query/timeseries-interval";
 export type {
+  WidgetFieldChoice,
   WidgetOp,
   WidgetSourceField,
   WidgetSourceFieldType,

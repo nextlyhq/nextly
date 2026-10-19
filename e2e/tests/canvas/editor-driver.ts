@@ -291,7 +291,7 @@ export async function openEditorWith(
     true
   );
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("button", { name: OPEN_BUILDER_ACTION }).click();
+  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   // The block must be ON SCREEN before anything is aimed at it: a gesture sent
   // at an element that has not rendered lands on the page behind it.
   await expect(await block(page, firstId)).toBeVisible({ timeout: 30_000 });

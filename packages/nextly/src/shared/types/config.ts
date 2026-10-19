@@ -43,7 +43,10 @@ import type {
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
-import type { RateLimitStore } from "../../middleware/rate-limit";
+import {
+  RATE_LIMIT_DEFAULTS,
+  type RateLimitStore,
+} from "../../middleware/rate-limit";
 import type { SecurityHeadersConfig } from "../../middleware/security-headers";
 import type { AdminPlacement } from "../../plugins/admin-placement";
 import type { PluginPermission } from "../../plugins/contributions";
@@ -284,9 +287,29 @@ export interface RateLimitingConfig {
 
   /**
    * Function to skip rate limiting for certain requests.
-   * Returns true to skip rate limiting.
+   * Returns true to skip rate limiting. No request is skipped by default, the
+   * admin API included.
    */
   skip?: (request: Request) => boolean | Promise<boolean>;
+
+  /**
+   * The budget a signed-in session spends per window, counted per user
+   * whatever address it comes from. A plugin's signed-in people each spend a
+   * budget of this size too.
+   *
+   * @default five times `readLimit` and `writeLimit`
+   */
+  sessions?: { readLimit?: number; writeLimit?: number };
+
+  /**
+   * The ceiling shared, per window, by requests that carry no session or API
+   * key and come from no address the server can resolve (see
+   * `security.trustProxy`). It never refuses a session, a key, or a request to
+   * an auth route.
+   *
+   * @default ten times `readLimit` and `writeLimit`
+   */
+  unresolvedCeiling?: { readLimit?: number; writeLimit?: number };
 
   /**
    * Per-collection rate limit overrides.
@@ -341,6 +364,10 @@ export interface SanitizedRateLimitingConfig {
   skip?: (request: Request) => boolean | Promise<boolean>;
   /** Per-collection rate limit overrides (optional) */
   collections?: Record<string, { readLimit?: number; writeLimit?: number }>;
+  /** A session's own budget (optional); five times the per-address budgets when absent. */
+  sessions?: { readLimit?: number; writeLimit?: number };
+  /** The unresolved sources' ceiling (optional); ten times the per-address budgets when absent. */
+  unresolvedCeiling?: { readLimit?: number; writeLimit?: number };
 }
 
 // ============================================================
@@ -711,6 +738,17 @@ export interface AuthConfig {
   revealRegistrationConflict?: boolean;
 
   /**
+   * Whether strangers may create an account through the registration route.
+   *
+   * Default: `false`. While it is off, a registration is refused before any
+   * account is created or any email sent. An account still awaiting
+   * verification from before can still complete it by its link. Turn it on
+   * only for an app whose users sign themselves up; an account registered this
+   * way gets no role, and never becomes the install's first administrator.
+   */
+  allowRegistration?: boolean;
+
+  /**
    * @experimental Opt-in auth strategies (D71). A plugin may *provide* a
    * strategy, but it only authenticates anyone once listed here. Strategies run
    * in order; the built-in `password` strategy always runs last.
@@ -724,6 +762,8 @@ export interface AuthConfig {
 export interface SanitizedAuthConfig {
   /** Whether to reveal duplicate-email registrations on the wire. Defaults to false. */
   revealRegistrationConflict: boolean;
+  /** Whether strangers may register. Defaults to false. */
+  allowRegistration: boolean;
   /** @experimental Opt-in auth strategies (D71); built-in password runs last. */
   strategies?: AuthStrategy[];
 }
@@ -733,6 +773,7 @@ export interface SanitizedAuthConfig {
  */
 export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
+  allowRegistration: false,
 };
 
 // ============================================================
@@ -1024,12 +1065,12 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
 /**
  * Default rate limiting configuration values.
  * Only applied when rate limiting is enabled.
+ *
+ * The limiter's own defaults, not a copy of them: two copies once said 100
+ * and 600 reads, and an app got one while a limiter built without values got
+ * the other.
  */
-export const DEFAULT_RATE_LIMIT_CONFIG = {
-  readLimit: 100,
-  writeLimit: 30,
-  windowMs: 60000,
-} as const;
+export const DEFAULT_RATE_LIMIT_CONFIG = RATE_LIMIT_DEFAULTS;
 
 /**
  * Default API key rate limiting values.
@@ -1135,6 +1176,8 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     keyGenerator: config.rateLimit?.keyGenerator,
     skip: config.rateLimit?.skip,
     collections: config.rateLimit?.collections,
+    sessions: config.rateLimit?.sessions,
+    unresolvedCeiling: config.rateLimit?.unresolvedCeiling,
   };
 
   // Build apiKeys config only if the block is provided; omitting it entirely
@@ -1202,6 +1245,10 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       revealRegistrationConflict:
         config.auth?.revealRegistrationConflict ??
         DEFAULT_AUTH_CONFIG.revealRegistrationConflict,
+      // Only `true` opens registration; anything else leaves it closed.
+      allowRegistration:
+        config.auth?.allowRegistration === true ||
+        DEFAULT_AUTH_CONFIG.allowRegistration,
       // Pass opt-in auth strategies through unchanged (D71).
       strategies: config.auth?.strategies,
     },

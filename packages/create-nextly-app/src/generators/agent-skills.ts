@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import {
   chmod,
   lstat,
@@ -12,7 +12,7 @@ import {
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { skillsVersion } from "../lib/bundled-skills";
+import { skillsVersion, skillsVersionIn } from "../lib/bundled-skills";
 import { EXACT_VERSION } from "../lib/exact-version";
 
 import type { GeneratedFiles } from "./generated-files";
@@ -113,7 +113,7 @@ async function filesIn(
 }
 
 /**
- * The release the bundled skills were checked against, from their own
+ * The release the bundled skills ship with, from their own
  * frontmatter. Read with the bundle, before anything is written, so a bundle
  * that declares none, or disagrees with itself, stops the run untouched.
  */
@@ -127,6 +127,25 @@ export function bundledSkillsVersion(skills: BundledSkill[]): string {
           ?.content.toString("utf8") ?? "",
     }))
   );
+}
+
+/**
+ * The release the bundled skills declare, for the agent guide: the skills at
+ * this CLI's own tag are these same files, so this is the release that tag's
+ * skills were written for. Null when this copy carries no readable bundle,
+ * which leaves the guide nothing to offer a restore against; a scaffold run
+ * with --no-skills from such a copy must still succeed.
+ */
+export function bundledSkillsVersionOrNull(dir?: string): string | null {
+  try {
+    const skillsDir = dir ?? resolveSkillsPath();
+    const names = readdirSync(skillsDir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name);
+    return skillsVersionIn(skillsDir, names);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -196,8 +215,8 @@ async function readJson(file: string): Promise<Record<string, unknown> | null> {
 
 /**
  * Why the bundled skills may not be written into a project with `nextly` at
- * `projectVersion`, or null when they may. They were checked against the
- * release this CLI belongs to, and a project on another release, or one
+ * `projectVersion`, or null when they may. They ship with the release this
+ * CLI belongs to, and a project on another release, or one
  * whose release cannot be told, could be handed instructions for APIs it does
  * not have. No install command is given: the right one depends on whether
  * that release publishes skills at all, which the docs page says.

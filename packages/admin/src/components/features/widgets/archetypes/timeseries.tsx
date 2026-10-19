@@ -18,20 +18,9 @@
 
 import { formatGlobalDateTime } from "@admin/lib/dates/format";
 
-import { cardNumber } from "../frame/format";
+import { OverTimeChart } from "../charts/over-time-chart";
 
-import { ChartFrame } from "./chart-frame";
-import { areaPath, linePath, linePoints, type ChartBox } from "./chart-scale";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
-
-/**
- * The user units the line is drawn in.
- *
- * Arbitrary, and deliberately so: the SVG scales to the card, so these decide
- * the shape's proportions rather than its size. The padding keeps a 2px stroke
- * off the edges of the viewBox, which would otherwise clip it in half.
- */
-const BOX: ChartBox = { width: 240, height: 64, padding: 3 };
 
 /**
  * How each interval's start is written.
@@ -96,85 +85,23 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
     };
   }
 
-  const counts = result.points.map(point => point.count);
-  const points = linePoints(counts, BOX);
-  const line = linePath(points);
-  const area = areaPath(points, BOX.height - BOX.padding);
-  const total = counts.reduce((sum, count) => sum + count, 0);
-  const busiest = rows.reduce((best, row) =>
-    row.count > best.count ? row : best
-  );
-
-  // Only the ends are labelled on the axis. Thirty labels do not fit under a
-  // card-width chart, and thinning them to every nth point makes which dates
-  // appear depend on the window length. The table carries every one.
-  const first = rows[0];
-  const last = rows[rows.length - 1];
-
-  // Composed ONCE and handed to both the frame and the graphic, so the table's
-  // caption and the chart's own description cannot describe different data.
-  const description = `${rows.length} ${result.interval} intervals, ${cardNumber(total).label} in total. Busiest: ${busiest.label}, ${cardNumber(busiest.count).label}.`;
-
   return {
     ok: true,
+    // The chart draws the line, its axis, its latest point and its words; this adapter only
+    // reads the one series out of the answer, its intervals named in UTC.
     node: (
-      <ChartFrame
+      <OverTimeChart
         title={definition.title ?? "Over time"}
-        description={description}
         labelHeading="Interval"
-        rows={rows}
-      >
-        {({ titleId, descId, title, description: text }) => (
-          <div className="flex flex-col gap-1">
-            <svg
-              role="img"
-              aria-labelledby={titleId}
-              aria-describedby={descId}
-              viewBox={`0 0 ${BOX.width} ${BOX.height}`}
-              preserveAspectRatio="none"
-              className="h-16 w-full text-primary"
-            >
-              <title id={titleId}>{title}</title>
-              <desc id={descId}>{text}</desc>
-              {area ? (
-                <path d={area} fill="currentColor" className="opacity-10" />
-              ) : null}
-              {line ? (
-                <path
-                  d={line}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ) : null}
-              {/* A single interval draws no line, so it is marked instead --
-                  otherwise a one-point window renders as an empty box. */}
-              {points.length === 1 ? (
-                <circle
-                  cx={points[0].x}
-                  cy={points[0].y}
-                  r="2.5"
-                  fill="currentColor"
-                  vectorEffect="non-scaling-stroke"
-                />
-              ) : null}
-            </svg>
-            {/* Hidden from assistive tech: the `<desc>` above already names the
-                span, and these two would otherwise be read as bare dates with
-                nothing saying what they bound. */}
-            <div
-              aria-hidden="true"
-              className="flex justify-between text-[10px] leading-none text-muted-foreground"
-            >
-              <span>{first.label}</span>
-              {rows.length > 1 ? <span>{last.label}</span> : null}
-            </div>
-          </div>
-        )}
-      </ChartFrame>
+        intervals={rows.map(row => ({ key: row.key, label: row.label }))}
+        series={[
+          {
+            key: "count",
+            name: definition.title ?? "Over time",
+            points: rows.map(row => ({ key: row.key, value: row.count })),
+          },
+        ]}
+      />
     ),
   };
 };

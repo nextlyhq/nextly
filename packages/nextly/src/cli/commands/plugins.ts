@@ -179,6 +179,18 @@ export async function runPluginsInfoCommand(
   renderPluginInfo(info, context.logger);
 }
 
+/**
+ * What `nextly plugins install` was asked to install: one named plugin, every
+ * configured one, or — given both or neither — nothing it can act on.
+ */
+export function installTarget(
+  name: string | undefined,
+  all: boolean
+): { name: string } | "all" | null {
+  if (all) return name === undefined ? "all" : null;
+  return name === undefined ? null : { name };
+}
+
 /** Register the `nextly plugins` command group (D48). */
 export function registerPluginsCommand(program: Command): void {
   const plugins = program
@@ -203,23 +215,45 @@ export function registerPluginsCommand(program: Command): void {
     });
 
   plugins
-    .command("install <name>")
-    .description("Apply a plugin's migrations and run its onInstall hook")
-    .action(async (name: string, _cmdOptions: unknown, cmd: Command) => {
-      const globalOpts = cmd.optsWithGlobals();
-      const context = createContext(globalOpts);
-      try {
-        const { runPluginInstall } = await import("./plugin-lifecycle-runner");
-        await runPluginInstall(
-          name,
-          { config: globalOpts.config, cwd: globalOpts.cwd },
-          context
-        );
-      } catch (error) {
-        context.logger.error(describeError(error));
-        process.exit(1);
+    .command("install [name]")
+    .description(
+      "Apply a plugin's migrations and run its onInstall hook, or every configured plugin's with --all"
+    )
+    .option(
+      "--all",
+      "Install every configured plugin, dependencies first",
+      false
+    )
+    .action(
+      async (
+        name: string | undefined,
+        cmdOptions: { all?: boolean },
+        cmd: Command
+      ) => {
+        const globalOpts = cmd.optsWithGlobals();
+        const context = createContext(globalOpts);
+        // Exactly one of the two: a name with --all would leave which one was
+        // meant to the parser's reading of the line.
+        const target = installTarget(name, cmdOptions.all === true);
+        if (target === null) {
+          context.logger.error(
+            'Name one plugin to install, or pass --all to install every configured plugin: "nextly plugins install <name>" or "nextly plugins install --all".'
+          );
+          process.exit(1);
+        }
+        try {
+          const options = { config: globalOpts.config, cwd: globalOpts.cwd };
+          const { runPluginInstall, runPluginInstallAll } = await import(
+            "./plugin-lifecycle-runner"
+          );
+          if (target === "all") await runPluginInstallAll(options, context);
+          else await runPluginInstall(target.name, options, context);
+        } catch (error) {
+          context.logger.error(describeError(error));
+          process.exit(1);
+        }
       }
-    });
+    );
 
   plugins
     .command("uninstall <name>")

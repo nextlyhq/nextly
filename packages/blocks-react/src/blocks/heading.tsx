@@ -91,9 +91,9 @@ export const heading = defineBlock<HeadingProps, PageContext>({
     keywords: ["title", "headline", "h1", "h2"],
   },
   props: {
-    text: { type: "text", inline: true },
+    text: { role: "content", type: "text", inline: true },
     level: { type: "select", options: [...HEADING_LEVELS] },
-    href: { type: "url" },
+    href: { role: "content", type: "url" },
     target: { type: "select", options: ["_self", "_blank"] },
     rel: { type: "text" },
   },

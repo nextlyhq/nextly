@@ -88,6 +88,8 @@ const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 
 const received = vi.fn();
 const mounted = vi.fn();
+/** What happened to the view and the recovery, in order. */
+const lifecycle: string[] = [];
 
 /**
  * A view with the shapes a real one has: a field written through the
@@ -95,7 +97,13 @@ const mounted = vi.fn();
  */
 function BuilderView(props: DocumentViewProps): ReactElement {
   received(props);
-  useEffect(() => mounted(), []);
+  useEffect(() => {
+    mounted();
+    lifecycle.push("mount");
+    return () => {
+      lifecycle.push("unmount");
+    };
+  }, []);
   const { register } = useFormContext();
   return (
     <div data-testid="builder-view">
@@ -270,7 +278,15 @@ describe("EntryForm with a document view", () => {
     // A restore replaces the form's values from outside the view, and a view
     // may keep a working copy read once at mount, as the Page Builder does. So
     // the restore must reach the recovery AND give the view a new mount.
-    const restore = vi.fn();
+    //
+    // In that order: the outgoing view unmounts BEFORE the values are
+    // replaced. A view that hands its unsaved work to the form as it goes (the
+    // Page Builder does, for a takeover) would otherwise write its pre-restore
+    // copy over the restored values, and the new mount would read those.
+    lifecycle.length = 0;
+    const restore = vi.fn(() => {
+      lifecycle.push("restore");
+    });
     recovery.current = {
       ...recovery.current,
       offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
@@ -282,7 +298,8 @@ describe("EntryForm with a document view", () => {
     await userEvent.click(screen.getByRole("button", { name: "Restore" }));
 
     expect(restore).toHaveBeenCalledTimes(1);
-    expect(mounted).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+    expect(lifecycle).toEqual(["mount", "unmount", "restore", "mount"]);
   });
 
   it("leaves through the page's exit with unsaved work, without the leave warning", async () => {
@@ -356,6 +373,28 @@ describe("EntryForm with a document view", () => {
     expect(
       screen.getByRole("separator", { name: "Source and translation" })
     ).toBeInTheDocument();
+  });
+
+  it("says the screen is unavailable, rather than drawing nothing, when its component is missing", () => {
+    // Declared, routed and loaded, but not in this admin's component map: the
+    // first draw of a plugin added without regenerating the map. The control
+    // is the first case in this suite, where the registered view draws.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      renderView({
+        documentView: { component: "@acme/missing/admin#View", onExit },
+      });
+
+      expect(screen.getByRole("alert").textContent).toContain(
+        "This screen isn't available. Ask your developer."
+      );
+      expect(screen.queryByTestId("builder-view")).toBeNull();
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("@acme/missing/admin#View")
+      );
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it("keeps the ordinary editor when no view is routed", () => {
@@ -493,5 +532,212 @@ describe("a field-type view on a document with two fields of its type", () => {
         field: expect.objectContaining({ name: "layout", type: "blocks" }),
       })
     );
+  });
+});
+
+describe("a field the form would not let the author edit", () => {
+  function openWith(fields: unknown[], title = "Hello") {
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=layout"
+    );
+    return renderView({
+      collection: { name: "pages", fields } as never,
+      entry: { id: "e1", title } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+  }
+
+  function refusedSaying(reason: RegExp): void {
+    expect(
+      screen.getByRole("heading", { name: "This field can't be edited" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    // Refused, not handed over: the view is never drawn, so it cannot edit
+    // the field however it treats what it is given.
+    expect(screen.queryByTestId("builder-view")).toBeNull();
+  }
+
+  afterEach(() => {
+    window.history.pushState(null, "", "/");
+  });
+
+  it("refuses a read-only field, and offers the way back", () => {
+    openWith([
+      { name: "title", type: "text" },
+      { name: "layout", type: "blocks", admin: { readOnly: true } },
+    ]);
+    refusedSaying(/read-only/);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to the document" })
+    );
+    expect(onExit).toHaveBeenCalled();
+  });
+
+  it("refuses a disabled field", () => {
+    openWith([
+      { name: "title", type: "text" },
+      { name: "layout", type: "blocks", admin: { disabled: true } },
+    ]);
+    refusedSaying(/turned off for editing/);
+  });
+
+  it("follows a condition while the view is up, as the form does", () => {
+    // Typed into the mounted document, not set up in two separate mounts: a
+    // gate that read the condition once would pass two mounts and fail here.
+    openWith(
+      [
+        { name: "title", type: "text" },
+        {
+          name: "layout",
+          type: "blocks",
+          admin: { condition: { field: "title", equals: "Show" } },
+        },
+      ],
+      "Show"
+    );
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Page heading"), {
+      target: { value: "Hide" },
+    });
+
+    refusedSaying(/isn't shown for this document/);
+  });
+
+  it("asks the condition of the field the address names now, not the one it named first", () => {
+    // Two fields hidden by different values. Moving between them keeps the
+    // view's host mounted, so each must be answered from its own condition.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=first"
+    );
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "subtitle", type: "text" },
+          {
+            name: "first",
+            type: "blocks",
+            admin: { condition: { field: "title", equals: "Show" } },
+          },
+          {
+            name: "second",
+            type: "blocks",
+            admin: { condition: { field: "subtitle", equals: "Show" } },
+          },
+        ],
+      } as never,
+      entry: { id: "e1", title: "Show", subtitle: "Hide" } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+
+    const moveTo = (name: string) => {
+      window.history.pushState(
+        null,
+        "",
+        `/admin/collections/pages/e1/builder?field=${name}`
+      );
+      act(() => {
+        window.dispatchEvent(new Event("locationchange"));
+      });
+    };
+    moveTo("second");
+    refusedSaying(/isn't shown for this document/);
+
+    moveTo("first");
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+  });
+
+  it("offers only the fields the author may edit, and opens the only one", () => {
+    window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "hero", type: "blocks", admin: { hidden: true } },
+          { name: "body", type: "blocks" },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    // One field of two may be edited, so there is nothing to ask.
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "body" }),
+      })
+    );
+  });
+
+  it("leaves a field the author may not edit out of the question", () => {
+    window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "hero",
+            label: "Hero",
+            type: "blocks",
+            admin: { readOnly: true },
+          },
+          { name: "body", label: "Body", type: "blocks" },
+          { name: "aside", label: "Aside", type: "blocks" },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    expect(screen.getByRole("button", { name: "Body" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Aside" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Hero" })).toBeNull();
+  });
+
+  it("refuses a gated field the address names, rather than opening another", () => {
+    // The author followed an address to this field; meeting a different one
+    // in its place would hide why theirs did not open.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=hero"
+    );
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "hero", type: "blocks", admin: { readOnly: true } },
+          { name: "body", type: "blocks" },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    refusedSaying(/read-only/);
+  });
+
+  it("refuses a field the form never draws", () => {
+    openWith([
+      { name: "title", type: "text" },
+      { name: "layout", type: "blocks", admin: { hidden: true } },
+    ]);
+    refusedSaying(/isn't shown for this document/);
+  });
+
+  it("refuses a field inside a read-only unnamed group, as the form draws it", () => {
+    openWith([
+      { name: "title", type: "text" },
+      {
+        type: "group",
+        admin: { readOnly: true },
+        fields: [{ name: "layout", type: "blocks" }],
+      },
+    ]);
+    refusedSaying(/read-only/);
   });
 });

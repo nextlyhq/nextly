@@ -30,6 +30,7 @@ import { ReleasesRepository } from "../releases-repository";
 import { ReleasesService } from "../services/releases-service";
 
 import { seedLiveAuthor } from "./helpers/live-author";
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 let current: TestNextly | undefined;
 
@@ -97,18 +98,23 @@ async function singleWithOneMember(
  * The service over a given repository. Only the repository is reached by the
  * moves under test for a trusted caller; the other collaborators refuse, so a
  * path that reached one would fail loudly rather than pass by accident.
+ *
+ * The one exception is the lifecycle: scheduling asks it of every member as a
+ * readiness check, so it answers as the posts collection does — it has one —
+ * and a refusal here is the fence's, not a check failing on a stand-in.
  */
 function serviceOver(repository: ReleasesRepository): ReleasesService {
   return new ReleasesService({
     repository,
     targets: {
       readDocument: async () => null,
-      declaresLifecycle: async () => false,
+      declaresLifecycle: async () => true,
     },
     canManageReleases: async () => false,
     canActOnDocument: async () => false,
     // No move under test runs a release.
     runDrainNow: async () => undefined,
+    checks: READY_CHECKS,
   });
 }
 
@@ -145,6 +151,43 @@ class InterleavedRemoval extends ReleasesRepository {
     this.ran += 1;
     await this.before();
     return super.removeMember(...args);
+  }
+}
+
+/** Runs `before` once, immediately before the action switch's own write. */
+class InterleavedSwitch extends ReleasesRepository {
+  ran = 0;
+  constructor(
+    db: TestNextly["adapter"],
+    private readonly before: () => Promise<unknown>
+  ) {
+    super(db);
+  }
+  override async changeMemberAction(
+    ...args: Parameters<ReleasesRepository["changeMemberAction"]>
+  ): ReturnType<ReleasesRepository["changeMemberAction"]> {
+    this.ran += 1;
+    await this.before();
+    return super.changeMemberAction(...args);
+  }
+}
+
+/** Runs `before` once, right after the member is read: the read goes stale. */
+class StaleMemberRead extends ReleasesRepository {
+  ran = 0;
+  constructor(
+    db: TestNextly["adapter"],
+    private readonly before: () => Promise<unknown>
+  ) {
+    super(db);
+  }
+  override async findMember(
+    ...args: Parameters<ReleasesRepository["findMember"]>
+  ): ReturnType<ReleasesRepository["findMember"]> {
+    const read = await super.findMember(...args);
+    this.ran += 1;
+    await this.before();
+    return read;
   }
 }
 
@@ -200,6 +243,123 @@ describe.each(getConfiguredTestDialects())(
       const members = await repo.listMembers(releaseId);
       expect(members.map(member => member.id)).toEqual([memberId]);
       expect((await readRelease(repo, releaseId)).state).toBe("scheduled");
+    });
+
+    it("refuses an action switch judged against a draft once the release is scheduled", async () => {
+      const t = await boot(dialect);
+      const { releaseId, memberId } = await singleWithOneMember(t);
+      // The schedule commits AFTER the service has judged the release a draft
+      // — so it neither asked for the publish authority nor checked the new
+      // action — and BEFORE the switch writes.
+      const repo = new InterleavedSwitch(t.adapter, () =>
+        t.nextly.releases.schedule({
+          id: releaseId,
+          at: FUTURE,
+          timezone: "UTC",
+        })
+      );
+
+      await expect(
+        serviceOver(repo).changeMemberAction(
+          memberId,
+          "unpublish",
+          TRUSTED,
+          releaseId
+        )
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      expect(repo.ran).toBe(1);
+      expect(
+        (await repo.listMembers(releaseId)).map(member => member.action)
+      ).toEqual(["publish"]);
+      expect((await readRelease(repo, releaseId)).state).toBe("scheduled");
+    });
+
+    it("answers a switch with the member as stored, when another switch lands after the read", async () => {
+      const t = await boot(dialect);
+      const { releaseId, memberId } = await singleWithOneMember(t);
+      // The service reads the member going live; another switch to coming down
+      // commits after that read and before this one writes.
+      const repo = new StaleMemberRead(t.adapter, () =>
+        new ReleasesRepository(t.adapter).changeMemberAction(
+          { id: memberId, releaseId },
+          "unpublish",
+          RELEASE_ASSEMBLABLE_FROM
+        )
+      );
+
+      const answered = await serviceOver(repo).changeMemberAction(
+        memberId,
+        "publish",
+        TRUSTED,
+        releaseId
+      );
+
+      expect(repo.ran).toBe(1);
+      const stored = await repo.listMembers(releaseId);
+      // What the caller is told is what the release holds, and it holds what
+      // the caller asked for.
+      expect(answered.action).toBe("publish");
+      expect(stored.map(member => member.action)).toEqual(["publish"]);
+    });
+
+    it("writes nothing when the member already has the action under the lock", async () => {
+      const t = await boot(dialect);
+      const { releaseId, memberId } = await singleWithOneMember(t);
+      const repo = new StaleMemberRead(t.adapter, () =>
+        new ReleasesRepository(t.adapter).changeMemberAction(
+          { id: memberId, releaseId },
+          "unpublish",
+          RELEASE_ASSEMBLABLE_FROM
+        )
+      );
+
+      const answered = await serviceOver(repo).changeMemberAction(
+        memberId,
+        "unpublish",
+        TRUSTED,
+        releaseId
+      );
+      const revision = (await readRelease(repo, releaseId)).revision;
+
+      expect(answered.action).toBe("unpublish");
+      // One bump, the other switch's: this one found it done and wrote nothing.
+      expect(revision).toBe(2);
+    });
+
+    it("bumps the revision when an action is switched, so a schedule judged before it misses", async () => {
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({ title: "Spring" });
+      const member = await repo.addMember(
+        {
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: await post(t, "one"),
+          locale: null,
+          action: "publish",
+        },
+        RELEASE_ASSEMBLABLE_FROM
+      );
+      expect((await readRelease(repo, release.id)).revision).toBe(1);
+
+      const switched = await repo.changeMemberAction(
+        member,
+        "unpublish",
+        RELEASE_ASSEMBLABLE_FROM
+      );
+      expect(switched).toMatchObject({ id: member.id, action: "unpublish" });
+      expect((await readRelease(repo, release.id)).revision).toBe(2);
+      expect(
+        await repo.scheduleRelease(
+          release.id,
+          FUTURE,
+          "UTC",
+          RELEASE_SCHEDULABLE_FROM,
+          1
+        )
+      ).toBe(false);
     });
 
     it("refuses removing the member of a scheduled single release, and keeps it", async () => {
@@ -374,18 +534,66 @@ describe.each(getConfiguredTestDialects())(
         0
       );
 
-      expect(await repo.markReleasePublished(release.id, new Date())).toBe(
-        true
-      );
+      const planned = { revision: 1, scheduledAt: PAST };
+      expect(
+        (
+          await repo.markReleasesPublished(
+            [{ id: release.id, ...planned }],
+            new Date()
+          )
+        ).length === 1
+      ).toBe(true);
       const published = await readRelease(repo, release.id);
       expect(published.state).toBe("published");
       expect(published.revision).toBe(2);
 
       // A second pass is refused by the state fence and moves nothing.
-      expect(await repo.markReleasePublished(release.id, new Date())).toBe(
-        false
-      );
+      expect(
+        (
+          await repo.markReleasesPublished(
+            [{ id: release.id, ...planned }],
+            new Date()
+          )
+        ).length === 1
+      ).toBe(false);
       expect((await readRelease(repo, release.id)).revision).toBe(2);
+    });
+
+    it("refuses to publish a release moved since the drain planned against it", async () => {
+      // Still scheduled, so the state fence alone would admit it: postponed
+      // after the plan was loaded, it must keep its new schedule.
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({ title: "Spring" });
+      await repo.scheduleRelease(
+        release.id,
+        PAST,
+        "UTC",
+        RELEASE_SCHEDULABLE_FROM,
+        0
+      );
+      const planned = { revision: 1, scheduledAt: PAST };
+      const later = new Date(PAST.getTime() + 86_400_000);
+      await repo.scheduleRelease(
+        release.id,
+        later,
+        "UTC",
+        RELEASE_SCHEDULABLE_FROM,
+        1
+      );
+
+      expect(
+        (
+          await repo.markReleasesPublished(
+            [{ id: release.id, ...planned }],
+            new Date()
+          )
+        ).length === 1
+      ).toBe(false);
+      const kept = await readRelease(repo, release.id);
+      expect(kept.state).toBe("scheduled");
+      expect(kept.scheduledAt?.getTime()).toBe(later.getTime());
+      expect(kept.revision).toBe(2);
     });
   }
 );

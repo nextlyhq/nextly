@@ -20,13 +20,13 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { COMPANION_STATUS_COLUMN } from "../companion-columns";
-
 import { castText, ddlType, exactText, lit, q } from "./ddl-types";
 import {
+  archiveOwnerOf,
   buildDefaultLocaleRestoreStatements,
   buildFieldLeavesTranslationArchiveStatement,
 } from "./generate-down";
+import { buildMissingDefaultRowsInsert } from "./generate-up";
 import type { CompanionMigrationSpec, LocalizedColumnSpec } from "./types";
 
 const ARCHIVE = "nextly_i18n_archive";
@@ -70,15 +70,22 @@ function fromArchivedText(
 export function planFieldLeavesTranslationMigration(
   spec: CompanionMigrationSpec
 ): FieldLeavesMigrationPlan {
-  const { dialect, mainTable, companionTable, defaultLocale, collection } =
-    spec;
+  const {
+    dialect,
+    mainTable,
+    companionTable,
+    defaultLocale,
+    collection,
+    kind,
+  } = spec;
+  const owner = archiveOwnerOf(collection, kind);
   const ref = { dialect, mainTable, companionTable, defaultLocale };
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
   const names = spec.columns.map(c => c.name);
 
   const archiveUp = spec.columns.map(column =>
-    buildFieldLeavesTranslationArchiveStatement(ref, collection, column.name)
+    buildFieldLeavesTranslationArchiveStatement(ref, owner, column.name)
   );
   const archiveDown = [
     // The archived copies stay: a restore may still read them, and they change nothing a rollback
@@ -101,6 +108,7 @@ export function planFieldLeavesTranslationMigration(
   const newestArchived = (column: LocalizedColumnSpec) =>
     `(SELECT ${q("archived", dialect)}.${q("value", dialect)} FROM ${q(ARCHIVE, dialect)} ${q("archived", dialect)} ` +
     `WHERE ${q("archived", dialect)}.${q("collection", dialect)} = ${lit(collection)} ` +
+    `AND ${q("archived", dialect)}.${q("entity_kind", dialect)} = ${lit(owner.kind)} ` +
     `AND ${exactText(`${q("archived", dialect)}.${q("entry_id", dialect)}`, dialect)} = ${exactText(castText(parent, dialect), dialect)} ` +
     `AND ${exactText(`${q("archived", dialect)}.${q("locale", dialect)}`, dialect)} = ${exactText(locale, dialect)} ` +
     `AND ${q("archived", dialect)}.${q("field", dialect)} = ${lit(column.name)} ` +
@@ -110,15 +118,9 @@ export function planFieldLeavesTranslationMigration(
   // was shared may have none (when this was the entity's last translated field, nothing wrote
   // one), and the main table's column is dropped right after this file's DOWN, so it is created
   // here from the main row, publishing state included, rather than its value being left behind.
-  const insertMissingDefaultRows =
-    `INSERT INTO ${comp} (${q("_parent", dialect)}, ${q("_locale", dialect)}, ` +
-    `${names.map(name => q(name, dialect)).join(", ")}` +
-    `${spec.status ? `, ${q(COMPANION_STATUS_COLUMN, dialect)}` : ""}) ` +
-    `SELECT ${mainId}, ${lit(defaultLocale)}, ` +
-    `${names.map(name => `${main}.${q(name, dialect)}`).join(", ")}` +
-    `${spec.status ? `, ${main}.${q("status", dialect)}` : ""} ` +
-    `FROM ${main} WHERE NOT EXISTS (SELECT 1 FROM ${comp} WHERE ${parent} = ${mainId} ` +
-    `AND ${locale} = ${lit(defaultLocale)})`;
+  const insertMissingDefaultRows = buildMissingDefaultRowsInsert(ref, names, {
+    status: spec.status,
+  });
   const sharedDown = [
     ...spec.columns.map(
       column =>

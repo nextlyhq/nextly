@@ -739,6 +739,46 @@ export async function companionHasStatusColumn(
 }
 
 /**
+ * The companion columns `<tableName>_locales` already has for `fields`' translated fields, for a
+ * reconcile to take the companion as it is: an apply that moved a field's value and dropped its
+ * main column, then stopped before the registry recorded it, leaves that column in place, and the
+ * next apply must not add it again.
+ */
+export async function translatedColumnsOnCompanion(
+  adapter: CompanionIntrospectAdapter,
+  args: {
+    tableName: string;
+    fields: readonly CompanionFieldLike[];
+    builtBy: ColumnOrigin;
+  }
+): Promise<string[]> {
+  const companionTableName = `${args.tableName}_locales`;
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const snapshot = await introspectLiveSnapshot(
+    adapter.getDrizzle(),
+    adapter.dialect,
+    [companionTableName]
+  );
+  const present = new Set(
+    snapshot.tables
+      .find(t => t.name === companionTableName)
+      ?.columns.map(c => c.name) ?? []
+  );
+  const { fieldToLocalizedColumnSpec } = await import(
+    "../migration/field-to-column-spec"
+  );
+  return resolveLocalizedFieldNames([...args.fields], true).flatMap(name => {
+    const field = args.fields.find(f => f.name === name);
+    const column = field
+      ? fieldToLocalizedColumnSpec(field, adapter.dialect, args.builtBy)?.name
+      : undefined;
+    return column && present.has(column) ? [column] : [];
+  });
+}
+
+/**
  * Whether an EXISTING companion physically carries `column`.
  *
  * Answered by reading the table's column list, through the same introspection the companion

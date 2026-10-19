@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { ArrowLeft, ArrowRight, Loader2 } from "@admin/components/icons";
 import { AuthFormCard } from "@admin/components/shared/auth/AuthFormCard";
+import { AuthRefusalNotice } from "@admin/components/shared/auth/AuthRefusalNotice";
 import { AuthStatusCard } from "@admin/components/shared/auth/AuthStatusCard";
 import { toast } from "@admin/components/ui";
 import {
@@ -19,6 +20,7 @@ import {
 } from "@admin/components/ui/form";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { requestPasswordReset } from "@admin/services/authApi";
 
@@ -32,6 +34,9 @@ const formSchema = z.object({
 
 export function ForgotPassword() {
   const [isLoading, setIsLoading] = useState(false);
+  // A refused submission is shown in the form, where it stays while the
+  // person acts on it; a toast is kept for every other failure.
+  const authRefusal = useAuthRefusal();
   const [isSubmitted, setIsSubmitted] = useState(false);
 
   const form = useForm<z.infer<typeof formSchema>>({
@@ -44,12 +49,14 @@ export function ForgotPassword() {
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     setIsLoading(true);
+    authRefusal.clear();
 
     try {
       const csrfToken = await getCsrfToken();
       await requestPasswordReset(values.email, csrfToken);
       setIsSubmitted(true);
-    } catch {
+    } catch (error: unknown) {
+      if (authRefusal.take(error)) return;
       toast.error("Something went wrong", {
         description: "Please try again later.",
       });
@@ -80,6 +87,7 @@ export function ForgotPassword() {
       title="Forgot Password"
       description="Enter your email and we'll send you a reset link"
     >
+      <AuthRefusalNotice refusal={authRefusal.refusal} />
       <FormProvider {...form}>
         <form
           onSubmit={e => {

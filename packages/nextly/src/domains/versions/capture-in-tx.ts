@@ -23,11 +23,9 @@ import {
   type AssembleDocumentParts,
 } from "./assemble-document";
 import type { VersionsDbApi } from "./db-api";
-import type {
-  CaptureResult,
-  VersionCaptureService,
-} from "./version-capture-service";
-import type { VersionRef } from "./versions-repository";
+import { sameContent } from "./draft-save";
+import type { VersionCaptureService } from "./version-capture-service";
+import { VersionsRepository, type VersionRef } from "./versions-repository";
 
 /** Arguments for a single in-transaction version capture. */
 export interface CaptureInTxArgs {
@@ -67,21 +65,91 @@ export interface CaptureInTxArgs {
    * so history reads it as that state rather than an ordinary save.
    */
   label?: string | null;
+  /**
+   * Record nothing when the save leaves this part of the document as its
+   * newest version holds it. For an UPDATE only: a create always records the
+   * version that says the document began, even where an earlier document
+   * under the same id left versions behind.
+   */
+  onlyIfChanged?: boolean;
+}
+
+/**
+ * Whether this save leaves its part of the document as its newest version
+ * already holds it: the same status, and the same content by the comparison a
+ * held save uses (`sameContent`, framework keys such as timestamps aside).
+ * Such a save records no version, so history is not filled with entries that
+ * changed nothing and the retention cap is not spent on them.
+ *
+ * Both sides are assembled snapshots: the newest version was captured through
+ * this same assembly. A restore, and a named version, always record: the
+ * first names what it came from, and the second is asked for by name.
+ */
+async function changesNothing(
+  tx: VersionsDbApi,
+  args: CaptureInTxArgs,
+  status: string,
+  snapshot: Record<string, unknown>
+): Promise<boolean> {
+  if (alwaysRecords(args)) return false;
+  // Only the document's newest version can say nothing changed since, and only
+  // when it is this save's part. An older version of the same language can
+  // predate another language's change to the shared fields, which this
+  // snapshot carries too.
+  const newest = await new VersionsRepository(tx).findNewest(args.ref);
+  if (!newest || newest.status !== status) return false;
+  if ((newest.locale ?? null) !== (args.locale ?? null)) return false;
+  const entity = args.ref.scopeKind === "single" ? "single" : "collection";
+  return holdsTheSame(newest.snapshot, snapshot, entity);
+}
+
+/** A save that records whatever it holds: a create, a restore, a named version. */
+function alwaysRecords(args: CaptureInTxArgs): boolean {
+  return (
+    !args.onlyIfChanged ||
+    typeof args.sourceVersionNo === "number" ||
+    Boolean(args.label)
+  );
+}
+
+/** Whether a stored version's snapshot holds what this save would record. */
+function holdsTheSame(
+  previous: unknown,
+  snapshot: Record<string, unknown>,
+  entity: "single" | "collection"
+): boolean {
+  if (previous === null || typeof previous !== "object") return false;
+  const before = previous as Record<string, unknown>;
+  // The stored `status` itself, beside the version status it normalizes to.
+  // Under the draft/published lifecycle the two say the same thing; without
+  // it `status` is an authored field, and two values that both normalize to
+  // "published" are still a change.
+  if (
+    JSON.stringify(snapshot.status ?? null) !==
+    JSON.stringify(before.status ?? null)
+  ) {
+    return false;
+  }
+  return sameContent(snapshot, before, entity);
 }
 
 /**
  * Assemble the document snapshot and capture one durable version inside `tx`.
- * Returns the allocated version number.
+ * Returns the allocated version number, or null when the save changed nothing
+ * and so recorded no version.
  */
 export async function captureInTx(
   tx: VersionsDbApi,
   capture: VersionCaptureService,
   args: CaptureInTxArgs
-): Promise<CaptureResult> {
+): Promise<{ versionNo: number | null }> {
   const status = isVersionStatus(args.contentStatus)
     ? args.contentStatus
     : "published";
   const snapshot = assembleDocument(args.parts);
+  if (await changesNothing(tx, args, status, snapshot)) {
+    return { versionNo: null };
+  }
   return capture.capture(tx, {
     ref: args.ref,
     status,

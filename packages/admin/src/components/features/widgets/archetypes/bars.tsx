@@ -9,22 +9,20 @@
  * Running the bars left-to-right gives every label a full line of its own.
  *
  * Length encodes the count, because length is judged accurately at a glance.
- * Nothing is encoded by colour: this is one series, so a second hue would carry
- * no information while excluding the readers who cannot separate it.
+ * Colour names the category, not the count: each bar takes its group's value's
+ * shared chart colour, so Published is the same colour on every card, and the
+ * name beside each bar is what identifies it for a reader who cannot tell the
+ * colours apart.
  *
- * Drawn with layout rather than SVG. A bar here is a `<div>` whose width is a
- * percentage, which wraps, reflows and respects the reader's font size for
- * free — none of which an SVG of the same picture does without being told.
+ * This is the adapter from a grouped answer to `GroupsChart`, which draws it:
+ * the buckets become groups named by the grouped field's own labels.
  *
  * @module components/features/widgets/archetypes/bars
  */
 
-import { CardFigure } from "../frame/figure";
-import { cardNumber } from "../frame/format";
+import { GroupsChart, type GroupsChartGroup } from "../charts/groups-chart";
 
 import { choiceLabel, type CellColumn } from "./cell-text";
-import { ChartFrame, type ChartRow } from "./chart-frame";
-import { barFractions } from "./chart-scale";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
 
 /**
@@ -51,25 +49,33 @@ function bucketRow(
   value: string | null,
   count: number,
   choices: CellColumn["choices"]
-): ChartRow {
+): GroupsChartGroup {
   if (value === null) {
-    return { key: "null", label: "(none)", count, announce: "no value stored" };
+    return {
+      key: "null",
+      value,
+      label: "(none)",
+      count,
+      announce: "no value stored",
+    };
   }
   // Named by the grouped field's own value label ("Needs review", not `needs_review`), keyed by
   // the stored value, so two values that share a label still draw as two bars. Asked before the
   // empty-value placeholder: an option that stores "" on purpose ("None") is a choice, and it
   // reads here as it reads in a list or a table.
   const named = choiceLabel(value, choices);
-  if (named !== undefined) return { key: `v${value}`, label: named, count };
+  if (named !== undefined)
+    return { key: `v${value}`, value, label: named, count };
   if (value === "") {
     return {
       key: "empty",
+      value,
       label: "(empty)",
       count,
       announce: "an empty value",
     };
   }
-  return { key: `v${value}`, label: value, count };
+  return { key: `v${value}`, value, label: value, count };
 }
 
 export const barsAccepts: ArchetypeAccepts = definition => {
@@ -102,85 +108,17 @@ export const barsBody: ArchetypeBody = (result, definition) => {
     };
   }
 
-  const fractions = barFractions(rows.map(row => row.count));
-  const largest = rows[0];
-  // Composed ONCE and handed to both the frame and the graphic. Written twice,
-  // the two drifted immediately: one pluralised "category" for a single bucket
-  // and the other did not, so the table's caption and the chart's own
-  // description disagreed about the same data.
-  const description = `${rows.length} ${rows.length === 1 ? "category" : "categories"}. Largest: ${largest.label}, ${cardNumber(largest.count).label}.`;
-
   return {
     ok: true,
     node: (
-      <ChartFrame
+      // The chart orders, cuts, colours and describes the groups; this adapter only reads them
+      // out of the answer.
+      <GroupsChart
+        groups={rows}
+        truncated={result.truncated === true}
         title={definition.title ?? "Comparison"}
-        // The shape in words, for a reader who cannot see the lengths. Naming
-        // the biggest bucket is what the picture communicates first.
-        description={description}
-        // The grouped field's label heads the value column ("Status"), falling back to a
-        // neutral word when the server described no field.
         labelHeading={result.field?.label ?? "Value"}
-        rows={rows}
-        note={
-          result.truncated
-            ? "Showing the largest groups only; some are not listed."
-            : undefined
-        }
-      >
-        {({ titleId, descId, title, description: text }) => (
-          // A list rather than a bare stack of divs: the bars ARE a list of
-          // labelled values, and `role="img"` on the wrapper prunes the
-          // children anyway, so the semantics cost nothing and survive if the
-          // role is ever removed.
-          <div
-            role="img"
-            aria-labelledby={titleId}
-            aria-describedby={descId}
-            className="flex flex-col gap-1.5"
-          >
-            <span id={titleId} className="sr-only">
-              {title}
-            </span>
-            <span id={descId} className="sr-only">
-              {text}
-            </span>
-            {rows.map((row, index) => (
-              <div key={row.key} className="flex flex-col gap-0.5">
-                <div className="flex min-w-0 items-baseline justify-between gap-2">
-                  {/* Truncated with an accessible full value: a long author
-                      name must not push the count off the card, and the title
-                      attribute keeps the whole string reachable on hover. */}
-                  <span
-                    className={
-                      row.announce
-                        ? "truncate text-xs italic text-muted-foreground"
-                        : "truncate text-xs text-foreground"
-                    }
-                    title={row.label}
-                  >
-                    {row.label}
-                  </span>
-                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                    <CardFigure value={row.count} />
-                  </span>
-                </div>
-                {/* The track is always full width, so the bars share one
-                    baseline and their lengths are comparable by eye. */}
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                  <div
-                    className="h-full rounded-full bg-primary"
-                    // design-lint-ok: the width IS the datum, so it cannot come
-                    // from a utility class -- there is no Tailwind scale for
-                    // "this bucket's share of the largest one".
-                    style={{ width: `${fractions[index] * 100}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </ChartFrame>
+      />
     ),
   };
 };

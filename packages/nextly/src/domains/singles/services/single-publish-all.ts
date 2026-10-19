@@ -38,6 +38,7 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
+import { recordTransitionEvents } from "../../content-events/write-event";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
@@ -503,8 +504,9 @@ export class SinglePublishAllService extends BaseService {
       options.user
     );
 
+    let publishVersionNo: number | null = null;
     if (singleMeta.versions?.enabled) {
-      await this.capturePublishSnapshot(
+      publishVersionNo = await this.capturePublishSnapshot(
         tx,
         slug,
         existingDoc.id,
@@ -515,6 +517,13 @@ export class SinglePublishAllService extends BaseService {
         singleMeta.versions.maxPerDoc
       );
     }
+
+    await this.recordPublishHistory(tx, plan, {
+      user: options.user,
+      mainFrom: lockedRow.status as string | null,
+      priorCompanionStatuses,
+      versionNo: publishVersionNo,
+    });
 
     const eventRecorded = plan.recordingEnabled
       ? await this.recordPublishEvents(tx, {
@@ -967,7 +976,7 @@ export class SinglePublishAllService extends BaseService {
     fieldConfigs: FieldConfig[],
     user: UserContext | undefined,
     maxPerDoc: number | false | undefined
-  ): Promise<void> {
+  ): Promise<number | null> {
     // Match the read shape: keep user field keys (which may contain
     // underscores like `site_title`) exactly, converting only the timestamp
     // columns — camel-casing every key would rewrite those fields.
@@ -998,7 +1007,10 @@ export class SinglePublishAllService extends BaseService {
       logContext: { single: slug },
     });
 
-    await captureInTx(tx, this.versionCapture, {
+    // Always recorded: publishing every language can change only a
+    // language's status, which this snapshot does not hold, so it would
+    // compare equal with the version before.
+    const { versionNo } = await captureInTx(tx, this.versionCapture, {
       ref: { scopeKind: "single", scopeSlug: slug, entryId },
       contentStatus: "published",
       parts: {
@@ -1017,6 +1029,48 @@ export class SinglePublishAllService extends BaseService {
       locale: null,
       maxPerDoc,
     });
+    return versionNo;
+  }
+
+  /**
+   * One history event for the whole publish, naming the languages it moved
+   * (the app's own; a locale it no longer configures names nothing it
+   * exposes), whatever the Single's webhook settings.
+   */
+  private async recordPublishHistory(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    publish: {
+      user: UserContext | undefined;
+      mainFrom: string | null;
+      priorCompanionStatuses: Map<string, string | null>;
+      versionNo: number | null;
+    }
+  ): Promise<void> {
+    const configuredLocales = new Set(
+      this.localization?.locales.map(locale => locale.code) ?? []
+    );
+    await recordTransitionEvents(
+      tx,
+      { adapter: this.adapter },
+      {
+        subject: { kind: "single", slug: plan.slug, id: plan.existingDoc.id },
+        actor: plan.actor,
+        personName: publish.user?.name ?? null,
+        versionNo: publish.versionNo,
+      },
+      [
+        ...(plan.hasMainStatus
+          ? [{ from: publish.mainFrom, to: "published" }]
+          : []),
+        ...[...publish.priorCompanionStatuses]
+          .filter(
+            ([locale]) =>
+              configuredLocales.size === 0 || configuredLocales.has(locale)
+          )
+          .map(([locale, from]) => ({ locale, from, to: "published" })),
+      ]
+    );
   }
 
   /**

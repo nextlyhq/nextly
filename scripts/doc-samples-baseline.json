@@ -1,9 +1,4 @@
 {
-  "coverage": {
-    "pages": 80,
-    "samples": 455,
-    "compiled": 286
-  },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
       "samples": 7,
@@ -122,8 +117,8 @@
       "compiled": 5
     },
     "docs/guides/media-storage.mdx": {
-      "samples": 13,
-      "compiled": 8
+      "samples": 15,
+      "compiled": 10
     },
     "docs/guides/production-migrations.mdx": {
       "samples": 1,
@@ -149,21 +144,25 @@
       "samples": 3,
       "compiled": 3
     },
+    "docs/page-builder/locked-areas.mdx": {
+      "samples": 2,
+      "compiled": 2
+    },
     "docs/permissions/index.mdx": {
       "samples": 3,
       "compiled": 2
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 14,
-      "compiled": 7
+      "samples": 16,
+      "compiled": 9
     },
     "docs/plugins/api-reference.mdx": {
       "samples": 23,
       "compiled": 1
     },
     "docs/plugins/auth.mdx": {
-      "samples": 3,
-      "compiled": 3
+      "samples": 4,
+      "compiled": 4
     },
     "docs/plugins/author-guide.mdx": {
       "samples": 5,
@@ -230,8 +229,8 @@
       "compiled": 5
     },
     "docs/releases/index.mdx": {
-      "samples": 2,
-      "compiled": 1
+      "samples": 5,
+      "compiled": 4
     },
     "docs/versions/index.mdx": {
       "samples": 2,
@@ -363,14 +362,16 @@
       "reader-name #6 error TS2304: Cannot find name 'Page'.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "#11 error TS2304: Cannot find name 'Skeleton'.": 1,
-      "uninstalled #13 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "#13 error TS2304: Cannot find name 'Skeleton'.": 1,
+      "uninstalled #15 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
-      "reader-name #11 error TS2304: Cannot find name 'Chart'.": 1
+      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '../../../types/generated/plugin-admin-components.generated' or its corresponding type declarations.": 1,
+      "reader-name #13 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
-      "#2 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
-      "#2 error TS2304: Cannot find name 'verifyTotp'.": 1,
+      "#3 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
+      "#3 error TS2304: Cannot find name 'verifyTotp'.": 1,
       "uninstalled #0 error TS2307: Cannot find module '@acme/nextly-plugin-google' or its corresponding type declarations.": 1
     },
     "docs/plugins/author-guide.mdx": {
@@ -528,7 +529,9 @@
       "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/releases/index.mdx": {
-      "reader-file #1 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #1 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #3 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "packages/admin/README.md": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1

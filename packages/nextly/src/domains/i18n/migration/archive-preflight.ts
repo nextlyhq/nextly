@@ -11,23 +11,25 @@
  * @module domains/i18n/migration/archive-preflight
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import {
-  getI18nArchiveDdl,
-  getI18nArchiveIndexRepairDdl,
-} from "../../../schemas/nextly-i18n-archive/ddl";
-import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
+import { ensureI18nArchive } from "./ensure-archive";
+import { fieldsJoiningTranslation } from "./field-joins-translation";
 import {
   type LeavingFieldLike,
+  refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
+  storageDiffers,
 } from "./field-leaves-translation-rules";
+import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
   buildLeavingFieldsArchiveStatements,
   fieldsLeavingTranslation,
 } from "./reconcile-companion";
+import type { I18nTransitionKind } from "./transition-state";
 
 /**
  * Creates the archive table when it is missing, then runs the given archive writes.
@@ -42,19 +44,7 @@ async function writeArchiveFirst(
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
   try {
-    for (const statement of getI18nArchiveDdl(dialect)) {
-      await adapter.executeQuery(statement);
-    }
-    // MySQL's table DDL cannot restore an index the table is missing; the repair is tolerated
-    // when the index is already there, as the schema executor tolerates it.
-    const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
-    if (indexRepair) {
-      try {
-        await adapter.executeQuery(indexRepair);
-      } catch (error) {
-        if (!isIdempotencyError(error)) throw error;
-      }
-    }
+    await ensureI18nArchive(adapter, dialect);
     for (const statement of writes) {
       await adapter.executeQuery(statement);
     }
@@ -89,6 +79,10 @@ async function writeArchiveFirst(
  *   the same placeholder or none. A required column then has nothing valid to hold (each dialect
  *   and path fails differently), and a unique one fails its check part-way through the change.
  *
+ * A shared field that becomes translated while its storage changes is refused here too
+ * (`refusalsForFieldsJoiningTranslation`): its value would be copied as it is into a companion
+ * column of the new shape.
+ *
  * Then every non-default language's value of each leaving field is written to the archive. The
  * writes are safe to repeat, so the companion transition that later drops the column, and a
  * migration file replayed elsewhere, can make them again without adding rows. Should a later step
@@ -98,12 +92,14 @@ async function writeArchiveFirst(
  * and after the change (turning translation off for the whole entity archives by its own path).
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each reshaped or constrained field and the order
- *   that works, or `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
+ *   that works, leaving or joining, or `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
  */
 export async function archiveFieldsLeavingTranslation(args: {
   adapter: DrizzleAdapter;
   /** The collection, Single or field group being changed. */
   entity: string;
+  /** Which of the three it is, recorded with its archive rows. */
+  kind: I18nTransitionKind;
   /** Its main table; the companion is `<tableName>_locales`. */
   tableName: string;
   /** Which builder made the entity's table, which decides a column's bounds. */
@@ -119,17 +115,25 @@ export async function archiveFieldsLeavingTranslation(args: {
   const leaving = new Set(
     fieldsLeavingTranslation(args.oldFields, args.newFields)
   );
-  if (leaving.size === 0) return;
+  const joining = fieldsJoiningTranslation(args.oldFields, args.newFields);
+  // Nothing to judge or archive when no field changes whether it is translated.
+  if (leaving.size === 0 && joining.length === 0) return;
 
   const dialect = args.adapter.getCapabilities().dialect;
-  const refusals = refusalsForFieldsLeavingTranslation({
-    leaving,
-    newFields: args.newFields,
-    oldFields: args.oldFields,
-    dialect,
-    builtBy: args.builtBy,
-    surface: "builder",
-  });
+  const refusals = [
+    ...refusalsForFieldsLeavingTranslation({
+      leaving,
+      newFields: args.newFields,
+      oldFields: args.oldFields,
+      dialect,
+      builtBy: args.builtBy,
+      surface: "builder",
+    }),
+    ...refusalsForFieldsJoiningTranslation({
+      reshaped: reshapedJoiningFields(joining, args, dialect),
+      surface: "builder",
+    }),
+  ];
   if (refusals.length > 0) {
     throw NextlyError.validation({
       errors: refusals,
@@ -139,12 +143,14 @@ export async function archiveFieldsLeavingTranslation(args: {
       },
     });
   }
+  if (leaving.size === 0) return;
 
   await writeArchiveFirst(
     args.adapter,
     args.entity,
     buildLeavingFieldsArchiveStatements({
       slug: args.entity,
+      kind: args.kind,
       tableName: args.tableName,
       dialect,
       builtBy: args.builtBy,
@@ -152,5 +158,29 @@ export async function archiveFieldsLeavingTranslation(args: {
       oldFields: args.oldFields,
       newFields: args.newFields,
     })
+  );
+}
+
+/**
+ * The shared fields that become translated in this change while their storage changes, judged
+ * against the column each one's value sits in now, which its old definition describes.
+ */
+function reshapedJoiningFields(
+  joining: readonly string[],
+  args: {
+    oldFields: readonly LeavingFieldLike[];
+    newFields: readonly LeavingFieldLike[];
+    builtBy: ColumnOrigin;
+  },
+  dialect: SupportedDialect
+): string[] {
+  const columnOf = (field: LeavingFieldLike | undefined) =>
+    field === undefined
+      ? undefined
+      : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
+  const before = new Map(args.oldFields.map(f => [f.name, f]));
+  const after = new Map(args.newFields.map(f => [f.name, f]));
+  return joining.filter(name =>
+    storageDiffers(columnOf(before.get(name)), columnOf(after.get(name)))
   );
 }

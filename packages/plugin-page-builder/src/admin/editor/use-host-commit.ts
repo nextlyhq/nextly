@@ -17,7 +17,13 @@ import {
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
 import { chordMatches, detectApplePlatform, parseKeys } from "@nextlyhq/ui";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import {
   useFormState,
   useWatch,
@@ -185,6 +191,60 @@ export function useDocumentDirty<TFieldValues extends FieldValues>(
 }
 
 /**
+ * Hand unsaved work to the form when the editor goes without leaving.
+ *
+ * The editor can be unmounted from outside: a colleague takes the document
+ * over and the view turns read-only, and the lock's banner then promises the
+ * author their unsaved changes are still here. The editor holding them is
+ * gone, so the form has to hold them — committed into this browser's form
+ * only, which saves nothing, and from which the editor reopens when the author
+ * takes the document back.
+ *
+ * Only when there is work, and only once: a remount (React's strict mode
+ * runs one) finds nothing of its own to commit, and an exit that already
+ * handed the document over marks it so the unmount after it does nothing.
+ *
+ * An open passage is written first, as leaving writes it: its words are in the
+ * passage and not yet in `editor.document`, and handing over the document
+ * alone would drop the very text the banner says is still here. A LAYOUT
+ * effect's cleanup, because it runs while the canvas is still in the page and
+ * the passage can still answer; a passive one runs after the elements are gone.
+ * A refused write cannot keep the editor open here, as it can on leaving, so
+ * what is handed over is the document as it stands.
+ *
+ * @returns marks the current work as handed over
+ */
+function useCommitOnUnmount(
+  editor: { document: BlockDocument; undoDepth: number },
+  inline: {
+    commit: () => InlineEditOutcome;
+    editing: unknown;
+    editingRich: unknown;
+  },
+  onCommit: (value: BlockDocument) => void
+): () => void {
+  const latest = useRef({ editor, inline, onCommit });
+  latest.current = { editor, inline, onCommit };
+  const committed = useRef(false);
+  useLayoutEffect(
+    () => () => {
+      const held = latest.current;
+      if (committed.current || !hasUnsavedWork(held.editor, held.inline)) {
+        return;
+      }
+      committed.current = true;
+      held.onCommit(
+        finishInlineEdit(held.inline, held.editor.document).document
+      );
+    },
+    []
+  );
+  return useCallback(() => {
+    committed.current = true;
+  }, []);
+}
+
+/**
  * Everything the open editor tells the form, in the order it tells it.
  *
  * One hook so the four channels below keep their order relative to one
@@ -268,6 +328,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    * an edit the author then undoes, and would make the form's undo and the
    * editor's undo two answers to one question.
    */
+  const markCommitted = useCommitOnUnmount(editor, inline, onCommit);
   const done = useCallback(() => {
     /*
      * The open inline edit is finished FIRST, and the document it produced is
@@ -288,8 +349,9 @@ export function useHostCommit<TFieldValues extends FieldValues>({
      */
     if (!finished.mayClose) return;
     onCommit(finished.document);
+    markCommitted();
     onClose();
-  }, [editor.document, inline, onCommit, onClose]);
+  }, [editor.document, inline, onCommit, onClose, markCommitted]);
 
   /*
    * The editor takes the window: the shell draws its own rail, panels, top bar

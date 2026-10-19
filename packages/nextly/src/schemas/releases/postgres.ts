@@ -25,6 +25,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
+import { NEXTLY_RELEASES_INDEXES, pgIndexes } from "../_internal/core-indexes";
 import type { VersionScopeKind } from "../versions/types";
 
 import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";
@@ -71,10 +72,8 @@ export const nextlyReleasesPg = pgTable(
     // serialize to the same value and become indistinguishable.
     revision: integer("revision").default(0).notNull(),
   },
-  table => [
-    // The due-release query reads exactly these two columns together.
-    index("nextly_releases_due_idx").on(table.state, table.scheduledAt),
-  ]
+  // Declared once for the three dialects; what each index serves is said there.
+  table => pgIndexes(NEXTLY_RELEASES_INDEXES, table)
 );
 
 export const nextlyReleaseMembersPg = pgTable(
@@ -109,6 +108,14 @@ export const nextlyReleaseMembersPg = pgTable(
     // release is unaffected. A count checked before the insert could not
     // promise that: two adds can both count zero.
     singleSlot: integer("single_slot"),
+
+    // The release `revision` this member's action was last applied for, set by
+    // the drain in the same transaction as the member's content write. NULL
+    // until a write lands. A member counts as applied only while this equals
+    // its release's current revision, so any move of the release (a
+    // reschedule, a cancel, an edit, a membership change) leaves it stale
+    // without anything having to clear it.
+    appliedRevision: integer("applied_revision"),
 
     // Materialisation acts AS this user, so the transition is subject to their
     // permissions and the audit trail names the person who scheduled it rather

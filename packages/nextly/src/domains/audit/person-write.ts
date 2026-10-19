@@ -37,7 +37,11 @@ interface TransactionalDb<Db> {
  *   transaction it nests there.
  * - **A plugin transaction holding the deleted-people lock** in the calling
  *   flow: inside that transaction, since one of its own would wait for the
- *   plugin's commit while the plugin waits for the write.
+ *   plugin's commit while the plugin waits for the write. Contained there
+ *   (`runContained`): both writers record fail-safe and carry on past a
+ *   failure, and on PostgreSQL a failed statement left in the plugin's
+ *   transaction would abort it, so its commit would roll back the plugin's
+ *   deletion and its report while the plugin was told they committed.
  * - **A write naming a person, or one taking another lock**: in a transaction
  *   of its own, which holds the lock until it commits.
  * - Otherwise directly.
@@ -57,7 +61,7 @@ export async function runLockedWrite<Db, R>(
   }
   const reporting = needs.namesPerson ? reportingTransaction() : undefined;
   if (reporting) {
-    return linkedTransaction(reporting, operation).run(tx =>
+    return linkedTransaction(reporting, operation).runContained(tx =>
       write(tx.getDrizzle<Db>())
     );
   }

@@ -191,7 +191,10 @@ describe("SingleEntryService", () => {
 
       const result = await ctx.service.get("site-settings");
 
-      expect(ctx.adapter.insert).toHaveBeenCalledTimes(1);
+      // The default document, then its creation in the Single's history.
+      expect(
+        ctx.adapter.insert.mock.calls.map(([table]: [string]) => table)
+      ).toEqual(["single_site_settings", "nextly_content_events"]);
       const [tableName, defaults] = ctx.adapter.insert.mock.calls[0];
       expect(tableName).toBe("single_site_settings");
       expect(defaults).toMatchObject({
@@ -467,9 +470,14 @@ describe("SingleEntryService", () => {
         siteName: "Set",
       });
 
-      // Two inserts: the auto-created default document, then the outbox event
-      // appended in the same update transaction.
-      expect(ctx.adapter.insert).toHaveBeenCalledTimes(2);
+      // The auto-created default document once, with the history and outbox
+      // events appended in the same update transaction.
+      const tables = ctx.adapter.insert.mock.calls.map(
+        ([table]: [string]) => table
+      );
+      expect(tables.filter(t => t === "single_site_settings")).toHaveLength(1);
+      expect(tables).toContain("nextly_content_events");
+      expect(tables).toContain("nextly_events");
       expect(ctx.adapter.update).toHaveBeenCalledTimes(1);
       expect(result.data?.siteName).toBe("Set");
     });
@@ -1096,10 +1104,13 @@ describe("SingleEntryService", () => {
 
       expect(result.success).toBe(true);
       // The default row was persisted (once), only after authorization. The
-      // write also appends outbox events, so count only inserts to the Single
-      // table, not the `nextly_events` outbox.
+      // write also appends outbox and history events, so count only inserts to
+      // the Single table.
       const rowInserts = ctx.adapter.insert.mock.calls.filter(
-        (c: unknown[]) => c[0] !== "nextly_events"
+        (c: unknown[]) =>
+          c[0] !== "nextly_events" &&
+          c[0] !== "nextly_content_events" &&
+          c[0] !== "nextly_content_event_parts"
       );
       expect(rowInserts).toHaveLength(1);
       // No delete of the DOCUMENT. A successful save does delete the saving

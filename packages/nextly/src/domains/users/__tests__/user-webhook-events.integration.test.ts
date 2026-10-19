@@ -34,9 +34,9 @@ import {
 } from "../../../domains/webhooks/recording-activation";
 import { splitStatements } from "../../../domains/schema/pipeline/sql-statement-utils";
 import {
-  roles as rolesSqlite,
-  userRoles as userRolesSqlite,
-} from "../../../schemas/rbac/sqlite";
+  ADMINISTRATOR_TABLES_SQLITE,
+  makeAdministrator,
+} from "./administrator-fixture";
 import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { activityLog as activityLogSqlite } from "../../../schemas/audit/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
@@ -61,8 +61,7 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      roles: rolesSqlite,
-      userRoles: userRolesSqlite,
+      ...ADMINISTRATOR_TABLES_SQLITE,
       nextlyEvents: eventsSqlite,
       activityLog: activityLogSqlite,
     })
@@ -98,14 +97,17 @@ describe("user mutation webhook events (real SQLite)", () => {
     for (const stmt of await ddl()) {
       await adapter.executeQuery(stmt);
     }
-    // A sentinel user so createLocalUser's "first user ever" branch (which needs
-    // the RBAC tables) is never taken.
+    // An administrator already, so no account this suite creates is made the
+    // install's first one: deleting it would then be refused as removing the
+    // last administrator. A user row alone does not settle that; holding the
+    // role does.
     const nowEpoch = Math.floor(Date.now() / 1000);
     await adapter.executeQuery(
       `INSERT INTO users (id, email, name, is_active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       ["sentinel", "sentinel@test.local", "Sentinel", 1, nowEpoch, nowEpoch]
     );
+    await makeAdministrator(adapter, "sentinel");
     service = new UserMutationService(adapter, silentLogger);
   });
 

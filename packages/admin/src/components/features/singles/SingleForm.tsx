@@ -8,7 +8,7 @@
  * This component provides:
  * - Dynamic field rendering based on Single schema
  * - Form validation with Zod
- * - Auto-save to localStorage
+ * - Autosave to a server-side recovery point
  * - Unsaved changes protection
  * - Keyboard shortcuts
  *
@@ -53,12 +53,12 @@ import {
   useFormUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
 import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
+import { useDocumentPanelCollapsed } from "@admin/components/features/entries/EntryForm/useDocumentPanelCollapsed";
 import {
   mapIntentToPayload,
   passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
-import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -72,7 +72,6 @@ import {
   mayRecordRecovery,
   useViewedVersion,
   writeActionsHeld,
-  ViewedVersionBanner,
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
@@ -284,17 +283,21 @@ function SingleFormFieldsPanel({
   isSubmitting,
   mainFields,
   readOnly,
+  versionActionsHeld,
 }: {
   historicalFields: FieldConfig[] | null;
   historicalValues: Record<string, unknown> | null;
   isSubmitting: boolean;
   mainFields: FieldConfig[];
   readOnly: boolean;
+  /** Why a past version's restore is withheld (see `useVersionActions`). */
+  versionActionsHeld: boolean;
 }) {
   return (
     <ViewedVersionBody
       fields={historicalFields ?? mainFields}
       values={historicalValues ?? undefined}
+      actionsDisabled={versionActionsHeld}
     >
       {mainFields.length > 0 && (
         <div className="@4xl/content:p-8 pt-6">
@@ -370,8 +373,7 @@ function SingleFormRail({
  * - Loading and submitting states
  * - Dirty state tracking
  * - Unsaved changes protection
- * - Auto-save to localStorage
- * - Draft recovery
+ * - Autosave to a server-side recovery point, offered back on return
  * - Keyboard shortcuts (Cmd/Ctrl+S to save)
  *
  * @example
@@ -680,7 +682,10 @@ export function SingleForm({
 
   // Rail collapse pref (shared with collection EntryForm via the same
   // localStorage key).
-  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+  // Out of the way when the author collapsed it (shared with the collection
+  // editor), and while history is open, which takes its place.
+  const { collapsed: railCollapsed, toggle: toggleRail } =
+    useDocumentPanelCollapsed(historyEnabledFrom(schema) !== false);
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
@@ -1027,6 +1032,12 @@ export function SingleForm({
                                 slugField={slugField}
                                 hasStatus={hasStatus}
                                 status={documentStatus}
+                                // The pill shows wherever the panel is off
+                                // screen, a phone included, so it reports a
+                                // pending working draft as the panel does.
+                                hasWorkingDraft={hasPendingWorkingDraft(
+                                  document
+                                )}
                                 isRailCollapsed={railCollapsed}
                                 lockSlug
                               />
@@ -1045,17 +1056,6 @@ export function SingleForm({
                                 recovery={recovery}
                                 viewingVersion={viewingVersion}
                                 className="mx-6 mt-3"
-                              />
-
-                              {/* The banner over the version being read, with the
-                              document's other notices: above the fields it
-                              describes, below the header that offered the
-                              panel. Renders nothing while the live document is
-                              on screen. A submit in flight withholds restore
-                              too — a restore racing the ordinary save would let
-                              completion order decide which contents survive. */}
-                              <ViewedVersionBanner
-                                actionsDisabled={lock.actionsDisabled || busy}
                               />
 
                               {/* The language panel, inline: the exact complement
@@ -1082,6 +1082,13 @@ export function SingleForm({
                                 isSubmitting={isSubmitting}
                                 mainFields={mainFields}
                                 readOnly={lock.readOnly}
+                                // A submit in flight withholds restore too: a
+                                // restore racing the ordinary save would let
+                                // completion order decide which contents
+                                // survive.
+                                versionActionsHeld={
+                                  lock.actionsDisabled || busy
+                                }
                               />
                             </div>
 
