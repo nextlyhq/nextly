@@ -306,9 +306,12 @@ describe.each(getConfiguredTestDialects())(
         "saved",
         "created",
       ]);
-      expect((await restGet(outsider, ["content-events"], query)).status).toBe(
-        404
-      );
+      const refusal = await restGet(outsider, ["content-events"], query);
+      expect(refusal.status).toBe(404);
+      // The refusal is the caller's own: a shared cache must not replay it to
+      // someone who may read these events.
+      expect(refusal.headers.get("cache-control")).toMatch(/private/);
+      expect(refusal.headers.get("cache-control")).toMatch(/no-store/);
     }, 120_000);
 
     it("reads a deleted document under a document-level rule only as a super-admin", async () => {

@@ -14,7 +14,7 @@ import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import { getCachedNextly } from "../init";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
-import { respondList, withSessionCacheHeaders } from "./response-shapes";
+import { privateToSession, respondList } from "./response-shapes";
 import { requireRouteAuthentication } from "./route-auth";
 import {
   parseSubjectEventsQuery,
@@ -23,8 +23,11 @@ import {
 } from "./subject-events";
 import { withErrorHandler } from "./with-error-handler";
 
-export const handleContentEventsRequest = withErrorHandler(
-  async (request: Request): Promise<Response> => {
+// Private to the session, refusals included: whether a subject is readable
+// depends on who asks, so a shared cache must not replay one caller's answer,
+// or one caller's "not found", to another.
+export const handleContentEventsRequest = privateToSession(
+  withErrorHandler(async (request: Request): Promise<Response> => {
     // Booted before authenticating: on a cold process the permission lookup
     // itself needs the services registered.
     await getCachedNextly();
@@ -47,7 +50,6 @@ export const handleContentEventsRequest = withErrorHandler(
         ? { authenticatedScope: apiKeyScopeFrom(auth) }
         : {}),
     });
-    // Private to the caller: whether a subject is readable depends on who asks.
-    return withSessionCacheHeaders(respondList(result.items, result.meta));
-  }
+    return respondList(result.items, result.meta);
+  })
 );
