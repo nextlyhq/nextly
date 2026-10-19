@@ -341,7 +341,13 @@ export function VersionHistorySheet({
   // version, re-rendering the editor, every time.
   const scopeRef = useRef(scope);
   scopeRef.current = scope;
-  const comparedWithKind = previousTarget?.kind ?? "unknown";
+  // A "first" is believed only once the list has really ended: while older
+  // pages remain (the search paused, or a page failed) the predecessor is
+  // unknown, and the document must not present the version as the first.
+  const comparedWithKind =
+    previousTarget?.kind === "first" && hasNextPage
+      ? "unknown"
+      : (previousTarget?.kind ?? "unknown");
   useEffect(() => {
     if (!open || selected === null) {
       setViewing(null);

@@ -562,6 +562,52 @@ describe("VersionHistorySheet", () => {
     ).toBeInTheDocument();
   });
 
+  it("hands the document what a version is compared with, unknown while older pages remain", async () => {
+    // Version 3 is the oldest LOADED, with more history beyond it: its
+    // predecessor exists but has not arrived, so it must not be presented as
+    // the first version, its changes left unmarked.
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(3)], meta: { hasNext: true } }] },
+        hasNextPage: true,
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    const { setViewing } = renderPublishing();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() =>
+      expect(setViewing.mock.calls.at(-1)?.[0]).toMatchObject({
+        versionNo: 3,
+        comparedWith: { kind: "unknown" },
+      })
+    );
+  });
+
+  it("hands the document the version before, once it is loaded", async () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(1)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    const { setViewing } = renderPublishing();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    // Version 2 was pruned: the version before 3 is 1.
+    await waitFor(() =>
+      expect(setViewing.mock.calls.at(-1)?.[0]).toMatchObject({
+        comparedWith: { kind: "version", versionNo: 1 },
+      })
+    );
+  });
+
   it("hands the chosen version to the document rather than previewing it", async () => {
     useVersionsMock.mockReturnValue(
       listState({

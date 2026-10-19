@@ -40,7 +40,9 @@ export function versionChangesOf(diff: VersionDiff): VersionChanges {
   }
   return {
     byField,
-    total: diff.fields.length,
+    // Only the fields this reader may read: a withheld field is not one of
+    // "the fields you can read".
+    total: diff.fields.filter(node => node.kind !== "hidden").length,
     incomplete: diff.incomplete === true,
   };
 }

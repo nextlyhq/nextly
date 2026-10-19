@@ -65,6 +65,8 @@ describe("versionChangesOf", () => {
     );
 
     expect([...changes.byField.keys()]).toEqual(["title"]);
+    // Counted among the fields this reader can read: the hidden one is not.
+    expect(changes.total).toBe(1);
     expect(changes.incomplete).toBe(true);
   });
 });
