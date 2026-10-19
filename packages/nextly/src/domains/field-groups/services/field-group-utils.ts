@@ -166,3 +166,26 @@ export function asComponentReferenceList(
   }
   return value;
 }
+
+/**
+ * A component's fields as relationship expansion must read them: a many-to-many as the row-backed
+ * `hasMany` list it is on a component.
+ *
+ * Expansion fetches a field marked `relationType: "manyToMany"` from its junction table, which is
+ * where a collection keeps those links. A component has none: its ids are on the instance row, so
+ * the same field reads them from the row, with the target it names in `options.target`. Every other
+ * field is passed through unchanged.
+ */
+export function asRowBackedRelationFields(
+  fields: readonly FieldConfig[]
+): FieldConfig[] {
+  return fields.map(field => {
+    if (!usesJunctionTable(field)) return field;
+    const options = (field as { options?: Record<string, unknown> }).options;
+    return {
+      ...field,
+      hasMany: true,
+      options: { ...options, relationType: undefined },
+    } as unknown as FieldConfig;
+  });
+}

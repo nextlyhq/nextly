@@ -103,6 +103,37 @@ describe.each(getConfiguredTestDialects())(
       expect(seo?.related).toEqual(ids);
     });
 
+    // The default read expands relationships. A component has no junction table, so the related
+    // entries are found from the ids on its row, not from a junction query that finds none.
+    it("expands into the related entries at the default depth", async () => {
+      const t = await bootWithHero(dialect);
+      const first = await t.nextly.create({
+        collection: "tags",
+        data: { name: "first" },
+      });
+      const second = await t.nextly.create({
+        collection: "tags",
+        data: { name: "second" },
+      });
+      const ids = [String(first.item.id), String(second.item.id)];
+
+      const singles = t.getService("singleEntryService") as SingleEntryService;
+      const saved = await singles.update(
+        "preferences",
+        { seo: { heading: "Hello", related: ids } },
+        { overrideAccess: true }
+      );
+      expect(saved.success).toBe(true);
+
+      const read = await singles.get("preferences", { overrideAccess: true });
+      const seo = (read.data as { seo?: { related?: unknown } }).seo;
+      const related = seo?.related as { id?: unknown; name?: unknown }[];
+      expect(related.map(entry => [String(entry.id), entry.name])).toEqual([
+        [ids[0], "first"],
+        [ids[1], "second"],
+      ]);
+    });
+
     // A single id is one reference, and a many-to-many reads as a list whatever it holds: a row
     // written with one id, or an older row holding a bare id in a column SQLite never retypes.
     it("reads a single saved id back as a one-item list", async () => {
