@@ -1994,7 +1994,11 @@ class StatementWalk {
       return;
     }
     if (NON_COLUMN_ELEMENTS.has(first)) return;
-    const k = first === "COLUMN" ? at + 2 : at + 1;
+    this.readAddedColumn(table, first === "COLUMN" ? at + 2 : at + 1);
+  }
+
+  /** The column an `ADD [COLUMN]` clause adds, from the name at `k`. */
+  private readAddedColumn(table: TableRef, k: number): void {
     // A conditional add may be a no-op on a column that already exists, so
     // it is not credited to this list.
     if (this.isConditionalAddAt(k)) return;
