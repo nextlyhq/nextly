@@ -254,6 +254,10 @@ Your component replaces the form's body and receives `DocumentViewProps` from
 | `field` | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
 
 Opening that address requires the same permission as editing the document.
+A field-type view also opens only for a field the edit form would let the
+author edit. If the field, or an unnamed group around it, is read-only,
+disabled, hidden, or hidden by its condition, the admin says why and offers the
+way back instead of drawing your view.
 
 To open a view from inside the admin, for example from a field editor, call
 `navigateTo(path)` from `@nextlyhq/plugin-sdk/admin`. It accepts a path
