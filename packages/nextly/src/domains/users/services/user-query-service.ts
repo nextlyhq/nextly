@@ -409,9 +409,13 @@ export class UserQueryService extends BaseService {
             .filter(Boolean);
         }
       } catch (extSearchErr) {
-        console.error(
-          "[UserQueryService] Failed to search user_ext fields:",
-          extSearchErr
+        // Through the service logger, which is masked: a failed query's error
+        // quotes the values it was given, an address among them.
+        this.logger.error(
+          "[UserQueryService] Failed to search user_ext fields",
+          {
+            error: extSearchErr,
+          }
         );
       }
     }
@@ -627,9 +631,11 @@ export class UserQueryService extends BaseService {
       } catch (extErr) {
         // Log the error so it's visible in server logs; do not permanently
         // disable ext lookups for a transient failure.
-        console.error(
-          "[UserQueryService] Failed to fetch user_ext fields:",
-          extErr
+        this.logger.error(
+          "[UserQueryService] Failed to fetch user_ext fields",
+          {
+            error: extErr,
+          }
         );
       }
     }
@@ -783,9 +789,11 @@ export class UserQueryService extends BaseService {
           Object.assign(userData, this.extractCustomFields(extRows[0]));
         }
       } catch (extErr) {
-        console.error(
-          "[UserQueryService] Failed to fetch user_ext fields for user:",
-          extErr
+        this.logger.error(
+          "[UserQueryService] Failed to fetch user_ext fields for user",
+          {
+            error: extErr,
+          }
         );
       }
     }
@@ -926,9 +934,11 @@ export class UserQueryService extends BaseService {
           Object.assign(userData, this.extractCustomFields(extRows[0]));
         }
       } catch (extErr) {
-        console.error(
-          "[UserQueryService] Failed to fetch user_ext fields for user by email:",
-          extErr
+        this.logger.error(
+          "[UserQueryService] Failed to fetch user_ext fields for user by email",
+          {
+            error: extErr,
+          }
         );
       }
     }

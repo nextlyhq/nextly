@@ -12,6 +12,7 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
+import { consoleLogger } from "../../shared/types";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
@@ -56,8 +57,10 @@ const SILENT_MESSAGE =
  *     env-var allowlist (comma-separated host[:port] entries).
  *
  * Rejected values fall back to `undefined` (the password-reset
- * service applies its default) and emit a `console.warn` so
- * misconfigurations are visible in production logs. Returning
+ * service applies its default) and emit a warning so
+ * misconfigurations are visible in production logs. The warning goes
+ * through the masked console logger, because it echoes the caller's
+ * input and that input can carry an address. Returning
  * `undefined` (not throwing) preserves the timing-equalised
  * anti-enumeration response shape.
  */
@@ -66,7 +69,7 @@ function sanitizeRedirectPath(raw: unknown): string | undefined {
 
   // Reject obvious garbage early.
   if (raw.length > 2048 || raw.includes("\0")) {
-    console.warn(
+    consoleLogger.warn(
       `[nextly/auth] Rejected forgot-password redirectPath: oversized or contained null byte`
     );
     return undefined;
@@ -83,7 +86,7 @@ function sanitizeRedirectPath(raw: unknown): string | undefined {
     ) {
       return raw;
     }
-    console.warn(
+    consoleLogger.warn(
       `[nextly/auth] Rejected forgot-password redirectPath outside /admin: ${raw}`
     );
     return undefined;
@@ -94,13 +97,13 @@ function sanitizeRedirectPath(raw: unknown): string | undefined {
   try {
     parsed = new URL(raw);
   } catch {
-    console.warn(
+    consoleLogger.warn(
       `[nextly/auth] Rejected forgot-password redirectPath: unparseable URL: ${raw}`
     );
     return undefined;
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
-    console.warn(
+    consoleLogger.warn(
       `[nextly/auth] Rejected forgot-password redirectPath: bad protocol ${parsed.protocol}`
     );
     return undefined;
@@ -113,7 +116,7 @@ function sanitizeRedirectPath(raw: unknown): string | undefined {
   if (allowed.includes(host)) {
     return raw;
   }
-  console.warn(
+  consoleLogger.warn(
     `[nextly/auth] Rejected forgot-password redirectPath: host ${host} not in ALLOWED_REDIRECT_HOSTS`
   );
   return undefined;
