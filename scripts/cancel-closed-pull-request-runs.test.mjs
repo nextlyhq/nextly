@@ -64,6 +64,12 @@ describe("the runs that belong to the closed pull request", () => {
     expect(runsOf(fork, [forkRun, sameNameHere, otherBranch], 99).map(r => r.id)).toEqual([1]);
   });
 
+  it("leaves a run created after the pull request closed, which belongs to its reopening", () => {
+    const closed = { ...PULL, closed_at: "2026-10-18T17:47:00Z" };
+    const runs = [run(1, { created_at: "2026-10-18T17:40:00Z" }), run(2, { created_at: "2026-10-18T17:48:11Z" })];
+    expect(runsOf(closed, runs, 99).map(r => r.id)).toEqual([1]);
+  });
+
   it("leaves the run doing the cancelling alone", () => {
     expect(runsOf(PULL, [run(1), run(2)], 2).map(r => r.id)).toEqual([1]);
   });
@@ -101,6 +107,20 @@ describe("the command a workflow step runs", () => {
     expect(await main(env, { fetchImpl: finished.fetchImpl })).toBe(0);
     const refused = api({ queued: [run(1)] }, () => 403);
     expect(await main(env, { fetchImpl: refused.fetchImpl })).toBe(1);
+  });
+
+  it("cancels nothing when the pull request is open again by the time this runs", async () => {
+    const posts = [];
+    const fetchImpl = async (url, { method = "GET" } = {}) => {
+      if (method === "POST") {
+        posts.push(url);
+        return { ok: true, status: 202 };
+      }
+      if (url.endsWith(`/pulls/${PULL.number}`)) return { ok: true, status: 200, json: async () => ({ state: "open" }) };
+      return { ok: true, status: 200, json: async () => ({ total_count: 1, workflow_runs: url.includes("status=queued&") && url.includes("event=pull_request&") ? [run(1)] : [] }) };
+    };
+    expect(await main(env, { fetchImpl })).toBe(0);
+    expect(posts).toEqual([]);
   });
 
   it("fails, cancelling nothing, when the runs cannot be read", async () => {

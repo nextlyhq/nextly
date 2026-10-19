@@ -133,8 +133,17 @@ export default async function PostPage({
   const headline =
     post.title.length > 110 ? `${post.title.slice(0, 107)}…` : post.title;
 
-  const articleImage = post.featuredImage?.url
-    ? [post.featuredImage.url]
+  // JSON-LD needs an absolute URL. A local upload's URL is a path on the
+  // storage's base (`/uploads/...`), resolved here against the same origin as
+  // `metadataBase` and the canonical; a cloud upload's URL is already
+  // absolute and stays as it is.
+  const imageUrl = post.featuredImage?.url;
+  const articleImage = imageUrl
+    ? [
+        /^(?:[a-z][a-z0-9+.-]*:)?\/\//i.test(imageUrl)
+          ? imageUrl
+          : absoluteUrl(imageUrl),
+      ]
     : [absoluteUrl(`/blog/${slug}/opengraph-image`)];
 
   const articleSchema: Record<string, unknown> = {

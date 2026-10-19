@@ -578,17 +578,18 @@ function checkExampleValues(name: string, keys: EnvKeys): string[] {
 
 /**
  * Whether a value, whole, is a form an example file uses to say "put yours
- * here": empty, `<…>`, a run of x, or words alone that start with a
- * placeholder word (`your-secret-here`, `change-me`, `replace_me`). A
- * placeholder word inside anything else does not count: a real credential
- * can contain one.
+ * here": empty, `<…>`, a run of x, or words alone whose first is a whole
+ * placeholder word (`your-secret-here`, `change-me`, `changeme`,
+ * `replace_me`). A placeholder word inside anything else does not count, nor
+ * a word that only begins like one, such as `enterprise`: a real credential
+ * can be either.
  */
 function isPlaceholder(value: string): boolean {
   return (
     value === "" ||
     /^<[^<>]*>$/.test(value) ||
     /^x+$/i.test(value) ||
-    /^(?:your|change|replace|placeholder|example|insert|enter|put)[a-z]*(?:[-_. ][a-z0-9]+)*$/i.test(
+    /^(?:your|change|changeme|replace|replaceme|placeholder|example|insert|enter|put)(?:[-_. ][a-z0-9]+)*$/i.test(
       value
     )
   );
@@ -596,20 +597,26 @@ function isPlaceholder(value: string): boolean {
 
 function hasRealPassword(url: string): boolean {
   return passwordsIn(url).some(raw => {
-    // new URL keeps a % that decodeURIComponent refuses, such as `pa%ss`; the
-    // password is no less real for it, so it is judged as written.
-    let password = raw;
-    try {
-      password = decodeURIComponent(raw);
-    } catch {
-      // Kept as written.
-    }
+    const password = decoded(raw);
     return (
       password !== "" &&
       !isPlaceholder(password) &&
       !["password", "pass"].includes(password.toLowerCase())
     );
   });
+}
+
+/**
+ * Percent-decoded, as a URL parser reads a name or a value. new URL keeps a
+ * % that decodeURIComponent refuses, such as `pa%ss`; the text is no less
+ * meant for it, so it is then judged as written.
+ */
+function decoded(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
 }
 
 /**
@@ -623,7 +630,7 @@ function passwordsIn(url: string): string[] {
     ? new URL(url).password
     : (/^[a-z][a-z0-9+.-]*:\/\/[^:/@\s]*:([^@\s]*)@/i.exec(url)?.[1] ?? "");
   const query = [...url.matchAll(/[?&]([^=&#]*)=([^&#]*)/g)]
-    .filter(([, param]) => /pass|pwd|secret|token/i.test(param))
+    .filter(([, param]) => /pass|pwd|secret|token/i.test(decoded(param)))
     .map(([, , value]) => value);
   return [beforeHost, ...query];
 }

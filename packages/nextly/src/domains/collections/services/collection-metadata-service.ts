@@ -388,6 +388,30 @@ export class CollectionMetadataService extends BaseService {
     try {
       const artifacts = await this.collectionService.generateCollection(data);
 
+      // A save applies whole or fails whole: in development the migration runs before anything is
+      // recorded, so a change the database refuses leaves no file, no registry row and nothing
+      // reported as applied.
+      if (this.isDevelopment()) {
+        try {
+          // The artefact carries the registry-row upsert so the committed file
+          // recreates it where the Builder has never run. This database gets
+          // that row from `registerCollection` below, and it refuses a slug
+          // that already exists -- so what runs HERE is the DDL alone.
+          await this.fileManager.runMigration(
+            artifacts.localMigrationSQL ?? artifacts.migrationSQL
+          );
+        } catch (migrationError: unknown) {
+          return errorToMetadataResult(
+            migrationError,
+            {
+              statusCode: 500,
+              defaultMessage: "The collection's table could not be created",
+            },
+            this.dialect
+          );
+        }
+      }
+
       // Persist the SQL migration. The Drizzle `.ts` schema is no longer
       // written — the runtime builds it from dynamic_collections metadata,
       // matching singles/components (see CollectionFileManager.saveMigration).
@@ -398,25 +422,25 @@ export class CollectionMetadataService extends BaseService {
 
       if (this.isDevelopment()) {
         try {
-          // The artefact carries the registry-row upsert so the committed file
-          // recreates it where the Builder has never run. This database gets
-          // that row from `registerCollection` below, and it refuses a slug
-          // that already exists -- so what runs HERE is the DDL alone.
-          await this.fileManager.runMigration(
-            artifacts.localMigrationSQL ?? artifacts.migrationSQL
-          );
           // Verify table was actually created before marking as applied
           const tableExists = await this.adapter.tableExists(
             artifacts.tableName
           );
           if (tableExists) {
             artifacts.metadata.migrationStatus = "applied";
-            await this.registerRuntimeSchema(artifacts.tableName, data.fields, {
-              hasStatus: data.status === true,
-              // i18n: register the main table without translatable columns and register
-              // the companion, so reads/writes route localized fields correctly.
-              localized: data.localized === true,
-            });
+            // The fields as the registry stores them, not as the request spelled them: the
+            // table's columns were named from the stored names, and a restart rebuilds these
+            // tables from them.
+            await this.registerRuntimeSchema(
+              artifacts.tableName,
+              artifacts.metadata.fields,
+              {
+                hasStatus: data.status === true,
+                // i18n: register the main table without translatable columns and register
+                // the companion, so reads/writes route localized fields correctly.
+                localized: data.localized === true,
+              }
+            );
           } else {
             artifacts.metadata.migrationStatus = "failed";
             this.logger.error(
@@ -758,6 +782,41 @@ export class CollectionMetadataService extends BaseService {
       // `.ts` schema is written — the runtime regenerates it from the
       // dynamic_collections metadata, matching singles/components.
       if (updateArtifacts.migrationSQL) {
+        // A save applies whole or fails whole: in development the migration runs before anything is
+        // recorded, so a change the database refuses leaves no file, an unchanged registry and
+        // nothing reported as applied.
+        if (this.isDevelopment()) {
+          try {
+            // The file is what a fresh database will replay; this is what THIS one needs. They
+            // differ only where unattended provisioning left the local schema in a shape no
+            // migration history produces, and running the file here would then fail on a column
+            // that is already present.
+            // The file creates the archive when it is missing but cannot add the kind column to an
+            // archive from before rows recorded it, which its writes name.
+            if (updateArtifacts.needsArchive) {
+              const { ensureI18nArchive } = await import(
+                "../../i18n/migration/ensure-archive"
+              );
+              await ensureI18nArchive(
+                this.adapter,
+                this.adapter.getCapabilities().dialect
+              );
+            }
+            await this.fileManager.runMigration(
+              updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
+            );
+          } catch (migrationError: unknown) {
+            return errorToMetadataResult(
+              migrationError,
+              {
+                statusCode: 500,
+                defaultMessage: "The schema change could not be applied",
+              },
+              this.dialect
+            );
+          }
+        }
+
         await this.fileManager.saveMigration(
           updateArtifacts.migrationSQL,
           updateArtifacts.migrationFileName!
@@ -765,13 +824,6 @@ export class CollectionMetadataService extends BaseService {
 
         if (this.isDevelopment()) {
           try {
-            // The file is what a fresh database will replay; this is what THIS one needs. They
-            // differ only where unattended provisioning left the local schema in a shape no
-            // migration history produces, and running the file here would then fail on a column
-            // that is already present.
-            await this.fileManager.runMigration(
-              updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
-            );
             // The companion may have just been dropped or reshaped by that migration, and a
             // `ready` verdict outlives the table it describes: for up to its TTL, concurrent
             // requests on this same process would keep querying a relation that is gone instead of
@@ -821,7 +873,9 @@ export class CollectionMetadataService extends BaseService {
                   body.status !== undefined ? body.status === true : wasStatus;
                 await this.registerRuntimeSchema(
                   existingCollection.tableName,
-                  body.fields ??
+                  // As stored, like the create: the save's own list when it changed the fields,
+                  // else the registry's.
+                  updateArtifacts.metadataUpdates.fields ??
                     (existingCollection.fields as FieldDefinition[]),
                   {
                     hasStatus,

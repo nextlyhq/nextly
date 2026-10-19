@@ -6,6 +6,11 @@ import type { ProjectInfo } from "../types";
 import { resolveTemplatePath } from "../utils/template";
 
 import type { GeneratedFiles } from "./generated-files";
+import {
+  MODULE_FILE,
+  appPageExtensions,
+  pageExtensionsSkip,
+} from "./page-extensions";
 import { ADMIN_API_FOLDER } from "./routes";
 
 /**
@@ -24,9 +29,8 @@ import { ADMIN_API_FOLDER } from "./routes";
  * route groups `(name)` and slots `@name` out of the URL wherever they sit,
  * and never routes a private folder `_name`, so the folders that answer a URL
  * are found by that rule rather than by name. `catchAll` marks the optional
- * catch-alls: they also clash with a dynamic child (`[id]`, `[...rest]`) that
- * holds a handler, but not with a concrete child such as `sign/`, which
- * Next.js sorts ahead of the catch-all.
+ * catch-alls, which serve everything below their URL too: a child folder
+ * holding a handler is weighed by {@link childFinding}.
  *
  * `role` says what Nextly's route does there, for a media route the app
  * already has something in place of; the report then carries the route to
@@ -98,6 +102,25 @@ const ROUTE_FILE = /^route\.(tsx|ts|jsx|js)$/;
 /** A route handler file in an extension the app may or may not route. */
 const MAYBE_ROUTE_FILE = /^route\.[^.]+$/;
 
+const BESIDE_AN_OPTIONAL_CATCH_ALL =
+  "holds another optional catch-all route, which Next.js refuses to build beside Nextly's as ambiguous; left as it is";
+
+const BESIDE_A_REQUIRED_CATCH_ALL =
+  "holds a required catch-all route, which Next.js builds beside Nextly's optional catch-all and then fails every request at this URL; left as it is";
+
+const TAKES_ITEMS =
+  "holds a dynamic route one part below this URL, which Next.js matches first, so it would take the requests for a media item by its id, and for its folders, that Nextly's route serves; left as it is";
+
+/**
+ * Why a concrete child holding a route is left alone. Next.js matches it
+ * ahead of the catch-all, and whether Nextly's media handler serves that
+ * path too (as it does `folders/` and `bulk/`) is the handler's to say: a
+ * list kept here would drift from it, so any concrete child counts.
+ */
+function takesPath(name: string): string {
+  return `holds a route at ${name}/, which Next.js matches ahead of Nextly's catch-all, so it would take any ${name} requests Nextly's route serves; left as it is`;
+}
+
 const THROUGH_A_DYNAMIC_SEGMENT =
   "already answers this URL through a dynamic segment, and a route written here would take those requests from it; left as it is";
 
@@ -148,25 +171,85 @@ class UnreadableFolder extends Error {
   }
 }
 
+/** Each route's template text, by its path under the app folder, as {@link readMediaRouteTemplates} read it. */
+export type MediaRouteTemplates = ReadonlyMap<string, string>;
+
 /**
- * Write the media and health routes into an existing app, from the template
- * in `templatesDir` (the CLI's bundled templates by default).
+ * Read every route the existing-app path writes from the templates in
+ * `templatesDir` (the CLI's bundled templates by default), refusing a missing
+ * file or a route that no longer imports the config, and naming it.
+ *
+ * It is called before anything is installed or written in the app, so a
+ * template folder that cannot supply the routes stops the run with the app
+ * as it was, rather than part-way, where a retry would find the config the
+ * first attempt wrote.
+ */
+export async function readMediaRouteTemplates(
+  templatesDir: string = resolveTemplatePath()
+): Promise<MediaRouteTemplates> {
+  const texts = new Map<string, string>();
+  for (const route of ROUTES) {
+    const relative = `base/src/app/${route.path}`;
+    let text: string;
+    try {
+      text = await fs.readFile(path.join(templatesDir, relative), "utf-8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "unreadable";
+      throw new Error(
+        `The templates at ${templatesDir} have no readable ${relative} (${code}), so Nextly's routes cannot be added. Nothing was installed or written; check the --local-template path if one was given.`
+      );
+    }
+    if (route.importsConfig && !CONFIG_IMPORT.test(text)) {
+      throw new Error(
+        `The template's ${route.path} does not import the Nextly config, so no route that finds it can be written. Nothing was installed or written.`
+      );
+    }
+    texts.set(route.path, text);
+  }
+  return texts;
+}
+
+/**
+ * Write the media and health routes into an existing app, from the templates
+ * {@link readMediaRouteTemplates} read.
  *
  * A route whose URL the app already answers is never written: the folder
  * that answers it is reported as skipped, exactly as it was, and for a media
  * route the report says what Nextly's route does there and carries it to add
- * by hand. Nothing is written through a linked folder. Every route is read
- * and prepared before any is written, so a template whose route no longer
- * imports the config is refused with nothing written.
+ * by hand. Nothing is written through a linked folder.
+ *
+ * An app that sets `pageExtensions` routes a route file only under a name with
+ * one of them, and may already have routes under such names, which the checks
+ * here do not recognise. So nothing is written there: each route is reported
+ * with the name to create it under and its content, as the server-start hook
+ * is for such an app.
  */
 export async function generateMediaRoutes(
   cwd: string,
   projectInfo: ProjectInfo,
-  templatesDir: string = resolveTemplatePath()
+  templates: MediaRouteTemplates
 ): Promise<GeneratedFiles> {
-  const prepared = await Promise.all(
-    ROUTES.map(route => prepareRoute(cwd, projectInfo, templatesDir, route))
+  const prepared = ROUTES.map(route =>
+    prepareRoute(cwd, projectInfo, templates, route)
   );
+  const pages = await appPageExtensions(cwd);
+  if (pages.extensions !== "absent") {
+    const { configName, extensions } = pages;
+    return {
+      written: [],
+      changed: [],
+      skipped: prepared.map(route =>
+        pageExtensionsSkip(
+          toPosix(
+            path.relative(cwd, path.join(path.dirname(route.target), "route"))
+          ),
+          route.text,
+          { configName, extensions },
+          MODULE_FILE
+        )
+      ),
+    };
+  }
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   for (const route of prepared) {
     await writeIfUnanswered(cwd, route, result);
@@ -179,26 +262,29 @@ interface PreparedRoute {
   target: string;
   appRoot: string;
   segment: string;
-  catchAll: boolean;
+  /** The optional catch-all's own folder, such as `[[...path]]`, or null for a route that is not one. */
+  catchAll: string | null;
   text: string;
   role: ((file: string) => string) | null;
 }
 
 /** One route's destination in the project and its text, with the config import made relative. */
-async function prepareRoute(
+function prepareRoute(
   cwd: string,
   projectInfo: ProjectInfo,
-  templatesDir: string,
+  templates: MediaRouteTemplates,
   route: (typeof ROUTES)[number]
-): Promise<PreparedRoute> {
-  const source = path.join(templatesDir, "base", "src", "app", route.path);
-  const text = await fs.readFile(source, "utf-8");
+): PreparedRoute {
+  const text = templates.get(route.path);
+  if (text === undefined) {
+    throw new Error(`No template was read for ${route.path}.`);
+  }
   const target = path.join(cwd, projectInfo.appDir, route.path);
   return {
     target,
     appRoot: path.join(cwd, projectInfo.appDir),
     segment: route.segment,
-    catchAll: route.catchAll,
+    catchAll: route.catchAll ? path.basename(path.dirname(route.path)) : null,
     text: route.importsConfig
       ? withRelativeConfigImport(text, cwd, target, route.path)
       : text,
@@ -263,7 +349,7 @@ async function writeIfUnanswered(
   const answering =
     (await answeringFolder(appRoot, segment, catchAll)) ??
     (await answeringThroughDynamic(appRoot, segment)) ??
-    (await answeringPage(cwd, segment));
+    (await answeringPage(cwd, segment, catchAll !== null));
   if (answering !== null) {
     result.skipped.push(
       skipped(cwd, answering.folder, target, text, role, answering.reason)
@@ -337,16 +423,16 @@ function isDynamic(name: string): boolean {
 async function answeringFolder(
   appRoot: string,
   segment: string,
-  catchAll: boolean
+  catchAll: string | null
 ): Promise<{ folder: string; reason: string } | null> {
   try {
     for (const folder of await foldersAt(appRoot, segment)) {
       const here = await handlerIn(folder);
       if (here !== null) return { folder, reason: here };
-      if (!catchAll) continue;
-      for (const child of (await subfolders(folder)).filter(isDynamic)) {
-        const within = await handlerWithin(path.join(folder, child));
-        if (within !== null) return { folder, reason: within };
+      if (catchAll === null) continue;
+      for (const child of await subfolders(folder)) {
+        const found = await childFinding(folder, child, catchAll);
+        if (found !== null) return found;
       }
     }
     return null;
@@ -356,6 +442,50 @@ async function answeringFolder(
     }
     throw error;
   }
+}
+
+/**
+ * The child folders that leave an optional catch-all unwritten, first match
+ * first, each with why, as Next.js 16 builds and serves them beside one: it
+ * refuses a second optional catch-all at build time, fails every request
+ * when a required one is beside it, and matches a single dynamic segment or
+ * a concrete name ahead of the catch-all. Every other child is concrete.
+ */
+const CHILD_SHAPES: {
+  matches: (child: string) => boolean;
+  reason: (child: string) => string;
+}[] = [
+  {
+    matches: child => child.startsWith("[[..."),
+    reason: () => BESIDE_AN_OPTIONAL_CATCH_ALL,
+  },
+  {
+    matches: child => child.startsWith("[..."),
+    reason: () => BESIDE_A_REQUIRED_CATCH_ALL,
+  },
+  { matches: isDynamic, reason: () => TAKES_ITEMS },
+  { matches: () => true, reason: takesPath },
+];
+
+/**
+ * Why a child folder of an optional catch-all's URL leaves the catch-all
+ * unwritten, or null when it may sit beside it. `own` is the catch-all's own
+ * folder name. Only a child holding a handler counts; why, for each shape,
+ * is in {@link CHILD_SHAPES}.
+ */
+async function childFinding(
+  folder: string,
+  child: string,
+  own: string
+): Promise<Finding | null> {
+  // The app's own copy of the catch-all is the route itself, not one beside it.
+  const shape = CHILD_SHAPES.find(({ matches }) => matches(child));
+  const reason = child === own ? LEFT_AS_IT_IS : (shape?.reason(child) ?? null);
+  if (reason === null) return null;
+  const within = await handlerWithin(path.join(folder, child));
+  if (within === null) return null;
+  // A file Next.js may not route at all is reported as such, not as a clash.
+  return { folder, reason: within === LEFT_AS_IT_IS ? reason : within };
 }
 
 /**
@@ -463,18 +593,23 @@ function isCatchAll(name: string): boolean {
 
 /**
  * The first Pages Router file or folder that answers `segment`, or might,
- * with why; or null when none does. It fails closed as the app check does: a
- * file named for the URL's last part in any extension, that part's folder
- * holding anything, a dynamic route anywhere on the way, a linked folder on
- * the way, or a folder that cannot be read all leave the route unwritten.
+ * with why; or null when none does. `below` says the route also serves every
+ * URL under `segment`, as an optional catch-all does. It fails closed as the
+ * app check does: what cannot be judged (a link, an unreadable folder) leaves
+ * the route unwritten.
  */
 async function answeringPage(
   cwd: string,
-  segment: string
+  segment: string,
+  below: boolean
 ): Promise<PageFinding | null> {
   try {
     for (const dir of PAGES_DIRS) {
-      const found = await pageAt(path.join(cwd, dir), segment.split("/"));
+      const found = await pageAt(path.join(cwd, dir), {
+        parts: segment.split("/"),
+        below,
+        throughDynamic: false,
+      });
       if (found !== null) return found;
     }
     return null;
@@ -489,60 +624,102 @@ async function answeringPage(
 /** A page that answers, or might, and why. */
 type PageFinding = { folder: string; reason: string };
 
-/** What in one Pages Router folder answers the URL made of `parts`, walking it part by part. */
+/**
+ * Where a Pages Router walk stands: the URL's parts still to match, whether
+ * the route also serves every URL below it, and whether a dynamic folder was
+ * passed on the way, after which a page only may answer the URL.
+ */
+interface PageWalk {
+  parts: string[];
+  below: boolean;
+  throughDynamic: boolean;
+}
+
+/** What in one Pages Router folder answers the rest of the walk's URL. */
 async function pageAt(
-  pagesRoot: string,
-  parts: string[]
-): Promise<PageFinding | null> {
-  let folder = pagesRoot;
-  for (const [index, part] of parts.entries()) {
-    const entries = await entriesOf(folder);
-    const dynamic = dynamicPage(folder, entries);
-    if (dynamic !== null) return dynamic;
-    if (index === parts.length - 1) return lastPartPage(folder, entries, part);
-    const next = entries.find(entry => entry.name === part);
-    if (next === undefined) return null;
-    // A link is not followed, so what it leads to cannot be judged.
-    if (!next.isDirectory()) {
-      return {
-        folder: path.join(folder, next.name),
-        reason: A_PAGE_MAY_ANSWER,
-      };
-    }
-    folder = path.join(folder, next.name);
-  }
-  return null;
-}
-
-/**
- * A dynamic page or folder in `folder`, which can match the URL's part at
- * this depth, and a catch-all the rest of the URL with it.
- */
-function dynamicPage(folder: string, entries: fs.Dirent[]): PageFinding | null {
-  const dynamic = entries.find(entry => isDynamic(entry.name));
-  return dynamic === undefined
-    ? null
-    : { folder: path.join(folder, dynamic.name), reason: A_PAGE_MAY_ANSWER };
-}
-
-/**
- * The page for the URL's last part: `health.ts` in any extension, or a
- * `health/` that holds anything (its `index` page answers the URL, and what
- * else is there cannot be judged for certain).
- */
-async function lastPartPage(
   folder: string,
-  entries: fs.Dirent[],
-  part: string
+  walk: PageWalk
 ): Promise<PageFinding | null> {
-  for (const entry of entries) {
-    if (entry.name !== part && !entry.name.startsWith(`${part}.`)) continue;
-    const at = path.join(folder, entry.name);
-    if (!entry.isDirectory() || (await entriesOf(at)).length > 0) {
-      return { folder: at, reason: A_PAGE_ANSWERS };
-    }
+  for (const entry of await entriesOf(folder)) {
+    const found = await pageEntry(folder, entry, walk);
+    if (found !== null) return found;
   }
   return null;
+}
+
+/**
+ * What one entry of a Pages Router folder answers of the walk's URL. A catch-all page or folder takes one part or more, so it
+ * may answer whatever remains. A single dynamic page, `[slug].tsx`, takes
+ * exactly one part, as a page named for the part does, so either answers
+ * only the URL's last part; a folder of either kind is walked with the rest.
+ * A link is not followed, so what it leads to cannot be judged.
+ */
+async function pageEntry(
+  folder: string,
+  entry: fs.Dirent,
+  walk: PageWalk
+): Promise<PageFinding | null> {
+  const at = path.join(folder, entry.name);
+  if (isCatchAll(entry.name)) return { folder: at, reason: A_PAGE_MAY_ANSWER };
+  if (!takesPart(entry, walk.parts[0])) return null;
+  if (!entry.isFile() && !entry.isDirectory()) {
+    return { folder: at, reason: A_PAGE_MAY_ANSWER };
+  }
+  return matchedPage(at, entry.isFile(), walk);
+}
+
+/** Whether an entry takes the URL part `part`: a dynamic one takes any, another only its own name. */
+function takesPart(entry: fs.Dirent, part: string | undefined): boolean {
+  if (isDynamic(entry.name)) return true;
+  const stem = entry.isDirectory() ? entry.name : entry.name.split(".")[0];
+  return stem === part;
+}
+
+/**
+ * What an entry that took the walk's next part answers: a page answers the
+ * URL when that part was its last, and a folder is judged as the URL's
+ * folder then, or walked with the rest.
+ */
+async function matchedPage(
+  at: string,
+  isFile: boolean,
+  walk: PageWalk
+): Promise<PageFinding | null> {
+  const rest = walk.parts.slice(1);
+  const throughDynamic = walk.throughDynamic || isDynamic(path.basename(at));
+  const reason = throughDynamic ? A_PAGE_MAY_ANSWER : A_PAGE_ANSWERS;
+  if (rest.length > 0) {
+    return isFile ? null : pageAt(at, { ...walk, parts: rest, throughDynamic });
+  }
+  return isFile
+    ? { folder: at, reason }
+    : folderAnswers(at, reason, walk.below);
+}
+
+/**
+ * Whether the folder for the URL's last part answers it. Its `index` page
+ * does, in any extension, and so does an optional catch-all in it, which also
+ * matches no part at all; another page there answers a longer URL. For a
+ * route that also serves every URL below, any page in the folder answers one
+ * of those.
+ */
+async function folderAnswers(
+  folder: string,
+  reason: string,
+  below: boolean
+): Promise<PageFinding | null> {
+  const entries = await entriesOf(folder);
+  if (below) return entries.length > 0 ? { folder, reason } : null;
+  const index = entries.find(
+    entry => !entry.isDirectory() && entry.name.split(".")[0] === "index"
+  );
+  if (index !== undefined) {
+    return { folder: path.join(folder, index.name), reason };
+  }
+  const optional = entries.find(entry => entry.name.startsWith("[[..."));
+  return optional === undefined
+    ? null
+    : { folder: path.join(folder, optional.name), reason: A_PAGE_MAY_ANSWER };
 }
 
 /**

@@ -116,6 +116,12 @@ export interface ListVersionsParams {
   locale?: string;
 }
 
+/** What marking a version as seen reports back: the version and its part. */
+export interface MarkVersionSeenResponse {
+  message: string;
+  item: { versionNo: number; locale: string | null };
+}
+
 /** Base path for a scope's history. */
 function basePath(scope: VersionScope): string {
   return scope.kind === "single"
@@ -217,6 +223,22 @@ export const versionApi = {
    * idempotent: sending the same name twice leaves the same state. The server
    * trims and bounds the value, so the client's own trim is a courtesy.
    */
+  /**
+   * Record that the signed-in person was shown this version, which moves where
+   * a later comparison "since you last looked" starts from.
+   *
+   * Sent once for each version shown, never for the history list: reading a
+   * list of versions is not reading any one of them.
+   */
+  markSeen: (
+    scope: VersionScope,
+    versionNo: number
+  ): Promise<MarkVersionSeenResponse> =>
+    protectedApi.put<MarkVersionSeenResponse>(
+      `${basePath(scope)}/${versionNo}/seen`,
+      {}
+    ),
+
   setLabel: (
     scope: VersionScope,
     versionNo: number,

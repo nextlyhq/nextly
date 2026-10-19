@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  RELEASE_MEMBER_LIMIT,
   RELEASE_STATES,
   type ReleaseKind,
   type ReleaseState,
@@ -23,12 +24,13 @@ import type {
   ReleaseAuthority,
   ReleasesServiceDeps,
 } from "../services/releases-service";
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 const ACTOR = { userId: "u1" };
 
 /**
  * @param members what each release holds, by release id. Read through the
- *   batched `listMembersOf` only; every other repository method is absent, so a
+ *   batched `memberCountsOf` only; every other repository method is absent, so a
  *   path that reached one would fail rather than pass by accident.
  */
 function service(
@@ -39,22 +41,23 @@ function service(
   const canManageReleases = vi.fn(
     async (_id: string, authority: ReleaseAuthority) => held.has(authority)
   );
-  const listMembersOf = vi.fn(async (ids: string[]) =>
-    ids.flatMap(releaseId =>
-      Array.from({ length: members[releaseId] ?? 0 }, (_, n) => ({
-        id: `${releaseId}-m${n}`,
-        releaseId,
-      }))
-    )
+  const memberCountsOf = vi.fn(
+    async (ids: readonly string[]) =>
+      new Map(
+        ids
+          .filter(id => (members[id] ?? 0) > 0)
+          .map(id => [id, members[id] ?? 0] as const)
+      )
   );
   const deps = {
     repository: {
-      listMembersOf,
+      memberCountsOf,
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases,
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
     runDrainNow: vi.fn(async () => undefined),
+    checks: READY_CHECKS,
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({
@@ -63,7 +66,7 @@ function service(
       declaresLifecycle: async () => true,
     },
   };
-  return { svc: new ReleasesService(deps), canManageReleases, listMembersOf };
+  return { svc: new ReleasesService(deps), canManageReleases, memberCountsOf };
 }
 
 /** A row carrying only what `capabilities` reads, so nothing else can decide it. */
@@ -103,8 +106,8 @@ describe("capabilities, for a caller holding everything", () => {
   });
 
   it("allows cancelling a DRAFT, because that is how one is abandoned", async () => {
-    // There is no delete route, so a draft that could not be cancelled would
-    // stay in the list forever.
+    // Deleting needs a permission of its own, so a publisher without it
+    // still needs a way to call a draft off.
     const { svc } = service(ALL);
     const can = await svc.capabilities([release("draft")], ACTOR);
     expect(can.get("r1")?.cancel).toBe(true);
@@ -174,8 +177,9 @@ describe("capabilities, as an instrument", () => {
     const { svc, canManageReleases } = service(ALL);
     const rows = RELEASE_STATES.map((state, n) => release(state, `r${n}`));
     await svc.capabilities([...rows, ...rows, ...rows], ACTOR);
-    // `read` for the authorize, then `publish` and `create` once each.
-    expect(canManageReleases.mock.calls.length).toBeLessThanOrEqual(3);
+    // `read` for the authorize, then `publish`, `create`, `update` and
+    // `delete` once each.
+    expect(canManageReleases.mock.calls.length).toBeLessThanOrEqual(5);
   });
 
   it("asks nothing at all for an empty page", async () => {
@@ -307,25 +311,141 @@ describe("capabilities, for a single-document release", () => {
     expect(can.get("s")?.cancel).toBe(true);
   });
 
-  it("reads what single releases hold in ONE query, and nothing for ordinary ones", async () => {
-    const { svc, listMembersOf } = service(ALL, { s1: 1 });
+  it("reads what editable releases hold in ONE query, and nothing for final ones", async () => {
+    // Single releases for the one-document rule, and every release that can
+    // still take a document for the limit; a release that ran takes nothing
+    // whatever it holds, so asking about it would be a read for nothing.
+    const { svc, memberCountsOf } = service(ALL, { s1: 1 });
     await svc.capabilities(
       [
         release("draft", "s1", "single"),
         release("draft", "s2", "single"),
         release("draft", "o1", "release"),
         release("scheduled", "o2", "release"),
+        release("published", "p1", "release"),
       ],
       ACTOR
     );
-    expect(listMembersOf).toHaveBeenCalledTimes(1);
-    expect(listMembersOf).toHaveBeenCalledWith(["s1", "s2"]);
+    expect(memberCountsOf).toHaveBeenCalledTimes(1);
+    expect(memberCountsOf).toHaveBeenCalledWith(["s1", "s2", "o1", "o2"]);
 
-    listMembersOf.mockClear();
+    memberCountsOf.mockClear();
     await svc.capabilities(
-      [release("draft", "o1", "release"), release("draft", "o2")],
+      [release("published", "p1"), release("cancelled", "c1")],
       ACTOR
     );
-    expect(listMembersOf).not.toHaveBeenCalled();
+    expect(memberCountsOf).toHaveBeenCalledWith([]);
+  });
+
+  it("counts an ordinary release only where this caller could add to it", async () => {
+    // What a release holds changes no answer for a caller who may not add,
+    // so it is not read for them: a reader learns no add either way.
+    const reader = service(["read"], { o1: 3 });
+    await reader.svc.capabilities(
+      [release("draft", "o1", "release"), release("draft", "s1", "single")],
+      ACTOR
+    );
+    expect(reader.memberCountsOf).toHaveBeenCalledWith(["s1"]);
+
+    // Without publish, a scheduled release takes no document from this
+    // caller, so only the draft is counted.
+    const creator = service(["read", "create"], {});
+    await creator.svc.capabilities(
+      [
+        release("draft", "o1", "release"),
+        release("scheduled", "o2", "release"),
+      ],
+      ACTOR
+    );
+    expect(creator.memberCountsOf).toHaveBeenCalledWith(["o1"]);
+  });
+
+  it("offers no add to a full release, nor to one over the limit, but still a removal", async () => {
+    const { svc } = service(ALL, {
+      full: RELEASE_MEMBER_LIMIT,
+      over: RELEASE_MEMBER_LIMIT + 5,
+      room: RELEASE_MEMBER_LIMIT - 1,
+    });
+    const can = await svc.capabilities(
+      [
+        release("draft", "full"),
+        release("draft", "over"),
+        release("draft", "room"),
+      ],
+      ACTOR
+    );
+    expect(can.get("full")?.addMember).toBe(false);
+    expect(can.get("over")?.addMember).toBe(false);
+    expect(can.get("over")?.removeMember).toBe(true);
+    // The control: one short of the limit still takes a document.
+    expect(can.get("room")?.addMember).toBe(true);
+  });
+});
+
+describe("capabilities to rename and to delete", () => {
+  // Each case is decided by one authority and, for delete, the state; the
+  // control in each is the same rows with the other authorities held instead,
+  // so a verdict read from the wrong grant fails it.
+
+  it("offers renaming in every state to a holder of update, and to nobody else", async () => {
+    const rows = RELEASE_STATES.map(state => release(state, state));
+    const withUpdate = await service(["read", "update"]).svc.capabilities(
+      rows,
+      ACTOR
+    );
+    const withoutUpdate = await service([
+      "read",
+      "create",
+      "publish",
+      "delete",
+    ]).svc.capabilities(rows, ACTOR);
+    for (const state of RELEASE_STATES) {
+      expect(withUpdate.get(state)?.update).toBe(true);
+      expect(withoutUpdate.get(state)?.update).toBe(false);
+    }
+  });
+
+  it("offers deleting a draft or a cancelled release only, and only to a holder of delete", async () => {
+    const rows = RELEASE_STATES.map(state => release(state, state));
+    const withDelete = await service(["read", "delete"]).svc.capabilities(
+      rows,
+      ACTOR
+    );
+    const withoutDelete = await service([
+      "read",
+      "create",
+      "publish",
+      "update",
+    ]).svc.capabilities(rows, ACTOR);
+    expect(
+      Object.fromEntries(
+        RELEASE_STATES.map(state => [state, withDelete.get(state)?.delete])
+      )
+    ).toEqual({
+      draft: true,
+      scheduled: false,
+      published: false,
+      cancelled: true,
+      blocked: false,
+    });
+    for (const state of RELEASE_STATES) {
+      expect(withoutDelete.get(state)?.delete).toBe(false);
+    }
+  });
+
+  it("does not offer deleting a cancelled release that was ever scheduled", async () => {
+    const { svc } = service(["read", "delete"]);
+    const can = await svc.capabilities(
+      [
+        {
+          ...release("cancelled", "was"),
+          scheduledAt: new Date("2026-09-01T09:00:00Z"),
+        },
+        { ...release("cancelled", "never"), scheduledAt: null },
+      ],
+      ACTOR
+    );
+    expect(can.get("was")?.delete).toBe(false);
+    expect(can.get("never")?.delete).toBe(true);
   });
 });

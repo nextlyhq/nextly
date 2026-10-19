@@ -602,9 +602,12 @@ describe.each(getConfiguredTestDialects())(
         { title: "T", account: { label: "L" }, status: "published" },
         { overrideAccess: true }
       );
+      // The second save changes a field a version shows, as well as setting
+      // the password: a password alone is never in a snapshot, so a save that
+      // changes nothing else records no version.
       await singles.update(
         "home",
-        { account: { label: "L", secret: "plain-text-secret" } },
+        { account: { label: "M", secret: "plain-text-secret" } },
         { overrideAccess: true }
       );
 

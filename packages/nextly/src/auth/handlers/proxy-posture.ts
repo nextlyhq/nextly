@@ -64,11 +64,52 @@ export function edgeProxyWarning(
   );
 }
 
+/** The app's own auth strategies, as far as an unvalidated config shows them. */
+function configuredStrategies(
+  config: unknown
+): ReadonlyArray<{ name: unknown; limitKey?: unknown }> {
+  if (config === null || typeof config !== "object") return [];
+  const auth: unknown = Reflect.get(config, "auth");
+  if (auth === null || typeof auth !== "object") return [];
+  const strategies: unknown = Reflect.get(auth, "strategies");
+  return Array.isArray(strategies)
+    ? strategies.filter(
+        (strategy): strategy is { name: unknown; limitKey?: unknown } =>
+          strategy !== null && typeof strategy === "object"
+      )
+    : [];
+}
+
+/**
+ * One startup warning for each configured strategy that cannot tell the auth
+ * rate limit which account a sign-in names, or none while the limiter is off.
+ *
+ * Every configured strategy runs before the built-in password one, so the
+ * limiter cannot tell whether such a strategy will claim a request, and keys
+ * the whole chain on the `email` a request carries; nothing about a working
+ * sign-in shows that, so each such strategy is named where an operator reads.
+ */
+export function unkeyedStrategyWarnings(config: unknown): string[] {
+  if (readAuthRateLimit(() => config).requestsPerHour <= 0) return [];
+  return configuredStrategies(config)
+    .filter(strategy => typeof strategy.limitKey !== "function")
+    .map(
+      strategy =>
+        `[nextly] Auth strategy "${String(strategy.name)}" cannot tell the ` +
+        "sign-in rate limit which account a request names, so sign-ins from " +
+        "clients whose address cannot be read are limited by the email they " +
+        "carry. Give the strategy a limitKey, or set security.trustProxy " +
+        "behind a proxy that reports the client to limit them per client."
+    );
+}
+
 /** Whether this process has already said the fallback is catching requests. */
 let fallbackReported = false;
 
 /**
- * Note an auth request the limiter could not resolve a client address for.
+ * Note an auth request the limiter could not resolve a client address for:
+ * one of core's auth routes, or a plugin's `rateLimit: "auth"` route, which
+ * the message describes too, since either may be the first to arrive.
  *
  * Logs once per process, and only for a request that carries a
  * client-address header: those are the requests a setting could move off
@@ -85,7 +126,10 @@ export function noteUnresolvedAuthRequest(request: Request): void {
     message:
       "Auth requests are arriving with proxy client-address headers that " +
       "could not be used, so the auth rate limit is counting them by the " +
-      "account each names, under a shared ceiling, rather than per client. " +
+      "account each names, under a shared ceiling, rather than per client; " +
+      "a plugin's auth route counts them by the identity its limitKey names, " +
+      "or against one budget its requests naming no identity share, under " +
+      "that plugin's own ceiling, or by the ceiling alone without a limitKey. " +
       "A client can send these headers itself, so they do not show a proxy " +
       "is in front: only if every request reaches the app through a proxy " +
       "you control that sets them, set security.trustProxy: true, and list " +

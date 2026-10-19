@@ -202,6 +202,7 @@ describe.each(getConfiguredTestDialects())(
         {
           dialect,
           collection: "seedsrc",
+          kind: "collection" as const,
           mainTable: "dc_seedsrc",
           companionTable: "dc_seedsrc_locales",
           defaultLocale: "en",

@@ -25,6 +25,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
+import { NEXTLY_RELEASES_INDEXES, pgIndexes } from "../_internal/core-indexes";
 import type { VersionScopeKind } from "../versions/types";
 
 import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";
@@ -71,10 +72,8 @@ export const nextlyReleasesPg = pgTable(
     // serialize to the same value and become indistinguishable.
     revision: integer("revision").default(0).notNull(),
   },
-  table => [
-    // The due-release query reads exactly these two columns together.
-    index("nextly_releases_due_idx").on(table.state, table.scheduledAt),
-  ]
+  // Declared once for the three dialects; what each index serves is said there.
+  table => pgIndexes(NEXTLY_RELEASES_INDEXES, table)
 );
 
 export const nextlyReleaseMembersPg = pgTable(

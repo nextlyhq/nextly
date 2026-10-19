@@ -54,6 +54,7 @@ import {
   clearCachedSnapshot,
   clearLiveSnapshots,
 } from "../init/schema-snapshot-cache";
+import { resetDispatcherForTests } from "../route-handler/auth-handler";
 import type { Logger } from "../services/shared";
 import { _resetEnvCache } from "../shared/lib/env";
 import type { SecurityConfig } from "../shared/types/config";
@@ -595,6 +596,11 @@ export async function createTestNextly(
   resetWebhookActivation();
   resetPluginRouteRegistry();
   resetNextlyInstance();
+  // The REST dispatcher is cached for the process and keeps the adapter it was
+  // built on. A previous instance's adapter is disconnected by now, so its
+  // dispatcher would answer this instance's REST requests from a closed
+  // database: dropped here, the first request builds one on this instance's.
+  resetDispatcherForTests();
   // Each boot is a fresh, distinct in-memory database. The schema-snapshot
   // cache is a globalThis singleton scoped to a single live DB; if left
   // warm from a prior boot it makes the runtime auto-sync skip the push
@@ -788,6 +794,9 @@ async function bootServices(
       resetWebhookRecordingPolicy();
       resetPluginRouteRegistry();
       resetNextlyInstance();
+      // The dispatcher built on the adapter just disconnected, for the same
+      // reason the boot above drops it.
+      resetDispatcherForTests();
       clearCachedSnapshot();
       clearLiveSnapshots();
       // Process state keyed by dialect: a later boot on another dialect

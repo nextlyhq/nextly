@@ -18,6 +18,7 @@
  */
 
 import type { SystemColumnEntity } from "../../lib/system-columns";
+import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
 import type { VersionsDbApi } from "./db-api";
 import { documentSystemKeys } from "./snapshot-system-keys";
@@ -120,6 +121,10 @@ function withoutStatus(
  * say. A save moves `updatedAt` every time, so comparing whole snapshots would
  * call every save a change.
  *
+ * A component instance (a nested row that names its component type) is a row of
+ * its own, and a save rewrites its timestamps too, so those are left out of
+ * it as well. A plain group has no framework columns: a key there is content.
+ *
  * Key order does not matter. Values are compared as the JSON they are stored
  * as, because one side is usually read back from the database (a date as its
  * string) and the other built in memory (a date as a Date).
@@ -146,12 +151,31 @@ function contentOf(
   );
 }
 
-/** JSON with object keys sorted at every depth, so equal content is equal text. */
+/** The timestamps a component row's own columns carry, in both spellings. */
+const COMPONENT_ROW_TIMESTAMPS = new Set([
+  "created_at",
+  "updated_at",
+  "createdAt",
+  "updatedAt",
+]);
+
+/** An object's entries, without a component row's own timestamps. */
+function contentEntries(inner: Record<string, unknown>): [string, unknown][] {
+  const entries = Object.entries(inner);
+  return readFieldGroupType(inner) !== undefined
+    ? entries.filter(([key]) => !COMPONENT_ROW_TIMESTAMPS.has(key))
+    : entries;
+}
+
+/**
+ * JSON with object keys sorted at every depth, and component rows' timestamps
+ * left out, so equal content is equal text.
+ */
 function canonicalJson(value: unknown): string {
   return JSON.stringify(value, (_key, inner: unknown) =>
     inner !== null && typeof inner === "object" && !Array.isArray(inner)
       ? Object.fromEntries(
-          Object.entries(inner as Record<string, unknown>).sort(([x], [y]) =>
+          contentEntries(inner as Record<string, unknown>).sort(([x], [y]) =>
             x < y ? -1 : x > y ? 1 : 0
           )
         )

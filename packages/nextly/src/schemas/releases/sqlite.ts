@@ -26,6 +26,10 @@ import {
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
+import {
+  NEXTLY_RELEASES_INDEXES,
+  sqliteIndexes,
+} from "../_internal/core-indexes";
 import type { VersionScopeKind } from "../versions/types";
 
 import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";
@@ -62,7 +66,8 @@ export const nextlyReleasesSqlite = sqliteTable(
 
     revision: integer("revision").default(0).notNull(),
   },
-  table => [index("nextly_releases_due_idx").on(table.state, table.scheduledAt)]
+  // Declared once for the three dialects; what each index serves is said there.
+  table => sqliteIndexes(NEXTLY_RELEASES_INDEXES, table)
 );
 
 export const nextlyReleaseMembersSqlite = sqliteTable(

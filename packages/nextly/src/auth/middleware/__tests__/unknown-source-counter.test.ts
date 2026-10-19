@@ -51,6 +51,27 @@ const fresh = (prefix: string, n: number): string[] =>
   Array.from({ length: n }, (_, i) => `${prefix}-${i}`);
 
 describe("MemoryUnknownSourceCounter", () => {
+  it("charges a key admitted after its arrival at the time of admission, with its ceiling place moved there too", async () => {
+    const counter = new MemoryUnknownSourceCounter();
+    const limits = { budget: 1, ceiling: 1, windowMs: W };
+    const arrival = await counter.arrive(limits);
+    if (!arrival.allowed) throw new Error("the first arrival is admitted");
+    // The work between arrival and admission outlasts the window.
+    vi.setSystemTime(T0 + W + 1);
+    expect((await counter.admitArrived("a", limits, arrival.at)).allowed).toBe(
+      true
+    );
+
+    // Charged at admission, the key's budget is spent for a window from now,
+    // and so is the ceiling place, which expires with it.
+    expect(await counter.admitArrived("a", limits, Date.now())).toMatchObject({
+      allowed: false,
+      by: "budget",
+    });
+    expect(await counter.ceilingMet(limits)).toMatchObject({ by: "ceiling" });
+    expect(counter.trackedKeys).toBe(1);
+  });
+
   it("a request its budget refuses leaves the ceiling's count unchanged", async () => {
     const counter = new MemoryUnknownSourceCounter();
     const limits = { budget: 2, ceiling: 5, windowMs: W };

@@ -3,8 +3,13 @@
  * number on the user row that rises whenever the account's sessions are
  * ended. A token signed at an older number is refused where a session is read
  * (`auth/session/session-standing`).
+ *
+ * Namespaced, because claim names were the app's own before this one: a
+ * custom user field or a `customizeClaims` claim called plainly `sev` keeps
+ * working, and a token signed before the upgrade with such a claim is not
+ * read as carrying an epoch.
  */
-export const SESSION_EPOCH_CLAIM = "sev";
+export const SESSION_EPOCH_CLAIM = "nx_sev";
 
 // Standard JWT claims that are excluded from session user data. `typ` is here
 // because a custom user field of that name would otherwise be spread into the
@@ -44,7 +49,7 @@ export interface NextlyJwtPayload {
   image: string | null;
   roleIds: string[];
   /** The session epoch the token was signed at; absent on older tokens. */
-  sev?: number;
+  nx_sev?: number;
 
   // Custom user fields from user_ext table (spread dynamically)
   [key: string]: unknown;

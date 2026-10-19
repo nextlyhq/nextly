@@ -12,6 +12,7 @@ import {
   getReleaseManifest,
   readFirstPublishAcknowledgements,
 } from "./lib.mjs";
+import { skillsVersionMismatches } from "./skills-version.mjs";
 
 async function main() {
   const manifest = getReleaseManifest();
@@ -64,6 +65,21 @@ async function main() {
     );
     for (const { name, version } of versionMismatch) {
       console.error(`  ${name}: ${version}`);
+    }
+  }
+
+  // create-nextly-app writes its bundled skills only into a project on the
+  // release they name, so a skill stamped with another release would ship in
+  // this release and reach no project. The version step stamps them; this
+  // catches a Version PR edited by hand after that.
+  const staleSkills = skillsVersionMismatches(undefined, expectedVersion);
+  if (staleSkills.length > 0) {
+    blocked = true;
+    console.error(
+      `\nBlocked: bundled skills do not name ${expectedVersion}`
+    );
+    for (const { path, version } of staleSkills) {
+      console.error(`  ${path}: ${version ?? "no metadata.nextly-version"}`);
     }
   }
 

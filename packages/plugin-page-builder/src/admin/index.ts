@@ -30,8 +30,11 @@ import {
   registerKnownPlugin,
 } from "@nextlyhq/plugin-sdk/admin";
 
+import { BUILDER_VIEW_COMPONENT } from "../builder-view";
+
 import { BlocksField } from "./BlocksField";
 import { BlocksSummary } from "./BlocksSummary";
+import { PageBuilderView } from "./editor/PageBuilderView";
 
 /**
  * The blocks field's editor-form control.
@@ -57,6 +60,9 @@ const BLOCKS_SUMMARY_PATH = "@nextlyhq/plugin-page-builder/admin#BlocksSummary";
 const COMPONENTS = {
   [BLOCKS_FIELD_PATH]: BlocksField,
   [BLOCKS_SUMMARY_PATH]: BlocksSummary,
+  // The editor itself, drawn by the admin as a view of the document at the
+  // address the blocks field's card links to.
+  [BUILDER_VIEW_COMPONENT]: PageBuilderView,
 };
 
 // Eager registration on module load.
@@ -68,6 +74,6 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   return Promise.resolve();
 });
 
-export { BlocksField, BlocksSummary };
+export { BlocksField, BlocksSummary, PageBuilderView };
 export type { BlocksFieldProps } from "./BlocksField";
 export type { BlocksSummaryProps } from "./BlocksSummary";

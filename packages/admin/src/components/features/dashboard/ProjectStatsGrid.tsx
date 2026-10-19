@@ -60,7 +60,16 @@ export const ProjectStatsGrid: React.FC = () => {
   const stats: Pick<StatsCardProps, "title" | "value" | "icon" | "href">[] =
     useMemo(() => {
       if (!data) return [];
-      return [
+      // A count the summary left out (the reader may not read it) is left out
+      // of the grid too, rather than drawn as 0.
+      const figures: Array<
+        Omit<
+          Pick<StatsCardProps, "title" | "value" | "icon" | "href">,
+          "value"
+        > & {
+          value: number | undefined;
+        }
+      > = [
         {
           title: "Entries",
           value: data.content.totalEntries,
@@ -109,6 +118,9 @@ export const ProjectStatsGrid: React.FC = () => {
           icon: <Languages className="h-5 w-5" />,
         },
       ];
+      return figures.flatMap(({ value, ...figure }) =>
+        value === undefined ? [] : [{ ...figure, value }]
+      );
     }, [data, localeCount]);
 
   return (

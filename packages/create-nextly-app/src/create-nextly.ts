@@ -17,6 +17,10 @@ import {
 import { generateEnv } from "./generators/env";
 import { generateIntoExistingApp } from "./generators/existing-app";
 import type { GeneratedFiles } from "./generators/generated-files";
+import {
+  type MediaRouteTemplates,
+  readMediaRouteTemplates,
+} from "./generators/media-routes";
 import { reportGeneratedFiles } from "./generators/report";
 import {
   installDependencies,
@@ -83,6 +87,21 @@ function cwdProjectName(cwd: string): string {
     return DEFAULT_PROJECT_NAME;
   }
   return basename;
+}
+
+/**
+ * Stop a run that failed while setting up the app's files: record where it
+ * failed, say why, and exit. One place for it, since both the check of the
+ * templates before anything is written and the writing itself end this way.
+ */
+function stopAtConfig(error: unknown, startedAt: number): never {
+  telemetry.capture("scaffold_failed", {
+    stage: "config",
+    error_code: classifyError(error, "config"),
+    duration_ms: Date.now() - startedAt,
+  });
+  p.cancel((error as Error).message);
+  process.exit(1);
 }
 
 /**
@@ -571,6 +590,23 @@ export async function createNextly(
     }
   }
 
+  // --- Read what the existing-app path writes ---
+
+  // Every template the existing-app path writes from is read now, before the
+  // install and before any file: a missing or incomplete --local-template
+  // otherwise stopped the run part-way, with the config already written, so
+  // a retry failed on it.
+  let mediaRouteTemplates: MediaRouteTemplates | undefined;
+  if (!isFreshProject) {
+    try {
+      mediaRouteTemplates = await readMediaRouteTemplates(
+        resolveTemplatePath(options.localTemplatePath)
+      );
+    } catch (error) {
+      stopAtConfig(error, overallStartedAt);
+    }
+  }
+
   // --- Install dependencies ---
 
   if (skipInstall) {
@@ -622,13 +658,16 @@ export async function createNextly(
       if (!isFreshProject) {
         // Existing project: Nextly's files, each written only where nothing
         // is, and the Next config extended.
+        if (mediaRouteTemplates === undefined) {
+          throw new Error("The route templates were not read before writing.");
+        }
         reported.push(
           ...(await generateIntoExistingApp(
             cwd,
             projectType,
             projectInfo,
             database,
-            resolveTemplatePath(options.localTemplatePath)
+            mediaRouteTemplates
           ))
         );
       }
@@ -673,13 +712,7 @@ export async function createNextly(
       );
     } catch (error) {
       s.stop("Failed to generate configuration");
-      telemetry.capture("scaffold_failed", {
-        stage: "config",
-        error_code: classifyError(error, "config"),
-        duration_ms: Date.now() - overallStartedAt,
-      });
-      p.cancel((error as Error).message);
-      process.exit(1);
+      stopAtConfig(error, overallStartedAt);
     }
   }
 

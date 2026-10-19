@@ -52,7 +52,12 @@ function SingleCard({ single }: { single: ApiSingle }) {
                 {single.label || single.slug}
               </span>
               {single.description && (
-                <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                // Shortened to two lines, with the whole text on hover (`title`) and to assistive
+                // technology, which reads the element's full text.
+                <p
+                  className="text-xs text-muted-foreground line-clamp-2 leading-relaxed"
+                  title={single.description}
+                >
                   {single.description}
                 </p>
               )}
@@ -121,7 +126,9 @@ export const SinglesQuickLinks: React.FC = () => {
     );
   }
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    // As many columns as the CARD's width fits, never the window's: a tile is at least 11rem,
+    // so a small card is one column and a wide one several.
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-4">
       {singles.map(single => (
         <SingleCard key={single.id} single={single} />
       ))}

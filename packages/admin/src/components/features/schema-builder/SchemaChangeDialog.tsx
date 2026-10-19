@@ -18,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   Badge,
+  buttonVariants,
   Input,
   Label,
 } from "@nextlyhq/ui";
@@ -26,11 +27,14 @@ import { useMemo, useState } from "react";
 
 import type {
   SchemaPreviewChange,
+  SchemaPreviewLeavingTranslation,
   SchemaPreviewRenameCandidate,
   SchemaRenameResolution,
   InteractiveField,
   FieldResolution,
 } from "@admin/services/schemaApi";
+
+import { LeavingTranslationNotice } from "./LeavingTranslationNotice";
 
 interface SchemaChangeDialogProps {
   open: boolean;
@@ -44,6 +48,8 @@ interface SchemaChangeDialogProps {
   renamed?: SchemaPreviewRenameCandidate[];
   warnings: string[];
   interactiveFields: InteractiveField[];
+  // Fields that stop being translated: what moves to the archive, or why the change is refused.
+  leavingTranslation?: SchemaPreviewLeavingTranslation[];
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
@@ -61,6 +67,7 @@ export function SchemaChangeDialog({
   renamed,
   warnings,
   interactiveFields,
+  leavingTranslation = [],
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps) {
@@ -104,15 +111,37 @@ export function SchemaChangeDialog({
     changes.removed.length > 0 ||
     changes.changed.length > 0;
 
+  // A field that cannot leave translation in one change is refused by the server, so the dialog
+  // does not offer Apply, and any prompt the same field raises (a default for its new shared
+  // column, say) is moot: the change that would need the answer will not run.
+  // Matched by column: the classifier's prompts name a field by its column (`meta_title`), the
+  // notice by its name (`metaTitle`).
+  const refusedColumns = new Set(
+    leavingTranslation.filter(field => field.refusal).map(field => field.column)
+  );
+  const refused = refusedColumns.size > 0;
+  const promptedFields = interactiveFields.filter(
+    f => !refusedColumns.has(f.name)
+  );
+
   // Check if all interactive fields have been resolved with valid values.
   // "provide_default" requires a non-empty value; "mark_nullable" is always valid.
-  const allResolved = interactiveFields.every(f => {
+  const allResolved = promptedFields.every(f => {
     const res = resolutions[f.name];
     if (!res?.action) return false;
     if (res.action === "provide_default") return !!res.value?.trim();
     return true;
   });
-  const canApply = classification !== "interactive" || allResolved;
+  const canApply =
+    (classification !== "interactive" || allResolved) && !refused;
+  // When nothing in the change could be saved, there is no Save to disable: the dialog offers
+  // only Close. When something could, Save stays (disabled) with what to fix beside it.
+  const nothingSaveable =
+    refused &&
+    !hasChanges &&
+    candidatesByDrop.size === 0 &&
+    promptedFields.length === 0 &&
+    leavingTranslation.every(field => field.refusal);
 
   const updateResolution = (fieldName: string, resolution: FieldResolution) => {
     setResolutions(prev => ({ ...prev, [fieldName]: resolution }));
@@ -158,19 +187,11 @@ export function SchemaChangeDialog({
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-lg">
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {classification === "interactive"
-              ? "Schema Changes Need Input"
-              : hasDestructiveChanges
-                ? "Schema Changes Detected"
-                : "Save Collection"}
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            The following changes will be applied to{" "}
-            <strong className="text-foreground">{collectionName}</strong>.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
+        <SchemaChangeDialogHeader
+          collectionName={collectionName}
+          title={dialogTitle(refused, classification, hasDestructiveChanges)}
+          refused={refused}
+        />
 
         {/* Changes list */}
         {hasChanges && (
@@ -233,6 +254,8 @@ export function SchemaChangeDialog({
             ))}
           </div>
         )}
+
+        <LeavingTranslationNotice fields={leavingTranslation} />
 
         {/* Rename candidates - one section per dropped column with a list
             of "rename to X" radios + a "drop and add new" option.
@@ -323,9 +346,9 @@ export function SchemaChangeDialog({
         )}
 
         {/* Interactive fields -- need user input */}
-        {interactiveFields.length > 0 && (
+        {promptedFields.length > 0 && (
           <div className="space-y-3 rounded-md  border border-border border-warning-200 bg-warning-50 p-3 dark:border-warning-800 dark:bg-warning-950">
-            {interactiveFields.map(field => (
+            {promptedFields.map(field => (
               <div key={field.name} className="space-y-2">
                 <Label className="text-sm font-medium">
                   {field.reason === "new_required_no_default"
@@ -398,30 +421,121 @@ export function SchemaChangeDialog({
           </Alert>
         )}
 
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={isApplying}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={e => {
-              // Prevent auto-close so we show the overlay during apply
-              e.preventDefault();
-              onConfirm(buildResolutions(), buildRenameResolutions());
-            }}
-            disabled={isApplying || !canApply}
-            className={
-              // The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here.
-              hasDestructiveChanges
-                ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
-                : ""
-            }
-          >
-            {isApplying
-              ? "Applying..."
-              : hasDestructiveChanges
-                ? "Apply Changes"
-                : "Save Changes"}
-          </AlertDialogAction>
-        </AlertDialogFooter>
+        <SchemaChangeDialogFooter
+          nothingSaveable={nothingSaveable}
+          refusedCount={refusedColumns.size}
+          emphasisDestructive={hasDestructiveChanges && !refused}
+          isApplying={isApplying}
+          canApply={canApply}
+          onClose={() => onOpenChange(false)}
+          onApply={() =>
+            onConfirm(buildResolutions(), buildRenameResolutions())
+          }
+        />
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+function dialogTitle(
+  refused: boolean,
+  classification: SchemaChangeDialogProps["classification"],
+  hasDestructiveChanges: boolean
+): string {
+  if (refused) return "Schema Change Needs Another Step";
+  if (classification === "interactive") return "Schema Changes Need Input";
+  return hasDestructiveChanges ? "Schema Changes Detected" : "Save Collection";
+}
+
+function SchemaChangeDialogHeader({
+  collectionName,
+  title,
+  refused,
+}: {
+  collectionName: string;
+  title: string;
+  refused: boolean;
+}) {
+  return (
+    <AlertDialogHeader>
+      <AlertDialogTitle>{title}</AlertDialogTitle>
+      {/* A refused change applies nothing, so the description must not promise it will. */}
+      <AlertDialogDescription>
+        {refused
+          ? "This change cannot be saved to "
+          : "The following changes will be applied to "}
+        <strong className="text-foreground">{collectionName}</strong>
+        {refused ? " in one step." : "."}
+      </AlertDialogDescription>
+    </AlertDialogHeader>
+  );
+}
+
+// `AlertDialogAction` is a danger button by default, which suits a delete but not a save or a
+// close. The hover fill is pinned as well: tailwind-merge drops the default's background but
+// keeps its `hover:bg-destructive-600`, which `hover:opacity-90` does not conflict with.
+const PRIMARY_ACTION = `${buttonVariants({ variant: "primary" })} hover:bg-primary`;
+
+/**
+ * When nothing in the change could be saved there is no Save to disable, so the footer offers
+ * only Close. When something could, Save stays, disabled, with what to fix beside it.
+ */
+function SchemaChangeDialogFooter({
+  nothingSaveable,
+  refusedCount,
+  emphasisDestructive,
+  isApplying,
+  canApply,
+  onClose,
+  onApply,
+}: {
+  nothingSaveable: boolean;
+  refusedCount: number;
+  emphasisDestructive: boolean;
+  isApplying: boolean;
+  canApply: boolean;
+  onClose: () => void;
+  onApply: () => void;
+}) {
+  if (nothingSaveable) {
+    return (
+      <AlertDialogFooter>
+        <AlertDialogAction className={PRIMARY_ACTION} onClick={onClose}>
+          Close
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    );
+  }
+  return (
+    <AlertDialogFooter>
+      {refusedCount > 0 && (
+        <p className="text-xs text-muted-foreground sm:mr-auto sm:self-center">
+          {refusedCount === 1
+            ? "Fix the field above to save."
+            : "Fix the fields above to save."}
+        </p>
+      )}
+      <AlertDialogCancel disabled={isApplying}>Cancel</AlertDialogCancel>
+      <AlertDialogAction
+        onClick={e => {
+          // Prevent auto-close so we show the overlay during apply
+          e.preventDefault();
+          onApply();
+        }}
+        disabled={isApplying || !canApply}
+        className={
+          // The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here.
+          emphasisDestructive
+            ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+            : PRIMARY_ACTION
+        }
+      >
+        {isApplying
+          ? "Applying..."
+          : emphasisDestructive
+            ? "Apply Changes"
+            : "Save Changes"}
+      </AlertDialogAction>
+    </AlertDialogFooter>
   );
 }

@@ -92,11 +92,18 @@ describe("the last commit Integration tested", () => {
    * tested. A run where one leg judged the commit and another was cancelled
    * did not test it on the second dialect, so every leg is named as the work.
    */
-  it("counts a run as tested only when every leg reached a verdict", () => {
+  it("counts a run as tested only when every job that runs the suite reached a verdict", () => {
     const workflow = read(".github/workflows/integration.yml");
-    const legs = Object.values(workflow.jobs).map(job => job.name).filter(name => name.startsWith("Integration ("));
+    // The jobs that run a lane, under the names their runs carry: GitHub
+    // appends a matrix job's value to a name with no expression in it, so a
+    // sharded leg is one name per shard.
+    const runsTheSuite = job => (job.steps ?? []).some(step => /\blane:test:integration:/.test(String(step.run)));
+    const legs = Object.values(workflow.jobs)
+      .filter(runsTheSuite)
+      .flatMap(job => (job.strategy?.matrix?.shard ?? [null]).map(shard => (shard === null ? job.name : `${job.name} (${shard})`)));
     const ask = workflow.jobs.changes.steps.find(step => step.id === "newer");
-    expect(legs.length).toBe(3);
+    // A floor, so a reader that found no jobs cannot pass by comparing nothing.
+    expect(legs.length).toBeGreaterThanOrEqual(3);
     expect(ask.with["substantive-job"].split("\n").map(name => name.trim()).filter(Boolean).sort()).toEqual(legs.sort());
   });
 });
@@ -205,8 +212,10 @@ describe("Integration on request", () => {
   });
 
   it("skips a leg only on an answer of no, so a question that failed still runs it", () => {
+    // Every job of a leg, the shards that run the suite and the required check
+    // that reads them, so neither runs where the other skips.
     const legs = Object.values(workflow.jobs).filter(job => String(job.name).startsWith("Integration ("));
-    expect(legs.length).toBe(3);
+    for (const check of QUEUE_CHECKS[".github/workflows/integration.yml"]) expect(legs.map(leg => leg.name)).toContain(check);
     for (const leg of legs) expect(leg.if, leg.name).toContain("needs.changes.outputs.requested != 'false'");
   });
 
@@ -235,6 +244,86 @@ describe("Integration on request", () => {
     // Two separate requests for the same pull request share one group, so the later replaces the earlier.
     expect(groupFor("run-integration", 1)).toBe(groupFor("run-integration", 2));
     expect(request.concurrency["cancel-in-progress"]).toBe(true);
+  });
+});
+
+describe("a sharded leg", () => {
+  /*
+   * The lane check takes a matrix job that hands the lane its own shard as
+   * calling the lane (scripts/check-test-lanes.mjs), in whichever workflow it
+   * reads. That is true only when the matrix lists every shard, 1 to n, has no
+   * other axis (which would make `strategy.job-total` count combinations, and
+   * hand out some shards twice and others never), and none is cancelled
+   * because another failed: then between them the jobs run all of it.
+   */
+  it("runs every shard of the lane it hands out, in every workflow", async () => {
+    const { MATRIX_SHARD } = await import("./check-test-lanes.mjs");
+    const dir = new URL("../.github/workflows/", import.meta.url);
+    const sharded = readdirSync(dir)
+      .filter(name => /\.ya?ml$/.test(name))
+      .flatMap(name =>
+        Object.entries(read(`.github/workflows/${name}`).jobs ?? {})
+          .filter(([, job]) => (job.steps ?? []).some(step => String(step.run).includes(MATRIX_SHARD.trim())))
+          .map(([id, job]) => [`${name}#${id}`, job])
+      );
+    // A floor: the postgres and mysql legs are sharded.
+    expect(sharded.map(([id]) => id).sort()).toEqual([
+      "integration.yml#integration-mysql-shards",
+      "integration.yml#integration-postgres-shards",
+    ]);
+    for (const [id, job] of sharded) {
+      const matrix = job.strategy?.matrix ?? {};
+      expect(Object.keys(matrix), id).toEqual(["shard"]);
+      const shards = matrix.shard;
+      expect(shards, id).toEqual(Array.from({ length: shards.length }, (_, i) => i + 1));
+      expect(shards.length, id).toBeGreaterThanOrEqual(2);
+      expect(job.strategy["fail-fast"], id).toBe(false);
+    }
+  });
+});
+
+describe("a sharded leg's required check", () => {
+  /*
+   * The required check reads the shards' result and fails unless every shard
+   * passed. It must run whatever happened to them: a shard stopped by its own
+   * backstop is cancelled, and a verdict guarded by `!cancelled()` could then
+   * be skipped, which the merge gate reads as a pass. So it runs under
+   * `always()`, with the same conditions as the shards otherwise.
+   */
+  it("runs whatever happened to the shards, on the shards' own conditions", () => {
+    const workflow = read(".github/workflows/integration.yml");
+    const verdicts = Object.entries(workflow.jobs).filter(([, job]) =>
+      (job.needs ?? []).some?.(need => String(need).endsWith("-shards"))
+    );
+    expect(verdicts.map(([id]) => id).sort()).toEqual(["integration-mysql", "integration-postgres"]);
+    for (const [id, job] of verdicts) {
+      const shards = workflow.jobs[`${id}-shards`];
+      expect(String(job.if), id).toMatch(/^\$\{\{\s*always\(\)/);
+      expect(String(job.if), id).not.toMatch(/cancelled\(\)/);
+      expect(String(job.if).replace(/always\(\)/, ""), id).toBe(String(shards.if).replace(/!cancelled\(\)/, ""));
+    }
+  });
+});
+
+describe("the MySQL leg's database", () => {
+  /*
+   * The core suite commits many small transactions, and MySQL's default
+   * durability made the leg wait on disk writes until it overran its budget
+   * with every test green. The leg relaxes it before the suite runs.
+   */
+  it("enlarges the redo log and stops forcing each commit to disk before the suite starts", () => {
+    // The job that runs the MySQL lane, whatever it is called.
+    const job = Object.values(read(".github/workflows/integration.yml").jobs).find(candidate =>
+      (candidate.steps ?? []).some(step => /\blane:test:integration:mysql\b/.test(String(step.run)))
+    );
+    const steps = job.steps.map(step => step.name);
+    const room = job.steps.findIndex(step => step.name === "Give the test database room to write");
+    const suite = job.steps.findIndex(step => step.name === "Run integration tests (mysql)");
+    expect(room, steps.join(", ")).toBeGreaterThanOrEqual(0);
+    expect(room).toBeLessThan(suite);
+    for (const setting of ["innodb_redo_log_capacity = 1073741824", "innodb_flush_log_at_trx_commit = 2", "sync_binlog = 0"]) {
+      expect(job.steps[room].run).toContain(setting);
+    }
   });
 });
 

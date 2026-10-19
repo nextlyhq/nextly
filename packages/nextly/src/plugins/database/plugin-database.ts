@@ -113,7 +113,7 @@ export interface PluginDatabaseDeps {
    * is the transaction's record of the work still running on its connection
    * (see `transactionScope`).
    */
-  track?: <R>(work: PromiseLike<R>) => Promise<R>;
+  track?: <R>(work: PromiseLike<R>, kind?: "write" | "read") => Promise<R>;
   /**
    * Columns contributed to tables `ctx.db` has no owner for — entity and
    * extendable core tables — keyed by table SQL name, with who contributed
@@ -231,11 +231,12 @@ function nestedTransactionError(): NextlyError {
  * is outside a transaction would make `ctx.db.query.x.findMany()` run once per
  * await there and exactly once inside one, and would expose a handle able to
  * assemble queries past the owner check. Every other terminal call is an
- * async function, so for it this changes nothing.
+ * async function, so for it this changes nothing. A read is marked as one,
+ * so a rollback to a savepoint, which cannot undo it, does not count it.
  */
 function trackerOf(
   deps: PluginDatabaseDeps
-): <R>(work: PromiseLike<R>) => Promise<R> {
+): <R>(work: PromiseLike<R>, kind?: "write" | "read") => Promise<R> {
   return deps.track ?? (work => Promise.resolve(work));
 }
 
@@ -932,11 +933,11 @@ function checkedEntry(
     // has; only the query itself is handed to the tracker.
     findMany: config => {
       const { entry, checked } = prepare(config);
-      return trackerOf(deps)(entry.findMany(checked));
+      return trackerOf(deps)(entry.findMany(checked), "read");
     },
     findFirst: config => {
       const { entry, checked } = prepare(config);
-      return trackerOf(deps)(entry.findFirst(checked));
+      return trackerOf(deps)(entry.findFirst(checked), "read");
     },
   };
 }
@@ -1113,7 +1114,7 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
         orderBy: (...columns) => build({ ...state, orderBy: columns }),
         limit: count => build({ ...state, limit: count }),
         offset: count => build({ ...state, offset: count }),
-        all: () => track(selectRows(state)),
+        all: () => track(selectRows(state), "read"),
         async first() {
           const rows = await build({ ...state, limit: 1 }).all();
           return rows[0] ?? null;
@@ -1254,7 +1255,7 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
       // Closure-bound rather than methods reading `this`, so a destructured
       // `const { get } = ctx.db.contributed(...)` works like the object form.
       const getMany: ContributedColumns<typeof columns>["getMany"] = ids =>
-        track(readMany(ids));
+        track(readMany(ids), "read");
       const get: ContributedColumns<typeof columns>["get"] = async id => {
         const [row] = await getMany([id]);
         return row ?? null;

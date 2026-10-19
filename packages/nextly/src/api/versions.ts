@@ -22,8 +22,11 @@ import { attachVersionAuthors } from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
-import { respondList } from "./response-shapes";
-import { requireRouteVersionReadAccess } from "./versions-access";
+import { privateToSession, respondList } from "./response-shapes";
+import {
+  requireRouteVersionReadAccess,
+  withLastViewedMarks,
+} from "./versions-access";
 import { withErrorHandler } from "./with-error-handler";
 
 /** Page size when the caller does not ask for one. */
@@ -90,8 +93,10 @@ function parsePositiveInt(
  * Rows carry only an author id as stored, so each is resolved to a display name
  * before returning.
  */
-export const GET = withErrorHandler(
-  async (request: Request, context: RouteContext) => {
+// Private to the session, refusals included: the page marks where this person
+// last looked.
+export const GET = privateToSession(
+  withErrorHandler(async (request: Request, context: RouteContext) => {
     const { kind, slug, id } = await context.params;
     const scopeKind = parseScopeKind(kind);
 
@@ -112,7 +117,12 @@ export const GET = withErrorHandler(
     // clamped, so no single request can serialize an entire long history.
     const limit = Math.min(requestedLimit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
-    await requireRouteVersionReadAccess(request, scopeKind, slug, id);
+    const caller = await requireRouteVersionReadAccess(
+      request,
+      scopeKind,
+      slug,
+      id
+    );
 
     const versions = getService("versionsService");
     // Fetch one more than asked for: its presence is what proves another page
@@ -132,8 +142,15 @@ export const GET = withErrorHandler(
 
     // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
     // so the meta describes the returned window.
-    // Rows record only an author id; a history list shows a person.
-    return respondList(await attachVersionAuthors(rows), {
+    // Rows record only an author id; a history list shows a person. For a
+    // person, each part's "You last looked here" row is marked; reading the
+    // list records nothing.
+    const items = await withLastViewedMarks(await attachVersionAuthors(rows), {
+      ref: { scopeKind, scopeSlug: slug, entryId: id },
+      user: caller.user,
+      authenticatedScope: caller.authenticatedScope,
+    });
+    return respondList(items, {
       total: rows.length,
       page: 1,
       limit,
@@ -141,5 +158,5 @@ export const GET = withErrorHandler(
       hasNext,
       hasPrev: cursor !== undefined,
     });
-  }
+  })
 );
