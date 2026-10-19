@@ -220,7 +220,11 @@ describe.each(getConfiguredTestDialects())(
         );
 
       expect(failed).toBeInstanceOf(Error);
-      expect(await t.events()).toEqual([]);
+      // Only the create's own history is left: the event the failed change
+      // wrote went with it, and so did its part.
+      expect(
+        (await t.events()).map(e => (e as { kind?: string }).kind)
+      ).toEqual(["created"]);
       expect(await t.parts()).toEqual([]);
       const [row] = await current!.adapter.select<{ title: string }>(
         posts!.tableName,
