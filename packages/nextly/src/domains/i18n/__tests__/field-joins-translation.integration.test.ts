@@ -607,6 +607,52 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
   });
 
+  // SQLite keeps no length on a text column, so a narrower bound changes nothing it stores.
+  it.skipIf(dialect === "sqlite")(
+    "refuses a code-first apply that narrows a field's length as it becomes translated, and changes nothing",
+    async () => {
+      // A bounded column reports its length apart from its type on PostgreSQL and MySQL, so the
+      // comparison has to read the new length from the column the field would have, not keep the
+      // live one: a value copied into the narrower companion column is cut on MySQL.
+      const short = (maxLength: number) => ({
+        name: "heading",
+        type: "text",
+        options: { variant: "short" },
+        validation: { maxLength },
+      });
+      const created = await handler().createCollection({
+        name: "posts",
+        label: "Post",
+        localized: true,
+        fields: [
+          { ...short(100), localized: false },
+          { name: "views", type: "number" },
+        ],
+      });
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const entry = await handler()
+        .getEntryService()
+        .createEntry(
+          { collectionName: "posts", overrideAccess: true, locale: "en" },
+          { heading: "Hello", views: 7 }
+        );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+      const id = String((entry.data as { id: unknown }).id);
+
+      const applied = await applyCodeFirst([
+        { ...short(10), localized: true },
+        { name: "views", type: "number" },
+      ]);
+
+      expect(applied.success).toBe(false);
+      expect(JSON.stringify(applied)).toMatch(
+        /RESHAPED_FIELD_JOINS_TRANSLATION/
+      );
+      expect(await mainHeading("dc_posts", id)).toBe("Hello");
+      expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
+    }
+  );
+
   /** `heading` as the main table holds it, or undefined when the column is gone. */
   async function mainHeading(table: string, id: string): Promise<unknown> {
     const rows = await query<{ heading: unknown }>(

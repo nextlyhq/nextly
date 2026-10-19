@@ -402,7 +402,14 @@ async function refuseReshapedJoins(
     return (
       column !== undefined &&
       shared !== null &&
-      typesDiffer(column, { ...column, type: shared.dialectType })
+      // The column the field would have, from its descriptor alone: PostgreSQL and MySQL report a
+      // live column's length or precision apart from its type, and keeping that beside the new
+      // type would compare the old bound with itself.
+      typesDiffer(column, {
+        name: column.name,
+        type: shared.dialectType,
+        nullable: column.nullable,
+      })
     );
   });
   if (reshaped.length === 0) return;
