@@ -64,6 +64,17 @@ function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
   return definition.query?.select?.length ?? 0;
 }
 
+/**
+ * Whether a freshness line will come for this card: it asked for data, and its answer was not a
+ * refusal, which never gets a time. The card holds the line's place until then.
+ */
+function awaitsFreshnessFor(
+  definition: DashboardWidget,
+  slot: WidgetSlot | undefined
+): boolean {
+  return definition.query !== undefined && slot?.ok !== false;
+}
+
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
     case "metric":
@@ -232,6 +243,7 @@ export function WidgetRenderer({
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
     skeletonFields: skeletonFieldsFor(definition),
+    awaitsFreshness: awaitsFreshnessFor(definition, slot),
     skeletonCells: definition.cells?.map(cell => cell.label),
     answerTier,
   };
@@ -312,8 +324,6 @@ export function WidgetRenderer({
         // never replaced, so no `error` is passed and the footer's `settled`
         // gate never sees one.
         updatedAt={slot?.ok === false ? null : updatedAt}
-        // A refused slot never gets a time, so its card holds no line for one.
-        awaitsFreshness={definition.query !== undefined && slot?.ok !== false}
         isLoading={isFetching}
       >
         <PluginSlot path={definition.component} props={componentProps} />
@@ -323,11 +333,7 @@ export function WidgetRenderer({
 
   const drawn = cardForOutcome(outcome, { updatedAt, isFetching, onRetry });
   return (
-    <WidgetCard
-      {...shared}
-      {...drawn.props}
-      awaitsFreshness={definition.query !== undefined}
-    >
+    <WidgetCard {...shared} {...drawn.props}>
       {drawn.body}
     </WidgetCard>
   );
