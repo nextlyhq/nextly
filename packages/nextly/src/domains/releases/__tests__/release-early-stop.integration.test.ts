@@ -382,6 +382,32 @@ describe.each(getConfiguredTestDialects())(
       expect(await stoppedNotices(t, arranged)).toBe(1);
     });
 
+    it("stops it when the author of its documents is deactivated", async () => {
+      // A visitor is shown nothing of it either way: the read path already
+      // passes over a due document whose author cannot act. What the event
+      // adds is the stop, and the owner told, before any pass runs.
+      const t = await boot(dialect);
+      const article = await entry(t, "articles", "draft");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "articles",
+          entryId: article,
+          action: "publish",
+        },
+      ]);
+      expect(await visibleIds(t, "articles")).toContain(article);
+
+      await t.nextly.users.update({
+        id: arranged.author,
+        data: { isActive: false },
+      });
+
+      expect(await visibleIds(t, "articles")).not.toContain(article);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
     it("stops it when one of its documents is deleted, so the others are not shown going live", async () => {
       const t = await boot(dialect);
       const kept = await entry(t, "articles", "draft");

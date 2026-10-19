@@ -93,6 +93,7 @@ import { affectedRowCount } from "../../auth/services/auth-service";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import { eraseRecipientDeliveries } from "../../email/erase-recipient";
 import { revalidateMedia } from "../../media/revalidate-media";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
@@ -1926,6 +1927,16 @@ export class UserMutationService extends BaseService {
         if (hasRoleUpdates && services) {
           await this.afterCommit(() =>
             services.userRoles.invalidateRoleCaches(String(currentUser.id))
+          );
+        }
+        // A deactivated author can no longer be acted as, so a scheduled
+        // release holding a document they added is stopped now rather than at
+        // its instant. After the commit, outside the deactivation's
+        // transaction; the early stop logs its own failures and never throws,
+        // so a deactivation cannot fail over a release.
+        if (updateData.isActive === false) {
+          await this.afterCommit(() =>
+            stopReleasesHolding({ authors: [String(currentUser.id)] })
           );
         }
       }
