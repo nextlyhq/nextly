@@ -65,6 +65,11 @@ export interface RestoreAffordance {
    * it, offered where the panel stepped aside and so cannot offer it itself.
    */
   compare?: () => void;
+  /**
+   * Opens the full comparison of the version on screen with the newest in its
+   * language, offered for the same reason as `compare`.
+   */
+  compareCurrent?: () => void;
 }
 
 export interface DocumentHistoryValue {

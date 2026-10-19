@@ -44,7 +44,7 @@ import { useDocumentHistory } from "./document-history-context";
 import { useHistoryAddress } from "./history-address";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
-import { predecessorOf } from "./version-pairing";
+import { newestInLocale, predecessorOf } from "./version-pairing";
 import { versionsHref } from "./VersionComparePage";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionLocaleFilter } from "./VersionLocaleFilter";
@@ -360,11 +360,16 @@ export function VersionHistorySheet({
   // could point "previous" at a version retention has already pruned, 404-ing
   // the comparison. A failed revalidation clears `isRefetching` but leaves the
   // list stale, so `isRefetchError` keeps it withheld until a fetch succeeds.
+  const listFresh = !isRefetching && !isRefetchError;
   const canComparePrevious =
-    selectedPresent &&
-    previousVersionNo !== null &&
-    !isRefetching &&
-    !isRefetchError;
+    selectedPresent && previousVersionNo !== null && listFresh;
+  // The newest version in the chosen one's language, to compare against for
+  // everything since it; withheld on the same freshness grounds, since a stale
+  // list can name a newest that has since been pruned.
+  const newestVersionNo =
+    selected === null ? null : newestInLocale(versions, selected);
+  const canCompareCurrent =
+    selectedPresent && newestVersionNo !== null && listFresh;
 
   // Restoring is offered from the banner in the document, which is where the
   // reader is looking — but it stays THIS component's mutation, guarded by
@@ -388,17 +393,31 @@ export function VersionHistorySheet({
   // Built as the address itself, a plain string: the scope object and the
   // list are rebuilt each render, and an action built from them would
   // republish the banner's actions, re-rendering the editor, every time.
+  const selectedLocale = versions.find(v => v.versionNo === selected)?.locale;
   const comparisonHref =
     selected === null || previousVersionNo === null
       ? null
       : versionsHref(
           scope,
           { from: previousVersionNo, to: selected },
-          versions.find(v => v.versionNo === selected)?.locale
+          selectedLocale
         );
   const openComparison = useCallback(() => {
     if (comparisonHref !== null) navigateTo(comparisonHref);
   }, [comparisonHref]);
+  // The same page, from the version chosen to the newest in its language:
+  // everything that has changed since it.
+  const currentComparisonHref =
+    selected === null || newestVersionNo === null
+      ? null
+      : versionsHref(
+          scope,
+          { from: selected, to: newestVersionNo },
+          selectedLocale
+        );
+  const openCurrentComparison = useCallback(() => {
+    if (currentComparisonHref !== null) navigateTo(currentComparisonHref);
+  }, [currentComparisonHref]);
   useEffect(() => {
     if (!open || selected === null) {
       setRestore(null);
@@ -415,6 +434,9 @@ export function VersionHistorySheet({
         : {
             backToHistory,
             ...(canComparePrevious ? { compare: openComparison } : {}),
+            ...(canCompareCurrent
+              ? { compareCurrent: openCurrentComparison }
+              : {}),
           }),
     });
     // Withdrawn on unmount as well as on close: a banner left holding a
@@ -429,6 +451,8 @@ export function VersionHistorySheet({
     backToHistory,
     canComparePrevious,
     openComparison,
+    canCompareCurrent,
+    openCurrentComparison,
     roomBeside,
     setRestore,
   ]);
@@ -728,9 +752,7 @@ export function VersionHistorySheet({
             nothing. */}
           {/* No way back to the list here: the list never left the panel, and
             the banner over the version offers Back to current. */}
-          {selected !== null &&
-          canComparePrevious &&
-          previousVersionNo !== null ? (
+          {selected !== null && (canComparePrevious || canCompareCurrent) ? (
             <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
               {/* The full comparison, on a page of its own, from the version
                 already chosen against the one before it: its address names
@@ -739,9 +761,20 @@ export function VersionHistorySheet({
                 pair does not open "this version with nothing"; the destination
                 reads an absent pair as the two NEWEST versions, so the control
                 would silently show a comparison the reader did not ask for. */}
-              <Button variant="outline" size="sm" onClick={openComparison}>
-                Open full comparison
-              </Button>
+              {canComparePrevious ? (
+                <Button variant="outline" size="sm" onClick={openComparison}>
+                  Open full comparison
+                </Button>
+              ) : null}
+              {canCompareCurrent ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={openCurrentComparison}
+                >
+                  Compare with current
+                </Button>
+              ) : null}
               {/* Restoring is offered in the BANNER over the version being
                   read, not here. The panel only ever offered it while a
                   version was selected, which is exactly when the banner is on

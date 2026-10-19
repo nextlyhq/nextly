@@ -93,6 +93,28 @@ describe("HistoricalDocumentBanner", () => {
     expect(onCompare).toHaveBeenCalled();
   });
 
+  it("offers the comparison with current only when it is handed one", async () => {
+    const onCompareCurrent = vi.fn();
+    const { rerender } = render(
+      <HistoricalDocumentBanner versionNo={7} onReturnToCurrent={vi.fn()} />
+    );
+    expect(
+      screen.queryByRole("button", { name: "Compare with current" })
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <HistoricalDocumentBanner
+        versionNo={7}
+        onReturnToCurrent={vi.fn()}
+        onCompareCurrent={onCompareCurrent}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Compare with current" })
+    );
+    expect(onCompareCurrent).toHaveBeenCalled();
+  });
+
   it("offers restoring only when a handler is supplied", () => {
     const { unmount } = render(
       <HistoricalDocumentBanner versionNo={7} onReturnToCurrent={vi.fn()} />

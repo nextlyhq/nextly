@@ -460,6 +460,49 @@ describe("VersionHistorySheet", () => {
     ).toBeInTheDocument();
   });
 
+  it("opens the comparison of a past version with the newest in its language", async () => {
+    // Localized: the newest version overall is another language's, so
+    // "current" is the newest in the chosen version's own.
+    const inLocale = (versionNo: number, locale: string) => ({
+      ...version(versionNo),
+      locale,
+    });
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            {
+              items: [
+                inLocale(5, "es"),
+                inLocale(4, "en"),
+                inLocale(3, "en"),
+                inLocale(2, "en"),
+              ],
+              meta: { hasNext: false },
+            },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    answerMediaQueries(true);
+    renderSheet();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Compare with current" })
+    );
+
+    // The comparison page, naming the pair and the language it is in.
+    const address = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toMatch(/\/versions$/);
+    expect({
+      from: address.get("from"),
+      to: address.get("to"),
+      locale: address.get("locale"),
+    }).toEqual({ from: "2", to: "4", locale: "en" });
+  });
+
   it("leaves the document reachable while its history is open", () => {
     /*
      * A window wide enough to hold the panel BESIDE the document, which is the
@@ -928,6 +971,21 @@ describe("VersionHistorySheet — the comparison where the page steps aside", ()
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
     await waitFor(() => expect(seen.restore?.compare).toBeTypeOf("function"));
+  });
+
+  it("hands the banner the comparison with current on a narrow window", async () => {
+    answerMediaQueries(false);
+    const seen: { restore: RestoreAffordance | null } = { restore: null };
+    render(<Editor onPublished={r => (seen.restore = r)} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+    await waitFor(() =>
+      expect(seen.restore?.compareCurrent).toBeTypeOf("function")
+    );
+    act(() => seen.restore?.compareCurrent?.());
+
+    const address = new URLSearchParams(window.location.search);
+    expect([address.get("from"), address.get("to")]).toEqual(["2", "3"]);
   });
 
   it("keeps the comparison in the panel beside the document", async () => {
