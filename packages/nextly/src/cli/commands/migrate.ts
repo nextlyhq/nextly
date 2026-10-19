@@ -36,9 +36,6 @@ import { resolve } from "node:path";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { getDialectTables } from "../../database/index";
-import { SchemaRegistry } from "../../database/schema-registry";
-import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { resolveRegistryNameFromCatalog } from "../../domains/field-groups/storage/resolve-storage-names";
 import {
   isLocalizationIntentRefusal,
@@ -116,7 +113,11 @@ import {
   withMigrateLock,
 } from "../../domains/schema/pipeline/locks";
 import { snapshotComparableTables } from "../../domains/schema/pipeline/managed-tables";
+import { provisionUserFieldStorage } from "../../domains/users/services/provision-user-field-storage";
+import { UserExtSchemaService } from "../../domains/users/services/user-ext-schema-service";
+import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
 import { NextlyError, describeError } from "../../errors";
+import type { UserConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
 import {
   createCliAdapter,
@@ -126,17 +127,22 @@ import {
   type SupportedDialect,
 } from "../utils/adapter";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
-import { formatDuration, formatCount } from "../utils/logger";
+import { formatDuration, formatCount, type Logger } from "../utils/logger";
 import {
   discoverMigrationGroups,
   selectVariant,
   getSortedBaseNames,
 } from "../utils/migration-discovery";
+import { installRegistryResolver } from "../utils/registry-resolver";
 
 import {
   plainTextPasswordCleanup,
   plainTextPasswordNotice,
 } from "./clear-plaintext-passwords";
+
+// Re-exported for the callers that import it from this command. Other
+// commands import it from cli/utils, which does not pull this one in.
+export { installRegistryResolver };
 
 /**
  * Options specific to the migrate command
@@ -465,6 +471,18 @@ export async function runMigrate(
             repairUntracked: options.repairLocalization === true,
           }
         );
+        // After the migrations too, and for the same reason: the user fields'
+        // table follows the config's final schema.
+        const userFields = await provisionUserFieldTables(
+          configResult.configPath ? configResult.config.users : null,
+          adapter as unknown as DrizzleAdapter,
+          logger
+        );
+        if (userFields > 0) {
+          logger.info(
+            `User fields: storage ready for ${formatCount(userFields, "field")}.`
+          );
+        }
       }
     } catch (err) {
       logger.error(describeError(err));
@@ -492,6 +510,37 @@ export async function runMigrate(
   } finally {
     await adapter.disconnect();
   }
+}
+
+/**
+ * Provision `user_ext`, the table the project's user fields are stored in, for
+ * the code-defined fields and the ones defined in the admin. `nextly migrate`
+ * sets up every production database, and a production boot never changes the
+ * schema, so this is the step that gives such a database the table its user
+ * fields are read from. Returns how many fields it holds columns for.
+ *
+ * `users` is null when no config file was loaded. Nothing is done then: the
+ * defaults declare no fields, and syncing that empty list would delete every
+ * code-defined field's definition, as a migrate run from the wrong folder
+ * would otherwise do.
+ */
+export async function provisionUserFieldTables(
+  users: UserConfig | undefined | null,
+  adapter: DrizzleAdapter,
+  logger: Logger
+): Promise<number> {
+  if (users === null) return 0;
+  const fieldDefService = new UserFieldDefinitionService(adapter, logger);
+  return provisionUserFieldStorage({
+    codeFields: users?.fields ?? [],
+    fieldDefService,
+    userExtSchemaService: new UserExtSchemaService(
+      adapter.dialect,
+      fieldDefService,
+      logger
+    ),
+    db: adapter.getDrizzle(),
+  });
 }
 
 /**
@@ -702,39 +751,6 @@ export async function maybeForceUnlock(
 ): Promise<void> {
   if (!options.forceUnlock) return;
   await forceUnlock(db, dialect);
-}
-
-/**
- * Give the adapter a way to resolve core table NAMES to Drizzle tables.
- *
- * 🔴 Without this, the metadata reconciliation silently does nothing.
- * `adapter.select` maps a name through a resolver and refuses with "not found
- * in schema registry" when none is installed. A CLI run has no boot to install
- * one — which is why `prune`, `webhooks-prune`, `migrate-field-groups` and
- * `dev-server` each wire it up the same way before touching adapter CRUD.
- *
- * Missing here, every registry read in the sweep threw, the per-registry guard
- * caught all three, and the command reported success having repaired nothing:
- * a no-op in exactly the production case the phase exists for.
- *
- * Both spellings of the field-group registry are registered, because a database
- * whose storage migration has run has no handle for it under the other name.
- *
- * Its own exported function so the wiring can be asserted by its OUTCOME — that
- * the registry table resolves — rather than by whether a call appears in the
- * source.
- */
-export function installRegistryResolver(
-  adapter: DrizzleAdapter
-): SchemaRegistry {
-  const { dialect } = adapter.getCapabilities();
-  const schemaRegistry = new SchemaRegistry(dialect);
-  schemaRegistry.registerStaticSchemas({
-    ...getDialectTables(dialect),
-    ...getFieldGroupRegistryAliases(dialect),
-  });
-  adapter.setTableResolver(schemaRegistry);
-  return schemaRegistry;
 }
 
 /**

@@ -20,6 +20,10 @@ import type {
 
 import { WelcomeHeader } from "../../../dashboard/WelcomeHeader";
 import { WidgetGrid } from "../../WidgetGrid";
+import {
+  stubDashboardWidth,
+  unstubDashboardWidth,
+} from "../../__tests__/dashboard-width";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
@@ -186,6 +190,8 @@ function renderDashboard() {
 }
 
 beforeEach(() => {
+  // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
+  stubDashboardWidth();
   vi.clearAllMocks();
   mockBranding = branding();
   layoutResponse = layout();
@@ -199,6 +205,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unstubDashboardWidth();
   vi.useRealTimers();
 });
 

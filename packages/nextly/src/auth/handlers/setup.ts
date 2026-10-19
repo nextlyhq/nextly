@@ -47,12 +47,22 @@ export interface SetupHandlerDeps {
   accessTokenTTL: number;
   refreshTokenTTL: number;
   allowedOrigins: string[];
-  getUserCount: () => Promise<number>;
+  /**
+   * Whether anyone holds the `super-admin` role: setup's gate. Not the user
+   * count, since a role-less self-registered account can exist before the
+   * install has an administrator, and setup must still create one.
+   */
+  hasAdministrator: () => Promise<boolean>;
+  /**
+   * Create the administrator's account, or answer null when another setup
+   * created the administrator first: of setups racing on an empty install,
+   * exactly one is made the administrator, and the others create nothing.
+   */
   createSuperAdmin: (data: {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string }>;
+  }) => Promise<{ id: string; email: string; name: string } | null>;
   /** The roles in force, and when the first of them lapses; see `SessionRoles`. */
   fetchSessionRoles: (userId: string) => Promise<SessionRoles>;
   seedPermissions: () => Promise<void>;
@@ -70,19 +80,28 @@ export interface SetupHandlerDeps {
   trustedProxyIps: string[];
 }
 
+/** The refusal once the install has its administrator, on every path here. */
+function setupCompleteResponse(): Response {
+  return jsonResponse(403, {
+    error: {
+      code: "SETUP_COMPLETE",
+      message: "Setup already completed",
+    },
+  });
+}
+
 export async function handleSetupStatus(
   request: Request,
-  deps: Pick<SetupHandlerDeps, "getUserCount">
+  deps: Pick<SetupHandlerDeps, "hasAdministrator">
 ): Promise<Response> {
   try {
-    const count = await deps.getUserCount();
-    // Emit `{ isSetup, requiresInitialUser }` per spec §7.7. Both
-    // fields are derived from the user count: `isSetup` is true once a user
-    // exists, `requiresInitialUser` is the inverse so the admin client can
+    const isSetup = await deps.hasAdministrator();
+    // Emit `{ isSetup, requiresInitialUser }` per spec §7.7. Both fields are
+    // derived from whether an administrator exists: `isSetup` is true once
+    // one does, `requiresInitialUser` is the inverse so the admin client can
     // drive the bootstrap-form redirect guard without reinterpreting the
     // same boolean. The pair also satisfies the section 5.1 "no Boolean-only
     // respondData payload" rule.
-    const isSetup = count > 0;
     return respondData({ isSetup, requiresInitialUser: !isSetup });
   } catch (err) {
     // Surface a 503 rather than synthesising a default `isSetup` -- the
@@ -106,18 +125,18 @@ export async function handleSetup(
   request: Request,
   deps: SetupHandlerDeps
 ): Promise<Response> {
-  // Fail closed: an unknown user count must not be treated as 0, otherwise
-  // a transient DB failure could allow a second super-admin to be created
-  // while the real first user is invisible to the query.
-  let userCount: number;
+  // Fail closed: an unknown answer must not be treated as "no administrator",
+  // otherwise a transient DB failure could allow a second super-admin to be
+  // created while the real one is invisible to the query.
+  let administratorExists: boolean;
   try {
-    userCount = await deps.getUserCount();
+    administratorExists = await deps.hasAdministrator();
   } catch (err) {
     const requestId = readOrGenerateRequestId(request);
     const nextlyErr = NextlyError.is(err)
       ? err
       : NextlyError.serviceUnavailable({
-          logMessage: "setup: user-count pre-check failed",
+          logMessage: "setup: administrator pre-check failed",
           cause: err as Error,
         });
     getNextlyLogger().error({
@@ -126,14 +145,7 @@ export async function handleSetup(
     });
     return buildAuthErrorResponse(nextlyErr, requestId);
   }
-  if (userCount > 0) {
-    return jsonResponse(403, {
-      error: {
-        code: "SETUP_COMPLETE",
-        message: "Setup already completed",
-      },
-    });
-  }
+  if (administratorExists) return setupCompleteResponse();
 
   const body = await request.json();
 
@@ -183,6 +195,8 @@ export async function handleSetup(
 
   // Create super admin (seeds permissions internally, hashes password internally)
   const user = await deps.createSuperAdmin({ email, name, password });
+  // Another setup made the administrator while this one was creating it.
+  if (!user) return setupCompleteResponse();
 
   const sessionRoles = await deps.fetchSessionRoles(user.id);
   const { roleIds } = sessionRoles;

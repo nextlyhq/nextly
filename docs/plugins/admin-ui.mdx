@@ -37,8 +37,46 @@ registerComponents({
 });
 ```
 
-Running `nextly generate:types` emits a `plugin-admin-imports.generated.ts` import map so
-these load with no manual host wiring (D60).
+An app loads these through its **component map**, two generated files beside its generated
+types (D60):
+
+- `plugin-admin-imports.generated.ts` imports and registers every plugin admin component, and
+  the app's admin page imports it.
+- `plugin-admin-components.generated.ts` lists the same paths as plain strings, and the admin's
+  server layout passes them to `checkAdminComponents` from `nextly/runtime`.
+
+The app commits both. `nextly generate:types` writes them, and `next dev` rewrites them when
+they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, for a read-only
+checkout or CI. A production build whose map lacks a dashboard widget's component does not serve
+the admin: its server log names the plugin, the widget and the command that fixes it, and the
+public site keeps serving. Other components missing from the map are logged.
+
+After a map change in development, the request that finds the map out of date is already
+being served when the map is rewritten, so that one render can still draw the new widget's
+card empty. The rewritten map is what the next render loads.
+
+**The check runs once the admin layout calls it.** New apps import the map in their admin
+page; the layout's call is two lines to add. An app made from an older template has neither,
+and keeps drawing a missing component as an empty card, with a console warning, until it adds
+them:
+
+```tsx
+// src/app/admin/[[...params]]/page.tsx: with the other imports
+import "../../../types/generated/plugin-admin-imports.generated";
+```
+
+```tsx
+// src/app/admin/[[...params]]/layout.tsx: make the layout async, then
+import { checkAdminComponents } from "nextly/runtime";
+import config from "../../../../nextly.config";
+import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
+// ...inside the layout, before it returns:
+await checkAdminComponents({ config, registeredComponentPaths });
+```
+
+Then run `npx nextly generate:types` once and commit the two generated files. The paths
+assume the default types location (`./src/types/generated/`); use the folder your
+`typescript.outputFile` names.
 
 ## UI building blocks (`@nextlyhq/ui`)
 
@@ -254,6 +292,10 @@ Your component replaces the form's body and receives `DocumentViewProps` from
 | `field` | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
 
 Opening that address requires the same permission as editing the document.
+A field-type view also opens only for a field the edit form would let the
+author edit. If the field, or an unnamed group around it, is read-only,
+disabled, hidden, or hidden by its condition, the admin says why and offers the
+way back instead of drawing your view.
 
 To open a view from inside the admin, for example from a field editor, call
 `navigateTo(path)` from `@nextlyhq/plugin-sdk/admin`. It accepts a path

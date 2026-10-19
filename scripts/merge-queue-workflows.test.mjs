@@ -250,22 +250,57 @@ describe("Integration on request", () => {
 describe("a sharded leg", () => {
   /*
    * The lane check takes a matrix job that hands the lane its own shard as
-   * calling the lane (scripts/check-test-lanes.mjs). That is true only when
-   * the matrix lists every shard, 1 to n, and none is cancelled because
-   * another failed: then between them the jobs run all of it.
+   * calling the lane (scripts/check-test-lanes.mjs), in whichever workflow it
+   * reads. That is true only when the matrix lists every shard, 1 to n, has no
+   * other axis (which would make `strategy.job-total` count combinations, and
+   * hand out some shards twice and others never), and none is cancelled
+   * because another failed: then between them the jobs run all of it.
    */
-  it("runs every shard of the lane it hands out", async () => {
+  it("runs every shard of the lane it hands out, in every workflow", async () => {
     const { MATRIX_SHARD } = await import("./check-test-lanes.mjs");
-    const sharded = Object.entries(read(".github/workflows/integration.yml").jobs).filter(([, job]) =>
-      (job.steps ?? []).some(step => String(step.run).includes(MATRIX_SHARD.trim()))
-    );
+    const dir = new URL("../.github/workflows/", import.meta.url);
+    const sharded = readdirSync(dir)
+      .filter(name => /\.ya?ml$/.test(name))
+      .flatMap(name =>
+        Object.entries(read(`.github/workflows/${name}`).jobs ?? {})
+          .filter(([, job]) => (job.steps ?? []).some(step => String(step.run).includes(MATRIX_SHARD.trim())))
+          .map(([id, job]) => [`${name}#${id}`, job])
+      );
     // A floor: the postgres and mysql legs are sharded.
-    expect(sharded.map(([id]) => id).sort()).toEqual(["integration-mysql-shards", "integration-postgres-shards"]);
+    expect(sharded.map(([id]) => id).sort()).toEqual([
+      "integration.yml#integration-mysql-shards",
+      "integration.yml#integration-postgres-shards",
+    ]);
     for (const [id, job] of sharded) {
-      const shards = job.strategy?.matrix?.shard;
+      const matrix = job.strategy?.matrix ?? {};
+      expect(Object.keys(matrix), id).toEqual(["shard"]);
+      const shards = matrix.shard;
       expect(shards, id).toEqual(Array.from({ length: shards.length }, (_, i) => i + 1));
       expect(shards.length, id).toBeGreaterThanOrEqual(2);
       expect(job.strategy["fail-fast"], id).toBe(false);
+    }
+  });
+});
+
+describe("a sharded leg's required check", () => {
+  /*
+   * The required check reads the shards' result and fails unless every shard
+   * passed. It must run whatever happened to them: a shard stopped by its own
+   * backstop is cancelled, and a verdict guarded by `!cancelled()` could then
+   * be skipped, which the merge gate reads as a pass. So it runs under
+   * `always()`, with the same conditions as the shards otherwise.
+   */
+  it("runs whatever happened to the shards, on the shards' own conditions", () => {
+    const workflow = read(".github/workflows/integration.yml");
+    const verdicts = Object.entries(workflow.jobs).filter(([, job]) =>
+      (job.needs ?? []).some?.(need => String(need).endsWith("-shards"))
+    );
+    expect(verdicts.map(([id]) => id).sort()).toEqual(["integration-mysql", "integration-postgres"]);
+    for (const [id, job] of verdicts) {
+      const shards = workflow.jobs[`${id}-shards`];
+      expect(String(job.if), id).toMatch(/^\$\{\{\s*always\(\)/);
+      expect(String(job.if), id).not.toMatch(/cancelled\(\)/);
+      expect(String(job.if).replace(/always\(\)/, ""), id).toBe(String(shards.if).replace(/!cancelled\(\)/, ""));
     }
   });
 });
