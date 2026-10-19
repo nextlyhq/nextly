@@ -456,10 +456,12 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
    * Stores only IDs in the form value.
    */
   const handleRemove = useCallback(
-    (fileId: string) => {
+    (index: number) => {
       if (field.hasMany) {
-        // Filter out the removed file
-        const updatedFiles = files.filter(f => f.id !== fileId);
+        // By position rather than by id: a file can be linked twice, and a
+        // field naming several collections can hold one id from two of them,
+        // so an id names more than the one tile that was clicked.
+        const updatedFiles = files.filter((_, at) => at !== index);
         // Store only IDs in form, and placeholders as placeholders
         onChange(updatedFiles.map(toFormValue));
         // Update display cache
@@ -540,22 +542,24 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
               : "grid-cols-1 max-w-[200px]"
           )}
         >
-          {files.map(file =>
+          {files.map((file, index) =>
             // A stored upload the editor cannot see: kept, removable, never
             // opened or edited.
             file.restricted ? (
               <RestrictedReference
-                key={file.id}
+                // A file linked twice still needs a key of its own.
+                key={`${index}:${file.id}`}
                 id={file.id}
                 variant="tile"
-                onRemove={() => handleRemove(file.id)}
+                onRemove={() => handleRemove(index)}
                 disabled={disabled || readOnly}
               />
             ) : (
               <UploadPreview
-                key={file.id}
+                // A file linked twice still needs a key of its own.
+                key={`${index}:${file.id}`}
                 file={file}
-                onRemove={() => handleRemove(file.id)}
+                onRemove={() => handleRemove(index)}
                 onEdit={() => handleEdit(file)}
                 disabled={disabled || readOnly}
               />

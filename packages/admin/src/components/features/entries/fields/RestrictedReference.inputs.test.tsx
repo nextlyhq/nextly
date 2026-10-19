@@ -99,4 +99,17 @@ describe("removing a restricted link", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove one.png" }));
     expect(latest).toEqual([hiddenPair("files", "f1")]);
   });
+
+  it("in an upload, removes one of a file linked twice and keeps the other", () => {
+    const placeholder = { id: "m9", [RESTRICTED_REFERENCE]: true };
+    renderWithProviders(
+      <UploadHarness initial={[placeholder, "m2", placeholder]} />
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", {
+        name: "Remove restricted or missing item m9",
+      })[0]
+    );
+    expect(latest).toEqual(["m2", placeholder]);
+  });
 });
