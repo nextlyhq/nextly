@@ -425,6 +425,13 @@ function dependencyProblems(
 }
 
 /**
+ * The fault for a setting that is not an object at all. Named so a caller that
+ * can say which setting it was, as a declaration keyed by name can, puts its
+ * own words in place of this one.
+ */
+export const SETTING_NOT_AN_OBJECT = "every setting must be an object";
+
+/**
  * Why one setting cannot be used, or `undefined` when it can.
  *
  * Separate from the collection check because they answer different questions —
@@ -440,7 +447,7 @@ function settingProblem(
   seen: Set<string>
 ): string | undefined {
   if (typeof setting !== "object" || setting === null) {
-    return "every setting must be an object";
+    return SETTING_NOT_AN_OBJECT;
   }
   const { name, type, defaultValue, ...rest } = setting as {
     name?: unknown;

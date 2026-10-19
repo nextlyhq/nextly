@@ -18,7 +18,7 @@ import { z } from "zod";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { isValidWidgetId } from "../definition";
-import { widgetSettingsProblems } from "../settings";
+import { SETTING_NOT_AN_OBJECT, widgetSettingsProblems } from "../settings";
 import { WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
 import { CORE_DISPLAYS, displayDataProblem, isCoreDisplay } from "./displays";
@@ -300,10 +300,18 @@ function settingsProblems(settings: unknown): string[] {
   const malformed = entries
     .filter(([, setting]) => !isRecord(setting))
     .map(([name]) => `setting "${name}" must be a setting declaration`);
-  if (malformed.length > 0) return malformed;
-  return widgetSettingsProblems(
-    entries.map(([name, setting]) => ({ ...(setting as object), name }))
-  );
+  /*
+   * 🔴 Every entry goes to the shared rules, the malformed ones included, so
+   * the limit on how many there are and every well-formed sibling are still
+   * judged in the same restart. Only the shared rules' unnamed fault for a
+   * non-object is dropped: it is named above, by the key the author wrote.
+   */
+  const shared = widgetSettingsProblems(
+    entries.map(([name, setting]) =>
+      isRecord(setting) ? { ...setting, name } : setting
+    )
+  ).filter(problem => problem !== SETTING_NOT_AN_OBJECT);
+  return [...malformed, ...shared];
 }
 
 function dataProblem(data: unknown): string | undefined {

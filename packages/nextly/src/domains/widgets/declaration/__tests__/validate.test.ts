@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import { MAX_WIDGET_SETTINGS } from "../../settings";
 import { settings } from "../setting-builders";
 import {
   assertWidgetDeclarations,
@@ -283,6 +284,47 @@ describe("a widget declaration as startup receives it", () => {
       ).toEqual([
         'setting "by" depends on "colection", which is not a Collection setting of this widget',
       ]);
+    });
+
+    it("beside one that is not a setting at all, naming every fault", () => {
+      // A malformed entry is named by its key, and does not keep its
+      // well-formed siblings from being judged in the same restart.
+      const problems = problemsOf(
+        valid({
+          settings: {
+            broken: null,
+            limit: { type: "number", defaultValue: "five" },
+            by: { type: "groupBy", of: "missing" },
+          },
+        })
+      );
+      expect(problems).toHaveLength(3);
+      expect(problems[0]).toContain(
+        'setting "broken" must be a setting declaration'
+      );
+      expect(problems[1]).toContain('setting "limit"');
+      expect(problems[2]).toContain(
+        'setting "by" depends on "missing", which is not a Collection setting of this widget'
+      );
+      expect(problems.join("\n")).not.toContain(
+        "every setting must be an object"
+      );
+    });
+
+    it("over the limit, still saying so when one is malformed", () => {
+      const many = Object.fromEntries(
+        Array.from({ length: MAX_WIDGET_SETTINGS }, (_, index) => [
+          `s${index}`,
+          { type: "number" },
+        ])
+      );
+      const problems = problemsOf(valid({ settings: { ...many, broken: 7 } }));
+      expect(problems.join("\n")).toContain(
+        'setting "broken" must be a setting declaration'
+      );
+      expect(problems.join("\n")).toContain(
+        `at most ${MAX_WIDGET_SETTINGS} settings`
+      );
     });
   });
 
