@@ -279,6 +279,40 @@ describe("a publish or an unpublish", () => {
     expect((await decide(partial, "unpublish", posts)).allowed).toBe(false);
   });
 
+  it("is refused by its own rule even where the update rule allows", async () => {
+    // A decision that judged a publish by the update rule alone would allow.
+    const lifecycleRefuses: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        update: () => true,
+        publish: () => false,
+        unpublish: () => false,
+      },
+    };
+    for (const action of ["publish", "unpublish"] as const) {
+      expect(
+        await decide(callers["user-with"], action, lifecycleRefuses)
+      ).toEqual({ allowed: false, reason: "rule-refused" });
+      expect(
+        (await decide(callers["key-with"], action, lifecycleRefuses)).allowed
+      ).toBe(false);
+    }
+  });
+
+  it("names an update rule that failed apart from one that refused", async () => {
+    for (const rule of ["throws", "async-rejects"] as const) {
+      const updateFails: AccessTarget = {
+        kind: "collection",
+        slug: "posts",
+        access: { update: RULES[rule] },
+      };
+      expect(
+        await decide(callers["user-with"], "publish", updateFails)
+      ).toEqual({ allowed: false, reason: "update-rule-threw" });
+    }
+  });
+
   it("needs the update permission as well, since it changes the entry", async () => {
     const publisher = userActor({
       userId: "u5",

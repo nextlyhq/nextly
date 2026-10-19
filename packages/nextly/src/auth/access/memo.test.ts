@@ -40,7 +40,15 @@ describe("DecisionMemo", () => {
       { kind: "single", slug: "posts" },
       decide
     );
-    expect(decide).toHaveBeenCalledTimes(3);
+    // Same kind and action, another slug: a key without the slug would reuse
+    // one collection's answer for another.
+    await memo.remember(
+      actor,
+      "read",
+      { kind: "collection", slug: "pages" },
+      decide
+    );
+    expect(decide).toHaveBeenCalledTimes(4);
   });
 
   it("never reuses a decision for another actor, even one equal in every field", async () => {

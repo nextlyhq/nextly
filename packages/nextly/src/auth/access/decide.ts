@@ -61,7 +61,8 @@ export type RefusalReason =
   | "no-permission"
   | "rule-refused"
   | "rule-threw"
-  | "update-rule-refused";
+  | "update-rule-refused"
+  | "update-rule-threw";
 
 /**
  * Allowed, or refused with the reason. `filter` is where a rule's row filter
@@ -157,6 +158,8 @@ export async function decide(
   if (refusal) return refuse(refusal);
   if (isLifecycle(action)) {
     const update = ruleRefusal(await askRule(actor, "update", target));
+    // Kept apart, so the log tells a failing update rule from a refusing one.
+    if (update === "rule-threw") return refuse("update-rule-threw");
     if (update) return refuse("update-rule-refused");
   }
   return ALLOW;
