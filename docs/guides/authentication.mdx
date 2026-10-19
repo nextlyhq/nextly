@@ -199,12 +199,12 @@ A valid token completes setup whatever the auth rate limit holds. A missing, wro
 `nextly users:create-admin` creates the first administrator directly in the database, with no browser and no setup token:
 
 ```bash
-NEXTLY_ADMIN_PASSWORD='a long, unique password' \
+NEXTLY_ADMIN_PASSWORD='<your password>' \
   pnpm nextly users:create-admin --email admin@example.com --name "Site Admin"
 ```
 
 - It uses the database the environment names (`DATABASE_URL`, and `DB_DIALECT` when set), as the other `nextly` commands do, so run it with the production environment to set up a production install.
-- The password comes from `NEXTLY_ADMIN_PASSWORD`, or, at a terminal, from a prompt that does not echo and asks twice. It is never taken from an argument. It must pass the same strength rules as the setup form, and the command lists the rules it fails.
+- The password comes from `NEXTLY_ADMIN_PASSWORD`, or, at a terminal, from a prompt that does not echo and asks twice. It is never taken from an argument. It must pass the same strength rules as the setup form: 8 to 128 characters, with a lowercase letter, an uppercase letter, a number and a symbol. The command lists the rules it fails.
 - A missing `--email` or `--name` is prompted for at a terminal; with no terminal, the command refuses and names the flag.
 - It refuses, creating nothing and exiting with code 1, when an administrator already exists, when another setup is in progress at that moment, when an account already uses that email (matched as sign-in matches it), or when the password is weak, the two prompts differ, the email is invalid or no password source is available.
 - It spends any generated setup token, as the setup form does, so a pending one stops working.

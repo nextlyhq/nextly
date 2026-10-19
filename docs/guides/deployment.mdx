@@ -226,11 +226,11 @@ A generated token lasts 24 hours and one setup. If you lost it, `pnpm nextly set
 **From the command line**, with no browser and no token:
 
 ```bash
-NEXTLY_ADMIN_PASSWORD='a long, unique password' \
+NEXTLY_ADMIN_PASSWORD='<your password>' \
   pnpm nextly users:create-admin --email admin@example.com --name "Site Admin"
 ```
 
-Run it with the production environment (`DATABASE_URL`, and `DB_DIALECT` if you set it), from your machine or a CI step. Without `NEXTLY_ADMIN_PASSWORD`, it prompts for the password at a terminal.
+Run it with the production environment (`DATABASE_URL`, and `DB_DIALECT` if you set it), from your machine or a CI step. The password must be 8 to 128 characters with a lowercase letter, an uppercase letter, a number and a symbol. Without `NEXTLY_ADMIN_PASSWORD`, it prompts for the password at a terminal.
 
 Both refuse once an administrator exists. The details, the refusals and the rules the password must pass are in [Authentication](/docs/guides/authentication#the-first-administrator).
 

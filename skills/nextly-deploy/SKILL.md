@@ -169,11 +169,11 @@ token. Pick one of these; both refuse once an admin exists.
   (`DATABASE_URL`, and every other variable the config reads):
 
   ```bash
-  NEXTLY_ADMIN_PASSWORD='<a long, unique password>' \
+  NEXTLY_ADMIN_PASSWORD='<your password>' \
     npx nextly users:create-admin --email admin@example.com --name "Site Admin"
   ```
 
-  Without `NEXTLY_ADMIN_PASSWORD` it prompts for the password at a terminal.
+  Without `NEXTLY_ADMIN_PASSWORD` it prompts for the password at a terminal. The password must be 8 to 128 characters with a lowercase letter, an uppercase letter, a number and a symbol.
   It needs no token, and it creates nothing if an account already uses that
   email.
 
