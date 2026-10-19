@@ -688,6 +688,18 @@ export class AuthService extends BaseService {
       });
 
       if (!consumed) {
+        if (new Date(resetToken.expires) <= new Date()) {
+          throw new NextlyError({
+            code: "TOKEN_EXPIRED",
+            publicMessage: "Your session has expired. Please sign in again.",
+            logContext: {
+              reason: "reset-token-expired",
+              tokenId: resetToken.id,
+              expiredAt: resetToken.expires,
+            },
+          });
+        }
+
         throw NextlyError.validation({
           errors: [
             {

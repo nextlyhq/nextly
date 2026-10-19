@@ -7,7 +7,7 @@
  * a failing write after consumption commits neither.
  */
 import { eq } from "drizzle-orm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { verifyPassword } from "../../../../auth/password";
 import { getDialectTables } from "../../../../database/index";
@@ -19,6 +19,28 @@ import {
 } from "../../../../plugins/test-nextly";
 import { consoleLogger } from "../../../../services/shared";
 import { AuthService } from "../auth-service";
+
+const between = vi.hoisted(() => ({
+  failReset: false,
+}));
+
+vi.mock("../../../users/services/password-write", async importOriginal => {
+  const actual =
+    await importOriginal<
+      typeof import("../../../users/services/password-write")
+    >();
+  return {
+    ...actual,
+    updateUserEndingSessions: async (
+      ...args: Parameters<typeof actual.updateUserEndingSessions>
+    ) => {
+      if (between.failReset) {
+        throw new Error("simulated failure after token claim");
+      }
+      return actual.updateUserEndingSessions(...args);
+    },
+  };
+});
 
 interface TestDb {
   insert: (table: unknown) => { values: (data: unknown) => Promise<unknown> };
@@ -33,6 +55,8 @@ let current: TestNextly | undefined;
 let tables: ReturnType<typeof getDialectTables>;
 
 afterEach(async () => {
+  between.failReset = false;
+  vi.useRealTimers();
   await current?.destroy();
   current = undefined;
 });
@@ -120,23 +144,29 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
         userRow.passwordHash as string
       );
 
-      expect(isPassA || isPassB).toBe(true);
-      expect(isPassA && isPassB).toBe(false);
+      if (res1.status === "fulfilled") {
+        expect(isPassA).toBe(true);
+        expect(isPassB).toBe(false);
+      } else {
+        expect(res2.status).toBe("fulfilled");
+        expect(isPassB).toBe(true);
+        expect(isPassA).toBe(false);
+      }
     });
 
     it("commits neither if a write fails after token consumption", async () => {
-      const { t, auth1, db } = await setup(dialect);
+      const { auth1, db } = await setup(dialect);
       const { token } = await auth1.generatePasswordResetToken(EMAIL, {
         disableEmail: true,
       });
 
-      // Deactivate user before the reset write, so updateUserEndingSessions rejects
-      await t.nextly.users.update({ id: USER_ID, data: { isActive: false } });
+      between.failReset = true;
 
       await expect(
         auth1.resetPasswordWithToken(token as string, "Passw0rdA123!")
       ).rejects.toMatchObject({
-        code: "VALIDATION_ERROR",
+        code: "INTERNAL_ERROR",
+        statusCode: 500,
       });
 
       // Assert token was NOT consumed (usedAt is still null)
@@ -152,6 +182,31 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
         .from(tables.users)
         .where(eq(tables.users.id, USER_ID));
       expect(userRow.passwordHash).toBeNull();
+    });
+
+    it("reports TOKEN_EXPIRED if the token expires before the consumption write", async () => {
+      const { auth1 } = await setup(dialect);
+      const { token } = await auth1.generatePasswordResetToken(EMAIL, {
+        disableEmail: true,
+      });
+
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const origWithTransaction = auth1["withTransaction"].bind(auth1);
+        auth1["withTransaction"] = (async (fn: any) => {
+          vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24);
+          return origWithTransaction(fn);
+        }) as any;
+
+        await expect(
+          auth1.resetPasswordWithToken(token as string, "Passw0rdA123!")
+        ).rejects.toMatchObject({
+          code: "TOKEN_EXPIRED",
+          statusCode: 401,
+        });
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
