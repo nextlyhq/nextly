@@ -70,6 +70,14 @@ async function boot(dialect: TestDialect) {
         versions: true,
         fields: [text({ name: "title", localized: true })],
       }),
+      // Translated, with each language's own published state.
+      defineCollection({
+        slug: "bilingual",
+        localized: true,
+        status: true,
+        versions: true,
+        fields: [text({ name: "title", localized: true })],
+      }),
     ],
     fieldGroups: [
       defineFieldGroup({ slug: "byline", fields: [text({ name: "label" })] }),
@@ -82,6 +90,13 @@ async function boot(dialect: TestDialect) {
           text({ name: "heading" }),
           fieldGroup({ name: "byline", component: "byline" }),
         ],
+      }),
+      defineSingle({
+        slug: "edition",
+        localized: true,
+        status: true,
+        versions: true,
+        fields: [text({ name: "headline", localized: true })],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -113,7 +128,26 @@ async function boot(dialect: TestDialect) {
       },
       data
     );
-  return { create, update };
+  return { create, update, handler };
+}
+
+/** A Single's durable versions, oldest first. */
+async function singleVersionsOf(slug: string) {
+  return (
+    await current!.adapter.select<{
+      scopeSlug: string;
+      versionNo: number | null;
+      isAutosave: boolean | number;
+      status: string;
+    }>("nextly_versions")
+  )
+    .filter(
+      row =>
+        row.scopeSlug === slug &&
+        typeof row.versionNo === "number" &&
+        !row.isAutosave
+    )
+    .sort((a, b) => (a.versionNo ?? 0) - (b.versionNo ?? 0));
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -251,6 +285,63 @@ describe.each(getConfiguredTestDialects())(
 
       await t.update("drafted", id, { title: "a", status: "published" });
       const after = await versionsOf(id);
+      expect(after).toHaveLength(before + 1);
+      expect(after[after.length - 1]?.status).toBe("published");
+    });
+
+    it("records publishing every language when only one language's status moves", async () => {
+      const t = await boot(dialect);
+      const id = await t.create(
+        "bilingual",
+        { title: "hello", status: "published" },
+        "en"
+      );
+      await t.update("bilingual", id, { title: "hola" }, "es");
+      await t.handler.publishAllLocales({
+        collectionName: "bilingual",
+        entryId: id,
+        overrideAccess: true,
+      });
+      // Spanish back to draft: the content is what the newest version holds,
+      // and only Spanish's status differs from it.
+      await t.update("bilingual", id, { status: "draft" }, "es");
+      const before = (await versionsOf(id)).length;
+
+      await t.handler.publishAllLocales({
+        collectionName: "bilingual",
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      const after = await versionsOf(id);
+      expect(after).toHaveLength(before + 1);
+      expect(after[after.length - 1]?.status).toBe("published");
+    });
+
+    it("records publishing every language of a Single when only one language's status moves", async () => {
+      await boot(dialect);
+      const singles = current!.getService("singleEntryService");
+      await singles.update(
+        "edition",
+        { headline: "hello", status: "published" },
+        { overrideAccess: true, locale: "en" }
+      );
+      await singles.update(
+        "edition",
+        { headline: "hola" },
+        { overrideAccess: true, locale: "es" }
+      );
+      await singles.publishAllLocales("edition", { overrideAccess: true });
+      await singles.update(
+        "edition",
+        { status: "draft" },
+        { overrideAccess: true, locale: "es" }
+      );
+      const before = (await singleVersionsOf("edition")).length;
+
+      await singles.publishAllLocales("edition", { overrideAccess: true });
+
+      const after = await singleVersionsOf("edition");
       expect(after).toHaveLength(before + 1);
       expect(after[after.length - 1]?.status).toBe("published");
     });

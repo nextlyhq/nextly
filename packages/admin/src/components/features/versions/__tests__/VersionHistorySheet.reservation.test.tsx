@@ -20,6 +20,10 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { answerMediaQueries } from "@admin/__tests__/helpers/media-query";
 import { render, screen } from "@admin/__tests__/utils";
 import {
+  ChromeSuppressionProvider,
+  useSuppressedChrome,
+} from "@admin/components/layout/ChromeSuppression";
+import {
   SidePanelReservationProvider,
   useReservedInlineEnd,
 } from "@admin/components/layout/SidePanelReservation";
@@ -48,18 +52,32 @@ function ColumnProbe() {
   return <div data-testid="reserved">{String(useReservedInlineEnd())}</div>;
 }
 
-function renderPanel(open: boolean) {
-  return render(
-    <SidePanelReservationProvider>
-      <ColumnProbe />
-      <VersionHistorySheet
-        open={open}
-        onOpenChange={vi.fn()}
-        scope={{ kind: "collection", slug: "posts", entryId: "1" }}
-      />
-    </SidePanelReservationProvider>
+/** Reports whether the content sidebar is folded, as the layout would read it. */
+function SidebarProbe() {
+  return (
+    <div data-testid="folded">
+      {String(useSuppressedChrome().has("subSidebar"))}
+    </div>
   );
 }
+
+function renderPanel(open: boolean) {
+  return render(
+    <ChromeSuppressionProvider>
+      <SidePanelReservationProvider>
+        <ColumnProbe />
+        <SidebarProbe />
+        <VersionHistorySheet
+          open={open}
+          onOpenChange={vi.fn()}
+          scope={{ kind: "collection", slug: "posts", entryId: "1" }}
+        />
+      </SidePanelReservationProvider>
+    </ChromeSuppressionProvider>
+  );
+}
+
+const folded = () => screen.getByTestId("folded").textContent;
 
 const reserved = () => screen.getByTestId("reserved").textContent;
 const overlay = () => document.querySelector('[data-slot="sheet-overlay"]');
@@ -73,7 +91,7 @@ describe("a window wide enough to hold the panel beside the document", () => {
     renderPanel(true);
     // 480, from the panel's own constant. The number is the point: an indent
     // narrower than the panel leaves a covered strip, which is the defect.
-    expect(reserved()).toBe("480");
+    expect(reserved()).toBe("400");
   });
 
   it("leaves the document live, with no scrim over it", () => {
@@ -108,5 +126,31 @@ describe("a window too narrow to hold both", () => {
      */
     renderPanel(true);
     expect(overlay()).not.toBeNull();
+  });
+});
+
+describe("a window that holds the panel beside the document only narrower", () => {
+  // At least 1024 wide, and under 1200.
+  beforeEach(() => answerMediaQueries(query => !query.includes("1200px")));
+
+  it("reserves the narrower width, and folds the content sidebar while open", () => {
+    renderPanel(true);
+    expect(reserved()).toBe("360");
+    expect(folded()).toBe("true");
+    expect(overlay()).toBeNull();
+  });
+
+  it("leaves the content sidebar alone while closed", () => {
+    renderPanel(false);
+    expect(folded()).toBe("false");
+  });
+});
+
+describe("a wide window keeps the content sidebar", () => {
+  beforeEach(() => answerMediaQueries(true));
+
+  it("does not fold it beside the full-width panel", () => {
+    renderPanel(true);
+    expect(folded()).toBe("false");
   });
 });

@@ -106,26 +106,32 @@ describe("EventBus", () => {
   });
 });
 
-describe("EventBus.settleRunning", () => {
+describe("EventBus.settleCaused", () => {
   const later = (ms: number) =>
     new Promise<void>(resolve => setTimeout(resolve, ms));
 
-  it("waits for the handlers running now, and answers true", async () => {
+  it("waits for a traced handler and the follow-up events it emits", async () => {
     const bus = new EventBus();
-    let finished = false;
-    bus.on("x", async () => {
+    const order: string[] = [];
+    bus.on("first", async () => {
       await later(5);
-      finished = true;
+      bus.emit("second", {});
+      order.push("first finished");
     });
-    bus.emit("x", {});
+    bus.on("second", async () => {
+      await later(5);
+      order.push("second finished");
+    });
+    const cause = Symbol("hook");
+    bus.runCaused(cause, () => bus.emit("first", {}));
 
-    expect(await bus.settleRunning(1_000)).toBe(true);
-    expect(finished).toBe(true);
+    expect(await bus.settleCaused(cause, 1_000)).toBe(true);
+    expect(order).toEqual(["first finished", "second finished"]);
   });
 
-  it("does not wait for a handler started after it was asked", async () => {
+  it("does not wait for a producer started outside the traced work", async () => {
     // A producer re-emitting from its own handler never lets the bus empty;
-    // only the handler running at the call is waited for.
+    // started untraced, as a plugin's init() starts one, it is not waited for.
     const bus = new EventBus();
     let producing = true;
     bus.on("tick", async () => {
@@ -134,18 +140,19 @@ describe("EventBus.settleRunning", () => {
     });
     bus.emit("tick", {});
 
-    expect(await bus.settleRunning(1_000)).toBe(true);
+    expect(await bus.settleCaused(Symbol("hook"), 1_000)).toBe(true);
     producing = false;
     await bus.settle();
   });
 
-  it("answers false within its time when a handler never settles", async () => {
+  it("answers false within its time when a traced handler never settles", async () => {
     const bus = new EventBus();
     bus.on("x", () => new Promise<void>(() => {}));
-    bus.emit("x", {});
+    const cause = Symbol("hook");
+    bus.runCaused(cause, () => bus.emit("x", {}));
     const started = Date.now();
 
-    expect(await bus.settleRunning(50)).toBe(false);
+    expect(await bus.settleCaused(cause, 50)).toBe(false);
     expect(Date.now() - started).toBeLessThan(1_000);
   });
 });
