@@ -122,8 +122,13 @@ interface Reading {
  * share it. A {@link SessionStandingCache.forget} while a read is running
  * marks that read superseded, because it may have queried before the change:
  * its answer goes to the callers already waiting and is not kept. The mark
- * lives on the read and goes with it, so nothing is held for an account once
- * its reads are done.
+ * lives on the read and goes with it.
+ *
+ * A read that BEGINS after a forget can still be early: the writer forgets
+ * inside its transaction, and until that commits another connection reads the
+ * row as it was. So for one lifetime after a forget nothing read for the
+ * account is kept, and each request reads the row, which is what lets the
+ * instance that made the change refuse at once on every dialect.
  *
  * A caller for whom `shared` answers false reads alone. It may take a held
  * answer, which was read and committed before it, but it neither joins a read
@@ -147,6 +152,25 @@ export function createSessionStandingCache(options: {
   const now = options.now ?? (() => performance.now());
   const held = new Map<string, { standing: SessionStanding; readAt: number }>();
   const reading = new Map<string, Reading>();
+  // When each account was last forgotten. A writer forgets inside its
+  // transaction, and on PostgreSQL and MySQL a read on another connection
+  // before the commit still sees the old row, so no read that began within a
+  // lifetime of the forget is kept: it is answered, and the next request
+  // reads again. Past that lifetime the mark goes, and so does the cost.
+  const forgottenAt = new Map<string, number>();
+
+  function recentlyForgotten(userId: string, readAt: number): boolean {
+    const at = forgottenAt.get(userId);
+    if (at === undefined) return false;
+    // A negative age is a clock that moved backward, which proves nothing
+    // about the change having committed, so it still counts as recent.
+    const age = readAt - at;
+    if (age >= 0 && age >= ttlMs) {
+      forgottenAt.delete(userId);
+      return false;
+    }
+    return true;
+  }
 
   function keep(
     userId: string,
@@ -186,7 +210,11 @@ export function createSessionStandingCache(options: {
                 "standing cache's lifetime, so its answer was not used",
             });
           }
-          if (!entry.superseded && standing?.isActive === true) {
+          if (
+            !entry.superseded &&
+            standing?.isActive === true &&
+            !recentlyForgotten(userId, startedAt)
+          ) {
             keep(userId, standing, startedAt);
           }
           return standing;
@@ -231,6 +259,13 @@ export function createSessionStandingCache(options: {
 
     forget(userId) {
       held.delete(userId);
+      forgottenAt.delete(userId);
+      if (forgottenAt.size >= maxEntries) {
+        // Insertion order again: the oldest mark is the nearest to lapsing.
+        const oldest = forgottenAt.keys().next();
+        if (!oldest.done) forgottenAt.delete(oldest.value);
+      }
+      forgottenAt.set(userId, now());
       const running = reading.get(userId);
       if (running) {
         running.superseded = true;

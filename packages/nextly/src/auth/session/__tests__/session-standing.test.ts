@@ -360,6 +360,43 @@ describe("createSessionStandingCache", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it("does not keep a read that ran after forget but before the change committed", async () => {
+    // The writer forgets inside its transaction. On PostgreSQL and MySQL a
+    // read on another connection before the commit still sees the old row;
+    // kept, it would serve that row for a whole lifetime after the commit.
+    const { rows, read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({ read, now: c.now });
+
+    await cache.standing("u1", 0);
+    cache.forget("u1");
+    // Not committed yet: the row still reads as it was.
+    expect(await cache.standing("u1", 0)).toEqual(ACTIVE);
+    rows.u1 = { isActive: false, sessionEpoch: 1 };
+    c.advance(1);
+
+    expect(await cache.standing("u1", 0)).toEqual({
+      isActive: false,
+      sessionEpoch: 1,
+    });
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps answers again once a lifetime has passed since forget", async () => {
+    // The window after a forget costs a read per request for one lifetime,
+    // and no longer: past it, a held answer saves the read again.
+    const { read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({ read, now: c.now });
+
+    cache.forget("u1");
+    c.advance(SESSION_STANDING_TTL_MS);
+    await cache.standing("u1", 0);
+    await cache.standing("u1", 0);
+
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("reads an account that no longer exists again on its next request", async () => {
     // Only an active account's answer is kept. A refusal kept for the
     // lifetime would refuse the account's next session too, had it come back.

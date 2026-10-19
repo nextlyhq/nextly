@@ -128,8 +128,9 @@ export async function updateUserEndingSessions(
     .where(eq(refreshTokens.userId, String(args.userId)));
   // This process stops answering from what it holds for the account now
   // rather than when its cache entry would lapse. The write may not have
-  // committed yet, and a read in between keeps the old epoch, but only for
-  // the cache's lifetime, which is the bound every other instance has too.
+  // committed yet, so a read in between still sees the old row; the cache
+  // answers that read but keeps nothing for the account for a lifetime after
+  // this, so the first request after the commit reads the new row.
   forgetSessionStanding(args.userId);
   return changed;
 }
