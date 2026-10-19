@@ -76,11 +76,14 @@ async function selfRegister(t: TestNextly, email: string): Promise<string> {
 
 /**
  * Hold the next account write's transaction open once all its rows are
- * written, before it commits. `writesDone` settles there; `release` lets it
- * commit once `other`, the write racing it, has either finished or had a
- * moment to reach whatever it waits on.
+ * written, before it commits. `writesDone` settles there. `release` lets it
+ * commit only once the write racing it has entered its own transaction (not
+ * merely started: an account's password is hashed before its transaction
+ * opens, which can take seconds), and then either finished or had a moment
+ * to reach whatever it waits on. `onEnter` runs as the held write's
+ * transaction is about to open, after everything it did before it.
  */
-function holdNextTransactionOpen(): {
+function holdNextTransactionOpen(onEnter?: () => Promise<void>): {
   writesDone: Promise<void>;
   release(other: Promise<unknown>): Promise<void>;
 } {
@@ -92,19 +95,35 @@ function holdNextTransactionOpen(): {
   const gate = new Promise<void>(resolve => {
     commit = resolve;
   });
+  let entered!: () => void;
+  const otherEntered = new Promise<void>(resolve => {
+    entered = resolve;
+  });
   const prototype = UserMutationService.prototype as unknown as {
     withTransaction: (
       work: (tx: unknown) => Promise<unknown>
     ) => Promise<unknown>;
   };
   const original = prototype.withTransaction;
-  let armed = true;
-  vi.spyOn(prototype, "withTransaction").mockImplementation(function (
+  let held = false;
+  let entering = false;
+  vi.spyOn(prototype, "withTransaction").mockImplementation(async function (
     this: unknown,
     work: (tx: unknown) => Promise<unknown>
   ): Promise<unknown> {
-    if (!armed) return original.call(this, work);
-    armed = false;
+    // The hook's own writes are neither held nor the racing write.
+    if (entering) return original.call(this, work);
+    if (held) {
+      entered();
+      return original.call(this, work);
+    }
+    held = true;
+    entering = true;
+    try {
+      await onEnter?.();
+    } finally {
+      entering = false;
+    }
     return original.call(this, async tx => {
       const result = await work(tx);
       reached();
@@ -115,6 +134,7 @@ function holdNextTransactionOpen(): {
   return {
     writesDone,
     async release(other) {
+      await Promise.race([otherEntered, other.catch(() => undefined)]);
       await Promise.race([
         other.catch(() => undefined),
         new Promise(resolve => setTimeout(resolve, 500)),
@@ -268,6 +288,36 @@ describe.each(getConfiguredTestDialects())(
         );
       }
     );
+
+    it.skipIf(dialect === "sqlite")(
+      "never promotes the app's account when the only account is deleted while a sign-up is under way",
+      async () => {
+        const t = await boot(dialect);
+        const early = await selfRegister(t, "early@example.com");
+        // The sign-up sees that account before its transaction, and it is gone
+        // once the transaction opens.
+        const held = holdNextTransactionOpen(async () => {
+          await services(t).users.deleteUser(early);
+        });
+        const signUp = selfRegister(t, "stranger@example.com");
+        await held.writesDone;
+        const app = provision(t, "customer@example.com");
+        await held.release(app);
+        await signUp;
+        const id = await app;
+        // The sign-up commits first, so the app's account is the second.
+        expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
+      }
+    );
+
+    it("lets a stranger register on an empty install beside a role merely named Super Admin", async () => {
+      const t = await boot(dialect);
+      await insertRole(t, "Super Admin", "custom-super-admin");
+      // The administrator role cannot be created beside it, which a sign-up,
+      // never given that role, does not depend on.
+      const id = await selfRegister(t, "stranger@example.com");
+      expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
+    });
 
     it("keeps setup open after a self-registration, so the owner can still create the administrator", async () => {
       const t = await boot(dialect);

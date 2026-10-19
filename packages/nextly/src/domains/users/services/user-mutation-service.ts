@@ -1436,17 +1436,24 @@ export class UserMutationService extends BaseService {
       // is seen: once one exists, nothing here can grant.
       const provisionsFirstAdministrator =
         (caller === "app" && !anyAccount) || caller === "setup";
-      // A sign-up on an install with no account yet takes the same lock,
-      // first, though it is never granted: on PostgreSQL the app's check for
-      // other accounts cannot see a sign-up still uncommitted beside it, so
-      // the two must run one after the other. Once any account exists, the
-      // app promotes nothing and sign-ups are not held to it.
-      const takesFirstAdministratorLock =
-        provisionsFirstAdministrator ||
-        (caller === "self-registration" && !anyAccount);
       const bootstrapRoleReady =
-        takesFirstAdministratorLock &&
+        provisionsFirstAdministrator &&
         (await this.mayBootstrapFirstAdministrator());
+      // A sign-up takes the same lock, first, while nobody holds the role,
+      // though it is never granted: on PostgreSQL the app's check for other
+      // accounts cannot see a sign-up still uncommitted beside it, so the two
+      // must run one after the other. Judged by the role's holders rather than
+      // by whether any account exists, since an account seen here can be gone
+      // by the time the transaction opens, while a holder cannot drop to none
+      // (refuseRemovingLastSuperAdmin). The role row is ensured so that it
+      // exists to be locked, as a fresh install has none until its first
+      // administrator; a sign-up never fails for it (roleForSignUpToWaitOn).
+      const signUpWaitsForFirstAdministrator =
+        caller === "self-registration" &&
+        !(await superAdminRoleHeld(this.db, this.tables));
+      if (signUpWaitsForFirstAdministrator) {
+        await this.roleForSignUpToWaitOn();
+      }
       // Setup creates the install's first administrator or nothing: refused
       // here once one is seen, and inside the insert's transaction when another
       // wins the grant, so a setup that lost a race publishes no account.
@@ -1458,7 +1465,7 @@ export class UserMutationService extends BaseService {
       const lockForBootstrap = async (
         txDb: DrizzleTransactionLike
       ): Promise<string | undefined> =>
-        bootstrapRoleReady
+        bootstrapRoleReady || signUpWaitsForFirstAdministrator
           ? lockSuperAdminRole(
               txDb as unknown as FirstAdministratorTx,
               this.tables,
@@ -2294,6 +2301,24 @@ export class UserMutationService extends BaseService {
    *
    * @param logContext - Where the refusal came from, for the log only.
    */
+  /**
+   * The administrator role's row, ensured for a sign-up to lock while nobody
+   * holds the role, so that it waits for an account the app is provisioning
+   * as the install's first.
+   */
+  private async roleForSignUpToWaitOn(): Promise<void> {
+    try {
+      await new ServiceContainer(this.adapter).roles.ensureSuperAdminRole();
+    } catch {
+      // Refused when a role of the install's own already holds the
+      // administrator role's name: then no administrator role can exist, so
+      // no account can be granted it and the sign-up has nothing to wait for.
+      // It goes on unlocked (lockSuperAdminRole finds no row) rather than
+      // failing for a role it is never given; a database that is failing
+      // fails the sign-up's own insert instead.
+    }
+  }
+
   /**
    * Whether an account created now could be the install's first
    * administrator: true when nobody holds the `super-admin` role yet, in which
