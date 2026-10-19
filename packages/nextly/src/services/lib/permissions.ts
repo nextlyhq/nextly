@@ -89,7 +89,9 @@ function getAdapter(): DrizzleAdapter {
 }
 
 function getLogger(): Logger {
-  return container.has("logger") ? container.get<Logger>("logger") : console;
+  return container.has("logger")
+    ? container.get<Logger>("logger")
+    : consoleLogger;
 }
 
 export type PermissionCheck = { action: string; resource: string };

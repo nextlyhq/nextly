@@ -34,6 +34,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { ImageSizeService } from "../services/image-size";
 import { MediaRegenerationService } from "../services/media-regeneration";
+import { consoleLogger } from "../shared/types";
 
 import {
   respondAction,
@@ -53,7 +54,7 @@ async function getImageSizeService(): Promise<ImageSizeService> {
     // Ensure Nextly is initialized (adapter registered in DI container)
     await getCachedNextly();
     const adapter = container.get<DrizzleAdapter>("adapter");
-    imageSizeServiceInstance = new ImageSizeService(adapter, console);
+    imageSizeServiceInstance = new ImageSizeService(adapter, consoleLogger);
   }
   return imageSizeServiceInstance;
 }
@@ -264,7 +265,7 @@ export const getRegenerationStatus = withErrorHandler(async (req: Request) => {
 
   await getCachedNextly();
   const adapter = container.get<DrizzleAdapter>("adapter");
-  const regenService = new MediaRegenerationService(adapter, console);
+  const regenService = new MediaRegenerationService(adapter, consoleLogger);
   const status = await regenService.getRegenerationStatus();
 
   // Non-CRUD read: surface the status object bare via respondData.
@@ -307,7 +308,7 @@ export const regenerateBatch = withErrorHandler(async (req: Request) => {
 
   await getCachedNextly();
   const adapter = container.get<DrizzleAdapter>("adapter");
-  const regenService = new MediaRegenerationService(adapter, console);
+  const regenService = new MediaRegenerationService(adapter, consoleLogger);
   const result = await regenService.regenerateBatch({ batchSize, cursor });
 
   // Batch-action endpoint: surface the run summary alongside a toast string
