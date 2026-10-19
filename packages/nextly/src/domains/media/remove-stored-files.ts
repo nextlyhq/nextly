@@ -106,6 +106,13 @@ function lastSegment(path: string): string {
   return located.slice(located.lastIndexOf("/") + 1);
 }
 
+/** `char` as a `like` pattern matches it in JSON text: itself, or anything. */
+function widenedForJson(char: string): string {
+  return char === "\\" || char === '"' || char.charCodeAt(0) < 0x20
+    ? "%"
+    : char;
+}
+
 /**
  * Rows that may refer to a file named `names`: any of whose stored path,
  * URLs or sizes holds one of them, read as text. Wider than the rows that do
@@ -123,7 +130,11 @@ function mayReferTo(search: StoredFileSearch, names: readonly string[]): SQL {
         ? sql`cast(${columns.sizes} as char)`
         : sql`${columns.sizes}`;
   const conditions = names.flatMap(name => {
-    const pattern = `%${name}%`;
+    // A character JSON escapes (a backslash, a double quote, a control
+    // character) is written otherwise in the sizes text, and a backslash is
+    // `like`'s own escape: each matches anything here, which only widens
+    // the rows found.
+    const pattern = `%${Array.from(name, widenedForJson).join("")}%`;
     return [
       like(columns.filename, pattern),
       like(columns.url, pattern),
