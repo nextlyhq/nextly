@@ -26,7 +26,6 @@ import {
   doublePrecision as pgDoublePrecision,
   numeric as pgNumeric,
   index as pgIndex,
-  uuid as pgUuid,
 } from "drizzle-orm/pg-core";
 import {
   sqliteTable,
@@ -584,11 +583,7 @@ export class FieldGroupSchemaService {
     };
 
     for (const field of this.columnFields(fields)) {
-      // A many-to-many keeps its ids on the component row as a uuid, the type the creating SQL writes.
-      // It is decided on the original field: the mappable copy has lost its options.
-      const column = usesJunctionTable(field)
-        ? pgUuid(this.toSnakeCase(field.name))
-        : this.mapFieldToPostgresColumn(this.asMappableField(field));
+      const column = this.mapFieldToPostgresColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
       }
@@ -929,6 +924,11 @@ export class FieldGroupSchemaService {
     if (isUploadField(field) || isRelationshipField(field)) {
       if (Array.isArray(field.relationTo) || field.hasMany) {
         return types.json;
+      }
+      // A component's many-to-many keeps its ids on the component row as text on PostgreSQL, the
+      // type the runtime table writes too. A scalar uuid cannot hold a multi-value relation.
+      if (this.dialect === "postgresql" && usesJunctionTable(field)) {
+        return types.text;
       }
       return types.uuid;
     }
