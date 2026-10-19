@@ -893,16 +893,29 @@ export class EmailTemplateService extends BaseService {
   }
 
   /**
-   * An overridden template beside its owner's current version, with each
-   * change the owner made since the override started.
+   * What a review of an overridden template works from: the row, its owner's
+   * entry, the base it is kept against and the site's version now.
    */
-  async compareTemplate(id: string): Promise<EmailTemplateComparison> {
+  private async reviewOf(id: string) {
     const row = await this.getRow(id);
     const record = this.toRecord(row);
     const entry = this.ownedEntry(record);
     this.assertOverridden(record);
-    const base = versionOf(row.baseVersion ?? entry.version);
-    const mine = versionOf(row);
+    return {
+      row,
+      record,
+      entry,
+      base: versionOf(row.baseVersion ?? entry.version),
+      mine: versionOf(row),
+    };
+  }
+
+  /**
+   * An overridden template beside its owner's current version, with each
+   * change the owner made since the override started.
+   */
+  async compareTemplate(id: string): Promise<EmailTemplateComparison> {
+    const { entry, base, mine } = await this.reviewOf(id);
     return {
       base,
       // A copy: the registry's own version must not change with a caller's.
@@ -928,13 +941,7 @@ export class EmailTemplateService extends BaseService {
     review: string,
     actor?: RequestActor | null
   ): Promise<{ template: EmailTemplateRecord; undo: OwnerUpdateUndo }> {
-    const row = await this.getRow(id);
-    const record = this.toRecord(row);
-    const entry = this.ownedEntry(record);
-    this.assertOverridden(record);
-
-    const base = versionOf(row.baseVersion ?? entry.version);
-    const mine = versionOf(row);
+    const { row, record, entry, base, mine } = await this.reviewOf(id);
     if (reviewToken(base, entry.version, mine) !== review) {
       throw changedSince("reviewed", id, record.slug);
     }
