@@ -73,6 +73,57 @@ describe("useSnapshotAutosave", () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
   });
 
+  /**
+   * Holds the first recording open, so a second one asked for meanwhile is
+   * queued behind it rather than started. Returns how to let the first finish.
+   */
+  function withRecordingInFlight() {
+    let finish: () => void = () => undefined;
+    const save = vi
+      .fn<() => Promise<{ updatedAt: string }>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            finish = () => resolve({ updatedAt: STORED_AT });
+          })
+      )
+      .mockImplementation(() => saved());
+    const hook = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+    act(() => hook.result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    // A second edit's timer fires while the first recording is still open.
+    act(() => hook.result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    return { save, hook, finish: () => finish() };
+  }
+
+  it("also drops the recording queued behind one still in flight", async () => {
+    // The other half of cancel(): the timer has already fired, so what is
+    // pending is the re-flush queued behind the open recording, and it would
+    // run as soon as that recording finished.
+    const { save, hook, finish } = withRecordingInFlight();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    act(() => hook.result.current.cancel());
+    await act(async () => finish());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 2));
+
+    await Promise.resolve();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the queued recording when nothing cancels it, which is the control", async () => {
+    // Without this, the case above passes on a core that never re-flushes.
+    const { save, finish } = withRecordingInFlight();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish());
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+
   it("waits for the debounce before recording anything", async () => {
     const save = vi.fn(() => saved());
     const { result } = renderHook(() =>
@@ -216,6 +267,41 @@ describe("what switches recording off", () => {
 });
 
 describe("the identity is opaque, and it bounds a pending recording", () => {
+  /**
+   * A recording comes due while recording is off, so it is held. Then the
+   * hook rerenders with recording back on, under the identity given.
+   */
+  function heldThenReEnabledAs(nextIdentity: string) {
+    const save = vi.fn(() => saved());
+    const hook = renderHook(
+      ({ identity, enabled }) =>
+        useSnapshotAutosave({ identity, save, debounceMs: DEBOUNCE, enabled }),
+      { initialProps: { identity: "doc-1", enabled: false } }
+    );
+    act(() => hook.result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    expect(save).not.toHaveBeenCalled();
+    hook.rerender({ identity: nextIdentity, enabled: true });
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 2));
+    return save;
+  }
+
+  it("does not replay a held recording under a different identity", async () => {
+    // Recording back on in the same render as a new identity (a create
+    // finishing hands the document its id): the recording was held for the
+    // old one, so it must not be made under the new one.
+    const save = heldThenReEnabledAs("doc-2");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("replays a held recording under the identity it was held for, which is the control", async () => {
+    const save = heldThenReEnabledAs("doc-1");
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  });
+
   it("drops a pending recording when the identity changes", async () => {
     /*
      * The one failure this module can cause that its caller cannot see: a

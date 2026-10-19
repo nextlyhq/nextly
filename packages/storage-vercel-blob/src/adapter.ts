@@ -38,6 +38,7 @@ import type {
   FileMetadata,
   BulkDeleteResult,
   StorageReadOptions,
+  StoredFileEntry,
 } from "nextly/storage";
 import {
   fetchStoredBytes,
@@ -335,6 +336,21 @@ export class VercelBlobStorageAdapter implements IStorageAdapter {
    * @param filePath - Full blob URL
    * @returns The same URL (Vercel Blob paths are already public URLs)
    */
+  /**
+   * Every blob in the store, by its URL (which is its stored path here), with
+   * when it was uploaded, a page at a time.
+   */
+  async *list(): AsyncIterable<StoredFileEntry> {
+    let cursor: string | undefined;
+    do {
+      const page = await this.listBlobs(undefined, { cursor });
+      for (const blob of page.blobs) {
+        yield { path: blob.url, lastModified: blob.uploadedAt };
+      }
+      cursor = page.hasMore ? page.cursor : undefined;
+    } while (cursor);
+  }
+
   getPublicUrl(filePath: string): string {
     // Vercel Blob paths are already full URLs
     return filePath;

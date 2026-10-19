@@ -79,10 +79,12 @@ function Harness({
   state,
   backLink,
   onCopyLink,
+  isCopyingLink = false,
 }: {
   state: State;
   backLink?: { href: string; label: string };
   onCopyLink?: () => void;
+  isCopyingLink?: boolean;
 }) {
   const methods = useForm({
     defaultValues: { title: state.entry?.title ?? "" },
@@ -103,6 +105,7 @@ function Harness({
         {...(onCopyLink === undefined
           ? {}
           : { onCopyLink, isLinkAvailable: true })}
+        isCopyingLink={isCopyingLink}
         onSaveDraft={vi.fn()}
         onPublish={vi.fn()}
         onSaveChanges={vi.fn()}
@@ -237,5 +240,27 @@ describe("the editor header", () => {
     expect(copy.className).toContain(shownNarrow);
     await user.click(copy);
     expect(onCopyLink).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a folded copy still running on the menu's trigger, which stays", () => {
+    render(<Harness state={STATES[1]!} onCopyLink={vi.fn()} isCopyingLink />);
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(trigger).toHaveAttribute("aria-busy", "true");
+    // The spinner shows on a narrow screen only; a wider one shows it on the
+    // copy control itself.
+    expect(
+      trigger.querySelector("svg.animate-spin")?.getAttribute("class")
+    ).toContain("max-sm:block");
+  });
+
+  it("lets the actions wrap within the row rather than run past it", () => {
+    // A feature's contributed controls are sized by the feature, so the
+    // cluster must be able to break inside the row's width.
+    render(<Harness state={STATES[1]!} />);
+    const cluster = screen
+      .getByRole("button", { name: /^save draft$/i })
+      .closest("div.ml-auto");
+    expect(cluster?.className).toContain("flex-wrap");
+    expect(cluster?.className).toContain("max-w-full");
   });
 });

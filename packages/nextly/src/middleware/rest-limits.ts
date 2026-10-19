@@ -136,9 +136,14 @@ function operationOf(method: string): Operation {
   return isReadOperation(method) ? "read" : "write";
 }
 
-/** The collection a request's URL names, as `/collections/{slug}`. */
+/**
+ * The collection a request's path names, as `/collections/{slug}`.
+ *
+ * The path only: a query is the caller's to write, so a slug read from it
+ * would let one caller name a fresh budget on every request.
+ */
 function collectionOf(url: string): string | null {
-  const match = url.match(/\/collections\/([^/]+)/);
+  const match = new URL(url).pathname.match(/\/collections\/([^/]+)/);
   return match ? match[1] : null;
 }
 
@@ -265,15 +270,23 @@ class RestLimits implements RestLimitDecider {
     const source = this.settings.sourceOf(request);
     if (source === null) return null;
     const collection = collectionOf(request.url);
-    if (collection === null) {
+    // A collection the config gives limits of its own keeps a budget of its
+    // own. Any other slug shares the address's one budget: a slug is the
+    // caller's to choose, and a counter per slug would hand a caller a fresh
+    // budget for every name it invents.
+    const override =
+      collection !== null &&
+      Object.hasOwn(this.settings.collections, collection)
+        ? this.settings.collections[collection]
+        : undefined;
+    if (collection === null || override === undefined) {
       return {
         key: `ratelimit:${source}:${operation}`,
         limit: this.settings.perAddress[operation],
       };
     }
-    const override = this.settings.collections[collection];
     const overridden =
-      operation === "read" ? override?.readLimit : override?.writeLimit;
+      operation === "read" ? override.readLimit : override.writeLimit;
     return {
       key: `ratelimit:${source}:${collection}:${operation}`,
       limit: overridden ?? this.settings.perAddress[operation],

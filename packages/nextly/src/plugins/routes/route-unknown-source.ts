@@ -97,9 +97,10 @@ export async function admitRouteUnknownSource(
   };
   const counter = counterFor(input.pluginName, input.store);
   const { limitKey } = input.route;
-  // Asking the route is the work the ceiling bounds, so the ceiling is spent
-  // on arrival, before the body is read or the route asked; with no
-  // `limitKey` there is nothing else to spend.
+  // Reading the body and asking the route are the work the ceiling bounds,
+  // so the ceiling is spent on arrival, before either: a met ceiling refuses
+  // before any reading, and a caller holding bodies open holds at most the
+  // ceiling's worth of them. With no `limitKey` there is nothing else to spend.
   const arrival = await counter.arrive(limits);
   if (!arrival.allowed || limitKey === undefined) return arrival;
 
@@ -111,6 +112,9 @@ export async function admitRouteUnknownSource(
   const key = answer.handles
     ? pluginRouteLimitKey(input.pluginName, answer.key, input.secret)
     : null;
+  // The counter charges the identity at admission, once the body is in, not
+  // at arrival: a caller controls how long its body takes, and a body held
+  // open past the window would otherwise be charged at a time already expired.
   return counter.admitArrived(
     key ?? noIdentityKey(input.pluginName),
     limits,

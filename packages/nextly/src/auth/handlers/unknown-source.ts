@@ -222,6 +222,55 @@ export async function readLimiterBody(
   }
 }
 
+/**
+ * Unknown-source bodies this process is reading right now, across every
+ * deployment counter: what a client holding bodies open occupies is this
+ * process's connections and reads, whichever store keeps the windows.
+ */
+let bodiesBeingRead = 0;
+
+/**
+ * How long a request refused for want of a reading place is told to wait. A
+ * place frees when any body being read ends, which no window predicts, so
+ * this is the shortest wait a client is ever told.
+ */
+const READING_PLACE_RETRY_MS = 1_000;
+
+/**
+ * The limiter's view of a request's body, or the ceiling's refusal when as
+ * many bodies are already being read as the ceiling admits.
+ *
+ * A body is read before the request spends anything, because a plain sign-in
+ * may spend the ceiling only once its budget admits it, and its budget is the
+ * account the body names. Nothing else bounded those reads, so a client could
+ * hold any number of bodies open below the ceiling, none counted until it
+ * completed. Counting the reads themselves bounds that without spending: a
+ * refused request reads nothing, and spends no budget and no ceiling place.
+ * The place is given back once the read ends, completed, aborted or over the
+ * byte limit, and only then.
+ */
+async function readWithinReadingBound(
+  request: Request,
+  limits: UnknownSourceLimits
+): Promise<
+  | { body: Record<string, unknown> }
+  | Extract<UnknownSourceVerdict, { allowed: false }>
+> {
+  if (bodiesBeingRead >= limits.ceiling) {
+    return {
+      allowed: false,
+      by: "ceiling",
+      resetAt: Date.now() + READING_PLACE_RETRY_MS,
+    };
+  }
+  bodiesBeingRead++;
+  try {
+    return { body: await readLimiterBody(request) };
+  } finally {
+    bodiesBeingRead--;
+  }
+}
+
 function stringField(body: Record<string, unknown>, name: string): string {
   const value = body[name];
   return typeof value === "string" ? value : "";
@@ -289,7 +338,9 @@ export async function admitUnknownSource(
   // body is read: past the ceiling, a request costs no reading and no parse.
   const met = await counter.ceilingMet(limits);
   if (met) return met;
-  const body = await readLimiterBody(request);
+  const read = await readWithinReadingBound(request, limits);
+  if ("allowed" in read) return read;
+  const { body } = read;
 
   const strategies = deps.authStrategies ?? [];
   if (authPath === "login" && strategiesNameTheKey(strategies)) {

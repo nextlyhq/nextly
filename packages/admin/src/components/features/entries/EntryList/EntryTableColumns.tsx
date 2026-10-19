@@ -348,6 +348,71 @@ export interface EntryColumnActions {
   openInLocale?: (entryId: string, locale: string) => void;
 }
 
+/**
+ * The columns the list's sort can order by: the ones its table marks sortable. The one answer
+ * both the sort menu and a sort carried in the list's address are held to.
+ */
+export function sortableColumnNames(
+  collection: CollectionForColumns
+): ReadonlySet<string> {
+  return new Set(
+    buildEntryColumns(collection)
+      .filter(column => column.sortable)
+      .map(column => column.name)
+  );
+}
+
+/**
+ * The sort a link asked for, when it names a column the sort menu can order by
+ * (`field` ascending, `-field` descending), or `undefined` for anything else, which the list
+ * then ignores rather than refuses.
+ */
+export function linkedSortFor(
+  param: string | null | undefined,
+  collection: CollectionForColumns | undefined
+): string | undefined {
+  if (!param || !collection) return undefined;
+  const name = param.startsWith("-") ? param.slice(1) : param;
+  return sortableColumnNames(collection).has(name) ? param : undefined;
+}
+
+/**
+ * The lifecycle a link asks the list to show (`?status=draft` or `?status=published`), for a
+ * collection with the Draft / Published lifecycle; `undefined` for anything else, and the list
+ * then shows every entry. A collection without the lifecycle has no status to narrow by.
+ */
+export function linkedStatusFor(
+  param: string | null | undefined,
+  collection: CollectionForColumns | undefined
+): "draft" | "published" | undefined {
+  if (collection?.status !== true) return undefined;
+  return param === "draft" || param === "published" ? param : undefined;
+}
+
+/** A choice the reader made from the list's own controls, and the collection it was made on. */
+export interface ChosenForCollection {
+  collectionSlug: string;
+  value: string;
+}
+
+/**
+ * What the list asks with, for one control (its sort, its status): the reader's own choice, then
+ * what its address carried, then `fallback`. A choice holds only on the collection it was made
+ * on, because the list is the same component from one collection to the next: a field of the
+ * first is not one of the second, and carried over it would order nothing while overriding the
+ * new address's own value.
+ */
+export function choiceInForce(
+  chosen: ChosenForCollection | undefined,
+  collectionSlug: string,
+  linked: string | undefined,
+  fallback: string
+): string {
+  const own =
+    chosen?.collectionSlug === collectionSlug ? chosen.value : undefined;
+  return own ?? linked ?? fallback;
+}
+
 export function buildEntryColumns(
   collection: CollectionForColumns,
   /**

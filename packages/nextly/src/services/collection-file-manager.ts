@@ -2,15 +2,14 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { sql } from "drizzle-orm";
 
 import { resolveLocalizedFieldNames } from "../domains/i18n/classify-fields";
 import type { LocalizedFieldRef } from "../domains/i18n/companion-join";
 import type { CompanionSchema } from "../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../domains/i18n/runtime/companion-registration";
+import { applyMigrationWhole } from "../domains/schema/services/apply-migration-statements";
 import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
-import { NextlyError } from "../errors/nextly-error";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
 import type { DatabaseInstance } from "../types/database-operations";
 
@@ -65,44 +64,6 @@ export type CollectionMetadataFetcher = (
  * path keep their import, and there is one definition to keep correct.
  */
 export type { CompanionSchema };
-
-/**
- * A migration's statements: split on Drizzle's `--> statement-breakpoint` separator, with comment
- * lines dropped so a chunk holding only a comment is not sent.
- */
-function migrationStatements(migrationSQL: string): string[] {
-  return migrationSQL
-    .split("--> statement-breakpoint")
-    .map(statement =>
-      statement
-        .split("\n")
-        .filter(line => !line.trim().startsWith("--"))
-        .join("\n")
-        .trim()
-    )
-    .filter(statement => statement.length > 0);
-}
-
-/** The error a refused migration is reported with: whether anything ran, and where it stopped. */
-function migrationRefused(
-  error: unknown,
-  ran: number,
-  total: number,
-  transactional: boolean
-): NextlyError {
-  return new NextlyError({
-    code: "NEXTLY_MIGRATION_APPLY_FAILED",
-    publicMessage: transactional
-      ? "The database refused this schema change, so nothing was changed."
-      : `The database refused statement ${ran + 1} of ${total} of this schema change. ` +
-        `The ${ran} before it were applied; saving again finishes the change from the table as it is now.`,
-    logMessage: `collection migration refused at statement ${ran + 1} of ${total}: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
-    logContext: { statement: ran + 1, of: total, transactional },
-    cause: error instanceof Error ? error : undefined,
-  });
-}
 
 export class CollectionFileManager {
   private migrationsDir: string;
@@ -213,60 +174,13 @@ export class CollectionFileManager {
    * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the database refuses a statement
    */
   async runMigration(migrationSQL: string): Promise<void> {
-    const statements = migrationStatements(migrationSQL);
-    if (statements.length === 0) return;
-    const progress = { ran: 0 };
-    try {
-      await this.runStatements(statements, progress);
-    } catch (error: unknown) {
-      throw migrationRefused(
-        error,
-        progress.ran,
-        statements.length,
-        this.adapter?.dialect !== "mysql"
-      );
-    }
-  }
-
-  /** The statements, in one transaction where the dialect has transactional schema changes. */
-  private async runStatements(
-    statements: readonly string[],
-    progress: { ran: number }
-  ): Promise<void> {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const dbInstance = this.db as any;
-    const client = dbInstance.$client;
-    if (
-      typeof client?.exec === "function" &&
-      typeof client?.transaction === "function"
-    ) {
-      // SQLite (better-sqlite3): one synchronous transaction around every statement.
-      client.transaction(() => {
-        for (const statement of statements) {
-          client.exec(statement);
-          progress.ran += 1;
-        }
-      })();
-      return;
-    }
-    if (typeof dbInstance.execute !== "function") {
-      throw NextlyError.internal({
-        logContext: {
-          reason:
-            "the database instance supports neither execute nor $client.exec",
-        },
-      });
-    }
-    const runAll = async (db: typeof dbInstance) => {
-      for (const statement of statements) {
-        await db.execute(sql.raw(statement));
-        progress.ran += 1;
-      }
-    };
-    // MySQL commits each schema statement as it runs; there is no whole to roll back.
-    await (this.adapter?.dialect === "postgresql"
-      ? dbInstance.transaction(runAll)
-      : runAll(dbInstance));
+    // The runner the Single save uses too, so the two saves apply a migration the same way.
+    await applyMigrationWhole({
+      db: this.db,
+      dialect: this.adapter?.dialect,
+      migrationSQL,
+      entity: "collection",
+    });
   }
 
   async loadDynamicSchema(

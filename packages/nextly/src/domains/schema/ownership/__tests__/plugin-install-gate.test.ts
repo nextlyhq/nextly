@@ -78,6 +78,66 @@ describe("assertPluginsInstalled", () => {
     );
   });
 
+  describe("a disabled plugin", () => {
+    // `enabled: false` withholds a plugin's hooks, so no install can run its
+    // `onInstall`; requiring one would refuse every such production boot.
+    const withSeo = (enabled: boolean) => [
+      { name: "auth" },
+      { name: "seo", enabled },
+    ];
+    function judgeWith(
+      enabled: boolean,
+      entries: Record<string, PluginLifecycleRecord>,
+      production: boolean
+    ) {
+      const warn = vi.fn();
+      const run = () =>
+        assertPluginsInstalled({
+          plugins: withSeo(enabled),
+          states: states(entries),
+          production,
+          warn,
+        });
+      return { run, warn };
+    }
+
+    it("boots in production when it was never installed, and says nothing of it", () => {
+      const { run, warn } = judgeWith(false, { auth: installed }, true);
+      expect(run).not.toThrow();
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("is refused, naming the install, once it is enabled and still not installed", () => {
+      // The same config with the plugin switched on: its `onInstall` has
+      // still never run, and the refusal names the command that runs it.
+      const { run } = judgeWith(true, { auth: installed }, true);
+      expect(thrown(run)).toMatchObject({
+        code: "PLUGIN_NOT_INSTALLED",
+        publicMessage: expect.stringContaining(
+          'Run "nextly plugins install seo"'
+        ),
+      });
+    });
+
+    it.each([
+      [{ state: "uninstalled" } as const, "PLUGIN_SCHEMA_UNINSTALLED"],
+      [{ state: "orphaned" } as const, "PLUGIN_SCHEMA_UNINSTALLED"],
+      [
+        { state: "uninstalling", keepData: false } as const,
+        "PLUGIN_UNINSTALL_UNFINISHED",
+      ],
+    ])("is still refused when recorded %o", (record, code) => {
+      for (const production of [true, false]) {
+        const { run } = judgeWith(
+          false,
+          { auth: installed, seo: record },
+          production
+        );
+        expect(thrown(run)).toMatchObject({ code });
+      }
+    });
+  });
+
   it.each([true, false])(
     "refuses an uninstall that began and did not finish (production: %s)",
     production => {

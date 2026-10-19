@@ -290,6 +290,53 @@ describe("REST limit: addresses", () => {
     const check = limiter({ collections: { posts: { readLimit: 4 } } });
     expect(await admitted(check, { address: "203.0.113.7" }, 10)).toBe(4);
   });
+
+  /** How many of `paths` one address is admitted, each requested once. */
+  async function admittedAcross(
+    check: ReturnType<typeof limiter>,
+    paths: string[],
+    caller: Caller = {}
+  ): Promise<number> {
+    let count = 0;
+    for (const path of paths) {
+      const refused = await check({ address: "203.0.113.7", ...caller, path });
+      if (refused === null) count++;
+    }
+    return count;
+  }
+
+  const rotate = (make: (n: number) => string) =>
+    Array.from({ length: 6 }, (_, n) => make(n));
+
+  it("opens no new budget for a collection named in the query", async () => {
+    const check = limiter();
+    const paths = rotate(n => `/admin/api/admin-meta?x=/collections/c${n}`);
+    expect(await admittedAcross(check, paths)).toBe(2);
+  });
+
+  it("opens no new budget for a collection the config does not override", async () => {
+    const check = limiter({ collections: { posts: { readLimit: 4 } } });
+    const paths = rotate(n => `/admin/api/collections/nope-${n}/entries`);
+    expect(await admittedAcross(check, paths)).toBe(2);
+    // The control: an overridden collection still has a budget of its own.
+    expect(
+      await admittedAcross(
+        check,
+        rotate(() => "/admin/api/collections/posts")
+      )
+    ).toBe(4);
+  });
+
+  it("lets no rotation reset the bound on failed key lookups", async () => {
+    const readers = testReaders();
+    const check = limiter({}, readers);
+    const paths = [
+      ...rotate(n => `/admin/api/me?x=/collections/q${n}`),
+      ...rotate(n => `/admin/api/collections/s${n}`),
+    ];
+    expect(await admittedAcross(check, paths, { key: "bogus" })).toBe(2);
+    expect(readers.lookupKey).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("REST limit: the unresolved sources' ceiling", () => {

@@ -1,5 +1,331 @@
 # @nextlyhq/telemetry
 
+## 0.0.2-alpha.68
+
+### Patch Changes
+
+- [#2327](https://github.com/nextlyhq/nextly/pull/2327) [`cd5f971`](https://github.com/nextlyhq/nextly/commit/cd5f971a7cc84923e9f3c024117902bdcaeadff4) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A core record written inside a plugin's PostgreSQL transaction (an email
+  delivery or an audit row naming a plugin-defined person) runs under a
+  savepoint of its own, and a failure rolls back only to it. The savepoint could
+  open while plugin work started earlier was still running: a deletion report of
+  several steps, or a query not yet sent. A rollback to it then undid that work
+  while the transaction still committed. The savepoint now opens only once
+  nothing the plugin started is in flight. A plugin read made meanwhile no
+  longer fails the transaction, since a rollback cannot undo a read.
+
+- [#2308](https://github.com/nextlyhq/nextly/pull/2308) [`0f38a7e`](https://github.com/nextlyhq/nextly/commit/0f38a7eee75d2da2d77223e730cb1089e4345810) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - On PostgreSQL, a transaction that a failed statement had aborted was reported
+  as committed. PostgreSQL does not refuse a COMMIT sent after a failure: it
+  rolls the transaction back and answers with the ROLLBACK command tag, raising
+  no error. So a callback that caught a failed statement and returned saw
+  `transaction()` resolve while none of its writes were kept.
+
+  **The PostgreSQL adapter's `transaction()`, and so `ctx.db.transaction`, now
+  rejects in that case**, with a `DatabaseError` (`code` `25P02`): an error now
+  replaces a silent rollback. `ctx.db.raw.transaction` is Drizzle's own
+  transaction and is unchanged. Code
+  that catches a failed statement inside a PostgreSQL transaction and carries on
+  will see the transaction fail where it used to appear to succeed. Nothing it
+  wrote was ever kept, so no data changes; only the report does. A bulk create
+  or update without `stopOnError`, in which one item's statement failed, now
+  reports every item failed, which is what was kept, where it used to count the
+  items before the failure as saved. A statement
+  that may fail, and that the rest of the work should not depend on, belongs
+  outside the transaction.
+
+  One core path did exactly that. A plugin that reports a person deleted inside
+  `ctx.db.transaction`, and then sends the person an email naming them, has the
+  email's record written inside that same transaction. The recorder never fails
+  a send, so when that insert failed (a provider removed between the send and
+  its record, a lock timeout), it caught the failure and carried on. On
+  PostgreSQL the commit then rolled back the plugin's deletion, the audit
+  erasure and the deleted-person record, while the plugin was told all three had
+  committed. The person was never erased.
+
+  A core record written inside a plugin's transaction (an email delivery or an
+  audit row naming a plugin-defined person) now runs under a savepoint of its
+  own on PostgreSQL. Its failure is rolled back to the savepoint and the
+  plugin's transaction stays usable, so the deletion commits. If rolling back
+  would also undo a write the plugin started while the record was being written,
+  the transaction is failed instead, so no write the plugin was told about is
+  lost unseen. MySQL keeps a transaction usable after a failed statement and has
+  no savepoints in this adapter, so nothing changes there.
+
+- [#2252](https://github.com/nextlyhq/nextly/pull/2252) [`2c7cd46`](https://github.com/nextlyhq/nextly/commit/2c7cd464de9084fe5b4394115aaa27f38ab11b42) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Nextly gains a record of content events, ready for the features that write
+  to it: what happened to a document or a release, who or what did it (a
+  person, an API key, a plugin-defined person, a release or the system, with
+  the name they had then), when, and optionally the state before and after, a
+  note, the version, a small kind-specific payload and a definition hash. The
+  languages and shared fields an event involved are kept as parts, so history
+  can be filtered and paged by language. Event kinds are registered by the core
+  features that write them, and an event is written in the same transaction as
+  the change it records. Nothing writes events yet. A subject's events are kept
+  while it exists, and removed once the activity log's retention window has
+  passed since its deletion, by the write paths' retention pass and the
+  scheduled drain alike. Deleting a staff account removes its name from the
+  events it performed and keeps its id as an opaque reference, as the audit
+  trail does; a plugin reporting one of its people deleted removes their name
+  and replaces their id with the keyed digest the audit trail names them by.
+  Two new core tables, `nextly_content_events` and
+  `nextly_content_event_parts`, are created by `nextly migrate`.
+
+- [#2267](https://github.com/nextlyhq/nextly/pull/2267) [`13af656`](https://github.com/nextlyhq/nextly/commit/13af656be3cd9a1a3fda6c474384d7c3c4463ca3) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A release now holds at most 200 documents (`RELEASE_MEMBER_LIMIT`, exported
+  from `nextly/schemas`), down from 1,000: a full release on its own publishes
+  within one pass of the job runner on every supported database. The limit is
+  per release; releases due together that share a document are settled as one
+  piece and take as long as all of their documents. Adding to a full release
+  is refused with a conflict that says no more fit, and `can.addMember` is false
+  for it. A release made before the limit and holding more keeps running as
+  scheduled and can lose documents, but takes no new one.
+
+- [#2289](https://github.com/nextlyhq/nextly/pull/2289) [`8b3589b`](https://github.com/nextlyhq/nextly/commit/8b3589b6160de9757ee7a3ba94e9b05a091896d3) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A save no longer leaves an autosave behind it. An edit schedules a recovery
+  point on a debounce, and a save made before that debounce ran used to be
+  followed by the recording anyway, writing a copy of what the save had just
+  stored. A recording waiting for an edit is now dropped once the editor is
+  clean again (the edit was saved, or undone), and the recording checks at the
+  moment it would run that there is still unsaved work to protect.
+
+- [#2282](https://github.com/nextlyhq/nextly/pull/2282) [`f86547c`](https://github.com/nextlyhq/nextly/commit/f86547c4d381439a7062ada81ca3d0461085f105) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A save that changes nothing records no version, on every path, not only on
+  a working draft: an unpublished document, a collection with history and no
+  status, a Single, and each language of a translated document. The
+  comparison is the one a working
+  draft's save already used, so framework fields such as timestamps don't
+  count as a change, and now neither do a component's own row timestamps,
+  which made an unchanged save of a document with a component look changed
+  whenever it landed in a later second (for a working draft too). A save
+  that changes only a password records none either: a version never holds a
+  secret, so it would show nothing. A save that changes the status still records one, and so
+  do a create, a restore, a named version, and publishing or unpublishing
+  every language. A save is compared with the document's newest version, and
+  only when that version is in the save's own language; an unchanged save in
+  another language still records one, since its own newest version can
+  predate a change to the shared fields. This takes one extra read of the
+  document's newest version per save of a document with history.
+
+- [#2257](https://github.com/nextlyhq/nextly/pull/2257) [`1a8f237`](https://github.com/nextlyhq/nextly/commit/1a8f23772e629a49b401e745f91013234c7e28a7) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The localization archive records which kind of entity each value came from, so a field group that shares its slug with a collection or a Single keeps its archived translations to itself.
+
+  A field group's slug can equal a collection's or a Single's. Until now the archive kept only the slug, so restoring one entity read the other's archived values as well (the restore failed part-way when it tried to write them into the wrong table), and deleting one entity removed the other's archived values too. Each row now records `collection`, `single` or `fieldGroup` in a new `entity_kind` column, and restore and delete act only on rows of their own kind.
+  - `nextly migrate`, and boot, add the column to an existing archive, and a Schema Builder save that archives brings an older archive up to date on its own. Rows written before the column existed are matched to their entity when exactly one holds their slug, counting only rows archived since that entity was created. The rest are kept, never deleted, and a restore of their slug reports them; `--kind` claims them.
+  - `nextly i18n:restore` takes `--kind collection`, `--kind single` or `--kind field-group`. It is needed only when the slug names more than one kind; without it, such a restore is refused and the kinds are named.
+
+- [#2281](https://github.com/nextlyhq/nextly/pull/2281) [`3991d77`](https://github.com/nextlyhq/nextly/commit/3991d771452d9d362f08406b12ac3682162b2987) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A boot on a database that lacks one of Nextly's core tables now says so. A
+  release can add core tables, and an existing database gets them only through
+  `nextly migrate`; a production boot never creates them. The boot used to
+  start in silence, and the first write that needed a missing table failed far
+  from the cause (deleting a document, for one, rolls back). It now logs one
+  warning naming every missing core table and the command that creates them,
+  beside the existing warning for missing columns, and keeps booting.
+
+- [#2298](https://github.com/nextlyhq/nextly/pull/2298) [`b6051d7`](https://github.com/nextlyhq/nextly/commit/b6051d7bc85e1e42b4fcf8a7f22baa378994f354) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The record of content events writes an event by a plugin-defined person already reported deleted as their erasure left their earlier events: named by the keyed digest, with no name. Writing an event for such a person now requires the deleted-people check, read on the event's own transaction. Retention deletes each batch of events and their parts in one transaction, so a failed batch never leaves events without their parts.
+
+- [#2277](https://github.com/nextlyhq/nextly/pull/2277) [`8124b14`](https://github.com/nextlyhq/nextly/commit/8124b14b84e359c7ecc6b80e71a8a8d5f3d741b5) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The dashboard summary (`GET /api/dashboard/stats`) now gives each installation-wide count only to a caller who may read that resource: users to `read-users`, roles and permissions to `read-roles`, media to `read-media`, field groups to a settings read, and active API keys to the API-key read policy. For anyone else the field is left out of the response rather than sent as zero, so the answer no longer reveals how many users, roles, keys or media items exist. An API key is judged on its own grant. The admin's Team card and stats grids draw nothing for a missing count instead of 0, and the Team card shows its unavailable state when neither count is given.
+
+- [#2306](https://github.com/nextlyhq/nextly/pull/2306) [`84719c5`](https://github.com/nextlyhq/nextly/commit/84719c51566ed1bd34dcd02487a5b19fa95d9653) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A field-type document view, such as the Page Builder's screen, now opens only for a field the edit form would let the author edit. Opened at its address for a field that is read-only, disabled, hidden, or hidden by its condition (its own, or an unnamed group's around it), the admin says why and offers the way back to the document, instead of drawing an editor that could save into the field.
+
+  Where a document has several such fields and the address names none, the admin offers only the ones the author may edit, and opens the only one directly.
+
+  The form also no longer draws a field marked `admin.hidden` that has its own editor (`admin.component`). Before, only fields drawn through the standard wrapper were hidden.
+
+  The Page Builder's screen also starts afresh when its address moves to another blocks field of the same document. Before, it kept showing the first field's page and could save it into the second.
+
+- [#2307](https://github.com/nextlyhq/nextly/pull/2307) [`d7577cc`](https://github.com/nextlyhq/nextly/commit/d7577cccdd3d97efe33400f2fa883d7c48043494) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - In development, a page opened at `localhost`, `127.0.0.1` or `[::1]` can now sign in, set up the first admin and submit the other auth forms when the app's own address names another of those, as long as the request is sent to exactly the address the page is on. Before, opening `127.0.0.1` for an app at `localhost` was refused with "Invalid request origin". Another loopback name of the same port, any other host, and everything in production are refused exactly as before.
+
+- [#2247](https://github.com/nextlyhq/nextly/pull/2247) [`ad96b66`](https://github.com/nextlyhq/nextly/commit/ad96b6660502524e84b1cf8111263f5520cf4915) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - On MySQL, removing a field in the Schema Builder now drops its column.
+
+  The Builder's ALTER generator wrote `ALTER TABLE … DROP COLUMN IF EXISTS`, a form MySQL does not accept (MariaDB does). On MySQL the drop failed, the column stayed, and a Required field's column, NOT NULL, refused every later entry, both for collections and for Singles. The same statement went into the migration file, where `nextly migrate` failed on it. PostgreSQL keeps `IF EXISTS`; MySQL and SQLite get the plain `DROP COLUMN`.
+
+  Columns that an existing MySQL install kept from fields removed before this fix are not dropped by it: a save drops only the columns of the fields it removes. They stay, with their data, until removed on purpose.
+
+  A collection save in the Schema Builder now applies whole or fails whole, and says why.
+  - Before anything runs, the save checks the entries: a field made Unique over repeated values, a new Unique field whose backfill would repeat, and a text field narrowed below a value an entry holds are refused, naming the field. A refusal never shows a stored value.
+  - The migration runs before the file and the registry are written. On PostgreSQL and SQLite it runs in one transaction, so a refusal changes nothing. On MySQL, which commits each schema statement, the refusal says which statement stopped it. Saving again finishes the change for what such a refusal most often leaves behind: a column already added or already removed, Draft/Published already turned on or off, a plain or unique index already created or dropped, and a translated field's companion column already added.
+  - Turning Unique on or off for an existing field now creates or drops its unique index. Before, only the registry changed, so a field could be recorded unique while the table accepted repeats.
+  - A new field whose name matches a column of another type already on the table is refused, naming the column, instead of being recorded over it.
+
+- [#2290](https://github.com/nextlyhq/nextly/pull/2290) [`ea579d6`](https://github.com/nextlyhq/nextly/commit/ea579d64d259655b7666b372b199a7c0041edf8f) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - **On MySQL, turning localization off now brings the content back.** On MySQL,
+  `nextly_meta`'s compare-and-set, and every statement guarded on one of its
+  rows, never matched a stored value: the column is native JSON and the stored
+  text was compared encoded twice. Postgres and SQLite were not affected.
+
+  What a MySQL install saw, in every release since localization transitions were
+  recorded (2026-07-31):
+  - **Turning localization off on an entity copied nothing back onto its main
+    table**, during `db:sync`, dev reloads and `nextly migrate`'s companion
+    pass. The site went back to the values the entity had before it was
+    localized, and edits made while it was localized looked lost. They were not:
+    they are intact in the entity's translation table (`dc_<slug>_locales` for a
+    collection), which is left in place.
+  - Re-enabling localization after a disable did not refresh the translation
+    table, so edits made while it was off stayed hidden.
+  - A first enable copied its content, but every later pass reported that the
+    transition was held by another process. Writing translations was not blocked.
+
+  **Before you start the upgraded version, save any edit made directly to an
+  affected entity's main table since you turned its localization off.** The first
+  `nextly db:sync`, dev-server start or `nextly migrate` after upgrading restores
+  the translation table's values onto the main table, replacing those edits. To
+  list the rows where the two differ, run this for each entity whose localization
+  you turned off, with its slug, its default locale and one comparison per
+  translated field:
+
+  ```sql
+  SELECT m.id, m.updated_at, m.title AS on_main, l.title AS in_translations
+  FROM dc_<slug> AS m
+  JOIN dc_<slug>_locales AS l ON l._parent = m.id AND l._locale = '<default locale>'
+  WHERE NOT (CAST(m.title AS BINARY) <=> CAST(l.title AS BINARY));
+  ```
+
+  The binary cast on both sides makes the comparison exact and keeps it null-safe:
+  under MySQL's default collation, `<=>` alone takes `Foo` and `foo` for the
+  same value, so an edit that changed only letter case or accents would not be
+  listed. For an entity defined with `timestamps: false`, leave out
+  `m.updated_at`: it has no such column.
+
+  A row whose `updated_at` is later than the disable was edited on the main
+  table since, and the upgrade replaces it with `in_translations`. Every other
+  listed row is an edit made while the entity was localized, which the upgrade
+  brings back. `updated_at` moves only with saves made through Nextly: a row
+  changed outside it (from a SQL client or a script) can keep an older
+  `updated_at`, so if anything wrote to the main table that way, judge its rows
+  by their values, not by the date.
+
+  Recovery, after upgrading: run `nextly db:sync` (or start the dev server, or
+  run `nextly migrate`). For an entity whose localization was turned off, the
+  earlier pass never recorded the restore as done, so this pass restores the
+  default language's values from the translation table onto the main table. A
+  stuck first enable settles on the same pass.
+
+  A migration file that turns localization off was never affected: its own
+  statements restore and archive before the translation table is dropped.
+
+- [#2313](https://github.com/nextlyhq/nextly/pull/2313) [`fed7bf6`](https://github.com/nextlyhq/nextly/commit/fed7bf671e598439eefe5fa36e2d421ed4e2dd84) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A plugin route declared with `rateLimit: "auth"` can no longer be closed to everyone by one visitor when no client address can be read (the default, without `security.trustProxy`). Before, every such client shared one bucket per route, so one visitor spending the auth budget refused the route to all. Now each request counts against the identity the route's new, optional `limitKey` names, at the auth budget, under a ceiling of 100 times that budget that only the plugin's own auth routes share. A route without a `limitKey` is bounded by that ceiling alone, and the server names it at startup. Core's sign-in and other plugins keep their own ceilings. Auth routes are no longer listed in the startup warning about routes sharing one limit.
+
+- [#2325](https://github.com/nextlyhq/nextly/pull/2325) [`fee1a1f`](https://github.com/nextlyhq/nextly/commit/fee1a1f9a98c9860a45c380a33348469bbb3dd54) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Requests from clients whose address cannot be read are now charged to the identity they name at the time they are admitted, with the shared ceiling still spent when they arrive. On a plugin's `rateLimit: "auth"` route, the body was read after the ceiling but charged at the time the request began, so a caller holding several bodies open longer than the window could make each charge land at a time already expired, and spend an identity's budget more than once. The route now spends the plugin's ceiling on arrival, before its body is read, so the ceiling also bounds how many requests a caller can hold open, and charges the identity once the body is in. Without a shared store, the ceiling place a request spent moves with its charge, so the two still expire together; core's token routes and strategy-keyed sign-ins are charged the same way.
+
+  The once-per-process warning about proxy client-address headers that could not be used also now says how a plugin's auth route counts such requests: by the identity its `limitKey` names, or against one budget its requests naming no identity share, under that plugin's own ceiling, or by the ceiling alone without a `limitKey`.
+
+- [#2309](https://github.com/nextlyhq/nextly/pull/2309) [`516a049`](https://github.com/nextlyhq/nextly/commit/516a0497a5c86a3f18664c8dd8bcb8a2e47068e6) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A sign-in challenge (a second step, such as a one-time code) whose answer the server refuses because the page is open at an address the app does not accept now shows the same notice as the sign-in form: both addresses, and where to go. Before, the challenge view showed only a short message.
+
+- [#2284](https://github.com/nextlyhq/nextly/pull/2284) [`e961c97`](https://github.com/nextlyhq/nextly/commit/e961c97a428d668abecc6131507ad2305b2408b0) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A sign-in, first-run setup or other signed-out form whose submission is refused now says so in the form. When the page is open at an address the app does not accept, for example `127.0.0.1` for an app at `localhost`, it names both addresses and links to the same page at the app's own. Before, the form looked unchanged. The auth routes' 403 `CSRF_FAILED` answer now carries `data.reason` (`"origin"` or `"token"`) and, for an origin, `data.appOrigin`; what they accept is unchanged.
+
+- [#2255](https://github.com/nextlyhq/nextly/pull/2255) [`98711ba`](https://github.com/nextlyhq/nextly/commit/98711baea778f41644f18ac777380788367d9e48) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A release's documents are checked before the moment, and a hard problem stops
+  scheduling. `GET /api/releases/:id/readiness` and `nextly.releases.readiness()`
+  report each document's hard problems (no author, an author who is gone or may
+  no longer publish or unpublish it, a document that is gone, a collection or
+  Single without a draft/published lifecycle or whose translations lack a
+  per-language status, unreleased work held in another language, a document going live that fails validation or edits
+  a field its author may no longer write) and soft ones (another scheduled release holds it,
+  and which one wins). Every document is checked, however many the release holds.
+  Scheduling, Publish now and adding a document to a scheduled release are refused
+  while a hard problem stands, as a `409 CONFLICT` naming each problem in
+  `data.problems`, alike over REST and the Direct API. A document coming down is
+  never validated. `PATCH /api/releases/:id/members/:memberId` and
+  `nextly.releases.changeMemberAction()` switch a document between going live and
+  coming down, checking the new action as the document's author in a scheduled
+  release. The blocking reasons are now derived from the same checks. All of this
+  is experimental. Publish now judges each member by its author, as the scheduled
+  run does.
+
+- [#2312](https://github.com/nextlyhq/nextly/pull/2312) [`6863300`](https://github.com/nextlyhq/nextly/commit/68633003a37eaa49d1dc1c2fd5eb90837083100b) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - `nextly.releases.find()` and `nextly.releases.count()` take their query as optional again, which restores the alpha.67 signature: a call with no argument compiles and lists or counts every release the caller can see.
+
+  A release's readiness check now judges each document's own write before the moment. A status the author's field rules would not let them set is reported as `FIELD_NOT_PERMITTED` rather than refused when the release runs, and a document taken down with a pending change is judged on that change, as the takedown folds it in. The checks also read each collection's stored documents and translations once per batch.
+
+- [#2328](https://github.com/nextlyhq/nextly/pull/2328) [`475c76e`](https://github.com/nextlyhq/nextly/commit/475c76eb3dc88a219822a4ca4fd6912bf0131387) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A release's readiness check no longer blocks a release whose run would succeed over a protected field the pending change left alone.
+  - A many-to-many relationship (a Schema Builder collection's) is compared using every id the document stores, as the release's write reads it. A related document unpublished or removed since no longer makes an unchanged relationship read as edited, and a failed read of the stored ids fails the check instead of reading as an empty relationship.
+  - For a localized collection, the live document the pending change is compared with now carries the default language's stored translations, as the write's does. An unchanged protected translation no longer reads as edited.
+
+- [#2291](https://github.com/nextlyhq/nextly/pull/2291) [`f8d3eee`](https://github.com/nextlyhq/nextly/commit/f8d3eeeeb53a9f29bada6b2e22c47b26f2f0bd5d) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A content release can now be renamed and deleted, under two new permissions. `update-content-releases` lets a person change a release's title and description in any state, through `PATCH /api/releases/:id` or `nextly.releases.update()`. `delete-content-releases` lets a person delete a release that never ran, with its documents, through `DELETE /api/releases/:id` or `nextly.releases.delete()`: a draft, or a release cancelled before it was ever scheduled. Every other release is refused with a conflict whose `data.reason` says why: a scheduled or stopped release (`committed`) can be cancelled to call it off, and is then kept; a published one (`published`) stays as the record of what went live; and a cancelled release that was ever scheduled (`was-scheduled`) is kept as a record too, because nothing stored says whether it began to run before it was called off. The delete answers with the release as it was. Each rename and deletion is recorded in the activity log, and the capabilities sent with every release gain `update` and `delete`, so the admin can offer only what the caller may do. All of this is experimental until the releases redesign is complete.
+
+  An existing installation receives both permissions the first time it boots, granted so that nobody gains or loses anything: super-admins hold both, every role holding `create-content-releases` gains `update-content-releases`, and every role holding `publish-content-releases` gains `delete-content-releases`. The grants are made once, when the permissions are created, so a permission an administrator later takes from a role is not given back on the next restart.
+
+- [#2323](https://github.com/nextlyhq/nextly/pull/2323) [`39d3273`](https://github.com/nextlyhq/nextly/commit/39d3273f8b4dcdf6b3be0ef1a1cb1fa3f798e50f) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - A REST request's per-address budget is no longer split by a collection name
+  the caller chooses. The collection was read from anywhere in the URL, query
+  included, and every name opened a counter of its own, so one address could
+  rotate a query value or an invented collection slug and never meet its
+  budget, and invalid API keys could be looked up past their bound the same
+  way. The collection now comes from the path alone, and only a collection with
+  limits of its own in `rateLimit.collections` keeps a separate budget; every
+  other request counts against the address's one budget.
+
+- [#2310](https://github.com/nextlyhq/nextly/pull/2310) [`b5aefd4`](https://github.com/nextlyhq/nextly/commit/b5aefd4e468a92351a4c1264bcc0e1927812d49f) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The REST rate limit now applies to every request, the admin API included, and
+  counts each one by who is asking. A signed-in session spends a budget of its
+  own, five times the per-address budgets by default (`rateLimit.sessions`), so
+  the admin's parallel page loads no longer need an exemption. An API key that
+  resolves spends its own `apiKeys.rateLimit` budget, counted once per request,
+  and a plugin's signed-in people each spend a budget the size of a session's.
+  Requests carrying neither from an address the server cannot resolve share a
+  ceiling of ten times the per-address budgets (`rateLimit.unresolvedCeiling`),
+  which never refuses a session, a key or a sign-in. Invalid API keys and
+  unresolvable plugin people are bounded before the next lookup. An app that
+  relied on the old exemption can pass the deprecated `defaultSkipAdminApi` as
+  `rateLimit.skip`; a later release removes it.
+
+  The limit's defaults now have one source, 100 reads and 30 writes a minute
+  per address, which is what every app configured through `defineConfig` already
+  ran on. A limiter built with no values used a second copy of 600 and 120; it
+  now uses the same 100 and 30. That narrows only code that reaches the limiter
+  without a sanitized config: `createRateLimiter()` called without `readLimit`
+  or `writeLimit`, and `createDynamicHandlers()` created without a config. Pass
+  the limits explicitly to keep the old numbers.
+
+- [#2286](https://github.com/nextlyhq/nextly/pull/2286) [`9425e32`](https://github.com/nextlyhq/nextly/commit/9425e3216eecd2dca266b5e1b88d87e2a5c7ff38) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The Schema Builder's change dialog says what happens to a field's translations when it stops being translated.
+  - Before you save, the dialog lists each field leaving translation, how many translated values move to the archive and in which languages, and that the default language's value stays as the shared one. A field badge reads "no longer localized".
+  - A change that can't be made in one save is refused with the steps to take: a Required field can't stop being translated in the same change, so the dialog says to turn off Required and save, turn off Localized and save, then turn Required back on.
+  - The command that restores the archived values (`nextly i18n:restore`) is shown on one line, with a copy button.
+  - The dialog's Save button now uses the primary style rather than the destructive red, which it used for every change.
+
+- [#2292](https://github.com/nextlyhq/nextly/pull/2292) [`7ddcc0e`](https://github.com/nextlyhq/nextly/commit/7ddcc0e7a73179fb5750b9aeb453df38abf9b8b0) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - An auth strategy can now name the account a sign-in targets, with an optional
+  `limitKey` (`@experimental`, exported from `@nextlyhq/plugin-sdk` with its
+  `AuthLimitAnswer` type). When the client's address cannot be read, the sign-in
+  rate limit then keys that strategy's sign-ins on what it reads, such as a
+  username or an OAuth code, so rotating the `email` in the body no longer buys
+  a fresh budget. A strategy without `limitKey` keeps sign-ins keyed on the
+  `email` they carry, as before, and the server names it at startup while the
+  limit is on.
+
+- [#2287](https://github.com/nextlyhq/nextly/pull/2287) [`ec02ef1`](https://github.com/nextlyhq/nextly/commit/ec02ef1a2a701a54d0078dc846595e1012be78bb) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The editor header is rearranged. The top row holds the way back to the
+  collection's list at the left and every action at the right, with History
+  first. The title has a line of its own below at full width, so it is no
+  longer cut to a few words wherever the actions take the width, and the save
+  state moves to a status line under it. Save draft, Unpublish and the other
+  secondary document verbs keep their words at every width: they draw no icon,
+  so at narrow widths they used to leave an empty bordered button. On a
+  phone, History and the preview move into the document's menu and the panel
+  toggle goes, so the actions keep to one row. What each control does is
+  unchanged.
+
+- [#2294](https://github.com/nextlyhq/nextly/pull/2294) [`5242780`](https://github.com/nextlyhq/nextly/commit/5242780983629942f8a7cf78493927a0d853d869) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - The Page Builder opens as a screen of its own, at the page's own address:
+  `/admin/collections/<slug>/<id>/builder`, or `/admin/singles/<slug>/builder`
+  for a Single. Before, it opened over the entry form. A reload keeps the author
+  in the builder, a link to it can be shared, and Exit editor goes back to the
+  page's form. The admin holds the page's soft lock, the offer to restore unsaved
+  work, and the question before leaving with unsaved changes. Saving a pattern no
+  longer saves the page as well. If a colleague takes the page over, the author's
+  unsaved edits stay in their form until they take it back.
+
+  A page that has never been saved has no address yet, so its Page Builder card
+  asks the author to save it first. The Page Builder edits the default language:
+  opened from another language's edit screen, it opens the default one, and the
+  card says so.
+
+  **Compatibility.** The Page Builder now opens only for a blocks field at the top
+  level of a collection or a Single, including one inside an unnamed group.
+  - **Who is affected:** a site that declares a blocks field inside a named group
+    or a repeater. That field's card still shows the page, but offers no way into
+    the builder, and startup logs a warning naming the collection and the field.
+    The warning covers fields declared in code; for a collection made in the
+    Schema Builder, the card is what says it.
+  - **What to do:** move the field to the top level of its collection or Single
+    to edit it visually, or keep it where it is until nested fields are
+    supported.
+
+  The builder is a document view at the `builder` address on every document
+  with a top-level blocks field, so another plugin declaring a document view at
+  `builder` is refused at startup, naming both plugins.
+
+- [#2302](https://github.com/nextlyhq/nextly/pull/2302) [`35ec0e6`](https://github.com/nextlyhq/nextly/commit/35ec0e67e5514362011a9c9e23996b79fa1d8c2e) Thanks [@nextly-agent](https://github.com/apps/nextly-agent)! - Two follow-ups to recent schema-save and localization-archive fixes.
+  - A collection save that makes a field unique and shortens it at once checks both: a value longer than the new length is refused, naming the field, rather than truncated by PostgreSQL's cast while the save succeeds.
+  - On MySQL, an archive row from before the archive recorded its entity's kind is matched to an entity only when it was archived more than 42 hours after the entity's recorded creation (14 on PostgreSQL). On MySQL the creation time, the archive time and the reading of it are all in the session's time zone, which may differ each time, so a narrower margin could give an older entity's translations to a newer one with the same slug. Rows inside the window stay unresolved: kept, reported by a restore and restored by naming their kind.
+
 ## 0.0.2-alpha.67
 
 ### Patch Changes

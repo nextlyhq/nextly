@@ -111,6 +111,16 @@ function namespace() {
         })
       ),
       findByID: vi.fn(async () => ({ id: "r1" })),
+      // Echoes the window it was asked for, so a case can tell the answer
+      // came from here and in the shape the route sent.
+      calendar: vi.fn(
+        async (query: { from: string; to: string; timezone: string }) => ({
+          timezone: query.timezone,
+          from: query.from,
+          to: query.to,
+          days: [],
+        })
+      ),
       create: vi.fn(async () => ({ id: "r1" })),
       addMember: vi.fn(async () => ({ id: "m1" })),
       removeMember: vi.fn(async () => undefined),
@@ -802,19 +812,44 @@ describe("the list's tab, search, page and order", () => {
     expect(api.releases.find).not.toHaveBeenCalled();
   });
 
-  it.each(["tab=upcoming", "search=spring", "order=latest", "reason=overdue"])(
-    "refuses %s alongside a document filter",
-    async extra => {
-      // One document's releases are not a tab, are not searched, and come in
-      // the order they apply to it; accepting the parameter and dropping it
-      // would answer a different question.
-      const res = await list(
-        `?containingScopeKind=collection&containingScopeSlug=posts&containingEntryId=e1&${extra}`
-      );
-      expect(res.status).toBe(400);
-      expect(api.releases.find).not.toHaveBeenCalled();
-    }
-  );
+  it("passes a day and its zone through as one filter", async () => {
+    const res = await list("?day=2026-03-29&timezone=Europe%2FBerlin");
+    expect(res.status).toBe(200);
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        day: { date: "2026-03-29", timezone: "Europe/Berlin" },
+      })
+    );
+  });
+
+  it.each([
+    ["a day without its zone", "?day=2026-03-29"],
+    ["a zone without its day", "?timezone=Europe%2FBerlin"],
+  ])("refuses %s rather than answering with every release", async (_, q) => {
+    const res = await list(q);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
+    expect(api.releases.find).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "tab=upcoming",
+    "search=spring",
+    "order=latest",
+    "reason=overdue",
+    "day=2026-03-29&timezone=UTC",
+  ])("refuses %s alongside a document filter", async extra => {
+    // One document's releases are not a tab, are not searched, and come in
+    // the order they apply to it; accepting the parameter and dropping it
+    // would answer a different question.
+    const res = await list(
+      `?containingScopeKind=collection&containingScopeSlug=posts&containingEntryId=e1&${extra}`
+    );
+    expect(res.status).toBe(400);
+    expect(api.releases.find).not.toHaveBeenCalled();
+  });
 });
 
 describe("filtering the list to the releases holding ONE document", () => {
@@ -1132,5 +1167,66 @@ describe("renaming and deleting a release", () => {
         overrideAccess: false,
       })
     );
+  });
+});
+
+describe("the calendar over REST", () => {
+  async function calendar(search: string) {
+    return handleReleaseRequest(
+      new Request(`https://example.test/api/releases/calendar${search}`),
+      "releaseCalendar",
+      {}
+    );
+  }
+
+  it("demands only read, as the list does", async () => {
+    expect(await authorityFor("releaseCalendar")).toEqual({
+      action: "read",
+      resource: "content-releases",
+    });
+  });
+
+  it("asks for the window and kind it was sent, as the caller, and answers the calendar bare", async () => {
+    const res = await calendar(
+      "?from=2026-03-01&to=2026-04-11&timezone=America%2FNew_York&kind=release"
+    );
+    expect(res.status).toBe(200);
+    expect(api.releases.calendar).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "2026-03-01",
+        to: "2026-04-11",
+        timezone: "America/New_York",
+        kind: "release",
+        userId: "u1",
+        overrideAccess: false,
+      })
+    );
+    expect(await res.json()).toEqual({
+      timezone: "America/New_York",
+      from: "2026-03-01",
+      to: "2026-04-11",
+      days: [],
+    });
+  });
+
+  it.each([
+    ["no `from`", "?to=2026-04-11&timezone=UTC"],
+    ["no `to`", "?from=2026-03-01&timezone=UTC"],
+    ["no zone", "?from=2026-03-01&to=2026-04-11"],
+  ])("refuses a window with %s, naming it, before reading", async (_, q) => {
+    const res = await calendar(q);
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
+    expect(api.releases.calendar).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unknown kind rather than reading every release", async () => {
+    const res = await calendar(
+      "?from=2026-03-01&to=2026-03-02&timezone=UTC&kind=singles"
+    );
+    expect(res.status).toBe(400);
+    expect(api.releases.calendar).not.toHaveBeenCalled();
   });
 });

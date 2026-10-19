@@ -261,6 +261,38 @@ export async function runPluginInstallCommand(
  * enabled dependent remains.
  */
 /**
+ * Install every configured plugin: what a deployment runs once its database
+ * is migrated, and what a fresh database needs before a production boot,
+ * which refuses a configured plugin no install has recorded.
+ *
+ * In `deps.plugins` order, which the config loader has already put in
+ * dependency order, so each install finds the plugins it depends on
+ * installed; that order is the loader's to decide, not this command's.
+ * Stops at the first install that fails, since a later one may depend on it.
+ *
+ * A disabled plugin is skipped and named: its install is refused anyway,
+ * because its hooks do not run, and refusing the whole run over it would
+ * leave every enabled plugin after it uninstalled.
+ */
+export async function runPluginInstallAllCommand(
+  deps: PluginLifecycleDeps
+): Promise<void> {
+  if (deps.plugins.length === 0) {
+    deps.logger.info("No plugins are configured.");
+    return;
+  }
+  for (const plugin of deps.plugins) {
+    if (!plugin.enabled) {
+      deps.logger.warn(
+        `Skipping ${plugin.name}: it is disabled in config. Enable it to install it.`
+      );
+      continue;
+    }
+    await runPluginInstallCommand(plugin.name, deps);
+  }
+}
+
+/**
  * A disabled plugin's hooks do not run, so an install or an uninstall of it
  * could record a state its hook never produced. Refused before any change.
  */

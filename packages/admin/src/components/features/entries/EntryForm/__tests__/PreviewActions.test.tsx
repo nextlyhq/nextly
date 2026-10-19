@@ -9,7 +9,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { PreviewActions } from "../PreviewActions";
+import { PreviewActions, previewChoices } from "../PreviewActions";
 
 describe("PreviewActions", () => {
   it("renders nothing when neither action is available", () => {
@@ -249,5 +249,46 @@ describe("the control keeps saying who it is, and what it is doing", () => {
     );
 
     expect(container.querySelector(".animate-spin")).toBeNull();
+  });
+});
+
+describe("previewChoices, folded into the document's menu", () => {
+  it("names each row by what it does, so a declared label never names two", () => {
+    const choices = previewChoices({
+      isPreviewAvailable: true,
+      onPreview: () => undefined,
+      previewLabel: "View page",
+      onTogglePreviewPane: () => undefined,
+      previewPaneOpen: false,
+      isLinkAvailable: true,
+      onCopyLink: () => undefined,
+    });
+    const labels = choices.map(choice => choice.label);
+    expect(labels).toEqual([
+      "Show preview pane",
+      "View page",
+      "Copy shareable link",
+    ]);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  it("says the pane will hide while it is open", () => {
+    const [pane] = previewChoices({
+      onTogglePreviewPane: () => undefined,
+      previewPaneOpen: true,
+    });
+    expect(pane?.label).toBe("Hide preview pane");
+  });
+
+  it("calls opening what the control calls it, promising a new tab only beside a pane", () => {
+    const open = (withPane: boolean) =>
+      previewChoices({
+        isPreviewAvailable: true,
+        onPreview: () => undefined,
+        ...(withPane ? { onTogglePreviewPane: () => undefined } : {}),
+      }).find(choice => choice.id === "open")?.label;
+    // Without a pane the preview may open in this window: no destination named.
+    expect(open(false)).toBe("Preview");
+    expect(open(true)).toBe("Open in new tab");
   });
 });
