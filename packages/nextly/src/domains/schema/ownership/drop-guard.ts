@@ -1988,10 +1988,11 @@ class StatementWalk {
 
   private readAddedClause(table: TableRef | undefined, at: number): void {
     if (table === undefined || this.word(at) !== "ADD") return;
+    // A takeover is judged wherever it is written, inside a routine or not.
+    this.readUsingIndexClause(table, at);
     // An addition inside a dollar-quoted body may not run: a branch not taken,
     // an exception swallowed, or a routine never called. It is not credited.
     if (this.bodyDepth > 0) return;
-    this.readUsingIndexClause(table, at);
     const first = this.word(at + 1) ?? "";
     if (first === "CONSTRAINT") {
       this.readAddedConstraint(table, at + 2);
@@ -2003,10 +2004,28 @@ class StatementWalk {
 
   /** The token position of `USING INDEX` in an ADD clause, if it has one. */
   private usingIndexAt(at: number): number | undefined {
-    for (let p = at + 1; p <= at + 4; p += 1) {
+    for (let p = at + 1; p <= at + 5; p += 1) {
       if (this.word(p) === "USING" && this.word(p + 1) === "INDEX") return p;
     }
     return undefined;
+  }
+
+  /**
+   * Whether a constraint's `INDEX` or `KEY` word is followed by an index name
+   * of its own. MariaDB creates that index under the name it is given, not
+   * under the constraint's symbol, so the symbol does not name what is added.
+   */
+  private namesIndexAt(at: number): boolean {
+    for (let p = at + 1; p <= at + 4; p += 1) {
+      const word = this.word(p);
+      if (
+        (word === "INDEX" || word === "KEY") &&
+        this.nameAt(p + 1) !== undefined
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -2053,6 +2072,7 @@ class StatementWalk {
     if (this.word(at + 1) === "PRIMARY") return;
     // A constraint that takes over an index, or may be a no-op, is not credited.
     if (this.usingIndexAt(at) !== undefined) return;
+    if (this.namesIndexAt(at)) return;
     for (let p = at + 1; p <= at + 4; p += 1) {
       if (this.isConditionalAddAt(p)) return;
     }

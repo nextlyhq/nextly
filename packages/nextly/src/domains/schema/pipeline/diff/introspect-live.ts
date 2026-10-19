@@ -850,10 +850,10 @@ export async function introspectIndexTables(
   if (dialect === "postgresql") {
     const result = (await (db as PgMysqlExecute).execute(
       sql`SELECT i.relname AS index, t.relname AS table
-          FROM pg_class t
-          JOIN pg_index ix ON ix.indrelid = t.oid
-          JOIN pg_class i ON i.oid = ix.indexrelid
-          WHERE ${PG_CLASS_IS_THE_RELATION_THE_WRITES_HIT}
+          FROM pg_class i
+          JOIN pg_index ix ON ix.indexrelid = i.oid
+          JOIN pg_class t ON t.oid = ix.indrelid
+          WHERE i.oid = to_regclass(quote_ident(i.relname))
             AND lower(i.relname) IN (${namesIn})`
     )) as { rows: Array<{ index: string; table: string }> };
     rows = result.rows;

@@ -707,3 +707,48 @@ describe("the review of 905d9ce11: qualified targets, conditional adds and USING
     ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
   });
 });
+
+describe("the review of 8fced47fc: named primary keys, routine bodies and MariaDB index names", () => {
+  it("judges an existing index taken over by a named PRIMARY KEY USING INDEX", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE app_notes ADD CONSTRAINT app_pk PRIMARY KEY USING INDEX idx_status",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
+  });
+
+  it("judges a USING INDEX takeover inside a routine body", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "DO $$ BEGIN ALTER TABLE app_notes ADD CONSTRAINT app_unique UNIQUE USING INDEX idx_status; END $$",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
+  });
+
+  it("does not credit a MariaDB constraint whose UNIQUE INDEX names a different index", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD CONSTRAINT pk_idx UNIQUE INDEX app_unique (id)",
+            "ALTER TABLE fx__notes ALTER KEY pk_idx IGNORED",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ element: "pk_idx", belongsTo: "plugin:fx" });
+  });
+});
