@@ -59,6 +59,7 @@ import {
   assertSendable,
   declaredMaxTo,
   filteredToList,
+  firstAddress,
   recipientsOf,
   messagesFor,
   toAddressList,
@@ -145,6 +146,110 @@ function deliveryRecipients(payload: {
   for (const address of payload.bcc ?? []) add(address, "bcc");
 
   return recipients;
+}
+
+/** What a send, or one message of it, reports to the caller. */
+type SendOutcome = { success: boolean; messageId?: string };
+
+/** What one message's dispatch needs beyond the message itself. */
+interface DispatchContext {
+  adapter: EmailProviderAdapter;
+  providerType: string;
+  resolvedProviderId?: string;
+  providerId?: string;
+  templateSlug?: string;
+  person: PrincipalRef | null;
+  resolvedAttachments?: ResolvedAttachment[];
+  /** Runs, or queues, the `email.afterSend` actions for this message. */
+  afterSend: (value: EmailAfterSendValue) => Promise<void>;
+}
+
+/**
+ * What a dispatch knows once the provider has answered: its verdict, and the
+ * response once it has been built. Shared with the catch, so a throw in the
+ * bookkeeping after the answer reports what the provider said.
+ */
+interface DispatchState {
+  verdict?: boolean;
+  dispatched?: SendOutcome;
+}
+
+/** The message as the adapter is handed it. */
+function adapterMessage(
+  message: SendMessage,
+  attachments: ResolvedAttachment[] | undefined
+): Parameters<EmailProviderAdapter["send"]>[0] {
+  return {
+    to: message.to[0],
+    // Only for a message to several people, so a one-recipient message
+    // reaches every adapter exactly as it did before `toList` existed.
+    ...(message.to.length > 1 ? { toList: [...message.to] } : {}),
+    from: message.from,
+    subject: message.subject,
+    html: message.html,
+    text: message.text,
+    replyTo: message.replyTo,
+    cc: message.cc,
+    bcc: message.bcc,
+    attachments,
+  };
+}
+
+/** The caller's result: the outcome, and the message id when one is safe. */
+function outcomeOf(success: boolean, messageId: string | null): SendOutcome {
+  return { success, ...(messageId !== null ? { messageId } : {}) };
+}
+
+/**
+ * `to` as one string for a one-recipient message, as the after-send actions
+ * have always received it, and as a list otherwise, beside every recipient of
+ * the message, copies included, in the same form the filter was given them.
+ */
+function afterSendAddressing(
+  message: SendMessage
+): Pick<EmailAfterSendValue, "to" | "recipients"> {
+  return {
+    to: message.to.length === 1 ? message.to[0] : [...message.to],
+    recipients: recipientsOf(message),
+  };
+}
+
+/** The fields every delivery record of a message shares. */
+function rowBase(
+  recipient: ReturnType<typeof deliveryRecipients>[number],
+  context: DispatchContext
+) {
+  return {
+    ...recipient,
+    person: recipient.recipientKind === "to" ? context.person : null,
+    providerId: context.resolvedProviderId ?? null,
+    providerType: context.providerType,
+    templateSlug: context.templateSlug ?? null,
+  };
+}
+
+/** One recipient's delivery record for a message the provider answered. */
+function acceptedRow(
+  recipient: ReturnType<typeof deliveryRecipients>[number],
+  facts: {
+    refused: ReadonlySet<string>;
+    providerAccepted: boolean;
+    safeMessageId: string | null;
+    context: DispatchContext;
+  }
+) {
+  const wasRefused = facts.refused.has(recipient.to.trim().toLowerCase());
+  const delivered = facts.providerAccepted && !wasRefused;
+  return {
+    ...rowBase(recipient, facts.context),
+    status: delivered ? ("sent" as const) : ("failed" as const),
+    messageId: facts.safeMessageId,
+    error: delivered
+      ? null
+      : wasRefused
+        ? "Recipient refused by the provider"
+        : "Send returned unsuccessful",
+  };
 }
 
 export class EmailService extends BaseService {
@@ -323,7 +428,7 @@ export class EmailService extends BaseService {
           name: (variables.userName as string) ?? null,
           // A code-first template renders for one user; with several `to`
           // addresses it is given the first, and `send` delivers to all.
-          email: typeof to === "string" ? to : (to[0] ?? ""),
+          email: firstAddress(to),
         },
         token: variables.token as string | undefined,
         url:
@@ -592,37 +697,11 @@ export class EmailService extends BaseService {
    */
   private async dispatchMessage(
     message: SendMessage,
-    context: {
-      adapter: EmailProviderAdapter;
-      providerType: string;
-      resolvedProviderId?: string;
-      providerId?: string;
-      templateSlug?: string;
-      person: PrincipalRef | null;
-      resolvedAttachments?: ResolvedAttachment[];
-      /** Runs, or queues, the `email.afterSend` actions for this message. */
-      afterSend: (value: EmailAfterSendValue) => Promise<void>;
-    }
-  ): Promise<{ success: boolean; messageId?: string }> {
-    const {
-      adapter,
-      providerType,
-      resolvedProviderId,
-      person,
-      resolvedAttachments,
-    } = context;
-    // `to` as one string for a one-recipient message, as the after-send
-    // actions have always received it, and as a list otherwise, beside every
-    // recipient of the message, copies included, in the same form the filter
-    // was given them.
-    const afterSendTo = {
-      to: message.to.length === 1 ? message.to[0] : [...message.to],
-      recipients: recipientsOf(message),
-    };
-
+    context: DispatchContext
+  ): Promise<SendOutcome> {
     const startedAt = Date.now();
-    // Two variables rather than one, because they answer different questions
-    // and only one of them can be answered immediately. `accepted` is the fact
+    // Two fields rather than one, because they answer different questions
+    // and only one of them can be answered immediately. `verdict` is the fact
     // that the provider took the message; `dispatched` is the response, which
     // needs values derived after the answer -- the refused set, the recipient
     // list, a message id that has been checked for leaked credentials.
@@ -633,24 +712,12 @@ export class EmailService extends BaseService {
     // refused: a full set of `failed` rows, an after-send action told the send
     // failed, and an auth flow withholding a token for a message that was
     // delivered.
-    let providerVerdict: boolean | undefined;
-    let dispatched: { success: boolean; messageId?: string } | undefined;
+    const state: DispatchState = {};
 
     try {
-      const result = await adapter.send({
-        to: message.to[0],
-        // Only for a message to several people, so a one-recipient message
-        // reaches every adapter exactly as it did before `toList` existed.
-        ...(message.to.length > 1 ? { toList: [...message.to] } : {}),
-        from: message.from,
-        subject: message.subject,
-        html: message.html,
-        text: message.text,
-        replyTo: message.replyTo,
-        cc: message.cc,
-        bcc: message.bcc,
-        attachments: resolvedAttachments,
-      });
+      const result = await context.adapter.send(
+        adapterMessage(message, context.resolvedAttachments)
+      );
 
       // The provider has answered, and WHAT it answered. Both are recorded
       // here: a later throw must not be able to turn a refusal into a success
@@ -658,239 +725,293 @@ export class EmailService extends BaseService {
       // "it answered" and defaulting to success would have an auth flow
       // withhold its undelivered-token fallback for a message the provider
       // said it did not send.
-      providerVerdict = result.success === true;
+      state.verdict = result.success === true;
 
-      // Recorded inline rather than through the after-send action seam, and
-      // BEFORE it. That seam exists for PLUGIN side-effects -- ordered,
-      // isolated, and registered by whoever installs one -- and core's own
-      // durable record of what it sent must not depend on a registry a plugin
-      // also writes into. Isolation is not enough on its own: `runActions`
-      // awaits each handler in turn, so a handler that blocks on network I/O
-      // long enough for the request to be torn down loses the record of a
-      // message the provider has already accepted. Writing first means the row
-      // exists whatever a plugin does afterwards.
-      // Per recipient, not per message. SMTP answers `RCPT TO` one address at
-      // a time, so a server can accept the message for some recipients and
-      // refuse it for others while the send as a whole succeeds -- and a row
-      // saying `sent` for a refused address is a wrong answer to the one
-      // question this table exists to answer.
-      const refused = refusedMailboxes(result.rejected);
-      const recipients = deliveryRecipients(message);
-      // A provider is handed the `to` addresses and may build its identifier out of
-      // it. The error string is redacted for exactly that reason, and an id
-      // like `delivery-user@example.com` carries a recipient into every place
-      // this value goes: the delivery row, the response both send routes
-      // spread it into, the after-send actions, and the log. An
-      // `email.beforeSend` filter can add a BCC the caller never wrote, so the
-      // address is not always one the reader already knows.
-      //
-      // Computed once and used for all four, so the value the caller reads,
-      // the value an action receives, the value in the log and the value in
-      // the delivery row cannot diverge. Four sanitisations could.
-      //
-      // Compared against the ACTUAL mailboxes rather than redacted by shape:
-      // a Message-ID legitimately contains an `@`, so address-shaped redaction
-      // would destroy every RFC-form id while catching nothing else.
-      // Two ways an id can carry something it should not: out of the envelope,
-      // and out of the body. The adapter is handed both.
-      // Kept only if it is SHAPED like an identifier, and then only if it
-      // carries nothing this message was built from that is KNOWN here. The
-      // shape rule stands in for the question that has no exact answer --
-      // whether the id came out of the body -- while the addresses and the
-      // attachment filenames are values in scope, so those are compared
-      // exactly rather than guessed at.
-      const safeMessageId = isRecognisedMessageId(result.messageId)
-        ? messageIdWithoutRecipients(
-            result.messageId,
-            recipients.map(recipient => recipient.to),
-            (resolvedAttachments ?? []).map(attachment => attachment.filename)
-          )
-        : null;
-
-      /**
-       * Whether the message reached the address the caller addressed it to.
-       *
-       * SMTP answers `RCPT TO` per address, so a server can accept a message
-       * for a CC -- including one an `email.beforeSend` filter added, which
-       * the caller never asked for -- while refusing the primary recipient,
-       * and the message-level result still says it succeeded. `AuthService`
-       * assigns this value to `delivered` and withholds a password-reset
-       * token from the response on the strength of it, so reporting that send
-       * as successful leaves someone who received nothing with no way to
-       * continue.
-       *
-       * The delivery rows are already per-recipient and say `failed` for that
-       * address. This makes the value every OTHER sink reads agree with them.
-       */
-      const deliveredToCaller =
-        result.success &&
-        !recipients.some(
-          recipient =>
-            recipient.recipientKind === "to" &&
-            refused.has(recipient.to.trim().toLowerCase())
-        );
-
-      // The provider has answered. Everything below this line is bookkeeping
-      // about a message that was already handed over, and the catch beneath
-      // the whole block reports a PROVIDER failure -- so an installed logger
-      // that throws, or a recorder that does, would otherwise write a second
-      // set of failed rows, run the after-send actions again with
-      // `success: false`, and tell the caller a delivered message failed.
-      dispatched = {
-        success: deliveredToCaller,
-        ...(safeMessageId !== null ? { messageId: safeMessageId } : {}),
-      };
-
-      await this.deliveries?.recordAll(
-        recipients.map(recipient => {
-          const wasRefused = refused.has(recipient.to.trim().toLowerCase());
-          const delivered = result.success && !wasRefused;
-          return {
-            ...recipient,
-            person: recipient.recipientKind === "to" ? person : null,
-            providerId: resolvedProviderId ?? null,
-            providerType,
-            templateSlug: context.templateSlug ?? null,
-            status: delivered ? ("sent" as const) : ("failed" as const),
-            messageId: safeMessageId,
-            error: delivered
-              ? null
-              : wasRefused
-                ? "Recipient refused by the provider"
-                : "Send returned unsuccessful",
-          };
-        })
+      return await this.recordAccepted(
+        message,
+        result,
+        context,
+        state,
+        startedAt
       );
-
-      // D63 action seam: ordered, isolated side-effects after a send attempt.
-      await context.afterSend({
-        ...afterSendTo,
-        subject: message.subject,
-        success: deliveredToCaller,
-        messageId: safeMessageId ?? undefined,
-      });
-
-      const durationMs = Date.now() - startedAt;
-      if (deliveredToCaller) {
-        // Stable, greppable send record for terminal / log-aggregator use.
-        // Do not log recipient PII (addresses/subject). Counts keep the record
-        // useful for a log aggregator without persisting personal data.
-        this.logger.info("email.sent", {
-          event: "email.sent",
-          provider: providerType,
-          messageId: safeMessageId,
-          durationMs,
-          toCount: message.to.length,
-          ccCount: message.cc?.length ?? 0,
-          bccCount: message.bcc?.length ?? 0,
-          attachmentCount: resolvedAttachments?.length ?? 0,
-        });
-      } else {
-        this.logger.warn("email.failed", {
-          event: "email.failed",
-          provider: providerType,
-          durationMs,
-          // A refused primary recipient and a provider-level failure are
-          // different operational problems: one is an address the server would
-          // not take, the other is the send itself.
-          reason: result.success
-            ? "primary recipient refused"
-            : "provider returned unsuccessful",
-        });
-      }
-
-      // Constructed, never the adapter's object. `send`'s declared return type
-      // has only these two fields, but returning `result` hands back whatever
-      // the provider put on it -- and both send routes spread that straight
-      // into an HTTP response. `rejected` carries addresses, including BCC
-      // recipients an `email.beforeSend` filter added, and a contributed
-      // provider can put anything else there while holding decrypted
-      // configuration. What this method promises is what it returns.
-      return {
-        success: deliveredToCaller,
-        ...(safeMessageId !== null ? { messageId: safeMessageId } : {}),
-      };
     } catch (error) {
       // The message was already accepted, so this is not a provider failure
       // however it reached here. Reporting one would contradict the rows and
       // the action that have already gone out, and would tell an auth flow to
       // withhold a token for a mail that was sent.
-      if (providerVerdict !== undefined) {
-        // The diagnostic is isolated because the thing it is describing may be
-        // the logger itself: a transport that threw once will throw again, and
-        // letting it do so here would reject an accepted send for the second
-        // time in the same catch -- putting back exactly the outcome this
-        // branch exists to prevent.
-        try {
-          this.logger.error("email.after_send_failed", {
-            event: "email.after_send_failed",
-            provider: providerType,
-            ...describeProviderFailure(error),
-          });
-        } catch {
-          // Nowhere left to report it: the reporter is what failed. The send
-          // stands, which is the fact that matters to the caller.
-        }
-        // Absent when the throw landed between the provider's answer and the
-        // point the response was built. The provider's own verdict stands --
-        // reporting a failure because an identifier could not be assembled is
-        // the outcome this branch exists to prevent, and reporting a success
-        // the provider never claimed is the outcome the verdict prevents.
-        //
-        // No identifier travels with it: the one the provider returned has not
-        // been through the check that keeps a credential or a recipient out of
-        // it, and an unchecked id is the thing that check exists to stop.
-        return dispatched ?? { success: providerVerdict };
+      if (state.verdict !== undefined) {
+        return this.acceptedDespite(error, context.providerType, {
+          verdict: state.verdict,
+          dispatched: state.dispatched,
+        });
       }
+      return await this.recordFailed(message, error, context, startedAt);
+    }
+  }
 
-      // Recorded before the action seam, for the reason given in the success
-      // path: a plugin handler that blocks must not be able to cost us the
-      // record of an attempt. A throw here is the case where the record
-      // matters most, since it is the only durable trace of the failure.
-      await this.deliveries?.recordAll(
-        deliveryRecipients(message).map(recipient => ({
-          ...recipient,
-          person: recipient.recipientKind === "to" ? person : null,
-          providerId: resolvedProviderId ?? null,
-          providerType,
-          templateSlug: context.templateSlug ?? null,
-          status: "failed" as const,
-          // The NORMALISED message, never the cause. `cause` is the provider's
-          // original error, and a contributed provider throws it with
-          // decrypted configuration in scope -- `Invalid key ${config.apiKey}`
-          // is an easy thing to write. Storing it would put a credential in a
-          // database column, which is the same disclosure the provider wrapper
-          // closes for responses, arriving by a longer route and persisting.
-          //
-          // Redaction cannot substitute for this: it removes address-shaped
-          // text, and an API key is not address-shaped.
-          //
-          // The cause is not lost -- the log line below records it, which is
-          // where a provider's own diagnostic belongs.
-          error: describeProviderFailure(error).message,
-        }))
+  /**
+   * Everything after a provider has answered: the delivery records, the
+   * after-send actions, the log line and the caller's result.
+   *
+   * Throws only when that bookkeeping does, after `state.dispatched` holds the
+   * response, so `dispatchMessage`'s catch can still report what the provider
+   * said rather than a failure.
+   */
+  private async recordAccepted(
+    message: SendMessage,
+    result: Awaited<ReturnType<EmailProviderAdapter["send"]>>,
+    context: DispatchContext,
+    state: DispatchState,
+    startedAt: number
+  ): Promise<SendOutcome> {
+    // Recorded inline rather than through the after-send action seam, and
+    // BEFORE it. That seam exists for PLUGIN side-effects -- ordered,
+    // isolated, and registered by whoever installs one -- and core's own
+    // durable record of what it sent must not depend on a registry a plugin
+    // also writes into. Isolation is not enough on its own: `runActions`
+    // awaits each handler in turn, so a handler that blocks on network I/O
+    // long enough for the request to be torn down loses the record of a
+    // message the provider has already accepted. Writing first means the row
+    // exists whatever a plugin does afterwards.
+    // Per recipient, not per message. SMTP answers `RCPT TO` one address at
+    // a time, so a server can accept the message for some recipients and
+    // refuse it for others while the send as a whole succeeds -- and a row
+    // saying `sent` for a refused address is a wrong answer to the one
+    // question this table exists to answer.
+    const refused = refusedMailboxes(result.rejected);
+    const recipients = deliveryRecipients(message);
+    // A provider is handed the `to` addresses and may build its identifier out of
+    // it. The error string is redacted for exactly that reason, and an id
+    // like `delivery-user@example.com` carries a recipient into every place
+    // this value goes: the delivery row, the response both send routes
+    // spread it into, the after-send actions, and the log. An
+    // `email.beforeSend` filter can add a BCC the caller never wrote, so the
+    // address is not always one the reader already knows.
+    //
+    // Computed once and used for all four, so the value the caller reads,
+    // the value an action receives, the value in the log and the value in
+    // the delivery row cannot diverge. Four sanitisations could.
+    //
+    // Compared against the ACTUAL mailboxes rather than redacted by shape:
+    // a Message-ID legitimately contains an `@`, so address-shaped redaction
+    // would destroy every RFC-form id while catching nothing else.
+    // Two ways an id can carry something it should not: out of the envelope,
+    // and out of the body. The adapter is handed both.
+    // Kept only if it is SHAPED like an identifier, and then only if it
+    // carries nothing this message was built from that is KNOWN here. The
+    // shape rule stands in for the question that has no exact answer --
+    // whether the id came out of the body -- while the addresses and the
+    // attachment filenames are values in scope, so those are compared
+    // exactly rather than guessed at.
+    const safeMessageId = isRecognisedMessageId(result.messageId)
+      ? messageIdWithoutRecipients(
+          result.messageId,
+          recipients.map(recipient => recipient.to),
+          (context.resolvedAttachments ?? []).map(
+            attachment => attachment.filename
+          )
+        )
+      : null;
+
+    /**
+     * Whether the message reached the address the caller addressed it to.
+     *
+     * SMTP answers `RCPT TO` per address, so a server can accept a message
+     * for a CC -- including one an `email.beforeSend` filter added, which
+     * the caller never asked for -- while refusing the primary recipient,
+     * and the message-level result still says it succeeded. `AuthService`
+     * assigns this value to `delivered` and withholds a password-reset
+     * token from the response on the strength of it, so reporting that send
+     * as successful leaves someone who received nothing with no way to
+     * continue.
+     *
+     * The delivery rows are already per-recipient and say `failed` for that
+     * address. This makes the value every OTHER sink reads agree with them.
+     */
+    const deliveredToCaller =
+      result.success &&
+      !recipients.some(
+        recipient =>
+          recipient.recipientKind === "to" &&
+          refused.has(recipient.to.trim().toLowerCase())
       );
 
-      // D63 action seam: ordered, isolated side-effects after a send attempt.
-      await context.afterSend({
-        ...afterSendTo,
-        subject: message.subject,
-        success: false,
-        messageId: undefined,
-      });
+    // Constructed, never the adapter's object. `send`'s declared return type
+    // has only these two fields, but returning `result` hands back whatever
+    // the provider put on it -- and both send routes spread that straight
+    // into an HTTP response. `rejected` carries addresses, including BCC
+    // recipients an `email.beforeSend` filter added, and a contributed
+    // provider can put anything else there while holding decrypted
+    // configuration. What this method promises is what it returns.
+    const outcome = outcomeOf(deliveredToCaller, safeMessageId);
 
-      this.logger.error("email.failed", {
-        event: "email.failed",
+    // The provider has answered. Everything below this line is bookkeeping
+    // about a message that was already handed over, and the catch beneath
+    // the whole block reports a PROVIDER failure -- so an installed logger
+    // that throws, or a recorder that does, would otherwise write a second
+    // set of failed rows, run the after-send actions again with
+    // `success: false`, and tell the caller a delivered message failed.
+    state.dispatched = outcome;
+
+    await this.deliveries?.recordAll(
+      recipients.map(recipient =>
+        acceptedRow(recipient, {
+          refused,
+          providerAccepted: result.success,
+          safeMessageId,
+          context,
+        })
+      )
+    );
+
+    // D63 action seam: ordered, isolated side-effects after a send attempt.
+    await context.afterSend({
+      ...afterSendAddressing(message),
+      subject: message.subject,
+      success: deliveredToCaller,
+      messageId: safeMessageId ?? undefined,
+    });
+
+    this.logAccepted(message, context, {
+      deliveredToCaller,
+      providerAccepted: result.success,
+      safeMessageId,
+      durationMs: Date.now() - startedAt,
+    });
+
+    return outcome;
+  }
+
+  /**
+   * The log line for a message the provider answered.
+   */
+  private logAccepted(
+    message: SendMessage,
+    context: DispatchContext,
+    facts: {
+      deliveredToCaller: boolean;
+      providerAccepted: boolean;
+      safeMessageId: string | null;
+      durationMs: number;
+    }
+  ): void {
+    if (facts.deliveredToCaller) {
+      // Stable, greppable send record for terminal / log-aggregator use.
+      // Do not log recipient PII (addresses/subject). Counts keep the record
+      // useful for a log aggregator without persisting personal data.
+      this.logger.info("email.sent", {
+        event: "email.sent",
+        provider: context.providerType,
+        messageId: facts.safeMessageId,
+        durationMs: facts.durationMs,
+        toCount: message.to.length,
+        ccCount: message.cc?.length ?? 0,
+        bccCount: message.bcc?.length ?? 0,
+        attachmentCount: context.resolvedAttachments?.length ?? 0,
+      });
+      return;
+    }
+    this.logger.warn("email.failed", {
+      event: "email.failed",
+      provider: context.providerType,
+      durationMs: facts.durationMs,
+      // A refused primary recipient and a provider-level failure are
+      // different operational problems: one is an address the server would
+      // not take, the other is the send itself.
+      reason: facts.providerAccepted
+        ? "primary recipient refused"
+        : "provider returned unsuccessful",
+    });
+  }
+
+  /**
+   * The result of a message the provider answered, when the bookkeeping after
+   * that answer threw.
+   */
+  private acceptedDespite(
+    error: unknown,
+    providerType: string,
+    state: { verdict: boolean; dispatched?: SendOutcome }
+  ): SendOutcome {
+    // The diagnostic is isolated because the thing it is describing may be
+    // the logger itself: a transport that threw once will throw again, and
+    // letting it do so here would reject an accepted send for the second
+    // time in the same catch -- putting back exactly the outcome this
+    // branch exists to prevent.
+    try {
+      this.logger.error("email.after_send_failed", {
+        event: "email.after_send_failed",
         provider: providerType,
-        durationMs: Date.now() - startedAt,
-        // The cause too, not just the message. A provider's own diagnostic --
-        // an SMTP status line, an API error code -- is moved onto `cause` when
-        // its failure is normalised, so a log reading only `message` records
-        // the generic sentence and loses the one fact worth having.
         ...describeProviderFailure(error),
       });
-      return { success: false };
+    } catch {
+      // Nowhere left to report it: the reporter is what failed. The send
+      // stands, which is the fact that matters to the caller.
     }
+    // Absent when the throw landed between the provider's answer and the
+    // point the response was built. The provider's own verdict stands --
+    // reporting a failure because an identifier could not be assembled is
+    // the outcome this branch exists to prevent, and reporting a success
+    // the provider never claimed is the outcome the verdict prevents.
+    //
+    // No identifier travels with it: the one the provider returned has not
+    // been through the check that keeps a credential or a recipient out of
+    // it, and an unchecked id is the thing that check exists to stop.
+    return state.dispatched ?? { success: state.verdict };
+  }
+
+  /**
+   * Record a message the provider refused or never answered.
+   */
+  private async recordFailed(
+    message: SendMessage,
+    error: unknown,
+    context: DispatchContext,
+    startedAt: number
+  ): Promise<SendOutcome> {
+    // Recorded before the action seam, for the reason given in the success
+    // path: a plugin handler that blocks must not be able to cost us the
+    // record of an attempt. A throw here is the case where the record
+    // matters most, since it is the only durable trace of the failure.
+    await this.deliveries?.recordAll(
+      deliveryRecipients(message).map(recipient => ({
+        ...rowBase(recipient, context),
+        status: "failed" as const,
+        // The NORMALISED message, never the cause. `cause` is the provider's
+        // original error, and a contributed provider throws it with
+        // decrypted configuration in scope -- `Invalid key ${config.apiKey}`
+        // is an easy thing to write. Storing it would put a credential in a
+        // database column, which is the same disclosure the provider wrapper
+        // closes for responses, arriving by a longer route and persisting.
+        //
+        // Redaction cannot substitute for this: it removes address-shaped
+        // text, and an API key is not address-shaped.
+        //
+        // The cause is not lost -- the log line below records it, which is
+        // where a provider's own diagnostic belongs.
+        error: describeProviderFailure(error).message,
+      }))
+    );
+
+    // D63 action seam: ordered, isolated side-effects after a send attempt.
+    await context.afterSend({
+      ...afterSendAddressing(message),
+      subject: message.subject,
+      success: false,
+      messageId: undefined,
+    });
+
+    this.logger.error("email.failed", {
+      event: "email.failed",
+      provider: context.providerType,
+      durationMs: Date.now() - startedAt,
+      // The cause too, not just the message. A provider's own diagnostic --
+      // an SMTP status line, an API error code -- is moved onto `cause` when
+      // its failure is normalised, so a log reading only `message` records
+      // the generic sentence and loses the one fact worth having.
+      ...describeProviderFailure(error),
+    });
+    return { success: false };
   }
 
   // ============================================================

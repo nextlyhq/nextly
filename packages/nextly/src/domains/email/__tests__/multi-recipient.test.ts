@@ -425,6 +425,11 @@ describe("several `to` addresses reach the provider", () => {
     "a@@example.com",
     "a b@example.com",
     "a@exa mple.com",
+    ".user@example.com",
+    "user.@example.com",
+    "user..name@example.com",
+    "user@example..com",
+    "user@.example.com",
     "@example.com",
     "a@",
   ])(

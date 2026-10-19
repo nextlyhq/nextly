@@ -13,6 +13,7 @@
  */
 
 import type { EmailProviderAdapter } from "../../types";
+import { messageToAddresses } from "../recipients";
 
 /** Resend's public API host, used when nothing overrides it. */
 const RESEND_DEFAULT_BASE_URL = "https://api.resend.com";
@@ -107,7 +108,7 @@ export function createResendProvider(
         // The REST API takes a recipient LIST even for a single address; the
         // SDK accepted a bare string and wrapped it. `toList` carries every
         // `to` address when there is more than one.
-        to: options.toList ?? [options.to],
+        to: messageToAddresses(options),
         subject: options.subject,
         html: options.html,
       };

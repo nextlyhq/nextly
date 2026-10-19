@@ -10,6 +10,7 @@
  */
 
 import type { EmailProviderAdapter } from "../../types";
+import { messageToAddresses } from "../recipients";
 
 /** SendLayer API base URL. */
 const SENDLAYER_API_URL = "https://console.sendlayer.com/api/v1/email";
@@ -80,7 +81,7 @@ export function createSendLayerProvider(
         // address is split into SendLayer's name and email fields, so a
         // display-name form (`Name <user@example.com>`) is sent to the mailbox
         // it names rather than refused as an invalid email.
-        To: (options.toList ?? [options.to]).map(address =>
+        To: messageToAddresses(options).map(address =>
           parseFromAddress(address)
         ),
         Subject: options.subject,

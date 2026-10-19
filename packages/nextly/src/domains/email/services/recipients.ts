@@ -43,13 +43,32 @@ export function toAddressList(to: string | readonly unknown[]): unknown[] {
  * A local part, `@`, and a domain, the forms RFC 5321 allows for each.
  *
  * The local part is either a quoted string (`"Joe,Smith"`), which may hold any
- * character but an unescaped quote or a line break, or plain text without
- * whitespace or a separator; an apostrophe is plain text (`o'brien`). The
- * domain is either an address literal in brackets (`[192.0.2.1]`) or plain
- * text likewise.
+ * character but an unescaped quote or a line break, or dot-separated atoms of
+ * text without whitespace or a separator; an apostrophe is text (`o'brien`).
+ * The domain is either an address literal in brackets (`[192.0.2.1]`) or
+ * dot-separated labels likewise. Atoms and labels are never empty, so a
+ * leading, trailing or doubled dot is refused (`.a@x`, `a..b@x`, `a@x..y`).
  */
 const MAILBOX =
-  /^(?:"(?:[^"\\\r\n]|\\.)*"|[^\s@,;"<>()[\]\\]+)@(?:\[[^[\]\s\\]+\]|[^\s@,;"<>()[\]\\]+)$/;
+  /^(?:"(?:[^"\\\r\n]|\\.)*"|[^\s@,;".<>()[\]\\]+(?:\.[^\s@,;".<>()[\]\\]+)*)@(?:\[[^[\]\s\\]+\]|[^\s@,;".<>()[\]\\]+(?:\.[^\s@,;".<>()[\]\\]+)*)$/;
+
+/**
+ * The first `to` address a caller gave, for what renders for one recipient.
+ */
+export function firstAddress(to: string | readonly string[]): string {
+  return typeof to === "string" ? to : (to[0] ?? "");
+}
+
+/**
+ * Every `to` address of a message as an adapter is handed it: `toList` when
+ * the message has several, else the one `to`.
+ */
+export function messageToAddresses(options: {
+  to: string;
+  toList?: string[];
+}): string[] {
+  return options.toList ?? [options.to];
+}
 
 /**
  * Whether a value is an address a message can be sent to.
