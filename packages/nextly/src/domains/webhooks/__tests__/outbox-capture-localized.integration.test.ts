@@ -451,19 +451,28 @@ describe("webhook outbox capture, localized (integration)", () => {
       { heading: "Deutsch" }
     );
 
-    const versions = await t.adapter.select<{
-      status: string;
-      snapshot: unknown;
-    }>("nextly_versions");
-    const latest = versions[versions.length - 1];
+    // The newest durable version, by number: the working draft (no number)
+    // and autosaves are not versions.
+    const versions = (
+      await t.adapter.select<{
+        status: string;
+        versionNo: number | null;
+        snapshot: unknown;
+      }>("nextly_versions")
+    )
+      .filter(v => typeof v.versionNo === "number")
+      .sort((a, b) => (b.versionNo ?? 0) - (a.versionNo ?? 0));
+    const latest = versions[0];
     const snapshot = (
       typeof latest.snapshot === "string"
         ? JSON.parse(latest.snapshot)
         : latest.snapshot
     ) as { status?: string };
-    expect(snapshot.status).toBe("draft");
-    // The indexed status must agree with the document it indexes.
-    expect(latest.status).toBe(snapshot.status);
+    expect(latest.status).toBe("draft");
+    // The indexed status must agree with the document it indexes. A saved
+    // draft's snapshot names no status at all, leaving the row as the one
+    // statement of it; a snapshot that does name one must say the same.
+    expect(snapshot.status ?? latest.status).toBe(latest.status);
   });
 
   it("leaves the status alone when a shared-field update writes no locale row", async () => {

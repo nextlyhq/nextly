@@ -14,6 +14,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { listBody } from "../list";
+import { CardEmpty } from "../../frame/states";
 
 const widget = (select?: string[]): DashboardWidget =>
   ({
@@ -37,7 +38,9 @@ const listOf = (items: Record<string, unknown>[]): WidgetResult => ({
 function draw(result: WidgetResult, definition: DashboardWidget) {
   const outcome = listBody(result, definition);
   if (!outcome.ok) throw new Error(`expected a body, got: ${outcome.message}`);
-  render(<>{outcome.node}</>);
+  render(
+    <>{outcome.empty ? <CardEmpty {...outcome.empty} /> : outcome.node}</>
+  );
 }
 
 describe("the list archetype", () => {
@@ -85,7 +88,8 @@ describe("the list archetype", () => {
 
   it("says nothing is there rather than drawing an empty list", () => {
     draw(listOf([]), widget(["title"]));
-    expect(screen.getByTestId("widget-list-empty")).toBeInTheDocument();
+    // The frame's one empty state, not a list of nothing.
+    expect(screen.getByTestId("card-empty")).toBeInTheDocument();
     expect(screen.queryByTestId("widget-list-row")).not.toBeInTheDocument();
   });
 

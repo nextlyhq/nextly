@@ -1,8 +1,19 @@
 import path from "path";
 
-import fs from "fs-extra";
-
 import type { ProjectInfo } from "../types";
+
+import type { GeneratedFiles } from "./generated-files";
+import { nothingYet, writeNew } from "./write-new";
+
+/**
+ * Where the generated types file goes, relative to the project root: under
+ * src/ when the app keeps its code there, at the root when it does not. The
+ * config names this path and the types step creates it, so both read it here.
+ */
+export function typesOutputFile(projectInfo: ProjectInfo): string {
+  const baseDir = projectInfo.srcDir ? "./src" : ".";
+  return `${baseDir}/types/generated/nextly-types.ts`;
+}
 
 /**
  * Create the types directory structure for generated TypeScript types.
@@ -13,23 +24,17 @@ import type { ProjectInfo } from "../types";
 export async function generateTypesDirectory(
   cwd: string,
   projectInfo: ProjectInfo
-): Promise<void> {
-  const baseDir = projectInfo.srcDir ? "src" : ".";
-  const typesDir = path.join(cwd, baseDir, "types", "generated");
-
-  // Create the types/generated directory
-  await fs.ensureDir(typesDir);
-
-  // Create a .gitkeep file to ensure the directory is tracked
-  const gitkeepPath = path.join(typesDir, ".gitkeep");
-  if (!(await fs.pathExists(gitkeepPath))) {
-    await fs.writeFile(gitkeepPath, "", "utf-8");
-  }
-
-  // Create a placeholder types file with instructions
-  const placeholderPath = path.join(typesDir, "nextly-types.ts");
-  if (!(await fs.pathExists(placeholderPath))) {
-    const placeholderContent = `/**
+): Promise<GeneratedFiles> {
+  const files = nothingYet();
+  const typesFile = path.posix.normalize(typesOutputFile(projectInfo));
+  const typesDir = path.posix.dirname(typesFile);
+  // A .gitkeep so the directory is tracked, and a placeholder until the first
+  // `next dev` or `nextly generate:types` writes the real types. Either one
+  // already there is kept.
+  await writeNew(cwd, `${typesDir}/.gitkeep`, "", files, {
+    why: "it is already there",
+  });
+  const placeholderContent = `/**
  * Nextly Generated Types
  *
  * This file will be auto-generated when you run:
@@ -42,6 +47,8 @@ export async function generateTypesDirectory(
 // Types will be generated here after running next dev
 export {};
 `;
-    await fs.writeFile(placeholderPath, placeholderContent, "utf-8");
-  }
+  await writeNew(cwd, typesFile, placeholderContent, files, {
+    why: "it is already there; Nextly writes the types into it when they are generated",
+  });
+  return files;
 }

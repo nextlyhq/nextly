@@ -263,6 +263,37 @@ export function usesJunctionTable(field: {
 }
 
 /**
+ * The descriptor for a field stored on a component's own row, which is where a component's values
+ * live when they are not in a nested field group's table.
+ *
+ * A component has no junction table, so a many-to-many on one keeps its ids on the instance row as
+ * a plain single relationship. `getColumnDescriptor` answers "no column" for it because it is asked
+ * the collection question; the component table, its DDL and its runtime schema all store the value
+ * in a column, so this answers the component question with the same shape a single relationship
+ * gets. Every other field is answered exactly as `getColumnDescriptor` answers it.
+ */
+export function getComponentRowColumnDescriptor(
+  field: FieldDefinition,
+  dialect: SupportedDialect,
+  builtBy: ColumnOrigin
+): ColumnDescriptor | null {
+  if (!usesJunctionTable(field)) {
+    return getColumnDescriptor(field, dialect, builtBy);
+  }
+  const options = field.options as Record<string, unknown>;
+  const asSingleRelation = {
+    ...field,
+    options: { ...options, relationType: undefined },
+  } as FieldDefinition;
+  const descriptor = getColumnDescriptor(asSingleRelation, dialect, builtBy);
+  if (!descriptor || dialect !== "postgresql") return descriptor;
+  // The creating SQL writes a relationship as UUID on PostgreSQL, while the single-relationship
+  // descriptor answers text. Naming the creating type keeps an existing install from planning a
+  // type change on this column. The runtime column mapper's text is recorded as a follow-up.
+  return { ...descriptor, dialectType: "uuid" };
+}
+
+/**
  * A column's kind and the sizes it states, each only where stated: what the
  * index, row and key rules weigh a column by, read the same way from a
  * field's descriptor, a system column's, or a seeded column.

@@ -237,16 +237,11 @@ describe("a column another stream's element row records", () => {
     // Another column, the app's own, on the app's own table.
     ["postgresql", "ALTER TABLE app_notes DROP COLUMN body"],
     ["mysql", "ALTER TABLE app_notes DROP body"],
-    // Clauses that drop something other than the column.
-    ["postgresql", "ALTER TABLE app_notes ALTER COLUMN status DROP DEFAULT"],
-    ["postgresql", "ALTER TABLE app_notes ALTER COLUMN status DROP NOT NULL"],
+    // Clauses that drop something other than the column. Changes to the
+    // column itself are judged as in-place changes (drop-guard-in-place).
     ["postgresql", "ALTER TABLE app_notes DROP CONSTRAINT status"],
     ["mysql", "ALTER TABLE app_notes DROP INDEX status"],
     ["mysql", "ALTER TABLE app_notes DROP CHECK status"],
-    ["mysql", "ALTER TABLE app_notes ALTER status DROP DEFAULT"],
-    // A redefinition that keeps the name.
-    ["mysql", "ALTER TABLE app_notes CHANGE status status varchar(40)"],
-    ["mysql", "ALTER TABLE app_notes MODIFY status varchar(40)"],
     // The table renamed, not the column.
     ["postgresql", "ALTER TABLE app_notes RENAME TO app_notes_v2"],
     ["mysql", "ALTER TABLE app_notes RENAME AS app_notes_v2"],

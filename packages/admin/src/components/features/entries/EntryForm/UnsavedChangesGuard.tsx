@@ -20,8 +20,15 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  Button,
 } from "@nextlyhq/ui";
-import { createContext, useContext, useRef, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useUnsavedChanges } from "@admin/hooks/useUnsavedChanges";
 
@@ -78,11 +85,28 @@ export interface UnsavedChangesGuardProps {
   onCancel?: (() => void) | undefined;
 
   /**
+   * Offer "Save Changes" beside Discard and Keep Editing, and run this when it
+   * is chosen. It answers whether the work was saved: `true` lets the held
+   * navigation go ahead, `false` cancels it and closes the prompt, so the
+   * page's own message about the failed save is what the author reads next.
+   *
+   * Optional, and absent for the entry and Single editors, whose prompt is
+   * unchanged without it.
+   */
+  onSave?: () => Promise<boolean>;
+
+  /**
    * Whether to disable the guard.
    * Useful during form submission when navigation should be allowed.
    * @default false
    */
   disabled?: boolean;
+
+  /**
+   * The edited document's fields: a view offered on a field type keeps the
+   * document only where it applies to them.
+   */
+  fields?: readonly object[] | undefined;
 
   /**
    * The form content to render.
@@ -95,11 +119,64 @@ export interface UnsavedChangesGuardProps {
 // ============================================================================
 
 /**
+ * The three choices a caller with a Save action gets, in place of the editors'
+ * two.
+ *
+ * Discard is an outline in the destructive colour, set apart on the left; Keep
+ * Editing is the dialog's Cancel, which Radix focuses first, so the choice
+ * that loses nothing is where focus starts; Save is the primary. On a phone
+ * they stack with Save on top and Keep Editing at the bottom, by `order`
+ * rather than by document order, so Tab still runs left to right as drawn on
+ * a wider screen.
+ */
+function SaveableChoices({
+  saving,
+  onDiscard,
+  onSave,
+}: {
+  saving: boolean;
+  onDiscard: () => void;
+  onSave: () => void;
+}) {
+  return (
+    <AlertDialogFooter className="flex-col gap-2 sm:flex-row sm:space-x-0">
+      {/* An Action, as the editors' Discard is, so Radix closes the dialog
+          through `onOpenChange` and the confirmed flag is spent by that close.
+          Restyled from the Action's solid fill to an outline. */}
+      <AlertDialogAction
+        onClick={onDiscard}
+        disabled={saving}
+        className="order-2 border-destructive bg-background text-destructive hover:bg-destructive/10 sm:order-1 sm:mr-auto"
+      >
+        Discard Changes
+      </AlertDialogAction>
+      {/* No handler: closing IS the refusal, as in the editors' prompt. Left
+          enabled while a save runs, so a save that never answers cannot hold
+          the author in this dialog. */}
+      <AlertDialogCancel className="order-3 mt-0 sm:order-2">
+        Keep Editing
+      </AlertDialogCancel>
+      {/* A plain button rather than an Action: an Action closes the dialog on
+          click, and this one has to stay open until the save has answered. */}
+      <Button
+        type="button"
+        onClick={onSave}
+        disabled={saving}
+        className="order-1 sm:order-3"
+      >
+        {saving ? "Saving…" : "Save Changes"}
+      </Button>
+    </AlertDialogFooter>
+  );
+}
+
+/**
  * UnsavedChangesGuard - Protect form from accidental navigation
  *
  * Wraps form content and intercepts navigation attempts when the form
  * has unsaved changes. Shows a confirmation dialog allowing the user
- * to either stay and continue editing, or discard changes and leave.
+ * to either stay and continue editing, or discard changes and leave; given
+ * `onSave`, also to save and then leave.
  *
  * @example Basic usage
  * ```tsx
@@ -138,15 +215,35 @@ export function UnsavedChangesGuard({
   isDirty,
   onDiscard,
   onCancel,
+  onSave,
   disabled = false,
+  fields,
   children,
 }: UnsavedChangesGuardProps) {
+  /*
+   * Set only while a save chosen from the prompt lets the held navigation go
+   * ahead. The hook reports every confirmed leave to `onConfirmLeave`, and a
+   * caller cleaning up on DISCARD must not be told its work was thrown away
+   * when it was kept.
+   */
+  const leavingSaved = useRef(false);
   const { showDialog, confirmLeave, cancelLeave, leaveWithoutWarning } =
     useUnsavedChanges({
       isDirty,
-      onConfirmLeave: onDiscard,
+      onConfirmLeave: () => {
+        if (!leavingSaved.current) onDiscard?.();
+      },
       disabled,
+      fields,
     });
+
+  const [saving, setSaving] = useState(false);
+  /*
+   * Which prompt a save belongs to. Bumped when the author closes the prompt
+   * themselves, so a save still running when they chose Keep Editing does not
+   * answer a question they have already answered.
+   */
+  const prompt = useRef(0);
 
   /*
    * Every exit from this dialog is funnelled through `onOpenChange`, and
@@ -177,6 +274,7 @@ export function UnsavedChangesGuard({
     const wasConfirmed = confirmed.current;
     confirmed.current = false;
     if (wasConfirmed) return;
+    prompt.current += 1;
     cancelLeave();
     onCancel?.();
   };
@@ -186,35 +284,92 @@ export function UnsavedChangesGuard({
     confirmLeave();
   };
 
+  /*
+   * Save, then either finish the navigation or cancel it. Both close the
+   * prompt without `onOpenChange`, which Radix calls only for a close the
+   * author caused, so the confirmed flag is neither set nor needed here.
+   *
+   * A save that fails or is refused cancels the navigation and reports it as
+   * a refusal: the caller learns the navigation did not happen, and the page's
+   * own message says why.
+   */
+  const handleSave = async (): Promise<void> => {
+    if (!onSave) return;
+    const mine = prompt.current;
+    setSaving(true);
+    let saved = false;
+    try {
+      saved = await onSave();
+    } catch {
+      saved = false;
+    } finally {
+      setSaving(false);
+    }
+    if (mine !== prompt.current) return;
+    if (!saved) {
+      cancelLeave();
+      onCancel?.();
+      return;
+    }
+    leavingSaved.current = true;
+    try {
+      confirmLeave();
+    } finally {
+      leavingSaved.current = false;
+    }
+  };
+
   return (
     <LeaveWithoutWarningContext.Provider value={leaveWithoutWarning}>
       {children}
 
       <AlertDialog open={showDialog} onOpenChange={handleOpenChange}>
         <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
-            <AlertDialogDescription>
-              You have unsaved changes that will be lost if you leave this page.
-              Are you sure you want to discard your changes?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            {/* No handler: closing IS the refusal, and it is reported once
-                from `onOpenChange` rather than from both places. */}
-            <AlertDialogCancel>Keep Editing</AlertDialogCancel>
-            {/* Hover darkens the fill by one ramp step, not two.
-                `destructive-700` drops the on-color label to 3.70:1 in dark
-                mode, under the 4.5:1 text minimum; `destructive-600` holds
-                5.67:1 dark and 5.92:1 light and still reads as a state change
-                against the resting fill. */}
-            <AlertDialogAction
-              onClick={handleConfirm}
-              className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
-            >
-              Discard Changes
-            </AlertDialogAction>
-          </AlertDialogFooter>
+          {onSave ? (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
+                {/* The editors' first sentence alone: their closing question
+                    asks whether to discard, which reads wrong above a choice
+                    that also offers to save. */}
+                <AlertDialogDescription>
+                  You have unsaved changes that will be lost if you leave this
+                  page.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <SaveableChoices
+                saving={saving}
+                onDiscard={handleConfirm}
+                onSave={() => void handleSave()}
+              />
+            </>
+          ) : (
+            <>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Unsaved Changes</AlertDialogTitle>
+                <AlertDialogDescription>
+                  You have unsaved changes that will be lost if you leave this
+                  page. Are you sure you want to discard your changes?
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                {/* No handler: closing IS the refusal, and it is reported once
+                    from `onOpenChange` rather than from both places. */}
+                <AlertDialogCancel>Keep Editing</AlertDialogCancel>
+                {/* Hover darkens the fill by one ramp step, not two.
+                    `destructive-700` drops the on-color label to 3.70:1 in dark
+                    mode, under the 4.5:1 text minimum; `destructive-600` holds
+                    5.67:1 dark and 5.92:1 light and still reads as a state
+                    change against the resting fill. */}
+                <AlertDialogAction
+                  onClick={handleConfirm}
+                  className="bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+                >
+                  Discard Changes
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>
+          )}
         </AlertDialogContent>
       </AlertDialog>
     </LeaveWithoutWarningContext.Provider>

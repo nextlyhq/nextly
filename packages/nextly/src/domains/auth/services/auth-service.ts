@@ -119,6 +119,26 @@ interface TransactionLike extends PasswordWriteTx {
  * await authService.cleanupExpiredTokens();
  * ```
  */
+/**
+ * Whether a stored token has expired: the one expiry test every consume path
+ * and every owner lookup applies, so a token is live to both or to neither.
+ */
+function tokenExpired(row: { expires: Date }): boolean {
+  return row.expires < new Date();
+}
+
+/** A reset or verification token row, as the consume and the lookup read it. */
+interface StoredTokenRow {
+  id: number;
+  identifier: string;
+  expires: Date;
+}
+
+/** How a reset or verification token is stored: the SHA-256 of the raw token. */
+function storedTokenHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 export class AuthService extends BaseService {
   private readonly TOKEN_EXPIRY_HOURS = 24;
 
@@ -217,15 +237,21 @@ export class AuthService extends BaseService {
         fastDrainScheduler,
         retentionRunner
       );
-      newUser = await userService.createLocalUser({
-        email: userData.email,
-        name: userData.name ?? "User",
-        password: userData.password,
-        // Self-registration: the person supplied this address and nothing has
-        // established it is theirs. The verification email sent below is what
-        // proves it, and until then the account stays unverified.
-        emailVerification: "pending",
-      });
+      newUser = await userService.createLocalUser(
+        {
+          email: userData.email,
+          name: userData.name ?? "User",
+          password: userData.password,
+          // Self-registration: the person supplied this address and nothing has
+          // established it is theirs. The verification email sent below is what
+          // proves it, and until then the account stays unverified.
+          emailVerification: "pending",
+        },
+        undefined,
+        // A stranger's registration never makes the install's administrator,
+        // whoever was there before it.
+        "self-registration"
+      );
     } catch (error) {
       if (NextlyError.is(error)) {
         throw error;
@@ -522,25 +548,7 @@ export class AuthService extends BaseService {
     token: string,
     newPassword: string
   ): Promise<ConsumeResetTokenResult> {
-    let resetToken;
-    try {
-      const tokenHash = createHash("sha256").update(token).digest("hex");
-
-      resetToken = await this.db.query.passwordResetTokens.findFirst({
-        where: {
-          tokenHash: requireFilterValue(tokenHash, "tokenHash"),
-          usedAt: { isNull: true },
-        },
-        columns: {
-          id: true,
-          identifier: true,
-          expires: true,
-        },
-      });
-    } catch (error) {
-      // Normalise raw driver errors so the DB kind is preserved.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
+    const resetToken = await this.findUnusedResetToken(token);
 
     if (!resetToken) {
       // Unknown / already-consumed token. Don't reveal which: a generic
@@ -557,7 +565,7 @@ export class AuthService extends BaseService {
       });
     }
 
-    if (resetToken.expires < new Date()) {
+    if (tokenExpired(resetToken)) {
       throw this.resetTokenExpiredError(resetToken);
     }
 
@@ -677,7 +685,7 @@ export class AuthService extends BaseService {
       });
 
       if (!consumed) {
-        if (new Date(resetToken.expires) <= new Date()) {
+        if (tokenExpired(resetToken)) {
           throw this.resetTokenExpiredError(resetToken);
         }
 
@@ -877,24 +885,7 @@ export class AuthService extends BaseService {
    * @throws NextlyError on DB errors during the verification transaction.
    */
   async verifyEmail(token: string): Promise<{ email: string }> {
-    let verificationToken;
-    try {
-      const tokenHash = createHash("sha256").update(token).digest("hex");
-
-      verificationToken = await this.db.query.emailVerificationTokens.findFirst(
-        {
-          where: { tokenHash: requireFilterValue(tokenHash, "tokenHash") },
-          columns: {
-            id: true,
-            identifier: true,
-            expires: true,
-          },
-        }
-      );
-    } catch (error) {
-      // Normalise raw driver errors so the DB kind is preserved.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
+    const verificationToken = await this.findVerificationToken(token);
 
     if (!verificationToken) {
       throw NextlyError.validation({
@@ -910,7 +901,7 @@ export class AuthService extends BaseService {
       });
     }
 
-    if (verificationToken.expires < new Date()) {
+    if (tokenExpired(verificationToken)) {
       throw new NextlyError({
         code: "TOKEN_EXPIRED",
         publicMessage: "Your session has expired. Please sign in again.",
@@ -1068,23 +1059,12 @@ export class AuthService extends BaseService {
     token: string,
     newPassword: string
   ): Promise<AcceptInviteResult> {
-    const tokenHash = hashInviteToken(token);
-
-    let invite: { id: number; userId: string; expires: Date } | undefined;
-    try {
-      invite = await this.db.query.userInviteTokens.findFirst({
-        // rqb v2 object filter (drizzle v1): unused invite for this hash.
-        where: { tokenHash, usedAt: { isNull: true } },
-        columns: { id: true, userId: true, expires: true },
-      });
-    } catch (error) {
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
+    const invite = await this.findUnusedInviteToken(token);
 
     // Unknown, already used, and expired all return the same error, so a
     // guessed token cannot tell a live invite from a dead one. The expiry
     // detail is kept for the log only.
-    if (!invite || invite.expires < new Date()) {
+    if (!invite || tokenExpired(invite)) {
       throw this.invalidInviteError(
         invite ? { inviteId: invite.id, expiredAt: invite.expires } : undefined
       );
@@ -1302,6 +1282,104 @@ export class AuthService extends BaseService {
       passwordUpdatedAt: written.passwordUpdatedAt,
       sessionEpoch: Number(written.sessionEpoch ?? 0),
     };
+  }
+
+  /**
+   * The address a live password-reset token was issued to, or `null` when
+   * the token is unknown, used or expired. Reads only: the token stays
+   * usable. The auth limiter asks it to count a reset whose client address
+   * cannot be resolved against the account it would reset.
+   */
+  async resetTokenOwner(token: string): Promise<string | null> {
+    const row = await this.findUnusedResetToken(token);
+    return row && !tokenExpired(row) ? row.identifier : null;
+  }
+
+  /**
+   * The address a live email-verification token was issued to, or `null`
+   * when it is unknown or expired. Reads only, as {@link resetTokenOwner}.
+   */
+  async verificationTokenOwner(token: string): Promise<string | null> {
+    const row = await this.findVerificationToken(token);
+    return row && !tokenExpired(row) ? row.identifier : null;
+  }
+
+  /**
+   * The address of the account a live invite token sets up, or `null` when
+   * the invite is unknown, used or expired, or its account is gone. Reads
+   * only, as {@link resetTokenOwner}.
+   */
+  async inviteTokenOwner(token: string): Promise<string | null> {
+    const invite = await this.findUnusedInviteToken(token);
+    if (!invite || tokenExpired(invite)) return null;
+    let user: { email: string } | undefined;
+    try {
+      user = await this.db.query.users.findFirst({
+        where: { id: requireFilterValue(invite.userId, "id") },
+        columns: { email: true },
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+    return user?.email ?? null;
+  }
+
+  /*
+   * The stored-token reads. Each is the ONE read of its kind: the method that
+   * consumes a token and the lookup that names its owner both make it, and
+   * both judge the row with `tokenExpired`, so the two cannot come to
+   * disagree about which tokens are live.
+   */
+
+  /** The unused password-reset token stored for `token`, if any. */
+  private async findUnusedResetToken(
+    token: string
+  ): Promise<StoredTokenRow | undefined> {
+    const tokenHash = storedTokenHash(token);
+    try {
+      return await this.db.query.passwordResetTokens.findFirst({
+        where: {
+          tokenHash: requireFilterValue(tokenHash, "tokenHash"),
+          usedAt: { isNull: true },
+        },
+        columns: { id: true, identifier: true, expires: true },
+      });
+    } catch (error) {
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /** The email-verification token stored for `token`, if any. */
+  private async findVerificationToken(
+    token: string
+  ): Promise<StoredTokenRow | undefined> {
+    const tokenHash = storedTokenHash(token);
+    try {
+      return await this.db.query.emailVerificationTokens.findFirst({
+        where: { tokenHash: requireFilterValue(tokenHash, "tokenHash") },
+        columns: { id: true, identifier: true, expires: true },
+      });
+    } catch (error) {
+      // Normalise raw driver errors so the DB kind is preserved.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /** The unused invite stored for `token`, if any. */
+  private async findUnusedInviteToken(
+    token: string
+  ): Promise<{ id: number; userId: string; expires: Date } | undefined> {
+    const tokenHash = hashInviteToken(token);
+    try {
+      return await this.db.query.userInviteTokens.findFirst({
+        // rqb v2 object filter (drizzle v1): unused invite for this hash.
+        where: { tokenHash, usedAt: { isNull: true } },
+        columns: { id: true, userId: true, expires: true },
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
   }
 
   /**

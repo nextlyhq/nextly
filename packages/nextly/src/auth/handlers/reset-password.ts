@@ -18,7 +18,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse } from "./handler-utils";
+import { csrfFailure, jsonResponse } from "./handler-utils";
 
 export interface ResetPasswordHandlerDeps {
   allowedOrigins: string[];
@@ -95,7 +95,7 @@ export async function handleResetPassword(
     if (!csrfResult.valid) {
       return jsonResponse(
         403,
-        { error: { code: "CSRF_FAILED", message: csrfResult.error } },
+        { error: csrfFailure(request, csrfResult) },
         { "x-request-id": requestId }
       );
     }

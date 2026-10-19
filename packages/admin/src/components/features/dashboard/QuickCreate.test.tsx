@@ -1,11 +1,14 @@
 /**
  * What the quick-create card offers, and what it deliberately does not.
  */
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { render, screen } from "@admin/__tests__/utils";
 import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+
+import { CardTierContext } from "../widgets/frame/tier";
 
 import { QuickCreate } from "./QuickCreate";
 
@@ -35,6 +38,7 @@ interface TestCollection {
   name: string;
   label?: string;
   labels?: { singular: string; plural: string };
+  admin?: { hidden?: boolean };
 }
 
 function collection(
@@ -87,6 +91,25 @@ describe("the quick-create card", () => {
     // The control: `pages` IS in the list the server returned, so its absence
     // is this filter acting rather than the fixture never offering it.
     expect(screen.queryByTestId("quick-create-pages")).toBeNull();
+  });
+
+  it("offers no shortcut for a collection kept off the dashboard, even one the reader may create in", () => {
+    // `internal: true` is stored as `admin.hidden`, so the page builder's usage index stands for
+    // both. The reader holds the create grant, so only the dashboard rule removes it.
+    mockCollections.mockReturnValue(
+      listing([
+        collection({ name: "posts" }),
+        collection({ name: "nx_pb_class_usage", admin: { hidden: true } }),
+      ])
+    );
+    mockPermissions.mockReturnValue(
+      granting(["create-posts", "create-nx_pb_class_usage"])
+    );
+
+    render(<QuickCreate />);
+
+    expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
+    expect(screen.queryByTestId("quick-create-nx_pb_class_usage")).toBeNull();
   });
 
   it("names the entity the way its form does", () => {
@@ -222,9 +245,68 @@ describe("the quick-create card", () => {
       granting(many.map(c => `create-${c.name}`))
     );
 
-    render(<QuickCreate />);
+    render(
+      <CardTierContext.Provider value="large">
+        <QuickCreate />
+      </CardTierContext.Provider>
+    );
 
     expect(screen.getAllByRole("link")).toHaveLength(6);
-    expect(screen.getByText("3 more.")).toBeInTheDocument();
+    // The rest are a menu away, not dropped: its trigger says how many it holds.
+    expect(
+      screen.getByRole("button", { name: "3 more collections to create" })
+    ).toBeInTheDocument();
+  });
+
+  it.each<[SizeTier, number]>([
+    ["small", 2],
+    ["medium", 3],
+    ["large", 6],
+  ])(
+    "offers the %s tier's %i shortcuts and the rest in a More menu",
+    (tier, drawn) => {
+      const many = Array.from({ length: 9 }, (_unused, i) =>
+        collection({ name: `c${i}` })
+      );
+      mockCollections.mockReturnValue(listing(many));
+      mockPermissions.mockReturnValue(
+        granting(many.map(c => `create-${c.name}`))
+      );
+
+      render(
+        <CardTierContext.Provider value={tier}>
+          <QuickCreate />
+        </CardTierContext.Provider>
+      );
+
+      // 🔴 The first ones in the list's order, so a card that grows adds to what it showed.
+      expect(
+        screen
+          .getAllByRole("link")
+          .map(link => link.getAttribute("data-testid"))
+      ).toEqual(many.slice(0, drawn).map(c => `quick-create-${c.name}`));
+      expect(
+        screen.getByRole("button", {
+          name: `${9 - drawn} more collections to create`,
+        })
+      ).toBeInTheDocument();
+    }
+  );
+
+  it("offers no More menu when every shortcut fits", () => {
+    const two = [collection({ name: "posts" }), collection({ name: "pages" })];
+    mockCollections.mockReturnValue(listing(two));
+    mockPermissions.mockReturnValue(granting(two.map(c => `create-${c.name}`)));
+
+    render(
+      <CardTierContext.Provider value="small">
+        <QuickCreate />
+      </CardTierContext.Provider>
+    );
+
+    expect(screen.getAllByRole("link")).toHaveLength(2);
+    expect(
+      screen.queryByRole("button", { name: /more collections/ })
+    ).not.toBeInTheDocument();
   });
 });

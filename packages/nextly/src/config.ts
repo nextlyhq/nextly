@@ -323,6 +323,34 @@ export {
   MAX_PLACEMENTS,
   type ColumnCount,
 } from "./domains/widgets/layout-limits";
+// The endpoint's own size check, so the editor can trim a save to what the
+// endpoint accepts by bytes as well as by count. From `layout-payload.ts`,
+// which reaches only `layout-limits.ts`, for the reason above.
+export {
+  MAX_LAYOUT_BYTES,
+  layoutSizeProblem,
+} from "./domains/widgets/layout-payload";
+// The width vocabulary a dashboard stores and draws: the five widths in their
+// ranking, and the one conversion from a declared size. The admin derives its
+// own list, check and size map from these rather than restating them, since a
+// width added or renamed in core would otherwise draw wrongly with no error.
+// `widths.ts` imports only a type, so this entry stays safe for a browser.
+export {
+  WIDGET_WIDTHS,
+  isWidgetWidth,
+  widthFromSize,
+  type WidgetWidth,
+} from "./domains/widgets/widths";
+// The row count a widget query runs at, its one rule, and the most rows a card
+// draws. The admin decides a card's rows from them before any data arrives, so
+// it asks the validator's own question. From `query-limits.ts`, which has no
+// imports.
+export {
+  DEFAULT_WIDGET_LIMIT,
+  MAX_WIDGET_LIMIT,
+  MAX_WIDGET_ROWS,
+  effectiveWidgetLimit,
+} from "./domains/widgets/query-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this
 // tuple is what stops the browser silently erasing a kind core has started to
@@ -344,6 +372,7 @@ export {
 } from "./domains/collections/query/timeseries-interval";
 export type { TimeseriesInterval } from "./domains/collections/query/timeseries-interval";
 export type {
+  WidgetFieldChoice,
   WidgetOp,
   WidgetSourceField,
   WidgetSourceFieldType,

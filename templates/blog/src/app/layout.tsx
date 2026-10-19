@@ -47,15 +47,18 @@ export const metadata: Metadata = {
  *
  * Runs before React hydrates so the correct theme class is set on
  * <html> on first paint - eliminates flash-of-wrong-theme. Reads the
- * user preference from localStorage under `nextly-theme`; falls back
- * to `prefers-color-scheme: dark` when preference is "system" or
- * unset. See `src/components/ThemeToggle.tsx` for the writer side.
+ * user preference from localStorage under `nextly-theme`; follows
+ * `prefers-color-scheme` when the preference is "system", unset, or not
+ * one of the three choices. `src/lib/theme.ts` is how the theme toggle reads
+ * and applies the key after hydration; a test holds the two to the same result.
  */
 const themeInitScript = `
 (function() {
   try {
     var stored = localStorage.getItem("nextly-theme");
-    var pref = stored || "system";
+    // The same three choices, and the same fallback, as the theme toggle's
+    // reading of this key, so the first paint and hydration never disagree.
+    var pref = stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
     var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     var isDark = pref === "dark" || (pref === "system" && prefersDark);
     document.documentElement.dataset.theme = isDark ? "dark" : "light";

@@ -34,7 +34,14 @@
  * @module hooks/useSnapshotAutosave
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+} from "react";
 
 /**
  * A refusal the server will give again, told apart from a failure that may not.
@@ -110,8 +117,37 @@ function recordingBlocked(state: {
   identity: string | null;
   enabled: boolean;
   refused: boolean;
+  /** Whether the work is still unsaved, when the caller can say. */
+  stillWanted: (() => boolean) | undefined;
 }): boolean {
-  return state.identity === null || !state.enabled || state.refused;
+  return (
+    state.identity === null ||
+    !state.enabled ||
+    state.refused ||
+    state.stillWanted?.() === false
+  );
+}
+
+/** Stop a recording that has been asked for and not yet made. */
+function clearTimer(
+  timerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>
+): void {
+  if (timerRef.current) {
+    clearTimeout(timerRef.current);
+    timerRef.current = null;
+  }
+}
+
+/**
+ * Drop a recording asked for and not yet made, and one queued behind a
+ * recording in flight: the work they would record is no longer at risk.
+ */
+function dropRecording(
+  timerRef: MutableRefObject<ReturnType<typeof setTimeout> | null>,
+  pendingRef: MutableRefObject<boolean>
+): void {
+  clearTimer(timerRef);
+  pendingRef.current = false;
 }
 
 /**
@@ -161,6 +197,15 @@ export interface UseSnapshotAutosaveOptions {
    * recovery point written now would describe a state that never existed.
    */
   enabled?: boolean;
+
+  /**
+   * Whether the work is still worth recording, asked when the timer fires.
+   *
+   * The edit that scheduled a recording may have been saved for real while
+   * the timer waited: the work is then no longer at risk, and recording it
+   * would write a copy of what the save just stored.
+   */
+  stillWanted?: () => boolean;
 }
 
 export interface UseSnapshotAutosaveResult {
@@ -173,6 +218,11 @@ export interface UseSnapshotAutosaveResult {
    * records once at the end of it.
    */
   schedule: () => void;
+  /**
+   * Drop a recording that has been asked for and not yet made: the work it
+   * would record has been saved, or undone, since.
+   */
+  cancel: () => void;
 }
 
 /**
@@ -184,6 +234,7 @@ export function useSnapshotAutosave({
   save,
   debounceMs = DEFAULT_AUTOSAVE_DEBOUNCE_MS,
   enabled = true,
+  stillWanted,
 }: UseSnapshotAutosaveOptions): UseSnapshotAutosaveResult {
   const [status, setStatus] = useState<AutosaveStatus>("idle");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
@@ -210,12 +261,16 @@ export function useSnapshotAutosave({
    * dependencies. The callback is created once per subscription, and closing
    * over these would pin the values they held when it was set up.
    */
-  const identityRef = useRef(identity);
-  const enabledRef = useRef(enabled);
-  const saveRef = useRef(save);
-  identityRef.current = identity;
-  enabledRef.current = enabled;
-  saveRef.current = save;
+  const latestRef = useRef({ identity, enabled, save, stillWanted });
+  latestRef.current = { identity, enabled, save, stillWanted };
+  /*
+   * The identity a recording was held for: one that came due while recording
+   * was off, and so was not made. `null` when none is held. Turning recording
+   * back on asks for that one again, and only under the same identity; it is
+   * the only thing that may, because being re-enabled is not itself a reason
+   * to write (an editor also turns recording off to show a past version).
+   */
+  const heldRef = useRef<string | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -225,11 +280,17 @@ export function useSnapshotAutosave({
   }, []);
 
   const flush = useCallback(async () => {
+    const latest = latestRef.current;
+    // Off when it came due: held for this identity, to be asked for again once
+    // recording is on.
+    heldRef.current = latest.enabled ? null : latest.identity;
     if (
       recordingBlocked({
-        identity: identityRef.current,
-        enabled: enabledRef.current,
+        identity: latest.identity,
+        enabled: latest.enabled,
         refused: refusedRef.current,
+        // Saved or undone while the timer waited: nothing is at risk any more.
+        stillWanted: latest.stillWanted,
       })
     )
       return;
@@ -243,7 +304,7 @@ export function useSnapshotAutosave({
     if (mountedRef.current) setStatus("saving");
 
     try {
-      const result = await saveRef.current();
+      const result = await latest.save();
       if (mountedRef.current) {
         setLastSavedAt(new Date(result.updatedAt));
         setStatus("saved");
@@ -282,12 +343,34 @@ export function useSnapshotAutosave({
    * recording one of them had already allowed. Scheduling a timer that flush
    * then declines costs a cleared timeout.
    */
-  const schedule = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => {
-      void flush();
-    }, debounceMs);
-  }, [flush, debounceMs]);
+  // Built together, as the two halves of one pending recording: asking for
+  // it, and dropping it once the work it would record is no longer at risk.
+  const { schedule, cancel } = useMemo(
+    () => ({
+      schedule: () => {
+        clearTimer(timerRef);
+        timerRef.current = setTimeout(() => {
+          void flush();
+        }, debounceMs);
+      },
+      cancel: () => {
+        dropRecording(timerRef, pendingRef);
+        heldRef.current = null;
+      },
+    }),
+    [flush, debounceMs]
+  );
+
+  // Back on: the recording that came due while recording was off is asked for
+  // again. Nothing else is, so a recovery point already made is not repeated,
+  // and one held for another identity (recording back on in the same render
+  // as a new document) is dropped rather than made under the new one.
+  useEffect(() => {
+    const heldFor = heldRef.current;
+    if (!enabled || heldFor === null) return;
+    heldRef.current = null;
+    if (heldFor === identity) schedule();
+  }, [enabled, identity, schedule]);
 
   // A pending recording belongs to the identity that scheduled it. Left
   // running across a change it would write one document's snapshot against
@@ -298,13 +381,9 @@ export function useSnapshotAutosave({
     // another entity with its own setting and its own access, so the answer is
     // asked again rather than inherited.
     refusedRef.current = false;
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    heldRef.current = null;
+    return () => clearTimer(timerRef);
   }, [identity]);
 
-  return { status, lastSavedAt, schedule };
+  return { status, lastSavedAt, schedule, cancel };
 }

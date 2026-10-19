@@ -26,6 +26,8 @@
 
 import type { FormConfig, FormSettings, FormNotifications } from "../types";
 
+import { warnIfWebhooksConfigured } from "./removed-options";
+
 // ============================================================
 // Default Values
 // ============================================================
@@ -156,6 +158,8 @@ export function pluralize(singular: string): string {
  * ```
  */
 export function applyFormDefaults(config: FormConfig): FormConfig {
+  warnIfWebhooksConfigured(config);
+
   // Generate singular label from slug if not provided
   const singularLabel = config.labels?.singular || toTitleCase(config.slug);
 

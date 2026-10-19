@@ -15,9 +15,10 @@
  * contributions, so without a declared position core's cards would sit BELOW
  * every plugin's, which is not the dashboard anyone has today.
  *
- * The `custom` ones carry `chrome: "none"`. Each already draws a titled section
- * with its own rules, loading skeleton and error state; framed by `WidgetCard`
- * each would gain a second heading above its own. `title` is still required and
+ * Collections, Singles and Team draw inside the shared frame like every other
+ * card, so they read as one product. The other `custom` ones still carry
+ * `chrome: "none"` until each moves into the frame: each draws a titled section
+ * with its own rules, loading skeleton and error state. `title` is still required and
  * still meaningful -- it is what names the card in the layout editor, where a
  * reader chooses what to show. Stated as a property of that group rather than
  * as a count, because the count was written as "all four" and was wrong by two
@@ -147,7 +148,6 @@ const CORE_WIDGET_LITERALS = [
     title: "Collections",
     description: "Entry counts per collection, grouped by what provides them.",
     archetype: "custom",
-    chrome: "none",
     defaultSize: "full",
     // The narrowest width it still draws at: a grid of collection cards, which needs at least half the row.
     minSize: "lg",
@@ -169,7 +169,6 @@ const CORE_WIDGET_LITERALS = [
     title: "Singles",
     description: "The project's singles.",
     archetype: "custom",
-    chrome: "none",
     defaultSize: "full",
     // The narrowest width it still draws at: a grid of Single cards, which needs at least half the row.
     minSize: "lg",
@@ -200,9 +199,9 @@ const CORE_WIDGET_LITERALS = [
   {
     id: "core/team",
     title: "Team",
-    description: "How many users and roles the project has.",
+    // Tier-neutral: a small card draws the people alone, and a reader may see only one count.
+    description: "Your project's team at a glance.",
     archetype: "custom",
-    chrome: "none",
     defaultSize: "full",
     // The narrowest width it still draws at: two counters side by side, which need at least a third.
     minSize: "md",

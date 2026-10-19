@@ -24,6 +24,7 @@ function member(over: Partial<ReleaseMemberRow> = {}): ReleaseMemberRow {
     locale: null,
     action: "publish",
     memberKey: `k${seq}`,
+    singleSlot: null,
     createdBy: "author",
     createdAt: new Date("2026-01-01T00:00:00.000Z"),
     ...over,

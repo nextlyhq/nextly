@@ -11,12 +11,20 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors";
+import {
+  RELEASE_ASSEMBLABLE_FROM,
+  RELEASE_MEMBER_LIMIT,
+} from "../../../schemas/releases/types";
+import { releaseMemberKey } from "../release-member-key";
 import { RELEASE_LIST_ORDERS } from "../releases-repository";
 import { ReleasesService } from "../services/releases-service";
 import type {
   ReleaseAuthority,
   ReleasesServiceDeps,
 } from "../services/releases-service";
+
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 const ADMIN = { userId: "u1" };
 const ANON = { userId: null };
@@ -26,12 +34,36 @@ function repository() {
   return {
     createRelease: vi.fn(async () => ({ id: "r1" })),
     scheduleReleaseOk: true,
-    findReleases: vi.fn(async () => [{ id: "r1", state: "draft" }]),
-    listMembers: vi.fn(async () => []),
-    addMember: vi.fn(async () => ({ id: "m1" })),
-    removeMember: vi.fn(async () => undefined),
-    touchIfAssemblable: vi.fn(async () => true),
-    restoreMember: vi.fn(async () => undefined),
+    findReleases: vi.fn(
+      async (): Promise<
+        Array<{
+          id: string;
+          state: string;
+          title?: string;
+          description?: string | null;
+          kind?: string;
+          timezone?: string;
+          revision?: number;
+          scheduledAt?: Date | null;
+        }>
+      > => [{ id: "r1", state: "draft", revision: 0 }]
+    ),
+    // The list's paged read, which `find` routes every non-document query to.
+    findReleasePage: vi.fn(async () => ({ rows: [], total: 0 })),
+    countReleases: vi.fn(async () => 0),
+    // The calendar's read. Answers nothing; a case asserts what it was ASKED.
+    findReleaseCalendar: vi.fn(async (_query: unknown) => []),
+    listMembers: vi.fn(
+      async (): Promise<Array<{ id: string; memberKey?: string }>> => []
+    ),
+    // What a release holds, for the member limit; empty unless a case sets it.
+    memberCountsOf: vi.fn(
+      async (_ids: readonly string[]) => new Map<string, number>()
+    ),
+    // Each write takes the states the service judged it may land on as its
+    // last argument, which the cases below read back from the call.
+    addMember: vi.fn(async (..._args: unknown[]) => ({ id: "m1" })),
+    removeMember: vi.fn(async (..._args: unknown[]) => undefined),
     findMember: vi.fn(
       async (): Promise<{ id: string; releaseId: string } | undefined> => ({
         id: "m1",
@@ -39,8 +71,21 @@ function repository() {
       })
     ),
     liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
-    scheduleRelease: vi.fn(async () => true),
+    scheduleRelease: vi.fn(async (..._args: unknown[]) => true),
     cancelRelease: vi.fn(async () => true),
+    updateReleaseDetails: vi.fn(
+      async (
+        ..._args: unknown[]
+      ): Promise<{
+        row: Record<string, unknown>;
+        changed: Array<"title" | "description">;
+      } | null> => null
+    ),
+    // Answers the row its delete found under the lock, or null.
+    deleteRelease: vi.fn(
+      async (..._args: unknown[]): Promise<Record<string, unknown> | null> =>
+        null
+    ),
     // The `containing` listing's own read. Present so a test can drive that
     // branch to completion rather than dying on a missing collaborator, which
     // would fail for a reason unrelated to the property under test.
@@ -59,6 +104,14 @@ function service(over?: {
     canManageReleases: vi.fn(async (_id: string, a: ReleaseAuthority) =>
       held.has(a)
     ),
+    // Every target is there and has a lifecycle; the checks have their own
+    // tests (`release-targets.test.ts`).
+    targets: {
+      readDocument: async (target: { entryId: string }) => ({
+        id: target.entryId,
+      }),
+      declaresLifecycle: async () => true,
+    },
     canActOnDocument: vi.fn(
       async (_params: {
         userId: string;
@@ -67,6 +120,14 @@ function service(over?: {
         authenticatedScope?: unknown;
       }) => over?.mayActOnDocument !== false
     ),
+    runDrainNow: vi.fn(
+      async (_options: { maxDurationMs: number }) => undefined
+    ),
+    logger: {
+      warn: vi.fn((_message: string, _meta?: Record<string, unknown>) => {}),
+    },
+    checks: READY_CHECKS,
+    recordActivity: vi.fn(async (_entry: unknown) => undefined),
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }
@@ -95,7 +156,7 @@ describe("ReleasesService authorization", () => {
     await expect(svc.find({}, ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("lets an assembler read, because creating implies seeing what you made", async () => {
@@ -105,7 +166,7 @@ describe("ReleasesService authorization", () => {
     // The implication is one-directional; the control for that is below.
     const { svc, repo } = service({ holds: ["create"] });
     await expect(svc.find({}, ADMIN)).resolves.toBeDefined();
-    expect(repo.findReleases).toHaveBeenCalled();
+    expect(repo.findReleasePage).toHaveBeenCalled();
   });
 
   it("refuses to schedule with only create authority, because committing is a separate power", async () => {
@@ -137,7 +198,7 @@ describe("ReleasesService authorization", () => {
     // Asking about a null user is a lookup whose only possible answer is no, and
     // a store that answered anything else would be granting authority to nobody.
     expect(deps.canManageReleases).not.toHaveBeenCalled();
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("lets a trusted in-process caller through without a permission store", async () => {
@@ -146,7 +207,7 @@ describe("ReleasesService authorization", () => {
     const { svc, repo, deps } = service({ holds: [] });
     await svc.find({}, { userId: null, overrideAccess: true });
     expect(deps.canManageReleases).not.toHaveBeenCalled();
-    expect(repo.findReleases).toHaveBeenCalled();
+    expect(repo.findReleasePage).toHaveBeenCalled();
   });
 });
 
@@ -201,7 +262,9 @@ describe("ReleasesService add-time document check", () => {
       ADMIN
     );
     expect(repo.addMember).toHaveBeenCalledWith(
-      expect.objectContaining({ createdBy: "u1", releaseId: "r1" })
+      expect.objectContaining({ createdBy: "u1", releaseId: "r1" }),
+      expect.anything(),
+      expect.any(Function)
     );
   });
 
@@ -283,8 +346,7 @@ describe("ReleasesService refuses members that would act on nothing", () => {
     // mistyped id would insert a row no drain can ever find: a 201 for a member
     // that belongs to nothing.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
-    repo.findReleases.mockResolvedValueOnce([]);
+    repo.findReleases.mockResolvedValue([]);
     await expect(svc.addMember("nope", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
@@ -293,7 +355,6 @@ describe("ReleasesService refuses members that would act on nothing", () => {
 
   it("refuses a member on a release that will never run again", async () => {
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
     repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "published" }]);
     await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "CONFLICT",
@@ -326,6 +387,139 @@ describe("ReleasesService refuses members that would act on nothing", () => {
   });
 });
 
+describe("ReleasesService keeps a single-document release to one document", () => {
+  it("calls the same Single again a duplicate, whatever id the caller sent", async () => {
+    // A Single is recorded by its own row, so a stale id names the same
+    // document: the member key is built from the resolved id.
+    const { svc, repo, deps } = service({ holds: ["create"] });
+    deps.targets.readDocument = async () => ({ id: "row-1" });
+    const single = {
+      ...MEMBER,
+      scopeKind: "single" as const,
+      scopeSlug: "home",
+    };
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", kind: "single" },
+    ]);
+    repo.listMembers.mockResolvedValue([
+      {
+        id: "m0",
+        memberKey: releaseMemberKey("r1", { ...single, entryId: "row-1" }),
+      },
+    ]);
+    repo.addMember.mockRejectedValueOnce(
+      Object.assign(new Error("UNIQUE constraint failed"), { code: "23505" })
+    );
+    await expect(
+      svc.addMember("r1", { ...single, entryId: "stale" }, ADMIN)
+    ).rejects.toMatchObject({ code: "DUPLICATE" });
+  });
+
+  it("asks for publish authority on a committed release before saying what it holds", async () => {
+    // Without that authority the caller learns nothing of the release's kind
+    // or occupancy: the refusal is the access decision, not the conflict.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", kind: "single" },
+    ]);
+    repo.listMembers.mockResolvedValue([{ id: "m0", memberKey: "another" }]);
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.listMembers).not.toHaveBeenCalled();
+  });
+
+  it("refuses to schedule a single release that has no document yet", async () => {
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", kind: "single" },
+    ]);
+    repo.listMembers.mockResolvedValue([]);
+    await expect(
+      svc.schedule("r1", new Date(Date.now() + 86_400_000), "UTC", ADMIN)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses taking the only document out of a scheduled single release", async () => {
+    const { svc, repo } = service({ holds: ["create", "publish"] });
+    repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", kind: "single" },
+    ]);
+    await expect(svc.removeMember("m0", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(repo.removeMember).not.toHaveBeenCalled();
+  });
+
+  const SINGLE = { id: "r1", state: "draft", kind: "single" };
+  const HELD = { id: "m0", memberKey: "another-document" };
+
+  it("refuses a second document before writing anything, saying what to do", async () => {
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValue([SINGLE]);
+    repo.listMembers.mockResolvedValue([HELD]);
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringMatching(/ordinary release/),
+    });
+    expect(repo.addMember).not.toHaveBeenCalled();
+  });
+
+  it("lets an ordinary release holding a document take another", async () => {
+    // The control: the rule is the kind's, not the member count's.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValue([{ ...SINGLE, kind: "release" }]);
+    repo.listMembers.mockResolvedValue([HELD]);
+    await svc.addMember("r1", MEMBER, ADMIN);
+    expect(repo.addMember).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the index refusing a racing second document as the same conflict", async () => {
+    // The early check saw an empty release; by the insert, another add had
+    // landed, and the single-slot index refused this one.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValue([SINGLE]);
+    repo.listMembers.mockResolvedValueOnce([]).mockResolvedValue([HELD]);
+    repo.addMember.mockRejectedValueOnce(
+      Object.assign(new Error("UNIQUE constraint failed"), { code: "23505" })
+    );
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+
+  it("still calls the same document twice a duplicate", async () => {
+    // A single release already holding THIS document: the member key, not the
+    // slot, is what refused it, and the caller is told so.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValue([SINGLE]);
+    repo.listMembers.mockResolvedValue([
+      { id: "m0", memberKey: releaseMemberKey("r1", MEMBER) },
+    ]);
+    repo.addMember.mockRejectedValueOnce(
+      Object.assign(new Error("UNIQUE constraint failed"), { code: "23505" })
+    );
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "DUPLICATE",
+    });
+  });
+
+  it("refuses an unknown kind when a release is made", async () => {
+    const { svc, repo } = service({ holds: ["create"] });
+    await expect(
+      svc.create(
+        { title: "Launch", kind: "singles" } as unknown as Parameters<
+          typeof svc.create
+        >[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.createRelease).not.toHaveBeenCalled();
+  });
+});
+
 describe("ReleasesService protects a committed release", () => {
   it("requires publish authority to add to a SCHEDULED release", async () => {
     // The drain reads membership at the scheduled instant, not at scheduling
@@ -333,8 +527,7 @@ describe("ReleasesService protects a committed release", () => {
     // publisher already committed to — the escalation the publish authority
     // exists to prevent, arriving after the decision instead of before it.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
-    repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
+    repo.findReleases.mockResolvedValue([{ id: "r1", state: "scheduled" }]);
     await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
@@ -346,10 +539,11 @@ describe("ReleasesService protects a committed release", () => {
     // not about the state. Without this, freezing membership outright would
     // pass the test above and be wrong.
     const { svc, repo } = service({ holds: ["create", "publish"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
-    repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
+    repo.findReleases.mockResolvedValue([{ id: "r1", state: "scheduled" }]);
     await svc.addMember("r1", MEMBER, ADMIN);
-    expect(repo.addMember).toHaveBeenCalled();
+    // And the write is fenced on states that admit the scheduled release, or
+    // it would refuse the add the judgement allowed.
+    expect(repo.addMember.mock.calls[0]?.[1]).toContain("scheduled");
   });
 
   it("refuses an unusable schedule instant before touching the release", async () => {
@@ -378,28 +572,56 @@ describe("ReleasesService protects a committed release", () => {
   });
 });
 
-describe("ReleasesService closes the window around a committed release", () => {
-  it("undoes the member when the release is scheduled during the insert", async () => {
-    // The claim cannot cover the insert itself: a publisher can schedule
-    // between the two, and the drain reads membership at the instant. Detected
-    // after the write and COMPENSATED — a member that should not be there is
-    // removable, while a publish that already happened is not.
+describe("ReleasesService fences a membership change on its judgement", () => {
+  /** The states the last write of this kind was fenced on. */
+  function fencedOn(write: { mock: { calls: unknown[][] } }): unknown {
+    return write.mock.calls.at(-1)?.[1];
+  }
+
+  it("hands the write the member limit, judged under its lock", async () => {
+    // The early count can be raced; the check the write asks under the
+    // release lock is the one that holds, so it must be the limit's own rule.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable
-      .mockResolvedValueOnce(true) // the claim succeeds: still a draft
-      .mockResolvedValueOnce(false); // scheduled while we were inserting
+    await svc.addMember("r1", MEMBER, ADMIN);
+    const check = repo.addMember.mock.calls.at(-1)?.[2] as (
+      held: number
+    ) => unknown;
+    expect(check(RELEASE_MEMBER_LIMIT - 1)).toBeNull();
+    expect(check(RELEASE_MEMBER_LIMIT)).toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("fences an add judged against a draft on the assembling states alone", async () => {
+    // A publisher can schedule between the judgement and the write, and the
+    // drain reads membership at the instant. The write's fence is what refuses
+    // the member then; a fence that admitted `scheduled` would let a caller who
+    // never passed the publish gate add to a committed launch.
+    const { svc, repo } = service({ holds: ["create"] });
+    await svc.addMember("r1", MEMBER, ADMIN);
+    expect(fencedOn(repo.addMember)).toEqual(RELEASE_ASSEMBLABLE_FROM);
+  });
+
+  it("fences it there even for a caller who may publish", async () => {
+    // The judgement was formed on a draft, so the publish authority was never
+    // asked: what may land is what was judged, not what the caller could have
+    // been allowed.
+    const { svc, repo, deps } = service({ holds: ["create", "publish"] });
+    await svc.addMember("r1", MEMBER, ADMIN);
+    expect(fencedOn(repo.addMember)).toEqual(RELEASE_ASSEMBLABLE_FROM);
+    expect(deps.canManageReleases).not.toHaveBeenCalledWith("u1", "publish");
+  });
+
+  it("answers a release that moved after the judgement as a conflict, undoing nothing", async () => {
+    // The repository refuses inside the transaction, before anything is
+    // written, so there is no member to take back out.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.addMember.mockRejectedValueOnce(
+      NextlyError.conflict({
+        logContext: { reason: "release-moved-since-judged" },
+      })
+    );
     await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "CONFLICT",
     });
-    expect(repo.removeMember).toHaveBeenCalledWith("m1");
-  });
-
-  it("does not re-check for a caller who may publish", async () => {
-    // For them adding to a scheduled release is allowed, so there is nothing to
-    // undo — and a second fence call would refuse a legitimate write.
-    const { svc, repo } = service({ holds: ["create", "publish"] });
-    await svc.addMember("r1", MEMBER, ADMIN);
-    expect(repo.touchIfAssemblable).toHaveBeenCalledTimes(1);
     expect(repo.removeMember).not.toHaveBeenCalled();
   });
 
@@ -408,8 +630,7 @@ describe("ReleasesService closes the window around a committed release", () => {
     // content live. The earlier reasoning — that removal can only make less go
     // live — was wrong in exactly that direction.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
-    repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
+    repo.findReleases.mockResolvedValue([{ id: "r1", state: "scheduled" }]);
     await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
@@ -458,7 +679,7 @@ describe("ReleasesService refuses input the database would answer differently", 
         ADMIN
       )
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("accepts both orders the vocabulary declares", async () => {
@@ -469,7 +690,7 @@ describe("ReleasesService refuses input the database would answer differently", 
     for (const order of RELEASE_LIST_ORDERS) {
       const { svc, repo } = service({ holds: ["read"] });
       await svc.find({ order }, ADMIN);
-      expect(repo.findReleases).toHaveBeenCalledWith(
+      expect(repo.findReleasePage).toHaveBeenCalledWith(
         expect.objectContaining({ order })
       );
     }
@@ -501,7 +722,7 @@ describe("ReleasesService refuses input the database would answer differently", 
       )
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(repo.findDueMembersFor).not.toHaveBeenCalled();
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("forwards `order` to the repository when nothing narrows by document", async () => {
@@ -516,7 +737,7 @@ describe("ReleasesService refuses input the database would answer differently", 
     // `releases-repository.integration.test.ts`.
     const { svc, repo } = service({ holds: ["read"] });
     await svc.find({ order: "soonest", limit: 3 }, ADMIN);
-    expect(repo.findReleases).toHaveBeenCalledWith(
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
       expect.objectContaining({ order: "soonest", limit: 3 })
     );
   });
@@ -537,8 +758,18 @@ describe("ReleasesService refuses input the database would answer differently", 
         },
         ADMIN
       )
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject({ rows: [], total: 0 });
     expect(repo.findDueMembersFor).toHaveBeenCalled();
+  });
+
+  it("refuses a limit of zero, which pages nothing", async () => {
+    // A page of nothing has no next page and no meaningful count of pages, so
+    // it is a caller's mistake rather than a smaller page.
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(svc.find({ limit: 0 }, ADMIN)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("refuses a negative limit, which SQLite reads as NO limit", async () => {
@@ -548,7 +779,528 @@ describe("ReleasesService refuses input the database would answer differently", 
     await expect(svc.find({ limit: -1 }, ADMIN)).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.find pages the list", () => {
+  it("asks the repository for the page the caller named, as an offset", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    repo.findReleasePage.mockResolvedValueOnce({ rows: [], total: 41 });
+    const page = await svc.find({ tab: "drafts", page: 3, limit: 20 }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "drafts", offset: 40, limit: 20 })
+    );
+    expect(page).toMatchObject({ total: 41, page: 3, limit: 20 });
+  });
+
+  it("defaults to the first page of 50", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({}, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({ offset: 0, limit: 50 })
+    );
+  });
+
+  it("orders the upcoming tab and scheduled releases soonest first by default, and the rest latest first", async () => {
+    // Three questions, one rule: which end of the timeline a caller who named
+    // no order is asking about.
+    for (const [query, order] of [
+      [{ tab: "upcoming" }, "soonest"],
+      [{ state: "scheduled" }, "soonest"],
+      [{}, "latest"],
+      [{ state: "published" }, "latest"],
+    ] as const) {
+      const { svc, repo } = service({ holds: ["read"] });
+      await svc.find(query, ADMIN);
+      expect(repo.findReleasePage).toHaveBeenCalledWith(
+        expect.objectContaining({ order })
+      );
+    }
+  });
+
+  it("trims the search, and treats an empty one as none", async () => {
+    // A stray space typed into the box would otherwise narrow the list to
+    // releases whose text contains a space.
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({ search: "  spring " }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: "spring" })
+    );
+    await svc.find({ search: "   " }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: undefined })
+    );
+  });
+
+  it.each([
+    ["an unknown tab", { tab: "soon" }],
+    ["a tab with a state", { tab: "drafts", state: "draft" }],
+    ["an order on a tab with its own", { tab: "done", order: "soonest" }],
+    ["a reason without the attention tab", { reason: "overdue" }],
+    ["a reason on another tab", { tab: "upcoming", reason: "overdue" }],
+    ["an unknown reason", { tab: "attention", reason: "late" }],
+    ["an unknown state", { state: "schedule" }],
+    ["an unknown kind", { kind: "singles" }],
+    ["a search past the limit", { search: "x".repeat(201) }],
+    ["page 0", { page: 0 }],
+    ["a null page", { page: null }],
+    ["a null limit", { limit: null }],
+    ["a fractional page", { page: 1.5 }],
+    ["a page larger than the maximum", { limit: 201 }],
+    ["a page past the safe integers", { page: 1e308 }],
+    [
+      "a page whose offset is past the safe integers",
+      { page: 2 ** 52, limit: 200 },
+    ],
+    ["a search that is not text", { search: 42 }],
+    ["a window bound that is not a Date", { scheduledAfter: "tomorrow" }],
+    [
+      "a window bound that is an invalid Date",
+      { scheduledBefore: new Date("nope") },
+    ],
+  ])("refuses %s, naming it, before reading anything", async (_, query) => {
+    // Each would otherwise answer with rows that look right: an unknown tab or
+    // state matches nothing and reads as "no releases", and an order a tab
+    // cannot honour would be silently dropped.
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(query as unknown as Parameters<typeof svc.find>[0], ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
+  });
+
+  it("checks the window bounds of a document's releases too", async () => {
+    // The document listing filters in memory; a bound that is not a Date
+    // would fail there as a TypeError, or as NaN would silently not filter.
+    const { svc, repo } = service({ holds: ["read"] });
+    for (const bound of [
+      { scheduledAfter: "tomorrow" },
+      { scheduledBefore: new Date("nope") },
+    ]) {
+      await expect(
+        svc.find(
+          {
+            containing: {
+              scopeKind: "collection",
+              scopeSlug: "posts",
+              entryId: "e1",
+              locale: null,
+            },
+            ...bound,
+          } as unknown as Parameters<typeof svc.find>[0],
+          ADMIN
+        )
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
+    expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+  });
+
+  it("names the fix when `reason` comes without the attention tab", async () => {
+    const { svc } = service({ holds: ["read"] });
+    await expect(svc.find({ reason: "overdue" }, ADMIN)).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(
+        '`reason` needs `tab: "attention"`'
+      ),
+    });
+  });
+
+  it("passes the reason through with the attention tab", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({ tab: "attention", reason: "overdue" }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "overdue" })
+    );
+  });
+
+  it.each([
+    ["tab", "upcoming"],
+    ["search", "spring"],
+    ["reason", "overdue"],
+  ])("refuses `%s` alongside `containing`", async (key, value) => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(
+        {
+          containing: {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e1",
+            locale: null,
+          },
+          [key]: value,
+        } as unknown as Parameters<typeof svc.find>[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService narrows the list to one day in a zone", () => {
+  const BERLIN_SPRING = { date: "2026-03-29", timezone: "Europe/Berlin" };
+
+  it("asks the database for that day's instants in that zone, soonest first", async () => {
+    // The day the clocks go forward in Berlin, so a span of 24 hours from
+    // midnight, or midnight in UTC, both name instants a calendar in Berlin
+    // puts on another day.
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({ day: BERLIN_SPRING }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placedWithin: {
+          start: new Date("2026-03-28T23:00:00Z"),
+          end: new Date("2026-03-29T22:00:00Z"),
+        },
+        // In the day's own order, so the releases a calendar shows on the day
+        // are the first rows here.
+        order: "soonest",
+      })
+    );
+  });
+
+  it("counts a day with the same span", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.count({ day: BERLIN_SPRING }, ADMIN);
+    expect(repo.countReleases).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placedWithin: {
+          start: new Date("2026-03-28T23:00:00Z"),
+          end: new Date("2026-03-29T22:00:00Z"),
+        },
+      })
+    );
+  });
+
+  it.each([
+    ["a day that is not an object", { day: "2026-03-29" }],
+    ["a day with no zone", { day: { date: "2026-03-29" } }],
+    [
+      "a day in an unknown zone",
+      { day: { date: "2026-03-29", timezone: "Mars/Olympus" } },
+    ],
+    [
+      "a day that does not exist",
+      { day: { date: "2026-02-30", timezone: "UTC" } },
+    ],
+  ])("refuses %s before reading anything", async (_, query) => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(query as unknown as Parameters<typeof svc.find>[0], ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
+  });
+
+  it("refuses a day alongside `containing`", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(
+        {
+          containing: {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e1",
+            locale: null,
+          },
+          day: BERLIN_SPRING,
+        } as unknown as Parameters<typeof svc.find>[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.calendar", () => {
+  const WINDOW = {
+    from: "2026-03-01",
+    to: "2026-04-11",
+    timezone: "Europe/Berlin",
+  };
+
+  it("reads each day of the window in the zone, with three releases a day", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    const calendar = await svc.calendar({ ...WINDOW, kind: "release" }, ADMIN);
+    expect(calendar).toMatchObject({ ...WINDOW, days: [] });
+
+    const asked = repo.findReleaseCalendar.mock.calls[0]?.[0] as {
+      days: { date: string; start: Date; end: Date }[];
+      kind?: string;
+      perDay: number;
+    };
+    expect(asked.kind).toBe("release");
+    expect(asked.perDay).toBe(3);
+    expect(asked.days).toHaveLength(42);
+    expect(asked.days[0]).toEqual({
+      date: "2026-03-01",
+      start: new Date("2026-02-28T23:00:00Z"),
+      end: new Date("2026-03-01T23:00:00Z"),
+    });
+    // After the clocks went forward, a Berlin day starts at 22:00 UTC.
+    expect(asked.days[41]).toEqual({
+      date: "2026-04-11",
+      start: new Date("2026-04-10T22:00:00Z"),
+      end: new Date("2026-04-11T22:00:00Z"),
+    });
+  });
+
+  it.each([
+    ["a window longer than six weeks", { ...WINDOW, to: "2026-04-12" }],
+    ["a window that ends before it starts", { ...WINDOW, to: "2026-02-28" }],
+    ["an unknown zone", { ...WINDOW, timezone: "Europe/Berln" }],
+    ["an unknown kind", { ...WINDOW, kind: "singles" }],
+  ])("refuses %s without reading", async (_, query) => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.calendar(
+        query as unknown as Parameters<typeof svc.calendar>[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findReleaseCalendar).not.toHaveBeenCalled();
+  });
+
+  it("refuses a caller who may not read releases, before judging the window", async () => {
+    const { svc, repo } = service({ holds: [] });
+    await expect(
+      svc.calendar({ ...WINDOW, to: "2027-01-01" }, ADMIN)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.findReleaseCalendar).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.count", () => {
+  it("counts with the list's own filters, checked the same way", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    repo.countReleases.mockResolvedValueOnce(4);
+    await expect(
+      svc.count({ tab: "attention", search: " late " }, ADMIN)
+    ).resolves.toBe(4);
+    expect(repo.countReleases).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", search: "late" })
+    );
+    await expect(
+      svc.count({ tab: "drafts", state: "draft" }, ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("refuses a caller who may not read releases", async () => {
+    const { svc, repo } = service({ holds: [] });
+    await expect(svc.count({ tab: "attention" }, ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.countReleases).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.publishNow", () => {
+  it("schedules the release for this moment, then runs the drain within the budget", async () => {
+    // Scheduled for later, so it is moved first, fenced on the state and the
+    // revision it was read at: the run is the drain's ordinary run of a due
+    // release rather than a second way to publish. Then the runner's drain
+    // job, bounded by the request's budget; the answer is the release as the
+    // drain left it.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases
+      .mockResolvedValueOnce([
+        {
+          id: "r1",
+          state: "scheduled",
+          timezone: "Asia/Karachi",
+          revision: 4,
+          scheduledAt: new Date(Date.now() + 60 * 60 * 1000),
+        },
+      ])
+      .mockResolvedValueOnce([
+        { id: "r1", state: "published", timezone: "Asia/Karachi", revision: 6 },
+      ]);
+    const before = Date.now();
+    const answer = await svc.publishNow("r1", ADMIN);
+
+    const [id, at, zone, from, revision] = repo.scheduleRelease.mock
+      .calls[0] as unknown as [string, Date, string, string[], number];
+    expect(id).toBe("r1");
+    expect(at.getTime()).toBeGreaterThanOrEqual(before);
+    expect(zone).toBe("Asia/Karachi");
+    expect(from).toEqual(["scheduled"]);
+    expect(revision).toBe(4);
+    expect(deps.runDrainNow).toHaveBeenCalledTimes(1);
+    expect(deps.runDrainNow).toHaveBeenCalledWith({ maxDurationMs: 15_000 });
+    // After the move, never before it: a drain run first would find the
+    // release not yet due and send nothing.
+    expect(repo.scheduleRelease.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.runDrainNow.mock.invocationCallOrder[0]
+    );
+    expect(answer.state).toBe("published");
+  });
+
+  it("runs the drain for a release already due without moving it", async () => {
+    // Its instant has come, so it is due as it stands. Moving it again would
+    // change the instant a drain already running it checks before marking it
+    // published, and that drain would leave it for the next pass.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      {
+        id: "r1",
+        state: "scheduled",
+        revision: 2,
+        scheduledAt: new Date(Date.now() - 60_000),
+      },
+    ]);
+    await svc.publishNow("r1", ADMIN);
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+    expect(deps.runDrainNow).toHaveBeenCalledWith({ maxDurationMs: 15_000 });
+  });
+
+  it("still moves a draft to now before running the drain", async () => {
+    // The control for the case above: only a release already due is left
+    // where it is.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", revision: 0, scheduledAt: null },
+    ]);
+    await svc.publishNow("r1", ADMIN);
+    expect(repo.scheduleRelease).toHaveBeenCalledTimes(1);
+    expect(deps.runDrainNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers the release as it stands when the drain could not be started, and logs it", async () => {
+    // The move has happened and the release is due, so the runner sends it
+    // whatever happened here. Failing the request would report a release that
+    // is going out as one that is not.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases
+      .mockResolvedValueOnce([{ id: "r1", state: "draft", revision: 0 }])
+      .mockResolvedValueOnce([{ id: "r1", state: "scheduled", revision: 1 }]);
+    deps.runDrainNow.mockRejectedValueOnce(new Error("jobs table is gone"));
+
+    const answer = await svc.publishNow("r1", ADMIN);
+
+    expect(answer).toMatchObject({ id: "r1", state: "scheduled", revision: 1 });
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        releaseId: "r1",
+        error: "jobs table is gone",
+      })
+    );
+  });
+
+  it("answers scheduled when the drain sent nothing, rather than published", async () => {
+    // Another runner held the drain, or the budget ran out: the release is
+    // due and going out, and saying it is published would be untrue.
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", revision: 1 },
+    ]);
+    const answer = await svc.publishNow("r1", ADMIN);
+    expect(answer.state).toBe("scheduled");
+  });
+
+  it.each([
+    ["published", "Create a new release"],
+    ["cancelled", "create a new release"],
+    ["blocked", "schedule it again"],
+  ])(
+    "refuses a %s release, saying what to do instead, before writing anything",
+    async (state, advice) => {
+      const { svc, repo, deps } = service({ holds: ["publish"] });
+      repo.findReleases.mockResolvedValue([{ id: "r1", state }]);
+      await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(advice),
+      });
+      expect(repo.scheduleRelease).not.toHaveBeenCalled();
+      expect(deps.runDrainNow).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses a caller who may assemble releases but not publish them", async () => {
+    // Running a release is the act that puts content live, the same power
+    // scheduling needs.
+    const { svc, repo, deps } = service({ holds: ["create", "read"] });
+    await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+    expect(deps.runDrainNow).not.toHaveBeenCalled();
+  });
+
+  it("does not run a release that moved between the read and the write", async () => {
+    // Cancelled by someone else in that window, or moved by a second request
+    // that read the same revision: the fenced write matches nothing, and the
+    // request is refused with nothing run on its behalf.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([{ id: "r1", state: "draft" }]);
+    repo.scheduleRelease.mockResolvedValueOnce(false);
+    await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(deps.runDrainNow).not.toHaveBeenCalled();
+  });
+
+  it.each(["draft", "scheduled"])(
+    "refuses a %s single-document release with no document, as scheduling does",
+    async state => {
+      // Run now, it would publish nothing and read as done: final, with
+      // nothing in it. The same refusal scheduling makes, before any write.
+      const { svc, repo, deps } = service({ holds: ["publish"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, kind: "single", revision: 0 },
+      ]);
+      repo.listMembers.mockResolvedValue([]);
+      await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(
+          "A single-document release needs its document"
+        ),
+      });
+      expect(repo.scheduleRelease).not.toHaveBeenCalled();
+      expect(deps.runDrainNow).not.toHaveBeenCalled();
+    }
+  );
+
+  it("answers not found for a release that does not exist", async () => {
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(svc.publishNow("nope", ADMIN)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(deps.runDrainNow).not.toHaveBeenCalled();
+  });
+});
+
+describe("a finished release offers nothing to change", () => {
+  it.each(["published", "cancelled"])(
+    "offers no schedule, membership change or publish now on a %s release",
+    async state => {
+      // The admin draws its controls from these, so a finished release that
+      // still offered one would show a button the server then refuses.
+      const { svc } = service({ holds: ["publish", "create", "read"] });
+      const can = await svc.capabilities([{ id: "r1", state } as never], ADMIN);
+      expect(can.get("r1")).toEqual({
+        schedule: false,
+        cancel: false,
+        addMember: false,
+        removeMember: false,
+        publishNow: false,
+        update: false,
+        delete: false,
+      });
+    }
+  );
+
+  it("still lets a stopped release be fixed and rescheduled, but not run as it is", async () => {
+    const { svc } = service({ holds: ["publish", "create", "read"] });
+    const can = await svc.capabilities(
+      [{ id: "r1", state: "blocked" } as never],
+      ADMIN
+    );
+    expect(can.get("r1")).toMatchObject({
+      schedule: true,
+      removeMember: true,
+      publishNow: false,
+    });
   });
 });
 
@@ -564,7 +1316,7 @@ describe("ReleasesService honours a scoped API key over its owner", () => {
     // owner instead would deny a key that was explicitly granted the authority.
     const { svc, repo, deps } = service({ holds: [] });
     await svc.find({}, KEY(["read-content-releases"]));
-    expect(repo.findReleases).toHaveBeenCalled();
+    expect(repo.findReleasePage).toHaveBeenCalled();
     // The owner's grants are never consulted for a scoped key.
     expect(deps.canManageReleases).not.toHaveBeenCalled();
   });
@@ -622,29 +1374,317 @@ describe("ReleasesService carries the key scope into the DOCUMENT check", () => 
   });
 });
 
-describe("ReleasesService closes the window around a REMOVAL too", () => {
-  it("puts the member back when the release is scheduled during the delete", async () => {
+describe("ReleasesService fences a REMOVAL on its judgement too", () => {
+  /** The states the last removal was fenced on. */
+  function fencedOn(write: { mock: { calls: unknown[][] } }): unknown {
+    return write.mock.calls.at(-1)?.at(-1);
+  }
+
+  it("fences a removal judged against a draft on the assembling states alone", async () => {
     // Removing an `unpublish` member cancels a committed takedown, so a
-    // publisher scheduling between the claim and the delete would have their
-    // decision undone by a caller who never passed the publish gate.
+    // publisher scheduling between the judgement and the delete would have
+    // their decision undone by a caller who never passed the publish gate.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable
-      .mockResolvedValueOnce(true) // the claim succeeds
-      .mockResolvedValueOnce(false); // scheduled while we were deleting
-    await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
-      code: "CONFLICT",
-    });
-    // Restored with the ORIGINAL row, so the undo is invisible to anything
-    // holding that id.
-    expect(repo.restoreMember).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "m1" })
+    await svc.removeMember("m1", ADMIN);
+    expect(repo.removeMember).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "m1", releaseId: "r1" }),
+      RELEASE_ASSEMBLABLE_FROM
     );
   });
 
-  it("does not re-check for a caller who may publish", async () => {
+  it("lets a publisher's removal land on a scheduled ordinary release", async () => {
+    // The control: the fence follows the authority the judgement asked for.
     const { svc, repo } = service({ holds: ["create", "publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", kind: "release" },
+    ]);
     await svc.removeMember("m1", ADMIN);
-    expect(repo.touchIfAssemblable).toHaveBeenCalledTimes(1);
-    expect(repo.restoreMember).not.toHaveBeenCalled();
+    expect(fencedOn(repo.removeMember)).toContain("scheduled");
+  });
+
+  it("answers a release that moved after the judgement as a conflict", async () => {
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.removeMember.mockRejectedValueOnce(
+      NextlyError.conflict({
+        logContext: { reason: "release-moved-since-judged" },
+      })
+    );
+    await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+});
+
+describe("ReleasesService fences a schedule on the revision it read", () => {
+  it("hands the write the revision the read carried", async () => {
+    // A membership change landing after the read bumps the revision, so the
+    // write misses rather than scheduling contents nobody checked.
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", revision: 7 },
+    ]);
+    await svc.schedule("r1", new Date(Date.now() + 86_400_000), "UTC", ADMIN);
+    expect(repo.scheduleRelease.mock.calls[0]?.[4]).toBe(7);
+  });
+
+  it("refuses a release that is not there as unschedulable, writing nothing", async () => {
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(
+      svc.schedule("r1", new Date(Date.now() + 86_400_000), "UTC", ADMIN)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.update renames a release under its own permission", () => {
+  const NAMED = {
+    id: "r1",
+    state: "published",
+    title: "Spring launch",
+    description: "Old notes",
+    revision: 3,
+  };
+
+  /** The repository's answer for a rename that changed `changed`. */
+  function wrote(
+    changed: Array<"title" | "description">,
+    row: Record<string, unknown> = NAMED
+  ) {
+    return { row, changed };
+  }
+
+  it("refuses a caller without update, whatever else it holds, and writes nothing", async () => {
+    // Renaming used to go with assembling. It is its own permission now, so a
+    // role holding every other release authority but this one is refused.
+    const { svc, repo, deps } = service({
+      holds: ["read", "create", "publish", "delete"],
+    });
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ADMIN)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it("refuses an anonymous caller", async () => {
+    const { svc, repo } = service({ holds: ["update"] });
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ANON)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+  });
+
+  it("hands the repository only the fields the change names", async () => {
+    // The repository decides, under the release's lock, which of them differ.
+    const { svc, repo } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
+    await svc.update("r1", { title: "Summer launch" }, ADMIN);
+    expect(repo.updateReleaseDetails).toHaveBeenCalledWith("r1", {
+      title: "Summer launch",
+    });
+  });
+
+  it("answers and records the row the repository wrote, with the fields it changed, as the user", async () => {
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    const row = { ...NAMED, title: "Summer launch", description: null };
+    repo.updateReleaseDetails.mockResolvedValueOnce(
+      wrote(["title", "description"], row)
+    );
+    const renamed = await svc.update(
+      "r1",
+      { title: "Summer launch", description: null },
+      ADMIN
+    );
+    expect(renamed).toBe(row);
+    // No read after the write: a later one could answer another request's
+    // change as this one's.
+    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(deps.recordActivity).toHaveBeenCalledWith({
+      action: "update",
+      release: row,
+      changedFields: ["title", "description"],
+      actor: { type: "user", id: "u1" },
+    });
+  });
+
+  it("records nothing for a change the repository found already made", async () => {
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote([]));
+    const answered = await svc.update("r1", { title: "Spring launch" }, ADMIN);
+    expect(answered).toBe(NAMED);
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no field at all", {}],
+    ["an empty title", { title: "" }],
+    ["a title that is not text", { title: 42 }],
+    ["a title too long for every dialect", { title: "x".repeat(256) }],
+    ["a description that is not text", { description: 7 }],
+  ])("refuses %s before anything is written", async (_name, change) => {
+    const { svc, repo } = service({ holds: ["update"] });
+    await expect(
+      svc.update("r1", change as never, ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+  });
+
+  it("answers NOT_FOUND for a release that is not there", async () => {
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(null);
+    await expect(
+      svc.update("nope", { title: "Renamed" }, ADMIN)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it("records a key's rename as a key, never as the key's owner", async () => {
+    // The actor carries the owner's id so the key can be authorized; naming
+    // the owner in the trail would put a person against a change they did
+    // not make.
+    const { svc, repo, deps } = service();
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
+    await svc.update(
+      "r1",
+      { title: "Renamed" },
+      {
+        userId: "owner",
+        overrideAccess: false,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-content-releases"],
+        },
+      }
+    );
+    expect(deps.recordActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: { type: "apiKey" } })
+    );
+  });
+
+  it("still answers the rename when the activity log cannot be written", async () => {
+    // The rename has committed. Failing the request now would report a change
+    // that happened as one that did not.
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
+    deps.recordActivity.mockRejectedValueOnce(new Error("log is down"));
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ADMIN)
+    ).resolves.toBeDefined();
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      "A release change could not be recorded",
+      expect.objectContaining({ releaseId: "r1", action: "update" })
+    );
+  });
+});
+
+describe("ReleasesService.delete deletes only a release that never ran", () => {
+  it("refuses a caller without delete, whatever else it holds, and deletes nothing", async () => {
+    const { svc, repo, deps } = service({
+      holds: ["read", "create", "publish", "update"],
+    });
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it.each(["draft", "cancelled"])(
+    "deletes a %s release, and records it",
+    async state => {
+      const { svc, repo, deps } = service({ holds: ["delete"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, title: "Launch", revision: 1 },
+      ]);
+      // The repository's row is the answer and the record, not the read
+      // before it: here a rename landed in between.
+      repo.deleteRelease.mockResolvedValueOnce({
+        id: "r1",
+        state,
+        title: "Relaunch",
+        revision: 2,
+      });
+      expect(await svc.delete("r1", ADMIN)).toMatchObject({
+        id: "r1",
+        title: "Relaunch",
+        state,
+      });
+      expect(repo.deleteRelease).toHaveBeenCalledWith("r1");
+      expect(deps.recordActivity).toHaveBeenCalledWith({
+        action: "delete",
+        release: expect.objectContaining({
+          id: "r1",
+          title: "Relaunch",
+          state,
+        }),
+        actor: { type: "user", id: "u1" },
+      });
+    }
+  );
+
+  it.each([
+    ["scheduled", "Cancelling it calls it off"],
+    ["blocked", "Cancelling it calls it off"],
+    ["published", "record of what went live"],
+  ])(
+    "refuses a %s release with a CONFLICT saying what to do, and deletes nothing",
+    async (state, says) => {
+      const { svc, repo, deps } = service({ holds: ["delete"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, title: "Launch", revision: 1 },
+      ]);
+      await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(says),
+      });
+      expect(repo.deleteRelease).not.toHaveBeenCalled();
+      expect(deps.recordActivity).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps a cancelled release that was ever scheduled, naming why in the refusal's data", async () => {
+    const { svc, repo, deps } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([
+      {
+        id: "r1",
+        state: "cancelled",
+        title: "Launch",
+        revision: 4,
+        scheduledAt: new Date("2026-09-01T09:00:00Z"),
+      },
+    ]);
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+      publicMessage:
+        "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
+      publicData: { reason: "was-scheduled" },
+    });
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it("answers NOT_FOUND for a release that is not there", async () => {
+    const { svc, repo } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(svc.delete("nope", ADMIN)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses with a CONFLICT, and records nothing, when the release moved before the delete", async () => {
+    // Read as a draft, scheduled before the fenced delete: the repository
+    // refuses, and nothing was deleted to record.
+    const { svc, repo, deps } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", title: "Launch", revision: 1 },
+    ]);
+    repo.deleteRelease.mockResolvedValueOnce(null);
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(deps.recordActivity).not.toHaveBeenCalled();
   });
 });

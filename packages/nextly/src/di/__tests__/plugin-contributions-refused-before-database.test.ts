@@ -45,6 +45,13 @@ vi.mock("../../cli/commands/migrate", () => ({
 vi.mock("../../route-handler/auth-handler", () => ({
   setBootedConfig: () => undefined,
 }));
+// The plugins here are never installed, and a production boot refuses that
+// before boot migrations. Install state is not what these boots are about
+// (`plugin-install-gate.test.ts` is), so the gate passes, and the positive
+// controls reach the migrations as they did before it ran.
+vi.mock("../../domains/schema/ownership/plugin-install-gate", () => ({
+  assertBootPluginsInstalled: async () => undefined,
+}));
 
 const { registerServices } = await import("../register");
 

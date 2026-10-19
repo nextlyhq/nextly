@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
+import { CardEmpty } from "../../frame/states";
 import { actionsBody } from "../actions";
 
 vi.mock("@admin/components/ui/link", () => ({
@@ -38,7 +39,9 @@ const widget = (
 function draw(definition: DashboardWidget) {
   const outcome = actionsBody(definition);
   if (!outcome.ok) throw new Error(`expected a body, got: ${outcome.message}`);
-  render(<>{outcome.node}</>);
+  render(
+    <>{outcome.empty ? <CardEmpty {...outcome.empty} /> : outcome.node}</>
+  );
 }
 
 describe("the actions archetype", () => {
@@ -92,7 +95,10 @@ describe("the actions archetype", () => {
     // The widget is legitimately present -- its own permission let it through
     // -- so saying so beats a titled card with nothing under it.
     draw(widget([]));
-    expect(screen.getByTestId("widget-actions-empty")).toBeInTheDocument();
+    // The frame's one empty state, so the card reads as empty like every other card.
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "No shortcuts for you here"
+    );
     expect(screen.queryByTestId("widget-action")).not.toBeInTheDocument();
   });
 

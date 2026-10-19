@@ -92,6 +92,9 @@ const BARE_VISUAL_BUILDER = /(?<!schema )(?<!page )\bvisual builder\b/gi;
  * A curated list, like `FORBIDDEN_PHRASES` above and for the same reason: no code can ask
  * whether a sentence is true. A sentence that must quote one of these to correct it is
  * allowlisted by its file and its text, with the reason, never by weakening the phrase here.
+ * Its text is the passage the phrase spans: the line it starts on, and for a phrase that wraps,
+ * each line beneath up to the one it ends on, digested as `digestLine` of those lines joined
+ * by newlines. Editing any of them ends the exemption.
  *
  * `word: true` matches only where no letter or digit touches either end, so `SSO` never
  * matches inside "also" and "in 5 minutes" never matches inside "within 5 minutes". Every other
@@ -1014,11 +1017,12 @@ function metaReachability(repoRoot, tracked, findings) {
  * generated project. It is the first thing a plugin author hits.
  *
  * Everything this compares against is DERIVED on each run: the namespace
- * segment from its one declaration, and the mount from BOTH places that decide
- * it, since `create-nextly-app` scaffolds into an empty project from the
- * template and into an existing one from its own generator. Two sources that
- * disagree mean the docs cannot state one answer, so this refuses instead of
- * picking a side.
+ * segment from its one declaration, and the mount from where the base template
+ * keeps its catch-all route. `create-nextly-app` writes the same route into an
+ * existing app from its own generator, and its test `admin-api-mount.test.ts`
+ * runs that generator and holds the file it writes to the template's, so the
+ * two cannot disagree. The generator's source is not read here: how it spells
+ * the path changes with the code, and only where the file lands matters.
  *
  * Comments in published source are read too. The wrong claim started in a
  * `@public` JSDoc, so a guard that watched only Markdown would leave the
@@ -1031,11 +1035,6 @@ const NAMESPACE_DECLARATION =
 const NAMESPACE_SOURCE = "packages/nextly/src/plugins/routes/route-path.ts";
 const TEMPLATE_APP_DIR = "templates/base/src/app/";
 const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
-const GENERATOR_SOURCE = "packages/create-nextly-app/src/generators/routes.ts";
-const GENERATOR_MOUNT =
-  /path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/;
-const QUOTED_SEGMENT = /"([^"]*)"/g;
-
 /** The mount the base template hard-codes by where its route file sits. */
 function templateMount(repoRoot, tracked, refuse) {
   const candidates = tracked
@@ -1064,31 +1063,6 @@ function templateMount(repoRoot, tracked, refuse) {
   )}`;
 }
 
-/** The mount the generator builds when scaffolding into an existing project. */
-function generatorMount(repoRoot, refuse) {
-  let source;
-  try {
-    source = readFileSync(join(repoRoot, GENERATOR_SOURCE), "utf-8");
-  } catch {
-    refuse(GENERATOR_SOURCE, "could not be read, so the mount it generates is unknown");
-    return null;
-  }
-  const declared = GENERATOR_MOUNT.exec(source);
-  if (declared === null) {
-    refuse(
-      GENERATOR_SOURCE,
-      "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown"
-    );
-    return null;
-  }
-  const segments = [...declared[1].matchAll(QUOTED_SEGMENT)].map(m => m[1]);
-  if (segments.length === 0) {
-    refuse(GENERATOR_SOURCE, "builds a catch-all route path with no leading segments");
-    return null;
-  }
-  return `/${segments.join("/")}`;
-}
-
 function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
   const refuse = (file, message) => {
     findings.push({
@@ -1102,15 +1076,7 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
   // Fails closed on every input. Checking the docs against a mount this could
   // not establish would report "no findings" for a question it never asked.
   const fromTemplate = templateMount(repoRoot, tracked, refuse);
-  const fromGenerator = generatorMount(repoRoot, refuse);
-  if (fromTemplate === null || fromGenerator === null) return;
-  if (fromTemplate !== fromGenerator) {
-    refuse(
-      GENERATOR_SOURCE,
-      `generates ${fromGenerator} while the template mounts at ${fromTemplate}; a scaffolded project's plugin routes would answer at two different addresses, so the docs cannot name one`
-    );
-    return;
-  }
+  if (fromTemplate === null) return;
 
   let namespace;
   try {
@@ -2020,7 +1986,10 @@ function continuedText(next, quoted) {
   return OPENS_BLOCK.test(below) ? null : plainLine(below);
 }
 
-/** The lines beneath line `i` that continue its sentence, as far as any phrase can reach. */
+/**
+ * The lines beneath line `i` that continue its sentence, as far as any phrase can reach, each as
+ * a reader sees it.
+ */
 function continuation(lines, i) {
   const quoted = QUOTE_MARKER.test(lines[i]);
   const rest = [];
@@ -2029,17 +1998,44 @@ function continuation(lines, i) {
     if (text === null) break;
     rest.push(text);
   }
-  return rest.join(" ");
+  return rest;
 }
 
 /**
  * The refused phrases that START on line `i`, read together with the lines beneath that
- * continue the sentence.
+ * continue the sentence, and the source passage they span: line `i` and every line beneath
+ * that one of them reaches into.
+ *
+ * The passage is what an exemption is held against. Held against line `i` alone, an exemption
+ * for a phrase that wraps would survive any edit to the lines that finish it, so the words that
+ * make the claim could be rewritten under a standing permission. A phrase that ends on its own
+ * line spans that one line, so its passage, and an exemption's digest of it, are unchanged.
  */
 function refusedOnLine(lines, i, wraps) {
   const own = plainLine(lines[i]);
-  const rest = wraps ? continuation(lines, i) : "";
-  return refusedClaimsIn(`${own} ${rest}`).filter(hit => hit.index < own.length);
+  const { text, starts } = joinedLines([own, ...(wraps ? continuation(lines, i) : [])]);
+  const hits = refusedClaimsIn(text).filter(hit => hit.index < own.length);
+  const end = Math.max(0, ...hits.map(hit => hit.index + hit.text.length));
+  // Line `i` starts at 0 and is always in the passage; each continued line is in it when the
+  // furthest phrase reaches past where that line starts.
+  const reached = starts.slice(1).filter(start => start < end).length;
+  return { hits, passage: lines.slice(i, i + 1 + reached).join("\n") };
+}
+
+/**
+ * Lines read as one sentence, joined by a space, with where each starts in the joined text.
+ * Built together, so the offsets a phrase is measured against are those of the text it was
+ * found in.
+ */
+function joinedLines(parts) {
+  const starts = [];
+  let text = "";
+  for (const part of parts) {
+    if (starts.length > 0) text += " ";
+    starts.push(text.length);
+    text += part;
+  }
+  return { text, starts };
 }
 
 function pushRefused(findings, isExempt, { file, line, source, hits }) {
@@ -2065,8 +2061,8 @@ function refusedInFile(repoRoot, file, findings, isExempt) {
   const lines = text.split("\n");
   const wraps = !file.endsWith(".json");
   for (let i = 0; i < lines.length; i++) {
-    const hits = refusedOnLine(lines, i, wraps);
-    pushRefused(findings, isExempt, { file, line: i + 1, source: lines[i], hits });
+    const { hits, passage } = refusedOnLine(lines, i, wraps);
+    pushRefused(findings, isExempt, { file, line: i + 1, source: passage, hits });
   }
 }
 

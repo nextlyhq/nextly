@@ -16,6 +16,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { timeseriesAccepts, timeseriesBody } from "../timeseries";
+import { CardEmpty } from "../../frame/states";
 
 const widget = (): DashboardWidget =>
   ({
@@ -40,7 +41,9 @@ const series = (
 function draw(result: WidgetResult, definition = widget()) {
   const outcome = timeseriesBody(result, definition);
   if (!outcome.ok) throw new Error(`expected a body, got: ${outcome.message}`);
-  render(<>{outcome.node}</>);
+  render(
+    <>{outcome.empty ? <CardEmpty {...outcome.empty} /> : outcome.node}</>
+  );
 }
 
 afterEach(() => {
@@ -141,6 +144,9 @@ describe("the timeseries archetype", () => {
 
   it("says the window is empty rather than drawing nothing at all", () => {
     draw(series([]));
-    expect(screen.getByText(/no intervals/i)).toBeInTheDocument();
+    // The frame's one empty state, worded for a chart over time.
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      /Nothing to plot yet/
+    );
   });
 });

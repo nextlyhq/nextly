@@ -1,5 +1,6 @@
+import { clearBlocks, registerBlocks } from "@nextlyhq/blocks-engine";
 import type { BreakpointSet } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { validateBlocksValue } from "./blocks-validator";
 
@@ -280,5 +281,68 @@ describe("the breakpoint set a blocks field is validated against", () => {
 
     expect(check(page([]), clashing)).not.toEqual([]);
     expect(check(page([]), WIRED)).toEqual([]);
+  });
+});
+
+describe("a slot its block locks", () => {
+  const base = {
+    version: 1,
+    description: "A block.",
+    example: { props: {} },
+    render: () => null,
+  };
+  const HERO = "22222222-2222-4222-8222-222222222222";
+  const HEADING = "33333333-3333-4333-8333-333333333333";
+
+  beforeEach(() => {
+    registerBlocks(
+      [
+        { ...base, name: "acme/locked-heading" },
+        {
+          ...base,
+          name: "acme/locked-hero",
+          slots: {
+            content: {
+              defaultBlock: [{ type: "acme/locked-heading" }],
+              lock: "all",
+            },
+          },
+        },
+      ] as never,
+      { source: "acme" }
+    );
+  });
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  /** A page holding the hero, with these children stored in its locked slot. */
+  function heroWith(children: unknown[]) {
+    return page([
+      { ...node("acme/locked-hero", HERO), slots: { content: children } },
+    ]);
+  }
+
+  it("accepts the locked slot holding the block it starts with", () => {
+    expect(
+      validateBlocksValue(
+        heroWith([node("acme/locked-heading", HEADING)]),
+        "content",
+        "Content",
+        {}
+      )
+    ).toEqual([]);
+  });
+
+  it("refuses the save once the locked slot no longer holds it", () => {
+    // Every writer's save reaches this path, so refusing here is what holds
+    // the API, an import and an agent to the lock as well as the editor.
+    const issues = validateBlocksValue(heroWith([]), "content", "Content", {});
+
+    expect(issues.map(issue => issue.code)).toEqual(["locked-slot-altered"]);
+    expect(issues[0]?.message).toContain(
+      'The "content" slot of a "acme/locked-hero" is locked'
+    );
   });
 });

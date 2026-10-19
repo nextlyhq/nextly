@@ -31,8 +31,10 @@ pnpm create nextly-app@alpha my-app
 Or add Nextly to an existing Next.js app:
 
 ```bash
-# Runtime and admin
-pnpm add nextly @nextlyhq/admin
+# Runtime, admin and the admin's peer dependencies
+pnpm add nextly @nextlyhq/admin @nextlyhq/ui @tanstack/react-query lucide-react
+# Loads nextly.config.ts for the CLI and the dev server
+pnpm add -D esbuild
 
 # Plus the database adapter and driver you want
 pnpm add @nextlyhq/adapter-postgres pg               # PostgreSQL

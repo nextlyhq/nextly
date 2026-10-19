@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/ui",
-  "version": "0.0.2-alpha.66",
+  "version": "0.0.2-alpha.68",
   "description": "Nextly UI — Reusable React component library for Nextly plugins and custom admin UIs",
   "license": "MIT",
   "keywords": [
@@ -54,6 +54,16 @@
       "require": {
         "types": "./dist/color.d.cts",
         "default": "./dist/color.cjs"
+      }
+    },
+    "./format": {
+      "import": {
+        "types": "./dist/format.d.ts",
+        "default": "./dist/format.mjs"
+      },
+      "require": {
+        "types": "./dist/format.d.cts",
+        "default": "./dist/format.cjs"
       }
     },
     "./theme.css": "./dist/theme.css",

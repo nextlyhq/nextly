@@ -717,3 +717,120 @@ describe("buildDesiredTableFromComponentFields - the discriminator column", () =
     });
   });
 });
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "buildDesiredTableFromComponentFields - many-to-many on %s",
+  dialect => {
+    // A component has no junction table, so its many-to-many keeps the ids on its own row. The
+    // desired table must carry that column with the same shape a plain single relationship gets,
+    // which is the shape the component DDL and the runtime table already emit for it.
+    const relation = { type: "relationship", options: { target: "tags" } };
+    const manyToMany = {
+      ...relation,
+      options: { target: "tags", relationType: "manyToMany" },
+    };
+    const columnNamed = (
+      columns: readonly ColumnSpec[],
+      name: string
+    ): ColumnSpec | undefined => columns.find(c => c.name === name);
+
+    it("gives the component table a column for the many-to-many", () => {
+      const table = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [{ name: "tags", ...manyToMany }] as never,
+        dialect,
+        { builtBy: "codeFirst" }
+      );
+      expect(columnNamed(table.columns, "tags")).toBeDefined();
+    });
+
+    it("gives it the column the creating SQL writes", () => {
+      const withManyToMany = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [{ name: "tags", ...manyToMany }] as never,
+        dialect,
+        { builtBy: "codeFirst" }
+      );
+      const plain = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [{ name: "tags", ...relation }] as never,
+        dialect,
+        { builtBy: "codeFirst" }
+      );
+      // On PostgreSQL the creating SQL writes UUID, while a plain relationship's desired column stays
+      // text (the runtime mapper's type, a recorded follow-up). MySQL and SQLite agree.
+      const expected =
+        dialect === "postgresql"
+          ? { ...columnNamed(plain.columns, "tags"), type: "uuid" }
+          : columnNamed(plain.columns, "tags");
+      expect(columnNamed(withManyToMany.columns, "tags")).toEqual(expected);
+    });
+  }
+);
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "buildDesiredTableFromComponentFields - required many-to-many on %s",
+  dialect => {
+    // The component creator writes every relationship column without NOT NULL, required or not, so
+    // the desired column stays nullable. Asserting NOT NULL here would plan a constraint the creator
+    // never sets.
+    const requiredManyToMany = {
+      name: "tags",
+      type: "relationship",
+      required: true,
+      options: { target: "tags", relationType: "manyToMany" },
+    };
+
+    it("records the many-to-many column as nullable, as the creator writes it", () => {
+      const table = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [requiredManyToMany] as never,
+        dialect,
+        { builtBy: "codeFirst" }
+      );
+      const tags = table.columns.find(c => c.name === "tags");
+      expect(tags?.nullable).toBe(true);
+    });
+  }
+);
+
+describe("buildDesiredTableFromComponentFields - many-to-many index", () => {
+  // The component creator indexes a relationship only when it has a string `relationTo`, and a
+  // Builder-authored many-to-many has none. Declaring an index here would make the next preview
+  // propose adding one to a component the creator just made without it.
+  it("declares no index for a many-to-many, which the creator never indexes", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      [
+        {
+          name: "tags",
+          type: "relationship",
+          options: { target: "tags", relationType: "manyToMany" },
+        },
+      ] as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    );
+    expect(table.indexes?.map(i => i.name)).not.toContain("idx_comp_hero_tags");
+  });
+});
+
+describe("buildDesiredTableFromComponentFields - many-to-many column type", () => {
+  // The creating SQL writes a relationship as UUID on PostgreSQL. The desired column must name the
+  // same type, or an existing install plans a type change on a column nobody touched.
+  it("declares the many-to-many column as uuid on PostgreSQL, as the creating SQL does", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      [
+        {
+          name: "tags",
+          type: "relationship",
+          options: { target: "tags", relationType: "manyToMany" },
+        },
+      ] as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    );
+    expect(table.columns.find(c => c.name === "tags")?.type).toBe("uuid");
+  });
+});

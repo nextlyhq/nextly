@@ -127,14 +127,19 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
           // below renders them instead of this message.
           <div className="px-4 py-8 text-center">
             <p className="text-sm text-muted-foreground">
-              These two versions are identical.
+              {/* Withheld fields may differ, so "identical" would claim too much. */}
+              {diff.data.incomplete
+                ? "No changes in the fields you can read."
+                : "These two versions are identical."}
             </p>
           </div>
         ) : diff.data ? (
           <div className="px-4">
             {!diff.data.hasChanges ? (
               <p className="py-3 text-sm text-muted-foreground">
-                No changes between these versions.
+                {diff.data.incomplete
+                  ? "No changes in the fields you can read."
+                  : "No changes between these versions."}
               </p>
             ) : null}
             {diff.data.fields.map(node => (

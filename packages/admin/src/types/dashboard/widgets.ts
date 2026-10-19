@@ -30,6 +30,7 @@ import type {
   WidgetSize,
   WidgetStatCell,
   WidgetChrome,
+  WidgetWidth,
 } from "nextly/config";
 
 /*
@@ -137,15 +138,11 @@ export interface DashboardWidget {
 }
 
 /**
- * The five widths a card may be drawn at, narrowest first.
- *
- * Declared here rather than imported: core's `WidgetWidth` lives in
- * `domains/widgets/widths`, which `nextly/config` does not re-export, and this
- * file is where the admin's copy of every layout wire shape already lives. The
- * ORDER is the width ranking the nearest-width rule reads, matching the
- * server's own list.
+ * The five widths a card may be drawn at, narrowest first: core's own type,
+ * from `nextly/config`, so a width core adds or renames reaches every table
+ * keyed by it here as a type error rather than a card drawn wrongly.
  */
-export type WidgetWidth = "quarter" | "third" | "half" | "twoThirds" | "full";
+export type { WidgetWidth };
 
 /**
  * What the server says about one widget's widths, for this reader.

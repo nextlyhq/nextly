@@ -13,12 +13,22 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import {
-  clearWidgets,
+  deregisterWidget,
+  listWidgets,
   registerWidget,
 } from "../../../domains/widgets/registry";
 import {
@@ -36,6 +46,14 @@ const silentLogger = {
   warn: () => {},
   error: () => {},
 };
+
+// Each test makes several real requests through the whole handler, each one a
+// dozen queries. The package's 30 s default fits a local database; set
+// NEXTLY_TEST_SLOW_DB=1 when the database is across a network. CI keeps the
+// default, so a slow query there still fails.
+if (process.env.NEXTLY_TEST_SLOW_DB === "1") {
+  vi.setConfig({ testTimeout: 90_000, hookTimeout: 120_000 });
+}
 
 interface Placement {
   id: string;
@@ -206,18 +224,45 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
-    beforeEach(async () => {
+    // ONE instance per dialect, booted once: a boot creates a database and
+    // pushes the whole schema, which on a networked server is most of a test's
+    // time budget. Each test still starts clean: a fresh editor account (so no
+    // row of an earlier test can be read), the admin's row removed, and this
+    // test's widgets registered anew, beside the widgets the boot registered.
+    let accounts = 0;
+    let bootWidgets: string[] = [];
+    beforeAll(async () => {
       handle = await createTestNextly({ dialect });
+      bootWidgets = listWidgets().map(w => w.id);
+      // The first account of an instance is its super admin.
       admin = await account("admin@example.com");
-      editor = await account("editor@example.com");
+    }, 120_000);
+
+    afterAll(async () => {
+      await handle?.destroy();
+    });
+
+    beforeEach(async () => {
+      // Every test reads the registry a real boot leaves, whichever ran
+      // before it: an earlier test's clean-up must not take core's widgets.
+      expect(listWidgets().map(w => w.id)).toEqual(bootWidgets);
+      accounts += 1;
+      editor = await account(`editor-${accounts}@example.com`);
+      const stored = await service().getLayout("user", admin);
+      if (stored.version > 0) {
+        await service().deleteLayout("user", admin, stored.version);
+      }
       testWidget("first", 1000);
       testWidget("gated", 1010, { requiredPermission: "manage-the-vault" });
       testWidget("last", 1020, { defaultSize: "sm" });
     });
 
-    afterEach(async () => {
-      clearWidgets();
-      await handle.destroy();
+    // Only this suite's widgets: the instance outlives the test, and so must
+    // the widgets its boot registered.
+    afterEach(() => {
+      for (const { id } of listWidgets()) {
+        if (id.startsWith("test/")) deregisterWidget(id);
+      }
     });
 
     it("gives two people with no arrangement the same default, less what one may not see", async () => {
@@ -369,6 +414,31 @@ describe.each(getConfiguredTestDialects())(
         expect(res.status).toBe(200);
         expect((await read(editor)).source).toBe("own");
       });
+    });
+
+    it("after a saved reset, brings later changes to the default to the reader", async () => {
+      // The reset removes the row rather than storing today's default, so the
+      // reader follows the default again: a widget declared afterwards
+      // reaches them, as it reaches someone who never arranged anything.
+      const seen = await read(editor);
+      const arranged = [...ours(seen.placements)].reverse();
+      expect((await save(editor, seen, arranged)).status).toBe(200);
+
+      const before = await read(editor);
+      const reset = await call(editor, "DELETE", {
+        query: { version: String(before.version), scope: before.scope },
+      });
+      expect(reset.status).toBe(200);
+
+      testWidget("declared-later", 1015);
+      const after = await read(editor);
+      expect(after.source).toBe("default");
+      expect(after.version).toBe(0);
+      expect(ours(after.placements).map(p => p.widgetId)).toEqual([
+        "test/first",
+        "test/declared-later",
+        "test/last",
+      ]);
     });
 
     it("refuses a reset staged in a stale tab, keeping the newer arrangement", async () => {

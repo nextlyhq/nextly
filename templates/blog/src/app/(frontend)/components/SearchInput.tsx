@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 /**
  * SearchInput - client-side search powered by Pagefind.
@@ -25,9 +25,14 @@ import type { PagefindDocument } from "/pagefind/pagefind.js";
 
 type PagefindModule = typeof import("/pagefind/pagefind.js");
 
+/** A search's documents, with the query that produced them. */
+type Found = { query: string; docs: PagefindDocument[] };
+
+const NOTHING_FOUND: Found = { query: "", docs: [] };
+
 export function SearchInput() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<PagefindDocument[]>([]);
+  const [found, setFound] = useState<Found>(NOTHING_FOUND);
   const [pagefind, setPagefind] = useState<PagefindModule | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -75,13 +80,10 @@ export function SearchInput() {
   }, []);
 
   // Debounce the query so fast typing doesn't fire a search per keystroke.
-  const debouncedQuery = useDebounce(query, 150);
+  const debouncedQuery = useSettledQuery(query, 150);
 
   useEffect(() => {
-    if (!pagefind || !debouncedQuery) {
-      setResults([]);
-      return;
-    }
+    if (!pagefind || !debouncedQuery) return;
     let cancelled = false;
     (async () => {
       try {
@@ -89,7 +91,7 @@ export function SearchInput() {
         const docs = await Promise.all(
           search.results.slice(0, 10).map(r => r.data())
         );
-        if (!cancelled) setResults(docs);
+        if (!cancelled) setFound({ query: debouncedQuery, docs });
       } catch (err) {
         console.debug("[search] query failed:", err);
       }
@@ -98,6 +100,20 @@ export function SearchInput() {
       cancelled = true;
     };
   }, [debouncedQuery, pagefind]);
+
+  // An emptied box forgets the last answer, so it cannot reappear under the
+  // next query while that one loads. Adjusted while rendering rather than in
+  // an effect; a search still running when the box empties is cancelled by
+  // the effect's cleanup, and one that finished just before is dropped here.
+  if (!debouncedQuery && found !== NOTHING_FOUND) {
+    setFound(NOTHING_FOUND);
+  }
+
+  // A cleared box, or no index yet, shows nothing; while typing, the last
+  // answer stays up until the newer one arrives.
+  const results = pagefind && debouncedQuery ? found.docs : [];
+  // "No results" only once this query's own search has answered.
+  const answered = found.query === debouncedQuery;
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -128,7 +144,7 @@ export function SearchInput() {
         </div>
       )}
 
-      {!loadError && debouncedQuery && results.length === 0 && (
+      {!loadError && debouncedQuery && answered && results.length === 0 && (
         <p
           className="mt-10 text-center text-sm font-medium"
           style={{ color: "var(--color-fg-muted)" }}
@@ -176,11 +192,18 @@ export function SearchInput() {
   );
 }
 
-function useDebounce<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
+/**
+ * The query to search for. Typing settles after a pause; an emptied box
+ * settles at once, during the same render, so clearing and retyping quickly
+ * still ends the old search and its results before the new one starts.
+ */
+function useSettledQuery(query: string, delayMs: number): string {
+  const [settled, setSettled] = useState(query);
+  if (!query && settled) setSettled("");
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delayMs);
+    if (!query) return;
+    const t = setTimeout(() => setSettled(query), delayMs);
     return () => clearTimeout(t);
-  }, [value, delayMs]);
-  return useMemo(() => debounced, [debounced]);
+  }, [query, delayMs]);
+  return settled;
 }

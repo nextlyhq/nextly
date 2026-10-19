@@ -41,9 +41,7 @@ beforeEach(() => {
 describe("POST /api/email/send", () => {
   it("emits respondAction with messageId and success spread onto the body", async () => {
     (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
-      send: vi
-        .fn()
-        .mockResolvedValue({ success: true, messageId: "msg-123" }),
+      send: vi.fn().mockResolvedValue({ success: true, messageId: "msg-123" }),
     });
 
     const res = await POST(

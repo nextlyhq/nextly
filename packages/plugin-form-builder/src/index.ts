@@ -118,9 +118,6 @@ export type {
 // Email types
 export type { EmailConfig } from "./types";
 
-// Webhook types
-export type { WebhookConfig, WebhookEvent } from "./types";
-
 // ============================================================
 // Utility Exports
 // ============================================================
@@ -248,18 +245,6 @@ export {
   type SpamCheckConfig,
   type SpamCheckOptions,
   type SpamCheckResult,
-} from "./handlers";
-
-// Webhook utilities
-export {
-  triggerWebhooks,
-  fireWebhooks,
-  isValidWebhookUrl,
-  getSupportedWebhookEvents,
-  type WebhookPayload,
-  type TriggerWebhooksOptions,
-  type WebhookDeliveryResult,
-  type TriggerWebhooksResult,
 } from "./handlers";
 
 // ============================================================

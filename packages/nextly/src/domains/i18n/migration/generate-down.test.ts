@@ -10,6 +10,7 @@ import type { CompanionMigrationSpec } from "./types";
 const spec: CompanionMigrationSpec = {
   dialect: "sqlite",
   collection: "pages",
+  kind: "collection",
   mainTable: "dc_pages",
   companionTable: "dc_pages_locales",
   defaultLocale: "en",
@@ -97,7 +98,7 @@ describe("buildLocalizationDownSql", () => {
   it("archives non-default-locale translations before dropping", () => {
     const sql = buildLocalizationDownSql(spec);
     expect(sql).toContain(`INSERT INTO "nextly_i18n_archive"`);
-    expect(sql).toContain(`WHERE "_locale" <> 'en'`);
+    expect(sql).toContain(`WHERE "source"."_locale" <> 'en'`);
     expect(sql).toContain(`'pages'`); // collection literal
     expect(sql).toContain(`'title'`); // field literal
   });

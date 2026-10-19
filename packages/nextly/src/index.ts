@@ -552,6 +552,7 @@ export {
   type PluginRouteHandler,
   type PluginRouteMount,
   type PluginRouteRateLimit,
+  type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
   type NextlyPrincipals,
@@ -583,6 +584,8 @@ export {
   type PluginAdminQuerylessWidget,
   type DeclarativeWidgetArchetype,
   type PluginCollectionView,
+  type PluginDocumentView,
+  type PluginFieldTypeDocumentView,
   type PluginMenuItem,
   type PluginNavSection,
 } from "./plugins";
@@ -679,6 +682,7 @@ export {
   type CellWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
+  type WidgetFieldChoice,
   type WidgetSourceFieldType,
   type WidgetSourceKind,
   type WidgetOp,
@@ -800,6 +804,7 @@ export type {
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
 export type {
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,
@@ -850,6 +855,19 @@ export type {
   DraftSplitEligibility,
   DraftSplitDisabledReason,
 } from "./domains/versions/draft-split-eligibility";
+
+// Version pins: a feature registers itself as a holder once, then points named
+// slots at a document's versions, and retention never removes a version a slot
+// points at. Pins run on the caller's core transaction.
+// @experimental
+export {
+  registerVersionPinHolder,
+  versionPins,
+  type VersionPin,
+  type VersionPinHolder,
+  type VersionPinHolderDefinition,
+} from "./domains/versions/version-pins";
+export type { VersionRef } from "./domains/versions/versions-repository";
 
 // Which fields a level addresses, with presentational groups flattened.
 // Exported because a plugin that walks a collection's fields was otherwise
@@ -1062,10 +1080,12 @@ export type { BreachedPasswordsConfig } from "./shared/types/config";
 // MIDDLEWARE
 // ============================================================
 
-// Rate limiting middleware
+// Rate limiting middleware. `defaultSkipAdminApi` is deprecated: kept for an
+// app that passes it as `rateLimit.skip`, and no longer the default.
 export {
   createRateLimiter,
   createRateLimitHeaders,
+  defaultSkipAdminApi,
   InMemoryRateLimitStore,
   resolveRateLimitStore,
   type RateLimitConfig,
@@ -1301,6 +1321,8 @@ export {
 export {
   getMediaVariant,
   getSmallestMediaVariant,
+  // @experimental: an absolute media URL for a consumer outside the app.
+  toPublicMediaUrl,
   type MediaLike,
   type GetMediaVariantOptions,
 } from "./lib/media-variant";

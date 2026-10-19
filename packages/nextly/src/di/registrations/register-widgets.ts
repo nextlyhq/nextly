@@ -41,6 +41,7 @@ import { registerReleasesWidgetSource } from "../../domains/releases/releases-wi
 import { registerVersionsWidgetSource } from "../../domains/versions/versions-widget-source";
 import { setContributedWidgets } from "../../domains/widgets/canonical";
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import { setAdminComponentPlugins } from "../../domains/widgets/declaration/component-map-store";
 import {
   clearDeclaredWidgets,
   registerWidgetDeclarations,
@@ -90,6 +91,9 @@ export function resetWidgetRegistries(
   // Replaced rather than merged, for the same reason the registry is cleared
   // above: a hot reload must not accumulate the previous boot's plugins.
   setContributedWidgets(contributedWidgetSummaries(plugins));
+  // The resolved list the admin's component-map check reads, so it judges
+  // the generated map against the plugins this boot runs.
+  setAdminComponentPlugins(plugins);
 
   for (const definition of CORE_WIDGETS) {
     registerWidget(definition);

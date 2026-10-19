@@ -169,6 +169,28 @@ describe("usePluginPageRegistration", () => {
     spy.mockRestore();
   });
 
+  it("emits locationchange when a document view registers, and when it goes away", () => {
+    // A document view is a route the resolver only finds once registered, so
+    // a deep link to one 404s unless its arrival re-resolves the current path.
+    const spy = vi.spyOn(window, "dispatchEvent");
+    const withView: PluginMetadata = {
+      name: "acme",
+      collections: [],
+      documentViews: [
+        { slug: "pages", path: "builder", component: "@acme/x/admin#B" },
+      ],
+    };
+    const { rerender } = renderWith([withView]);
+    expect(locationChangeCount(spy)).toBe(1);
+
+    rerender({ plugins: [{ ...withView }] });
+    expect(locationChangeCount(spy)).toBe(1);
+
+    rerender({ plugins: [{ name: "acme", collections: [] }] });
+    expect(locationChangeCount(spy)).toBe(2);
+    spy.mockRestore();
+  });
+
   it("imports a plugin's form-toolbar slot module so the slot can resolve", () => {
     // The toolbar slot renders inside the entry form's provider and resolves
     // by string like any plugin component, but a plugin declaring only this

@@ -15,7 +15,11 @@ import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar"
 import { Toaster } from "../components/ui/toaster";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
 import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSyncProvider";
-import { ThemeProvider, useTheme } from "../context/providers/ThemeProvider";
+import {
+  ThemePaintScript,
+  ThemeProvider,
+  useTheme,
+} from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
 import { fieldGroupKeys } from "../hooks/queries";
 import { useRouter } from "../hooks/useRouter";
@@ -34,7 +38,7 @@ const RestartOverlay = lazy(() =>
  * Admin App Content component
  * Handles theme synchronization via React state instead of manual DOM manipulation.
  */
-function AdminAppContent() {
+function AdminAppContent({ nonce }: RootLayoutProps) {
   const { route, isHydrated } = useRouter();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
@@ -62,7 +66,20 @@ function AdminAppContent() {
   // Render an empty themed container so the layout doesn't flash a mismatched
   // background during the cold-load gap.
   if (!isHydrated || !route) {
-    return <div className="min-h-screen bg-background nextly-admin" />;
+    // The server renders this placeholder, so it is what the browser paints
+    // first. The script inside applies the saved theme to it before that
+    // paint, which is why its class may differ from what hydration expects.
+    return (
+      <div
+        className={cn(
+          "min-h-screen bg-background nextly-admin",
+          isDark && "dark"
+        )}
+        suppressHydrationWarning
+      >
+        <ThemePaintScript nonce={nonce} />
+      </div>
+    );
   }
 
   const {
@@ -71,6 +88,7 @@ function AdminAppContent() {
     searchParams,
     routeType,
     requiredPermission,
+    accessSubject,
     requiresBuilder,
   } = route;
 
@@ -94,7 +112,10 @@ function AdminAppContent() {
 
     if (routeType === "private") {
       const content = requiredPermission ? (
-        <PermissionGuard requiredPermission={requiredPermission}>
+        <PermissionGuard
+          requiredPermission={requiredPermission}
+          subject={accessSubject}
+        >
           {componentElement}
         </PermissionGuard>
       ) : (
@@ -175,9 +196,19 @@ function AdminAppContent() {
   );
 }
 
-const RootLayout = (): React.ReactElement => {
+/** The admin's root layout's settings. */
+export interface RootLayoutProps {
+  /**
+   * The nonce a `script-src` Content Security Policy needs. The admin paints
+   * its saved theme with a small inline script before the first paint, which
+   * such a policy blocks without it.
+   */
+  nonce?: string;
+}
+
+const RootLayout = ({ nonce }: RootLayoutProps = {}): React.ReactElement => {
   return (
-    <ThemeProvider>
+    <ThemeProvider nonce={nonce}>
       <RestartProvider>
         {/*
           The admin's one keydown listener, and the root of the shortcut layer stack. It sits
@@ -186,7 +217,7 @@ const RootLayout = (): React.ReactElement => {
           other has to stay clear of.
         */}
         <ShortcutProvider>
-          <AdminAppContent />
+          <AdminAppContent nonce={nonce} />
         </ShortcutProvider>
       </RestartProvider>
     </ThemeProvider>

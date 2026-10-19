@@ -40,6 +40,13 @@ import {
 } from "../../field-groups/storage/field-group-field-type";
 import { isFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
+import {
+  assertWellFormedFilter,
+  isPlainObject,
+  refuseFilterProblems,
+  snapshotFilter,
+  type FilterProblem,
+} from "./filter-shape";
 import type { GeoFilter } from "./geo-utils";
 import { parseNearQuery, parseWithinQuery } from "./geo-utils";
 
@@ -94,8 +101,10 @@ const OPERATOR_MAP: Record<QueryOperator, WhereOperator> = {
   less_than: "<",
   less_than_equal: "<=",
   like: "LIKE",
-  contains: "ILIKE",
-  search: "ILIKE", // Alias for contains - case-insensitive search
+  // Case-insensitive literal substring matching, compiled by the adapter's one rule for it
+  // (`caseInsensitiveContains`) whatever the column's collation.
+  contains: "ICONTAINS",
+  search: "ICONTAINS", // Alias for contains
   in: "IN",
   not_in: "NOT IN",
   exists: "IS NOT NULL", // Will be handled specially for false value
@@ -163,19 +172,6 @@ export interface WhereFilter {
 }
 
 /**
- * Check if a value is a FieldCondition (has operator keys).
- */
-function isFieldCondition(value: unknown): value is FieldCondition {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-
-  const keys = Object.keys(value);
-  // Check for standard operators OR geo operators
-  return keys.some(key => key in OPERATOR_MAP || GEO_OPERATORS.has(key));
-}
-
-/**
  * Build a WhereCondition from a field name and query operator.
  *
  * @param field - Field name (supports dot notation for nested fields)
@@ -196,14 +192,21 @@ function buildCondition(
     };
   }
 
-  // Special handling for 'like', 'contains', and 'search' - wrap with wildcards.
-  // 'search' is an alias for 'contains' (case-insensitive ILIKE).
-  // Escape backslash, percent, and underscore in the user-supplied
-  // value so they are matched as literals rather than as
-  // SQL LIKE wildcards. Backslash escape MUST come first or it will
-  // double-escape the % / _ replacements that follow. Mirrors the
-  // logic in buildSearchCondition (collection-query-service.ts:1196).
-  if (operator === "like" || operator === "contains" || operator === "search") {
+  // 'contains' and 'search' take the text as typed: `ICONTAINS` matches it literally and does
+  // its own escaping, so a typed `%` or `_` is a character to find.
+  if (operator === "contains" || operator === "search") {
+    return {
+      column: field,
+      op: OPERATOR_MAP[operator],
+      value: String(value),
+    };
+  }
+
+  // 'like' - wrap with wildcards. Escape backslash, percent, and underscore in the
+  // user-supplied value so they are matched as literals rather than as SQL LIKE
+  // wildcards. Backslash escape MUST come first or it will double-escape the % / _
+  // replacements that follow.
+  if (operator === "like") {
     const escaped =
       typeof value === "string"
         ? value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")
@@ -239,6 +242,17 @@ function buildCondition(
  * Converts Nextly query syntax to the internal WhereClause format
  * used by the adapter-drizzle package.
  *
+ * REFUSES a filter that is not well formed rather than building what it can
+ * of it (see ./filter-shape). Skipping the member it did not understand used
+ * to leave its siblings to decide alone, which answers a wider question than
+ * the one asked. A geo operator is refused here too: the list read lifts geo
+ * conditions out and applies them in memory before it calls this, so one that
+ * still arrives has no SQL to become and would otherwise vanish.
+ *
+ * `undefined` means "no condition" (every row); an `or` with no members
+ * becomes `{ or: [] }`, which the condition builder renders as matching no
+ * row, as an empty disjunction is false.
+ *
  * @param payload - WhereFilter input
  * @returns WhereClause for the adapter, or undefined if empty
  *
@@ -261,56 +275,32 @@ function buildCondition(
 export function buildWhereClause(
   payload: WhereFilter
 ): WhereClause | undefined {
-  const conditions: (WhereCondition | WhereClause)[] = [];
+  // One read of the filter, checked and translated alike.
+  const filter = snapshotFilter(payload);
+  assertWellFormedFilter(filter);
+  const geo: FilterProblem[] = [];
+  const clause = buildClause(filter, "where", geo);
+  refuseFilterProblems(geo);
+  return clause;
+}
 
-  // Handle AND conditions
-  if (payload.and && Array.isArray(payload.and)) {
-    const andConditions = payload.and
-      .map(cond => buildWhereClause(cond))
-      .filter((c): c is WhereClause => c !== undefined);
-
-    if (andConditions.length > 0) {
-      conditions.push({ and: andConditions });
-    }
-  }
-
-  // Handle OR conditions
-  if (payload.or && Array.isArray(payload.or)) {
-    const orConditions = payload.or
-      .map(cond => buildWhereClause(cond))
-      .filter((c): c is WhereClause => c !== undefined);
-
-    if (orConditions.length > 0) {
-      conditions.push({ or: orConditions });
-    }
-  }
-
-  // Handle field conditions
+/**
+ * The clause for one well-formed filter node, recording any geo operator met.
+ *
+ * Only reached after `assertWellFormedFilter`, so every value here is a
+ * scalar shorthand or an object of known operators with usable operands.
+ */
+function buildClause(
+  payload: WhereFilter,
+  path: string,
+  geo: FilterProblem[]
+): WhereClause | undefined {
+  const conditions: (WhereCondition | WhereClause)[] = [
+    ...logicalClauses(payload, path, geo),
+  ];
   for (const [field, value] of Object.entries(payload)) {
-    // Skip logical operators
     if (field === "and" || field === "or") continue;
-
-    // Skip undefined/null values
-    if (value === undefined || value === null) continue;
-
-    // Check if it's a field condition with operators
-    if (isFieldCondition(value)) {
-      for (const [operator, operatorValue] of Object.entries(value)) {
-        if (operator in OPERATOR_MAP && operatorValue !== undefined) {
-          conditions.push(
-            buildCondition(field, operator as QueryOperator, operatorValue)
-          );
-        }
-      }
-    }
-    // Handle simple equality (shorthand: { field: value })
-    else if (typeof value !== "object") {
-      conditions.push({
-        column: field,
-        op: "=",
-        value: value as WhereCondition["value"],
-      });
-    }
+    conditions.push(...fieldConditions(field, value, `${path}.${field}`, geo));
   }
 
   // Return undefined if no conditions
@@ -333,6 +323,83 @@ export function buildWhereClause(
   return { and: conditions };
 }
 
+/** The clauses a node's `and` and `or` lists contribute. */
+function logicalClauses(
+  payload: WhereFilter,
+  path: string,
+  geo: FilterProblem[]
+): WhereClause[] {
+  const clauses: WhereClause[] = [];
+
+  // AND conditions. A member with no condition is true, and leaving a true
+  // member out of a conjunction does not change it.
+  if (Array.isArray(payload.and)) {
+    const andConditions = payload.and
+      .map((cond, i) => buildClause(cond, `${path}.and.${i}`, geo))
+      .filter((c): c is WhereClause => c !== undefined);
+    if (andConditions.length > 0) clauses.push({ and: andConditions });
+  }
+
+  // OR conditions. A member with no condition is true, which makes the whole
+  // disjunction true; dropping only that member would make the `or` NARROWER
+  // than written. An `or` with no members at all is false, and is kept as an
+  // empty list for the builder to render.
+  if (Array.isArray(payload.or)) {
+    // A member with no condition is kept as an empty conjunction rather than
+    // folding the `or` away here: the condition builder still has to resolve
+    // every other member's fields, and it treats the empty one as true.
+    clauses.push({
+      or: payload.or.map(
+        (cond, i) => buildClause(cond, `${path}.or.${i}`, geo) ?? { and: [] }
+      ),
+    });
+  }
+  return clauses;
+}
+
+/** The conditions one field's value contributes. */
+function fieldConditions(
+  field: string,
+  value: unknown,
+  path: string,
+  geo: FilterProblem[]
+): WhereCondition[] {
+  // Simple equality (shorthand: { field: value })
+  if (!isPlainObject(value)) {
+    return [
+      { column: field, op: "=", value: value as WhereCondition["value"] },
+    ];
+  }
+  const conditions: WhereCondition[] = [];
+  for (const [operator, operatorValue] of Object.entries(value)) {
+    if (GEO_OPERATORS.has(operator)) {
+      geo.push({
+        path: `${path}.${operator}`,
+        code: "FILTER_GEO_NOT_HERE",
+        message: `"${operator}" can only filter a list of entries, which applies it to the rows it reads. It cannot narrow a count or a grouping.`,
+      });
+    } else {
+      // An empty `not_in` is kept rather than dropped, although it excludes
+      // nothing: the condition builder still has to resolve its field, or a
+      // misspelt one would pass as an unfiltered read. It renders as true.
+      conditions.push(
+        buildCondition(field, operator as QueryOperator, operatorValue)
+      );
+    }
+  }
+  return conditions;
+}
+
+/**
+ * An empty `not_in` excludes nothing. A component condition with one is left
+ * out, because the component builder has no "true" to render it as.
+ */
+function excludesNothing(operator: string, operand: unknown): boolean {
+  return (
+    operator === "not_in" && Array.isArray(operand) && operand.length === 0
+  );
+}
+
 /**
  * Validate that a query operator is supported.
  *
@@ -340,7 +407,9 @@ export function buildWhereClause(
  * @returns True if the operator is valid
  */
 export function isValidOperator(operator: string): operator is QueryOperator {
-  return operator in OPERATOR_MAP;
+  // An own key, not `in`: `in` reaches Object.prototype, so `toString` or
+  // `constructor` would pass here while the filter shape check refused them.
+  return Object.prototype.hasOwnProperty.call(OPERATOR_MAP, operator);
 }
 
 /**
@@ -395,111 +464,124 @@ export function extractGeoFilters(
   if (!where) {
     return { geoFilters: [], cleanedWhere: undefined };
   }
+  // Judged whole first, so nothing below has to decide what to do with a
+  // member it does not understand: extraction used to drop such a member, and
+  // the builder downstream never got to refuse it.
+  const filter = snapshotFilter(where);
+  assertWellFormedFilter(filter, { allowTranslated: true });
 
-  const geoFilters: GeoFilter[] = [];
-  const cleanedWhere: WhereFilter = {};
-  let hasNonGeoConditions = false;
-
-  // Process AND conditions
-  if (where.and && Array.isArray(where.and)) {
-    const cleanedAnd: WhereFilter[] = [];
-
-    for (const condition of where.and) {
-      const { geoFilters: nestedGeo, cleanedWhere: nestedClean } =
-        extractGeoFilters(condition);
-      geoFilters.push(...nestedGeo);
-      if (nestedClean && Object.keys(nestedClean).length > 0) {
-        cleanedAnd.push(nestedClean);
-      }
-    }
-
-    if (cleanedAnd.length > 0) {
-      cleanedWhere.and = cleanedAnd;
-      hasNonGeoConditions = true;
-    }
-  }
-
-  // Process OR conditions
-  if (where.or && Array.isArray(where.or)) {
-    const cleanedOr: WhereFilter[] = [];
-
-    for (const condition of where.or) {
-      const { geoFilters: nestedGeo, cleanedWhere: nestedClean } =
-        extractGeoFilters(condition);
-      geoFilters.push(...nestedGeo);
-      if (nestedClean && Object.keys(nestedClean).length > 0) {
-        cleanedOr.push(nestedClean);
-      }
-    }
-
-    if (cleanedOr.length > 0) {
-      cleanedWhere.or = cleanedOr;
-      hasNonGeoConditions = true;
-    }
-  }
-
-  // Process field conditions
-  for (const [field, value] of Object.entries(where)) {
-    // Skip logical operators (already handled)
-    if (field === "and" || field === "or") continue;
-
-    // Skip undefined/null values
-    if (value === undefined || value === null) continue;
-
-    // Check if it's a field condition with operators
-    if (isFieldCondition(value)) {
-      const geoOps: Record<string, unknown> = {};
-      const nonGeoOps: Record<string, unknown> = {};
-
-      // Separate geo and non-geo operators
-      for (const [operator, operatorValue] of Object.entries(value)) {
-        if (GEO_OPERATORS.has(operator)) {
-          geoOps[operator] = operatorValue;
-        } else {
-          nonGeoOps[operator] = operatorValue;
-        }
-      }
-
-      // Process geo operators
-      for (const [operator, operatorValue] of Object.entries(geoOps)) {
-        if (operator === "near" && typeof operatorValue === "string") {
-          const parsed = parseNearQuery(operatorValue);
-          if (parsed) {
-            geoFilters.push({
-              field,
-              operator: "near",
-              value: parsed,
-            });
-          }
-        } else if (operator === "within" && typeof operatorValue === "string") {
-          const parsed = parseWithinQuery(operatorValue);
-          if (parsed) {
-            geoFilters.push({
-              field,
-              operator: "within",
-              value: parsed,
-            });
-          }
-        }
-      }
-
-      // Keep non-geo operators in cleaned where
-      if (Object.keys(nonGeoOps).length > 0) {
-        cleanedWhere[field] = nonGeoOps;
-        hasNonGeoConditions = true;
-      }
-    }
-    // Handle simple equality (no geo operators possible)
-    else if (typeof value !== "object") {
-      cleanedWhere[field] = value;
-      hasNonGeoConditions = true;
-    }
-  }
-
-  return {
-    geoFilters,
-    cleanedWhere: hasNonGeoConditions ? cleanedWhere : undefined,
+  const out = {
+    geoFilters: [] as GeoFilter[],
+    misplaced: [] as FilterProblem[],
   };
+  const cleanedWhere = rebuildFilter(filter, ROOT_SITE, (field, value, site) =>
+    liftGeo(field, value, site, out)
+  );
+  refuseFilterProblems(out.misplaced);
+  return { geoFilters: out.geoFilters, cleanedWhere };
+}
+
+/** One field condition's value, as a filter object holds it. */
+type FieldValue = WhereFilter[string];
+
+/** Where a field condition sits: its path, and whether an `or` encloses it. */
+interface FieldSite {
+  path: string;
+  underOr: boolean;
+}
+
+const ROOT_SITE: FieldSite = { path: "where", underOr: false };
+
+/**
+ * A well-formed filter rebuilt with `keep` deciding what remains of each field
+ * condition — the value to keep, or `undefined` once it has been lifted out.
+ *
+ * The one walk both extractors share. Every `and`/`or` list and member is kept
+ * as written, emptied or not: an empty `or` is false and a member left with no
+ * condition is true, and dropping either would change what the filter
+ * matches.
+ */
+function rebuildFilter(
+  where: WhereFilter,
+  site: FieldSite,
+  keep: (field: string, value: FieldValue, site: FieldSite) => FieldValue
+): WhereFilter | undefined {
+  const cleaned: WhereFilter = {};
+  for (const [field, value] of Object.entries(where)) {
+    if ((field === "and" || field === "or") && Array.isArray(value)) {
+      cleaned[field] = value.map(
+        (member: WhereFilter, i: number) =>
+          rebuildFilter(
+            member,
+            {
+              path: `${site.path}.${field}.${i}`,
+              underOr: site.underOr || field === "or",
+            },
+            keep
+          ) ?? {}
+      );
+      continue;
+    }
+    const kept = keep(field, value, {
+      path: `${site.path}.${field}`,
+      underOr: site.underOr,
+    });
+    if (kept !== undefined) {
+      // Defined as an own key, not assigned: assigning `__proto__` sets the
+      // prototype and the condition disappears. The shape check refuses that
+      // name first; this keeps the walk from ever losing a key.
+      Object.defineProperty(cleaned, field, {
+        value: kept,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+  }
+  return Object.keys(cleaned).length > 0 ? cleaned : undefined;
+}
+
+/**
+ * What remains of one field condition once its geo operators are lifted out.
+ *
+ * Geo operators are applied in memory as one more condition every row must
+ * meet, so one written under an `or` would narrow the read instead of offering
+ * an alternative, and is refused.
+ */
+function liftGeo(
+  field: string,
+  value: FieldValue,
+  site: FieldSite,
+  out: { geoFilters: GeoFilter[]; misplaced: FilterProblem[] }
+): FieldValue {
+  if (!isPlainObject(value)) return value;
+  const nonGeoOps: Record<string, unknown> = {};
+  for (const [operator, operatorValue] of Object.entries(value)) {
+    if (!GEO_OPERATORS.has(operator)) {
+      nonGeoOps[operator] = operatorValue;
+    } else if (site.underOr) {
+      out.misplaced.push({
+        path: `${site.path}.${operator}`,
+        code: "FILTER_NOT_IN_OR",
+        message: `"${operator}" cannot be used inside "or": it is applied to every row read, so it would narrow the read instead of offering an alternative. Move it to the top level, or into "and".`,
+      });
+    } else {
+      // Well formed, so the operand parses: the shape check used these same
+      // parsers to judge it.
+      const parsed =
+        operator === "near"
+          ? parseNearQuery(operatorValue as string)
+          : parseWithinQuery(operatorValue as string);
+      if (parsed) {
+        out.geoFilters.push({
+          field,
+          operator: operator as GeoQueryOperator,
+          value: parsed,
+        });
+      }
+    }
+  }
+  return Object.keys(nonGeoOps).length > 0 ? nonGeoOps : undefined;
 }
 
 // ============================================================================
@@ -692,114 +774,90 @@ export function extractComponentFieldConditions(
   if (!where) {
     return { componentFilters: [], cleanedWhere: undefined };
   }
+  // Judged whole first, for the reason `extractGeoFilters` is: a component
+  // condition with an unknown operator, or a value with none, used to be
+  // dropped here without the builder ever seeing it.
+  const filter = snapshotFilter(where);
+  assertWellFormedFilter(filter, { allowTranslated: true });
 
-  const componentFieldMap = buildComponentFieldMap(fields);
-  const componentFilters: ComponentFieldFilter[] = [];
-  const cleanedWhere: WhereFilter = {};
-  let hasNonComponentConditions = false;
-
-  // Process AND conditions recursively
-  if (where.and && Array.isArray(where.and)) {
-    const cleanedAnd: WhereFilter[] = [];
-
-    for (const condition of where.and) {
-      const { componentFilters: nestedFilters, cleanedWhere: nestedClean } =
-        extractComponentFieldConditions(condition, fields);
-      componentFilters.push(...nestedFilters);
-      if (nestedClean && Object.keys(nestedClean).length > 0) {
-        cleanedAnd.push(nestedClean);
-      }
-    }
-
-    if (cleanedAnd.length > 0) {
-      cleanedWhere.and = cleanedAnd;
-      hasNonComponentConditions = true;
-    }
-  }
-
-  // Process OR conditions recursively
-  if (where.or && Array.isArray(where.or)) {
-    const cleanedOr: WhereFilter[] = [];
-
-    for (const condition of where.or) {
-      const { componentFilters: nestedFilters, cleanedWhere: nestedClean } =
-        extractComponentFieldConditions(condition, fields);
-      componentFilters.push(...nestedFilters);
-      if (nestedClean && Object.keys(nestedClean).length > 0) {
-        cleanedOr.push(nestedClean);
-      }
-    }
-
-    if (cleanedOr.length > 0) {
-      cleanedWhere.or = cleanedOr;
-      hasNonComponentConditions = true;
-    }
-  }
-
-  // Process field conditions
-  for (const [field, value] of Object.entries(where)) {
-    // Skip logical operators (already handled)
-    if (field === "and" || field === "or") continue;
-
-    // Skip undefined/null values
-    if (value === undefined || value === null) continue;
-
-    // Check for dot notation (component field access)
-    const dotIndex = field.indexOf(".");
-    if (dotIndex > 0) {
-      const fieldName = field.slice(0, dotIndex);
-      const componentFieldPath = field.slice(dotIndex + 1);
-
-      // Check if the top-level field is a component field
-      const componentField = componentFieldMap.get(fieldName);
-
-      if (componentField) {
-        // This is a component field condition — extract it.
-        const componentSlugs = componentSlugsOf(componentField);
-
-        // Check if it's a field condition with operators
-        if (isFieldCondition(value)) {
-          for (const [operator, operatorValue] of Object.entries(value)) {
-            if (operator in OPERATOR_MAP && operatorValue !== undefined) {
-              componentFilters.push({
-                fieldName,
-                componentSlugs,
-                componentFieldPath,
-                operator: operator as QueryOperator,
-                value: operatorValue,
-                // The path comes from the caller's own query, so it may name any spelling the
-                // key has ever carried. Matching a single one turns an existing filter into an
-                // ordinary field lookup against a column that does not exist, which answers with
-                // the wrong rows rather than an error.
-                isComponentTypeFilter: isFieldGroupTypeKey(componentFieldPath),
-              });
-            }
-          }
-        }
-        // Handle simple equality shorthand
-        else if (typeof value !== "object") {
-          componentFilters.push({
-            fieldName,
-            componentSlugs,
-            componentFieldPath,
-            operator: "equals",
-            value,
-            isComponentTypeFilter: isFieldGroupTypeKey(componentFieldPath),
-          });
-        }
-
-        // Don't add to cleanedWhere — this condition is handled separately
-        continue;
-      }
-    }
-
-    // Not a component field condition — keep in cleanedWhere
-    cleanedWhere[field] = value;
-    hasNonComponentConditions = true;
-  }
-
-  return {
-    componentFilters,
-    cleanedWhere: hasNonComponentConditions ? cleanedWhere : undefined,
+  const out = {
+    componentFieldMap: buildComponentFieldMap(fields),
+    componentFilters: [] as ComponentFieldFilter[],
+    misplaced: [] as FilterProblem[],
   };
+  const cleanedWhere = rebuildFilter(filter, ROOT_SITE, (field, value, site) =>
+    liftComponent(field, value, site, out)
+  );
+  refuseFilterProblems(out.misplaced);
+  return { componentFilters: out.componentFilters, cleanedWhere };
+}
+
+/**
+ * One field condition, kept unless it addresses a component table, in which
+ * case it is lifted out as component filters.
+ *
+ * Component conditions become EXISTS subqueries that every entry must
+ * satisfy, so one written under an `or` would turn the alternative into a
+ * requirement, and is refused.
+ */
+function liftComponent(
+  field: string,
+  value: FieldValue,
+  site: FieldSite,
+  out: {
+    componentFieldMap: Map<string, ComponentFieldDefinition>;
+    componentFilters: ComponentFieldFilter[];
+    misplaced: FilterProblem[];
+  }
+): FieldValue {
+  // Dot notation whose head is a component field addresses that component's
+  // table; anything else stays in the filter for the main table.
+  const dotIndex = field.indexOf(".");
+  const componentField =
+    dotIndex > 0
+      ? out.componentFieldMap.get(field.slice(0, dotIndex))
+      : undefined;
+  if (!componentField) return value;
+
+  if (site.underOr) {
+    out.misplaced.push({
+      path: site.path,
+      code: "FILTER_NOT_IN_OR",
+      message: `"${field}" is a component field, which cannot be filtered inside "or": its condition must hold for every entry. Move it to the top level, or into "and".`,
+    });
+    return undefined;
+  }
+
+  const componentFieldPath = field.slice(dotIndex + 1);
+  const target = {
+    fieldName: field.slice(0, dotIndex),
+    componentSlugs: componentSlugsOf(componentField),
+    componentFieldPath,
+    // The path comes from the caller's own query, so it may name any spelling
+    // the key has ever carried. Matching a single one turns an existing filter
+    // into an ordinary field lookup against a column that does not exist,
+    // which answers with the wrong rows rather than an error.
+    isComponentTypeFilter: isFieldGroupTypeKey(componentFieldPath),
+  };
+  // A well-formed value is an object of known operators or, as shorthand, a
+  // value meaning `equals`.
+  const operators: Array<[string, unknown]> = isPlainObject(value)
+    ? Object.entries(value)
+    : [["equals", value]];
+  for (const [operator, operatorValue] of operators) {
+    if (GEO_OPERATORS.has(operator)) {
+      out.misplaced.push({
+        path: `${site.path}.${operator}`,
+        code: "FILTER_GEO_NOT_HERE",
+        message: `"${operator}" cannot filter a field inside a component.`,
+      });
+    } else if (!excludesNothing(operator, operatorValue)) {
+      out.componentFilters.push({
+        ...target,
+        operator: operator as QueryOperator,
+        value: operatorValue,
+      });
+    }
+  }
+  return undefined;
 }

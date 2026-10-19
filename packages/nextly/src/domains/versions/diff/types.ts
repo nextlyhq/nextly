@@ -20,11 +20,49 @@ export type DiffStatus = "added" | "removed" | "changed" | "unchanged";
  */
 export type TextSegment = { op: -1 | 0 | 1; text: string };
 
+/**
+ * One container a field sits inside, outermost first: a group, a repeater or a
+ * component.
+ *
+ * A container with no name still has a heading on the form, so it keeps its
+ * place here with `name: null`; one with neither a name nor a label shows no
+ * heading and is left out.
+ *
+ * @experimental
+ */
+export interface DiffPathSegment {
+  /** The container's key, or null for a container that has none. */
+  name: string | null;
+  /** The label it declares, or null; see {@link FieldDiffBase.declaredLabel}. */
+  declaredLabel: string | null;
+  /** The container's field type. */
+  type: string;
+}
+
 interface FieldDiffBase {
   /** Field name (the snapshot key). */
   name: string;
   /** Human label, resolved from `field.label ?? field.name`. */
   label: string;
+  /**
+   * The label the field declares, trimmed, or null when it declares none (or a
+   * blank one). A reader names a null-labelled field by its own rule for
+   * unlabelled fields, as the editor does, rather than by its key.
+   *
+   * Always present on a comparison this server returns; optional in the type
+   * so a node built elsewhere (a fixture, a plugin's renderer test) stays
+   * valid.
+   *
+   * @experimental
+   */
+  declaredLabel?: string | null;
+  /**
+   * The containers the field sits inside, outermost first; empty at the top of
+   * the document. Always present on a comparison this server returns.
+   *
+   * @experimental
+   */
+  path?: DiffPathSegment[];
   /** The field's declared type, so the renderer can pick a display. */
   type: string;
   status: DiffStatus;
@@ -176,10 +214,39 @@ export interface UnknownFieldDiff {
   kind: "unknown";
   name: string;
   status: DiffStatus;
+  /**
+   * Why the key has no field: `system` for a column the framework keeps on
+   * every document (such as when it was first published), `removed` for a
+   * field the content type no longer has. Removed fields come last. Always
+   * present on a comparison this server returns.
+   *
+   * @experimental
+   */
+  reason?: "system" | "removed";
+  /** @experimental See {@link FieldDiffBase.path}. */
+  path?: DiffPathSegment[];
 }
 
 /**
- * The label triple every emitted node carries, computed once with a real name.
+ * A field the reader may not read. It is named in its place so the reader
+ * knows it exists, but nothing about its values is sent, not even whether
+ * they changed: `status` is always `unchanged`, it never appears in a
+ * changes-only comparison, and the comparison is marked `incomplete`.
+ *
+ * A new member of the {@link FieldDiff} union: a consumer that switches over
+ * `kind` exhaustively adds a `hidden` case (or a default) when it upgrades.
+ *
+ * @experimental
+ */
+export interface HiddenFieldDiff extends FieldDiffBase {
+  kind: "hidden";
+  status: "unchanged";
+  reason: "no-access";
+}
+
+/**
+ * The naming every emitted node carries (its key, labels, place and type),
+ * computed once with a real name.
  * Exported so the per-kind builders that live in their own modules take the
  * same shape rather than each declaring one: three declarations of one shape
  * agree today and drift silently afterwards.
@@ -187,6 +254,8 @@ export interface UnknownFieldDiff {
 export interface NodeMeta {
   name: string;
   label: string;
+  declaredLabel: string | null;
+  path: DiffPathSegment[];
   type: string;
 }
 
@@ -277,6 +346,7 @@ export type FieldDiff =
   | ListFieldDiff
   | RichTextFieldDiff
   | SourceFieldDiff
+  | HiddenFieldDiff
   | UnknownFieldDiff;
 
 /** The full comparison of version `from` against version `to`. */
@@ -285,7 +355,29 @@ export interface VersionDiff {
   to: number;
   /** The (single) locale both snapshots belong to; null for unlocalized docs. */
   locale: string | null;
-  /** True when any field node is not "unchanged". */
+  /**
+   * True when any field node is not "unchanged". Speaks only for the fields
+   * the reader may read: see `incomplete`.
+   */
   hasChanges: boolean;
+  /**
+   * The baseline the server resolved `from` with, when the request named one
+   * (or took the default) instead of an explicit pair.
+   *
+   * `replaces` names the version the baseline named instead, when retention
+   * had removed it ("the version you last looked at was removed; comparing
+   * with the nearest older one").
+   *
+   * @experimental
+   */
+  baseline?: { name: string; versionNo: number; replaces?: number };
+  /**
+   * True when fields were withheld from the reader. Their changes cannot be
+   * shown, so `hasChanges: false` then means only that nothing the reader may
+   * read changed, never that the versions are the same.
+   *
+   * @experimental
+   */
+  incomplete?: boolean;
   fields: FieldDiff[];
 }

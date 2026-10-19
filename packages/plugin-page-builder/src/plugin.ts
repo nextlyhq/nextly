@@ -25,6 +25,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
@@ -52,7 +53,7 @@ import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageIndex } from "./component-usage";
 import type { CompositionSetup } from "./fields/blocks-composition";
-import { blocksFieldType } from "./fields/blocksField";
+import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
@@ -62,6 +63,7 @@ import {
   patternLibraryRoute,
   type ComponentStore,
 } from "./library-route";
+import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
@@ -898,6 +900,24 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
             `[page-builder] a component save was refused because it would break ${String(broken.hosts.length)} of the documents that place it`,
             { componentId: broken.componentId, hosts: broken.hosts }
           ),
+        onHostsStillBroken: found =>
+          ctx.logger.warn(
+            `[page-builder] a component save left ${String(found.hosts.length)} document(s) that already break a lock inside it no worse; they need repairing where they are stored`,
+            { componentId: found.componentId, hosts: found.hosts }
+          ),
+        onLockedExposures: found =>
+          ctx.logger.warn(
+            `[page-builder] a component exposes ${String(found.exposures.length)} field(s) a contentOnly lock holds; placements cannot change them. Remove each exposure, or loosen the lock on its slot.`,
+            {
+              componentId: found.componentId,
+              exposures: found.exposures.map(entry => ({
+                id: entry.exposureId,
+                label: entry.label,
+                slot: entry.slot,
+                holder: entry.holderType,
+              })),
+            }
+          ),
       };
 
       registerClassUsageMaintenance({
@@ -934,6 +954,10 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
       registerReadinessNotice(ctx, opts);
+      // A blocks field below the top level has no Page Builder to open, and the
+      // operator should learn that from the log before an author meets it in
+      // the form.
+      warnNestedBlocksFields(ctx.config, message => ctx.logger.warn(message));
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no
@@ -1135,6 +1159,17 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // with no design entry, so grouping them elsewhere would mean widening
         // that list — a change to the admin's navigation model, and a larger
         // question than where three links go.
+        // The editor is a full-screen view of the document, offered wherever a
+        // blocks field is used — including collections the Schema Builder adds
+        // later — and opened by the field's card at that address.
+        documentViews: [
+          {
+            path: BUILDER_VIEW_PATH,
+            fieldType: BLOCKS_TYPE,
+            component: BUILDER_VIEW_COMPONENT,
+            label: "Page Builder",
+          },
+        ],
         menu: [
           {
             label: "Patterns",

@@ -87,6 +87,7 @@ import {
   createAccessNamespace,
   createApiKeysNamespace,
   createJobsNamespace,
+  createNoticesNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
   createEmailNamespace,
@@ -101,6 +102,7 @@ import {
   type AccessNamespace,
   type ApiKeysNamespace,
   type JobsNamespace,
+  type NoticesNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
   type EmailNamespace,
@@ -267,6 +269,8 @@ export class Nextly implements NextlyContext {
   public readonly apiKeys: ApiKeysNamespace;
   public readonly jobs: JobsNamespace;
   public readonly releases: ReleasesNamespace;
+  /** @experimental A person's own notices. */
+  public readonly notices: NoticesNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
 
@@ -296,6 +300,7 @@ export class Nextly implements NextlyContext {
     this.apiKeys = createApiKeysNamespace(this);
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
+    this.notices = createNoticesNamespace();
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -911,24 +916,39 @@ export const nextly = {
       requireNextly().principals.byId(kind, id),
   },
 
-  releases: {
-    create: (args: Parameters<ReleasesNamespace["create"]>[0]) =>
-      requireNextly().releases.create(args),
-    find: (args?: Parameters<ReleasesNamespace["find"]>[0]) =>
-      requireNextly().releases.find(args),
-    findByID: (args: Parameters<ReleasesNamespace["findByID"]>[0]) =>
-      requireNextly().releases.findByID(args),
-    addMember: (args: Parameters<ReleasesNamespace["addMember"]>[0]) =>
-      requireNextly().releases.addMember(args),
-    removeMember: (args: Parameters<ReleasesNamespace["removeMember"]>[0]) =>
-      requireNextly().releases.removeMember(args),
-    listMembers: (args: Parameters<ReleasesNamespace["listMembers"]>[0]) =>
-      requireNextly().releases.listMembers(args),
-    schedule: (args: Parameters<ReleasesNamespace["schedule"]>[0]) =>
-      requireNextly().releases.schedule(args),
-    cancel: (args: Parameters<ReleasesNamespace["cancel"]>[0]) =>
-      requireNextly().releases.cancel(args),
+  notices: {
+    find: (args: Parameters<NoticesNamespace["find"]>[0]) =>
+      requireNextly().notices.find(args),
+    count: (args: Parameters<NoticesNamespace["count"]>[0]) =>
+      requireNextly().notices.count(args),
+    markRead: (args: Parameters<NoticesNamespace["markRead"]>[0]) =>
+      requireNextly().notices.markRead(args),
   },
+
+  // Checked against the namespace's own type, so a method added there and
+  // not delegated here is a compile error rather than a gap a caller finds.
+  releases: {
+    create: args => requireNextly().releases.create(args),
+    // Optional, as the namespace declares them: `satisfies` keeps an arrow's
+    // own parameter list, so a bare `args =>` would require an argument.
+    find: (args?) => requireNextly().releases.find(args),
+    count: (args?) => requireNextly().releases.count(args),
+    calendar: args => requireNextly().releases.calendar(args),
+    findByID: args => requireNextly().releases.findByID(args),
+    capabilities: args => requireNextly().releases.capabilities(args),
+    blockingReasons: args => requireNextly().releases.blockingReasons(args),
+    readiness: args => requireNextly().releases.readiness(args),
+    addMember: args => requireNextly().releases.addMember(args),
+    removeMember: args => requireNextly().releases.removeMember(args),
+    changeMemberAction: args =>
+      requireNextly().releases.changeMemberAction(args),
+    listMembers: args => requireNextly().releases.listMembers(args),
+    schedule: args => requireNextly().releases.schedule(args),
+    cancel: args => requireNextly().releases.cancel(args),
+    publishNow: args => requireNextly().releases.publishNow(args),
+    update: args => requireNextly().releases.update(args),
+    delete: args => requireNextly().releases.delete(args),
+  } satisfies ReleasesNamespace,
 
   users: {
     find: (args?: FindUsersArgs) => requireNextly().users.find(args),

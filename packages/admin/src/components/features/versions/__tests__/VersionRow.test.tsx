@@ -36,14 +36,33 @@ describe("VersionRow", () => {
     expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
   });
 
-  it("reports an unattributed version rather than leaving it blank", () => {
-    // A system write records no author. Blank space would read as a failed
-    // lookup rather than as nobody having signed the change.
+  it("says a version's author was not recorded, rather than guessing or leaving it blank", () => {
+    // A version written before authors were recorded, or by a write that
+    // carried no person, has none. Blank space would read as a failed lookup,
+    // and "Unknown" as someone nobody could identify.
     render(
-      <VersionRow version={version({ author: null })} onSelect={vi.fn()} />
+      <VersionRow
+        version={version({ author: null, createdBy: null })}
+        onSelect={vi.fn()}
+      />
     );
 
-    expect(screen.getByText("Unknown author")).toBeInTheDocument();
+    expect(screen.getByText("Author not recorded")).toBeInTheDocument();
+    expect(screen.queryByText(/Unknown/)).not.toBeInTheDocument();
+  });
+
+  it("says an author who was recorded but cannot be named is unavailable", () => {
+    // The version names a user who has since been deleted, or whose lookup
+    // failed: an author WAS recorded, so "not recorded" would be untrue.
+    render(
+      <VersionRow
+        version={version({ author: null, createdBy: "u1" })}
+        onSelect={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("Author unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Author not recorded")).not.toBeInTheDocument();
   });
 
   it("names the version in its accessible label", () => {

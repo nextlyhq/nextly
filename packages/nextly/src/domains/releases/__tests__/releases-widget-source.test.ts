@@ -41,7 +41,7 @@ const row = {
 beforeEach(() => {
   vi.clearAllMocks();
   has.mockReturnValue(true);
-  find.mockResolvedValue([row]);
+  find.mockResolvedValue({ rows: [row], total: 1, page: 1, limit: 50 });
   clearSources();
   clearSystemResolvers();
   registerReleasesWidgetSource();

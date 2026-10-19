@@ -252,7 +252,13 @@ function sqlForOp(op: Operation, dialect: SupportedDialect): string {
   return generateSQL(op, dialect);
 }
 
-async function runRaw(
+/**
+ * Run one raw SQL statement in the call pattern its dialect needs: SQLite's
+ * Drizzle database (better-sqlite3) exposes only a synchronous `.run()`, while
+ * PostgreSQL's and MySQL's expose an async `.execute()`. Calling `.execute()` on
+ * SQLite throws, so DDL written that way never runs there.
+ */
+export async function runRaw(
   txOrDb: unknown,
   sqlString: string,
   dialect: SupportedDialect

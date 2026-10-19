@@ -3,8 +3,6 @@ title: Plugin API Reference
 description: The public plugin surface re-exported by @nextlyhq/plugin-sdk.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** the `/db` entry point; `ChallengeViewProps` and `ChallengeResolveResult`; `capabilities`, `provides`, `requires`, `schemaVersion`, `onReady`, `onInstall` and `onUninstall`; the route options `rateLimit`, `rawBody`, `csrf` and `noStore`; `settings`, `settingsPermission`, `audit` and `hookPoints`; the typed `ctx.db`, `ctx.dialect`, `ctx.auth`, `ctx.settings`, `ctx.fetch`, `ctx.audit` and `config: PluginConfig`; the event-name rule; and `pluginConsent`. On 0.0.2-alpha.66 `ctx.db` is the Drizzle instance itself.
-
 > **Alpha (`0.x`) — pin your versions.** `@nextlyhq/plugin-sdk` **is** the stability boundary — if it isn't exported there, it isn't public. Most of this surface is now `@public` (semver-protected); some is still `@experimental`. See [API stability](/docs/plugins/stability) for the exact ledger.
 
 ## Entry points
@@ -68,7 +66,8 @@ interface PluginContributions {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
     pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
     settings?: { component: ComponentPath };
-    views?: Record<string, PluginCollectionView>; // list/edit/before*/after* by collection slug
+    views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, by collection slug
+    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a top-level field of one of this plugin's field types
     widgets?: PluginAdminWidget[]; // rendered on the dashboard; @experimental
   };
 }
@@ -113,8 +112,6 @@ interface PluginContext {
 ```
 
 ### `PluginConfig`
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 ```ts
 type PluginConfig = FrozenCopy<
@@ -177,8 +174,6 @@ spreading the array (`[...collections]`) is not enough, since each entry in it
 is still frozen and still typed readonly.
 
 ### Transactions
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 ```ts
 ctx.db.transaction(work: (tx: PluginTransaction) => Promise<T>): Promise<T>;
@@ -251,7 +246,7 @@ registerKnownPlugin(packagePrefix, async () => {
 });
 ```
 
-When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you — import it once in the app and your `contributes.admin` components load with no manual wiring.
+When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you, with a `plugin-admin-components.generated.ts` listing its paths. The app's admin page imports the first, and its server layout checks the second with `checkAdminComponents` from `nextly/runtime`, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
 
 ## Testing (`/testing`)
 
@@ -543,8 +538,6 @@ See the [author guide](/docs/plugins/author-guide) for the full workflow and the
 
 ## Runtime surfaces added for stateful plugins
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 `ctx.settings` is present only when the plugin declares
 `contributes.settings`, `ctx.fetch` only with a non-empty
 `capabilities.net.outbound`, and `ctx.audit` only with `contributes.audit`, so
@@ -686,3 +679,11 @@ plugins uninstall` calls `onUninstall` before its DOWN migrations, with
 `{ keepData }`. Write both so they can run again: an install can be retried
 after a failure part-way through. Work that must happen on every start, rather
 than once per install, belongs in `init`.
+
+Before either command shuts the runtime down, it waits for the event handlers
+the hook set off, including those of the follow-up events they emit, for at
+most 30 seconds. A handler is waited for while the promise it returns is
+pending, so return the promise of work that must finish: work left to a timer,
+or to a promise the handler does not return, is not waited for. When that work
+is still running at the limit, the command stops; an uninstall stops before its
+DOWN migrations, and running it again finishes it.

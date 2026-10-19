@@ -378,6 +378,19 @@ export class SchemaEventsRepository {
     return prunable;
   }
 
+  /**
+   * Every `plugin_lifecycle` row, which `plugin-lifecycle-state.ts` reads the
+   * newest of per plugin.
+   */
+  async listPluginLifecycle(): Promise<SchemaEventRow[]> {
+    return (await this.db
+      .select()
+      .from(this.table)
+      .where(
+        sql`event_type = 'plugin_lifecycle'`
+      )) as unknown as SchemaEventRow[];
+  }
+
   /** All `file_apply` rows, for `nextly migrate:status` (spec §4.3.1). */
   async listFileApplies(): Promise<SchemaEventRow[]> {
     return (await this.db

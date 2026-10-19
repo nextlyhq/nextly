@@ -173,8 +173,18 @@ export const STOPPED_SHORT: readonly string[] = [
 export interface ReadComposition {
   /** The last composition, with every placement the reads could supply expanded. */
   readonly composition: ResolvedComposition;
-  /** Whether a reference loop closed in any round. */
-  readonly loopClosed: boolean;
+  /**
+   * Each reference loop the composition closed, identified by the component
+   * it closes at and the placement it is cut at. Empty when none did.
+   *
+   * By placement, not by component alone: two loops that close at the same
+   * component are distinct loops, and a caller comparing two compositions has
+   * to tell a new one from one that was already there. The composed ids are
+   * the resolver's, derived from each placement's path, so one loop has one
+   * identity in both compositions. A loop closed in a round whose expansion was
+   * later abandoned keeps only its component, which is all that round left.
+   */
+  readonly loopsClosed: ReadonlySet<string>;
   /** Whether a limit ended the descent somewhere. */
   readonly stoppedShort: boolean;
   /**
@@ -209,11 +219,15 @@ export async function composeWithReads(args: {
     has: (id: string) => library.held.has(id),
     get: (id: string) => library.held.get(id) as BlockDocument | undefined,
   };
-  const seen = { loopClosed: false, stoppedShort: false, incomplete: false };
+  const seen = {
+    loopsClosed: new Set<string>(),
+    stoppedShort: false,
+    incomplete: false,
+  };
   let composition = resolveComponentInstances(host, lookup, { limits, work });
   for (let round = 0; ; round += 1) {
     noteRound(composition, seen);
-    if (seen.loopClosed && args.stopAtLoop === true) break;
+    if (seen.loopsClosed.size > 0 && args.stopAtLoop === true) break;
 
     const wanted = stillWanted(composition, library);
     // Nothing further to supply: every placement this document reaches was
@@ -241,9 +255,15 @@ export async function composeWithReads(args: {
  */
 function noteRound(
   composition: ResolvedComposition,
-  seen: { loopClosed: boolean; stoppedShort: boolean }
+  seen: { loopsClosed: Set<string>; stoppedShort: boolean }
 ): void {
-  if (composition.loopsClosed.length > 0) seen.loopClosed = true;
+  const cut = composition.unresolved.filter(one => one.reason === "cycle");
+  for (const one of cut) {
+    seen.loopsClosed.add(`${one.componentId}\u0000${one.instanceId}`);
+  }
+  for (const id of composition.loopsClosed) {
+    if (!cut.some(one => one.componentId === id)) seen.loopsClosed.add(id);
+  }
   if (composition.unresolved.some(one => STOPPED_SHORT.includes(one.reason))) {
     seen.stoppedShort = true;
   }

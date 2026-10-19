@@ -14,8 +14,20 @@ import { describe, expect, it } from "vitest";
 
 import { sourceNode, type SourceSide } from "../source-node";
 
-const jsonMeta = { name: "meta", label: "Meta", type: "json" };
-const codeMeta = { name: "snippet", label: "Snippet", type: "code" };
+const jsonMeta = {
+  name: "meta",
+  label: "Meta",
+  declaredLabel: "Meta",
+  path: [],
+  type: "json",
+};
+const codeMeta = {
+  name: "snippet",
+  label: "Snippet",
+  declaredLabel: "Snippet",
+  path: [],
+  type: "code",
+};
 
 /** A side that held this value. */
 const at = (value: unknown): SourceSide => ({ present: true, value });
