@@ -227,7 +227,11 @@ function mergeField(
     regions: regions(hunks(b, t), hunks(b, m)).map(region => {
       const theirLines = sideLines(b, t, region.theirs, region);
       const myLines = sideLines(b, m, region.mine, region);
-      const sameEdit = theirLines.join("\n") === myLines.join("\n");
+      // Compared line by line: joined, an added blank line reads the same as
+      // nothing added.
+      const sameEdit =
+        theirLines.length === myLines.length &&
+        theirLines.every((line, i) => line === myLines[i]);
       // Only a region the owner changed is offered, and not when the site
       // already made exactly the same edit.
       const change: OwnerChange | null =

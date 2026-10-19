@@ -176,6 +176,17 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         });
       });
 
+      it("resets a row the boot hasn't brought up to its owner's version yet", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        const starting = store.newService();
+        starting.configureOwnership({
+          plugins: [{ name: ORDERS, templates: [shipped(V2)] }],
+        });
+        const reset = await starting.resetTemplate(id, ACTOR);
+        expect(reset.htmlContent).toBe(V2);
+      });
+
       it("offers the owner's changes for an edit made before the boot reconciled the template", async () => {
         const first = await boot(V1);
         const id = (await shippedTemplate(first)).id;

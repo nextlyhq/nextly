@@ -1732,6 +1732,8 @@ function parseEmailTemplateRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // Every email template route goes to the same service with the same
+  // params; the tables only differ in operation and method.
   const parsed = (route: EmailTemplateRoute | undefined) =>
     route
       ? { service: "emailTemplates" as const, ...route, routeParams }

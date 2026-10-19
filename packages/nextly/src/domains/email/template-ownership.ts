@@ -416,7 +416,9 @@ export function sameStoredValue(a: unknown, b: unknown): boolean {
 function stable(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
   if (value && typeof value === "object") {
+    // A property set to undefined is left out, as JSON storage leaves it out.
     return `{${Object.keys(value)
+      .filter(key => (value as Record<string, unknown>)[key] !== undefined)
       .sort()
       .map(
         key =>

@@ -864,7 +864,12 @@ export class EmailTemplateService extends BaseService {
     const row = await this.getRow(id);
     const record = this.toRecord(row);
     const entry = this.ownedEntry(record);
-    if (!record.overridden) return record;
+    // Nothing to reset, unless the row still holds an earlier owner version
+    // the background reconciliation hasn't reached: Reset brings it up to the
+    // owner's current one now.
+    if (!record.overridden && sameVersion(versionOf(row), entry.version)) {
+      return record;
+    }
 
     // The owner's version and details; the site's settings (name, layout use,
     // provider, From, Reply-To, attachments, active) stay as they are.
@@ -1207,7 +1212,17 @@ export class EmailTemplateService extends BaseService {
           ...storedOwner(
             plugin ? { kind: "plugin", name: plugin } : { kind: "site" }
           ),
-          overridden: false,
+          // A slug alone can't prove a leftover is the plugin's unedited copy
+          // (the site may have made one with that slug), so it is kept as an
+          // override of itself: if the plugin returns, its version is offered
+          // for review rather than written over the row.
+          ...(plugin
+            ? {
+                overridden: true,
+                baseVersion: { ...versionOf(row), details: detailsOf(row) },
+                baseDigest: versionDigest(versionOf(row)),
+              }
+            : { overridden: false }),
         })
         // Conditioned on the row as read: an override saved in between stays.
         .where(this.unchanged(row));

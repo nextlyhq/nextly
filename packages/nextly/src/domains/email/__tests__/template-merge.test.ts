@@ -167,6 +167,14 @@ describe("applyOwnerChoices", () => {
     expect(result).toEqual(mine);
   });
 
+  it("offers an added blank line", () => {
+    const base = { ...version("<p>x</p>"), plainTextContent: "a\nb" };
+    const theirs = { ...base, plainTextContent: "a\n\nb" };
+    const changes = ownerChanges(base, theirs, base);
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ theirs: [""], conflict: false });
+  });
+
   it("compares very long versions without a table that grows with their square", () => {
     // 20,000 lines on each side, every one different in the middle: an LCS
     // table would need 400 million cells. The shared first and last lines

@@ -206,6 +206,34 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         });
       });
 
+      it("keeps a leftover's content when its plugin comes back, offering the plugin's version for review", async () => {
+        const back = store.newService();
+        back.configureOwnership({
+          plugins: [
+            {
+              name: "@nextlyhq/plugin-accounts",
+              templates: [
+                {
+                  slug: "accounts-reset-password",
+                  name: "Reset a password",
+                  subject: "Reset your password",
+                  htmlContent: "<p>Reset it here: {{link}}</p>",
+                },
+              ],
+            },
+          ],
+        });
+        await back.ensureBuiltInTemplates();
+        const template = await back.getTemplateBySlug(
+          "accounts-reset-password"
+        );
+        expect(template).toMatchObject({
+          htmlContent: "<p>{{link}}</p>",
+          overridden: true,
+          ownerChanged: true,
+        });
+      });
+
       it("gives everything else to the site", async () => {
         const own = await get("newsletter-welcome");
         expect(own.owner).toEqual({ kind: "site" });

@@ -10,6 +10,7 @@ import {
   buildTemplateOwnerRegistry,
   isProtectedOwner,
   ownerOf,
+  sameStoredValue,
   sameVersion,
   versionDigest,
 } from "../template-ownership";
@@ -57,6 +58,16 @@ describe("sameVersion", () => {
     expect(
       sameVersion(version("<p/>", { preheader: "" }), version("<p/>"))
     ).toBe(true);
+  });
+
+  it("reads a property set to undefined as JSON storage does, as absent", () => {
+    const declared = [{ name: "number", description: undefined }];
+    const stored = JSON.parse(JSON.stringify(declared)) as unknown;
+    expect(sameStoredValue(declared, stored)).toBe(true);
+    // The control: a value JSON keeps still counts.
+    expect(
+      sameStoredValue([{ name: "number", description: null }], stored)
+    ).toBe(false);
   });
 
   it("sees a real change", () => {
