@@ -763,6 +763,52 @@ describe.each(getConfiguredTestDialects())(
       expect(await stoppedNotices(t, arranged)).toBe(2);
     });
 
+    it("tells each owner once when a component is blocked, and nobody when one is published", async () => {
+      // The two moves of a whole component share one transition; only the
+      // stop records a notice. Blocked first, so the repository already knows
+      // the notices table exists when the publish runs.
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const component = async () => {
+        const arranged: Pick<Arranged, "releaseId" | "owner">[] = [];
+        for (let i = 0; i < 2; i += 1) {
+          const owner = await seedLiveAuthor(t);
+          const release = await repo.createRelease({
+            title: `Part ${i}`,
+            createdBy: owner,
+          });
+          await scheduleAsItStands(repo, release.id, PAST, "UTC");
+          arranged.push({ releaseId: release.id, owner });
+        }
+        const rows = await repo.findReleases({
+          ids: arranged.map(a => a.releaseId),
+        });
+        return {
+          arranged,
+          entries: rows.map(row => ({
+            id: row.id,
+            revision: row.revision,
+            scheduledAt: row.scheduledAt ?? PAST,
+          })),
+        };
+      };
+
+      const blocked = await component();
+      expect(await repo.blockReleases(blocked.entries)).toHaveLength(2);
+      for (const arranged of blocked.arranged) {
+        expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+        expect(await stoppedNotices(t, arranged)).toBe(1);
+      }
+      const published = await component();
+      expect(
+        await repo.markReleasesPublished(published.entries, new Date())
+      ).toHaveLength(2);
+      for (const arranged of published.arranged) {
+        expect(await stateOf(t, arranged.releaseId)).toBe("published");
+        expect(await stoppedNotices(t, arranged)).toBe(0);
+      }
+    });
+
     it("tells the owner once per stop when the drain stops it", async () => {
       const t = await boot(dialect);
       const owner = await seedLiveAuthor(t);
