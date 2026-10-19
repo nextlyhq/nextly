@@ -308,7 +308,7 @@ The deprecated `defaultSkipAdminApi`, once the default `skip`, is still exported
 apiKeys?: { rateLimit?: { requestsPerHour?: number; windowMs?: number } };
 ```
 
-Per-key rate limit applied when a request authenticates with an API key (`Authorization: Bearer nx_live_...`). The global [`rateLimit`](#ratelimit) counts a request whose key resolves against this budget, once, rather than against its address. Session-cookie requests spend the global limit's session budget instead. Omitting this block falls back to built-in defaults.
+Per-key rate limit applied when a request authenticates with an API key (`Authorization: Bearer nx_live_...`). The global [`rateLimit`](#ratelimit) counts a request whose key resolves against this budget, once, rather than against its address. Session-cookie requests spend the global limit's session budget instead. Omitting this block falls back to built-in defaults. A key whose budget is spent is still looked up on each request before it is refused with `429`, so a client holding one costs a key lookup per request until its window resets.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
