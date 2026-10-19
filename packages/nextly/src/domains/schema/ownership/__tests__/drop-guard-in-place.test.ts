@@ -63,6 +63,18 @@ const elementOwners: OwnerRecord[] = [
     elementKind: "check",
     elementName: "chk_status",
   }),
+  // A plugin index named pk_idx on the plugin's table.
+  record({
+    tableName: "fx__notes",
+    elementKind: "index",
+    elementName: "pk_idx",
+  }),
+  // A check the plugin named `check`, on the app's table.
+  record({
+    tableName: "app_notes",
+    elementKind: "check",
+    elementName: "check",
+  }),
   // A partition's index, the plugin's, on the plugin's table.
   record({
     tableName: "fx__notes",
@@ -393,6 +405,365 @@ describe("a form the guard cannot read, on another owner's table, is refused", (
   it("keeps an unmodelled clause on the app's own table allowed", () => {
     expect(() =>
       guard(["ALTER TABLE app_notes DISABLE TRIGGER ALL"], "app", "postgresql")
+    ).not.toThrow();
+  });
+});
+
+describe("a change to a column or constraint the same migration adds", () => {
+  it("allows changing a column the same migration added to a plugin table", () => {
+    expect(() =>
+      guard(
+        [
+          "ALTER TABLE fx__notes ADD COLUMN app_extra int",
+          "ALTER TABLE fx__notes ALTER COLUMN app_extra SET NOT NULL",
+        ],
+        "app",
+        "postgresql"
+      )
+    ).not.toThrow();
+  });
+
+  it("allows validating a constraint the same migration added to a plugin table", () => {
+    expect(() =>
+      guard(
+        [
+          "ALTER TABLE fx__notes ADD CONSTRAINT app_chk CHECK (true) NOT VALID",
+          "ALTER TABLE fx__notes VALIDATE CONSTRAINT app_chk",
+        ],
+        "app",
+        "postgresql"
+      )
+    ).not.toThrow();
+  });
+
+  it("still refuses a change to a plugin column the migration did not add", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD COLUMN app_extra int",
+            "ALTER TABLE fx__notes ALTER COLUMN body SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+});
+
+describe("the rare forms are refused by design", () => {
+  it("refuses ALTER TABLE that names an index, with a message to use ALTER INDEX", () => {
+    expect(() =>
+      assertNoForeignDrops({
+        statements: ["ALTER TABLE idx_status SET TABLESPACE other"],
+        stream: "app",
+        owners,
+        elementOwners,
+        dialect: "postgresql",
+        source: "0010_under_test",
+        liveTables: new Set([...owners.keys(), "users"]),
+        liveIndexTables: new Map([["idx_status", "fx__notes"]]),
+      })
+    ).toThrow();
+  });
+
+  it.each<string>([
+    "ALTER TABLE app_notes ALTER KEY idx_status IGNORED",
+    "ALTER TABLE app_notes ALTER KEY IF EXISTS idx_status IGNORED",
+  ])("refuses a MariaDB ALTER KEY on a plugin index: %s", sql => {
+    expect(refusal(() => guard([sql], "app", "mysql"))).toMatchObject({
+      element: "idx_status",
+      belongsTo: "plugin:fx",
+    });
+  });
+
+  it("leaves the app's own index's ALTER KEY alone", () => {
+    expect(() =>
+      guard(["ALTER TABLE app_notes ALTER KEY app_idx IGNORED"], "app", "mysql")
+    ).not.toThrow();
+  });
+});
+
+describe("the review of the same-migration follow-up", () => {
+  it("does not credit a conditional add that may be a no-op on an existing column", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD COLUMN IF NOT EXISTS body int",
+            "ALTER TABLE fx__notes ALTER COLUMN body SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+
+  it("does not record a MySQL FULLTEXT index as an added column", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD FULLTEXT INDEX ft (body)",
+            "ALTER TABLE fx__notes ALTER COLUMN fulltext SET NOT NULL",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "fulltext" });
+  });
+
+  it("names an index an ALTER TABLE changes, so production can look it up", () => {
+    expect(
+      indexesNamedWithoutTable(
+        ["ALTER TABLE idx_body SET TABLESPACE other"],
+        "postgresql"
+      )
+    ).toContain("idx_body");
+  });
+
+  it("refuses every ALTER TABLE form that names an index", () => {
+    expect(() =>
+      assertNoForeignDrops({
+        statements: ["ALTER TABLE idx_status RENAME TO other"],
+        stream: "app",
+        owners,
+        elementOwners,
+        dialect: "postgresql",
+        source: "0010_under_test",
+        liveTables: new Set([...owners.keys(), "users"]),
+        liveIndexTables: new Map([["idx_status", "fx__notes"]]),
+      })
+    ).toThrow();
+  });
+});
+
+describe("the review of the follow-up's credit for same-migration changes", () => {
+  it("does not credit a constraint whose kind differs from the index it unlocks", () => {
+    // The index's table is known from the live database, as in production.
+    expect(
+      refusal(() =>
+        assertNoForeignDrops({
+          statements: [
+            "ALTER TABLE app_notes ADD CONSTRAINT idx_status CHECK (true)",
+            "ALTER INDEX idx_status SET (fillfactor = 80)",
+          ],
+          stream: "app",
+          owners,
+          elementOwners,
+          dialect: "postgresql",
+          source: "0010_under_test",
+          liveTables: new Set([...owners.keys(), "users"]),
+          liveIndexTables: new Map([["idx_status", "app_notes"]]),
+        })
+      )
+    ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
+  });
+
+  it("does not credit a quoted column name that differs in case from the plugin's column", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            'ALTER TABLE fx__notes ADD COLUMN "Body" int',
+            "ALTER TABLE fx__notes ALTER COLUMN body SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+
+  it("does not credit a change that comes before the addition", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes MODIFY body varchar(40)",
+            "ALTER TABLE fx__notes ADD COLUMN body int",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+
+  it("does not credit an addition once the list changes name resolution", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD COLUMN app_extra int",
+            "SET search_path TO scratch",
+            "ALTER TABLE fx__notes ALTER COLUMN app_extra SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "app_extra" });
+  });
+
+  it("does not credit an anonymous MySQL constraint as one named by its keyword", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE app_notes ADD CONSTRAINT CHECK (status <> '')",
+            "ALTER TABLE app_notes ALTER CHECK check NOT ENFORCED",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ element: "check", belongsTo: "plugin:fx" });
+  });
+
+  it("refuses a storage change through a schema-qualified name it cannot model", () => {
+    expect(() =>
+      guard(
+        ["ALTER TABLE plugin_schema.idx_status SET TABLESPACE other"],
+        "app",
+        "postgresql"
+      )
+    ).toThrow();
+  });
+});
+
+describe("the review of d78f25b1a: credit that the database would not give", () => {
+  it("does not credit a MariaDB PRIMARY KEY whose symbol the database ignores", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD CONSTRAINT pk_idx PRIMARY KEY (id)",
+            "ALTER TABLE fx__notes ALTER KEY pk_idx IGNORED",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ element: "pk_idx", belongsTo: "plugin:fx" });
+  });
+
+  it("does not credit an addition inside a dollar-quoted body that may not run", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "DO $$ BEGIN ALTER TABLE fx__notes ADD COLUMN body int; EXCEPTION WHEN duplicate_column THEN NULL; END $$",
+            "ALTER TABLE fx__notes ALTER COLUMN body SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+});
+
+describe("the review of 905d9ce11: qualified targets, conditional adds and USING INDEX", () => {
+  it("refuses a rename through a schema-qualified name", () => {
+    expect(() =>
+      guard(
+        ["ALTER TABLE plugin_schema.idx_status RENAME TO other"],
+        "app",
+        "postgresql"
+      )
+    ).toThrow();
+  });
+
+  it("does not credit a conditional MariaDB constraint addition", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD CONSTRAINT pk_idx UNIQUE INDEX IF NOT EXISTS pk_idx (id)",
+            "ALTER TABLE fx__notes ALTER KEY pk_idx IGNORED",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ element: "pk_idx", belongsTo: "plugin:fx" });
+  });
+
+  it("judges an existing index that a constraint takes over with USING INDEX", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE app_notes ADD CONSTRAINT app_unique UNIQUE USING INDEX idx_status",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
+  });
+});
+
+describe("the review of 8fced47fc: named primary keys, routine bodies and MariaDB index names", () => {
+  it("judges an existing index taken over by a named PRIMARY KEY USING INDEX", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE app_notes ADD CONSTRAINT app_pk PRIMARY KEY USING INDEX idx_status",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
+  });
+
+  it("judges a USING INDEX takeover inside a routine body", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "DO $$ BEGIN ALTER TABLE app_notes ADD CONSTRAINT app_unique UNIQUE USING INDEX idx_status; END $$",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ element: "idx_status", belongsTo: "plugin:fx" });
+  });
+
+  it("does not credit a MariaDB constraint whose UNIQUE INDEX names a different index", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD CONSTRAINT pk_idx UNIQUE INDEX app_unique (id)",
+            "ALTER TABLE fx__notes ALTER KEY pk_idx IGNORED",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ element: "pk_idx", belongsTo: "plugin:fx" });
+  });
+});
+
+describe("the review of a3bfa3d64: a check expression is not read as index syntax", () => {
+  it("credits a check added with a column named key, so its later validation passes", () => {
+    expect(() =>
+      guard(
+        [
+          "ALTER TABLE fx__notes ADD CONSTRAINT app_chk CHECK (key IS NOT NULL) NOT VALID",
+          "ALTER TABLE fx__notes VALIDATE CONSTRAINT app_chk",
+        ],
+        "app",
+        "postgresql"
+      )
     ).not.toThrow();
   });
 });

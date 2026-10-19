@@ -83,12 +83,30 @@ export function setSearchParam(
   value: string | null,
   options?: { replace?: boolean }
 ): void {
+  setSearchParams({ [key]: value }, options);
+}
+
+/**
+ * Set several query parameters as ONE history entry, a `null` value removing
+ * its key: closing a panel that keeps two keys clears both in one step back,
+ * rather than leaving a half-closed state on the stack.
+ *
+ * No-ops when every value is already set.
+ */
+export function setSearchParams(
+  values: Readonly<Record<string, string | null>>,
+  options?: { replace?: boolean }
+): void {
   try {
     const url = new URL(window.location.href);
-    const current = url.searchParams.get(key);
-    if (current === value) return;
-    if (value === null) url.searchParams.delete(key);
-    else url.searchParams.set(key, value);
+    const entries = Object.entries(values);
+    if (entries.every(([key, value]) => url.searchParams.get(key) === value)) {
+      return;
+    }
+    for (const [key, value] of entries) {
+      if (value === null) url.searchParams.delete(key);
+      else url.searchParams.set(key, value);
+    }
 
     const next = `${url.pathname}${url.search}${url.hash}`;
     // The patched history methods in `useRouter` dispatch "locationchange"

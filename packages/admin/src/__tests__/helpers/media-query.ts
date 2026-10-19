@@ -18,9 +18,13 @@
 import { vi } from "vitest";
 
 /** Answer every media query with `matches`, for the current test. */
-export function answerMediaQueries(matches: boolean): void {
+export function answerMediaQueries(
+  matches: boolean | ((query: string) => boolean)
+): void {
   window.matchMedia = vi.fn((query: string) => ({
-    matches,
+    // One answer for every query, or each query answered on its own, for a
+    // window between two breakpoints.
+    matches: typeof matches === "function" ? matches(query) : matches,
     media: query,
     onchange: null,
     addEventListener: vi.fn(),

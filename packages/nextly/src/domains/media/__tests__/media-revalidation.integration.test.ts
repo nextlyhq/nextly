@@ -217,7 +217,14 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     expect(second.folderId).toBe(folder.id);
 
     flush.mockClear();
+    const warn = vi.spyOn(console, "warn");
     await unified.deleteFolder(folder.id, true, ctx);
+    // The search for files another item refers to ran on this dialect: a
+    // statement it cannot run leaves the files, and says so.
+    expect(
+      warn.mock.calls.map(args => args.map(String).join(" ")).join("\n")
+    ).not.toMatch(/could not check whether another item refers/);
+    warn.mockRestore();
 
     // Cleared first, so this cannot be satisfied by the uploads' own flushes.
     const tags = flushedTags(flush);

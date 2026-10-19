@@ -58,6 +58,7 @@ import {
   usePersistedState,
   usePersistedStringSet,
 } from "@admin/hooks/usePersistedState";
+import { copyableMediaUrl } from "@admin/lib/media-utils";
 import { cn } from "@admin/lib/utils";
 import type {
   Media,
@@ -768,7 +769,7 @@ export function MediaLibrary({
                   onEdit={handleEditMedia}
                   onDelete={(media: Media) => handleDeleteItem(media)}
                   onCopyUrl={(url: string) => {
-                    void navigator.clipboard.writeText(url);
+                    void navigator.clipboard.writeText(copyableMediaUrl(url));
                   }}
                   onDownload={(media: Media) => {
                     const a = document.createElement("a");
@@ -904,7 +905,7 @@ export function MediaLibrary({
             void handleDownload(m);
           }}
           onCopyUrl={url => {
-            void navigator.clipboard.writeText(url);
+            void navigator.clipboard.writeText(copyableMediaUrl(url));
             toast.success("URL copied to clipboard");
           }}
         />

@@ -56,9 +56,7 @@ describe("EntrySystemHeader version history", () => {
   it("offers history for a saved document", () => {
     renderHeader();
 
-    expect(
-      screen.getByRole("button", { name: "Version history" })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "History" })).toBeInTheDocument();
   });
 
   it("does not offer history for a document that was never saved", () => {
@@ -66,7 +64,7 @@ describe("EntrySystemHeader version history", () => {
     renderHeader({ mode: "create", entry: null });
 
     expect(
-      screen.queryByRole("button", { name: "Version history" })
+      screen.queryByRole("button", { name: "History" })
     ).not.toBeInTheDocument();
   });
 
@@ -74,7 +72,7 @@ describe("EntrySystemHeader version history", () => {
     renderHeader({ historyFields: undefined });
 
     expect(
-      screen.queryByRole("button", { name: "Version history" })
+      screen.queryByRole("button", { name: "History" })
     ).not.toBeInTheDocument();
   });
 
@@ -84,7 +82,7 @@ describe("EntrySystemHeader version history", () => {
     renderHeader({ historyEnabled: false });
 
     expect(
-      screen.queryByRole("button", { name: "Version history" })
+      screen.queryByRole("button", { name: "History" })
     ).not.toBeInTheDocument();
   });
 
@@ -93,9 +91,7 @@ describe("EntrySystemHeader version history", () => {
     // schema payload omits it.
     renderHeader({ historyEnabled: undefined });
 
-    expect(
-      screen.getByRole("button", { name: "Version history" })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "History" })).toBeInTheDocument();
   });
 
   it("addresses a collection entry by its id", () => {

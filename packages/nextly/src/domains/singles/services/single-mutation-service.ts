@@ -22,7 +22,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { actorForWrite } from "../../../auth/request-actor";
+import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -78,6 +78,11 @@ import {
 import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
+import {
+  recordSaveEvent,
+  recordTransitionEvents,
+  recordWriteEvent,
+} from "../../content-events/write-event";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
@@ -307,6 +312,9 @@ export class SingleMutationService extends BaseService {
      * author never opened. Ignored for an unlocalized Single, which has one.
      */
     locale?: string | null;
+    /** Who discarded it, for the Single's history. */
+    actor?: RequestActor;
+    user?: UserContext;
   }): Promise<void> {
     const singleMeta = await resolveSingleForRequest(
       this.adapter,
@@ -334,18 +342,33 @@ export class SingleMutationService extends BaseService {
       // Serialize with concurrent draft-save upserts, which lock this same row
       // before writing the sidecar.
       await tx.lockRow(singleMeta.tableName, entryId);
-      await new VersionsRepository(tx).deleteWorkingDraft(
+      const draftLocale = workingDraftLocale({
+        documentLocalized: singleMeta.localized === true,
+        requestLocale: params.locale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      });
+      const removed = await new VersionsRepository(tx).deleteWorkingDraft(
         {
           scopeKind: "single",
           scopeSlug: params.slug,
           entryId,
         },
-        workingDraftLocale({
-          documentLocalized: singleMeta.localized === true,
-          requestLocale: params.locale ?? null,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        })
+        draftLocale
       );
+      // In the Single's history only when there was a draft to discard.
+      if (removed > 0) {
+        await recordWriteEvent(
+          tx,
+          { adapter: this.adapter },
+          {
+            subject: { kind: "single", slug: params.slug, id: entryId },
+            kind: "draftDiscarded",
+            actor: actorForWrite(params.actor ?? null, params.user),
+            personName: params.user?.name ?? null,
+            ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+          }
+        );
+      }
     });
   }
 
@@ -412,6 +435,31 @@ export class SingleMutationService extends BaseService {
       }),
       configuredLocales: this.localization?.locales.map(l => l.code) ?? [],
     });
+  }
+
+  /** A save in this Single's history; see `recordSaveEvent`. */
+  private recordSingleSave(
+    tx: TransactionContext,
+    slug: string,
+    id: string,
+    options: UpdateSingleOptions,
+    save: {
+      locale: string | null;
+      toState: string | null;
+      versionNo: number | null;
+    }
+  ): Promise<void> {
+    return recordSaveEvent(
+      tx,
+      { adapter: this.adapter },
+      {
+        subject: { kind: "single", slug, id },
+        actor: actorForWrite(options.actor ?? null, options.user),
+        personName: options.user?.name ?? null,
+        ...save,
+        sourceVersionNo: options.sourceVersionNo ?? null,
+      }
+    );
   }
 
   /**
@@ -1252,6 +1300,20 @@ export class SingleMutationService extends BaseService {
                 // exists; track that this transaction actually seeded so the
                 // snapshot overlay records defaults that were really written.
                 didSeedCompanionDefaults = seedCompanionExists;
+                // The Single's first history event: this write created its
+                // document.
+                await recordWriteEvent(
+                  tx,
+                  { adapter: this.adapter },
+                  {
+                    subject: { kind: "single", slug, id: existingDoc.id },
+                    kind: "created",
+                    actor: actorForWrite(options.actor ?? null, options.user),
+                    personName: options.user?.name ?? null,
+                    toState:
+                      (existingDoc as { status?: string }).status ?? null,
+                  }
+                );
               }
             }
             // Unreachable: the pre-transaction step always resolves `existingDoc`
@@ -2466,14 +2528,23 @@ export class SingleMutationService extends BaseService {
               }
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.
-              await storeDraftSave(tx, this.versionCapture, {
-                ref: draftRef,
+              const { versionNo: draftVersionNo } = await storeDraftSave(
+                tx,
+                this.versionCapture,
+                {
+                  ref: draftRef,
+                  locale: singleDraftLocale,
+                  snapshot: pending,
+                  replaces: base,
+                  createdBy: options.user?.id ?? null,
+                  sourceVersionNo: options.sourceVersionNo ?? null,
+                  maxPerDoc: singleMeta.versions?.maxPerDoc,
+                }
+              );
+              await this.recordSingleSave(tx, slug, existingDoc.id, options, {
                 locale: singleDraftLocale,
-                snapshot: pending,
-                replaces: base,
-                createdBy: options.user?.id ?? null,
-                sourceVersionNo: options.sourceVersionNo ?? null,
-                maxPerDoc: singleMeta.versions?.maxPerDoc,
+                toState: "draft",
+                versionNo: draftVersionNo,
               });
             }
 
@@ -2748,7 +2819,16 @@ export class SingleMutationService extends BaseService {
                 parentRow.status = dataLocaleStatus;
               }
 
-              await captureInTx(tx, this.versionCapture, {
+              const savedStatus =
+                singleHasStatus && isLocaleSpecificSnapshot
+                  ? dataLocaleStatus
+                  : ((updatePayload as { status?: unknown }).status ??
+                    companionStatus ??
+                    (parentRow as { status?: unknown }).status);
+              const savedLocale = isLocaleSpecificSnapshot
+                ? (snapshotLocale ?? null)
+                : null;
+              const { versionNo } = await captureInTx(tx, this.versionCapture, {
                 // An update: a save that changes nothing records nothing.
                 onlyIfChanged: true,
                 ref: {
@@ -2759,12 +2839,7 @@ export class SingleMutationService extends BaseService {
                 // A locale-specific snapshot records the write locale's own
                 // status; otherwise prefer the written status, then the companion
                 // `_status` for a per-locale change, then the row's.
-                contentStatus:
-                  singleHasStatus && isLocaleSpecificSnapshot
-                    ? dataLocaleStatus
-                    : ((updatePayload as { status?: unknown }).status ??
-                      companionStatus ??
-                      (parentRow as { status?: unknown }).status),
+                contentStatus: savedStatus,
                 // Tagged for the snapshot alone: the same component values
                 // feed the outbox event, whose payload is read shape.
                 parts: {
@@ -2799,11 +2874,14 @@ export class SingleMutationService extends BaseService {
                 // resolves null, and a restore treats the snapshot as shared-only
                 // and drops the seeded defaults. The overlay only runs on a
                 // default-locale write, so `snapshotLocale` is the default locale.
-                locale: isLocaleSpecificSnapshot
-                  ? (snapshotLocale ?? null)
-                  : null,
+                locale: savedLocale,
                 sourceVersionNo: options.sourceVersionNo ?? null,
                 maxPerDoc: versionsConfig.maxPerDoc,
+              });
+              await this.recordSingleSave(tx, slug, existingDoc.id, options, {
+                locale: savedLocale,
+                toState: typeof savedStatus === "string" ? savedStatus : null,
+                versionNo,
               });
             }
 
@@ -2898,6 +2976,33 @@ export class SingleMutationService extends BaseService {
               previousLocaleStatus === "published";
 
             const actor = actorForWrite(options.actor ?? null, options.user);
+            // {@link EVERY_LOCALE}: the languages the sweep moved that the write
+            // locale's events do not cover, read once for the deliveries and
+            // the history below. A locale the app no longer configures still
+            // has a companion row, and an event tagged with one that normal
+            // reads and writes reject would mislead — it names content the
+            // application no longer exposes, so it is left out, as the
+            // collection sweep and the publish-all route leave it.
+            const configuredLocales = new Set(
+              this.localization?.locales.map(l => l.code) ?? []
+            );
+            const sweptMoves: { locale: string; from: string | null }[] =
+              sweepAllLocales &&
+              singleHasStatus &&
+              writtenStatus !== undefined &&
+              companion &&
+              companionPhysicallyExists
+                ? [...priorStatuses]
+                    .filter(
+                      ([locale, prior]) =>
+                        locale !== eventLocale &&
+                        (configuredLocales.size === 0 ||
+                          configuredLocales.has(locale)) &&
+                        (dataLocaleStatus === "published") !==
+                          (prior === "published")
+                    )
+                    .map(([locale, prior]) => ({ locale, from: prior }))
+                : [];
             // `slug` identifies WHICH single changed so a receiver can route the
             // event without scanning for the opaque document id; `single` still
             // FORBIDS an entry `collection` (the slug never feeds the collections
@@ -2960,33 +3065,9 @@ export class SingleMutationService extends BaseService {
               // German, so locale-routed consumers stay stale while the release
               // reports success — the same gap the collection path had, and a
               // Single reaches it through a different branch.
-              if (
-                sweepAllLocales &&
-                singleHasStatus &&
-                writtenStatus !== undefined &&
-                companion &&
-                companionPhysicallyExists
-              ) {
-                // A locale the app no longer configures still has a
-                // companion row, and an event tagged with one that normal reads
-                // and writes reject would mislead a locale-routed consumer —
-                // it names content the application no longer exposes. Both the
-                // collection sweep and the publish-all route already filter
-                // these, so this is the same decision rather than a new one.
-                const configuredLocales = new Set(
-                  this.localization?.locales.map(l => l.code) ?? []
-                );
-                for (const [locale, prior] of priorStatuses) {
-                  if (locale === eventLocale) continue;
-                  if (
-                    configuredLocales.size > 0 &&
-                    !configuredLocales.has(locale)
-                  ) {
-                    continue;
-                  }
+              if (companion) {
+                for (const { locale, from: prior } of sweptMoves) {
                   const nowPublished = dataLocaleStatus === "published";
-                  const wasPublished = prior === "published";
-                  if (nowPublished === wasPublished) continue;
                   const localeValues = await readCompanionLocaleValues(
                     this.adapter,
                     tx,
@@ -3016,6 +3097,32 @@ export class SingleMutationService extends BaseService {
                   });
                 }
               }
+            }
+
+            // The same moves in the Single's history, whatever its webhook
+            // settings: one event per kind, naming the languages it moved.
+            if (singleHasStatus && writtenStatus !== undefined) {
+              await recordTransitionEvents(
+                tx,
+                { adapter: this.adapter },
+                {
+                  subject: { kind: "single", slug, id: existingDoc.id },
+                  actor,
+                  personName: options.user?.name ?? null,
+                },
+                [
+                  {
+                    ...(eventLocale != null ? { locale: eventLocale } : {}),
+                    from: previousLocaleStatus,
+                    to: dataLocaleStatus,
+                  },
+                  ...sweptMoves.map(move => ({
+                    locale: move.locale,
+                    from: move.from,
+                    to: dataLocaleStatus,
+                  })),
+                ]
+              );
             }
 
             // A receipt a caller pinned for this Single is kept here, in the

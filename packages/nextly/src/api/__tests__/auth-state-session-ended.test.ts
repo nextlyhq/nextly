@@ -28,8 +28,10 @@ interface AccountSelect {
   limit(): Promise<unknown[]>;
 }
 
-// An active account, so a token that gets past the check reports a signed-in
-// state rather than failing for want of a database.
+// The account row the route reads, active unless a test says otherwise, so a
+// token that gets past the check reports a signed-in state rather than
+// failing for want of a database.
+const accountRow = vi.hoisted(() => ({ isActive: true }));
 const getCachedNextly = vi.hoisted(() =>
   vi.fn(async () => {
     const account = {
@@ -37,7 +39,7 @@ const getCachedNextly = vi.hoisted(() =>
       email: "a@b.c",
       name: "A",
       emailVerified: null,
-      isActive: true,
+      isActive: accountRow.isActive,
       lockedUntil: null,
     };
     const chain: AccountSelect = {
@@ -78,6 +80,7 @@ describe("GET /api/auth/state and an account's ended sessions", () => {
   beforeEach(() => {
     sessionTokenIsCurrent.mockReset();
     getCachedNextly.mockClear();
+    accountRow.isActive = true;
   });
 
   it("answers 'not authenticated' for a token its account can no longer use", async () => {
@@ -91,8 +94,11 @@ describe("GET /api/auth/state and an account's ended sessions", () => {
     expect(res.status).toBe(401);
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe("AUTH_REQUIRED");
+    // Judged on its epoch, not on whether the account is active: this route
+    // is where an inactive account's token reports `disabled: true`.
     expect(sessionTokenIsCurrent).toHaveBeenCalledWith(
-      expect.objectContaining({ sub: "u1", sev: 0 })
+      expect.objectContaining({ sub: "u1", nx_sev: 0 }),
+      { activeOnly: false }
     );
     // Refused before the route's own account read.
     expect(getCachedNextly).not.toHaveBeenCalled();
@@ -106,5 +112,25 @@ describe("GET /api/auth/state and an account's ended sessions", () => {
     const res = await GET(await withSession());
 
     expect(res.status).toBe(200);
+  });
+
+  it("reports an inactive account whose sessions were not ended as disabled, on every request", async () => {
+    // An account deactivated outside core keeps its epoch, so the check admits
+    // its token, and this route is where that token learns the account is
+    // disabled. Asked again, it answers the same way.
+    sessionTokenIsCurrent.mockResolvedValue(true);
+    accountRow.isActive = false;
+
+    for (let request = 0; request < 2; request++) {
+      const res = await GET(await withSession());
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        authenticated?: boolean;
+        account?: { disabled?: boolean };
+      };
+      expect(body.authenticated).toBe(true);
+      expect(body.account?.disabled).toBe(true);
+    }
   });
 });

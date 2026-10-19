@@ -280,7 +280,7 @@ function skillProblems(home, skill) {
  * is not evidence: `description: [` is not YAML, and a folded `>-` with no
  * text under it is an empty string.
  */
-function frontmatter(text) {
+export function frontmatter(text) {
   const block = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!block) return { problem: "has no frontmatter" };
   const { value, problem } = parsedYaml(block[1]);

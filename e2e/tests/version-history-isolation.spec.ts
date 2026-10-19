@@ -88,7 +88,7 @@ async function postWithHistory(
 
 /** Open the history panel and select the oldest version it lists. */
 async function openOldestVersion(page: Page): Promise<void> {
-  await page.getByRole("button", { name: "Version history" }).click();
+  await page.getByRole("button", { name: "History", exact: true }).click();
   const rows = page.getByRole("button", { name: /^Version \d+/ });
   await expect(rows.first()).toBeVisible({ timeout: 30_000 });
 
