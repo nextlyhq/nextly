@@ -74,15 +74,35 @@ function maskValue(value: unknown, seen: WeakMap<object, unknown>): unknown {
   const known = seen.get(value);
   if (known !== undefined) return known;
   if (value instanceof Error) return maskError(value, seen);
-  if (Array.isArray(value)) {
-    const list: unknown[] = [];
-    seen.set(value, list);
-    for (let i = 0; i < value.length; i++) list[i] = maskValue(value[i], seen);
-    return list;
-  }
+  if (Array.isArray(value)) return maskList(value, seen);
+  return isPlainObject(value) ? maskRecord(value, seen) : value;
+}
+
+/** Whether a value is plain data: an object literal or a null-prototype one. */
+function isPlainObject(value: object): value is Record<string, unknown> {
   const proto: unknown = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) return value;
+  return proto === Object.prototype || proto === null;
+}
+
+/** A list copied with each member masked. */
+function maskList(
+  value: readonly unknown[],
+  seen: WeakMap<object, unknown>
+): unknown[] {
+  const list: unknown[] = [];
+  // Recorded before the members, so a list that contains itself ends.
+  seen.set(value, list);
+  for (let i = 0; i < value.length; i++) list[i] = maskValue(value[i], seen);
+  return list;
+}
+
+/** A plain object copied with each field masked. */
+function maskRecord(
+  value: Record<string, unknown>,
+  seen: WeakMap<object, unknown>
+): Record<string, unknown> {
   const copy: Record<string, unknown> = {};
+  // Recorded before the fields, so an object that contains itself ends.
   seen.set(value, copy);
   for (const [key, field] of Object.entries(value)) {
     copy[key] = maskValue(field, seen);
