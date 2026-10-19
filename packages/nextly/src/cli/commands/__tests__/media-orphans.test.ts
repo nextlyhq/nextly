@@ -33,6 +33,7 @@ import type {
   UploadOptions,
 } from "../../../storage/types";
 import { mediaPlaceIsExclusive } from "../../../domains/media/orphan-thumbnails";
+import type { ReferencedNow } from "../../../domains/media/orphan-thumbnails";
 import { mediaOrphans, type MediaReferences } from "../media";
 
 const NOW = new Date("2026-10-18T12:00:00Z");
@@ -40,6 +41,17 @@ const TWO_HOURS_AGO = new Date(NOW.getTime() - 2 * 3_600_000);
 const A_MINUTE_AGO = new Date(NOW.getTime() - 60_000);
 const key = (name: string, folder = "") =>
   `${folder}2026/10/${randomUUID()}-${name}`;
+
+/**
+ * `referencedNow` as the listing's references answer it, asked afresh for
+ * each file: `null` while one of them cannot be located.
+ */
+const askedOf =
+  (referenced: () => Promise<MediaReferences>): ReferencedNow =>
+  async file => {
+    const now = await referenced();
+    return now.unlocated.length > 0 ? null : now.paths.has(file);
+  };
 
 /** What the media table refers to: these stored paths, all located. */
 const refs = (...paths: string[]): MediaReferences => ({
@@ -188,6 +200,7 @@ async function run(
     storage: layout.storage,
     ...place,
     referenced: referenced ?? (async () => refs(layout.referenced)),
+    referencedNow: askedOf(referenced ?? (async () => refs(layout.referenced))),
     apply,
     say: line => said.push(line),
     now: NOW,
@@ -290,6 +303,7 @@ describe("nextly media orphans", () => {
       exclusive: false,
       sharedWith: ["docs", "invoices"],
       referenced: async () => refs(layout.referenced),
+      referencedNow: askedOf(async () => refs(layout.referenced)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -322,6 +336,7 @@ describe("nextly media orphans", () => {
       prefix: "media/",
       exclusive: true,
       referenced: async () => refs(referenced),
+      referencedNow: askedOf(async () => refs(referenced)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -342,6 +357,7 @@ describe("nextly media orphans", () => {
       prefix: "media/",
       exclusive: true,
       referenced: async () => refs(recorded),
+      referencedNow: askedOf(async () => refs(recorded)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -351,6 +367,34 @@ describe("nextly media orphans", () => {
     const stored = await layout.stored();
     expect(stored).toContain(layout.referenced);
     expect(stored).not.toContain(layout.orphan);
+  });
+
+  // S3 keeps a key as written: `/media/...` and `media//...` are other keys
+  // than the `media/...` uploads under a `media` prefix make, and may be
+  // anything's.
+  it("leaves S3 keys spelled otherwise than media's prefix makes them", async () => {
+    const bucket = new Bucket("s3");
+    const outside = [
+      key("thumb_a.png", "/media/"),
+      key("thumb_b.png", "media//"),
+    ];
+    for (const path of outside)
+      bucket.put({ path, lastModified: TWO_HOURS_AGO });
+    const said: string[] = [];
+
+    const code = await mediaOrphans({
+      storage: bucket,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => refs(),
+      referencedNow: async () => false,
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    expect([...bucket.files.keys()].sort()).toEqual([...outside].sort());
   });
 
   // A prefix written with a leading slash, `/media`, is recorded as
@@ -366,6 +410,7 @@ describe("nextly media orphans", () => {
       prefix: "/media",
       exclusive: true,
       referenced: async () => refs(recorded),
+      referencedNow: askedOf(async () => refs(recorded)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -393,6 +438,7 @@ describe("nextly media orphans", () => {
       prefix: "/media",
       exclusive: true,
       referenced: async () => refs(referenced),
+      referencedNow: askedOf(async () => refs(referenced)),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -441,39 +487,49 @@ describe("nextly media orphans", () => {
     expect(code).toBe(1);
     expect(await layout.stored()).toContain(layout.orphan);
     expect(said).not.toContain("Removed");
-    expect(said).toMatch(/stored location cannot be worked out/);
+    expect(said).toMatch(/could not be checked just before their removal/);
   });
 
-  // The recheck before removals reads the media table; doing it once per
-  // listed file would read the whole table once per leftover.
-  it("rechecks references in a bounded number of passes", async () => {
+  // An item can come to refer to a listed file while earlier ones go: each
+  // is asked about just before its own removal, not once for a batch.
+  it("asks about each file just before removing it", async () => {
     const bucket = new Bucket("s3");
-    for (let i = 0; i < 120; i++) {
+    for (let i = 0; i < 3; i++) {
       bucket.put({
         path: key(`thumb_${i}.png`, "media/"),
         lastModified: TWO_HOURS_AGO,
       });
     }
-    let reads = 0;
-    const said: string[] = [];
+    const events: string[] = [];
+    const remove = bucket.delete.bind(bucket);
+    bucket.delete = async (file: string) => {
+      events.push(`delete ${file}`);
+      return remove(file);
+    };
 
     const code = await mediaOrphans({
       storage: bucket,
       prefix: "media",
       exclusive: true,
-      referenced: async () => {
-        reads++;
-        return refs();
+      referenced: async () => refs(),
+      referencedNow: async file => {
+        events.push(`ask ${file}`);
+        return false;
       },
       apply: true,
-      say: line => said.push(line),
+      say: () => {},
       now: NOW,
     });
 
     expect(code).toBe(0);
     expect(bucket.files.size).toBe(0);
-    // One read for the listing, and one per batch of removals.
-    expect(reads).toBeLessThanOrEqual(1 + Math.ceil(120 / 50));
+    const removed = events
+      .filter(event => event.startsWith("delete "))
+      .map(event => event.slice("delete ".length));
+    expect(removed).toHaveLength(3);
+    expect(events).toEqual(
+      removed.flatMap(file => [`ask ${file}`, `delete ${file}`])
+    );
   });
 
   // Between the listing and the removal an item can come to refer to it.

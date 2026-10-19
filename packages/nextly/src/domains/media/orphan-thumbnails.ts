@@ -110,12 +110,35 @@ function overlaps(a: string, b: string): boolean {
  * its keys carry no name, so there a file is judged by the name it was
  * uploaded under.
  */
-export function isMediaThumbnail(entry: StoredFileEntry, prefix = ""): boolean {
+export function isMediaThumbnail(
+  entry: StoredFileEntry,
+  prefix = "",
+  /**
+   * Whether the storage keeps a key as written (S3), where `/media/...` and
+   * `media//...` are other keys than the `media/...` an upload under the
+   * prefix `media` makes, and may be anything's. Elsewhere a filesystem, or
+   * a URL's path, reads every spelling as one.
+   */
+  keysAsWritten = false
+): boolean {
   if (entry.name !== undefined) return NAMED.test(entry.name);
+  if (keysAsWritten) return isKeyedUnder(locationOf(entry.path), prefix);
   const location = canonicalStoredPath(locationOf(entry.path));
   const folder = folderOf(prefix);
   if (folder !== "" && !location.startsWith(`${folder}/`)) return false;
   const below = folder === "" ? location : location.slice(folder.length + 1);
+  return KEYED.test(below) || NAMED.test(below);
+}
+
+/**
+ * Whether `key` is in the form an upload under `prefix` gives a thumbnail,
+ * spelled as the storage writes it: the prefix as configured, then `/`,
+ * then the thumbnail's own key (`MediaStorage.upload`, `generateKey`).
+ */
+function isKeyedUnder(key: string, prefix: string): boolean {
+  if (prefix === "") return KEYED.test(key) || NAMED.test(key);
+  if (!key.startsWith(`${prefix}/`)) return false;
+  const below = key.slice(prefix.length + 1);
   return KEYED.test(below) || NAMED.test(below);
 }
 
@@ -174,8 +197,9 @@ export async function findOrphanThumbnails(
   const orphans: string[] = [];
   const unconfirmed: Array<{ path: string; name?: string }> = [];
   let tooRecent = 0;
+  const keysAsWritten = adapter.getType() === "s3";
   for await (const entry of adapter.list()) {
-    if (!isMediaThumbnail(entry, options.prefix)) continue;
+    if (!isMediaThumbnail(entry, options.prefix, keysAsWritten)) continue;
     if (referenced.has(canonicalStoredPath(entry.path))) continue;
     const stored = entry.lastModified?.getTime();
     if (stored === undefined || now - stored < ORPHAN_MIN_AGE_MS) {
@@ -209,27 +233,30 @@ export interface OrphanRemoval {
   kept: string[];
   failed: Array<{ path: string; reason: string }>;
   /**
-   * Not tried: a recheck found a thumbnail in use whose stored location the
-   * record does not show, which any of these may be.
+   * Not tried: whether an item refers to the first of these could not be
+   * said just before its removal, so none of them was removed.
    */
   stopped: string[];
 }
 
-/** How many listed files are removed per fresh read of what is referenced. */
-const RECHECK_BATCH = 50;
+/**
+ * Whether a media item refers to `path` now: `true` or `false`, or `null`
+ * when that cannot be said, as when the media table cannot be read.
+ */
+export type ReferencedNow = (path: string) => Promise<boolean | null>;
 
 /**
  * Removes each of `orphans` that is still unreferenced just before its
- * removal, asked of `referencedNow` then, not at the listing: an item can
- * come to refer to a listed file in between. Asked once per batch of
- * {@link RECHECK_BATCH} files rather than once per file, since each ask reads
- * the whole media table. Stops, and removes no more, once an ask finds a
- * thumbnail in use it cannot locate.
+ * removal, asked of `referencedNow` for that file then, not at the listing:
+ * an item can come to refer to a listed file in between, as an upload or an
+ * import commits. Stops, and removes no more, once an ask cannot be
+ * answered. An item that comes to refer to a file between its ask and its
+ * removal is not seen; nothing short of a lock on references closes that.
  */
 export async function removeOrphanThumbnails(
   adapter: IStorageAdapter,
   orphans: readonly string[],
-  referencedNow: () => Promise<MediaReferences>
+  referencedNow: ReferencedNow
 ): Promise<OrphanRemoval> {
   const result: OrphanRemoval = {
     removed: [],
@@ -237,17 +264,13 @@ export async function removeOrphanThumbnails(
     failed: [],
     stopped: [],
   };
-  let referenced = new Set<string>();
   for (const [index, path] of orphans.entries()) {
-    if (index % RECHECK_BATCH === 0) {
-      const now = await referencedNow();
-      if (now.unlocated.length > 0) {
-        result.stopped = orphans.slice(index);
-        break;
-      }
-      referenced = canonicalSet(now.paths);
+    const referenced = await referencedNow(path);
+    if (referenced === null) {
+      result.stopped = orphans.slice(index);
+      break;
     }
-    if (referenced.has(canonicalStoredPath(path))) {
+    if (referenced) {
       result.kept.push(path);
       continue;
     }
