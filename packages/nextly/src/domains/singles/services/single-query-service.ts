@@ -53,7 +53,10 @@ import {
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import { isSuperAdminContext } from "../../../services/access";
-import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
+import {
+  effectiveRelationshipDepth,
+  type CollectionRelationshipService,
+} from "../../../services/collections/collection-relationship-service";
 import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
 import {
   applyMediaTrustBound,
@@ -91,6 +94,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { recordWriteEvent } from "../../content-events/write-event";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
@@ -786,10 +790,10 @@ export class SingleQueryService extends BaseService {
     // The snapshot stores JSON-backed fields serialized and relations as ids,
     // exactly as the live row does, so the same stages restore both.
     let overlaid = this.deserializeJsonFields(shaped, singleMeta.fields);
-    overlaid = await this.expandUploadFields(
+    overlaid = await this.readUploadFields(
       overlaid,
       singleMeta.fields,
-      expansionAccess(options)
+      options
     );
     // The SAME context the live document's relationships were read under,
     // so a related row is judged identically whether it arrived through the
@@ -876,11 +880,7 @@ export class SingleQueryService extends BaseService {
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
-    doc = await this.expandUploadFields(
-      doc,
-      singleMeta.fields,
-      expansionAccess(options)
-    );
+    doc = await this.readUploadFields(doc, singleMeta.fields, options);
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
     const readLocale = resolveLocaleChain(
@@ -1063,9 +1063,7 @@ export class SingleQueryService extends BaseService {
       // starts a history (the mutation path records its own first version).
       if (!doc) {
         this.logger.info("Auto-creating Single document", { slug });
-        doc = await this.createDefaultDocument(singleMeta, {
-          captureInitialVersion: true,
-        });
+        doc = await this.createDefaultDocumentOnce(singleMeta);
       }
 
       // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
@@ -1854,6 +1852,38 @@ export class SingleQueryService extends BaseService {
     );
   }
 
+  /**
+   * Create a Single's default document on its first read, or take the one
+   * another process created first.
+   *
+   * Several processes reading a Single for the first time at once, such as
+   * `next build`'s workers on a fresh database, each find no row and each try
+   * to create it. The table holds one row by its unique slug, so all but one
+   * insert fail; the row that won is the document every reader should get, so
+   * a loser reads it back rather than failing the read. Any other failure, or
+   * a violation that leaves no row behind, is still the read's failure.
+   */
+  private async createDefaultDocumentOnce(
+    singleMeta: DynamicSingleRecord
+  ): Promise<SingleDocument> {
+    try {
+      return await this.createDefaultDocument(singleMeta, {
+        captureInitialVersion: true,
+      });
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      const existing = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+      if (!existing) throw error;
+      this.logger.debug("Default Single document was created concurrently", {
+        slug: singleMeta.slug,
+      });
+      return existing;
+    }
+  }
+
   async createDefaultDocument(
     singleMeta: DynamicSingleRecord,
     options?: { captureInitialVersion?: boolean; draft?: DefaultDocumentDraft }
@@ -2034,6 +2064,25 @@ export class SingleQueryService extends BaseService {
     return deserializeJsonFields(doc, fields, this.logger, value =>
       this.normalizeDbTimestamp(value)
     );
+  }
+
+  /**
+   * A read's upload fields, populated to the depth it asked for.
+   *
+   * At depth 0 a read populates nothing, and a collection's uploads and every
+   * relationship already answer with the ids as stored there. An upload is
+   * given the same way, in stored order, whether or not the caller may read the
+   * media or it still exists, so an editor saving the document back keeps it.
+   */
+  private async readUploadFields(
+    doc: SingleDocument,
+    fields: FieldConfig[],
+    options: GetSingleOptions
+  ): Promise<SingleDocument> {
+    if (effectiveRelationshipDepth(options.depth ?? DEFAULT_READ_DEPTH) === 0) {
+      return doc;
+    }
+    return this.expandUploadFields(doc, fields, expansionAccess(options));
   }
 
   /**

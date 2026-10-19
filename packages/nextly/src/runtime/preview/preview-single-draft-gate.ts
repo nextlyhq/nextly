@@ -17,7 +17,10 @@
  */
 import { previewTokenCovers } from "../../auth/preview/preview-token";
 import type { UserContext } from "../../direct-api/types/shared";
-import { singleDocumentEditable } from "../../domains/singles/services/single-document-access";
+import {
+  singleDocumentEditable,
+  singleStoredDocumentReadable,
+} from "../../domains/singles/services/single-document-access";
 import type { SingleDraftRequest } from "../routing/single-route";
 
 import { resolvePreviewIdentity } from "./preview-identity";
@@ -89,33 +92,35 @@ export function previewSingleDraftGate(
     // whoever holds the link until it expired — an account that is still
     // ACTIVE, so the deactivation check does not reach it either.
     //
-    // **The EDITABLE half alone, and the exclusion is the point.** The mint
-    // asks both halves through `assertSinglePreviewable`, and the readable one
-    // cannot run here: it goes through `SingleQueryService.get`, which
-    // AUTO-CREATES a missing Single — row, localized defaults and a first
-    // version — and runs the Single's read hooks. A render is an anonymous
-    // public request, so that would let whoever holds a link persist a document
-    // and fire hook side effects, attributed to the sharer, on a page view.
-    // Reads do not write.
+    // **Both halves the mint asks, through probes that do not read.** The
+    // mint asks them through `assertSinglePreviewable`, whose readable half
+    // goes through `SingleQueryService.get`: that AUTO-CREATES a missing
+    // Single — row, localized defaults and a first version — and runs the
+    // Single's read hooks. A render is an anonymous public request, so asking
+    // that way would let whoever holds a link persist a document and fire hook
+    // side effects, attributed to the sharer, on a page view. Reads do not
+    // write. So both are asked of the STORED row through the adapter, and the
+    // Single's access gate is run against it for each operation.
     //
-    // What the editable half answers is also the question this gate needs. The
-    // working-draft overlay is gated on being able to EDIT the document, so
-    // edit capability is what decides whether a draft may be handed out at all;
-    // and it is non-mutating by construction, loading the row through the
-    // adapter and running the gate against it.
+    // Editable, because the working-draft overlay is gated on being able to
+    // EDIT the document, so edit capability decides whether a draft may be
+    // handed out at all. Readable as well, because the draft is a view of the
+    // document: a sharer who keeps update access and loses read access through
+    // a custom rule is no longer allowed to see what the link shows.
     //
-    // What it does NOT catch, stated rather than left to be found: a sharer who
-    // keeps update access and loses READ access through a custom rule. Closing
-    // that needs a readable probe that neither materializes nor runs hooks,
-    // which the Single read path does not currently offer.
+    // The sharer is asked about, never acted as: this decides whether the
+    // link may serve the draft and as whom its fields are judged, and the
+    // person holding the link gains nothing from it.
+    const sharer = {
+      user: readAs,
+      // FALSE: a render is an anonymous public request. Nothing ran the
+      // coarse access gate for it, and claiming otherwise skips the only part
+      // that notices a withdrawn role.
+      routeAuthorized: false,
+    };
     if (
-      !(await singleDocumentEditable(slug, {
-        user: readAs,
-        // FALSE: a render is an anonymous public request. Nothing ran the
-        // coarse access gate for it, and claiming otherwise skips the only part
-        // that notices a withdrawn role.
-        routeAuthorized: false,
-      }))
+      !(await singleDocumentEditable(slug, sharer)) ||
+      !(await singleStoredDocumentReadable(slug, sharer))
     ) {
       return false;
     }

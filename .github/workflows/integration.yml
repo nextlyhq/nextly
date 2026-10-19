@@ -252,7 +252,7 @@ jobs:
       # leg still builds all three regardless of which suites it runs.
       - name: Run integration tests (postgres)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
             "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the PostgreSQL integration suite" \
             pnpm lane:test:integration:postgres -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
@@ -379,7 +379,7 @@ jobs:
       # process, and its connections and locks with it.
       - name: Run integration tests (mysql)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder
           # The watcher sleeps in a child it waits on, and stops that child
           # when it is stopped: otherwise the sleep outlives it holding the
           # step's output open, and the step waits for it.
@@ -394,10 +394,15 @@ jobs:
             done
           ) &
           watcher=$!
-          status=0
+          # The suite's status is read on the line after it, with -e off around
+          # it, so the lane's call ends its line as check-test-lanes requires and
+          # a failed suite still stops the watcher before the step fails.
+          set +e
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
             "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the MySQL integration suite" \
-            pnpm lane:test:integration:mysql -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} || status=$?
+            pnpm lane:test:integration:mysql -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
+          status=$?
+          set -e
           kill "$watcher" 2>/dev/null || true
           wait "$watcher" 2>/dev/null || true
           exit "$status"
@@ -480,14 +485,16 @@ jobs:
       # Builds all three adapters for the same reason the database legs do:
       # nextly's database/factory.ts references them as optional peers, and
       # turbo's `^build` does not traverse peerDependencies.
-      # `plugin-seo` and `plugin-form-builder` run on THIS leg only, unlike the
-      # packages beside them. Their suites call `createTestNextly` and name no
-      # dialect, so it boots on in-memory SQLite and the postgres and mysql legs
-      # would run byte-identical work — three times the runtime for one answer.
-      # `plugin-page-builder`, `plugin-commerce` and `plugin-accounts` are in all
-      # three because
-      # their suites DO take a dialect, which is the property that decides this
-      # rather than the kind of package it is. They are here rather than in the unit `Test` step because
+      # `plugin-seo` runs on THIS leg only, unlike the packages beside it. Its
+      # suites call `createTestNextly` and name no dialect, so it boots on
+      # in-memory SQLite and the postgres and mysql legs would run
+      # byte-identical work — three times the runtime for one answer.
+      # `plugin-page-builder`, `plugin-commerce`, `plugin-accounts` and
+      # `plugin-form-builder` are in all three because their suites DO take a
+      # dialect, which is the property that decides this rather than the kind
+      # of package it is. One suite taking a dialect is enough: a package's
+      # suites run together, so the others repeat on each leg, which for Form
+      # Builder costs well under a minute a leg. They are here rather than in the unit `Test` step because
       # each case boots a real instance, and doing that while every other
       # package's suite runs in parallel is what took one past a 30s budget on
       # CI while it finishes in about 1.5s alone.
