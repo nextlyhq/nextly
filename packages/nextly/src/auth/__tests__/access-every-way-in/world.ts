@@ -720,8 +720,16 @@ export async function boot(dialect: TestDialect): Promise<World> {
     singles: ruleSingles(),
     plugins: [probePlugin(), membersPlugin()],
   });
-  const callers = await seedCallers(t);
-  const seeded = await seedCollections(t, dialect === "sqlite" ? 1 : 16);
-  const refId = await seedRefs(t, seeded);
-  return { t, callers, seeded, refId };
+  // The suite only learns of the instance once this returns, so a seeding
+  // failure takes it down here; otherwise its connections and its PostgreSQL
+  // or MySQL database would outlive the failed run.
+  try {
+    const callers = await seedCallers(t);
+    const seeded = await seedCollections(t, dialect === "sqlite" ? 1 : 16);
+    const refId = await seedRefs(t, seeded);
+    return { t, callers, seeded, refId };
+  } catch (error) {
+    await t.destroy();
+    throw error;
+  }
 }
