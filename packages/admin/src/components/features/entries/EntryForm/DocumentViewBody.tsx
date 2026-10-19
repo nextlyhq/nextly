@@ -34,12 +34,23 @@ import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParam } from "@admin/lib/navigation";
 import type { DocumentViewProps } from "@admin/lib/plugins/component-registry";
-import { resolveViewField } from "@admin/lib/plugins/document-view-registry";
+import {
+  resolveViewField,
+  viewFieldCandidates,
+  type ViewFieldResolution,
+} from "@admin/lib/plugins/document-view-registry";
 
 import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
+import {
+  useConditionValues,
+  viewFieldRefusal,
+  type ViewFieldRefusal,
+} from "./document-view-field-gate";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
+import { DocumentViewFieldRefused } from "./DocumentViewFieldRefused";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { MissingDocumentViewComponent } from "./MissingDocumentViewComponent";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -103,23 +114,106 @@ function useFieldInAddress(
  * changed under it, so it would go on showing, and then saving, the work the
  * author just chose to replace. Counting restores and keying the view by the
  * count gives it a new mount that reads the restored values.
+ *
+ * In three steps rather than one: the view goes, then the values are replaced,
+ * then a fresh view comes. A view may hand its unsaved work to the form as it
+ * unmounts — the Page Builder does, so a takeover keeps it — and replacing the
+ * values first would let that hand-over write the old copy over the restored
+ * one. Gone first, its hand-over lands before the restore and is replaced by
+ * it.
  */
 function useRestoreRemount(recovery: UseAutosaveRecoveryResult): {
   recovery: UseAutosaveRecoveryResult;
   generation: number;
+  /** True for the one commit between the view leaving and the restore. */
+  withdrawn: boolean;
 } {
   const [generation, setGeneration] = useState(0);
-  const restoring = useMemo(
-    () => ({
-      ...recovery,
-      restore: () => {
-        recovery.restore();
-        setGeneration(count => count + 1);
-      },
-    }),
+  const [withdrawn, setWithdrawn] = useState(false);
+  const { restore } = recovery;
+  useEffect(() => {
+    if (!withdrawn) return;
+    restore();
+    setGeneration(count => count + 1);
+    setWithdrawn(false);
+  }, [withdrawn, restore]);
+  const offered = useMemo(
+    () => ({ ...recovery, restore: () => setWithdrawn(true) }),
     [recovery]
   );
-  return { recovery: restoring, generation };
+  return { recovery: offered, generation, withdrawn };
+}
+
+/**
+ * Which field the view edits, from the address, and whether it may.
+ *
+ * Read here rather than by the view, so the rule the admin applies to the
+ * address is the one answer. The gates are the field's own and those of the
+ * groups around it, as the form applies them: an address reaches a field the
+ * form would not let the author edit, and the view is refused rather than
+ * trusted to refuse.
+ */
+function useViewField(
+  fieldType: string | undefined,
+  fields: readonly FieldConfig[] | undefined,
+  form: UseFormReturn<Record<string, unknown>>
+) {
+  const requested = useSearchParams().field;
+  // Every field the view could edit has its condition watched, not only the
+  // one open: which fields the question offers depends on them all.
+  const valueAt = useConditionValues(
+    fieldType === undefined ? [] : viewFieldCandidates(fieldType, fields),
+    form.control
+  );
+  const editing = resolveViewField(
+    fieldType,
+    fields,
+    typeof requested === "string" ? requested : undefined,
+    candidate => viewFieldRefusal(candidate, valueAt) === null
+  );
+  useFieldInAddress(editing, requested);
+  const refusal =
+    editing.kind === "field" ? viewFieldRefusal(editing, valueAt) : null;
+  return { editing, refusal };
+}
+
+/**
+ * What fills the view's area: the question of which field, the reason a field
+ * may not be edited, or the view itself — absent for the one commit a restore
+ * withdraws it, and keyed by the restore count so it reads restored values.
+ */
+function ViewArea({
+  editing,
+  refusal,
+  withdrawn,
+  generation,
+  component,
+  viewProps,
+}: {
+  editing: ViewFieldResolution<FieldConfig>;
+  refusal: ViewFieldRefusal | null;
+  withdrawn: boolean;
+  generation: number;
+  component: string;
+  viewProps: DocumentViewProps;
+}): React.JSX.Element | null {
+  if (editing.kind === "choose") {
+    return <DocumentViewFieldChooser candidates={editing.candidates} />;
+  }
+  if (refusal !== null) {
+    return (
+      <DocumentViewFieldRefused reason={refusal} onExit={viewProps.exit} />
+    );
+  }
+  if (withdrawn) return null;
+  return (
+    <PluginSlot
+      key={generation}
+      path={component}
+      props={viewProps}
+      fallback={<MissingDocumentViewComponent path={component} />}
+    />
+  );
 }
 
 export function DocumentViewBody({
@@ -153,15 +247,7 @@ export function DocumentViewBody({
   const exit = view.onExit;
   const offered = useRestoreRemount(recovery);
 
-  // Which field the view edits, from the address. Read here rather than by
-  // the view so the rule the admin applies to the address is the one answer.
-  const requested = useSearchParams().field;
-  const editing = resolveViewField(
-    view.fieldType,
-    fields,
-    typeof requested === "string" ? requested : undefined
-  );
-  useFieldInAddress(editing, requested);
+  const { editing, refusal } = useViewField(view.fieldType, fields, form);
 
   const { errors, submitCount } = form.formState;
   const viewProps: DocumentViewProps = {
@@ -203,15 +289,14 @@ export function DocumentViewBody({
         {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
         <div className="min-h-0 flex-1">
-          {editing.kind === "choose" ? (
-            <DocumentViewFieldChooser candidates={editing.candidates} />
-          ) : (
-            <PluginSlot
-              key={offered.generation}
-              path={view.component}
-              props={viewProps}
-            />
-          )}
+          <ViewArea
+            editing={editing}
+            refusal={refusal}
+            withdrawn={offered.withdrawn}
+            generation={offered.generation}
+            component={view.component}
+            viewProps={viewProps}
+          />
         </div>
       </div>
     </FormProvider>

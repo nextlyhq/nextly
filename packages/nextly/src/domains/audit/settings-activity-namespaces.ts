@@ -23,9 +23,9 @@
  *
  * This is a list of CANDIDATES, never of grants. Every consumer still asks
  * `canReadEntity` per name, and each has a real answer: `read-email-providers`,
- * `read-email-templates` and `read-settings` are seeded permissions
- * (`permission-seed-service`) that `routeHandler` already authorizes the
- * corresponding settings routes with. Appending a name here widens what may be CONSIDERED, never what is
+ * `read-email-templates`, `read-settings` and `read-content-releases` are
+ * seeded permissions (`permission-seed-service`) that `routeHandler` already
+ * authorizes the corresponding routes with. Appending a name here widens what may be CONSIDERED, never what is
  * allowed.
  *
  * A new `recordSettingsActivity` caller belongs in this list. It is deliberately
@@ -38,6 +38,7 @@
 import { EMAIL_PROVIDER_ACTIVITY_COLLECTION } from "../email/provider-activity";
 import { EMAIL_TEMPLATE_ACTIVITY_COLLECTION } from "../email/template-activity";
 import { PLUGIN_SETTINGS_ACTIVITY_COLLECTION } from "../plugins/settings-activity";
+import { RELEASE_ACTIVITY_COLLECTION } from "../releases/release-activity";
 
 /**
  * Every non-content `activity_log.collection` a production writer emits.
@@ -50,4 +51,7 @@ export const SETTINGS_ACTIVITY_NAMESPACES = [
   EMAIL_PROVIDER_ACTIVITY_COLLECTION,
   EMAIL_TEMPLATE_ACTIVITY_COLLECTION,
   PLUGIN_SETTINGS_ACTIVITY_COLLECTION,
+  // Renamed and deleted releases. Read under `read-content-releases`, the
+  // permission the release list itself asks.
+  RELEASE_ACTIVITY_COLLECTION,
 ] as const;

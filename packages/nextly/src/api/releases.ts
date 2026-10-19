@@ -7,8 +7,8 @@
  *
  * ## Two gates, and why neither is redundant
  *
- * The route checks the SYSTEM authority — read, create or publish on
- * `content-releases` — because that is what produces a proper 401 or 403 for an
+ * The route checks the SYSTEM authority — read, create, publish, update or
+ * delete on `content-releases` — because that is what produces a proper 401 or 403 for an
  * unauthenticated or unauthorized caller, and it stops a request before any
  * service work happens.
  *
@@ -21,12 +21,15 @@
  * @module api/releases
  */
 
+import { z } from "zod";
+
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { getLoggerFromDI } from "../dispatcher/helpers/di";
+import { isKnownTimeZone } from "../domains/releases/release-calendar";
 import { isDueAt } from "../domains/releases/release-due";
 import {
   isReleaseTab,
@@ -44,7 +47,10 @@ import {
 import {
   DEFAULT_RELEASE_PAGE_SIZE,
   MAX_RELEASE_PAGE_SIZE,
+  MAX_RELEASE_TITLE_LENGTH,
   RELEASES_RESOURCE,
+  type ReleaseAuthority,
+  type ReleaseDayFilter,
 } from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
@@ -60,11 +66,13 @@ import {
 
 import {
   respondAction,
+  respondData,
   respondDoc,
   respondList,
   respondMutation,
 } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 /**
  * The release authority each method needs, declared once.
@@ -80,20 +88,57 @@ import { withErrorHandler } from "./with-error-handler";
  * is the act that puts content live, and the seed keeps the two apart —
  * "publish-content-releases" is defined as "schedule or cancel".
  */
-const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
+const RELEASE_AUTHORITY: Record<string, ReleaseAuthority> = {
   listReleases: "read",
+  releaseCalendar: "read",
   getRelease: "read",
   listReleaseMembers: "read",
   listReleaseBlockers: "read",
+  getReleaseReadiness: "read",
   createRelease: "create",
   addReleaseMember: "create",
   // Removing a member un-does part of assembling a release and can only ever
   // make LESS content go live, so it is `create` rather than `publish`.
   removeReleaseMember: "create",
+  // Switching a document's action re-assembles the release; the document's
+  // own authority for the new action, and `publish` for a scheduled release,
+  // are the service's to ask.
+  changeReleaseMemberAction: "create",
   scheduleRelease: "publish",
   cancelRelease: "publish",
   publishRelease: "publish",
+  // Each its own permission rather than `create` and `publish`: renaming is
+  // not assembling, and deleting a release is not scheduling one.
+  updateRelease: "update",
+  deleteRelease: "delete",
 };
+
+/**
+ * What a rename may send: a title, a description, or both, and nothing else.
+ *
+ * Strict, so a field this route does not change — a `state`, a `scheduledAt`
+ * — is refused rather than accepted and ignored, which would answer 200 for
+ * a change that never happened. The title follows create's rules: required
+ * text when present, never empty, and no longer than the narrowest dialect
+ * stores. The service checks the same again for the Direct API.
+ */
+const RELEASE_DETAILS_BODY = z
+  .object({
+    title: z
+      .string()
+      .min(1, "`title` must not be empty.")
+      .max(
+        MAX_RELEASE_TITLE_LENGTH,
+        `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`
+      )
+      .optional(),
+    description: z.string().nullable().optional(),
+  })
+  .strict()
+  .refine(
+    body => body.title !== undefined || body.description !== undefined,
+    "Give a `title`, a `description`, or both."
+  );
 
 /**
  * Reject a body that is not a JSON object.
@@ -243,9 +288,7 @@ const ISO_INSTANT =
  */
 function requireTimezone(body: Record<string, unknown>): string {
   const zone = requireString(body, "timezone");
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: zone });
-  } catch {
+  if (!isKnownTimeZone(zone)) {
     throw badRequest(
       "`timezone` must be an IANA time zone, such as Europe/Berlin.",
       {
@@ -385,6 +428,57 @@ function optionalInstant(value: string | null, key: string): Date | undefined {
 }
 
 /**
+ * The list's day filter as a query string carries it: `day` and `timezone`,
+ * both or neither.
+ *
+ * Only their presence is decided here. Whether the date exists and the zone is
+ * known is the service's question, asked the same way of a Direct API caller.
+ */
+const DAY_PARAMS = z.object({
+  day: z.string({
+    error: "`day` is required with `timezone`: a date such as 2026-03-29.",
+  }),
+  timezone: z.string({
+    error:
+      "`timezone` is required with `day`: an IANA time zone such as Europe/Berlin.",
+  }),
+});
+
+/**
+ * The day to narrow the list to, or none.
+ *
+ * Half a filter is refused rather than dropped: a `day` without its zone has
+ * no instants, and ignoring it would answer with every release.
+ */
+function dayParam(params: URLSearchParams): ReleaseDayFilter | undefined {
+  const day = params.get("day");
+  const timezone = params.get("timezone");
+  if (day === null && timezone === null) return undefined;
+  const parsed = DAY_PARAMS.safeParse({
+    day: day ?? undefined,
+    timezone: timezone ?? undefined,
+  });
+  if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  return { date: parsed.data.day, timezone: parsed.data.timezone };
+}
+
+/**
+ * A calendar read's window as a query string carries it. Every field is
+ * required; what each must hold is the service's to check.
+ */
+const CALENDAR_PARAMS = z.object({
+  from: z.string({
+    error: "`from` is required: the first day, such as 2026-03-01.",
+  }),
+  to: z.string({
+    error: "`to` is required: the last day, such as 2026-04-11.",
+  }),
+  timezone: z.string({
+    error: "`timezone` is required: an IANA time zone, such as Europe/Berlin.",
+  }),
+});
+
+/**
  * What every release operation is handed.
  *
  * `caller` carries `overrideAccess: false`, which is what turns the service's
@@ -482,6 +576,8 @@ async function withCapabilities(
       addMember: false,
       removeMember: false,
       publishNow: false,
+      update: false,
+      delete: false,
     },
   }));
 }
@@ -603,6 +699,7 @@ const RELEASE_OPERATIONS: Record<
       // get the same releases.
       search: params.get("search") ?? undefined,
       order: releaseOrderParam(params.get("order")),
+      day: dayParam(params),
     };
     const { containing } = containingRef(params);
     if (containing !== undefined) {
@@ -625,6 +722,25 @@ const RELEASE_OPERATIONS: Record<
     // The service's own page and total, so `meta.total` is every release the
     // query matches, not the rows this page holds.
     return respondList(items, found.meta);
+  },
+
+  releaseCalendar: async ({ request, caller, releases }) => {
+    const params = new URL(request.url).searchParams;
+    const parsed = CALENDAR_PARAMS.safeParse({
+      from: params.get("from") ?? undefined,
+      to: params.get("to") ?? undefined,
+      timezone: params.get("timezone") ?? undefined,
+    });
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    // A calendar is one answer about a window, not a page of rows, so it is
+    // the bare read its Direct API method returns.
+    return respondData(
+      await releases.calendar({
+        ...caller,
+        ...parsed.data,
+        kind: releaseKindParam(params.get("kind")),
+      })
+    );
   },
 
   getRelease: async ({ caller, releases, releaseId }) => {
@@ -757,6 +873,40 @@ const RELEASE_OPERATIONS: Record<
     });
   },
 
+  /**
+   * Every problem the release's documents have now, hard ones (which stop it
+   * from being scheduled or published now) apart from soft ones.
+   */
+  getReleaseReadiness: async ({ caller, releases, releaseId }) =>
+    respondDoc(await releases.readiness({ ...caller, releaseId })),
+
+  /**
+   * Switch a document between going live and coming down. Bound to the
+   * release in the path, as a removal is.
+   */
+  changeReleaseMemberAction: async ({
+    request,
+    caller,
+    releases,
+    releaseId,
+    memberId,
+  }) => {
+    const body = await jsonObject(request);
+    const action = body.action;
+    if (action !== "publish" && action !== "unpublish") {
+      throw badRequest("`action` must be `publish` or `unpublish`.");
+    }
+    return respondMutation(
+      "Release document updated.",
+      await releases.changeMemberAction({
+        ...caller,
+        releaseId,
+        memberId,
+        action,
+      })
+    );
+  },
+
   removeReleaseMember: async ({ caller, releases, releaseId, memberId }) => {
     // Bound to the release in the PATH. Deleting by member id alone means
     // `/api/releases/A/members/B` removes B even when B belongs to release C —
@@ -786,6 +936,29 @@ const RELEASE_OPERATIONS: Record<
     // Not `{ cancelled: true }`: the response-shape contract refuses
     // boolean-only bodies, because a caller cannot grow against them.
     return respondAction("Release cancelled.", { releaseId });
+  },
+
+  updateRelease: async ({ request, caller, releases, releaseId }) => {
+    const parsed = RELEASE_DETAILS_BODY.safeParse(await jsonObject(request));
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    const release = await releases.update({
+      ...caller,
+      id: releaseId,
+      ...parsed.data,
+    });
+    return respondMutation(
+      "Release updated.",
+      await decorateAfterWrite(release, caller, releases)
+    );
+  },
+
+  deleteRelease: async ({ caller, releases, releaseId }) => {
+    // The mutation envelope with the release as it was, as a deleted entry is
+    // answered: the client can name what it just removed.
+    return respondMutation(
+      "Release deleted.",
+      await releases.delete({ ...caller, id: releaseId })
+    );
   },
 
   publishRelease: async ({ caller, releases, releaseId }) => {

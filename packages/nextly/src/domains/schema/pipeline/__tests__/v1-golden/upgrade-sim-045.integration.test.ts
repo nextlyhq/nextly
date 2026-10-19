@@ -143,6 +143,13 @@ const POST_045_TABLES = [
   // instead of settling to silence. It declares no index, so the CREATE TABLE
   // is the whole of what an upgrade emits for it.
   "nextly_widget_layout",
+  // Each person's "last looked at" markers, post-0.45 like the tables above:
+  // an existing install gains it on upgrade, with its three indexes.
+  "nextly_version_views",
+  // The record of content events and its parts, post-0.45 like the tables
+  // above: an existing install gains both on upgrade.
+  "nextly_content_events",
+  "nextly_content_event_parts",
   // The versions features have pinned against retention, post-0.45 like the
   // tables above: an existing install gains it on upgrade, so its CREATE TABLE
   // and its two indexes are legitimate rather than phantom.

@@ -33,6 +33,13 @@
  *
  * @module components/features/dashboard/QuickCreate
  */
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@nextlyhq/ui";
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { Plus } from "lucide-react";
 import { useMemo } from "react";
 
@@ -41,6 +48,8 @@ import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
+
+import { useCardTier } from "../widgets/frame/tier";
 
 import { keptOffDashboard } from "./kept-off-dashboard";
 
@@ -51,7 +60,15 @@ import { keptOffDashboard } from "./kept-off-dashboard";
  * handful this stops being a shortcut and becomes a second navigation menu,
  * which the sidebar already is. The surplus is reachable there.
  */
-const MAX_SHORTCUTS = 6;
+/**
+ * The shortcuts the card offers at each tier; the rest are a menu away. Past a handful a row of
+ * shortcuts stops being one and becomes a second navigation menu, which the sidebar already is.
+ */
+const SHORTCUTS_DRAWN: Readonly<Record<SizeTier, number>> = Object.freeze({
+  small: 2,
+  medium: 3,
+  large: 6,
+});
 
 /**
  * How many collections are asked for.
@@ -81,6 +98,7 @@ export function QuickCreate() {
     isLoading: permissionsLoading,
     error: permissionsError,
   } = useCurrentUserPermissions();
+  const tier = useCardTier();
 
   const creatable = useMemo(() => {
     const items = data?.items ?? [];
@@ -123,8 +141,9 @@ export function QuickCreate() {
     );
   }
 
-  const shown = creatable.slice(0, MAX_SHORTCUTS);
-  const hidden = creatable.length - shown.length;
+  // Medium until the card has measured itself, which it does before its first paint.
+  const shown = creatable.slice(0, SHORTCUTS_DRAWN[tier ?? "medium"]);
+  const rest = creatable.slice(shown.length);
 
   return (
     <div className="flex flex-col gap-2" data-testid="quick-create">
@@ -145,12 +164,50 @@ export function QuickCreate() {
           </Link>
         ))}
       </div>
-      {hidden > 0 && (
-        // Counted, not located. The surplus is reachable from the sidebar only
-        // while it reads the same page this does, so naming it as the way there
-        // is a promise this card cannot keep on a large install.
-        <p className="text-xs text-muted-foreground">{hidden} more.</p>
-      )}
+      {/* Located, not only counted: the menu lists the very collections this card read, so
+          every one the reader may create in is a click away. The sidebar is not named as the
+          way there, since it reads its own page of collections. */}
+      {rest.length > 0 && <MoreToCreate collections={rest} />}
     </div>
+  );
+}
+
+/** What the More menu needs of a collection: its name for the route, and its labels. */
+type CreatableCollection = Parameters<typeof collectionSingularLabel>[0] & {
+  name: string;
+};
+
+/** The collections past the tier's shortcuts, in a menu, each a click from its create form. */
+function MoreToCreate({
+  collections,
+}: {
+  collections: readonly CreatableCollection[];
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`${collections.length} more collections to create`}
+          className="inline-flex w-fit items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+        >
+          {collections.length} more
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        {collections.map(collection => (
+          <DropdownMenuItem key={collection.name} asChild>
+            <Link
+              href={buildRoute(ROUTES.COLLECTION_ENTRY_CREATE, {
+                slug: collection.name,
+              })}
+              data-testid={`quick-create-more-${collection.name}`}
+            >
+              New {collectionSingularLabel(collection)}
+            </Link>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

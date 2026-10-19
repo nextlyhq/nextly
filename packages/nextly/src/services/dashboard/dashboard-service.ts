@@ -9,8 +9,10 @@
  * per-collection totals — because a number computed beside the access layer
  * discloses exactly what the row read withholds. The adapter is used directly
  * only for the installation-wide admin metrics (`media`, `users`, `roles`,
- * `permissions`, active API keys), which are uniformly unscoped, and for the
- * two `activity_log` aggregates, whose scoping is applied to the query itself.
+ * `permissions`, active API keys), and for the two `activity_log` aggregates,
+ * whose scoping is applied to the query itself. Each admin metric is counted
+ * only for a caller who may read its resource, and left out otherwise; see
+ * `admin-counts`.
  *
  * @module services/dashboard/dashboard-service
  * @since 1.0.0
@@ -28,6 +30,7 @@ import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
+import type { AdminCount, ApiKeyCountScope } from "./admin-counts";
 import {
   filterByResource,
   someResources,
@@ -38,7 +41,8 @@ import {
 /** Content statistics for the hero stats row. */
 export interface ContentStats {
   totalEntries: number;
-  totalMedia: number;
+  /** Absent for a caller who may not read media. */
+  totalMedia?: number;
   contentTypes: number;
   recentChanges24h: number;
 }
@@ -57,17 +61,23 @@ export interface CollectionCount {
   count: number;
 }
 
-/** Full dashboard stats response. */
+/**
+ * Full dashboard stats response.
+ *
+ * The installation-wide counts are optional: each is present only for a
+ * caller who may read that resource, and absent -- not zero -- for anyone
+ * else, so the response does not change with rows the caller cannot see.
+ */
 export interface DashboardStatsResponse {
   content: ContentStats;
   status: ContentStatus;
   collectionCounts: CollectionCount[];
-  users: number;
-  roles: number;
-  permissions: number;
-  fieldGroups: number;
+  users?: number;
+  roles?: number;
+  permissions?: number;
+  fieldGroups?: number;
   singles: number;
-  apiKeys: number;
+  apiKeys?: number;
 }
 
 /** A recently edited entry across any collection. */
@@ -97,8 +107,26 @@ export interface ProjectStatsResponse {
   stats: ProjectStat[];
 }
 
+/** `{ [key]: value }` when the value was counted, and nothing when it was not. */
+function present<K extends string>(
+  key: K,
+  value: number | undefined
+): Partial<Record<K, number>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, number>);
+}
+
 /** Maximum number of collections to query for recent entries. */
 const MAX_COLLECTIONS_FOR_RECENT = 20;
+
+/**
+ * The collections one registry read left out as kept off the dashboard, and whether that read
+ * completed. Until it has, the set is not a snapshot of anything: an empty one would mean "nothing
+ * is hidden" when the truth is "the hidden ones are unknown".
+ */
+interface KeptOffRead {
+  slugs: Set<string>;
+  complete: boolean;
+}
 
 /**
  * Whether a registry record is kept off the dashboard, noting its slug in `keptOff` when it is.
@@ -135,7 +163,21 @@ export class DashboardService extends BaseService {
      * catch it.
      */
     caller: ReadCaller;
+    /**
+     * The installation-wide counts this caller may be given, as
+     * `readableAdminCounts` decides. Omitted means none, for the same reason
+     * an omitted scope means nothing: the default must be the refusal.
+     */
+    counts?: ReadonlySet<AdminCount>;
+    /**
+     * Whose API keys the key count covers, as `apiKeyCountScope` decides.
+     * Omitted, the key count is left out: whose keys a caller may count is
+     * not something to assume.
+     */
+    apiKeysOf?: ApiKeyCountScope;
   }): Promise<DashboardStatsResponse> {
+    const counts = options.counts ?? new Set<AdminCount>();
+    const apiKeysOf = options.apiKeysOf;
     // An omitted scope denies rather than allows. A caller that forgets to
     // pass one gets an empty dashboard, which is visible and reportable; the
     // old default returned everything, which was not.
@@ -145,7 +187,10 @@ export class DashboardService extends BaseService {
     // Collections only: the activity trail records no Single, and its `collection` column holds
     // collection slugs, so a hidden Single sharing a visible collection's slug must not remove
     // that collection's activity.
-    const keptOffCollections = new Set<string>();
+    const keptOffCollections: KeptOffRead = {
+      slugs: new Set(),
+      complete: false,
+    };
     const collections = await this.getRegisteredCollections(
       scope,
       keptOffCollections
@@ -161,6 +206,15 @@ export class DashboardService extends BaseService {
       options.caller
     );
 
+    // A count the caller may not be given is not run at all, rather than run
+    // and dropped: the decision is the precondition, and a query that never
+    // runs cannot leak through its failure or its timing.
+    const ifAllowed = (
+      count: AdminCount,
+      read: () => Promise<number>
+    ): Promise<number | undefined> =>
+      counts.has(count) ? read() : Promise.resolve(undefined);
+
     const [
       mediaCount,
       recentChanges,
@@ -171,13 +225,17 @@ export class DashboardService extends BaseService {
       apiKeyCount,
       statusBreakdown,
     ] = await Promise.all([
-      this.countTable("media"),
-      this.countRecentChanges24h(scope, keptOffCollections),
-      this.countTable("users"),
-      this.countTable("roles"),
-      this.countTable("permissions"),
-      this.countRegistryItems("fieldGroupRegistryService"),
-      this.countActiveApiKeys(),
+      ifAllowed("media", () => this.countTable("media")),
+      this.countRecentChangesOutside(scope, keptOffCollections),
+      ifAllowed("users", () => this.countTable("users")),
+      ifAllowed("roles", () => this.countTable("roles")),
+      ifAllowed("permissions", () => this.countTable("permissions")),
+      ifAllowed("fieldGroups", () =>
+        this.countRegistryItems("fieldGroupRegistryService")
+      ),
+      apiKeysOf === undefined
+        ? Promise.resolve(undefined)
+        : ifAllowed("apiKeys", () => this.countActiveApiKeys(apiKeysOf)),
       this.getContentStatusBreakdown(
         collections,
         collectionCounts,
@@ -187,21 +245,25 @@ export class DashboardService extends BaseService {
 
     const totalEntries = collectionCounts.reduce((sum, c) => sum + c.count, 0);
 
+    // A refused count is left out of the object, not set to `undefined` on
+    // it: JSON drops an undefined property anyway, but a caller of this
+    // method reads the object itself, and `"users" in stats` must agree with
+    // what the wire says.
     return {
       content: {
         totalEntries,
-        totalMedia: mediaCount,
+        ...present("totalMedia", mediaCount),
         contentTypes: collections.length,
         recentChanges24h: recentChanges,
       },
       status: statusBreakdown,
       collectionCounts,
-      users: userCount,
-      roles: roleCount,
-      permissions: permissionCount,
-      fieldGroups: componentCount,
+      ...present("users", userCount),
+      ...present("roles", roleCount),
+      ...present("permissions", permissionCount),
+      ...present("fieldGroups", componentCount),
       singles: singles.length,
-      apiKeys: apiKeyCount,
+      ...present("apiKeys", apiKeyCount),
     };
   }
 
@@ -265,43 +327,48 @@ export class DashboardService extends BaseService {
   async getProjectStats(options: {
     scope?: ReadableResources;
     caller: ReadCaller;
+    counts?: ReadonlySet<AdminCount>;
   }): Promise<ProjectStatsResponse> {
     const dashStats = await this.getStats(options);
 
+    // A count `getStats` left out is left out here too, rather than shown as 0.
+    const stats: Array<{ key: string; label: string; value?: number }> = [
+      {
+        key: "entries",
+        label: "Entries",
+        value: dashStats.content.totalEntries,
+      },
+      {
+        key: "media",
+        label: "Media Assets",
+        value: dashStats.content.totalMedia,
+      },
+      {
+        key: "contentTypes",
+        label: "Content Types",
+        value: dashStats.content.contentTypes,
+      },
+      {
+        key: "fieldGroups",
+        label: "Field Groups",
+        value: dashStats.fieldGroups,
+      },
+      { key: "singles", label: "Singles", value: dashStats.singles },
+      { key: "users", label: "Users", value: dashStats.users },
+      { key: "apiKeys", label: "API Keys", value: dashStats.apiKeys },
+      { key: "locales", label: "Locales", value: 1 }, // Placeholder until i18n
+    ];
     return {
-      stats: [
-        {
-          key: "entries",
-          label: "Entries",
-          value: dashStats.content.totalEntries,
-        },
-        {
-          key: "media",
-          label: "Media Assets",
-          value: dashStats.content.totalMedia,
-        },
-        {
-          key: "contentTypes",
-          label: "Content Types",
-          value: dashStats.content.contentTypes,
-        },
-        {
-          key: "fieldGroups",
-          label: "Field Groups",
-          value: dashStats.fieldGroups,
-        },
-        { key: "singles", label: "Singles", value: dashStats.singles },
-        { key: "users", label: "Users", value: dashStats.users },
-        { key: "apiKeys", label: "API Keys", value: dashStats.apiKeys },
-        { key: "locales", label: "Locales", value: 1 }, // Placeholder until i18n
-      ],
+      stats: stats.filter(
+        (stat): stat is ProjectStat => stat.value !== undefined
+      ),
     };
   }
 
   private async getRegisteredCollections(
     scope: ReadableResources,
     /** Collects the slugs left out as kept off the dashboard, for the figures read elsewhere. */
-    keptOff?: Set<string>
+    keptOff?: KeptOffRead
   ): Promise<CollectionInfo[]> {
     try {
       const registryService = container.get<{
@@ -330,8 +397,9 @@ export class DashboardService extends BaseService {
       // A collection kept off the dashboard is neither listed nor counted here, for any caller,
       // a super-admin included; see `keptOffDashboard`.
       const collections = (await registryService.getAllCollections()).filter(
-        c => !leftOut(c, keptOff)
+        c => !leftOut(c, keptOff?.slugs)
       );
+      if (keptOff) keptOff.complete = true;
       const mapped = collections.map(c => ({
         slug: c.slug,
         tableName: c.tableName,
@@ -417,39 +485,16 @@ export class DashboardService extends BaseService {
     }
   }
 
-  private async countActiveApiKeys(): Promise<number> {
+  /**
+   * Active, unexpired API keys: every user's, or one owner's, which is what
+   * that caller's key list shows.
+   */
+  private async countActiveApiKeys(owner: ApiKeyCountScope): Promise<number> {
     try {
-      const q = this.dialect === "mysql" ? "`" : '"';
-      // Phase A follow-up (2026-05-01): raw SQL queries can't bind a Date
-      // directly on SQLite (better-sqlite3 throws "can only bind numbers,
-      // strings, bigints, buffers, and null"). PG and MySQL drivers
-      // convert natively, but SQLite is strict. Format up-front per
-      // dialect so the bind value is always a primitive. See companion
-      // fix in `permission-cache-service.ts:222` (Phase A original).
-      const now = this.dateForRawBind();
-      const ph1 = this.dialect === "postgresql" ? "$1" : "?";
-      const ph2 = this.dialect === "postgresql" ? "$2" : "?";
-      const isActiveLiteral =
-        this.dialect === "sqlite"
-          ? "1"
-          : this.dialect === "mysql"
-            ? "1"
-            : "true";
-
-      const sql =
-        `SELECT COUNT(*) as count FROM ${q}api_keys${q} ` +
-        `WHERE ${q}is_active${q} = ${ph1} ` +
-        `AND (${q}expires_at${q} IS NULL OR ${q}expires_at${q} > ${ph2})`;
-
-      const params: SqlParam[] =
-        this.dialect === "postgresql"
-          ? [true, now]
-          : [isActiveLiteral === "1" ? 1 : true, now];
-
+      const { sql, params } = this.activeApiKeyQuery(owner);
       const result = await this.adapter.executeQuery<{
         count: number | string;
       }>(sql, params);
-
       return Number(result[0]?.count ?? 0);
     } catch (error) {
       this.logger.error("Failed to count active API keys", {
@@ -457,6 +502,34 @@ export class DashboardService extends BaseService {
       });
       return 0;
     }
+  }
+
+  /**
+   * The SQL and binds counting active, unexpired keys, narrowed to one owner
+   * unless the scope is every user's.
+   *
+   * The binds are primitives on every dialect. SQLite cannot bind a Date or a
+   * boolean (better-sqlite3 refuses them), so the time is formatted up front
+   * and "active" is bound as 1 everywhere but PostgreSQL, whose column is a
+   * real boolean.
+   */
+  private activeApiKeyQuery(owner: ApiKeyCountScope): {
+    sql: string;
+    params: SqlParam[];
+  } {
+    const q = this.dialect === "mysql" ? "`" : '"';
+    const at = (n: number) => (this.dialect === "postgresql" ? `$${n}` : "?");
+    const active: SqlParam = this.dialect === "postgresql" ? true : 1;
+    const params: SqlParam[] = [active, this.dateForRawBind()];
+    let sql =
+      `SELECT COUNT(*) as count FROM ${q}api_keys${q} ` +
+      `WHERE ${q}is_active${q} = ${at(1)} ` +
+      `AND (${q}expires_at${q} IS NULL OR ${q}expires_at${q} > ${at(2)})`;
+    if (owner.kind === "owner") {
+      sql += ` AND ${q}user_id${q} = ${at(3)}`;
+      params.push(owner.userId);
+    }
+    return { sql, params };
   }
 
   /**
@@ -479,6 +552,20 @@ export class DashboardService extends BaseService {
    *   some dialects, so the short-circuit has to happen before the query is
    *   built rather than as a driver rejection swallowed by the catch below.
    */
+  /**
+   * The recent-changes figure without the collections kept off the dashboard, or 0 when the
+   * registry read that names them did not complete: counting then would include exactly the
+   * activity the figure promises to leave out. 0 is what the count itself answers on a failure.
+   */
+  private countRecentChangesOutside(
+    scope: ReadableResources,
+    keptOff: KeptOffRead
+  ): Promise<number> {
+    return keptOff.complete
+      ? this.countRecentChanges24h(scope, keptOff.slugs)
+      : Promise.resolve(0);
+  }
+
   private async countRecentChanges24h(
     scope: ReadableResources,
     /** Collections kept off the dashboard: their activity is not counted. */

@@ -88,6 +88,12 @@ jobs:
       - name: Seed the playground
         run: pnpm --filter playground exec tsx scripts/seed.ts
 
+      # A production boot refuses a configured plugin no install has recorded,
+      # and this database is new, so its plugins are installed as a deployment
+      # would install them.
+      - name: Install the playground's plugins
+        run: pnpm --filter playground exec nextly plugins install --all
+
       - name: Build the playground for production
         run: pnpm --filter playground exec next build
 

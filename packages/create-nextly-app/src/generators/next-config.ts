@@ -242,15 +242,23 @@ function declaredValue(name: string, body: Statement[]): Expression | null {
 function configObject(
   value: Expression,
   body: Statement[],
-  depth = 0
+  depth = 0,
+  throughCalls = true
 ): ObjectExpression | string {
   if (depth > 8) return "its config is built in a way this cannot follow";
   if (value.type === "ObjectExpression") return value;
   if (isTypeAssertion(value))
-    return configObject(value.expression, body, depth + 1);
+    return configObject(value.expression, body, depth + 1, throughCalls);
   if (value.type === "Identifier")
-    return followVariable(value.name, body, depth);
-  if (value.type === "CallExpression") return followCall(value, body, depth);
+    return followVariable(value.name, body, depth, throughCalls);
+  if (value.type === "CallExpression") {
+    // A wrapper hands Next.js what it returns, not the object it was given:
+    // followed for an edit to that object, never trusted to say what Next.js
+    // finally receives.
+    return throughCalls
+      ? followCall(value, body, depth)
+      : "its config is the result of a call, which may change any setting";
+  }
   return value.type === "ArrowFunctionExpression" ||
     value.type === "FunctionExpression"
     ? "it exports a function"
@@ -282,14 +290,15 @@ function isTypeAssertion(
 function followVariable(
   name: string,
   body: Statement[],
-  depth: number
+  depth: number,
+  throughCalls = true
 ): ObjectExpression | string {
   if (referenceCount(name, body) > 1) {
     return `its ${name} is used again after it is declared, where it may be changed`;
   }
   const declared = declaredValue(name, body);
   return declared
-    ? configObject(declared, body, depth + 1)
+    ? configObject(declared, body, depth + 1, throughCalls)
     : "its config is not declared in this file";
 }
 
@@ -694,9 +703,39 @@ function experimentalConflict(
 }
 
 /** The object literal the file exports as its config, or why there is none to edit. */
-function exportedConfig(body: Statement[]): ObjectExpression | string {
+function exportedConfig(
+  body: Statement[],
+  throughCalls = true
+): ObjectExpression | string {
   const exported = exportedValue(body);
-  return typeof exported === "string" ? exported : configObject(exported, body);
+  return typeof exported === "string"
+    ? exported
+    : configObject(exported, body, 0, throughCalls);
+}
+
+/**
+ * The strings the exported config lists under `key`, in order; `"absent"`
+ * when the config it exports does not set `key`; or null when that cannot be
+ * known: the file does not parse, its export cannot be followed or comes from
+ * a wrapper call, the value is not an array of strings written in place, or a
+ * spread, computed or accessor property may set it unseen. Every step that reads a setting from the app's config asks here,
+ * so a commented-out or nested occurrence is never taken for the real one.
+ */
+export function configStringList(
+  source: string,
+  file: string,
+  key: string
+): string[] | "absent" | null {
+  const body = parseBody(source, file);
+  if (!body) return null;
+  // What Next.js receives, so not through a wrapper, whose result may differ.
+  const object = exportedConfig(body, false);
+  if (typeof object === "string") return null;
+  if (hiddenSettings(object, [key], "the config") !== null) return null;
+  const value = propertyValue(object, key);
+  if (value === undefined) return "absent";
+  const names = literalNames(value);
+  return names ? [...names] : null;
 }
 
 /** The edits that put every required package in the config's list, or why it cannot be changed. */
@@ -834,8 +873,12 @@ export async function nextConfigFileToChange(cwd: string): Promise<string> {
   return (await findConfigFile(cwd)) ?? "next.config.mjs";
 }
 
-/** The app's Next config file, by the name Next.js would read first. */
-async function findConfigFile(cwd: string): Promise<string | null> {
+/**
+ * The app's Next config file, by the name Next.js would read first. Every
+ * step that reads the app's config finds it here, so none reads a file that
+ * another step would pass over and replace.
+ */
+export async function findConfigFile(cwd: string): Promise<string | null> {
   for (const name of CONFIG_FILES) {
     if (await fs.pathExists(path.join(cwd, name))) return name;
   }

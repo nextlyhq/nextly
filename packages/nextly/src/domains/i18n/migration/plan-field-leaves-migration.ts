@@ -24,6 +24,7 @@ import { COMPANION_STATUS_COLUMN } from "../companion-columns";
 
 import { castText, ddlType, exactText, lit, q } from "./ddl-types";
 import {
+  archiveOwnerOf,
   buildDefaultLocaleRestoreStatements,
   buildFieldLeavesTranslationArchiveStatement,
 } from "./generate-down";
@@ -70,15 +71,22 @@ function fromArchivedText(
 export function planFieldLeavesTranslationMigration(
   spec: CompanionMigrationSpec
 ): FieldLeavesMigrationPlan {
-  const { dialect, mainTable, companionTable, defaultLocale, collection } =
-    spec;
+  const {
+    dialect,
+    mainTable,
+    companionTable,
+    defaultLocale,
+    collection,
+    kind,
+  } = spec;
+  const owner = archiveOwnerOf(collection, kind);
   const ref = { dialect, mainTable, companionTable, defaultLocale };
   const comp = q(companionTable, dialect);
   const main = q(mainTable, dialect);
   const names = spec.columns.map(c => c.name);
 
   const archiveUp = spec.columns.map(column =>
-    buildFieldLeavesTranslationArchiveStatement(ref, collection, column.name)
+    buildFieldLeavesTranslationArchiveStatement(ref, owner, column.name)
   );
   const archiveDown = [
     // The archived copies stay: a restore may still read them, and they change nothing a rollback
@@ -101,6 +109,7 @@ export function planFieldLeavesTranslationMigration(
   const newestArchived = (column: LocalizedColumnSpec) =>
     `(SELECT ${q("archived", dialect)}.${q("value", dialect)} FROM ${q(ARCHIVE, dialect)} ${q("archived", dialect)} ` +
     `WHERE ${q("archived", dialect)}.${q("collection", dialect)} = ${lit(collection)} ` +
+    `AND ${q("archived", dialect)}.${q("entity_kind", dialect)} = ${lit(owner.kind)} ` +
     `AND ${exactText(`${q("archived", dialect)}.${q("entry_id", dialect)}`, dialect)} = ${exactText(castText(parent, dialect), dialect)} ` +
     `AND ${exactText(`${q("archived", dialect)}.${q("locale", dialect)}`, dialect)} = ${exactText(locale, dialect)} ` +
     `AND ${q("archived", dialect)}.${q("field", dialect)} = ${lit(column.name)} ` +

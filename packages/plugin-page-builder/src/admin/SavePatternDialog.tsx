@@ -216,6 +216,10 @@ export function SavePatternDialog({
 
   const submit = async (event: React.FormEvent): Promise<void> => {
     event.preventDefault();
+    // Stopped here as well as kept out of any page form's tree. React bubbles a
+    // submit through the component tree, portals included, so a form of the
+    // page around this dialog would otherwise receive it and save the page.
+    event.stopPropagation();
     // NARROWED rather than asserted. `complete` is the same question, and a
     // boolean cannot carry the narrowing to the object below — so an assertion
     // there would be the one thing standing between an unanswered radio group

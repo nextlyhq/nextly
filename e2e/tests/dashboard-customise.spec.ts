@@ -82,6 +82,19 @@ async function promptChoices(page: Page): Promise<string[]> {
 
 /** axe's AA violations on the whole page, named so a failure says what to fix. */
 async function expectNoAxeViolations(page: Page): Promise<void> {
+  // Scanned once the page has settled: a menu fading out or a moved card's
+  // transition caught halfway is a colour the page never rests at, and axe
+  // measures its contrast as drawn. Endless animations (a spinner) never
+  // settle and are left out of the wait.
+  await page.waitForFunction(() =>
+    document
+      .getAnimations()
+      .every(
+        animation =>
+          animation.playState !== "running" ||
+          animation.effect?.getTiming().iterations === Number.POSITIVE_INFINITY
+      )
+  );
   const results = await new AxeBuilder({ page })
     .withTags(AA_TAGS)
     .disableRules(HOST_OWNED_RULES)
@@ -133,8 +146,10 @@ test("entering by keyboard lands on the bar, and Tab never reaches a card's own 
   // The positive control: at rest the cards DO hold links of their own, so a
   // Tab walk that meets none in customise mode has measured a fence rather
   // than an empty dashboard.
+  // Waited for: a card draws its links once its data arrives, after the
+  // card itself, so a count taken at once can read an empty dashboard.
   const cardLinks = page.locator(`${CELLS} a[href]`);
-  expect(await cardLinks.count()).toBeGreaterThan(0);
+  await expect(cardLinks.first()).toBeVisible();
 
   await customize(page);
   await expect(bar(page)).toBeFocused();
@@ -235,7 +250,14 @@ test("going Back with unsaved changes asks, and Keep Editing stays", async ({
   await expect(prompt).toBeVisible();
   await expect(page).toHaveURL(DASHBOARD_PATH);
   // Still the dashboard behind the question, not the page Back was going to.
-  await expect(bar(page)).toBeVisible();
+  // Found among hidden elements: the prompt is modal, so everything behind it
+  // is out of the accessibility tree while it shows, though still drawn.
+  await expect(
+    page.getByRole("group", {
+      name: "Customize your dashboard",
+      includeHidden: true,
+    })
+  ).toBeVisible();
   await prompt.getByRole("button", { name: "Keep Editing" }).click();
   await expect(prompt).toBeHidden();
   await expect(page).toHaveURL(DASHBOARD_PATH);

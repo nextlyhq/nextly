@@ -26,20 +26,28 @@ on:
   # merges it only if the required checks pass there too.
   merge_group:
     types: [checks_requested]
+  # main-catch-up.yml starts a run on main's newest commit when no run has
+  # tested it; a dispatched run tests everything (`scripts/change-scope.mjs`
+  # has no narrower rule for it).
+  workflow_dispatch:
 
 # Read-only: the job never writes through the GITHUB_TOKEN.
 permissions:
   contents: read
 
-# The wall-clock budget for ONE dialect's suite, enforced per step rather than
-# per job — see scripts/run-with-budget.sh for why the distinction decides
-# whether a slow leg reports at all.
+# The wall-clock budget for ONE job's share of a dialect's suite: the whole
+# suite on the sqlite leg, one shard of it on the postgres and mysql legs.
+# Enforced per step rather than per job — see scripts/run-with-budget.sh for
+# why the distinction decides whether a slow leg reports at all.
 #
-# 55 against a MySQL leg that spends about 34 minutes in this step and an sqlite
-# leg that spends about 22. Set with real headroom rather than just past the
-# last measurement: a bound at the current duration is a bound that fires on
-# variance, and this one is meant to catch a suite that has genuinely run away,
-# not to police a slow morning on shared runners.
+# Set with real headroom rather than just past the last measurement: a bound at
+# the current duration is a bound that fires on variance, and this one is meant
+# to catch a suite that has genuinely run away, not to police a slow morning on
+# shared runners. How slow a morning gets was measured on 2026-10-18: the same
+# 393 core files ran a median 1.54 times slower on the runner `main` got for
+# b2cf477bd than on the one it got for 0898c3e50, an hour earlier, and the
+# unsharded MySQL leg (about 38 minutes of suite on the fast runner) ran out of
+# this budget with 65 files still to go.
 #
 # ONE knob for all three legs on purpose. Per-leg budgets would have to be
 # re-tuned as each suite grows, and a budget nobody re-tunes is a budget that
@@ -106,9 +114,16 @@ jobs:
         uses: ./.github/actions/superseded-on-main
         with:
           workflow: integration.yml
+          # The jobs that run the suite, by the names their runs carry: each
+          # shard of a sharded leg on its own, since a run where one shard was
+          # cancelled did not test that shard's files, while the leg's
+          # required check, which only reads the shards, would still read
+          # `failure`, a verdict.
           substantive-job: |
-            Integration (postgres)
-            Integration (mysql)
+            Integration (postgres) shard (1)
+            Integration (postgres) shard (2)
+            Integration (mysql) shard (1)
+            Integration (mysql) shard (2)
             Integration (sqlite)
           token: ${{ github.token }}
       - name: Decide
@@ -145,8 +160,12 @@ jobs:
   # entry could not be chosen per matrix value, so the postgres leg started
   # mysql and vice versa. Each job below declares the one it connects to.
   # The setup the legs share lives in `.github/actions/integration-setup`.
-  integration-postgres:
-    name: Integration (postgres)
+  integration-postgres-shards:
+    # Not a required check: `Integration (postgres)` below is, and it passes
+    # only when every shard did. GitHub appends the matrix value to a name
+    # with no expression in it, so the shards report as `... shard (1)` and
+    # `... shard (2)`, and a skipped run as one `... shard`.
+    name: Integration (postgres) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
     # its timeout) does not skip this leg: with no `always()`-style override,
@@ -156,6 +175,16 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
+    strategy:
+      # Each shard's verdict is its own: one that fails does not cancel the
+      # other, so a red run still says how the rest of the suite did.
+      fail-fast: false
+      # `--shard` hands each job the same number of files, not the same amount
+      # of time, so shards finish apart by however their files differ. The
+      # count is read from `strategy.job-total`, so adding a value here is the
+      # whole change to run three.
+      matrix:
+        shard: [1, 2]
     # A BACKSTOP now, not the bound that should ever fire.
     #
     # 25 minutes until the suite outgrew it. The MySQL leg's last GREEN run
@@ -225,8 +254,8 @@ jobs:
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
-            "the PostgreSQL integration suite" \
-            pnpm lane:test:integration:postgres
+            "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the PostgreSQL integration suite" \
+            pnpm lane:test:integration:postgres -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
         env:
           TEST_POSTGRES_URL: postgres://nextly:nextly@localhost:5432/nextly_test
           TURBO_CACHE_DIR: .turbo
@@ -236,14 +265,49 @@ jobs:
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        if: success()
+        # One shard saves: both build the same packages under the same key,
+        # and a cache key can be written once.
+        if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
 
-  integration-mysql:
-    name: Integration (mysql)
+  # The required check `Integration (postgres)`, read by the ruleset and by
+  # scripts/verify-merge.mjs: it passes only when every shard above passed.
+  #
+  # It runs on the same conditions as the shards, so a run that skips them
+  # skips this too and reports `skipped` under this literal name, as the
+  # unsharded leg did. When they did run, `needs.<id>.result` is `success`
+  # only if every shard succeeded; anything else fails it, including a shard
+  # cancelled by its own backstop, which on its own would read as no verdict.
+  integration-postgres:
+    name: Integration (postgres)
+    needs: [changes, integration-postgres-shards]
+    # `always()`, not `!cancelled()`: a shard stopped by its own backstop is
+    # cancelled, and this check, skipped then, would read to the merge gate as
+    # a pass. It runs on the shards' conditions otherwise, and fails unless
+    # every shard succeeded; a run cancelled on purpose reads as failed here
+    # rather than cancelled, on a head nothing merges.
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard passed
+        env:
+          SHARDS: ${{ needs.integration-postgres-shards.result }}
+        run: |
+          if [ "$SHARDS" != "success" ]; then
+            echo "::error::the postgres integration shards ended '$SHARDS', not 'success'"
+            exit 1
+          fi
+
+  integration-mysql-shards:
+    # Not a required check: `Integration (mysql)` below is, and it passes
+    # only when every shard did. GitHub appends the matrix value to a name
+    # with no expression in it, so the shards report as `... shard (1)` and
+    # `... shard (2)`, and a skipped run as one `... shard`.
+    name: Integration (mysql) shard
     needs: changes
     # `!cancelled()` so a `changes` job that FAILED (checkout, the action,
     # its timeout) does not skip this leg: with no `always()`-style override,
@@ -253,6 +317,11 @@ jobs:
     # suite; only a cancelled workflow stays cancelled.
     if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
+    strategy:
+      # The same split as the postgres leg, for the same reasons.
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
 
@@ -288,13 +357,50 @@ jobs:
       - name: Setup
         uses: ./.github/actions/integration-setup
 
+      # MySQL 8.4 writes every commit's redo log and binary log to disk before
+      # it returns, and its redo log is 100 MB. The core suite commits many
+      # small transactions, so the leg spent its time waiting on those writes
+      # ("Consider increasing innodb_redo_log_capacity") and overran its
+      # budget with every test green. A throwaway test database needs neither
+      # guarantee, so this relaxes both and enlarges the redo log; all three
+      # settings change at runtime, so the service image stays as it is.
+      - name: Give the test database room to write
+        run: |
+          mysql -h 127.0.0.1 -uroot -pnextly -e "SET GLOBAL innodb_redo_log_capacity = 1073741824; SET GLOBAL innodb_flush_log_at_trx_commit = 2; SET GLOBAL sync_binlog = 0;"
+          mysql -h 127.0.0.1 -uroot -pnextly -N -e "SELECT @@innodb_redo_log_capacity, @@innodb_flush_log_at_trx_commit, @@sync_binlog;"
+
       # See the postgres leg for why every adapter is built on every leg.
+      #
+      # Every five minutes while the suite runs, the server prints the
+      # connections held for over a minute, the metadata locks of any schema
+      # where one is waiting, and the transactions open for over a minute. A
+      # suite that stops waiting on one of these leaves no other record of
+      # it, and only while it runs: the budget's stop ends the suite's
+      # process, and its connections and locks with it.
       - name: Run integration tests (mysql)
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts
+          # The watcher sleeps in a child it waits on, and stops that child
+          # when it is stopped: otherwise the sleep outlives it holding the
+          # step's output open, and the step waits for it.
+          (
+            trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+            while :; do
+              sleep 300 & nap=$!
+              wait "$nap"
+              echo "::group::What MySQL holds at $(date -u +%H:%M:%SZ)"
+              mysql -h 127.0.0.1 -uroot -pnextly -t -e "SELECT ID,USER,DB,COMMAND,TIME,STATE,LEFT(INFO,200) AS INFO FROM information_schema.PROCESSLIST WHERE TIME > 60 AND USER <> 'event_scheduler' ORDER BY TIME DESC; SELECT OBJECT_TYPE,OBJECT_SCHEMA,OBJECT_NAME,LOCK_TYPE,LOCK_DURATION,LOCK_STATUS,OWNER_THREAD_ID FROM performance_schema.metadata_locks WHERE OBJECT_SCHEMA IN (SELECT OBJECT_SCHEMA FROM performance_schema.metadata_locks WHERE LOCK_STATUS = 'PENDING'); SELECT trx_id,trx_state,trx_started,trx_mysql_thread_id,LEFT(trx_query,200) AS trx_query FROM information_schema.INNODB_TRX WHERE trx_started < NOW() - INTERVAL 60 SECOND;" 2>&1 | grep -v "Using a password" || true
+              echo "::endgroup::"
+            done
+          ) &
+          watcher=$!
+          status=0
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
-            "the MySQL integration suite" \
-            pnpm lane:test:integration:mysql
+            "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the MySQL integration suite" \
+            pnpm lane:test:integration:mysql -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} || status=$?
+          kill "$watcher" 2>/dev/null || true
+          wait "$watcher" 2>/dev/null || true
+          exit "$status"
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
           TURBO_CACHE_DIR: .turbo
@@ -304,11 +410,42 @@ jobs:
       # step that runs however the job ended, and splitting restore from save is the
       # supported way to make that conditional (`save-always` was deprecated for it).
       - name: Save Turbo cache
-        if: success()
+        # One shard saves: both build the same packages under the same key,
+        # and a cache key can be written once.
+        if: success() && matrix.shard == 1
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # The required check `Integration (mysql)`, read by the ruleset and by
+  # scripts/verify-merge.mjs: it passes only when every shard above passed.
+  #
+  # It runs on the same conditions as the shards, so a run that skips them
+  # skips this too and reports `skipped` under this literal name, as the
+  # unsharded leg did. When they did run, `needs.<id>.result` is `success`
+  # only if every shard succeeded; anything else fails it, including a shard
+  # cancelled by its own backstop, which on its own would read as no verdict.
+  integration-mysql:
+    name: Integration (mysql)
+    needs: [changes, integration-mysql-shards]
+    # `always()`, not `!cancelled()`: a shard stopped by its own backstop is
+    # cancelled, and this check, skipped then, would read to the merge gate as
+    # a pass. It runs on the shards' conditions otherwise, and fails unless
+    # every shard succeeded; a run cancelled on purpose reads as failed here
+    # rather than cancelled, on a head nothing merges.
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard passed
+        env:
+          SHARDS: ${{ needs.integration-mysql-shards.result }}
+        run: |
+          if [ "$SHARDS" != "success" ]; then
+            echo "::error::the mysql integration shards ended '$SHARDS', not 'success'"
+            exit 1
+          fi
 
   # sqlite runs in-process against a throwaway file, so this job declares no
   # `services:` at all and has no external network dependency: a

@@ -199,7 +199,8 @@ const CORE_WIDGET_LITERALS = [
   {
     id: "core/team",
     title: "Team",
-    description: "How many users and roles the project has.",
+    // Tier-neutral: a small card draws the people alone, and a reader may see only one count.
+    description: "Your project's team at a glance.",
     archetype: "custom",
     defaultSize: "full",
     // The narrowest width it still draws at: two counters side by side, which need at least a third.
