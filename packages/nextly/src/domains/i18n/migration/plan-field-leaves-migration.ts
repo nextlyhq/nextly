@@ -20,14 +20,13 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { COMPANION_STATUS_COLUMN } from "../companion-columns";
-
 import { castText, ddlType, exactText, lit, q } from "./ddl-types";
 import {
   archiveOwnerOf,
   buildDefaultLocaleRestoreStatements,
   buildFieldLeavesTranslationArchiveStatement,
 } from "./generate-down";
+import { buildMissingDefaultRowsInsert } from "./generate-up";
 import type { CompanionMigrationSpec, LocalizedColumnSpec } from "./types";
 
 const ARCHIVE = "nextly_i18n_archive";
@@ -119,15 +118,9 @@ export function planFieldLeavesTranslationMigration(
   // was shared may have none (when this was the entity's last translated field, nothing wrote
   // one), and the main table's column is dropped right after this file's DOWN, so it is created
   // here from the main row, publishing state included, rather than its value being left behind.
-  const insertMissingDefaultRows =
-    `INSERT INTO ${comp} (${q("_parent", dialect)}, ${q("_locale", dialect)}, ` +
-    `${names.map(name => q(name, dialect)).join(", ")}` +
-    `${spec.status ? `, ${q(COMPANION_STATUS_COLUMN, dialect)}` : ""}) ` +
-    `SELECT ${mainId}, ${lit(defaultLocale)}, ` +
-    `${names.map(name => `${main}.${q(name, dialect)}`).join(", ")}` +
-    `${spec.status ? `, ${main}.${q("status", dialect)}` : ""} ` +
-    `FROM ${main} WHERE NOT EXISTS (SELECT 1 FROM ${comp} WHERE ${parent} = ${mainId} ` +
-    `AND ${locale} = ${lit(defaultLocale)})`;
+  const insertMissingDefaultRows = buildMissingDefaultRowsInsert(ref, names, {
+    status: spec.status,
+  });
   const sharedDown = [
     ...spec.columns.map(
       column =>

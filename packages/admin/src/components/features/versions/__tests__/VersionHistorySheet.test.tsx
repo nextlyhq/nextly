@@ -5,10 +5,11 @@
  */
 import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { answerMediaQueries } from "@admin/__tests__/helpers/media-query";
-import { render, screen, waitFor, within } from "@admin/__tests__/utils";
+import { act, render, screen, waitFor, within } from "@admin/__tests__/utils";
 
 const {
   useVersionsMock,
@@ -17,7 +18,7 @@ const {
   setLabelMock,
   mutateMock,
   toastErrorMock,
-  compareDialogMock,
+  markSeenMock,
 } = vi.hoisted(() => ({
   useVersionsMock: vi.fn(),
   useVersionMock: vi.fn(),
@@ -25,18 +26,23 @@ const {
   setLabelMock: vi.fn(),
   mutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
-  compareDialogMock: vi.fn(),
+  // Resolves like the route; `clearAllMocks` keeps this between tests.
+  markSeenMock: vi.fn(() =>
+    Promise.resolve({ message: "Marked as seen.", item: {} })
+  ),
 }));
 
-// Stubbed so these tests stay about the panel. The real dialog fetches a diff
-// of its own, which the panel neither requests nor knows about; its own suite
-// covers what it renders.
-vi.mock("../VersionCompareDialog", () => ({
-  VersionCompareDialog: (props: Record<string, unknown>) => {
-    compareDialogMock(props);
-    return <div data-testid="compare-dialog" />;
-  },
-}));
+// The mark a shown version sends. Only this call is replaced; everything else
+// the panel reads stays real.
+vi.mock("@admin/services/versionApi", async () => {
+  const actual = await vi.importActual<
+    typeof import("@admin/services/versionApi")
+  >("@admin/services/versionApi");
+  return {
+    ...actual,
+    versionApi: { ...actual.versionApi, markSeen: markSeenMock },
+  };
+});
 
 vi.mock("@admin/components/ui", async () => {
   const actual = await vi.importActual<typeof import("@admin/components/ui")>(
@@ -55,7 +61,10 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   useSetVersionLabel: (...a: unknown[]) => setLabelMock(...a),
 }));
 
-import { DocumentHistoryContext } from "../document-history-context";
+import {
+  DocumentHistoryContext,
+  type RestoreAffordance,
+} from "../document-history-context";
 import { VersionHistorySheet } from "../VersionHistorySheet";
 
 const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
@@ -115,7 +124,7 @@ function renderSheet(props: Record<string, unknown> = {}) {
  */
 function titleRow(): HTMLElement {
   const title = screen.getByRole("heading", {
-    name: /^(Version history|Version \d+)$/,
+    name: /^(History|Version \d+)$/,
   });
   const row = title.closest("div");
   if (!row) throw new Error("panel title row not found");
@@ -172,6 +181,8 @@ function renderPublishing(props: Record<string, unknown> = {}) {
 describe("VersionHistorySheet", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Every test starts from an address naming no panel, as a page load does.
+    window.history.replaceState(null, "", "/");
     useVersionsMock.mockReturnValue(listState());
     useVersionMock.mockReturnValue(detailState());
     restoreMock.mockReturnValue({ mutate: mutateMock, isPending: false });
@@ -280,8 +291,8 @@ describe("VersionHistorySheet", () => {
   });
 
   it("keeps a retry reachable from a preview when the head refresh fails", async () => {
-    // In preview the freshness gate hides "Compare with current"; the retry has
-    // to remain reachable or the comparison cannot recover without a reopen.
+    // In preview the freshness gate withholds the comparison; the retry has to
+    // remain reachable or the comparison cannot recover without a reopen.
     const refetch = vi.fn();
     useVersionsMock.mockReturnValue(
       listState({
@@ -297,17 +308,20 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
+    // Beside the document, where the panel keeps its controls on screen
+    // while a version is read.
+    answerMediaQueries(true);
     renderSheet();
     await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
 
     expect(
-      screen.queryByRole("button", { name: /Compare with current/ })
+      screen.queryByRole("button", { name: /Open full comparison/ })
     ).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
     expect(refetch).toHaveBeenCalled();
   });
 
-  it("opens the compare dialog with the pair, without replacing the panel", async () => {
+  it("marks a version seen once when it is shown, and the list marks nothing", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: {
@@ -318,26 +332,60 @@ describe("VersionHistorySheet", () => {
       })
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    // Where the open panel's address stands.
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/collections/posts/e1?history=1"
+    );
+
+    const { rerender } = renderSheet();
+    // The list names versions without showing any of them.
+    expect(markSeenMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+    await waitFor(() => expect(markSeenMock).toHaveBeenCalledTimes(1));
+    expect(markSeenMock).toHaveBeenCalledWith(scope, 2);
+
+    // Staying on the same version is the same showing.
+    rerender(<VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />);
+    expect(markSeenMock).toHaveBeenCalledTimes(1);
+    // Back to the list, as the address moves when the author leaves the
+    // version, and the same version chosen again: a new showing, marked again.
+    act(() => {
+      window.history.replaceState(
+        null,
+        "",
+        "/admin/collections/posts/e1?history=1"
+      );
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Version 2/ })
+    );
+    await waitFor(() => expect(markSeenMock).toHaveBeenCalledTimes(2));
+    expect(markSeenMock).toHaveBeenLastCalledWith(scope, 2);
+  });
+
+  it("marks nothing while the chosen version has not arrived", async () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(2)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ isLoading: true }));
 
     renderSheet();
     await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Compare with current/ })
-    );
 
-    // Older on the left: "compare with current" reads version 2 against the
-    // head, so the chosen version is `from` and the head is `to`.
-    expect(compareDialogMock).toHaveBeenCalledWith(
-      expect.objectContaining({ open: true, from: 2, to: 3 })
-    );
-    // The preview stays underneath rather than being swapped out, which is what
-    // makes dismissing the dialog a return rather than a navigation.
-    expect(
-      screen.getByRole("button", { name: /Back to history/ })
-    ).toBeInTheDocument();
+    expect(markSeenMock).not.toHaveBeenCalled();
   });
 
-  it("compares against the next older version of the same locale", async () => {
+  it("offers no compare dialog: a comparison is read on its own page", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: {
@@ -349,15 +397,20 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
+    // Beside the document, where the panel keeps its controls on screen
+    // while a version is read.
+    answerMediaQueries(true);
     renderSheet();
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Compare with previous/ })
-    );
 
-    expect(compareDialogMock).toHaveBeenCalledWith(
-      expect.objectContaining({ from: 2, to: 3 })
-    );
+    // The version is chosen, so this is where the dialog was offered from.
+    expect(
+      screen.getByRole("button", { name: /Open full comparison/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Compare with/ })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /Compar/ })).toBeNull();
   });
 
   it("offers the full comparison only once the pair it would open is known", async () => {
@@ -396,12 +449,58 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
+    // Beside the document, where the panel keeps its controls on screen
+    // while a version is read.
+    answerMediaQueries(true);
     renderSheet();
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
     expect(
       screen.getByRole("button", { name: /Open full comparison/ })
     ).toBeInTheDocument();
+  });
+
+  it("opens the comparison of a past version with the newest in its language", async () => {
+    // Localized: the newest version overall is another language's, so
+    // "current" is the newest in the chosen version's own.
+    const inLocale = (versionNo: number, locale: string) => ({
+      ...version(versionNo),
+      locale,
+    });
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            {
+              items: [
+                inLocale(5, "es"),
+                inLocale(4, "en"),
+                inLocale(3, "en"),
+                inLocale(2, "en"),
+              ],
+              meta: { hasNext: false },
+            },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+    answerMediaQueries(true);
+    renderSheet();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "Compare with current" })
+    );
+
+    // The comparison page, naming the pair and the language it is in.
+    const address = new URLSearchParams(window.location.search);
+    expect(window.location.pathname).toMatch(/\/versions$/);
+    expect({
+      from: address.get("from"),
+      to: address.get("to"),
+      locale: address.get("locale"),
+    }).toEqual({ from: "2", to: "4", locale: "en" });
   });
 
   it("leaves the document reachable while its history is open", () => {
@@ -436,21 +535,6 @@ describe("VersionHistorySheet", () => {
     // being present is not enough — it has to still be reachable.
     expect(screen.getByText("Version 1")).toBeInTheDocument();
     expect(reachable(screen.getByLabelText("Title"))).toBe(true);
-  });
-
-  it("mounts no compare dialog until one is asked for", () => {
-    useVersionsMock.mockReturnValue(
-      listState({
-        data: { pages: [{ items: [version(1)], meta: { hasNext: false } }] },
-      })
-    );
-
-    renderSheet();
-
-    // The assertion above is only meaningful if the stub is absent by default;
-    // a dialog mounted from the start would satisfy it without any click.
-    expect(screen.queryByTestId("compare-dialog")).toBeNull();
-    expect(compareDialogMock).not.toHaveBeenCalled();
   });
 
   it("offers more only when another page exists", () => {
@@ -514,26 +598,6 @@ describe("VersionHistorySheet", () => {
       )
     );
     expect(screen.queryByText(/Viewing version/)).toBeNull();
-  });
-
-  it("returns to the list from a preview", async () => {
-    useVersionsMock.mockReturnValue(
-      listState({
-        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
-      })
-    );
-    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
-
-    renderSheet();
-    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Back to history/ })
-    );
-
-    expect(screen.queryByText(/Viewing version/)).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Version 3/ })
-    ).toBeInTheDocument();
   });
 
   it("publishes whether the caller may restore, rather than rendering a button", async () => {
@@ -694,7 +758,7 @@ describe("VersionHistorySheet — renaming", () => {
 });
 
 describe("VersionHistorySheet — what it publishes to the document", () => {
-  function renderWithDocument(canRestore = true) {
+  function renderWithDocument(canRestore = true, onOpenChange = vi.fn()) {
     const setViewing = vi.fn();
     const setRestore = vi.fn();
     render(
@@ -703,13 +767,17 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
       >
         <VersionHistorySheet
           open
-          onOpenChange={vi.fn()}
+          onOpenChange={onOpenChange}
           scope={scope}
           canRestore={canRestore}
         />
       </DocumentHistoryContext.Provider>
     );
-    return { setViewing, setRestore };
+    const published = () =>
+      setRestore.mock.calls.at(-1)?.[0] as
+        | { returnToCurrent: () => void; backToHistory?: () => void }
+        | undefined;
+    return { setViewing, setRestore, published };
   }
 
   beforeEach(() => {
@@ -735,6 +803,8 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
   });
 
   it("returns to the live document THROUGH the panel, clearing its own row", async () => {
+    // Beside the document, where the list stays on screen to be read.
+    answerMediaQueries(true);
     const { setRestore } = renderWithDocument();
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
@@ -749,9 +819,8 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
       "aria-current",
       "true"
     );
-    // ONLY the published callback — clicking "Back to history" as well would
-    // clear the selection by itself and the assertion would pass whether or not
-    // `returnToCurrent` does anything.
+    // ONLY the published callback: the panel offers no other way back, so the
+    // assertion turns on what `returnToCurrent` does.
     published.returnToCurrent();
     await waitFor(() =>
       expect(
@@ -773,6 +842,8 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
   });
 
   it("keeps the close control beside the title once a version is selected", async () => {
+    // Beside the document, where the panel stays open on a chosen version.
+    answerMediaQueries(true);
     useVersionsMock.mockReturnValue(
       listState({
         data: {
@@ -795,5 +866,139 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
     expect(within(titleRow()).getByRole("button", { name: /close/i })).toBe(
       closes[0]
     );
+  });
+
+  it("beside the document, keeps its heading and the whole list, and needs no way back to it", async () => {
+    answerMediaQueries(true);
+    const { published } = renderWithDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() => expect(published()).toBeDefined());
+    expect(
+      screen.getByRole("heading", { name: "History" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Version 3/ })).toHaveAttribute(
+      "aria-current",
+      "true"
+    );
+    expect(published()?.backToHistory).toBeUndefined();
+  });
+
+  it("without room beside the document, steps its page aside for a version and leads back to the list", async () => {
+    // Too narrow for the panel beside the document: it is a page over it.
+    answerMediaQueries(false);
+    const { published } = renderWithDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    // The version is read in the document, so the page over it steps aside.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    );
+    const backToHistory = published()?.backToHistory;
+    expect(backToHistory).toBeTypeOf("function");
+
+    // Back to the list: the page returns, no version chosen.
+    act(() => backToHistory?.());
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Version 3/ })
+    ).not.toHaveAttribute("aria-current", "true");
+  });
+
+  it("without room beside the document, reaches the live document by leaving history", async () => {
+    answerMediaQueries(false);
+    const onOpenChange = vi.fn();
+    const { published } = renderWithDocument(true, onOpenChange);
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    await waitFor(() => expect(published()).toBeDefined());
+
+    // Clearing only the version would bring the page back over the document.
+    act(() => published()?.returnToCurrent());
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("VersionHistorySheet — the comparison where the page steps aside", () => {
+  beforeEach(() => {
+    restoreMock.mockReturnValue({ mutate: mutateMock, isPending: false });
+    setLabelMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(2)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: { title: "Old" }, locale: null } })
+    );
+  });
+
+  /**
+   * The editor's own arrangement: the published affordance held in state, and
+   * the panel given a scope object rebuilt on every render, as the header
+   * builds it. A published action that changed each render would loop here.
+   */
+  // Stable, as the editor's own setter is.
+  const keepOpen = () => {};
+  function Editor({
+    onPublished,
+  }: {
+    onPublished: (r: RestoreAffordance | null) => void;
+  }) {
+    const [restore, setRestore] = useState<RestoreAffordance | null>(null);
+    onPublished(restore);
+    return (
+      <DocumentHistoryContext.Provider
+        value={{ viewing: null, setViewing: () => {}, restore, setRestore }}
+      >
+        <VersionHistorySheet
+          open
+          onOpenChange={keepOpen}
+          scope={{ kind: "collection", slug: "posts", entryId: "e1" }}
+        />
+      </DocumentHistoryContext.Provider>
+    );
+  }
+
+  it("hands the banner the comparison on a narrow window, and settles", async () => {
+    answerMediaQueries(false);
+    const seen: { restore: RestoreAffordance | null } = { restore: null };
+    render(<Editor onPublished={r => (seen.restore = r)} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() => expect(seen.restore?.compare).toBeTypeOf("function"));
+  });
+
+  it("hands the banner the comparison with current on a narrow window", async () => {
+    answerMediaQueries(false);
+    const seen: { restore: RestoreAffordance | null } = { restore: null };
+    render(<Editor onPublished={r => (seen.restore = r)} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+    await waitFor(() =>
+      expect(seen.restore?.compareCurrent).toBeTypeOf("function")
+    );
+    act(() => seen.restore?.compareCurrent?.());
+
+    const address = new URLSearchParams(window.location.search);
+    expect([address.get("from"), address.get("to")]).toEqual(["2", "3"]);
+  });
+
+  it("keeps the comparison in the panel beside the document", async () => {
+    answerMediaQueries(true);
+    const seen: { restore: RestoreAffordance | null } = { restore: null };
+    render(<Editor onPublished={r => (seen.restore = r)} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() => expect(seen.restore).not.toBeNull());
+    expect(seen.restore?.compare).toBeUndefined();
+    expect(
+      screen.getByRole("button", { name: "Open full comparison" })
+    ).toBeInTheDocument();
   });
 });

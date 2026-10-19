@@ -86,6 +86,14 @@ npx nextly i18n:restore --collection posts --field title
 
 Values archived by a version of Nextly from before the archive recorded which kind of entity they belong to are matched to their entity when the slug names only one, and only from the time that entity was created. Any the archive can't match are kept, never deleted, and a restore of that slug says how many there are. Restoring with `--kind` also brings those values back as that entity's.
 
+### When a shared field becomes translated
+
+Changing a shared field to translated keeps its value too, for a collection, a Single or a field group, in the Schema Builder or in code. The value becomes the default language's translation, and the other languages start empty, to be translated.
+
+In code, set `localized: true` on the field (or remove `localized: false` from a text field) and run `nextly migrate:create`. It writes one file, which adds the translated column, copies each entry's value into the default language, and removes the shared column. Rolling it back with `nextly migrate:down` makes the field shared again with the default language's value, and writes the other languages to the archive, as when a field stops being translated.
+
+A field whose type, length or precision changes in the same change is refused, because its value would be copied into a column of the new shape: save the new type with the field still shared, then make it translated.
+
 ## Fallback chains
 
 `fallback: true` means a missing translation falls back rather than rendering empty. A
