@@ -624,7 +624,7 @@ export class PermissionService extends BaseService {
    * The permission row for an action and resource, or null. Matched without
    * regard to case, as `listPermissions` matches.
    */
-  private async findByActionResource(
+  private findByActionResource(
     action: string,
     resource: string
   ): Promise<Record<
