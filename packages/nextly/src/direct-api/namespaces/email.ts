@@ -82,6 +82,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         bcc: args.bcc,
         providerId: args.providerId,
         attachments: args.attachments,
+        person: args.person,
       });
       return {
         success: result.success,
@@ -99,6 +100,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         cc?: string[];
         bcc?: string[];
         attachments?: typeof args.attachments;
+        person?: typeof args.person;
       } = {};
       if (args.providerId) sendOptions.providerId = args.providerId;
       // The send's own From and Reply-To win over the template's, which win
@@ -110,6 +112,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
       if (args.cc?.length) sendOptions.cc = args.cc;
       if (args.bcc?.length) sendOptions.bcc = args.bcc;
       if (args.attachments) sendOptions.attachments = args.attachments;
+      if (args.person) sendOptions.person = args.person;
 
       const result = await ctx.emailSendService.sendWithTemplate(
         args.template,
