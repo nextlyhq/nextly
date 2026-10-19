@@ -70,6 +70,7 @@ import type {
   Logger,
 } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import type { WhereFilter } from "../query/query-operators";
 
 import type { CollectionMetadataService } from "./collection-metadata-service";
@@ -204,6 +205,20 @@ export class CollectionService extends BaseService {
   private readonly pendingTxCommittedWrites = new Set<unknown>();
 
   /**
+   * Documents that `updateEntryInTransaction` / `deleteEntryInTransaction`
+   * saved or deleted during an owned transaction, keyed by its handle like the
+   * intents, so `withTransaction` hands them to the early stop once it commits:
+   * a scheduled release holding one may now have a hard problem. Not before,
+   * because the early stop reads through the database as any reader does and
+   * would not see the transaction's own writes, and its stop is a transaction
+   * of its own, which must not open inside this one.
+   */
+  private readonly pendingTxDocuments = new Map<
+    unknown,
+    { collectionName: string; entryId: string }[]
+  >();
+
+  /**
    * Run work inside a database transaction, then flush the cache-revalidation
    * intents produced by any createEntryInTransaction / updateEntryInTransaction /
    * deleteEntryInTransaction calls made against the same `tx`. The flush happens
@@ -236,6 +251,7 @@ export class CollectionService extends BaseService {
     let collector: RevalidationIntent[] | undefined;
     let sawEvent = false;
     let sawCommittedWrite = false;
+    let touched: { collectionName: string; entryId: string }[] = [];
     const result = await this.adapter.transaction(async tx => {
       collector = this.pendingTxIntents.get(tx);
       if (!collector) {
@@ -255,9 +271,11 @@ export class CollectionService extends BaseService {
         if (ownsFlush) {
           sawEvent = this.pendingTxEvents.has(tx);
           sawCommittedWrite = this.pendingTxCommittedWrites.has(tx);
+          touched = this.pendingTxDocuments.get(tx) ?? [];
           this.pendingTxIntents.delete(tx);
           this.pendingTxEvents.delete(tx);
           this.pendingTxCommittedWrites.delete(tx);
+          this.pendingTxDocuments.delete(tx);
         }
       }
     });
@@ -281,6 +299,15 @@ export class CollectionService extends BaseService {
         await this.entryService.offerPostCommitTxMaintenance({
           committedWrite: sawCommittedWrite || sawEvent,
           recordedEvent: sawEvent,
+        });
+      }
+      if (touched.length > 0) {
+        await stopReleasesHolding({
+          documents: touched.map(document => ({
+            scopeKind: "collection",
+            scopeSlug: document.collectionName,
+            entryId: document.entryId,
+          })),
         });
       }
     });
@@ -329,6 +356,24 @@ export class CollectionService extends BaseService {
   ): void {
     if (!success) return;
     if (this.pendingTxIntents.has(tx)) this.pendingTxCommittedWrites.add(tx);
+  }
+
+  /**
+   * Record a document a wrapper's `*InTransaction` write saved or deleted
+   * against the active owned transaction, for `withTransaction` to hand to the
+   * early stop after commit. A caller that obtained `tx` some other way owns
+   * that, as it owns the revalidation flush; a release it leaves with a hard
+   * problem is still stopped at its instant.
+   */
+  private collectTxDocument(
+    tx: TransactionContext,
+    collectionName: string,
+    entryId: string
+  ): void {
+    if (!this.pendingTxIntents.has(tx)) return;
+    const documents = this.pendingTxDocuments.get(tx) ?? [];
+    documents.push({ collectionName, entryId });
+    this.pendingTxDocuments.set(tx, documents);
   }
 
   /**
@@ -1082,6 +1127,7 @@ export class CollectionService extends BaseService {
       message: "Entry update in transaction failed",
       logContext: { collectionName, entryId },
     });
+    this.collectTxDocument(tx, collectionName, entryId);
 
     this.logger.info("Entry updated in transaction", {
       collectionName,
@@ -1128,6 +1174,7 @@ export class CollectionService extends BaseService {
       message: "Entry deletion in transaction failed",
       logContext: { collectionName, entryId },
     });
+    this.collectTxDocument(tx, collectionName, entryId);
 
     this.logger.info("Entry deleted in transaction", {
       collectionName,

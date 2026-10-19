@@ -92,6 +92,7 @@ import {
 import type { ReleaseActivityEntry } from "../release-activity";
 import { isDueAt } from "../release-due";
 import { releaseMemberKey } from "../release-member-key";
+import type { ReleaseRecheckTarget } from "../release-recheck";
 import {
   RELEASE_ATTENTION_REASONS,
   RELEASE_TABS,
@@ -1611,10 +1612,7 @@ export class ReleasesService {
     members: readonly ReleaseMemberRow[],
     refusal: { message: string; reason: string }
   ): Promise<void> {
-    const hardSources = registeredReleaseCheckSources().filter(
-      source => source.severity === "hard"
-    );
-    const { hard } = await this.checkMembers(release, members, hardSources);
+    const hard = await this.hardProblems(release, members);
     if (hard.length === 0) return;
     throw NextlyError.conflict({
       message: refusal.message,
@@ -1626,6 +1624,60 @@ export class ReleasesService {
         state: release.state,
       },
     });
+  }
+
+  /** These members' hard problems: the hard sources' findings alone. */
+  private async hardProblems(
+    release: ReleaseRow,
+    members: readonly ReleaseMemberRow[]
+  ): Promise<ReadinessFinding[]> {
+    const hardSources = registeredReleaseCheckSources().filter(
+      source => source.severity === "hard"
+    );
+    return (await this.checkMembers(release, members, hardSources)).hard;
+  }
+
+  /**
+   * Stop each still-scheduled release holding what an event names, as soon
+   * as one of those documents has a hard problem, and answer the ids stopped.
+   *
+   * The early stop. Scheduled includes a release whose instant has passed and
+   * which no drain has run yet, since that one is already in effect for
+   * readers. Only the members the event is about are checked, by the hard
+   * sources, as scheduling checks them; a soft problem never stops a release.
+   *
+   * Stopped through the drain's own transition (`blockReleases`), so the
+   * owner is told once for the stop, and fenced on the revision and instant
+   * the check judged: a release changed since, rescheduled or with a member
+   * removed, is left for its own change's checks rather than stopped on a
+   * verdict about a release that no longer exists. Asked again, a release
+   * already stopped is no longer scheduled and is not named, so a repeated
+   * event stops and tells nothing twice.
+   *
+   * A system act, not a caller's: it answers to no actor, and each document
+   * is still judged as its own author, as the run would judge it. Runs after
+   * the event's own write has committed and opens one transaction per
+   * release it stops, never inside another.
+   *
+   * @experimental
+   */
+  async stopOnHardProblems(target: ReleaseRecheckTarget): Promise<string[]> {
+    const stopped: string[] = [];
+    const affected = await this.deps.repository.scheduledMembersFor(target);
+    for (const { release, members } of affected) {
+      if (release.scheduledAt === null) continue;
+      if ((await this.hardProblems(release, members)).length === 0) continue;
+      stopped.push(
+        ...(await this.deps.repository.blockReleases([
+          {
+            id: release.id,
+            scheduledAt: release.scheduledAt,
+            revision: release.revision,
+          },
+        ]))
+      );
+    }
+    return stopped;
   }
 
   /**

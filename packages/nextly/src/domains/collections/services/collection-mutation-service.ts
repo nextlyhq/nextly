@@ -156,6 +156,7 @@ import {
   isCompanionReady,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { mergeComponentPatches } from "../../versions/draft-components";
@@ -8995,6 +8996,7 @@ export class CollectionMutationService extends BaseService {
       // is a durable write — flagged for the retention pass independent of the
       // recording/revalidation opt-outs below.
       committedWrite = true;
+      await this.recheckReleasesHolding(params.collectionName, params.entryId);
 
       // A pure draft edit leaves the live row untouched, so the re-fetched
       // `updated` is the OLD published content. Everything that reports what this
@@ -9623,6 +9625,7 @@ export class CollectionMutationService extends BaseService {
       }
 
       const deleted = entry;
+      await this.recheckReleasesHolding(params.collectionName, params.entryId);
 
       // The tags this delete invalidates: the collection tag and the removed
       // entry's id/slug tags (in its locale), so lists and any cached read of
@@ -10256,6 +10259,27 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     }
+  }
+
+  /**
+   * Hand a document this service just saved or deleted to the early stop, once
+   * the write is durable: a scheduled release holding it may now have a hard
+   * problem (a pending change its author may not publish, the document gone),
+   * and is stopped then rather than at its instant. Inside an enclosing SQLite
+   * transaction this waits for its commit, and never runs for a write it
+   * rolls back.
+   */
+  private recheckReleasesHolding(
+    collectionName: string,
+    entryId: string
+  ): Promise<void> {
+    return this.afterCommit(() =>
+      stopReleasesHolding({
+        documents: [
+          { scopeKind: "collection", scopeSlug: collectionName, entryId },
+        ],
+      })
+    );
   }
 
   /**

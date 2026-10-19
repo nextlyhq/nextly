@@ -435,11 +435,58 @@ the thrown `NextlyError`'s `publicData`.
 The run still checks everything again at the release's time. A problem that appears after
 scheduling stops the release then, and it is shown as stopped.
 
+### Stopped as soon as a problem appears
+
+Most hard problems appear because something happened after the release was scheduled. When it
+happens, the scheduled releases holding the affected documents are checked again straight away,
+and any with a hard problem is **stopped then** (its state becomes `blocked`), not at its time.
+That includes a release whose time has passed but which no job pass has run yet. A stopped
+release is never applied at read time, so no reader is shown its effect. A soft problem never
+stops a release.
+
+What is caught as it happens:
+
+| Event                                                                                                                                | What is checked again                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| A document is saved, its draft or another language's pending work included, through REST, the Direct API, the admin or a bulk update | the scheduled releases holding that document             |
+| A document is deleted                                                                                                                | the scheduled releases holding it                        |
+| A user's roles change: a role assigned, removed or replaced                                                                          | the documents that user added to scheduled releases      |
+| A role's grants change: a permission added or removed, an inherited role added or removed, the role edited or deleted                | every scheduled release (a role's reach is not recorded) |
+| A collection's or Single's fields change, its Draft/Published or localization switch is turned, or it is deleted                     | the scheduled releases holding its documents             |
+| A registered check source reports a change                                                                                           | what the source names                                    |
+
+A write made inside the collection service's `withTransaction` is checked once that transaction
+commits, never inside it. A release's documents are always judged as the person who added each
+one, as the run would judge them.
+
+**What is still caught only at the release's time.** The job pass checks every release again
+when it runs it, and stops it then for anything the events above do not report:
+
+- a user deactivated or deleted. A due document whose author can no longer act is not shown to
+  readers in the meantime, but the release stops, and its owner is told, only when the pass runs;
+- changes made outside Nextly's writes: rows edited in the database directly, or migrations;
+- an access rule or field rule changed in code, and a collection's or Single's code-defined
+  `access`, which change with a deploy rather than with a write;
+- a write inside a transaction opened some other way than the collection service's
+  `withTransaction`;
+- an early check that could not run. It never fails the write that caused it; it is logged as
+  `release-early-stop-failed` and left to the pass.
+
+#### The owner is told
+
+Whichever way a release stops, its owner (the person who created it) is given one notice of kind
+`releases.stopped` in their own [notices](/docs/notices), recorded in the same transaction as the
+stop. Once per stop: the same stop seen twice, or retried, gives one notice, and a release that
+is rescheduled and stops again gives another. A release with no recorded owner, or whose owner's
+account is gone, is still stopped, with no notice. The notice keeps the release's title and time,
+so it still reads after the release is deleted. Only people who may read releases see it.
+
 ### Blocking reasons
 
 `GET /api/releases/:id/blockers` and `nextly.releases.blockingReasons()` answer the three
-problems a stopped release is explained by: `NO_AUTHOR`, `AUTHOR_GONE` and `LOCALE_SCOPED`.
-They are the same findings readiness reports under those codes.
+problems a release stopped by its run is explained by: `NO_AUTHOR`, `AUTHOR_GONE` and
+`LOCALE_SCOPED`. They are the same findings readiness reports under those codes. A release
+stopped before its time can have any hard problem; its readiness names them all.
 
 ### Switching a document between going live and coming down
 
@@ -457,7 +504,8 @@ same `409` and the release is left as it was.
 ### What is not checked yet
 
 The checks run core's rules only. Other features will be able to add their own, such as
-approvals, later. Unpublished linked documents are not yet reported.
+approvals, later: a hard check of their own must also say when what it judges changes, so a
+scheduled release is stopped then. Unpublished linked documents are not yet reported.
 
 ## One release covers every language
 
