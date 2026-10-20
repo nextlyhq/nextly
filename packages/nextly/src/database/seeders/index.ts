@@ -1,5 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { consoleLogger } from "../../shared/types";
+
 import { seedPermissions, type SeederResult } from "./permissions";
 import { seedSuperAdmin } from "./super-admin";
 
@@ -49,8 +51,14 @@ export async function seedAll(
     skipSuperAdmin = false,
   } = options || {};
 
-  const log = silent ? () => {} : console.log;
-  const errorLog = silent ? () => {} : console.error;
+  // Through the masked console logger: a seeding line can name the account
+  // it is working on.
+  const log = silent
+    ? () => {}
+    : (message: string) => consoleLogger.info(message);
+  const errorLog = silent
+    ? () => {}
+    : (message: string) => consoleLogger.error(message);
 
   log("\nRunning system bootstrap seeders...\n");
 

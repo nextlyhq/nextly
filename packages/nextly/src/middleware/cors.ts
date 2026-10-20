@@ -1,3 +1,4 @@
+import { consoleLogger } from "../shared/types";
 /**
  * CORS Middleware
  *
@@ -197,7 +198,7 @@ export function createCorsMiddleware(config?: CorsConfig): CorsMiddleware {
 
   // Warn if wildcard is used in production
   if (mode === "wildcard" && process.env.NODE_ENV === "production") {
-    console.warn(
+    consoleLogger.warn(
       "[nextly] CORS origin is set to '*' (wildcard) in production. " +
         "This allows any website to make cross-origin requests to your API. " +
         "Consider restricting to specific origins for production use."

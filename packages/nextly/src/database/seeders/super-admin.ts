@@ -3,6 +3,8 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { NextlyError } from "@nextly/errors";
 import { ServiceContainer } from "@nextly/services/index";
 
+import { consoleLogger } from "../../shared/types";
+
 import type { SeederResult } from "./permissions";
 
 /**
@@ -66,8 +68,14 @@ export async function seedSuperAdmin(
     });
   }
 
-  const log = silent ? () => {} : console.log;
-  const errorLog = silent ? () => {} : console.error;
+  // Through the masked console logger: a seeding line can name the account
+  // it is working on.
+  const log = silent
+    ? () => {}
+    : (message: string) => consoleLogger.info(message);
+  const errorLog = silent
+    ? () => {}
+    : (message: string) => consoleLogger.error(message);
 
   log(" Starting super admin seeding...\n");
 

@@ -22,6 +22,7 @@
  *
  * @module middleware/rest-limits
  */
+import { consoleLogger } from "../shared/types";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
 import {
@@ -465,7 +466,7 @@ export function createRestLimits(
 ): RestLimitDecider {
   if (!config.enabled) return UNLIMITED;
   const settings = settingsFrom(config);
-  console.log(
+  consoleLogger.info(
     `[Nextly] Rate limiting enabled: ${settings.perAddress.read} reads / ${settings.perAddress.write} writes per ${settings.windowMs / 1000}s window per address`
   );
   return new RestLimits(
