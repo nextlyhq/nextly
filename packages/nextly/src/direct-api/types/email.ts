@@ -8,17 +8,51 @@
  */
 
 import type { EmailFailure } from "../../domains/email/failure";
-import type { OwnerUpdateUndo } from "../../domains/email/services/email-template-service";
+import type {
+  EmailTemplateComparison as TemplateComparison,
+  OwnerUpdateUndo as UpdateUndo,
+} from "../../domains/email/services/email-template-service";
 import type { RefusedRecipient } from "../../domains/email/services/send-failures";
-import type { OwnerChangeChoice } from "../../domains/email/template-merge";
+import type {
+  OwnerChange as Change,
+  OwnerChangeChoice as ChangeChoice,
+} from "../../domains/email/template-merge";
 import type { EmailAttachmentInput } from "../../domains/email/types";
 import type { PrincipalRef } from "../../plugins/principals/types";
 import type { EmailProviderType } from "../../schemas/email-providers/types";
-import type { EmailTemplateVersion } from "../../schemas/email-templates/types";
+import type { EmailTemplateVersion as TemplateVersion } from "../../schemas/email-templates/types";
 
 import type { DirectAPIConfig } from "./shared";
 
 export type { EmailAttachmentInput };
+
+// What the template ownership methods return, and the types their arguments
+// are built from, so code calling them can name each. Declared here rather
+// than re-exported so each public name carries its own release tag.
+
+/**
+ * @experimental An overridden template beside its owner's current version,
+ * as `compare()` returns it.
+ */
+export type EmailTemplateComparison = TemplateComparison;
+
+/**
+ * @experimental The parts of a template an owner's update can change: what
+ * the email says.
+ */
+export type EmailTemplateVersion = TemplateVersion;
+
+/**
+ * @experimental One change the owner made since the base, with the site's
+ * lines beside it.
+ */
+export type OwnerChange = Change;
+
+/** @experimental What the person chose for one change. */
+export type OwnerChangeChoice = ChangeChoice;
+
+/** @experimental What an applied review replaced, so it can be undone. */
+export type OwnerUpdateUndo = UpdateUndo;
 
 /**
  * Arguments for finding email providers.
