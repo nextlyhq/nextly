@@ -38,6 +38,7 @@ import type { NextlyContext } from "./context";
 import {
   checkWrite,
   createRequestContext,
+  directApiActor,
   isNotFoundError,
   mergeConfig,
   toListResult,
@@ -82,6 +83,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
   // named them. The raw call alone dropped an instance-level user.
   const writeContext = (args: Parameters<typeof createRequestContext>[0]) =>
     createRequestContext(mergeConfig(ctx.defaultConfig, args));
+  // And recorded as the actor the instance and the call name, so a write made
+  // with an API key is recorded as the key, as REST records it, rather than
+  // as the key's owner the context names.
+  const writeActor = (args: Parameters<typeof createRequestContext>[0]) =>
+    directApiActor(ctx.defaultConfig, args);
 
   const folders: MediaFoldersNamespace = {
     async list(args: ListFoldersArgs = {}): Promise<MediaFolder[]> {
@@ -137,7 +143,8 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           altText: args.altText,
           folderId: args.folder ?? null,
         },
-        writeContext(args)
+        writeContext(args),
+        writeActor(args)
       );
     },
 
@@ -200,7 +207,8 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           tags: args.data.tags,
           folderId: args.data.folderId,
         },
-        writeContext(args)
+        writeContext(args),
+        writeActor(args)
       );
       return {
         message: "Media updated.",
@@ -224,7 +232,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         });
       }
 
-      await ctx.mediaService.delete(args.id, writeContext(args));
+      await ctx.mediaService.delete(
+        args.id,
+        writeContext(args),
+        writeActor(args)
+      );
       return {
         message: "Media deleted.",
         item: { id: args.id },
@@ -250,7 +262,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
       // Phase 4.5: mediaService.bulkDelete now returns the canonical
       // BulkOperationResult shape (successes + failures) directly. No
       // translation needed at the direct-api boundary anymore.
-      return ctx.mediaService.bulkDelete(args.ids, writeContext(args));
+      return ctx.mediaService.bulkDelete(
+        args.ids,
+        writeContext(args),
+        writeActor(args)
+      );
     },
 
     folders,
