@@ -603,7 +603,12 @@ async function executeUninstall(
     { keepData: opts.keepData },
     async () => {
       if (judged?.schemaVersion === undefined) return;
-      beforeHook = { ...judged, schemaVersion: await deps.schemaVersion() };
+      const schemaVersion = await deps.schemaVersion();
+      // Unreadable here, the comparison after the hook could only refuse:
+      // refused now, before the hook can change rows or anything outside.
+      if (schemaVersion === null)
+        throw schemaVersionUnreadableAfterBoot(plugin);
+      beforeHook = { ...judged, schemaVersion };
     }
   );
   await assertHookLeftTables(plugin, plan, beforeHook, deps);
@@ -724,6 +729,25 @@ async function assertHookLeftTables(
   const now = await readTablesAsTheyStand(plan, deps);
   assertIdentitiesKept(plugin, plan, judged, now);
   assertSchemaVersionKept(plugin, plan, judged, now);
+}
+
+/**
+ * SQLite's schema version could not be read once the hook's boot was done.
+ * The plugin is recorded uninstalling by then and its hook has not run, so
+ * running the uninstall again picks it up from there.
+ */
+function schemaVersionUnreadableAfterBoot(
+  plugin: LifecyclePlugin
+): NextlyError {
+  return new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `The database's schema version could not be read before ${plugin.name}'s onUninstall, so the hook and its DOWN migrations were not run. Run the uninstall again.`,
+    logContext: {
+      plugin: plugin.name,
+      reason: "table-identity-unreadable",
+      tables: ["the schema version"],
+    },
+  });
 }
 
 /** Each table the DOWNs drop is the one read before anything ran. */

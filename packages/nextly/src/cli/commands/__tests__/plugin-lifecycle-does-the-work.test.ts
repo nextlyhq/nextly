@@ -784,8 +784,11 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     expect(runDown).not.toHaveBeenCalled();
   });
 
-  it("refuses on SQLite when the schema version cannot be read after the boot", async () => {
+  it("refuses on SQLite before the hook when the schema version cannot be read after the boot", async () => {
+    // Read again once the boot is done; unreadable there, the comparison
+    // after the hook could only refuse, so the hook is not run at all.
     let booted = false;
+    let hookRan = false;
     const { run, runDown } = await uninstallWith(
       [["DROP TABLE IF EXISTS fx__notes"], []],
       ownsNotes,
@@ -795,15 +798,21 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
           () => {
             booted = true;
           },
-          () => {}
+          () => {
+            hookRan = true;
+          }
         ),
         schemaVersion: vi.fn(async () => (booted ? null : 3)),
       }
     );
     await expect(run).rejects.toMatchObject({
       code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
-      logContext: { reason: "schema-changed-by-hook" },
+      logContext: {
+        reason: "table-identity-unreadable",
+        tables: ["the schema version"],
+      },
     });
+    expect(hookRan).toBe(false);
     expect(runDown).not.toHaveBeenCalled();
   });
 

@@ -10,8 +10,9 @@
  *   the name to (`to_regclass`). It is kept through a rename, `TRUNCATE` and
  *   `ALTER TABLE`, and no table created later is given it.
  * - MySQL: `information_schema.TABLES.CREATE_TIME`, which needs no privilege
- *   beyond reading the table. It is kept through a rename and `TRUNCATE`; a
- *   table rebuilt by a copying `ALTER` reads as another table. Its resolution
+ *   beyond reading the table. It is kept through a rename and `TRUNCATE`;
+ *   any `ALTER TABLE`, an added column included, sets a new one, so an
+ *   altered table reads as another (measured on MySQL 8.0). Its resolution
  *   is a second, so a replacement created within the second its original was
  *   cannot be told apart. The exact identifier, InnoDB's `TABLE_ID`, needs
  *   the PROCESS privilege and changes on `TRUNCATE`.

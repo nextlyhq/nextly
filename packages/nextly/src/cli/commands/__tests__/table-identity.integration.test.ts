@@ -48,15 +48,26 @@ describe.each(getConfiguredTestDialects())(
       expect(read.get(OWNED)).toEqual(expect.any(String));
     });
 
-    it("keeps a table's token through deleted rows and an added column", async () => {
+    it("keeps a table's token through deleted rows, and through an added column but on MySQL", async () => {
       const before = (await identities([OWNED])).get(OWNED);
+      // MySQL's token is the creation time, to the second: past a second
+      // boundary, a TRUNCATE that reset it would read as another value.
+      if (dialect === "mysql") {
+        await new Promise(resolve => setTimeout(resolve, 1100));
+      }
       await run(
         dialect === "sqlite"
           ? `DELETE FROM ${OWNED}`
           : `TRUNCATE TABLE ${OWNED}`
       );
-      await run(`ALTER TABLE ${OWNED} ADD COLUMN extra text`);
       expect((await identities([OWNED])).get(OWNED)).toBe(before);
+      // An added column keeps the table's oid and root page. MySQL sets a
+      // new creation time on any ALTER TABLE, so there the table reads as
+      // another one, and an uninstall whose hook alters it is refused.
+      await run(`ALTER TABLE ${OWNED} ADD COLUMN extra text`);
+      const altered = (await identities([OWNED])).get(OWNED);
+      if (dialect === "mysql") expect(altered).not.toBe(before);
+      else expect(altered).toBe(before);
     });
 
     it("reads a table created under a name another was renamed away from as another table", async () => {
