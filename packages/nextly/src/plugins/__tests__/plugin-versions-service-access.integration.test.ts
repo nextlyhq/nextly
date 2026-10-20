@@ -22,6 +22,7 @@ process.env.NEXTLY_SECRET =
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
+import { runAsPrincipal } from "../../auth/principal-scope";
 import { resetSessionStandingForTests } from "../../auth/session/session-standing";
 import { defineCollection, password, text } from "../../config";
 import {
@@ -30,8 +31,10 @@ import {
   seedPermissions,
 } from "../../direct-api/__tests__/checked-access-fixtures";
 import type { VersionRef } from "../../domains/versions/versions-repository";
+import { registerHook, unregisterHook } from "../../hooks";
 import type { AuthUserId } from "../../types/auth";
 import { definePlugin } from "../index";
+import { makePrincipal } from "../principals/principal";
 import type { ServiceOpts } from "../service-opts";
 import {
   createTestNextly,
@@ -78,7 +81,13 @@ interface PluginVersions {
   listEvents(
     subject: { kind: "collection"; slug: string; id: string },
     query?: { kinds?: string[] }
-  ): Promise<{ items: { actorKind: string; actorId: string | null }[] }>;
+  ): Promise<{
+    items: {
+      actorKind: string;
+      actorId: string | null;
+      actorName: string | null;
+    }[];
+  }>;
 }
 
 interface Handler {
@@ -287,6 +296,89 @@ describe.each(getConfiguredTestDialects())(
         expect((await versions.get(ref, 1)).label ?? null).toBeNull();
       });
 
+      it("records the caller's own name, not the one the plugin passes", async () => {
+        // The name shown beside the event is the authenticated caller's, as on
+        // REST, however `by` describes the namer.
+        const id = await published(NOTES, "p");
+        await versions.setLabel(
+          refOf(NOTES, id),
+          1,
+          "named by editor",
+          { actor: { type: "user", id: editorId }, personName: "Someone Else" },
+          {
+            user: {
+              id: editorId as AuthUserId,
+              email: "editor@example.com",
+              name: "Editor",
+            },
+          }
+        );
+        const { items } = await versions.listEvents(
+          { kind: "collection", slug: NOTES, id },
+          { kinds: ["named"] }
+        );
+        expect(items.map(e => e.actorName)).toEqual(["Editor"]);
+      });
+
+      it("is made for an API key holding the grants, recording no namer it cannot name", async () => {
+        // A key's own id is not known to a plugin, and an event naming the
+        // key's owner would put a person against a change they did not make,
+        // so the name is set and no event names anyone.
+        const id = await published(NOTES, "q");
+        const ref = refOf(NOTES, id);
+        await versions.setLabel(ref, 1, "by a key", undefined, {
+          ...asUser(editorId),
+          authenticatedScope: {
+            actorType: "apiKey",
+            permissions: [`read-${NOTES}`, `update-${NOTES}`],
+          },
+        });
+        expect((await versions.get(ref, 1)).label).toBe("by a key");
+        const { items } = await versions.listEvents(
+          { kind: "collection", slug: NOTES, id },
+          { kinds: ["named"] }
+        );
+        expect(items).toEqual([]);
+      });
+
+      it("is judged as the person it names, inside another person's frame", async () => {
+        // A write the plugin makes from within an operation run as one of its
+        // own people is a new call: it is judged as whom it names.
+        const ref = refOf(NOTES, await published(NOTES, "r"));
+        await runAsPrincipal(
+          makePrincipal("accounts:account", "acc_frame", { verified: true }),
+          () =>
+            versions.setLabel(
+              ref,
+              1,
+              "from a frame",
+              undefined,
+              asUser(editorId)
+            )
+        );
+        expect((await versions.get(ref, 1)).label).toBe("from a frame");
+      });
+
+      it("hands the document's read hooks the context the plugin passes", async () => {
+        const ref = refOf(NOTES, await published(NOTES, "s"));
+        const refuseWhenAsked = (ctx: { context: Record<string, unknown> }) => {
+          if (ctx.context.deny === true) throw new Error("refused by a hook");
+          return (ctx as { data?: unknown }).data;
+        };
+        registerHook("beforeRead", NOTES, refuseWhenAsked as never);
+        try {
+          await expect(
+            versions.setLabel(ref, 1, "hooked", undefined, {
+              ...asUser(editorId),
+              context: { deny: true },
+            })
+          ).rejects.toBeDefined();
+        } finally {
+          unregisterHook("beforeRead", NOTES, refuseWhenAsked as never);
+        }
+        expect((await versions.get(ref, 1)).label ?? null).toBeNull();
+      });
+
       it("stays trusted for the plugin acting as itself", async () => {
         const ref = refOf(NOTES, await published(NOTES, "e"));
         await versions.setLabel(ref, 1, "by the plugin");
@@ -350,6 +442,27 @@ describe.each(getConfiguredTestDialects())(
           asUser(editorId)
         );
         expect(await versions.getAutosave(ref, editorId)).toBeDefined();
+      });
+
+      it("takes any snapshot the store takes, a function or toJSON included", async () => {
+        // The store keeps a snapshot as JSON, so a value JSON can write is
+        // accepted, as it always was: a function is left out, and toJSON is
+        // what is kept.
+        const ref = refOf(NOTES, await published(NOTES, "t"));
+        await versions.autosave({
+          ref,
+          status: "draft",
+          snapshot: {
+            title: "typing",
+            draw: () => "not data",
+            when: { toJSON: () => "2026-10-20" },
+          },
+          createdBy: ownerId,
+        });
+        expect((await versions.getAutosave(ref, ownerId))?.snapshot).toEqual({
+          title: "typing",
+          when: "2026-10-20",
+        });
       });
 
       it("is filed under the caller when the call names no author", async () => {

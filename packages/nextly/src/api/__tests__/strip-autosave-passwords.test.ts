@@ -8,11 +8,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getCollection = vi.fn();
+const getSingleBySlug = vi.fn();
 const getComponentFields = vi.fn();
 let dataServiceWired = true;
 
 vi.mock("../../di", () => ({
-  getService: vi.fn(() => ({ getCollection })),
+  getService: vi.fn((name: string) =>
+    name === "singleRegistryService" ? { getSingleBySlug } : { getCollection }
+  ),
 }));
 
 vi.mock("../../di/container", () => ({
@@ -71,6 +74,35 @@ describe("stripAutosavePasswords", () => {
     await expect(
       stripAutosavePasswords("collection", "notes", snapshot)
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
+  it("refuses when the collection is not there, rather than finding no fields", async () => {
+    // A missing entity is not one with no fields: nothing says which values are
+    // passwords, so the snapshot is not kept.
+    getCollection.mockResolvedValue(null);
+
+    await expect(
+      stripAutosavePasswords("collection", "gone", { pin: "4321" })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
+  it("refuses when the Single is not there, rather than finding no fields", async () => {
+    getSingleBySlug.mockResolvedValue(null);
+
+    await expect(
+      stripAutosavePasswords("single", "gone", { pin: "4321" })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
+  it("keeps a Single that is there and has no fields of its own", async () => {
+    // The control: an entity whose identity columns alone form a document
+    // has nothing to strip, and is kept.
+    getSingleBySlug.mockResolvedValue({ fields: [] });
+    const snapshot = { id: "s1" };
+
+    await stripAutosavePasswords("single", "bare", snapshot);
+
+    expect(snapshot).toEqual({ id: "s1" });
   });
 
   it("refuses when a referenced component's fields cannot be read at all", async () => {
