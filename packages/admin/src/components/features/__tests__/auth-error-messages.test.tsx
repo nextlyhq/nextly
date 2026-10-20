@@ -166,7 +166,7 @@ describe("SetInitialPassword", () => {
         validationFailure(
           "newPassword",
           "WEAK_PASSWORD",
-          "Password must contain at least one uppercase letter"
+          "This password is too common."
         ),
         400
       )
@@ -176,7 +176,7 @@ describe("SetInitialPassword", () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalled());
     expect(toast.error).toHaveBeenCalledWith("Could not set your password", {
-      description: "Password must contain at least one uppercase letter",
+      description: "This password is too common.",
     });
   });
 

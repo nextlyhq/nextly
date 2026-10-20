@@ -126,11 +126,13 @@ function branding(): AdminBranding {
   } as unknown as AdminBranding;
 }
 
+/** Every width, one card, listed in the add panel's Overview group as core lists it. */
 function facts(): WidgetWidthFacts {
   return {
     allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
     defaultWidth: "full",
     allowsSeveral: false,
+    group: "overview",
   };
 }
 
@@ -295,7 +297,15 @@ const CHANGES: Array<[string, (user: User) => Promise<void>]> = [
   ["a removal", user => choose(user, "Posts", "Remove")],
   [
     "an addition",
-    user => user.click(screen.getByRole("button", { name: "Add Team" })),
+    async user => {
+      // From the add panel, then closed, as a reader leaves it before Save or Cancel.
+      await user.click(
+        within(bar()).getByRole("button", { name: "Add widget" })
+      );
+      await user.click(await screen.findByRole("button", { name: "Add Team" }));
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    },
   ],
   ["a reset", user => confirmReset(user)],
   [
@@ -395,12 +405,17 @@ describe("the bar", () => {
     expect(within(bar()).queryByText("Unsaved changes")).toBeNull();
   });
 
-  it("Add widget sends focus to the add picker", async () => {
+  it("Add widget opens the add panel, with focus in its search", async () => {
     renderDashboard();
     const user = await beginEditing();
-    await user.click(within(bar()).getByRole("button", { name: "Add widget" }));
+    const add = within(bar()).getByRole("button", { name: "Add widget" });
+    expect(add).toHaveAttribute("aria-haspopup", "dialog");
+    await user.click(add);
+    expect(
+      await screen.findByRole("dialog", { name: "Add widget" })
+    ).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.getByTestId("add-widget-picker")).toHaveFocus()
+      expect(screen.getByTestId("add-panel-search")).toHaveFocus()
     );
   });
 

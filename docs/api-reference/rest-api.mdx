@@ -288,10 +288,10 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `GET` | `/admin/api/user-fields/{id}` | Get user field. | `read-settings` |
 | `PATCH` | `/admin/api/user-fields/{id}` | Update user field. | `update-settings` |
 | `DELETE` | `/admin/api/user-fields/{id}` | Delete user field. | `delete-settings` |
-| `GET` | `/admin/api/api-keys` | List every API key, to anyone who may read keys. | Cookie (session-only) |
+| `GET` | `/admin/api/api-keys` | List every API key, to anyone who may read keys. | Cookie, or an API key with `read-api-keys` or `update-api-keys` |
 | `POST` | `/admin/api/api-keys` | Create API key. | Cookie (session-only) |
 | `GET` | `/admin/api/api-keys/abilities?tokenType=…&roleId=…` | **Experimental.** What a key you create now, of this type (and role, for `role-based`), would be able to do: `{ items: [{ slug, action, resource }], meta }`. Refused as creating that key would be. | Cookie (session-only) |
-| `GET` | `/admin/api/api-keys/{id}` | Get API key metadata. | Cookie (session-only) |
+| `GET` | `/admin/api/api-keys/{id}` | Get API key metadata. | Cookie, or an API key with `read-api-keys` or `update-api-keys` |
 | `PATCH` | `/admin/api/api-keys/{id}` | Update any key's name/description. | Cookie (session-only) |
 | `DELETE` | `/admin/api/api-keys/{id}` | Revoke any API key. | Cookie (session-only) |
 | `GET` | `/admin/api/dashboard/stats` | Admin dashboard stats. | Cookie |
@@ -587,7 +587,7 @@ Image-size presets are managed under `/admin/api/image-sizes`. The `regeneration
 
 ### API keys
 
-`/admin/api/api-keys/*` is session-only — these endpoints **do not** accept Bearer authentication, so an attacker with a stolen key cannot mint new keys with it. Manage keys from the admin UI or via cookie-authenticated requests.
+Creating, changing and revoking keys (`POST`, `PATCH` and `DELETE` under `/admin/api/api-keys`), and the `abilities` summary, are session-only. They **do not** accept Bearer authentication, so an attacker with a stolen key cannot mint new keys with it. Manage keys from the admin UI or via cookie-authenticated requests. Listing and reading keys (`GET /admin/api/api-keys` and `GET /admin/api/api-keys/{id}`) also accept an API key that holds `read-api-keys` or `update-api-keys`.
 
 ```bash
 curl http://localhost:3000/admin/api/api-keys -b "nextly_session=..."

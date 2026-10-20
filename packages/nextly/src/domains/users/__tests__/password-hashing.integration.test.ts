@@ -12,6 +12,7 @@ import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_DIGESTER_REACH_BYTES,
   hashPassword,
   isPasswordHash,
   verifyPassword,
@@ -352,10 +353,15 @@ describe.each(getConfiguredTestDialects())(
 
     it("keeps it when the Direct API changes a person's own password", async () => {
       // This write hashes with the app's configured hasher, so the instance
-      // is given one: core's own, which sign-in verifies.
+      // is given one: core's own, which sign-in verifies. The declared reach
+      // is core's own too — the contract the boot requires of every digester.
       current = await createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
-        passwordHasher: { hash: hashPassword, verify: verifyPassword },
+        passwordHasher: {
+          hash: hashPassword,
+          verify: verifyPassword,
+          reach: DEFAULT_DIGESTER_REACH_BYTES,
+        },
       });
       const t = current;
       if (dialect === "sqlite") {

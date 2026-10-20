@@ -27,7 +27,12 @@ import type {
   WidgetWidthFacts,
 } from "@admin/types/dashboard/widgets";
 
-import { addPlacement, hasChanges, type IsDrawn } from "../layout-editor";
+import {
+  addedPlacementId,
+  addPlacement,
+  hasChanges,
+  type IsDrawn,
+} from "../layout-editor";
 
 import { useLayoutLifecycle, type LayoutLifecycle } from "./useLayoutLifecycle";
 import {
@@ -41,7 +46,7 @@ export interface LayoutEditor extends PlacementMutations, LayoutLifecycle {
   /** The list to DRAW from — the draft while customising, else the server's. */
   placements: WidgetPlacement[];
   /**
-   * Widget ids the picker offers as NEW cards: ones this reader may see that
+   * Widget ids the add panel offers as NEW cards: ones this reader may see that
    * are not in the draft, and ones that allow several cards.
    */
   available: string[];
@@ -50,7 +55,7 @@ export interface LayoutEditor extends PlacementMutations, LayoutLifecycle {
   /**
    * Whether the list already holds as many cards as a write may carry.
    *
-   * 🔴 Exposed rather than left for the picker to compute, and refused in
+   * 🔴 Exposed rather than left for the add panel to compute, and refused in
    * {@link LayoutEditor.add} rather than only rendered: a draft past the limit
    * is one the server was always going to refuse.
    */
@@ -79,8 +84,12 @@ export interface LayoutEditor extends PlacementMutations, LayoutLifecycle {
    * mutations (which keep the alert up), and the query.
    */
   reload: () => void;
-  /** Append a new card of this widget, at its default width. */
-  add: (widgetId: string) => void;
+  /**
+   * Append a new card of this widget, at its default width. Answers the new card's id, so it
+   * can be highlighted and focused, or `null` when nothing was added: not customising, or the
+   * dashboard already holds as many cards as it can.
+   */
+  add: (widgetId: string) => string | null;
 }
 
 /**
@@ -104,7 +113,7 @@ export interface LayoutDraft {
 }
 
 /**
- * The widgets the picker may offer as new cards, against the DRAFT.
+ * The widgets the add panel may offer as new cards, against the DRAFT.
  *
  * Every widget the read says this reader may see, the server's own `available`
  * order first: a widget not in the draft, or one that allows several cards.
@@ -161,19 +170,27 @@ export function useLayoutEditor(
   }, [layout]);
 
   const add = useCallback(
-    (widgetId: string) =>
-      setDraft(current => {
-        if (!current) return current;
-        // The capacity refusal lives in `addPlacement`, the one path every add
-        // takes. A widget the read did not describe starts full, which is how
-        // the server reads a widget that says nothing.
-        const width = factsFor(widgetId)?.defaultWidth ?? "full";
-        return {
-          ...current,
-          placements: addPlacement(current.placements, widgetId, width),
-        };
-      }),
-    [factsFor]
+    (widgetId: string): string | null => {
+      // Answered from the draft as drawn, so the caller learns the id before the list moves
+      // on; `addPlacement` refuses the same cases again inside the update.
+      if (draft === null || draft.placements.length >= MAX_PLACEMENTS) {
+        return null;
+      }
+      const id = addedPlacementId(draft.placements, widgetId);
+      // A widget the read did not describe starts full, which is how the server reads a
+      // widget that says nothing.
+      const width = factsFor(widgetId)?.defaultWidth ?? "full";
+      setDraft(current =>
+        current
+          ? {
+              ...current,
+              placements: addPlacement(current.placements, widgetId, width, id),
+            }
+          : current
+      );
+      return id;
+    },
+    [draft, factsFor]
   );
 
   const placements = draft?.placements ?? server;
