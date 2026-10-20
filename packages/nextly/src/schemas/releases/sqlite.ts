@@ -96,6 +96,14 @@ export const nextlyReleaseMembersSqlite = sqliteTable(
     // promise that: two adds can both count zero.
     singleSlot: integer("single_slot"),
 
+    // The release `revision` this member's action was last applied for, set by
+    // the drain in the same transaction as the member's content write. NULL
+    // until a write lands. A member counts as applied only while this equals
+    // its release's current revision, so any move of the release (a
+    // reschedule, a cancel, an edit, a membership change) leaves it stale
+    // without anything having to clear it.
+    appliedRevision: integer("applied_revision"),
+
     createdBy: text("created_by"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())

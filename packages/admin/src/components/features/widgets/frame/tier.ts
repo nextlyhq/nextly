@@ -87,6 +87,30 @@ export function rowsDrawn(tier: SizeTier, items: unknown): number {
   );
 }
 
+/**
+ * How a list or table card lays its rows out at `tier`, given how many columns it has.
+ *
+ * - `table`: a heading row and the rows, at the large tier when there are columns to head.
+ * - `list-detail`: a label and a detail line per row, from the medium tier when there is a second
+ *   column to make the detail of.
+ * - `list`: label lines only; a small card has room for nothing more.
+ *
+ * One answer for the rows a card draws and the skeleton that holds their place before they
+ * arrive, so the two lay out alike: a skeleton drawn as a list for a card that then draws a
+ * table would change height the moment the answer lands.
+ */
+export type RowsLayout =
+  | { kind: "list" }
+  | { kind: "list-detail" }
+  | { kind: "table"; columns: number };
+
+export function rowsLayout(tier: SizeTier, columns: number): RowsLayout {
+  if (tier === "large" && columns > 0) return { kind: "table", columns };
+  return tier !== "small" && columns > 1
+    ? { kind: "list-detail" }
+    : { kind: "list" };
+}
+
 /** The tier of the card being drawn; `undefined` outside a card or before it is measured. */
 export const CardTierContext = createContext<SizeTier | undefined>(undefined);
 
