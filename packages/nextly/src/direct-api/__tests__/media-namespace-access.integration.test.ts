@@ -229,6 +229,52 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("who a checked write is recorded as", () => {
+      /** The actor the outbox recorded for a media write to this file. */
+      async function recordedActor(
+        type: string,
+        mediaId: string
+      ): Promise<[string | null, string | null] | undefined> {
+        const rows = await t.adapter.select<{
+          type: string;
+          resourceId: string | null;
+          actorType: string | null;
+          actorId: string | null;
+        }>("nextly_events");
+        const row = rows.find(r => r.type === type && r.resourceId === mediaId);
+        return row ? [row.actorType, row.actorId] : undefined;
+      }
+
+      it("records a write made with an API key as the key, not its owner", async () => {
+        const key = new Nextly({
+          overrideAccess: false,
+          user: { id: holderId },
+          actor: {
+            actorType: "apiKey",
+            permissions: ["read-media", "create-media", "update-media"],
+          },
+        });
+        const uploaded = await key.media.upload({ file: file("keyed.pdf") });
+        expect((await recordedActor("media.uploaded", uploaded.id))?.[0]).toBe(
+          "apiKey"
+        );
+        await key.media.update({ id: uploaded.id, data: { altText: "keyed" } });
+        expect((await recordedActor("media.updated", uploaded.id))?.[0]).toBe(
+          "apiKey"
+        );
+      });
+
+      it("records a write made as a person as that person", async () => {
+        const uploaded = await checkedAs(holderId).media.upload({
+          file: file("personal.pdf"),
+        });
+        expect(await recordedActor("media.uploaded", uploaded.id)).toEqual([
+          "user",
+          holderId,
+        ]);
+      });
+    });
+
     describe("a person with the permission", () => {
       it("uploads, changes, makes a folder and deletes, as REST would let them", async () => {
         const writer = checkedAs(holderId);
