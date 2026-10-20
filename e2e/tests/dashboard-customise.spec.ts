@@ -97,6 +97,9 @@ async function expectNoAxeViolations(page: Page): Promise<void> {
     results.passes.length,
     "axe reported no passing rules, so it scanned nothing"
   ).toBeGreaterThan(10);
+  // Every violation and every target is kept: nothing is set aside by rule
+  // or place, so the scan judges the sidebar rail like any other region of
+  // the page.
   const findings = results.violations.map(v => ({
     id: v.id,
     impact: v.impact ?? "unknown",
