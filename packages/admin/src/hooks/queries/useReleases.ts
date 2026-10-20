@@ -95,22 +95,38 @@ export function useReleases(params: ReleaseListParams = {}, enabled = true) {
  * One page of one tab of the release list.
  *
  * The list's own read rather than {@link useReleases}, for one reason: while
- * the next page, tab or search is being fetched it keeps showing the rows it
- * has, so the table and its pager hold still instead of collapsing to a
- * loading row on every page turn. Polled on the same two speeds as the rest of
- * the releases screens, and for the same reason.
+ * the next page or search of the SAME tab is being fetched it keeps showing
+ * the rows it has, so the table and its pager hold still instead of
+ * collapsing to a loading row on every page turn. Never across tabs: a tab
+ * showing another tab's releases, even for a moment, says something untrue
+ * about where they are, and offers a pager for a list it is not showing.
+ * Polled on the same two speeds as the rest of the releases screens, and for
+ * the same reason.
  */
 export function useReleaseListPage(params: ReleaseListParams) {
   return useQuery({
     queryKey: releaseKeys.list(params),
     queryFn: () => fetchReleases(params),
-    placeholderData: keepPreviousData,
+    placeholderData: (previous, previousQuery) =>
+      sameTab(previousQuery?.queryKey[2], params) ? previous : undefined,
     refetchInterval: data =>
       hasPendingRelease(data.state.data)
         ? PENDING_RELEASE_POLL_MS
         : NO_RELEASE_POLL_MS,
     refetchOnWindowFocus: true,
   });
+}
+
+/** Whether two list reads are of the same tab and the same part of it. */
+function sameTab(
+  previous: ReleaseListParams | undefined,
+  next: ReleaseListParams
+): boolean {
+  return (
+    previous !== undefined &&
+    previous.tab === next.tab &&
+    previous.reason === next.reason
+  );
 }
 
 /**
