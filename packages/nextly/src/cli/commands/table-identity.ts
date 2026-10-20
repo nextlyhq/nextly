@@ -18,9 +18,10 @@
  * - SQLite: the table's root page (`sqlite_master.rootpage`), kept through a
  *   rename, an added column and deleted rows. A page can be given again: a
  *   table dropped and created again may get the page it freed, and one
- *   created after a `VACUUM` may get the page a renamed table moved off. So
- *   on SQLite a caller also needs to know whether a table appeared under a
- *   new name, which is where a renamed original would be (`listTables`).
+ *   created after a `VACUUM` may get the page a renamed table moved off, and
+ *   the original can be renamed into a name another table held. So on
+ *   SQLite a caller also needs to know whether the schema changed at all
+ *   (`readSqliteSchemaVersion`).
  *
  * Every other gap is either a table read as another one, which a caller
  * refuses on, or a replacement where nothing of the original survives.
@@ -92,4 +93,19 @@ function identityToken(value: unknown): string | null {
   }
   if (typeof value === "number") return value > 0 ? String(value) : null;
   return typeof value === "string" && value !== "" ? value : null;
+}
+
+/**
+ * SQLite's schema version, which every change to the schema moves, `VACUUM`
+ * included, and changes to rows do not; null when it cannot be read. Stored
+ * in the database file, so a change made through any connection moves it.
+ */
+export async function readSqliteSchemaVersion(
+  adapter: RowReader
+): Promise<number | null> {
+  const [row] = await adapter.queryStatement<Record<string, unknown>>(
+    sql`PRAGMA schema_version`
+  );
+  const version = row?.schema_version;
+  return typeof version === "number" ? version : null;
 }

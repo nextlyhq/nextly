@@ -12,7 +12,10 @@ import {
   getConfiguredTestDialects,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { readTableIdentities } from "../table-identity";
+import {
+  readSqliteSchemaVersion,
+  readTableIdentities,
+} from "../table-identity";
 
 /** Hand-made tables, prefixed so they meet nothing else in the database. */
 const OWNED = "ti_owned";
@@ -75,3 +78,37 @@ describe.each(getConfiguredTestDialects())(
     });
   }
 );
+
+describe("readSqliteSchemaVersion on SQLite", () => {
+  let handle: TestNextly;
+  const version = () => readSqliteSchemaVersion(handle.adapter);
+  const run = (statement: string) => handle.adapter.executeQuery(statement);
+
+  beforeEach(async () => {
+    handle = await createTestNextly({});
+    await run(`CREATE TABLE ${OWNED} (id integer PRIMARY KEY, body text)`);
+  });
+
+  afterEach(async () => {
+    await run(`DROP TABLE IF EXISTS ${MOVED}`);
+    await run(`DROP TABLE IF EXISTS ${OWNED}`);
+    await handle?.destroy();
+  });
+
+  it("keeps its value through changes to rows", async () => {
+    const before = await version();
+    await run(`INSERT INTO ${OWNED} (id, body) VALUES (1, 'kept')`);
+    await run(`DELETE FROM ${OWNED}`);
+    expect(before).toEqual(expect.any(Number));
+    expect(await version()).toBe(before);
+  });
+
+  it("moves on a rename and on VACUUM, which a replacement can hide behind", async () => {
+    const before = await version();
+    await run(`ALTER TABLE ${OWNED} RENAME TO ${MOVED}`);
+    const renamed = await version();
+    expect(renamed).not.toBe(before);
+    await run("VACUUM");
+    expect(await version()).not.toBe(renamed);
+  });
+});

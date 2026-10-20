@@ -55,11 +55,11 @@ vi.mock("../../utils/adapter", () => ({
     dialect: "sqlite",
     getDrizzle: () => ({}),
     tableExists: async () => state.migrated,
-    // Each read of the table list, so the order of the uninstall's reads
-    // around the boot and the hook can be told.
-    listTables: async () => {
-      state.calls.push("listTables");
-      return [];
+    // Each read of SQLite's schema version, so the order of the
+    // uninstall's reads around the boot and the hook can be told.
+    queryStatement: async () => {
+      state.calls.push("schemaVersion");
+      return [{ schema_version: 1 }];
     },
     disconnect: async () => {
       state.calls.push("disconnect");
@@ -377,14 +377,14 @@ describe("an uninstall's table baseline", () => {
 
     expect(calls).toEqual([
       // Read before anything changes, to refuse an unreadable identity.
-      "listTables",
+      "schemaVersion",
       "register",
-      "listTables",
+      "schemaVersion",
       "onUninstall",
       "destroy",
       "clear",
       // And once the hook has run, to compare with.
-      "listTables",
+      "schemaVersion",
       "disconnect",
     ]);
   });

@@ -54,7 +54,7 @@ import {
   type PreparedModuleDown,
 } from "./plugin-lifecycle";
 import { pluginModuleDown } from "./plugin-module-rollback";
-import { readTableIdentities } from "./table-identity";
+import { readSqliteSchemaVersion, readTableIdentities } from "./table-identity";
 
 interface RunnerOptions {
   config?: string;
@@ -524,9 +524,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   ): Promise<ReadonlyMap<string, string | null>> =>
     readTableIdentities(drizzleAdapter, dialect, tables);
 
-  /** Every table in the database, as the adapter lists them. */
-  const listTables = (): Promise<readonly string[]> =>
-    drizzleAdapter.listTables();
+  /** SQLite's schema version (`readSqliteSchemaVersion`). */
+  const schemaVersion = (): Promise<number | null> =>
+    readSqliteSchemaVersion(drizzleAdapter);
 
   /**
    * Run one plugin's own `onInstall` / `onUninstall` against a real context.
@@ -738,7 +738,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     readAppliedModules,
     liveTables,
     tableIdentities,
-    listTables,
+    schemaVersion,
     runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,

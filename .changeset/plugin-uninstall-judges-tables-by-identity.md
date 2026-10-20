@@ -37,7 +37,8 @@ original table and its rows survived under the other name while the plugin
 was recorded uninstalled. Each table is now identified by what the database
 keeps for it (its oid on PostgreSQL, its creation time on MySQL, its root page
 on SQLite), read before and after the hook. On SQLite, where a root page can
-be given to a new table, a hook that creates a table is refused too. Nothing
+be given to a new table, a hook that changes the schema at all is refused
+too. Nothing
 has run when the refusal comes, and every module is still recorded as
 applied.
 
