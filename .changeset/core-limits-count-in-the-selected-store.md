@@ -49,8 +49,10 @@ counts one budget, where each used to count its own.
 (`503`, "Please try again shortly."), on core's `/auth/*` endpoints and on plugin
 routes with `rateLimit: "auth"`, while the REST API, API key and other plugin
 route limits let requests through. A store call that takes more than 2 seconds
-counts as an outage. Each outage is logged once when it begins and once when
-the store answers again. Before, a store failure failed the request. With an
+counts as an outage, and a call that never settles stops holding a place after
+20 seconds, so once the store answers again its limits count again without a
+restart. Each outage is logged once when it begins and once when the store
+answers again. Before, a store failure failed the request. With an
 app's own store, an outage stops staff sign-in until the store answers, so
 monitor that store.
 

@@ -5,7 +5,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { withCallDeadline } from "../call-deadline";
+import type { RateLimitStore } from "../../../middleware/rate-limit";
+import { withCallDeadline, withRateLimitStoreDeadline } from "../call-deadline";
 import { limitStoreUnavailableReason, type LimitStore } from "../limit-store";
 import { createMemoryLimitStore } from "../memory-limit-store";
 
@@ -118,5 +119,36 @@ describe("a limit store call held to a time", () => {
     expect(result).toBe("done");
     expect((await store.read(["k"])).get("k")?.value).toBe(7);
     expect(store.shared).toBe(false);
+  });
+});
+
+describe("withRateLimitStoreDeadline after calls that never settle", () => {
+  it("lets calls reach the store again once the store answers, rather than refusing for good", async () => {
+    // Calls that time out and never settle used to hold their places under
+    // the cap forever, so the store, healthy again, was never asked: sign-in
+    // refused and the API went uncounted until the process restarted.
+    let hanging = true;
+    const store: RateLimitStore = {
+      increment: (_key, windowMs) =>
+        hanging
+          ? new Promise(() => {})
+          : Promise.resolve({ count: 1, resetTime: Date.now() + windowMs }),
+      reset: () => Promise.resolve(),
+    };
+    const guarded = withRateLimitStoreDeadline(store, 20, 2);
+
+    // Two calls hang and time out, filling the cap.
+    await expect(guarded.increment("a", 1_000)).rejects.toThrow();
+    await expect(guarded.increment("b", 1_000)).rejects.toThrow();
+    // At the cap, a call is answered as unavailable without asking the store.
+    await expect(guarded.increment("c", 1_000)).rejects.toThrow();
+
+    // The store recovers; after the abandoned calls stop holding places, a
+    // call reaches it and is counted.
+    hanging = false;
+    await new Promise(resolve => setTimeout(resolve, 250));
+    await expect(guarded.increment("d", 1_000)).resolves.toMatchObject({
+      count: 1,
+    });
   });
 });
