@@ -28,30 +28,29 @@ const repoRoot = resolve(packageRoot, "../..");
 const ALLOWLIST_FILE = "eslint-console-allowlist.json";
 
 /**
- * The terminal entries, read as JSON as the ESLint config reads them, and narrowed rather than
- * asserted. The file holds that one section: any other would be an exemption nothing here
- * checks, so it is refused.
+ * The allowlist's one section, read as JSON as the ESLint config reads it, and narrowed rather
+ * than asserted. Any other section would be an exemption nothing here checks, so it is refused.
  */
-function readTerminal(): ReadonlyMap<string, string> {
+function terminalSection(): object {
   const parsed: unknown = JSON.parse(
     readFileSync(join(packageRoot, ALLOWLIST_FILE), "utf8")
   );
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new TypeError(`${ALLOWLIST_FILE} must be an object`);
-  }
-  const sections = Object.keys(parsed);
-  if (sections.length !== 1 || sections[0] !== "terminal") {
-    throw new TypeError(
-      `${ALLOWLIST_FILE} must hold only "terminal", got ${sections.join(", ")}`
-    );
-  }
-  const section: unknown = (parsed as Record<string, unknown>).terminal;
+  const sections =
+    typeof parsed === "object" && parsed !== null ? Object.keys(parsed) : [];
+  const section: unknown =
+    sections.length === 1 && sections[0] === "terminal"
+      ? (parsed as Record<string, unknown>).terminal
+      : undefined;
   if (typeof section !== "object" || section === null) {
-    throw new TypeError(`${ALLOWLIST_FILE}: "terminal" must be an object`);
+    throw new TypeError(`${ALLOWLIST_FILE} must hold only a "terminal" object`);
   }
+  return section;
+}
+
+/** The terminal entries. Every one is permanent, so each says why. */
+function readTerminal(): ReadonlyMap<string, string> {
   const terminal = new Map<string, string>();
-  for (const [path, reason] of Object.entries(section)) {
-    // Every entry is permanent, so each one says why.
+  for (const [path, reason] of Object.entries(terminalSection())) {
     if (typeof reason !== "string" || reason.trim() === "") {
       throw new TypeError(`${ALLOWLIST_FILE}: ${path} must give its reason`);
     }
