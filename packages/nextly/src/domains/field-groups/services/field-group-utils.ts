@@ -173,8 +173,10 @@ export function asComponentReferenceList(
  *
  * Expansion fetches a field marked `relationType: "manyToMany"` from its junction table, which is
  * where a collection keeps those links. A component has none: its ids are on the instance row, so
- * the same field reads them from the row, with the target it names in `options.target`. Every other
- * field is passed through unchanged.
+ * the same field reads them from the row. Its target is the one it names in `options.target`, which
+ * a many-to-many prefers to any `relationTo` beside it; that preference is tied to the many-to-many
+ * marker cleared here, so the target is carried into `relationTo`. Every other field is passed
+ * through unchanged.
  */
 export function asRowBackedRelationFields(
   fields: readonly FieldConfig[]
@@ -182,9 +184,11 @@ export function asRowBackedRelationFields(
   return fields.map(field => {
     if (!usesJunctionTable(field)) return field;
     const options = (field as { options?: Record<string, unknown> }).options;
+    const target = options?.target;
     return {
       ...field,
       hasMany: true,
+      ...(target !== undefined ? { relationTo: target } : {}),
       options: { ...options, relationType: undefined },
     } as unknown as FieldConfig;
   });

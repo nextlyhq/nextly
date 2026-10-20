@@ -17,6 +17,7 @@ import { getComponentRowColumnDescriptor } from "../../../schema/services/field-
 import { FieldGroupSchemaService } from "../field-group-schema-service";
 import {
   asComponentReferenceList,
+  asRowBackedRelationFields,
   shouldTreatAsJson,
 } from "../field-group-utils";
 
@@ -155,5 +156,48 @@ describe("reading a component many-to-many's stored value", () => {
       options: { target: "users" },
     } as unknown as FieldConfig;
     expect(asComponentReferenceList(single, "a")).toBe("a");
+  });
+});
+
+describe("a component many-to-many handed to relationship expansion", () => {
+  it("is a row-backed hasMany list that keeps the target it names in options.target", () => {
+    // A stale `relationTo` beside it must not win: a many-to-many's target is `options.target`.
+    const [field] = asRowBackedRelationFields([
+      {
+        name: "tags",
+        type: "relationship",
+        relationTo: "stale",
+        options: { target: "tags", relationType: "manyToMany" },
+      } as unknown as FieldConfig,
+    ]) as unknown as {
+      hasMany?: boolean;
+      relationTo?: unknown;
+      options?: { relationType?: unknown };
+    }[];
+    expect(field).toMatchObject({ hasMany: true, relationTo: "tags" });
+    expect(field.options?.relationType).toBeUndefined();
+  });
+});
+
+describe("an indexed component many-to-many in the creating SQL", () => {
+  const indexed = [
+    {
+      ...LIST_RELATIONS["a many-to-many"],
+      index: true,
+    },
+  ] as unknown as FieldConfig[];
+  const indexLine = (dialect: keyof typeof EXPECTED): string | undefined =>
+    new FieldGroupSchemaService(dialect)
+      .generateMigrationSQL("comp_hero", indexed)
+      .split("\n")
+      .find(line => line.includes("idx_comp_hero_tags"));
+
+  it("gets no index on MySQL, which cannot index a JSON column", () => {
+    expect(indexLine("mysql")).toBeUndefined();
+  });
+
+  it("keeps its index where the dialect can index the column", () => {
+    expect(indexLine("postgresql")).toBeDefined();
+    expect(indexLine("sqlite")).toBeDefined();
   });
 });

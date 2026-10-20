@@ -73,6 +73,7 @@ import {
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
+  columnTypeIsIndexable,
   uniquenessCanBeAnIndex,
 } from "../../schema/services/index-name";
 import {
@@ -295,9 +296,15 @@ export class FieldGroupSchemaService {
     const referencing = mainColumns.filter(field =>
       this.fieldHasForeignKey(field)
     );
+    // An index a field asks for only where the dialect can index its column: MySQL cannot index a
+    // JSON column, so a declared index on one would fail after the table was already created. The
+    // desired schema asks the same rule, so neither side declares an index the other lacks.
     const declaredIndexed = mainColumns.filter(
       field =>
-        !this.fieldHasForeignKey(field) && "index" in field && field.index
+        !this.fieldHasForeignKey(field) &&
+        "index" in field &&
+        field.index &&
+        columnTypeIsIndexable(this.columnTypeFor(field) ?? "", this.dialect)
     );
     for (const field of [...referencing, ...declaredIndexed]) {
       const columnName = this.toSnakeCase(field.name);
