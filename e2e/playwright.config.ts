@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXTLY_ROOT = path.resolve(HERE, "..");
 
@@ -120,6 +122,9 @@ export default defineConfig({
     stderr: "pipe",
     env: {
       PORT: String(PORT),
+      // A known signing secret, so share-preview-links.spec.ts can sign a link
+      // as an earlier version minted it. It wins over the playground's `.env`.
+      NEXTLY_SECRET: E2E_NEXTLY_SECRET,
       DB_DIALECT: "sqlite",
       DATABASE_URL: E2E_DB_RELATIVE,
       // Its own build directory. A separate port is not enough on its own:

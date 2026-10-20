@@ -196,6 +196,7 @@ import {
   isBuilderEnabled,
   isBuilderRoute,
 } from "./shared/builder-access";
+import { consoleLogger } from "./shared/types";
 import {
   hexToCssColor,
   getForegroundForBackground,
@@ -2061,7 +2062,9 @@ async function buildAdminMeta(
     }
   } catch (err) {
     // DB not ready or table missing — fall back to config values silently
-    console.error("[ADMIN-META] Error fetching settings from DB:", err);
+    consoleLogger.error("[ADMIN-META] Error fetching settings from DB", {
+      error: err,
+    });
   }
 
   return { branding, workspace };

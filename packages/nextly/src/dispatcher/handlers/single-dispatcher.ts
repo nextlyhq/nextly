@@ -83,6 +83,7 @@ import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { assertGlobalResourceSlugAvailable } from "../../services/lib/resource-slug-guard";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
+import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -684,9 +685,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
             );
           }
         } catch (e) {
-          console.warn(
-            `[Singles] Failed to seed permissions for "${b.slug}":`,
-            e
+          consoleLogger.warn(
+            `[Singles] Failed to seed permissions for "${b.slug}"`,
+            { e }
           );
         }
       }
@@ -847,16 +848,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
   deleteSingle: {
     execute: async (svc, p) => {
       const slug = requireParam(p, "slug", "Single slug");
-      console.log(
+      consoleLogger.info(
         `[deleteSingle] === START === slug: "${slug}" at ${new Date().toISOString()}`
       );
 
       // Code-first Singles are locked and cannot be deleted via API.
       const single = await svc.registry.getSingleBySlug(slug);
-      console.log(
-        `[deleteSingle] getSingleBySlug returned:`,
-        single ? `found (tableName: ${single.tableName})` : "null"
-      );
+      consoleLogger.info(`[deleteSingle] getSingleBySlug returned`, {
+        detail: single ? `found (tableName: ${single.tableName})` : "null",
+      });
 
       if (!single) {
         throw new Error(`Single "${slug}" not found`);
@@ -913,9 +913,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           }
         } catch (enrichError) {
           // Non-fatal: return unenriched fields if the component registry is down.
-          console.debug(
-            "[Dispatcher] Failed to enrich Single component fields:",
-            enrichError
+          consoleLogger.debug(
+            "[Dispatcher] Failed to enrich Single component fields",
+            { error: enrichError }
           );
         }
       }
@@ -1362,7 +1362,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       } catch (err) {
         versionPersisted = false;
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(
+        consoleLogger.warn(
           `[applySingleSchemaChanges] Post-apply metadata write failed for '${slug}': ${msg}. ` +
             `schema_version was not advanced; the save is reported at the current version so a retry re-attempts the bump.`
         );
@@ -1397,7 +1397,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(
+        consoleLogger.warn(
           `[applySingleSchemaChanges] In-memory schema refresh failed for '${slug}': ${msg}.`
         );
       }

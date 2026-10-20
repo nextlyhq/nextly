@@ -81,6 +81,7 @@ import { ServiceContainer } from "../services";
 import { resolveClaimedMimeType } from "../services/upload-validation/mime";
 import { resolveUploadPolicy } from "../services/upload-validation/upload-policy";
 import type { Logger } from "../shared/types";
+import { consoleLogger } from "../shared/types";
 import type { Media, MediaResponse } from "../types/media";
 import { UploadMediaInputSchema } from "../types/media";
 
@@ -103,7 +104,9 @@ function getRevalidatePath(): RevalidatePath {
  * not the host wired one up.
  */
 function getLogger(): Logger {
-  return container.has("logger") ? container.get<Logger>("logger") : console;
+  return container.has("logger")
+    ? container.get<Logger>("logger")
+    : consoleLogger;
 }
 
 function getServices(): ServiceContainer {
@@ -331,7 +334,9 @@ export async function uploadMediaAction(
     return settleMediaWrite(result, options.revalidatePath, "Upload failed");
   } catch (error) {
     // 9. Handle unexpected errors
-    console.error("[uploadMediaAction] Unexpected error:", error);
+    consoleLogger.error("[uploadMediaAction] Unexpected error", {
+      error: error,
+    });
 
     return {
       success: false,
@@ -396,7 +401,9 @@ export async function deleteMediaAction(
       statusCode: result.statusCode,
     };
   } catch (error) {
-    console.error("[deleteMediaAction] Unexpected error:", error);
+    consoleLogger.error("[deleteMediaAction] Unexpected error", {
+      error: error,
+    });
 
     return {
       success: false,
@@ -461,7 +468,9 @@ export async function updateMediaAction(
     // 3. Revalidate on success, and map whatever the service reported.
     return settleMediaWrite(result, options?.revalidatePath, "Update failed");
   } catch (error) {
-    console.error("[updateMediaAction] Unexpected error:", error);
+    consoleLogger.error("[updateMediaAction] Unexpected error", {
+      error: error,
+    });
 
     return {
       success: false,
