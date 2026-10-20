@@ -7,6 +7,7 @@
  * one read later, is what the session — or the second factor that interrupts
  * it — carries.
  */
+import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 import { hashPassword } from "../../password";
@@ -209,5 +210,24 @@ describe("the password version a sign-in proved", () => {
     const claims = await verifyPendingToken(body.pendingToken, SECRET);
 
     expect(claims.passwordUpdatedAt).toBe(PROVEN.getTime());
+  });
+});
+
+// Beside the version tests for this file's harness: a full sign-in with a
+// credential lookup whose database answers busy.
+describe("a sign-in while the database is busy", () => {
+  it("answers 503 with Retry-After, not a credentials refusal or an internal error", async () => {
+    const { deps, rows } = await loginDeps(PROVEN);
+    // What the adapters raise for a request that waited out its bound for a
+    // connection, reaching the handler unconverted.
+    deps.findUserByEmail.mockRejectedValue(poolWaitTimeoutError(15000));
+
+    const res = await handleLogin(loginRequest(), deps);
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("5");
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DATABASE_BUSY");
+    expect(rows.committed).toHaveLength(0);
   });
 });

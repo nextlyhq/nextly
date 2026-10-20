@@ -94,6 +94,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient, PoolConfig } from "pg";
 import { Pool } from "pg";
 
+import { reportPoolWaitTimeout } from "./pool-wait";
 import {
   detectPostgresProvider,
   getProviderDefaults,
@@ -410,7 +411,12 @@ export class PostgresAdapter extends DrizzleAdapter {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const poolConfig = this.buildPoolConfig();
-        this.pool = new Pool(poolConfig);
+        // A request that waits out connectionTimeoutMillis for a connection
+        // fails as busy, not as an unexplained driver error.
+        this.pool = reportPoolWaitTimeout(
+          new Pool(poolConfig),
+          poolConfig.connectionTimeoutMillis
+        );
 
         // Handle pool errors (background errors on idle clients)
         this.pool.on("error", (err: Error) => {
