@@ -42,12 +42,14 @@ import {
 
 afterEach(() => clearFieldFunctions());
 
-describe("field access can ask what the caller is granted", () => {
-  beforeEach(() => {
-    listEffectiveGrants.mockReset().mockResolvedValue([]);
-    listRoleSlugsForUser.mockReset().mockResolvedValue([]);
-  });
+// Every case starts from lookups that answer, so a case making one fail cannot
+// leave it failing for the cases after it.
+beforeEach(() => {
+  listEffectiveGrants.mockReset().mockResolvedValue([]);
+  listRoleSlugsForUser.mockReset().mockResolvedValue([]);
+});
 
+describe("field access can ask what the caller is granted", () => {
   const registerGated = (): void =>
     registerFieldFunctions("collection", "pages", [
       { name: "title" },
