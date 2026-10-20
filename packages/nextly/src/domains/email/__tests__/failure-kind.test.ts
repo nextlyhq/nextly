@@ -310,6 +310,43 @@ describe("what a provider's own answer may and may not carry", () => {
     ]);
   });
 
+  it("reports a registered provider's accepted message as sent, whatever it put in refusals", async () => {
+    // Read after the provider answered: a throw there would report a message
+    // it took as failed and retryable, and a retry would send it twice.
+    for (const refusals of [{ length: 1 }, [null, 7], "x"]) {
+      const provider = defineEmailProvider<{ apiKey: string }>({
+        type: "odd-mailer",
+        label: "Odd",
+        configFields: [
+          {
+            name: "apiKey",
+            label: "API key",
+            kind: "password",
+            required: true,
+            secret: true,
+          },
+        ],
+        parseConfig: input => input as { apiKey: string },
+        createAdapter: () => ({
+          send: () =>
+            Promise.resolve({
+              success: true,
+              messageId: "m-1",
+              refusals: refusals as never,
+            }),
+        }),
+      });
+      const { plugin } = build(
+        provider.createAdapterFrom({ apiKey: "sk_live_long_enough_value" })
+      );
+
+      expect(await plugin.send(message)).toEqual({
+        success: true,
+        messageId: "m-1",
+      });
+    }
+  });
+
   it("never reports a number that is not a status", async () => {
     const { plugin } = build({
       send: () =>

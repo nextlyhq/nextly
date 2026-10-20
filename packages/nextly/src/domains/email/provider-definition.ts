@@ -1417,19 +1417,31 @@ function withoutLeakedSecrets(
   secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
 ): EmailSendResult {
   // A refusal's reason is the provider's own text, contained like any other.
-  const contained = result.refusals?.length
+  // Read defensively: this runs after the provider has answered, so a throw
+  // here would report a message it accepted as failed. A value that is not a
+  // list, or an entry that is not an object, is dropped rather than read.
+  const refusals: unknown = result.refusals;
+  const contained = Array.isArray(refusals)
     ? {
         ...result,
-        refusals: result.refusals.map(refusal =>
-          refusal.reason === undefined
-            ? refusal
-            : containedClassification(
-                { ...refusal, reason: refusal.reason },
-                secrets
-              )
-        ),
+        refusals: refusals.flatMap(refusal => {
+          if (refusal === null || typeof refusal !== "object") return [];
+          const entry = refusal as NonNullable<
+            EmailSendResult["refusals"]
+          >[number];
+          return [
+            typeof entry.reason === "string"
+              ? containedClassification(
+                  { ...entry, reason: entry.reason },
+                  secrets
+                )
+              : entry,
+          ];
+        }),
       }
-    : result;
+    : refusals === undefined
+      ? result
+      : { ...result, refusals: undefined };
   return withoutLeakedMessageId(contained, secrets);
 }
 
