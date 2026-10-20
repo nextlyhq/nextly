@@ -11,6 +11,9 @@
 
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
+import { cn } from "@admin/lib/utils";
+
+import { MORE_LINE_CLASS } from "../frame/geometry";
 
 import type { ArchetypeBody } from "./types";
 
@@ -83,11 +86,14 @@ export function MoreExist({ query }: { query: CardQuery }) {
   return href ? (
     <Link
       href={href}
-      className="text-xs font-medium text-primary hover:underline"
+      className={cn(
+        MORE_LINE_CLASS,
+        "font-medium text-primary hover:underline"
+      )}
     >
       More exist
     </Link>
   ) : (
-    <p className="text-xs text-muted-foreground">More exist</p>
+    <p className={cn(MORE_LINE_CLASS, "text-muted-foreground")}>More exist</p>
   );
 }

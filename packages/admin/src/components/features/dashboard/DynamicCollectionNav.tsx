@@ -13,7 +13,7 @@ import {
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useBranding } from "@admin/context/providers/BrandingProvider";
-import { useCollections } from "@admin/hooks/queries";
+import { NAV_COLLECTIONS_PARAMS, useCollections } from "@admin/hooks/queries";
 import { useSingles } from "@admin/hooks/queries/useSingles";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
@@ -87,16 +87,9 @@ export function DynamicCollectionNav({
   const isCollapsed = state === "collapsed";
   const { capabilities } = useCurrentUserPermissions();
   const branding = useBranding();
-  const { data, isLoading, error } = useCollections(
-    {
-      pagination: { page: 0, pageSize: 100 },
-      sorting: [{ field: "name", direction: "asc" }],
-      filters: {},
-    },
-    {
-      staleTime: 5 * 60 * 1000,
-    }
-  );
+  const { data, isLoading, error } = useCollections(NAV_COLLECTIONS_PARAMS, {
+    staleTime: 5 * 60 * 1000,
+  });
 
   const {
     pinned: pinnedCollections,
