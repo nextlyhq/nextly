@@ -15,6 +15,7 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
+import { retryAfterHeader } from "../../errors/retry-after";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
@@ -44,6 +45,7 @@ function buildResetErrorResponse(
       headers: {
         "content-type": "application/problem+json",
         "x-request-id": requestId,
+        ...retryAfterHeader(err),
       },
     }
   );

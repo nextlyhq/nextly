@@ -11,6 +11,7 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
 import { respondAction } from "../../api/response-shapes";
 import { NextlyError } from "../../errors/nextly-error";
+import { retryAfterHeader } from "../../errors/retry-after";
 
 import { csrfRefusal, readJsonObjectBody } from "./handler-utils";
 
@@ -36,6 +37,7 @@ function buildErrorResponse(err: NextlyError, requestId: string): Response {
       headers: {
         "content-type": "application/problem+json",
         "x-request-id": requestId,
+        ...retryAfterHeader(err),
       },
     }
   );
