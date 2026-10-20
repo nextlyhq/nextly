@@ -4,8 +4,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { describeInventory } from "./transaction-escapes-inventory";
-import { UNKNOWN_SITE } from "./transaction-escapes";
+import { KNOWN_ESCAPES } from "./transaction-escape-baseline";
+import {
+  describeInventory,
+  type InventoryLine,
+  staleKnownEscapes,
+} from "./transaction-escapes-inventory";
+import { type KnownEscape, UNKNOWN_SITE } from "./transaction-escapes";
 
 describe("describeInventory", () => {
   it("groups by dialect then site, counts each, and lists the test files that reached it", () => {
@@ -52,5 +57,61 @@ describe("describeInventory", () => {
     expect(text.split("\n")[0]).toBe(
       "[transaction escapes] inventory: 3 report(s), 1 (33.3%) with no call site"
     );
+  });
+});
+
+describe("staleKnownEscapes", () => {
+  const entry: KnownEscape = {
+    dialect: "postgresql",
+    key: "packages/a.ts#A.run",
+    witness: "packages/nextly/src/w.integration.test.ts",
+    reason: "known: test",
+  };
+  const reached: InventoryLine = {
+    dialect: "postgresql",
+    key: "packages/a.ts#A.run",
+    accepted: true,
+    testFile: "/repo/packages/nextly/src/w.integration.test.ts",
+  };
+  const ran = new Set(["packages/nextly/src/w.integration.test.ts"]);
+  const postgres = new Set(["postgresql"]);
+
+  it("keeps an entry its witness still reaches", () => {
+    expect(staleKnownEscapes([entry], [reached], ran, postgres)).toEqual([]);
+  });
+
+  it("reports an entry whose witness ran and no longer reaches it, so the list only shrinks", () => {
+    expect(staleKnownEscapes([entry], [], ran, postgres)).toEqual([entry]);
+  });
+
+  it("does not count another file reaching the entry as its witness reaching it", () => {
+    const elsewhere = {
+      ...reached,
+      testFile: "/repo/packages/nextly/src/other.integration.test.ts",
+    };
+    expect(staleKnownEscapes([entry], [elsewhere], ran, postgres)).toEqual([
+      entry,
+    ]);
+  });
+
+  it("judges nothing when the witness did not run, or ran without the entry's dialect", () => {
+    expect(staleKnownEscapes([entry], [], new Set(), postgres)).toEqual([]);
+    expect(staleKnownEscapes([entry], [], ran, new Set(["mysql"]))).toEqual([]);
+  });
+});
+
+describe("the known escape baseline", () => {
+  it("lists each dialect and key once", () => {
+    const keys = KNOWN_ESCAPES.map(e => `${e.dialect} ${e.key}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("names a witness test file and a reason for every entry", () => {
+    for (const entry of KNOWN_ESCAPES) {
+      expect(entry.witness).toMatch(
+        /^packages\/[\w./-]+\.integration\.test\.ts$/
+      );
+      expect(entry.reason).toMatch(/^known: /);
+    }
   });
 });

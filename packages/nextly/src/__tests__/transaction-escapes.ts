@@ -11,16 +11,19 @@
  *
  * The adapters report each such pool access to the observer installed here
  * (`DrizzleAdapter.notePoolAccess`). The setup file fails the test that caused
- * one, naming its call site, unless the call site is listed below as a known
- * or deliberate escape. Each known one names the change that removes it, and
- * that change deletes its entry.
+ * one, naming its call site, unless it is a deliberate escape listed below or
+ * a known one in the baseline (`./transaction-escape-baseline`), which only
+ * shrinks: the change that fixes a known escape deletes its entry.
  *
- * Dependency-free, like `aborted-transaction-sightings`, because the setup
- * file it serves is loaded into every unit test as well.
+ * Free of dependencies beyond Node and its own data, like
+ * `aborted-transaction-sightings`, because the setup file it serves is loaded
+ * into every unit test as well.
  *
  * @module __tests__/transaction-escapes
  */
 import { appendFileSync } from "node:fs";
+
+import { KNOWN_ESCAPES } from "./transaction-escape-baseline";
 
 /** One escape, as the adapter reported it. */
 export interface TransactionEscape {
@@ -38,8 +41,8 @@ export interface TransactionEscape {
    */
   key: string;
   stack: string;
-  /** The accepted entry it matched, when it matched one. */
-  accepted?: AcceptedEscape;
+  /** The accepted entry it matched, deliberate or known, when it matched one. */
+  accepted?: AcceptedEscape | KnownEscape;
 }
 
 /** The key of an escape whose stack never reached the code that made it. */
@@ -60,8 +63,26 @@ interface AcceptedEscape {
 }
 
 /**
- * Escapes the run accepts. A deliberate one stays; a known one names the
- * change that removes it and is deleted by that change.
+ * An escape the suites already make, accepted as known debt until the change
+ * that fixes it deletes the entry (`./transaction-escape-baseline`).
+ */
+export interface KnownEscape {
+  dialect: "postgresql" | "mysql";
+  /** The escape's key (`TransactionEscape.key`), matched exactly. */
+  key: string;
+  /**
+   * A test file, from `packages/` on, that reaches the escape. The run fails
+   * when it runs and no longer does (`staleKnownEscapes`), so the list only
+   * shrinks.
+   */
+  witness: string;
+  /** Why it is accepted, and which kind of fix removes it. */
+  reason: string;
+}
+
+/**
+ * Escapes the run accepts on purpose, matched by any frame of their stacks: a
+ * test that makes one to prove the detector works. They stay.
  */
 export const ACCEPTED_ESCAPES: readonly AcceptedEscape[] = [
   {
@@ -75,6 +96,13 @@ export const ACCEPTED_ESCAPES: readonly AcceptedEscape[] = [
       "deliberate: reads the sessions from another connection while a transaction is open, the detector's positive control",
   },
 ];
+
+/** The known escape a report on `dialect` with `key` is, if it is one. */
+function knownEscape(dialect: string, key: string): KnownEscape | undefined {
+  return KNOWN_ESCAPES.find(
+    entry => entry.dialect === dialect && entry.key === key
+  );
+}
 
 const OBSERVER = Symbol.for("nextly.transactionEscapeObserver");
 
@@ -191,6 +219,10 @@ export function installTransactionEscapeObserver(): void {
         ? undefined
         : callSiteOf(report.openedAt, { wrappers: true });
     const stacks = `${report.stack}\n${report.openedAt ?? ""}`;
+    const key =
+      site !== undefined || opener === undefined
+        ? siteKeyOf(site)
+        : `${siteKeyOf(opener)}${OPENED_BY} · ${statementFingerprint(report.statement)}`;
     seen.push({
       dialect: report.dialect,
       site:
@@ -198,12 +230,11 @@ export function installTransactionEscapeObserver(): void {
         (opener === undefined
           ? "(no frame outside the adapters and dependencies)"
           : `transaction opened at ${opener}`),
-      key:
-        site !== undefined || opener === undefined
-          ? siteKeyOf(site)
-          : `${siteKeyOf(opener)}${OPENED_BY} · ${statementFingerprint(report.statement)}`,
+      key,
       stack: stacks,
-      accepted: ACCEPTED_ESCAPES.find(entry => stacks.includes(entry.frame)),
+      accepted:
+        ACCEPTED_ESCAPES.find(entry => stacks.includes(entry.frame)) ??
+        knownEscape(report.dialect, key),
     });
   };
 }
@@ -271,4 +302,15 @@ export function recordTransactionEscapes(
       )
       .join("\n") + "\n"
   );
+}
+
+/**
+ * Records in the run's inventory that `testFile` ran, so the end of the run
+ * can tell a known escape that stopped happening from one whose witness never
+ * ran (`staleKnownEscapes`).
+ */
+export function recordTestFileRan(testFile: string | undefined): void {
+  const log = process.env[INVENTORY_ENV];
+  if (log === undefined || testFile === undefined) return;
+  appendFileSync(log, `${JSON.stringify({ ran: testFile })}\n`);
 }

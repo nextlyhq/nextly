@@ -15,7 +15,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { INVENTORY_ENV, UNKNOWN_SITE } from "./transaction-escapes";
+import type { TestProject } from "vitest/node";
+
+import { KNOWN_ESCAPES } from "./transaction-escape-baseline";
+import {
+  INVENTORY_ENV,
+  type KnownEscape,
+  UNKNOWN_SITE,
+} from "./transaction-escapes";
 
 export interface InventoryLine {
   dialect: string;
@@ -24,8 +31,13 @@ export interface InventoryLine {
   testFile?: string;
 }
 
-/** Names the inventory file the forks append to, and prints it at teardown. */
-export default function setup(): () => void {
+/**
+ * Names the inventory file the forks append to, and at teardown prints it and
+ * fails the run on a known escape that stopped happening (`staleKnownEscapes`).
+ * A run filtered by test name skips that check: the witness's file ran, but
+ * not all of it.
+ */
+export default function setup(project: TestProject): () => void {
   const dir = mkdtempSync(join(tmpdir(), "nextly-transaction-escapes-"));
   const log = join(dir, "escapes.jsonl");
   // Set before the forks start, so each inherits it.
@@ -38,15 +50,76 @@ export default function setup(): () => void {
       // No escape was reported, so nothing was appended.
     }
     rmSync(dir, { recursive: true, force: true });
-    console.log(describeInventory(parse(text)));
+    const { lines, ran } = parse(text);
+    console.log(describeInventory(lines));
+    if (project.config.testNamePattern !== undefined) return;
+    const stale = staleKnownEscapes(KNOWN_ESCAPES, lines, ran, legDialects());
+    if (stale.length > 0) throw new Error(describeStale(stale));
   };
 }
 
-function parse(text: string): InventoryLine[] {
-  return text
-    .split("\n")
-    .filter(line => line.trim() !== "")
-    .map(line => JSON.parse(line) as InventoryLine);
+/** The inventory's escapes, and the test files that ran, from `packages/` on. */
+function parse(text: string): {
+  lines: InventoryLine[];
+  ran: Set<string>;
+} {
+  const lines: InventoryLine[] = [];
+  const ran = new Set<string>();
+  for (const raw of text.split("\n")) {
+    if (raw.trim() === "") continue;
+    const entry = JSON.parse(raw) as InventoryLine | { ran: string };
+    if ("ran" in entry) ran.add(fromPackages(entry.ran));
+    else lines.push(entry);
+  }
+  return { lines, ran };
+}
+
+/** The server dialects this run reaches: those whose database URL is set. */
+function legDialects(): Set<string> {
+  const dialects = new Set<string>();
+  if (process.env.TEST_POSTGRES_URL) dialects.add("postgresql");
+  if (process.env.TEST_MYSQL_URL) dialects.add("mysql");
+  return dialects;
+}
+
+/**
+ * The known escapes that stopped happening: the witness ran, on a dialect the
+ * run reaches, and did not reach the entry. Each is either fixed, and its
+ * entry is deleted, or still reached by other files, and given one of them as
+ * its witness. This is what keeps the baseline shrinking.
+ */
+export function staleKnownEscapes(
+  known: readonly KnownEscape[],
+  lines: readonly InventoryLine[],
+  ran: ReadonlySet<string>,
+  dialects: ReadonlySet<string>
+): KnownEscape[] {
+  return known.filter(
+    entry =>
+      dialects.has(entry.dialect) &&
+      ran.has(entry.witness) &&
+      !lines.some(
+        line =>
+          line.dialect === entry.dialect &&
+          line.key === entry.key &&
+          fromPackages(line.testFile) === entry.witness
+      )
+  );
+}
+
+/** The failure for `stale` known escapes, naming each and what to do. */
+function describeStale(stale: readonly KnownEscape[]): string {
+  return (
+    `${String(stale.length)} known transaction escape(s) no longer happen in ` +
+    `the test file named as their witness. Delete each fixed one from ` +
+    `src/__tests__/transaction-escape-baseline.ts, or name another test file ` +
+    `that still reaches it (see the inventory above).\n` +
+    stale
+      .map(
+        entry => `- ${entry.dialect} ${entry.key} (witness ${entry.witness})`
+      )
+      .join("\n")
+  );
 }
 
 /** The test file from `packages/` on, as the keys spell files. */

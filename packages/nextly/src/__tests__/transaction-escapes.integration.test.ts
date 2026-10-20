@@ -15,7 +15,22 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { describeEachDialect } from "../plugins/__tests__/helpers/dialect-matrix";
 import { createTestNextly, type TestNextly } from "../plugins/test-nextly";
 
-import { OPENED_BY, takeTransactionEscapes } from "./transaction-escapes";
+import {
+  OPENED_BY,
+  recordTransactionEscapes,
+  takeTransactionEscapes,
+} from "./transaction-escapes";
+
+/**
+ * What the guard saw, taken here rather than by the setup file so each case
+ * can assert it, and recorded in the run's inventory as the setup file records
+ * every other test's, so the inventory is the whole observed set.
+ */
+function drain() {
+  const escapes = takeTransactionEscapes();
+  recordTransactionEscapes(escapes, expect.getState().testPath);
+  return escapes;
+}
 
 describeEachDialect("the transaction escape guard", dialect => {
   let current: TestNextly;
@@ -24,7 +39,7 @@ describeEachDialect("the transaction escape guard", dialect => {
 
   beforeAll(async () => {
     current = await createTestNextly({ dialect });
-    takeTransactionEscapes();
+    drain();
   });
 
   afterAll(async () => {
@@ -36,7 +51,7 @@ describeEachDialect("the transaction escape guard", dialect => {
       await current.adapter.executeQuery("SELECT 1");
     });
 
-    const escapes = takeTransactionEscapes();
+    const escapes = drain();
     expect(escapes).toHaveLength(pooled ? 1 : 0);
     if (pooled) {
       expect(escapes[0].site).toContain("transaction-escapes.integration.test");
@@ -63,7 +78,7 @@ describeEachDialect("the transaction escape guard", dialect => {
       // A query builder is awaited as a thenable, and V8 links no caller
       // across that, so the escape is traced to where its transaction was
       // opened, here, rather than reported with no site at all.
-      const escapes = takeTransactionEscapes();
+      const escapes = drain();
       expect(escapes).toHaveLength(1);
       expect(escapes[0].key).toBe(
         `packages/nextly/src/__tests__/transaction-escapes.integration.test.ts#<anonymous>${OPENED_BY} · select`
@@ -76,7 +91,7 @@ describeEachDialect("the transaction escape guard", dialect => {
       await current.adapter.transaction(ctx => ctx.execute("SELECT 1"));
     });
 
-    expect(takeTransactionEscapes()).toHaveLength(pooled ? 1 : 0);
+    expect(drain()).toHaveLength(pooled ? 1 : 0);
   });
 
   it("reports nothing when the same work runs through the transaction", async () => {
@@ -89,7 +104,7 @@ describeEachDialect("the transaction escape guard", dialect => {
       }
     });
 
-    expect(takeTransactionEscapes()).toEqual([]);
+    expect(drain()).toEqual([]);
   });
 
   it("reports nothing for queries made outside any transaction", async () => {
@@ -97,6 +112,6 @@ describeEachDialect("the transaction escape guard", dialect => {
     await current.adapter.transaction(ctx => ctx.execute("SELECT 1"));
     await current.adapter.executeQuery("SELECT 1");
 
-    expect(takeTransactionEscapes()).toEqual([]);
+    expect(drain()).toEqual([]);
   });
 });

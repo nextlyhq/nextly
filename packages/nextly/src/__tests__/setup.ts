@@ -5,6 +5,7 @@ import { describeAbortedTransactions } from "../plugins/aborted-transaction-sigh
 import {
   describeTransactionEscapes,
   installTransactionEscapeObserver,
+  recordTestFileRan,
   recordTransactionEscapes,
   takeTransactionEscapes,
 } from "./transaction-escapes";
@@ -66,6 +67,12 @@ afterEach(() => {
  * for taking an inventory of a suite.
  */
 installTransactionEscapeObserver();
+
+// The inventory's record that this file ran, so a known escape whose witness
+// ran and was not reached shows as fixed (`staleKnownEscapes`).
+beforeAll(() => {
+  recordTestFileRan(expect.getState().testPath);
+});
 
 afterEach(() => {
   const reported = takeTransactionEscapes();
