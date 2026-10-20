@@ -38,3 +38,24 @@ export function releaseErrorMessage(error: unknown, fallback: string): string {
   }
   return typeof message === "string" && message.length > 0 ? message : fallback;
 }
+
+/**
+ * Whether a failed request was a definite refusal: the server answered, with
+ * a client-error status and its error envelope, so nothing it was asked to do
+ * happened.
+ *
+ * Anything else, such as no answer at all, a server error, or a body that
+ * was not the envelope, leaves the outcome unknown: the server may have done
+ * the work and lost only the reply.
+ */
+export function isDefiniteRefusal(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { status, code } = error as { status?: unknown; code?: unknown };
+  return (
+    typeof status === "number" &&
+    status >= 400 &&
+    status < 500 &&
+    typeof code === "string" &&
+    code !== "UNKNOWN"
+  );
+}

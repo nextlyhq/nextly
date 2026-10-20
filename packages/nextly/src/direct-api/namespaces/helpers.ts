@@ -9,6 +9,7 @@
  * @packageDocumentation
  */
 
+import { runWithAccessMemo } from "../../auth/access/request-memo";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
@@ -65,6 +66,19 @@ export async function runAsCaller<
   A extends DirectAPIConfig & RunAsPrincipal,
   R,
 >(
+  defaultConfig: DirectAPIConfig,
+  args: A,
+  operation: (args: A) => Promise<R>
+): Promise<R> {
+  // One memo of access lookups for the call, so a list whose field rules ask
+  // about the caller on every row looks the caller up once. A call made inside
+  // a request shares that request's memo.
+  return runWithAccessMemo(() =>
+    runAsCallerInMemo(defaultConfig, args, operation)
+  );
+}
+
+function runAsCallerInMemo<A extends DirectAPIConfig & RunAsPrincipal, R>(
   defaultConfig: DirectAPIConfig,
   args: A,
   operation: (args: A) => Promise<R>

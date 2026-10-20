@@ -1,5 +1,5 @@
 // Pins the canonical respondAction wire shape for email-send-template.
-// The body adds `templateId` so callers can correlate the queued message
+// The body adds `templateId` so callers can correlate the message
 // back to the template slug.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -60,7 +60,7 @@ describe("POST /api/email/send-with-template", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("data");
-    expect(json.message).toMatch(/queued/i);
+    expect(json.message).toBe("Email sent.");
     expect(json.messageId).toBe("msg-456");
     expect(json.success).toBe(true);
     expect(json.templateId).toBe("welcome");

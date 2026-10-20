@@ -13,9 +13,10 @@
 
 // Read by the deletion report's digest through the env proxy: set before any
 // of it is imported. A throwaway value, made for this file.
-process.env.NEXTLY_SECRET =
-  process.env.NEXTLY_SECRET ??
-  "test-secret-must-be-at-least-32-characters-long!!";
+// Every write here uses it too, as an install's writes and deletions share
+// one: a staff deletion opens the digest key with the env's secrets.
+const SECRET = (process.env.NEXTLY_SECRET ??=
+  "test-secret-must-be-at-least-32-characters-long!!");
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -37,8 +38,6 @@ const silentLogger = {
   warn: () => undefined,
   error: () => undefined,
 };
-
-const SECRET = "erasure-secret-first-generation-0123456789ab";
 
 let current: TestNextly | undefined;
 

@@ -101,6 +101,10 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
+import {
+  holdsPlaceholders,
+  withoutPlaceholders,
+} from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { SingleAdminOptions } from "@admin/types/entities";
 
@@ -664,8 +668,12 @@ export function SingleForm({
           toPayload: values =>
             mapIntentToPayload(values, intent, blankPasswordFields),
           write: async data => {
+            // A link the editor cannot see is held in the form as a
+            // placeholder and written as the reference it stands for.
             ownSave.current.inFlight = true;
-            const stored = await onSubmit(data).finally(() => {
+            const stored = await onSubmit(
+              withoutPlaceholders(schema.fields, data)
+            ).finally(() => {
               ownSave.current.inFlight = false;
             });
             // After the write lands and before the reset: this is the only
@@ -680,8 +688,14 @@ export function SingleForm({
               // screen; `onSubmit` reports no row of its own.
               item: { id: document.id },
               // A host that reports no stored document leaves the form at
-              // what was sent, the best starting point there is.
-              stored: stored ? singleFormDefaults(schema, stored) : null,
+              // what was sent, the best starting point there is. So does a
+              // save that sent a placeholder: the stored document leaves out
+              // the link it stands for, and taking it in would drop the link
+              // from the form, for the next save to remove.
+              stored:
+                stored && !holdsPlaceholders(schema.fields, data)
+                  ? singleFormDefaults(schema, stored)
+                  : null,
             };
           },
         });
@@ -1086,8 +1100,12 @@ export function SingleForm({
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
                                   isLinkAvailable={previewLink.isAvailable}
-                                  onCopyLink={previewLink.copy}
-                                  isCopyingLink={previewLink.isCopying}
+                                  {...(previewLink.shareDocument === undefined
+                                    ? {}
+                                    : {
+                                        shareDocument:
+                                          previewLink.shareDocument,
+                                      })}
                                   /* The pane is offered on exactly the terms the
                            shareable link is: a Single with a draft lifecycle
                            and a resolvable language. Withheld in translation

@@ -20,6 +20,10 @@ const { canMock } = vi.hoisted(() => ({ canMock: vi.fn() }));
 vi.mock("@admin/hooks/useCan", () => ({
   useCan: (permission: string) => canMock(permission) as boolean,
 }));
+// The share popover reads the document's live links when it opens.
+vi.mock("@admin/services/previewLinkApi", () => ({
+  previewLinkApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0 }) },
+}));
 
 import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
 
@@ -33,7 +37,8 @@ function WithForm({ children }: { children: ReactNode }) {
   return <FormProvider {...form}>{children}</FormProvider>;
 }
 
-const COPY_LABEL = "Copy shareable link";
+const SHARE_LABEL = "Share preview link…";
+const SHARE_DOCUMENT = { collection: "posts", entryId: "e1" };
 
 function renderHeader(overrides: Record<string, unknown> = {}) {
   return render(
@@ -46,7 +51,7 @@ function renderHeader(overrides: Record<string, unknown> = {}) {
         isSubmitting={false}
         isDirty={false}
         isLinkAvailable
-        onCopyLink={vi.fn()}
+        shareDocument={SHARE_DOCUMENT}
         {...overrides}
       />
     </WithForm>
@@ -63,18 +68,19 @@ describe("EntrySystemHeader preview control", () => {
     renderHeader();
 
     expect(
-      screen.getByRole("button", { name: COPY_LABEL })
+      screen.getByRole("button", { name: SHARE_LABEL })
     ).toBeInTheDocument();
   });
 
-  it("mints through the handler it was given", async () => {
-    const onCopyLink = vi.fn();
+  it("opens the share popover for the document it was given", async () => {
     const user = userEvent.setup();
-    renderHeader({ onCopyLink });
+    renderHeader();
 
-    await user.click(screen.getByRole("button", { name: COPY_LABEL }));
+    await user.click(screen.getByRole("button", { name: SHARE_LABEL }));
 
-    expect(onCopyLink).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByRole("heading", { name: "Share a preview" })
+    ).toBeInTheDocument();
   });
 
   it("still offers the link when the flat permission list omits update", () => {
@@ -88,7 +94,7 @@ describe("EntrySystemHeader preview control", () => {
     renderHeader();
 
     expect(
-      screen.getByRole("button", { name: COPY_LABEL })
+      screen.getByRole("button", { name: SHARE_LABEL })
     ).toBeInTheDocument();
   });
 
@@ -96,21 +102,15 @@ describe("EntrySystemHeader preview control", () => {
     renderHeader({ mode: "create", entry: null, isLinkAvailable: false });
 
     expect(
-      screen.queryByRole("button", { name: COPY_LABEL })
+      screen.queryByRole("button", { name: SHARE_LABEL })
     ).not.toBeInTheDocument();
-  });
-
-  it("refuses a second mint while one is in flight", () => {
-    renderHeader({ isCopyingLink: true });
-
-    expect(screen.getByRole("button", { name: COPY_LABEL })).toBeDisabled();
   });
 
   it("refuses a mint while the form is submitting", () => {
     // Minting reads what is saved, so a submit in flight is a race with it.
     renderHeader({ isSubmitting: true });
 
-    expect(screen.getByRole("button", { name: COPY_LABEL })).toBeDisabled();
+    expect(screen.getByRole("button", { name: SHARE_LABEL })).toBeDisabled();
   });
 
   it("uses a declared label VERBATIM on the pane toggle", () => {
@@ -164,10 +164,10 @@ describe("EntrySystemHeader preview control", () => {
   it("renders nothing when neither action is available", () => {
     // A disabled control says "you cannot do this" without saying why, so the
     // header shows no preview affordance at all rather than a dead button.
-    renderHeader({ isLinkAvailable: false, onCopyLink: undefined });
+    renderHeader({ isLinkAvailable: false, shareDocument: undefined });
 
     expect(
-      screen.queryByRole("button", { name: COPY_LABEL })
+      screen.queryByRole("button", { name: SHARE_LABEL })
     ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /preview/i })).toBeNull();
   });

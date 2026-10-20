@@ -39,10 +39,10 @@ import {
 } from "@admin/hooks/useDocumentAutosave";
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { usePreviewLink } from "@admin/hooks/usePreviewLink";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
 import { collectionSourceFetcher } from "../entry-locale-source";
@@ -82,7 +82,7 @@ import { EntryMetaStrip } from "./EntryMetaStrip";
 import { EntrySystemHeader } from "./EntrySystemHeader";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
-import { submitHeld } from "./submit-outcome";
+import { deleteHeld, submitHeld } from "./submit-outcome";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
 import {
@@ -621,9 +621,8 @@ export function EntryForm({
       ? Promise.resolve(submitHeld)
       : submitEntry(event, intent);
   };
-  const handleDelete = () => {
-    if (!writesHeld) deleteEntry();
-  };
+  const handleDelete = () =>
+    writesHeld ? Promise.resolve(deleteHeld) : deleteEntry();
   const handleDiscardWorkingDraft = () =>
     writesHeld ? Promise.resolve() : discardWorkingDraft();
 
@@ -672,11 +671,20 @@ export function EntryForm({
   // name a host, and the server is the only place that can: `settings` is a
   // system resource the `editor` and `author` presets cannot read, and those
   // are exactly the roles that share preview links.
-  const previewLink = usePreviewLink({
-    collection: collection.name,
-    entryId: savedEntryId,
-    ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
-  });
+  // The document the share popover makes links for and lists. Absent until
+  // the entry is saved, which is when it has an id to name, and while the
+  // language is unknown: a link minted without a resolvable locale is either
+  // refused or a grant over every translation.
+  const shareDocument: PreviewLinkDocument | undefined =
+    savedEntryId === "" || linkLocale.kind === "unresolved"
+      ? undefined
+      : {
+          collection: collection.name,
+          entryId: savedEntryId,
+          ...(linkLocale.kind === "scoped"
+            ? { locale: linkLocale.locale }
+            : {}),
+        };
 
   /*
    * Opening the preview, which is a different action from minting the link
@@ -1029,14 +1037,9 @@ export function EntryForm({
                                     savedEntryId !== "" &&
                                     linkLocale.kind !== "unresolved"
                                   }
-                                  {...(savedEntryId === ""
+                                  {...(shareDocument === undefined
                                     ? {}
-                                    : {
-                                        onCopyLink: () => {
-                                          previewLink.mutate();
-                                        },
-                                      })}
-                                  isCopyingLink={previewLink.isPending}
+                                    : { shareDocument })}
                                   toolbarSlot={versionAwareToolbarSlots(
                                     viewedVersionHost,
                                     lock.actionsDisabled,

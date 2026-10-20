@@ -12,6 +12,11 @@
  */
 
 import {
+  PREVIEW_LINKS_SWEEP_INTERVAL_MS,
+  prunePreviewLinks,
+  type PreviewLinksPruneAdapter,
+} from "../../auth/preview/preview-link-records";
+import {
   ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
   pruneOneTimeSecrets,
   type OneTimeSecretsPruneAdapter,
@@ -44,6 +49,7 @@ import {
   EMAIL_RETENTION_GATE_KEY,
   NOTICES_RETENTION_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
+  PREVIEW_LINKS_RETENTION_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
   type RetentionGateStore,
 } from "./gate";
@@ -56,7 +62,8 @@ export interface RetentionPassInput {
     EmailPruneAdapter &
     OneTimeSecretsPruneAdapter &
     NoticesPruneDb &
-    ContentEventsPruneDb;
+    ContentEventsPruneDb &
+    PreviewLinksPruneAdapter;
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
   /**
@@ -67,6 +74,8 @@ export interface RetentionPassInput {
   emailPolicy?: ResolvedEmailRetentionConfig;
   /** Sweep plugins' one-purpose secrets past their expiry. */
   oneTimeSecrets?: boolean;
+  /** Sweep recorded preview links long past their end. */
+  previewLinks?: boolean;
   gate: RetentionGateStore;
   now?: () => Date;
   logger?: Logger;
@@ -220,6 +229,32 @@ export function buildRetentionPasses(
       },
     });
 
+  // On wherever a configuration reached the call site, as the secrets sweep
+  // is: a link long past its end answers nothing, so there is no policy to
+  // set, only the fixed keeping time the store documents. Without it the table
+  // grows by one row per link for ever.
+  if (input.previewLinks)
+    passes.push({
+      key: PREVIEW_LINKS_RETENTION_GATE_KEY,
+      intervalMs: () => PREVIEW_LINKS_SWEEP_INTERVAL_MS,
+      run: async maxBatches => {
+        try {
+          await prunePreviewLinks(
+            input.adapter,
+            (input.now ?? (() => new Date()))(),
+            { maxBatches }
+          );
+        } catch (error) {
+          // Quietly, for the reason the secrets pass is: a failure here must
+          // never reach the write that offered the pass. A database not yet
+          // updated has no table, which lands here too.
+          warnQuietly(input.logger, "Preview links retention pass failed", {
+            error: error instanceof Error ? error.message : "unknown error",
+          });
+        }
+      },
+    });
+
   return passes;
 }
 
@@ -246,7 +281,11 @@ export function retentionPoliciesFrom(
     | undefined
 ): Pick<
   RetentionPassInput,
-  "webhookPolicy" | "auditPolicy" | "emailPolicy" | "oneTimeSecrets"
+  | "webhookPolicy"
+  | "auditPolicy"
+  | "emailPolicy"
+  | "oneTimeSecrets"
+  | "previewLinks"
 > {
   // `undefined` is "no configuration reached this call site", which is not the
   // same as "a configuration that asked for nothing" and must not gain passes.
@@ -256,6 +295,8 @@ export function retentionPoliciesFrom(
     webhookPolicy: config.webhookRetention,
     // Every install has the table, and its sweep has nothing to configure.
     oneTimeSecrets: true,
+    // The same holds for recorded preview links.
+    previewLinks: true,
     auditPolicy: config.auditRetention,
     // Flattened `emailRetention` when initialization produced one, and
     // otherwise resolved from the NESTED block by the same call the sanitizer

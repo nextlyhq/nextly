@@ -617,7 +617,7 @@ export class CollectionBulkService extends BaseService {
 
       return createResult;
     } catch (error: unknown) {
-      console.error("Error in duplicateEntry:", error);
+      this.logger.error("Error in duplicateEntry", { error: error });
       const errMsg =
         error instanceof Error ? error.message : "Failed to duplicate entry";
       const errStatus =

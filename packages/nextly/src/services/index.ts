@@ -18,6 +18,7 @@ import {
 } from "../domains/retention/passes";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { resolveWebhookWritePathInfra } from "../domains/webhooks/write-path-infra";
+import { consoleLogger } from "../shared/types";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionsHandler } from "./collections-handler";
@@ -180,7 +181,9 @@ export class ServiceContainer {
   }
 
   private getLogger(): Logger {
-    return container.has("logger") ? container.get<Logger>("logger") : console;
+    return container.has("logger")
+      ? container.get<Logger>("logger")
+      : consoleLogger;
   }
 
   /**
@@ -207,7 +210,7 @@ export class ServiceContainer {
         : undefined;
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       // The dispatcher (admin REST) and the setup seeder reach users through
       // this facade, so offer the same post-commit hooks the DI-registered user
       // service does — otherwise their user.created/deleted events would sit in

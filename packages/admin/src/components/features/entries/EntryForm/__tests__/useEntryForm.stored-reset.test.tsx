@@ -13,6 +13,7 @@ import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { act } from "@admin/__tests__/utils";
+import { RESTRICTED_REFERENCE } from "@admin/lib/form/stored-references";
 
 const { update } = vi.hoisted(() => ({ update: vi.fn() }));
 
@@ -141,6 +142,66 @@ describe("after a save, the form holds what the server stored", () => {
     expect(result.current.form.formState.dirtyFields).toEqual({
       summary: true,
     });
+  });
+});
+
+describe("after a save that sent a link the editor cannot see", () => {
+  const related = {
+    name: "posts",
+    label: "Posts",
+    fields: [
+      { name: "title", type: "text", label: "Title" },
+      {
+        name: "related",
+        type: "relationship",
+        label: "Related",
+        relationTo: "articles",
+        hasMany: true,
+      },
+    ],
+  } as never;
+  const hidden = { id: "a2", [RESTRICTED_REFERENCE]: true };
+  const withHidden = {
+    id: "e1",
+    title: "Hello",
+    related: [{ id: "a1", title: "Seen" }, hidden],
+  };
+
+  it("keeps the placeholder, which the stored row leaves out", async () => {
+    // The answer is read as the edit page's populated read is: the row the
+    // editor may not read is not in it.
+    update.mockImplementation((sent: Record<string, unknown>) =>
+      Promise.resolve({
+        item: {
+          ...withHidden,
+          ...sent,
+          related: [{ id: "a1", title: "Seen" }],
+        },
+      })
+    );
+    const { result } = renderHook(() =>
+      useEntryForm({ collection: related, entry: withHidden, mode: "edit" })
+    );
+    act(() => {
+      result.current.form.setValue("title", "Hello there", {
+        shouldDirty: true,
+      });
+    });
+
+    await act(async () => {
+      await result.current.handleSubmit();
+    });
+
+    // What went out named the hidden link by its id.
+    expect(update.mock.calls[0]?.[0]).toMatchObject({
+      related: [{ id: "a1", title: "Seen" }, "a2"],
+    });
+    // And the form still holds it, so the next save keeps it too.
+    expect(result.current.form.getValues("related")).toEqual([
+      { id: "a1", title: "Seen" },
+      hidden,
+    ]);
+    expect(result.current.form.getValues("title")).toBe("Hello there");
   });
 });
 

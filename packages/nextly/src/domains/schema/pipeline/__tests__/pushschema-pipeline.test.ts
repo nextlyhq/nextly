@@ -891,7 +891,9 @@ describe("PushSchemaPipeline (Option E flow) - phase D pushSchema", () => {
         hints: [],
       });
 
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    // The pipeline reports through consoleLogger, whose info level writes to
+    // console.info.
+    const consoleSpy = vi.spyOn(console, "info").mockImplementation(() => {});
     // Phase 4 (Task 8): force the drizzle-kit fallback path. With
     // add_table now in FAST_PATH_OP_TYPES, the real diff against an
     // empty live snapshot would produce an add_table op that routes

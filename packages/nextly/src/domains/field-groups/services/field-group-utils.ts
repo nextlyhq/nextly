@@ -2,6 +2,10 @@ import type { FieldConfig } from "../../../collections/fields/types";
 import { isVirtualField } from "../../../collections/fields/virtual";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+import {
+  componentRelationshipStoresJson,
+  usesJunctionTable,
+} from "../../schema/services/field-column-descriptor";
 import { isFieldGroupFieldType } from "../storage/field-group-field-type";
 import { fieldGroupTypeKeys } from "../storage/field-group-type-key";
 
@@ -135,12 +139,57 @@ export function shouldTreatAsJson(field: FieldConfig): boolean {
     return true;
   }
 
-  if (field.type === "relationship" || field.type === "upload") {
-    const hasMany = "hasMany" in field && field.hasMany;
-    const relationTo = "relationTo" in field ? field.relationTo : undefined;
-    const isPolymorphic = Array.isArray(relationTo);
-    return Boolean(hasMany) || isPolymorphic;
-  }
+  // A relation holding a list on the component row — hasMany, several targets, or a many-to-many,
+  // which a component keeps on its row — is a JSON column. The creating SQL, the runtime table and
+  // the desired schema ask the same rule.
+  return componentRelationshipStoresJson(field);
+}
 
-  return false;
+/**
+ * A component many-to-many's decoded value, read as the list it always is.
+ *
+ * The column holds a JSON list, but a row can still carry a single id: one saved as a bare value
+ * rather than a list, or a row written before the column held lists, which on SQLite is never
+ * converted because its column type does not change. Either is one reference, so it reads as a
+ * one-item list rather than handing the caller a string where every other row gives an array.
+ *
+ * A string starting with `{` is left as it is: that is a PostgreSQL array literal in a `text` column
+ * its owner has not converted yet, and reading it as one id would misread it.
+ */
+export function asComponentReferenceList(
+  field: FieldConfig,
+  value: unknown
+): unknown {
+  if (!usesJunctionTable(field)) return value;
+  if (typeof value === "string" && !value.trimStart().startsWith("{")) {
+    return [value];
+  }
+  return value;
+}
+
+/**
+ * A component's fields as relationship expansion must read them: a many-to-many as the row-backed
+ * `hasMany` list it is on a component.
+ *
+ * Expansion fetches a field marked `relationType: "manyToMany"` from its junction table, which is
+ * where a collection keeps those links. A component has none: its ids are on the instance row, so
+ * the same field reads them from the row. Its target is the one it names in `options.target`, which
+ * a many-to-many prefers to any `relationTo` beside it; that preference is tied to the many-to-many
+ * marker cleared here, so the target is carried into `relationTo`. Every other field is passed
+ * through unchanged.
+ */
+export function asRowBackedRelationFields(
+  fields: readonly FieldConfig[]
+): FieldConfig[] {
+  return fields.map(field => {
+    if (!usesJunctionTable(field)) return field;
+    const options = (field as { options?: Record<string, unknown> }).options;
+    const target = options?.target;
+    return {
+      ...field,
+      hasMany: true,
+      ...(target !== undefined ? { relationTo: target } : {}),
+      options: { ...options, relationType: undefined },
+    } as unknown as FieldConfig;
+  });
 }

@@ -11,14 +11,9 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { WidgetQuery } from "../query";
-import { resolveWidgetSettings, type WidgetSetting } from "../settings";
+import { resolveWidgetSettings, type AnyWidgetSetting } from "../settings";
 
 import type { ContentQuery } from "./define-widget";
-import {
-  DEPENDENT_SETTING_TYPES,
-  fitsNewSetting,
-  NEW_SETTING_TYPES,
-} from "./setting-builders";
 
 /** A setting as a declaration holds it, read without its compile-time types. */
 interface DeclaredSetting {
@@ -49,50 +44,24 @@ function declaredSettings(settings: unknown): [string, DeclaredSetting][] {
  * The values a card's readers are handed: the person's own where they fit,
  * the starting value everywhere else.
  *
- * - A setting of a type core already defines is read by `resolveWidgetSettings`,
- *   the reader every stored card goes through, so a declared widget's values and
- *   a registered one's cannot be judged two ways.
- * - A control core has no definition type for yet is read by `fitsNewSetting`.
- * - A dependent setting whose Collection setting has no value is hidden by it:
- *   there is nothing to filter, sort or group, so its stored value is not handed
- *   on, and its starting value is.
- *
- * Only declared names are handed on, in a record with no prototype: the keys
- * are names an author chose, and `__proto__` must stay a name.
+ * Read by `resolveWidgetSettings`, the reader every stored card goes through,
+ * all eight setting types alike, so a declared widget's values and a
+ * registered one's cannot be judged two ways. That reader also hides a
+ * dependent setting whose Collection setting has no value, and hands on only
+ * declared names, in a record with no prototype.
  */
 export function resolveCardSettings(
   settings: unknown,
   stored: Record<string, unknown> | undefined
 ): Record<string, unknown> {
-  const declared = declaredSettings(settings);
-  const canonical: WidgetSetting[] = declared
-    .filter(([, setting]) => !NEW_SETTING_TYPES.has(setting.type))
+  return resolveWidgetSettings(
     // A cast, because a declaration's settings were checked at startup by the
-    // same reader (`widgetSettingsProblem`) that a `WidgetSetting` passes.
-    .map(([name, setting]) => ({ ...setting, name }) as WidgetSetting);
-  const resolved: Record<string, unknown> = Object.assign(
-    Object.create(null),
-    resolveWidgetSettings(canonical, stored)
+    // same rules (`widgetSettingsProblems`) an `AnyWidgetSetting` passes.
+    declaredSettings(settings).map(
+      ([name, setting]) => ({ ...setting, name }) as AnyWidgetSetting
+    ),
+    stored
   );
-
-  // The Collection settings first, since the dependent ones read them.
-  const ordered = [...declared].sort(
-    ([, a], [, b]) =>
-      Number(DEPENDENT_SETTING_TYPES.has(a.type)) -
-      Number(DEPENDENT_SETTING_TYPES.has(b.type))
-  );
-  for (const [name, setting] of ordered) {
-    if (!NEW_SETTING_TYPES.has(setting.type)) continue;
-    const value = stored?.[name];
-    const hidden =
-      setting.of !== undefined && resolved[setting.of] === undefined;
-    if (!hidden && value !== undefined && fitsNewSetting(setting.type, value)) {
-      resolved[name] = value;
-    } else if (setting.defaultValue !== undefined) {
-      resolved[name] = setting.defaultValue;
-    }
-  }
-  return resolved;
 }
 
 /**

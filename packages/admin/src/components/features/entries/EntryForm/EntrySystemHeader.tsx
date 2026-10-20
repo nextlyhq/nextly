@@ -2,7 +2,7 @@
 
 import { Button } from "@nextlyhq/ui";
 import { isFieldLocalized, type FieldConfig } from "nextly/config";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
@@ -20,8 +20,10 @@ import { Link } from "@admin/components/ui/link";
 import { useCan } from "@admin/hooks/useCan";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
+import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { useEntryLocale } from "../EntryLocaleContext";
+import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 import { translationCounts } from "../translation-meta";
 
 import {
@@ -139,10 +141,12 @@ export interface EntrySystemHeaderProps {
    * Save controls are not gated on it either.
    */
   isLinkAvailable?: boolean;
-  /** Mints a shareable link and copies it. */
-  onCopyLink?: () => void;
-  /** Whether a link is being minted right now. */
-  isCopyingLink?: boolean;
+  /**
+   * The document a shared link names, which the share popover makes links
+   * for and lists the live links of. Absent means nothing can be shared yet:
+   * an unsaved entry has no id to name.
+   */
+  shareDocument?: PreviewLinkDocument;
 
   /**
    * Resource scope passed through to the Show JSON dialog and used by the
@@ -226,10 +230,12 @@ export function EntrySystemHeader({
   onTogglePreviewPane,
   previewPaneOpen = false,
   isLinkAvailable = false,
-  onCopyLink,
-  isCopyingLink = false,
+  shareDocument,
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
+  // The share popover, opened by the preview control on a wide screen and by
+  // the document menu's row on a narrow one.
+  const [shareOpen, setShareOpen] = useState(false);
   const entryLocale = useEntryLocale();
   // The language a first save is made in, named on the create-mode row.
   const {
@@ -333,8 +339,9 @@ export function EntrySystemHeader({
     ...(onTogglePreviewPane === undefined ? {} : { onTogglePreviewPane }),
     previewPaneOpen,
     isLinkAvailable,
-    ...(onCopyLink === undefined ? {} : { onCopyLink }),
-    isCopyingLink,
+    ...(shareDocument === undefined
+      ? {}
+      : { onShareLink: () => setShareOpen(true) }),
     disabled: isSubmitting,
   };
 
@@ -490,7 +497,6 @@ export function EntrySystemHeader({
                   bindings={documentActions.bindings}
                   pending={isSubmitting}
                   narrowItems={narrowItems}
-                  narrowPending={isCopyingLink}
                 />
               </>
             )}
@@ -521,6 +527,18 @@ export function EntrySystemHeader({
                   )}
                 </Button>
               </>
+            )}
+            {/* What the share popover hangs from: the end of this row, which
+              stays on screen at every width, unlike the preview control that
+              folds into the document menu on a narrow one. */}
+            {shareDocument === undefined ? null : (
+              <SharePreviewPopover
+                document={shareDocument}
+                open={shareOpen}
+                onOpenChange={setShareOpen}
+              >
+                <span className="h-0 w-0 self-end" aria-hidden="true" />
+              </SharePreviewPopover>
             )}
           </div>
         </div>

@@ -13,7 +13,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useCallback, useEffect, useRef } from "react";
+import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -24,10 +24,19 @@ import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
+import {
+  holdsPlaceholders,
+  withoutPlaceholders,
+} from "@admin/lib/form/stored-references";
 import type { EntryValue } from "@admin/types/collection";
 
 import { submitDocument } from "./submit-document";
-import { submitBusy, type SubmitOutcome } from "./submit-outcome";
+import {
+  deleteFailed,
+  submitBusy,
+  type DeleteOutcome,
+  type SubmitOutcome,
+} from "./submit-outcome";
 
 // ============================================================================
 // Types
@@ -283,8 +292,9 @@ export interface UseEntryFormReturn {
     e?: React.BaseSyntheticEvent,
     intent?: EntryFormIntent
   ) => Promise<SubmitOutcome>;
-  /** Handle entry deletion (edit mode only) */
-  handleDelete: () => void;
+  /** Delete the entry (edit mode only). Resolves to what the delete came to;
+   *  never rejects. */
+  handleDelete: () => Promise<DeleteOutcome>;
   /** Discard the pending working draft (draft/published split), reverting the
    *  editor to the live published row. No-op outside edit mode. Resolves once the
    *  discard succeeds and REJECTS if it fails, so the confirm dialog can show its
@@ -423,6 +433,24 @@ const KEEP_UNSAVED = {
   keepSubmitCount: true,
 } as const;
 
+/**
+ * What the form takes in once a save is stored: normally the stored row, so a
+ * value the server normalised becomes the form's starting point. The row a
+ * save answers with leaves out a link the editor may not read, though, which
+ * the form held as a placeholder and sent as the reference it stands for.
+ * Taking that row in would drop the link from the form and the next save would
+ * remove it, so when the save sent a placeholder the form keeps what it sent,
+ * placeholders and all, until the page hands over the document merged with
+ * its stored links again.
+ */
+function storedAfterSave(
+  fields: FieldConfig[],
+  sent: Record<string, unknown>,
+  row: EntryData
+): Record<string, unknown> {
+  return holdsPlaceholders(fields, sent) ? sent : getDefaultValues(fields, row);
+}
+
 export function useEntryForm({
   collection,
   entry = null,
@@ -494,6 +522,9 @@ export function useEntryForm({
   // because it can arrive on either side of the save's own reset. Any other
   // new version — a restore, a colleague's save — starts the form again from
   // it, as Restore promises when it warns unsaved work is discarded.
+  // Set by a discard and cleared by the next document the page hands over;
+  // see `handleDiscardWorkingDraft`.
+  const [awaitingEntry, setAwaitingEntry] = useState(false);
   const resetKey = useRef<EntryIdentity | undefined>(undefined);
   const ownSave = useRef<{ inFlight: boolean; storedVersion?: string }>({
     inFlight: false,
@@ -507,6 +538,7 @@ export function useEntryForm({
       defaultValues,
       decision === "keep-unsaved" ? KEEP_UNSAVED : undefined
     );
+    setAwaitingEntry(false);
   }, [entry, mode, defaultValues, form, locale, readDraft]);
 
   // Mutations - pass setError to enable server error mapping to form fields
@@ -561,7 +593,8 @@ export function useEntryForm({
   const isSubmitting =
     createMutation.isPending ||
     updateMutation.isPending ||
-    discardMutation.isPending;
+    discardMutation.isPending ||
+    awaitingEntry;
 
   //
   // The synchronous half of the same guard. `isSubmitting` is render state:
@@ -601,14 +634,18 @@ export function useEntryForm({
           toPayload: values =>
             mapIntentToPayload(values, intent, blankPasswordFields),
           write: async data => {
+            // What is sent: a link the editor cannot see is held in the form
+            // as a placeholder and written as the reference it stands for.
+            const payload = withoutPlaceholders(fields, data) as Record<
+              string,
+              EntryValue
+            >;
             if (mode === "create") {
-              const result = await createMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
+              const result = await createMutation.mutateAsync(payload);
               savedRow = result.item;
               return {
                 item: result.item,
-                stored: getDefaultValues(fields, result.item),
+                stored: storedAfterSave(fields, data, result.item),
               };
             }
             if (!entry?.id) {
@@ -617,7 +654,7 @@ export function useEntryForm({
             // entryId is passed to useUpdateEntry hook, so we just pass data here
             ownSave.current.inFlight = true;
             const result = await updateMutation
-              .mutateAsync(data as Record<string, EntryValue>)
+              .mutateAsync(payload)
               .finally(() => {
                 ownSave.current.inFlight = false;
               });
@@ -628,7 +665,7 @@ export function useEntryForm({
             savedRow = result.item;
             return {
               item: result.item,
-              stored: getDefaultValues(fields, result.item),
+              stored: storedAfterSave(fields, data, result.item),
             };
           },
           // Server errors are mapped to form fields through the setError the
@@ -659,19 +696,26 @@ export function useEntryForm({
     ]
   );
 
-  // Delete handler
-  const handleDelete = useCallback(async () => {
+  // Delete handler. Resolves once the delete has been answered, with what it
+  // came to, and never rejects: the toast reports to the author as before, and
+  // the outcome reports to a caller that acts on it.
+  const handleDelete = useCallback(async (): Promise<DeleteOutcome> => {
     if (mode !== "edit" || !entry?.id) {
-      console.warn("Delete is only available in edit mode with a valid entry");
-      return;
+      return {
+        ok: false,
+        reason: "refused",
+        message: "Only a saved entry can be deleted.",
+      };
     }
 
     try {
       await deleteMutation.mutateAsync(entry.id);
       onDelete?.();
+      return { ok: true };
     } catch (error) {
       console.error("Delete error:", error);
       onError?.(error);
+      return deleteFailed(error);
     }
   }, [mode, entry?.id, deleteMutation, onDelete, onError]);
 
@@ -700,6 +744,11 @@ export function useEntryForm({
     try {
       const result = await discardMutation.mutateAsync();
       form.reset(getDefaultValues(fields, result.item));
+      // The discard answers with the live row as the API populates it, which
+      // leaves out a related item the editor may not read, so a save of these
+      // values would delete those links. Saving waits for the page to hand
+      // over the document again, merged with its stored links.
+      setAwaitingEntry(true);
     } catch (error) {
       console.error("Discard working draft error:", error);
       onError?.(error);
@@ -720,9 +769,7 @@ export function useEntryForm({
   return {
     form,
     handleSubmit,
-    handleDelete: () => {
-      void handleDelete();
-    },
+    handleDelete,
     // Returned as a promise (not fire-and-forget) so the confirm dialog can
     // await the discard and keep its loading state visible until it settles.
     handleDiscardWorkingDraft: () => handleDiscardWorkingDraft(),
