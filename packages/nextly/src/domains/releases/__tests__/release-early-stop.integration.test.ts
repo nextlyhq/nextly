@@ -1,0 +1,999 @@
+/**
+ * A scheduled release stopped as soon as a hard problem appears, before any
+ * reader is shown its effect, and its owner told once per stop.
+ *
+ * Each event that can create a hard problem is driven through its ordinary
+ * path, and the case then reads as a visitor would, after the release's
+ * instant and before any drain pass: the release's documents read as they
+ * did before it. Without the stop, the read path projects the due release and
+ * the visitor is shown the effect of a release that will never run.
+ *
+ * Releases are arranged through the repository, so an instant already past
+ * can be set, and each is asserted ready first: what the event does is what
+ * stops it.
+ */
+import { afterEach, describe, expect, it } from "vitest";
+
+import { defineCollection, defineSingle, text } from "../../../config";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { NOTICES_TABLE } from "../../../schemas/notices/table-name";
+import type { CollectionsHandler } from "../../../services/collections-handler";
+import { ServiceContainer } from "../../../services/index";
+import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
+import type { CollectionRegistryService } from "../../collections/services/collection-registry-service";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
+import { applyDueReleases } from "../apply-due-releases";
+import {
+  clearReleaseCheckSourcesForTests,
+  registerReleaseCheckSource,
+} from "../readiness/check-sources";
+import { registerCoreReleaseCheckSources } from "../readiness/core-sources";
+import type { ReleaseRecheckTarget } from "../release-recheck";
+import { createReleaseMutations } from "../release-mutations";
+import { ReleasesRepository } from "../releases-repository";
+
+import { seedLiveAuthor, seedPlainAuthor } from "./helpers/live-author";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
+
+let current: TestNextly | undefined;
+
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+  afterPostChange = undefined;
+  // A case may register a source of its own; the next boot starts from core's.
+  clearReleaseCheckSourcesForTests();
+  registerCoreReleaseCheckSources();
+});
+
+const PAST = new Date("2020-01-01T00:00:00Z");
+type Slug =
+  | "pages"
+  | "memos"
+  | "articles"
+  | "posts"
+  | "notes"
+  | "letters"
+  | "dossiers";
+
+/** Run after each write to a post, for a case that acts inside one. */
+let afterPostChange: (() => Promise<void>) | undefined;
+
+/** The role slug a note's code-defined rule lets publish. */
+let publisherSlug = "";
+
+const OPEN = {
+  read: () => true,
+  update: () => true,
+  publish: () => true,
+  unpublish: () => true,
+  delete: () => true,
+};
+
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly({
+    dialect,
+    collections: [
+      // Pending work in another language stops a document-wide write.
+      defineCollection({
+        slug: "pages",
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: OPEN,
+        fields: [text({ name: "title", localized: true })],
+      }),
+      // No rule for taking a memo down: who may is decided by grants alone.
+      defineCollection({
+        slug: "memos",
+        status: true,
+        access: { read: () => true, update: () => true, publish: () => true },
+        fields: [text({ name: "title" })],
+      }),
+      // Its summary is optional until a case makes it required.
+      defineCollection({
+        slug: "articles",
+        status: true,
+        access: OPEN,
+        fields: [text({ name: "title" }), text({ name: "summary" })],
+      }),
+      // Runs a case's own work after each write, as a project's hook would.
+      defineCollection({
+        slug: "posts",
+        status: true,
+        access: OPEN,
+        hooks: { afterChange: [() => afterPostChange?.()] },
+        fields: [text({ name: "title" })],
+      }),
+      // Published only by holders of one role, named by its slug.
+      defineCollection({
+        slug: "notes",
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: ({ roles }) => roles.includes(publisherSlug),
+        },
+        fields: [text({ name: "title" })],
+      }),
+      // Kept as drafts, with a field only the editor-in-chief may write.
+      defineCollection({
+        slug: "dossiers",
+        status: true,
+        versions: { drafts: true },
+        access: OPEN,
+        fields: [
+          text({ name: "title" }),
+          text({
+            name: "guarded",
+            access: {
+              update: ({ req }) => req.user?.email === "chief@example.com",
+            },
+          }),
+        ],
+      }),
+      // Its status is given a field rule in a case: see `guardLetterStatus`.
+      defineCollection({
+        slug: "letters",
+        status: true,
+        access: OPEN,
+        fields: [text({ name: "title" })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: "notice",
+        localized: true,
+        status: true,
+        versions: { drafts: true },
+        access: OPEN,
+        fields: [text({ name: "headline", localized: true })],
+      }),
+    ],
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
+  });
+  return current;
+}
+
+const handlerOf = (t: TestNextly): CollectionsHandler =>
+  t.getService("collectionsHandler") as CollectionsHandler;
+
+/** A document stored through the ordinary write, trusted. */
+async function entry(
+  t: TestNextly,
+  collection: Slug,
+  status: "draft" | "published"
+): Promise<string> {
+  const created = await handlerOf(t).createEntry(
+    { collectionName: collection, overrideAccess: true },
+    { title: "Fine", status }
+  );
+  const id = (created.data as { id?: string } | undefined)?.id;
+  if (typeof id !== "string") throw new Error("no id from create");
+  return id;
+}
+
+/** The ids an anonymous visitor's ordinary list read returns. */
+async function visibleIds(t: TestNextly, collection: Slug): Promise<string[]> {
+  const result = await handlerOf(t).listEntries({
+    collectionName: collection,
+    limit: 50,
+  });
+  const docs = (result.data?.docs ?? []) as { id: string }[];
+  return docs.map(row => row.id);
+}
+
+/** Whether an anonymous visitor can read the Single at all. */
+async function singleVisible(t: TestNextly): Promise<boolean> {
+  const singles = t.getService("singleEntryService") as SingleEntryService;
+  const result = await singles.get("notice", { overrideAccess: false });
+  return result.success === true;
+}
+
+interface Arranged {
+  releaseId: string;
+  owner: string;
+  author: string;
+}
+
+/**
+ * A release owned by the instance's first user, holding these documents,
+ * each added by a plain author, scheduled for an instant already past, and
+ * ready: no hard problem until the case makes one.
+ */
+async function dueRelease(
+  t: TestNextly,
+  members: Array<{
+    scopeKind: "collection" | "single";
+    scopeSlug: string;
+    entryId: string;
+    action: "publish" | "unpublish";
+  }>,
+  people?: { owner: string; author: string }
+): Promise<Arranged> {
+  const owner = people?.owner ?? (await seedLiveAuthor(t));
+  const author = people?.author ?? (await seedPlainAuthor(t));
+  const repo = new ReleasesRepository(t.adapter);
+  const release = await repo.createRelease({
+    title: "Launch",
+    createdBy: owner,
+  });
+  for (const member of members) {
+    await repo.addMember(
+      { releaseId: release.id, locale: null, createdBy: author, ...member },
+      ANY_EDITABLE_STATE
+    );
+  }
+  await scheduleAsItStands(repo, release.id, PAST, "UTC");
+  expect(
+    (await t.nextly.releases.readiness({ releaseId: release.id })).hard
+  ).toEqual([]);
+  return { releaseId: release.id, owner, author };
+}
+
+/**
+ * A release holding one article, owned and added as `dueRelease` does, and
+ * scheduled for an instant still to come.
+ */
+async function futureRelease(
+  t: TestNextly,
+  entryId: string
+): Promise<Pick<Arranged, "releaseId" | "owner">> {
+  const owner = await seedLiveAuthor(t);
+  const repo = new ReleasesRepository(t.adapter);
+  const release = await repo.createRelease({
+    title: "Later",
+    createdBy: owner,
+  });
+  await repo.addMember(
+    {
+      releaseId: release.id,
+      scopeKind: "collection",
+      scopeSlug: "articles",
+      entryId,
+      locale: null,
+      action: "publish",
+      createdBy: await seedPlainAuthor(t),
+    },
+    ANY_EDITABLE_STATE
+  );
+  await scheduleAsItStands(
+    repo,
+    release.id,
+    new Date("2099-01-01T00:00:00Z"),
+    "UTC"
+  );
+  return { releaseId: release.id, owner };
+}
+
+async function stateOf(t: TestNextly, releaseId: string): Promise<string> {
+  const [row] = await new ReleasesRepository(t.adapter).findReleases({
+    ids: [releaseId],
+  });
+  return row?.state ?? "missing";
+}
+
+/** The stopped notices this release's owner has been given. */
+async function stoppedNotices(
+  t: TestNextly,
+  arranged: Pick<Arranged, "releaseId" | "owner">
+): Promise<number> {
+  const rows = await t.adapter.select<{ id: string }>(NOTICES_TABLE, {
+    columns: ["id"],
+    where: {
+      and: [
+        { column: "kind", op: "=", value: "releases.stopped" },
+        { column: "subjectId", op: "=", value: arranged.releaseId },
+        { column: "userId", op: "=", value: arranged.owner },
+      ],
+    },
+  });
+  return rows.length;
+}
+
+/**
+ * Let only people with an address at example.com set a letter's status, by a
+ * field rule, the way a plugin's raw field contribution reaches the rules.
+ */
+function guardLetterStatus(): void {
+  registerFieldFunctions("collection", "letters", [
+    { name: "title", type: "text" },
+    {
+      name: "status",
+      type: "text",
+      access: {
+        update: ({ req }: { req: { user?: { email?: string } } }) =>
+          req.user?.email?.endsWith("@example.com") === true,
+      },
+    },
+  ]);
+}
+
+/** A role holding exactly these seeded grants, given to `userId`. */
+async function grantRole(
+  t: TestNextly,
+  userId: string,
+  slugs: string[]
+): Promise<string> {
+  await (
+    t.getService("permissionSeedService") as {
+      seedSystemPermissions: () => Promise<unknown>;
+    }
+  ).seedSystemPermissions();
+  const nextly = t.nextly as unknown as {
+    permissions: {
+      find: (a: { page: number; limit: number }) => Promise<{
+        items: { id: string; slug: string }[];
+        meta: { hasNext: boolean };
+      }>;
+    };
+    roles: {
+      create: (a: { data: Record<string, unknown> }) => Promise<{
+        item: { id: string };
+      }>;
+    };
+  };
+  const seeded: { id: string; slug: string }[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed = await nextly.permissions.find({ page, limit: 100 });
+    seeded.push(...listed.items);
+    if (!listed.meta.hasNext) break;
+  }
+  const role = await nextly.roles.create({
+    data: {
+      name: `Role ${userId}`,
+      slug: `role-${userId.slice(0, 8)}`,
+      permissionIds: slugs.map(slug => {
+        const found = seeded.find(p => p.slug === slug);
+        if (found === undefined) throw new Error(`${slug} is not seeded`);
+        return found.id;
+      }),
+    },
+  });
+  await new ServiceContainer(t.adapter).userRoles.assignRoleToUser(
+    userId,
+    role.item.id
+  );
+  return role.item.id;
+}
+
+/** A published memo, taken down by a due release whose author may do so by a role. */
+async function memoTakedown(
+  t: TestNextly
+): Promise<Arranged & { memo: string; roleId: string }> {
+  const owner = await seedLiveAuthor(t);
+  const author = await seedPlainAuthor(t);
+  const roleId = await grantRole(t, author, [
+    "update-memos",
+    "unpublish-memos",
+  ]);
+  const memo = await entry(t, "memos", "published");
+  const arranged = await dueRelease(
+    t,
+    [
+      {
+        scopeKind: "collection",
+        scopeSlug: "memos",
+        entryId: memo,
+        action: "unpublish",
+      },
+    ],
+    { owner, author }
+  );
+  // The takedown is in effect for readers: the release is due.
+  expect(await visibleIds(t, "memos")).not.toContain(memo);
+  return { ...arranged, memo, roleId };
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a scheduled release stopped as soon as a hard problem appears (%s)",
+  dialect => {
+    it("stops it when a draft saved in another language would refuse its takedown", async () => {
+      const t = await boot(dialect);
+      const page = await entry(t, "pages", "published");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "pages",
+          entryId: page,
+          action: "unpublish",
+        },
+      ]);
+      expect(await visibleIds(t, "pages")).not.toContain(page);
+
+      await handlerOf(t).updateEntry(
+        {
+          collectionName: "pages",
+          entryId: page,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "DE pending" }
+      );
+
+      expect(await visibleIds(t, "pages")).toContain(page);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when a Single's draft saved in another language would refuse its takedown", async () => {
+      const t = await boot(dialect);
+      for (const [locale, headline] of [
+        ["en", "EN live"],
+        ["de", "DE live"],
+      ]) {
+        await t.nextly.updateSingle({
+          slug: "notice" as never,
+          locale,
+          data: { headline, status: "published" } as never,
+        });
+      }
+      const row = await t.adapter.selectOne<{ id: string }>(
+        "single_notice",
+        {}
+      );
+      if (row === null || row === undefined) throw new Error("no notice row");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "single",
+          scopeSlug: "notice",
+          entryId: row.id,
+          action: "unpublish",
+        },
+      ]);
+      expect(await singleVisible(t)).toBe(false);
+
+      await t.nextly.updateSingle({
+        slug: "notice" as never,
+        locale: "de",
+        data: { headline: "DE pending" } as never,
+      });
+
+      expect(await singleVisible(t)).toBe(true);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when its author loses the role that let them take the document down", async () => {
+      const t = await boot(dialect);
+      const arranged = await memoTakedown(t);
+
+      await new ServiceContainer(t.adapter).userRoles.unassignRoleFromUser(
+        arranged.author,
+        arranged.roleId
+      );
+
+      expect(await visibleIds(t, "memos")).toContain(arranged.memo);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when the author's role stops granting the takedown", async () => {
+      const t = await boot(dialect);
+      const arranged = await memoTakedown(t);
+
+      await new ServiceContainer(
+        t.adapter
+      ).rolePermissions.removePermissionFromRole(arranged.roleId, {
+        action: "unpublish",
+        resource: "memos",
+      });
+
+      expect(await visibleIds(t, "memos")).toContain(arranged.memo);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when the permission the author's role grants is edited to mean something else", async () => {
+      const t = await boot(dialect);
+      const arranged = await memoTakedown(t);
+      const permission = await t.adapter.selectOne<{ id: string }>(
+        "permissions",
+        {
+          where: {
+            and: [{ column: "slug", op: "=", value: "unpublish-memos" }],
+          },
+        }
+      );
+      if (permission === null || permission === undefined) {
+        throw new Error("unpublish-memos is not seeded");
+      }
+
+      await new ServiceContainer(t.adapter).permissions.updatePermission(
+        permission.id,
+        { action: "archive" }
+      );
+
+      expect(await visibleIds(t, "memos")).toContain(arranged.memo);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops a due release with every release it shares documents with, so no reader sees the other's effect alone", async () => {
+      // Two releases on one instant, each winning one of the two documents
+      // they share: the later member wins, so the order they are added in
+      // decides. Stopping only the one with a problem would hand the other
+      // both documents, and with them an effect the pair never had.
+      const t = await boot(dialect);
+      const going = await seedPlainAuthor(t);
+      const coming = await seedPlainAuthor(t);
+      const roleId = await grantRole(t, coming, [
+        "update-memos",
+        "unpublish-memos",
+      ]);
+      const first = await entry(t, "memos", "draft");
+      const second = await entry(t, "memos", "draft");
+      const repo = new ReleasesRepository(t.adapter);
+      const pair: Pick<Arranged, "releaseId" | "owner">[] = [];
+      for (const title of ["Publishes", "Withdraws"]) {
+        const owner = await seedLiveAuthor(t);
+        const release = await repo.createRelease({ title, createdBy: owner });
+        pair.push({ releaseId: release.id, owner });
+      }
+      const [publishes, withdraws] = pair;
+      const add = (
+        release: Pick<Arranged, "releaseId">,
+        entryId: string,
+        action: "publish" | "unpublish",
+        createdBy: string
+      ) =>
+        repo.addMember(
+          {
+            releaseId: release.releaseId,
+            scopeKind: "collection",
+            scopeSlug: "memos",
+            entryId,
+            locale: null,
+            action,
+            createdBy,
+          },
+          ANY_EDITABLE_STATE
+        );
+      await add(publishes, first, "publish", going);
+      await add(withdraws, first, "unpublish", coming);
+      await add(withdraws, second, "unpublish", coming);
+      await add(publishes, second, "publish", going);
+      for (const release of pair) {
+        await scheduleAsItStands(repo, release.releaseId, PAST, "UTC");
+        expect(
+          (await t.nextly.releases.readiness({ releaseId: release.releaseId }))
+            .hard
+        ).toEqual([]);
+      }
+      // The withdrawal wins the first document, the publish the second.
+      expect(await visibleIds(t, "memos")).not.toContain(first);
+      expect(await visibleIds(t, "memos")).toContain(second);
+
+      await new ServiceContainer(t.adapter).userRoles.unassignRoleFromUser(
+        coming,
+        roleId
+      );
+
+      expect(await visibleIds(t, "memos")).not.toContain(first);
+      for (const release of pair) {
+        expect(await stateOf(t, release.releaseId)).toBe("blocked");
+        expect(await stoppedNotices(t, release)).toBe(1);
+      }
+    });
+
+    it("stops it when the author of its documents is deactivated", async () => {
+      // A visitor is shown nothing of it either way: the read path already
+      // passes over a due document whose author cannot act. What the event
+      // adds is the stop, and the owner told, before any pass runs.
+      const t = await boot(dialect);
+      const article = await entry(t, "articles", "draft");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "articles",
+          entryId: article,
+          action: "publish",
+        },
+      ]);
+      expect(await visibleIds(t, "articles")).toContain(article);
+
+      await t.nextly.users.update({
+        id: arranged.author,
+        data: { isActive: false },
+      });
+
+      expect(await visibleIds(t, "articles")).not.toContain(article);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when the address a field rule reads is changed", async () => {
+      const t = await boot(dialect);
+      guardLetterStatus();
+      const letter = await entry(t, "letters", "draft");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "letters",
+          entryId: letter,
+          action: "publish",
+        },
+      ]);
+      expect(await visibleIds(t, "letters")).toContain(letter);
+
+      await t.nextly.users.update({
+        id: arranged.author,
+        data: { email: "moved-away@elsewhere.test" },
+      });
+
+      expect(await visibleIds(t, "letters")).not.toContain(letter);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when the role a publish rule names is given a new slug", async () => {
+      const t = await boot(dialect);
+      const owner = await seedLiveAuthor(t);
+      const author = await seedPlainAuthor(t);
+      const roleId = await grantRole(t, author, ["update-notes"]);
+      // The slug `grantRole` gives the role it makes.
+      publisherSlug = `role-${author.slice(0, 8)}`;
+      const note = await entry(t, "notes", "draft");
+      const arranged = await dueRelease(
+        t,
+        [
+          {
+            scopeKind: "collection",
+            scopeSlug: "notes",
+            entryId: note,
+            action: "publish",
+          },
+        ],
+        { owner, author }
+      );
+      expect(await visibleIds(t, "notes")).toContain(note);
+
+      await new ServiceContainer(t.adapter).roles.updateRole(roleId, {
+        slug: `${publisherSlug}-renamed`,
+      });
+
+      expect(await visibleIds(t, "notes")).not.toContain(note);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops another release when the run's own write sets off a deletion of its document", async () => {
+      // The run passes over its own document; what its write sets off, here a
+      // hook deleting a document another release holds, is an event as ever.
+      const t = await boot(dialect);
+      const post = await entry(t, "posts", "draft");
+      const running = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: post,
+          action: "publish",
+        },
+      ]);
+      const gone = await entry(t, "articles", "draft");
+      const other = await futureRelease(t, gone);
+      afterPostChange = async () => {
+        afterPostChange = undefined;
+        await t.nextly.delete({ collection: "articles" as never, id: gone });
+      };
+
+      const pass = await applyDueReleases({
+        repository: new ReleasesRepository(t.adapter),
+        mutations: createReleaseMutations({ contentApi: t.nextly }),
+        runAs: {
+          findUser: async id => ({ id, isActive: true }),
+          listRoleSlugs: async () => [],
+        },
+      });
+
+      expect(pass).toMatchObject({ applied: 1, failed: 0, published: 1 });
+      expect(await stateOf(t, running.releaseId)).toBe("published");
+      expect(await stateOf(t, other.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, other)).toBe(1);
+    });
+
+    it("stops it when a bulk update leaves a pending change its author may not write", async () => {
+      // A field rule, since a required field cannot be emptied by any write:
+      // validation refuses it. The takedown would fold the pending change in.
+      const t = await boot(dialect);
+      const dossier = await entry(t, "dossiers", "published");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "dossiers",
+          entryId: dossier,
+          action: "unpublish",
+        },
+      ]);
+      expect(await visibleIds(t, "dossiers")).not.toContain(dossier);
+
+      const written = await handlerOf(t)
+        .getEntryService()
+        .updateEntries({ collectionName: "dossiers", overrideAccess: true }, [
+          { id: dossier, data: { guarded: "secret" } },
+        ]);
+      expect(written.successful).toBe(1);
+
+      expect(await visibleIds(t, "dossiers")).toContain(dossier);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when a bulk delete removes one of its documents", async () => {
+      const t = await boot(dialect);
+      const kept = await entry(t, "articles", "draft");
+      const gone = await entry(t, "articles", "draft");
+      const arranged = await dueRelease(
+        t,
+        [kept, gone].map(entryId => ({
+          scopeKind: "collection" as const,
+          scopeSlug: "articles",
+          entryId,
+          action: "publish" as const,
+        }))
+      );
+      expect(await visibleIds(t, "articles")).toContain(kept);
+
+      const deleted = await handlerOf(t)
+        .getEntryService()
+        .deleteEntries({ collectionName: "articles" }, [gone]);
+      expect(deleted.successful).toBe(1);
+
+      expect(await visibleIds(t, "articles")).not.toContain(kept);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when one of its documents is deleted, so the others are not shown going live", async () => {
+      const t = await boot(dialect);
+      const kept = await entry(t, "articles", "draft");
+      const gone = await entry(t, "articles", "draft");
+      const arranged = await dueRelease(
+        t,
+        [kept, gone].map(entryId => ({
+          scopeKind: "collection" as const,
+          scopeSlug: "articles",
+          entryId,
+          action: "publish" as const,
+        }))
+      );
+      expect(await visibleIds(t, "articles")).toContain(kept);
+
+      await t.nextly.delete({ collection: "articles" as never, id: gone });
+
+      expect(await visibleIds(t, "articles")).not.toContain(kept);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when the schema makes a field its document lacks required", async () => {
+      const t = await boot(dialect);
+      const article = await entry(t, "articles", "draft");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "articles",
+          entryId: article,
+          action: "publish",
+        },
+      ]);
+      expect(await visibleIds(t, "articles")).toContain(article);
+
+      const registry = t.getService(
+        "collectionRegistryService"
+      ) as CollectionRegistryService;
+      const stored = await registry.getCollection("articles");
+      await registry.updateCollection(
+        "articles",
+        {
+          fields: stored.fields.map(field =>
+            "name" in field && field.name === "summary"
+              ? { ...field, required: true }
+              : field
+          ),
+        },
+        { source: "code" }
+      );
+
+      expect(await visibleIds(t, "articles")).not.toContain(article);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when a registered source signals a change it judges hard", async () => {
+      const t = await boot(dialect);
+      const withdrawn = new Set<string>();
+      let recheck:
+        | ((target: ReleaseRecheckTarget) => Promise<void>)
+        | undefined;
+      registerReleaseCheckSource({
+        key: "test.approval",
+        severity: "hard",
+        codes: ["NOT_APPROVED"],
+        check: async batch =>
+          batch
+            .filter(member => withdrawn.has(member.entryId))
+            .map(member => ({
+              memberId: member.id,
+              code: "NOT_APPROVED" as const,
+            })),
+        signal: handed => {
+          recheck = handed;
+        },
+      });
+      const article = await entry(t, "articles", "draft");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "articles",
+          entryId: article,
+          action: "publish",
+        },
+      ]);
+      expect(await visibleIds(t, "articles")).toContain(article);
+
+      withdrawn.add(article);
+      await recheck?.({
+        documents: [
+          { scopeKind: "collection", scopeSlug: "articles", entryId: article },
+        ],
+      });
+
+      expect(await visibleIds(t, "articles")).not.toContain(article);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("never stops it for a soft problem", async () => {
+      // The control: the document is in a second scheduled release, which is
+      // a note, and a save checks it all the same.
+      const t = await boot(dialect);
+      const article = await entry(t, "articles", "draft");
+      const member = {
+        scopeKind: "collection" as const,
+        scopeSlug: "articles",
+        entryId: article,
+        action: "publish" as const,
+      };
+      const arranged = await dueRelease(t, [member]);
+      const other = await dueRelease(t, [member]);
+
+      await handlerOf(t).updateEntry(
+        { collectionName: "articles", entryId: article, overrideAccess: true },
+        { title: "Edited" }
+      );
+
+      expect(await visibleIds(t, "articles")).toContain(article);
+      expect(await stateOf(t, arranged.releaseId)).toBe("scheduled");
+      expect(await stateOf(t, other.releaseId)).toBe("scheduled");
+      expect(await stoppedNotices(t, arranged)).toBe(0);
+    });
+
+    it("tells the owner once per stop: a repeated event adds nothing, a second stop adds one", async () => {
+      const t = await boot(dialect);
+      const arranged = await memoTakedown(t);
+      const roles = new ServiceContainer(t.adapter).userRoles;
+
+      await roles.unassignRoleFromUser(arranged.author, arranged.roleId);
+      // The same event again, as a retry delivers it.
+      await roles.invalidateRoleCaches(arranged.author);
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+
+      // Fixed, rescheduled, and stopped again: a second occurrence.
+      await roles.assignRoleToUser(arranged.author, arranged.roleId);
+      expect(
+        (await t.nextly.releases.readiness({ releaseId: arranged.releaseId }))
+          .hard
+      ).toEqual([]);
+      await scheduleAsItStands(
+        new ReleasesRepository(t.adapter),
+        arranged.releaseId,
+        PAST,
+        "UTC"
+      );
+      expect(await stateOf(t, arranged.releaseId)).toBe("scheduled");
+      await roles.unassignRoleFromUser(arranged.author, arranged.roleId);
+
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(2);
+    });
+
+    it("tells each owner once when a component is blocked, and nobody when one is published", async () => {
+      // The two moves of a whole component share one transition; only the
+      // stop records a notice. Blocked first, so the repository already knows
+      // the notices table exists when the publish runs.
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const component = async () => {
+        const arranged: Pick<Arranged, "releaseId" | "owner">[] = [];
+        for (let i = 0; i < 2; i += 1) {
+          const owner = await seedLiveAuthor(t);
+          const release = await repo.createRelease({
+            title: `Part ${i}`,
+            createdBy: owner,
+          });
+          await scheduleAsItStands(repo, release.id, PAST, "UTC");
+          arranged.push({ releaseId: release.id, owner });
+        }
+        const rows = await repo.findReleases({
+          ids: arranged.map(a => a.releaseId),
+        });
+        return {
+          arranged,
+          entries: rows.map(row => ({
+            id: row.id,
+            revision: row.revision,
+            scheduledAt: row.scheduledAt ?? PAST,
+          })),
+        };
+      };
+
+      const blocked = await component();
+      expect(await repo.blockReleases(blocked.entries)).toHaveLength(2);
+      for (const arranged of blocked.arranged) {
+        expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+        expect(await stoppedNotices(t, arranged)).toBe(1);
+      }
+      const published = await component();
+      expect(
+        await repo.markReleasesPublished(published.entries, new Date())
+      ).toHaveLength(2);
+      for (const arranged of published.arranged) {
+        expect(await stateOf(t, arranged.releaseId)).toBe("published");
+        expect(await stoppedNotices(t, arranged)).toBe(0);
+      }
+    });
+
+    it("tells the owner once per stop when the drain stops it", async () => {
+      const t = await boot(dialect);
+      const owner = await seedLiveAuthor(t);
+      const article = await entry(t, "articles", "draft");
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({
+        title: "Launch",
+        createdBy: owner,
+      });
+      // No recorded author: nobody the run could act as, which only the run
+      // finds and stops on.
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: "articles",
+          entryId: article,
+          locale: null,
+          action: "publish",
+          createdBy: null,
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      const arranged = { releaseId: release.id, owner };
+      const pass = () =>
+        applyDueReleases({
+          repository: new ReleasesRepository(t.adapter),
+          mutations: createReleaseMutations({ contentApi: t.nextly }),
+          runAs: { findUser: async () => null, listRoleSlugs: async () => [] },
+        });
+
+      expect((await pass()).blocked).toBe(1);
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+      // A second pass finds nothing due and tells nobody again.
+      expect((await pass()).blocked).toBe(0);
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+
+      // Put back on as it stands, and stopped again: a second occurrence.
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
+      expect((await pass()).blocked).toBe(1);
+      expect(await stoppedNotices(t, arranged)).toBe(2);
+    });
+  }
+);

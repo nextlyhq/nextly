@@ -9,8 +9,12 @@
  */
 
 import { Button } from "@nextlyhq/ui";
+import { useState } from "react";
 
 import { Loader2 } from "@admin/components/icons";
+import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
+
+import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 
 import { PreviewActions } from "./PreviewActions";
 import type { EntryFormMode } from "./useEntryForm";
@@ -43,10 +47,11 @@ export interface EntryFormActionsProps {
    * creating, since an unsaved entry has no id to name.
    */
   isLinkAvailable?: boolean;
-  /** Mints a shareable preview link and copies it. */
-  onCopyLink?: () => void;
-  /** Whether a link is being minted right now. */
-  isCopyingLink?: boolean;
+  /**
+   * The document a shared link names, which the share popover makes links
+   * for and lists the live links of. Absent while nothing can be shared.
+   */
+  shareDocument?: PreviewLinkDocument;
 }
 
 // ============================================================================
@@ -99,9 +104,9 @@ export function EntryFormActions({
   onPreview,
   previewLabel = "Preview",
   isLinkAvailable = false,
-  onCopyLink,
-  isCopyingLink = false,
+  shareDocument,
 }: EntryFormActionsProps) {
+  const [shareOpen, setShareOpen] = useState(false);
   const submitLabel = mode === "create" ? `Create` : "Save Changes";
 
   const submittingLabel = mode === "create" ? "Creating..." : "Saving...";
@@ -112,15 +117,34 @@ export function EntryFormActions({
         {/* Secondary Actions */}
         {(showCancel || isPreviewAvailable || isLinkAvailable) && (
           <div className="flex items-center gap-1 flex-1">
-            <PreviewActions
-              isPreviewAvailable={isPreviewAvailable}
-              {...(onPreview === undefined ? {} : { onPreview })}
-              previewLabel={previewLabel}
-              isLinkAvailable={isLinkAvailable}
-              {...(onCopyLink === undefined ? {} : { onCopyLink })}
-              isCopyingLink={isCopyingLink}
-              disabled={isSubmitting}
-            />
+            {/* The control is always on screen here, so the share popover
+              hangs from it directly. */}
+            {shareDocument === undefined ? (
+              <PreviewActions
+                isPreviewAvailable={isPreviewAvailable}
+                {...(onPreview === undefined ? {} : { onPreview })}
+                previewLabel={previewLabel}
+                isLinkAvailable={isLinkAvailable}
+                disabled={isSubmitting}
+              />
+            ) : (
+              <SharePreviewPopover
+                document={shareDocument}
+                open={shareOpen}
+                onOpenChange={setShareOpen}
+              >
+                <div className="flex">
+                  <PreviewActions
+                    isPreviewAvailable={isPreviewAvailable}
+                    {...(onPreview === undefined ? {} : { onPreview })}
+                    previewLabel={previewLabel}
+                    isLinkAvailable={isLinkAvailable}
+                    onShareLink={() => setShareOpen(true)}
+                    disabled={isSubmitting}
+                  />
+                </div>
+              </SharePreviewPopover>
+            )}
 
             {showCancel && onCancel && (
               <Button

@@ -147,6 +147,41 @@ address without activating the account, no new verification link is sent, and
 an invite link or a password-reset link is refused. Activating the account
 again lifts all of these.
 
+## Reset and verification links belong to one account
+
+A password-reset or email-verification link is issued for the account that
+holds the address it is sent to, and records that account. It works only for
+that account, and only while the account still holds that address:
+
+- Changing an account's address revokes every reset and verification link it
+  holds. A link sent to the old address stays dead even if the account later
+  moves back to it.
+- Deleting an account removes its links, whatever address they went to.
+- Someone who is later given an address keeps their own account: a link sent
+  to an earlier holder of the address never resets or verifies theirs.
+
+Issuing, following, changing an address and deleting an account are ordered
+against each other, so a link issued or followed while the account is moving
+or being deleted either completes first and is then revoked, or is refused.
+
+An installation upgrading to this release adds the column with
+`nextly migrate`, as for any new core column. The same run removes every
+password reset link already sent, so anyone part-way through a reset requests
+a new link: a reset link may have been given any lifetime, and its stored
+times cannot show reliably when it was sent. It ties each email verification
+link already sent to the account it was issued for, so it keeps working, when
+that account was created and last changed before the link was sent. A
+verification link whose account was created or changed afterwards, or in the
+same second, may have been sent to someone else, so it is removed, and its
+owner requests a new one. Expired links, and links to an address no account
+holds, are removed too. Until that run, a link from before the upgrade is
+refused.
+
+These guarantees hold once every server runs this release. During a rolling
+deploy, a server still on the previous release keeps the previous behaviour:
+it neither revokes a link when an address changes nor checks the account when
+a link is followed. Drain the old servers before relying on them.
+
 ## What a token is for
 
 Session tokens and the pending tokens of a second-factor exchange carry a

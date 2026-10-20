@@ -94,6 +94,12 @@ import {
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
+import {
+  revokeAccountTokens,
+  TOKEN_TABLE_NAMES,
+  tokenTable,
+  type TokenTable,
+} from "../../auth/services/token-account-binding";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import {
   eraseRecipientDeliveries,
@@ -101,6 +107,7 @@ import {
 } from "../../email/erase-recipient";
 import { revalidateMedia } from "../../media/revalidate-media";
 import { pluginSettingsSecrets } from "../../plugins/settings-service";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
@@ -2024,6 +2031,13 @@ export class UserMutationService extends BaseService {
         // old sessions still valid.
         const endsSessions =
           changes.isActive === false || updateData.passwordHash !== undefined;
+        // The token tables to revoke the account's links in, when the update
+        // writes its address; asked before the transaction, as the deletion's
+        // presence checks are.
+        const revokesTokens =
+          updateData.email !== undefined
+            ? await this.presentTokenTables()
+            : undefined;
         // One transaction for the fields and the roles. A plugin's write to
         // an account-controlling field asks about the account again in it,
         // holding its row, immediately before writing. Removing the roles and
@@ -2076,6 +2090,26 @@ export class UserMutationService extends BaseService {
                 .set(updateData)
                 .where(eq(users.id, currentUser.id));
             }
+            // A link sent to the address the account is leaving must not reset
+            // or verify it, now or after it returns to that address. After the
+            // write above, which holds the account's row: a link being issued
+            // for the old address either committed first and is removed here,
+            // or finds the account no longer there.
+            if (revokesTokens) {
+              // Kept: a link already bound to the address this write leaves
+              // the account at. The snapshot above may be older than the row,
+              // so a concurrent change may already have moved the account
+              // there and a link been issued for it since; this write moves
+              // nothing then.
+              await revokeAccountTokens(txDb, revokesTokens, {
+                userId: String(currentUser.id),
+                addresses:
+                  typeof currentUser.email === "string"
+                    ? [currentUser.email]
+                    : [],
+                keepAddress: updateData.email,
+              });
+            }
             if (requestedRoleIds && services) {
               hasRoleUpdates = await services.userRoles.replaceUserRoles(
                 String(currentUser.id),
@@ -2110,6 +2144,22 @@ export class UserMutationService extends BaseService {
         if (hasRoleUpdates && services) {
           await this.afterCommit(() =>
             services.userRoles.invalidateRoleCaches(String(currentUser.id))
+          );
+        }
+        // A deactivated author can no longer be acted as, and a changed email
+        // or name is what a code-defined rule judging the author may read, so
+        // a scheduled release holding a document they added is checked again
+        // and stopped now rather than at its instant. After the commit,
+        // outside the update's transaction; the early stop logs its own
+        // failures and never throws, so this update cannot fail over a
+        // release.
+        if (
+          updateData.isActive === false ||
+          updateData.email !== undefined ||
+          updateData.name !== undefined
+        ) {
+          await this.afterCommit(() =>
+            stopReleasesHolding({ authors: [String(currentUser.id)] })
           );
         }
       }
@@ -2310,6 +2360,20 @@ export class UserMutationService extends BaseService {
     } catch {
       return true;
     }
+  }
+
+  /**
+   * The reset and verification token tables this database has. An install
+   * created by an earlier release may lack either, as it may lack media.
+   */
+  private async presentTokenTables(): Promise<TokenTable[]> {
+    const present: TokenTable[] = [];
+    for (const kind of ["password-reset", "email-verification"] as const) {
+      if (await this.tablePresent(TOKEN_TABLE_NAMES[kind])) {
+        present.push(tokenTable(this.tables, kind));
+      }
+    }
+    return present;
   }
 
   /**
@@ -2753,6 +2817,7 @@ export class UserMutationService extends BaseService {
         logContext: { operation: "deleteUser" },
       });
     }
+    const tokenTables = await this.presentTokenTables();
 
     // Asked out here for the same reason, and treated as present when the
     // probe cannot answer, for the same reason too. `media.uploaded_by`
@@ -3006,6 +3071,19 @@ export class UserMutationService extends BaseService {
         await this.scrubPluginSettingsActor(txDb, userId, settingsExist);
 
         await this.eraseRetiredAccountRows(txDb, userId, retiredTables);
+
+        // Every reset and verification link of the account, whatever address
+        // it was sent to, and any from before links recorded their account
+        // that went to the address it holds. The bound ones would also go
+        // with the row through their foreign key; this says so where the
+        // deletion is read, and reaches the unbound ones the key cannot.
+        // Under the preimage's row lock, so a link being issued for the
+        // account now either lands first and is removed here, or finds the
+        // account gone.
+        await revokeAccountTokens(txDb, tokenTables, {
+          userId: String(userId),
+          addresses: typeof preimage.email === "string" ? [preimage.email] : [],
+        });
 
         if (mediaExists) {
           // Read before writing: the event carries a before and an after, and

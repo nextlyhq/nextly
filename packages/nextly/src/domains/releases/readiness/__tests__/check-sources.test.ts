@@ -8,6 +8,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { stopReleasesHolding } from "../../early-stop";
 import {
   clearReleaseCheckSourcesForTests,
   defineReleaseCheckSource,
@@ -64,6 +65,21 @@ describe("defineReleaseCheckSource", () => {
       expect.objectContaining({ code: "INTERNAL_ERROR" })
     );
   });
+
+  it("refuses a hard source outside core that declares no signal", () => {
+    // It could add a hard problem no event reports, which a scheduled release
+    // would then meet only at its instant.
+    expect(() =>
+      defineReleaseCheckSource(source({ key: "workflows.approval" }))
+    ).toThrow(expect.objectContaining({ code: "INTERNAL_ERROR" }));
+  });
+
+  it("accepts a hard source outside core with a signal, and a soft one without", () => {
+    const signalled = source({ key: "workflows.approval", signal: () => {} });
+    const soft = source({ key: "workflows.note", severity: "soft" });
+    expect(defineReleaseCheckSource(signalled)).toBe(signalled);
+    expect(defineReleaseCheckSource(soft)).toBe(soft);
+  });
 });
 
 describe("the registry", () => {
@@ -92,6 +108,14 @@ describe("the registry", () => {
       expect.objectContaining({ code: "INTERNAL_ERROR" })
     );
     expect(releaseCheckSources()).toEqual([]);
+  });
+
+  it("hands a source's signal the early stop when it is registered", () => {
+    const handed: unknown[] = [];
+    registerReleaseCheckSource(
+      source({ key: "workflows.approval", signal: fn => handed.push(fn) })
+    );
+    expect(handed).toEqual([stopReleasesHolding]);
   });
 
   it("forgets every source when cleared", () => {

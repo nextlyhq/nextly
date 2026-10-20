@@ -1132,10 +1132,14 @@ export class FieldGroupQueryService extends BaseService {
       result[currentFieldGroupTypeKey] = row[STORAGE_FORMAT.columns.type];
     }
 
+    // A row's keys may be the field's name or its snake_case column name, so
+    // a field is found under either. Missed, a JSON field such as a to-many
+    // relationship named `cardTags` comes back as its stored text.
     const fieldByColumn = new Map<string, FieldConfig>();
     for (const field of componentFields) {
       if ("name" in field && field.name) {
         fieldByColumn.set(toSnakeCase(field.name), field);
+        fieldByColumn.set(field.name, field);
       }
     }
 
