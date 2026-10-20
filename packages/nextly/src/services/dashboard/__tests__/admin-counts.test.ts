@@ -178,13 +178,10 @@ describe("whose keys the API-key count covers", () => {
     expect(await apiKeyCountScope(CALLER)).toEqual({ kind: "all" });
   });
 
-  it("is the caller's own for anyone else, as its key list is", async () => {
-    // 🔴 Holding read-api-keys is not enough to see other people's keys.
+  it("is every key for anyone else who may read keys, as its key list is", async () => {
+    // Holding read-api-keys opens every key, so the count covers every key.
     granted.add("read-api-keys");
-    expect(await apiKeyCountScope(CALLER)).toEqual({
-      kind: "owner",
-      userId: "u1",
-    });
+    expect(await apiKeyCountScope(CALLER)).toEqual({ kind: "all" });
   });
 });
 

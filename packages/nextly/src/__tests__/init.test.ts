@@ -107,14 +107,12 @@ describe("init - Nextly API", () => {
         .map(([name]) => name);
 
       expect(offered).toContain("releases");
+      expect(offered).toContain("apiKeys");
 
-      const missing = offered
-        // apiKeys: not forwarded to the public instance; outside this change.
-        .filter(name => name !== "apiKeys")
-        .filter(name => {
-          const value = (instance as unknown as Record<string, unknown>)[name];
-          return typeof value !== "object" || value === null;
-        });
+      const missing = offered.filter(name => {
+        const value = (instance as unknown as Record<string, unknown>)[name];
+        return typeof value !== "object" || value === null;
+      });
       expect(
         missing,
         "namespaces the lazy API offers that getNextly() lacks"
@@ -228,6 +226,7 @@ describe("init - Nextly API", () => {
     const PUBLIC_MEMBERS = [
       "access",
       "adapter",
+      "apiKeys",
       "bulkDelete",
       "changePassword",
       "collections",
