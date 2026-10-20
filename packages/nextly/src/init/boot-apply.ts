@@ -46,6 +46,7 @@ import { NextlyError } from "../errors";
 // The operator view of an error: code, the `logMessage` detail its generic
 // public message leaves out, the cause chain and the log context.
 import { describeError } from "../errors/describe-error";
+import { consoleLogger } from "../shared/types";
 
 import { reloadDynamicTables } from "./reload-dynamic-tables";
 
@@ -115,12 +116,12 @@ export async function runBootTimeApplyIfDev(opts?: {
     // - Users can run `nextly migrate` manually to see actual errors
     // Set NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 to throw instead of warn (useful for debugging)
     if (process.env.NEXTLY_BOOT_APPLY_FAIL_LOUDLY === "1") {
-      console.error(
+      consoleLogger.error(
         `${label} Boot-time schema apply FAILED ( NEXTLY_BOOT_APPLY_FAIL_LOUDLY=1 ): ${msg}`
       );
       throw err;
     }
-    console.warn(
+    consoleLogger.warn(
       `${label} Boot-time schema apply failed: ${msg}. ` +
         `The dev server still works against the live DB schema, ` +
         `but code-first edits won't be applied until next restart, ` +
@@ -242,7 +243,7 @@ async function registerMigrationMetadata(label: string): Promise<number> {
     const drizzleAdapter = container.get("adapter");
 
     if (!drizzleAdapter) {
-      console.warn(
+      consoleLogger.warn(
         `${label} Adapter not available for migration metadata registration. Run \`nextly migrate\` manually.`
       );
       return 0;
@@ -253,10 +254,10 @@ async function registerMigrationMetadata(label: string): Promise<number> {
     };
 
     const logger = {
-      info: (msg: string) => console.log(`${label} ${msg}`),
-      warn: (msg: string) => console.warn(`${label} ${msg}`),
-      error: (msg: string) => console.error(`${label} ${msg}`),
-      debug: (msg: string) => console.debug(`${label} ${msg}`),
+      info: (msg: string) => consoleLogger.info(`${label} ${msg}`),
+      warn: (msg: string) => consoleLogger.warn(`${label} ${msg}`),
+      error: (msg: string) => consoleLogger.error(`${label} ${msg}`),
+      debug: (msg: string) => consoleLogger.debug(`${label} ${msg}`),
     };
 
     // Register collections from migration snapshots
@@ -269,7 +270,7 @@ async function registerMigrationMetadata(label: string): Promise<number> {
 
     const registered = result.collectionsRegistered + result.singlesRegistered;
     if (registered > 0) {
-      console.log(
+      consoleLogger.info(
         `${label} ✅ Registered ${result.collectionsRegistered} collection(s), ${result.singlesRegistered} single(s) from migration metadata`
       );
     }
@@ -277,7 +278,7 @@ async function registerMigrationMetadata(label: string): Promise<number> {
   } catch (err) {
     // Metadata registration failed - log but don't block startup
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
+    consoleLogger.warn(
       `${label} Migration metadata registration skipped: ${msg}. ` +
         `Collections from migrations may not be available.`
     );
@@ -300,7 +301,7 @@ async function seedPermissionsForMigrationCollections(
 
     // Check if permissionSeedService is available
     if (!container.has("permissionSeedService")) {
-      console.warn(
+      consoleLogger.warn(
         `${label} PermissionSeedService not available - skipping permission seeding for migration collections`
       );
       return;
@@ -327,14 +328,14 @@ async function seedPermissionsForMigrationCollections(
     // Assign new permissions to super_admin
     if (allNewIds.length > 0) {
       await permissionSeedService.assignNewPermissionsToSuperAdmin(allNewIds);
-      console.log(
+      consoleLogger.info(
         `${label} ✅ Seeded ${allNewIds.length} permission(s) for migration collections and singles`
       );
     }
   } catch (err) {
     // Permission seeding failed - log but don't block startup
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
+    consoleLogger.warn(
       `${label} Permission seeding for migration collections failed: ${msg}. ` +
         `Permissions may need to be seeded manually.`
     );
@@ -379,7 +380,7 @@ async function applyPendingMigrations(label: string): Promise<number> {
       return 0;
     }
 
-    console.log(`${label} Checking for pending migrations...`);
+    consoleLogger.info(`${label} Checking for pending migrations...`);
 
     // Import migrateCore and related dependencies
     const { migrateCore } = await import("../cli/commands/migrate");
@@ -389,9 +390,9 @@ async function applyPendingMigrations(label: string): Promise<number> {
     // Validate database environment
     const dbValidation = validateDatabaseEnv();
     if (!dbValidation.valid) {
-      console.warn(
+      consoleLogger.warn(
         `${label} Database environment invalid. Run \`nextly migrate\` manually.`,
-        ...dbValidation.errors.map(e => `  - ${e}`)
+        { errors: dbValidation.errors }
       );
       return 0;
     }
@@ -400,7 +401,7 @@ async function applyPendingMigrations(label: string): Promise<number> {
     const drizzleAdapter = container.get<DrizzleAdapter | undefined>("adapter");
 
     if (!drizzleAdapter) {
-      console.warn(
+      consoleLogger.warn(
         `${label} Adapter not available. Run \`nextly migrate\` manually.`
       );
       return 0;
@@ -408,20 +409,20 @@ async function applyPendingMigrations(label: string): Promise<number> {
 
     // Create a logger compatible with migrateCore's CommandContext["logger"]
     const logger = {
-      header: (msg: string) => console.log(`${label} ${msg}`),
-      info: (msg: string) => console.log(`${label} ${msg}`),
-      success: (msg: string) => console.log(`${label} ✅ ${msg}`),
-      warn: (msg: string) => console.warn(`${label} ⚠️  ${msg}`),
-      error: (msg: string) => console.error(`${label} ❌ ${msg}`),
-      debug: (msg: string) => console.debug(`${label} ${msg}`),
+      header: (msg: string) => consoleLogger.info(`${label} ${msg}`),
+      info: (msg: string) => consoleLogger.info(`${label} ${msg}`),
+      success: (msg: string) => consoleLogger.info(`${label} ✅ ${msg}`),
+      warn: (msg: string) => consoleLogger.warn(`${label} ⚠️  ${msg}`),
+      error: (msg: string) => consoleLogger.error(`${label} ❌ ${msg}`),
+      debug: (msg: string) => consoleLogger.debug(`${label} ${msg}`),
       keyValue: (key: string, value: string | number | boolean) =>
-        console.log(`${label} ${key}: ${value}`),
-      divider: () => console.log(`${label} ---`),
-      newline: () => console.log(),
-      item: (msg: string) => console.log(`${label} • ${msg}`),
+        consoleLogger.info(`${label} ${key}: ${value}`),
+      divider: () => consoleLogger.info(`${label} ---`),
+      newline: () => consoleLogger.info(""),
+      item: (msg: string) => consoleLogger.info(`${label} • ${msg}`),
       table: (_headers: string[], _rows: (string | number | boolean)[][]) => {},
       spinner: (msg: string) => {
-        console.log(`${label} ${msg}`);
+        consoleLogger.info(`${label} ${msg}`);
         return { stop: () => {} };
       },
       setOptions: () => {},
@@ -446,7 +447,7 @@ async function applyPendingMigrations(label: string): Promise<number> {
       dialect: drizzleAdapter.dialect,
       plugins: configResult.config.plugins ?? [],
       config: configResult.config,
-      logger: { warn: m => console.warn(m) },
+      logger: { warn: m => consoleLogger.warn(m) },
     });
     const result = await migrateAtDevBoot({
       migrateCore,
@@ -473,9 +474,9 @@ async function applyPendingMigrations(label: string): Promise<number> {
     // that did nothing.
     const applied = result.applied + result.pluginModulesApplied;
     if (applied > 0) {
-      console.log(`${label} Applied ${applied} migration(s)`);
+      consoleLogger.info(`${label} Applied ${applied} migration(s)`);
     } else {
-      console.log(`${label} No pending migrations`);
+      consoleLogger.info(`${label} No pending migrations`);
     }
     return (
       result.metadata.collectionsRegistered + result.metadata.singlesRegistered
@@ -483,7 +484,7 @@ async function applyPendingMigrations(label: string): Promise<number> {
   } catch (err) {
     // Migration check/apply failed - log but don't block startup
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
+    consoleLogger.warn(
       `${label} Migration auto-apply skipped: ${msg}. ` +
         `Run \`nextly migrate\` manually if needed.`
     );
@@ -570,7 +571,7 @@ export async function migrateAtDevBoot<
       } catch (err) {
         // A ledger that cannot be created is reported, and the run goes on:
         // recording an event then fails with the database's own reason.
-        console.warn(
+        consoleLogger.warn(
           `${label} Ledger bootstrap failed: ${err instanceof Error ? err.message : String(err)}`
         );
       }

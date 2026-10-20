@@ -37,6 +37,7 @@ import { CollectionRelationshipService } from "../../services/collections/collec
 import { CollectionService } from "../../services/collections/collection-service";
 import { CollectionsHandler } from "../../services/collections-handler";
 import type { FieldGroupDataService } from "../../services/field-groups";
+import { consoleLogger } from "../../shared/types";
 import { container } from "../container";
 
 import { createNoOpHookRegistry } from "./no-op-hook-registry";
@@ -103,9 +104,9 @@ export function registerCollectionServices(ctx: RegistrationContext): void {
             };
           }
         } catch (error) {
-          console.error(
-            "[registerCollectionServices] Failed to fetch collection metadata:",
-            error
+          consoleLogger.error(
+            "[registerCollectionServices] Failed to fetch collection metadata",
+            { error: error }
           );
         }
         return null;

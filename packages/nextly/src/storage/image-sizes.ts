@@ -6,6 +6,7 @@
  * Each variant is uploaded to the same storage adapter as the original.
  */
 
+import { consoleLogger } from "../shared/types";
 import type { ImageSizeVariant } from "../types/media";
 
 import { getImageProcessor } from "./image-processor";
@@ -215,9 +216,9 @@ export async function generateImageSizes(
       if (variant) results[sizeConfig.name] = variant;
     } catch (error) {
       // One size failing must not lose the others or the upload itself.
-      console.warn(
-        `[ImageSizes] Failed to generate size "${sizeConfig.name}":`,
-        error instanceof Error ? error.message : error
+      consoleLogger.warn(
+        `[ImageSizes] Failed to generate size "${sizeConfig.name}"`,
+        { detail: error instanceof Error ? error.message : error }
       );
     }
   }
