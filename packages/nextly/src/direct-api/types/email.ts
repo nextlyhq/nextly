@@ -7,7 +7,9 @@
  * @packageDocumentation
  */
 
+import type { EmailFailure } from "../../domains/email/failure";
 import type { OwnerUpdateUndo } from "../../domains/email/services/email-template-service";
+import type { RefusedRecipient } from "../../domains/email/services/send-failures";
 import type { OwnerChangeChoice } from "../../domains/email/template-merge";
 import type { EmailAttachmentInput } from "../../domains/email/types";
 import type { PrincipalRef } from "../../plugins/principals/types";
@@ -289,7 +291,7 @@ export interface PreviewEmailTemplateArgs extends DirectAPIConfig {
   /** Template ID (required) */
   id: string;
   /** Variable values for interpolation */
-  data?: Record<string, string>;
+  data?: EmailTemplateData;
 }
 
 /**
@@ -420,6 +422,14 @@ export interface SendEmailArgs extends DirectAPIConfig {
 }
 
 /**
+ * The data a template renders with: any value, nested objects and lists
+ * included, which a template can loop over and branch on, and HTML the
+ * calling code marked with `markHtml`. Every value but a marked one is
+ * escaped where it is written into HTML.
+ */
+export type EmailTemplateData = Record<string, unknown>;
+
+/**
  * Arguments for sending an email using a database template.
  */
 export interface SendTemplateEmailArgs extends DirectAPIConfig {
@@ -431,8 +441,12 @@ export interface SendTemplateEmailArgs extends DirectAPIConfig {
   to: string | string[];
   /** Template slug (required) */
   template: string;
-  /** Variables for template interpolation */
-  variables?: Record<string, string>;
+  /**
+   * The template's data. Any JSON-shaped value: text, numbers, yes/no, lists
+   * and objects, which a template can loop over and branch on. Every value is
+   * escaped where it is written into HTML.
+   */
+  variables?: EmailTemplateData;
   /** Override the "from" address */
   from?: string;
   /** @experimental The Reply-To address. */
@@ -465,6 +479,18 @@ export interface SendEmailResult {
   success: boolean;
   /** Provider-assigned message ID (on success) */
   messageId?: string;
-  /** Error message (on failure) */
+  /**
+   * Why the send failed (on failure): the same sentence as `failure.reason`.
+   */
   error?: string;
+  /**
+   * @experimental On failure: whether a retry can help, the provider's status
+   * where it gave one, and a short reason free of configuration and secrets.
+   */
+  failure?: EmailFailure;
+  /**
+   * @experimental Recipients the provider refused while taking the message,
+   * by line and position, never by address.
+   */
+  refused?: RefusedRecipient[];
 }

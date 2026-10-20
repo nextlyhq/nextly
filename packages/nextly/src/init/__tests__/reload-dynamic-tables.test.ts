@@ -157,7 +157,7 @@ describe("reloadDynamicTables", () => {
   it("reports a swallowed read failure instead of claiming success", async () => {
     ready();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
     // The real loader's shape: RESOLVE, carrying the failure it swallowed.
     loadDynamicTables.mockResolvedValue({
       registered: 0,
@@ -184,7 +184,7 @@ describe("reloadDynamicTables", () => {
   it("reports a row that could not be registered, naming it", async () => {
     ready();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
     loadDynamicTables.mockResolvedValue({
       registered: 2,
       failures: [
@@ -212,7 +212,7 @@ describe("reloadDynamicTables", () => {
     // above while never reporting a healthy reload.
     ready();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const log = vi.spyOn(console, "info").mockImplementation(() => undefined);
     loadDynamicTables.mockResolvedValue(ok());
 
     await reloadDynamicTables("[t]");

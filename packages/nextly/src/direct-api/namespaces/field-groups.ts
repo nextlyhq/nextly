@@ -9,6 +9,7 @@
  */
 
 import type { FieldConfig } from "../../collections/fields/types";
+import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertValidFieldGroupConfig } from "../../field-groups/config/validate-field-group";
@@ -25,7 +26,12 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { isNotFoundError, mapFieldGroupRecord, mergeConfig } from "./helpers";
+import {
+  checkWrite,
+  isNotFoundError,
+  mapFieldGroupRecord,
+  mergeConfig,
+} from "./helpers";
 
 /**
  * Field groups namespace API, bound to a Nextly context.
@@ -128,6 +134,13 @@ export function createFieldGroupsNamespace(
     async create(
       args: CreateFieldGroupArgs
     ): Promise<MutationResult<FieldGroupDefinition>> {
+      // Checked as the REST route checks it, before anything else: REST
+      // authorizes before it reads the body.
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.fieldGroups.create
+      );
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -203,6 +216,11 @@ export function createFieldGroupsNamespace(
     async update(
       args: UpdateFieldGroupArgs
     ): Promise<MutationResult<FieldGroupDefinition>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.fieldGroups.update
+      );
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -263,6 +281,11 @@ export function createFieldGroupsNamespace(
     async delete(
       args: DeleteFieldGroupArgs
     ): Promise<MutationResult<{ slug: string }>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.fieldGroups.delete
+      );
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",

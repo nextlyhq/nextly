@@ -17,6 +17,11 @@ export type ValidationPublicData = {
   }>;
 };
 
+/**
+ * A retry hint: how many seconds the caller waits before sending the request
+ * again. Carried by RATE_LIMITED and DATABASE_BUSY, and sent on REST as the
+ * Retry-After header (`retryAfterSeconds` in `errors/retry-after.ts`).
+ */
 export type RateLimitPublicData = {
   retryAfterSeconds?: number;
 };

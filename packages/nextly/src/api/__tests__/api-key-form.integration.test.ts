@@ -159,6 +159,25 @@ describe.each(getConfiguredTestDialects())(
       );
     }
 
+    /** A write to a key route, as the admin sends one with the session cookie. */
+    function write(
+      method: "PATCH" | "DELETE",
+      path: string[],
+      headers: Record<string, string>,
+      body?: unknown
+    ) {
+      const handlers = createDynamicHandlers();
+      const request = new Request(`http://localhost/api/${path.join("/")}`, {
+        method,
+        headers: { ...headers, "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const context = { params: Promise.resolve({ params: path }) };
+      return method === "PATCH"
+        ? handlers.PATCH(request, context)
+        : handlers.DELETE(request, context);
+    }
+
     async function refusal(res: Response): Promise<Refusal> {
       const body = (await res.json()) as {
         error: { code: string; message: string };
@@ -535,6 +554,88 @@ describe.each(getConfiguredTestDialects())(
           authorization: `Bearer ${peopleReader.key}`,
         });
         expect(withUsers.some(item => item.owner?.id === editorId)).toBe(true);
+      });
+
+      it("lists every key to a person who may read keys, naming owners only if they may read users", async () => {
+        const theirs = await keys.createApiKey(superAdminId, {
+          name: "someone else's",
+          tokenType: "read-only",
+          expiresIn: "unlimited",
+        });
+        const mine = await keys.createApiKey(editorId, {
+          name: "the editor's own",
+          tokenType: "read-only",
+          expiresIn: "unlimited",
+        });
+        // The editor may read keys but not users.
+        const editor = await session(editorId, [editorRoleId]);
+        const items = await listed(editor);
+        const row = (id: string) => items.find(item => item.id === id);
+
+        expect(row(theirs.meta.id)).toBeDefined();
+        expect(row(theirs.meta.id)?.owner).toBeNull();
+        expect(row(mine.meta.id)?.owner?.id).toBe(editorId);
+        const single = await get(["api-keys", theirs.meta.id], editor);
+        expect(single.status).toBe(200);
+        expect(((await single.json()) as ListedKey).owner).toBeNull();
+
+        const auditorRoleId = await role("key-and-people-auditors", [
+          "read-api-keys",
+          "read-users",
+        ]);
+        const auditorId = await account("auditor@example.com", [auditorRoleId]);
+        const seen = await listed(await session(auditorId, [auditorRoleId]));
+        expect(seen.find(item => item.id === theirs.meta.id)?.owner?.id).toBe(
+          superAdminId
+        );
+      });
+
+      it("lets the holder of the permission edit or revoke anyone's key, and a reader neither", async () => {
+        const target = await keys.createApiKey(superAdminId, {
+          name: "anyone's key",
+          tokenType: "read-only",
+          expiresIn: "unlimited",
+        });
+        const stored = () =>
+          keys.getApiKeyById(target.meta.id, "", { allUsers: true });
+
+        // May read keys, not change them.
+        const editor = await session(editorId, [editorRoleId]);
+        expect(
+          (
+            await write("PATCH", ["api-keys", target.meta.id], editor, {
+              name: "by a reader",
+            })
+          ).status
+        ).toBe(403);
+        expect(
+          (await write("DELETE", ["api-keys", target.meta.id], editor)).status
+        ).toBe(403);
+        expect(await stored()).toMatchObject({
+          name: "anyone's key",
+          isActive: true,
+        });
+
+        const updaterRoleId = await role("key-updaters", ["update-api-keys"]);
+        const updaterId = await account("updater@example.com", [updaterRoleId]);
+        const renamed = await write(
+          "PATCH",
+          ["api-keys", target.meta.id],
+          await session(updaterId, [updaterRoleId]),
+          { name: "renamed by a key updater" }
+        );
+        expect(renamed.status).toBe(200);
+        expect((await stored())?.name).toBe("renamed by a key updater");
+
+        const revokerRoleId = await role("key-revokers", ["delete-api-keys"]);
+        const revokerId = await account("revoker@example.com", [revokerRoleId]);
+        const revoked = await write(
+          "DELETE",
+          ["api-keys", target.meta.id],
+          await session(revokerId, [revokerRoleId])
+        );
+        expect(revoked.status).toBe(200);
+        expect((await stored())?.isActive).toBe(false);
       });
 
       it("keeps the list private to the session that asked", async () => {

@@ -42,6 +42,8 @@ import type {
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import { isMissingTable } from "../../field-groups/migration/session";
+import { MetaService } from "../../meta";
 import {
   changedTemplateFields,
   recordTemplateActivity,
@@ -72,6 +74,8 @@ import {
 } from "../template-ownership";
 import type { EmailAttachmentInput, EmailConfig } from "../types";
 
+import { LIQUID_FIELDS, oldEngineReasons } from "./liquid-compat";
+import { parseLiquid, writesOutput } from "./liquid-engine";
 import {
   DEFAULT_APP_NAME,
   renderTemplate,
@@ -87,6 +91,28 @@ import {
 // ============================================================
 // Constants
 // ============================================================
+
+/**
+ * `nextly_meta` keys recording the switch to Liquid. One key marks that the
+ * stored templates were read at the switch; each template kept on the old
+ * engine has a key of its own holding a digest of its flagged text, which is
+ * deleted when the template is confirmed as Liquid. A key per template keeps
+ * every change a single-row write, with nothing to merge.
+ */
+const LIQUID_ADOPTED_KEY = "email.templates.liquid.adoptedAt";
+const keptKey = (id: string) => `email.templates.liquid.kept.${id}`;
+/**
+ * A template saved as Liquid while the first boot on Liquid had not yet
+ * recorded the switch. The switch leaves it as Liquid rather than judging its
+ * loops and filters as text the previous engine wrote.
+ */
+const authoredKey = (id: string) => `email.templates.liquid.authored.${id}`;
+
+/** Why a template is kept on the old engine, field by field. */
+export interface OldEngineStatus {
+  kept: boolean;
+  reasons: Array<{ field: string; label: string; reason: string }>;
+}
 
 /** Legacy reserved slugs migrated into the unified layout row on boot. */
 const LEGACY_HEADER_SLUG = "_email-header";
@@ -305,6 +331,8 @@ export class EmailTemplateService extends BaseService {
    * boot reconciliation does not run (see `ensureBuiltInTemplates`).
    */
   private registry: TemplateOwnerRegistry;
+  /** Where the switch to Liquid, and the templates kept off it, are recorded. */
+  private readonly meta: MetaService;
 
   constructor(adapter: DrizzleAdapter, logger: Logger, appName?: string) {
     // Masked here whatever logger an app supplied: what this service logs,
@@ -318,6 +346,7 @@ export class EmailTemplateService extends BaseService {
       plugins: [],
       complete: false,
     }).registry;
+    this.meta = new MetaService(adapter, logger);
 
     switch (this.dialect) {
       case "postgresql":
@@ -445,6 +474,27 @@ export class EmailTemplateService extends BaseService {
    * after the second marker when the layout is applied. Reject malformed
    * layouts at write time so rendering can rely on the invariant.
    */
+  /**
+   * In a Liquid layout, the body's marker must be an output Liquid writes:
+   * inside `raw`, `comment` or `capture`, or quoted in a tag's argument, it
+   * would be swapped for the body's slot and then never written, and every
+   * email would go out without its body.
+   */
+  private assertMarkerOutput(kind: string, htmlContent: string): void {
+    if (kind !== "layout") return;
+    if (writesOutput(htmlContent, LAYOUT_CONTENT_PLACEHOLDER)) return;
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "htmlContent",
+          code: "INVALID",
+          message: `A layout's ${LAYOUT_CONTENT_PLACEHOLDER} placeholder must stand on its own where Liquid writes output, not inside {% raw %}, {% comment %} or {% capture %}, or in a tag's quoted text.`,
+        },
+      ],
+      logContext: { kind },
+    });
+  }
+
   private assertLayoutMarker(kind: string, htmlContent: string): void {
     if (kind !== "layout") return;
     const markerCount =
@@ -464,6 +514,316 @@ export class EmailTemplateService extends BaseService {
   }
 
   /**
+   * A template kept on the old engine renders as it always did until it is
+   * confirmed as Liquid, so saving it (its other fields, or its text) is not
+   * judged by Liquid. Every other template must parse, and is recorded as
+   * written in Liquid if the switch isn't recorded yet. Returns what to do
+   * once the save is written: for a kept template, the re-check a confirmation
+   * that overtook the save needs.
+   */
+  private async checkLiquidOnSave(
+    existing: EmailTemplateRecord,
+    data: LiquidFieldValues
+  ): Promise<(saved: EmailTemplateRecord) => Promise<void>> {
+    if (await this.keptOnOldEngine(existing)) {
+      return saved => this.keepIfConfirmedUnderSave(saved);
+    }
+    this.assertLiquid(data);
+    this.assertMarkerOutput(
+      existing.kind,
+      data.htmlContent ?? existing.htmlContent
+    );
+    await this.markAuthoredBeforeSwitch(existing.id);
+    return () => Promise.resolve();
+  }
+
+  /**
+   * A save checked while the template was kept, which a confirmation then
+   * overtook: the confirmation read the template before this save landed, so
+   * Liquid never checked what it wrote. If that text is anything Liquid would
+   * read differently (the old engine's syntax, or text Liquid can't parse),
+   * the template goes back to the old engine, where it renders as written.
+   */
+  private async keepIfConfirmedUnderSave(
+    template: EmailTemplateRecord
+  ): Promise<void> {
+    if (await this.keptOnOldEngine(template)) return;
+    if (
+      oldEngineReasons(template).length === 0 &&
+      this.readsAsLiquid(template)
+    ) {
+      return;
+    }
+    await this.meta.insertIfAbsent(
+      keptKey(template.id),
+      flaggedDigests(template)
+    );
+  }
+
+  /** Whether every field Liquid renders parses. */
+  private readsAsLiquid(fields: LiquidFieldValues): boolean {
+    try {
+      this.assertLiquid(fields);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Refuse a template Liquid can't read, naming the field and the line, so
+   * nothing is stored that would fail every send.
+   */
+  private assertLiquid(fields: LiquidFieldValues): void {
+    const errors = LIQUID_FIELDS.flatMap(([field, label]) => {
+      const source = fields[field];
+      if (!source) return [];
+      const parsed = parseLiquid(
+        source,
+        field === "htmlContent" || field === "preheader" ? "html" : "text"
+      );
+      if (!("problem" in parsed)) return [];
+      const { line, message } = parsed.problem;
+      const sentence = /[.!?]$/.test(message) ? message : `${message}.`;
+      return [
+        {
+          path: field,
+          code: "LIQUID_SYNTAX",
+          message:
+            line !== null
+              ? `${label}, line ${line}: ${sentence}`
+              : `${label}: ${sentence}`,
+        },
+      ];
+    });
+    if (errors.length > 0) {
+      throw NextlyError.validation({
+        errors,
+        logContext: { fields: errors.map(error => error.path) },
+      });
+    }
+  }
+
+  // ============================================================
+  // Liquid, and templates kept on the old engine
+  // ============================================================
+
+  /**
+   * Whether the switch to Liquid is recorded, or null where nothing can be
+   * recorded (a database without the meta table).
+   */
+  private async liquidAdopted(): Promise<boolean | null> {
+    try {
+      return (await this.meta.getEntry(LIQUID_ADOPTED_KEY)).present;
+    } catch (error) {
+      // Only a missing meta table means nothing can be recorded. Any other
+      // failure is raised: reading it as "not switched yet" would render a
+      // new Liquid template with the old engine.
+      if (isMissingTable(error, this.dialect)) return null;
+      throw error;
+    }
+  }
+
+  /**
+   * Whether a stored template renders with the old engine.
+   *
+   * Once the switch is recorded, only the templates it kept do. Before it is
+   * (the first boot has not reached it yet), a template is judged by what it
+   * holds, the same test the switch applies, so no stored email changes in
+   * the meantime.
+   */
+  private async keptOnOldEngine(
+    template: Pick<EmailTemplateRecord, "id"> & LiquidFieldValues
+  ): Promise<boolean> {
+    const adopted = await this.liquidAdopted();
+    if (adopted) {
+      return (await this.meta.getEntry(keptKey(template.id))).present;
+    }
+    if (adopted === false && (await this.authoredAsLiquid(template.id))) {
+      return false;
+    }
+    return oldEngineReasons(template).length > 0;
+  }
+
+  private async authoredAsLiquid(id: string): Promise<boolean> {
+    return (await this.meta.getEntry(authoredKey(id))).present;
+  }
+
+  /**
+   * Record that a template was saved as Liquid, when the switch isn't recorded
+   * yet. Written before the template, so the switch never sees the row
+   * without it.
+   */
+  private async markAuthoredBeforeSwitch(id: string): Promise<void> {
+    if ((await this.liquidAdopted()) === false) {
+      await this.meta.insertIfAbsent(authoredKey(id), "1");
+    }
+  }
+
+  /**
+   * Record the switch to Liquid, once: every stored template that today's
+   * engine would render differently as Liquid is kept on today's engine.
+   * Templates created afterwards are Liquid. Each kept template is written
+   * before the mark, so a boot interrupted part-way simply reads them again.
+   */
+  private async adoptLiquid(): Promise<void> {
+    if ((await this.liquidAdopted()) !== false) return;
+    const rows = (await this.db
+      .select()
+      .from(this.emailTemplates)) as EmailTemplateRecord[];
+    const kept: string[] = [];
+    for (const row of rows) {
+      // Another instance may have recorded the switch meanwhile and seeded
+      // Liquid templates since; its scan decided, so this one stops.
+      if ((await this.liquidAdopted()) === true) return;
+      if (
+        oldEngineReasons(row).length > 0 &&
+        !(await this.authoredAsLiquid(row.id))
+      ) {
+        await this.meta.insertIfAbsent(keptKey(row.id), flaggedDigests(row));
+        kept.push(row.id);
+      }
+    }
+    await this.meta.insertIfAbsent(
+      LIQUID_ADOPTED_KEY,
+      new Date().toISOString()
+    );
+    if (kept.length > 0) {
+      this.logger.info(
+        `Kept ${kept.length} stored email template(s) on the previous engine; they render as before until confirmed as Liquid.`,
+        { templateIds: kept }
+      );
+    }
+  }
+
+  /** Whether a template is kept on the old engine, and what in it is why. */
+  async oldEngineStatus(id: string): Promise<OldEngineStatus> {
+    const template = await this.getTemplate(id);
+    const kept = await this.keptOnOldEngine(template);
+    return { kept, reasons: kept ? oldEngineReasons(template) : [] };
+  }
+
+  /**
+   * Read a template kept on the old engine as Liquid from now on.
+   *
+   * Only once what was flagged has changed, and only if Liquid can read every
+   * field: a confirmation of unchanged text would quietly change what the
+   * email says.
+   *
+   * @throws NextlyError BUSINESS_RULE_VIOLATION when the flagged text is
+   *   unchanged; VALIDATION_ERROR when Liquid can't read it
+   */
+  async confirmLiquid(
+    id: string,
+    actor?: RequestActor | null
+  ): Promise<EmailTemplateRecord> {
+    const template = await this.getTemplate(id);
+    const flagged = await this.flaggedWhenKept(template);
+    if (flagged === null) return template;
+    // Every flagged field must have changed: an edit elsewhere leaves the
+    // flagged text as it was, and reading it as Liquid would change the email.
+    const unchanged = unchangedFlaggedFields(flagged, template);
+    if (unchanged.length > 0) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage: `Change the text that was flagged (${unchanged.join(", ")}) before reading this template as Liquid.`,
+        logContext: { id, reason: "liquid-confirm-unchanged", unchanged },
+      });
+    }
+    this.assertLiquid(template);
+    // Saved while kept, a layout's marker was only checked as the old engine
+    // splices it; as Liquid it must also be an output Liquid writes.
+    this.assertMarkerOutput(template.kind, template.htmlContent);
+    await this.releaseToLiquid(template, flagged);
+    await this.recordActivity({
+      action: "update",
+      templateId: id,
+      templateName: template.name,
+      templateKind: template.kind,
+      changedFields: ["readAsLiquid"],
+      actor,
+    });
+    return template;
+  }
+
+  /**
+   * The flagged text a kept template was recorded with, or null when it is
+   * not kept.
+   *
+   * @throws NextlyError BUSINESS_RULE_VIOLATION while the switch isn't
+   *   recorded and the template would be kept by it
+   */
+  private async flaggedWhenKept(
+    template: EmailTemplateRecord
+  ): Promise<string | null> {
+    const adopted = await this.liquidAdopted();
+    if (adopted) {
+      const entry = await this.meta.getEntry<string>(keptKey(template.id));
+      return entry.present ? (entry.value ?? "") : null;
+    }
+    if (oldEngineReasons(template).length > 0) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          "This template can't be switched to Liquid until the site has finished starting.",
+        logContext: { id: template.id, reason: "liquid-state-not-recorded" },
+      });
+    }
+    return null;
+  }
+
+  /**
+   * Stop keeping a template on the old engine. A save that landed between
+   * the checks and this was made while the template was still kept, so
+   * Liquid never checked it: the switch is undone and refused.
+   *
+   * @throws NextlyError CONFLICT when a save overtook the confirmation
+   */
+  private async releaseToLiquid(
+    template: EmailTemplateRecord,
+    flagged: string
+  ): Promise<void> {
+    await this.meta.delete(keptKey(template.id));
+    const after = await this.getTemplate(template.id);
+    if (
+      flaggedDigests(after) === flaggedDigests(template) &&
+      this.readsAsLiquid(after)
+    ) {
+      return;
+    }
+    await this.meta.insertIfAbsent(keptKey(template.id), flagged);
+    throw new NextlyError({
+      code: "CONFLICT",
+      publicMessage:
+        "This template was saved while it was being confirmed. Check it again, then confirm.",
+      logContext: { id: template.id, reason: "liquid-confirm-raced" },
+    });
+  }
+
+  /**
+   * Render a stored template as a send does: wrapped in its layout, each of
+   * the two on the engine it renders with.
+   *
+   * @throws NextlyError when the template cannot be rendered; retrying cannot
+   *   fix it
+   */
+  async renderStored(
+    template: EmailTemplateRecord,
+    data: Record<string, unknown>,
+    options?: { appName?: string }
+  ): Promise<RenderedTemplate> {
+    const layout = template.useLayout
+      ? await this.getLayoutFor(template)
+      : null;
+    return renderTemplate(
+      { ...template, legacy: await this.keptOnOldEngine(template) },
+      layout && { ...layout, legacy: await this.keptOnOldEngine(layout) },
+      data,
+      { appName: options?.appName ?? this.appName }
+    );
+  }
+
+  /**
    * Create a new email template. A template created here is the site's own.
    *
    * @throws NextlyError BUSINESS_RULE_VIOLATION if slug is reserved
@@ -473,15 +833,19 @@ export class EmailTemplateService extends BaseService {
     data: CreateEmailTemplateInput,
     actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
-    this.assertLayoutMarker(orDefault(data, "kind"), data.htmlContent);
+    const kind = orDefault(data, "kind");
+    this.assertLayoutMarker(kind, data.htmlContent);
+    this.assertLiquid(data);
+    this.assertMarkerOutput(kind, data.htmlContent);
     const id = randomUUID();
     const now = new Date();
+    await this.markAuthoredBeforeSwitch(id);
 
     const values = {
       id,
       name: data.name,
       slug: data.slug,
-      kind: orDefault(data, "kind"),
+      kind,
       subject: data.subject,
       htmlContent: data.htmlContent,
       plainTextContent: orDefault(data, "plainTextContent"),
@@ -641,6 +1005,7 @@ export class EmailTemplateService extends BaseService {
       existing.kind,
       data.htmlContent ?? existing.htmlContent
     );
+    const afterSave = await this.checkLiquidOnSave(record, data);
 
     const updateData: Record<string, unknown> = {
       updatedAt: new Date(),
@@ -687,6 +1052,7 @@ export class EmailTemplateService extends BaseService {
 
     await this.assertUpdated(id, updateData, record.slug);
     const updated = await this.getTemplate(id);
+    await afterSave(updated);
     // Compared against the row as it was, so an update that submitted every
     // field but moved none produces no entry. `updatedAt` is excluded: it moves
     // on every write by definition and would make every no-op look like a
@@ -777,6 +1143,9 @@ export class EmailTemplateService extends BaseService {
     await this.db
       .delete(this.emailTemplates)
       .where(eq(this.emailTemplates.id, id));
+    // A deleted template has nothing left to keep on the old engine.
+    await this.meta.delete(keptKey(id)).catch(() => undefined);
+    await this.meta.delete(authoredKey(id)).catch(() => undefined);
 
     // The name is read from the row fetched above: after the delete there is
     // nothing left to label the entry with, and an unlabelled row is the one
@@ -834,19 +1203,12 @@ export class EmailTemplateService extends BaseService {
           digest: versionDigest(versionOf(row)),
         };
 
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...start,
-        overridden: true,
-        baseVersion: base.version,
-        baseDigest: base.digest,
-        updatedAt: new Date(),
-      })
-      // Conditioned on the row as read: `start` carries every version field
-      // from that read, so a save in between must not be overwritten.
-      .where(this.unchanged(row));
-    await this.assertWritten(id, start, base.digest, record.slug);
+    // `start` carries every version field from the read, so a save in
+    // between must not be overwritten.
+    await this.writeSitesVersion(row, record, start, base.digest, {
+      overridden: true,
+      baseVersion: base.version,
+    });
 
     await this.recordActivity({
       action: "update",
@@ -895,17 +1257,14 @@ export class EmailTemplateService extends BaseService {
       ...this.ownerColumns(entry),
       ...storedOwner(entry.owner),
     };
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...restored,
-        overridden: false,
-        baseVersion: null,
-        baseDigest: null,
-        updatedAt: new Date(),
-      })
-      // Conditioned on the row as read, as override, apply and undo are.
-      .where(this.unchanged(row));
+    // Conditioned on the row as read, as override, apply and undo are.
+    await this.writeOwnersVersion(row, entry, {
+      ...restored,
+      overridden: false,
+      baseVersion: null,
+      baseDigest: null,
+      updatedAt: new Date(),
+    });
     await this.assertWritten(id, entry.version, null, record.slug);
 
     await this.recordActivity({
@@ -980,21 +1339,14 @@ export class EmailTemplateService extends BaseService {
     const merged = applyOwnerChoices(base, entry.version, mine, choices);
     this.assertLayoutMarker(row.kind, merged.htmlContent);
 
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...merged,
-        // Rebased on the owner's version; the details the site's copy is
-        // compared against are a separate matter and carry over.
-        baseVersion: {
-          ...entry.version,
-          details: row.baseVersion?.details ?? detailsOf(entry.defaults),
-        },
-        baseDigest: entry.digest,
-        updatedAt: new Date(),
-      })
-      .where(this.unchanged(row));
-    await this.assertWritten(id, merged, entry.digest, record.slug);
+    await this.writeSitesVersion(row, record, merged, entry.digest, {
+      // Rebased on the owner's version; the details the site's copy is
+      // compared against are a separate matter and carry over.
+      baseVersion: {
+        ...entry.version,
+        details: row.baseVersion?.details ?? detailsOf(entry.defaults),
+      },
+    });
 
     await this.recordActivity({
       action: "update",
@@ -1044,16 +1396,9 @@ export class EmailTemplateService extends BaseService {
     const base = versionOf(undo.base);
     this.assertLayoutMarker(row.kind, version.htmlContent);
 
-    await this.db
-      .update(this.emailTemplates)
-      .set({
-        ...version,
-        baseVersion: { ...base, details: row.baseVersion?.details },
-        baseDigest: versionDigest(base),
-        updatedAt: new Date(),
-      })
-      .where(this.unchanged(row));
-    await this.assertWritten(id, version, versionDigest(base), record.slug);
+    await this.writeSitesVersion(row, record, version, versionDigest(base), {
+      baseVersion: { ...base, details: row.baseVersion?.details },
+    });
 
     await this.recordActivity({
       action: "update",
@@ -1143,6 +1488,74 @@ export class EmailTemplateService extends BaseService {
     }
   }
 
+  /**
+   * Write a version the site chose (an override, an applied review, an undo),
+   * conditioned on the row as read. Liquid judges it as it judges a save, and
+   * the re-check a save needs runs once it is written.
+   */
+  private async writeSitesVersion(
+    row: StoredTemplateRow,
+    record: EmailTemplateRecord,
+    version: EmailTemplateVersion,
+    baseDigest: string,
+    columns: Record<string, unknown>
+  ): Promise<void> {
+    const afterSave = await this.checkLiquidOnSave(record, version);
+    await this.db
+      .update(this.emailTemplates)
+      .set({ ...version, ...columns, baseDigest, updatedAt: new Date() })
+      .where(this.unchanged(row));
+    await this.assertWritten(row.id, version, baseDigest, record.slug);
+    await afterSave(await this.getTemplate(row.id));
+  }
+
+  /**
+   * Write the owner's current version over a row (Reset, or a boot following
+   * its owner), conditioned on the row as read, with the engine it renders
+   * on. A version Liquid can't read is kept on the old engine before the
+   * write, and that mark is taken back if the write fails or doesn't land. A
+   * version Liquid reads is released to Liquid once the row holds it, so the
+   * version before never renders as Liquid.
+   *
+   * @returns whether the row now holds the owner's version.
+   */
+  private async writeOwnersVersion(
+    row: StoredTemplateRow,
+    entry: OwnedTemplate,
+    columns: Record<string, unknown>
+  ): Promise<boolean> {
+    const engine = await this.keepIfWrittenForOldEngine({
+      id: row.id,
+      ...entry.version,
+    });
+    const undoKeep = () =>
+      engine.created ? this.meta.delete(keptKey(row.id)) : Promise.resolve();
+    try {
+      await this.db
+        .update(this.emailTemplates)
+        .set(columns)
+        .where(this.unchanged(row));
+    } catch (error) {
+      await undoKeep();
+      throw error;
+    }
+    const after = await this.getRowBySlug(row.slug);
+    if (!after || !sameVersion(versionOf(after), entry.version)) {
+      await undoKeep();
+      return false;
+    }
+    // After the switch, a version Liquid reads is Liquid, as an owner writes
+    // them now, even where the version it replaced was kept on the old engine.
+    if (
+      !engine.kept &&
+      !sameVersion(versionOf(row), entry.version) &&
+      (await this.liquidAdopted()) === true
+    ) {
+      await this.meta.delete(keptKey(row.id));
+    }
+    return true;
+  }
+
   private assertOverridden(record: EmailTemplateRecord): void {
     if (record.overridden) return;
     throw new NextlyError({
@@ -1173,7 +1586,7 @@ export class EmailTemplateService extends BaseService {
     sampleData: Record<string, unknown>
   ): Promise<{ subject: string; html: string }> {
     const template = await this.getTemplate(id);
-    const { subject, html } = await this.previewDraft(template, sampleData);
+    const { subject, html } = await this.renderStored(template, sampleData);
     return { subject, html };
   }
 
@@ -1187,13 +1600,27 @@ export class EmailTemplateService extends BaseService {
    * the shared one — the saved and unsaved paths cannot drift apart.
    */
   async previewDraft(
-    draft: TemplateFields & Pick<EmailTemplateRecord, "layoutId">,
+    draft: TemplateFields &
+      Pick<EmailTemplateRecord, "layoutId"> & { id?: string },
     sampleData: Record<string, unknown>
   ): Promise<RenderedTemplate> {
     const layout = draft.useLayout ? await this.getLayoutFor(draft) : null;
-    return renderTemplate(draft, layout, sampleData, {
-      appName: this.appName,
-    });
+    // A draft of a saved template previews with that template's engine unless
+    // the caller chose one, so a kept template's draft looks as it would send.
+    const legacy =
+      draft.legacy ??
+      (draft.id
+        ? await this.keptOnOldEngine({ ...draft, id: draft.id })
+        : false);
+    return renderTemplate(
+      { ...draft, legacy },
+      layout && {
+        ...layout,
+        legacy: await this.keptOnOldEngine(layout),
+      },
+      sampleData,
+      { appName: this.appName }
+    );
   }
 
   // ============================================================
@@ -1224,6 +1651,12 @@ export class EmailTemplateService extends BaseService {
       .update(this.emailTemplates)
       .set({ kind: "template" })
       .where(isNull(this.emailTemplates.kind));
+
+    // Recorded once, at the first boot on Liquid, whether or not anything is
+    // seeded, and before anything is: it judges the templates stored before
+    // Liquid, and every owner's version written from here on is its current
+    // one, which is Liquid unless Liquid can't read it.
+    if (this.registry.complete) await this.adoptLiquid();
 
     const rows = (await this.db
       .select()
@@ -1302,9 +1735,16 @@ export class EmailTemplateService extends BaseService {
   private async insertOwned(entry: OwnedTemplate): Promise<void> {
     const now = new Date();
     const t = entry.defaults;
+    const id = randomUUID();
+    // The engine choice first, then the row: if recording it fails, no row
+    // is written and the next boot tries again.
+    const { created } = await this.keepIfWrittenForOldEngine({
+      id,
+      ...entry.version,
+    });
     try {
       await this.db.insert(this.emailTemplates).values({
-        id: randomUUID(),
+        id,
         slug: t.slug,
         name: t.name,
         useLayout: t.useLayout ?? true,
@@ -1324,6 +1764,9 @@ export class EmailTemplateService extends BaseService {
       });
       this.logger.info(`Created email template: ${t.slug}`);
     } catch (error) {
+      // No row has this id, so no engine choice may name it either: boots
+      // that keep failing would otherwise pile them up.
+      if (created) await this.meta.delete(keptKey(id));
       // Two first starts seed at once (several instances, or a dev server
       // beside a build): the one that loses hits the unique slug, and the row
       // it wanted is there. Any other failure is warned of, and seeding goes on.
@@ -1464,13 +1907,38 @@ export class EmailTemplateService extends BaseService {
       ...detailsOf(row),
     };
     if (sameStoredValue(current, wanted)) return;
-    await this.db
-      .update(this.emailTemplates)
-      .set({ ...wanted, updatedAt: new Date() })
-      .where(this.unchanged(row));
-    this.logger.info(
-      `Updated email template to its owner's version: ${row.slug}`
-    );
+    const landed = await this.writeOwnersVersion(row, entry, {
+      ...wanted,
+      updatedAt: new Date(),
+    });
+    if (landed) {
+      this.logger.info(
+        `Updated email template to its owner's version: ${row.slug}`
+      );
+    }
+  }
+
+  /**
+   * An owner's version written after the switch to Liquid. One Liquid reads
+   * is Liquid; one it can't read at all was written for the engine before it,
+   * as every plugin's contribution published before Liquid was, and is kept
+   * on that engine rather than failing every send. Before the switch, the
+   * switch itself decides.
+   *
+   * @returns whether the template is recorded as kept, and whether this call
+   *   recorded it (so only that call takes it back).
+   */
+  private async keepIfWrittenForOldEngine(
+    template: { id: string } & LiquidFieldValues
+  ): Promise<{ kept: boolean; created: boolean }> {
+    if ((await this.liquidAdopted()) !== true) {
+      return { kept: false, created: false };
+    }
+    if (this.readsAsLiquid(template)) return { kept: false, created: false };
+    const key = keptKey(template.id);
+    const present = (await this.meta.getEntry(key)).present;
+    if (!present) await this.meta.insertIfAbsent(key, flaggedDigests(template));
+    return { kept: true, created: !present };
   }
 
   // ============================================================
@@ -1601,4 +2069,52 @@ export class EmailTemplateService extends BaseService {
 
     this.logger.info("Migrated legacy email layout rows into default layout.");
   }
+}
+
+/** The fields Liquid renders, as a template holds them. */
+type LiquidFieldValues = {
+  subject?: string | null;
+  htmlContent?: string | null;
+  plainTextContent?: string | null;
+  preheader?: string | null;
+};
+
+/** A digest of one field's text, as kept for a template on the old engine. */
+function fieldDigest(value: string | null | undefined): string {
+  return createHash("sha256")
+    .update(value ?? "")
+    .digest("hex");
+}
+
+/**
+ * What a template kept on the old engine records: a digest of each flagged
+ * field, by field, so confirming can tell whether that text changed.
+ */
+function flaggedDigests(template: LiquidFieldValues): string {
+  return JSON.stringify(
+    Object.fromEntries(
+      oldEngineReasons(template).map(({ field }) => [
+        field,
+        fieldDigest(template[field]),
+      ])
+    )
+  );
+}
+
+/** The labels of the flagged fields whose text is as it was recorded. */
+function unchangedFlaggedFields(
+  recorded: string,
+  template: LiquidFieldValues
+): string[] {
+  let digests: Record<string, string>;
+  try {
+    digests = JSON.parse(recorded) as Record<string, string>;
+  } catch {
+    digests = {};
+  }
+  return LIQUID_FIELDS.filter(
+    ([field]) =>
+      digests[field] !== undefined &&
+      digests[field] === fieldDigest(template[field])
+  ).map(([, label]) => label);
 }

@@ -18,7 +18,7 @@
 
 import { previewLinkLocale } from "@admin/components/features/entries/EntryForm/entry-address";
 import type { SelfPreviewScope } from "@admin/hooks/useEntryPreview";
-import { usePreviewLink } from "@admin/hooks/usePreviewLink";
+import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 export interface SinglePreviewLinkInput {
   /** The Single's slug, which is its identity — there is no id to wait for. */
@@ -36,10 +36,11 @@ export interface SinglePreviewLinkInput {
 export interface SinglePreviewLink {
   /** Whether to offer either preview control at all. */
   isAvailable: boolean;
-  /** Mint and copy. */
-  copy: () => void;
-  /** Whether a mint is in flight. */
-  isCopying: boolean;
+  /**
+   * The document the share popover makes links for and lists, present exactly
+   * when a link may be offered. The same object the pane mints against.
+   */
+  shareDocument: PreviewLinkDocument | undefined;
   /**
    * What an in-admin PANE should mint against.
    *
@@ -74,7 +75,7 @@ export function useSinglePreviewLink({
     ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
   };
 
-  const link = usePreviewLink(target);
+  const isAvailable = hasStatus && linkLocale.kind !== "unresolved";
 
   return {
     // The same object the shareable link mints against, so the pane cannot open
@@ -82,10 +83,7 @@ export function useSinglePreviewLink({
     scope: target,
     // A Single with no publish lifecycle has no pending state to show anyone,
     // so there is nothing to share and the control is not offered.
-    isAvailable: hasStatus && linkLocale.kind !== "unresolved",
-    copy: () => {
-      link.mutate();
-    },
-    isCopying: link.isPending,
+    isAvailable,
+    shareDocument: isAvailable ? target : undefined,
   };
 }

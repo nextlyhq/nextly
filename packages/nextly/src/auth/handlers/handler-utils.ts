@@ -4,6 +4,7 @@ import {
   type AuditLogWriter,
 } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
+import { retryAfterHeader } from "../../errors/retry-after";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import {
@@ -47,6 +48,7 @@ export function buildAuthErrorResponse(
       headers: {
         "content-type": "application/problem+json",
         "x-request-id": requestId,
+        ...retryAfterHeader(err),
       },
     }
   );
@@ -220,7 +222,8 @@ export function loginFailureResponse(
   requestId: string
 ): Response {
   return buildAuthErrorResponse(
-    NextlyError.is(err) ? err : NextlyError.internal({ cause: err as Error }),
+    // Internal, unless the database was only busy.
+    NextlyError.is(err) ? err : NextlyError.fromUnexpected(err),
     requestId
   );
 }

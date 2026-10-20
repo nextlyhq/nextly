@@ -69,6 +69,13 @@ export interface ContentEventQuery {
   limit: number;
   /** Only events older than this event (its id), for the next page. */
   before?: string;
+  /**
+   * Which life of the subject to read. A document id can live more than once
+   * (deleted, then made again under the same id), and each life's events are
+   * its own: `current` is the life not yet ended, and `{ endedBy }` the life a
+   * given deletion ended. Absent reads every life, as a storage read.
+   */
+  life?: "current" | { endedBy: string };
 }
 
 const MAX_PAGE = 100;
@@ -132,6 +139,29 @@ export class ContentEventsRepository extends BaseService {
   }
 
   /**
+   * The id of the subject's latest deletion, the event that ended its most
+   * recent life, or null when it has never been deleted.
+   */
+  async latestEnd(subject: ContentEventSubject): Promise<string | null> {
+    const rows = await withDbErrors(
+      this.dialect,
+      async () =>
+        (await this.db
+          .select({ id: this.events.id })
+          .from(this.events)
+          .where(
+            and(
+              this.subjectConditions(subject),
+              eq(this.events.endsSubject, true)
+            )
+          )
+          .orderBy(desc(this.events.id))
+          .limit(1)) as { id: string }[]
+    );
+    return rows[0]?.id ?? null;
+  }
+
+  /**
    * Who produced each of these versions of a subject: the actor of the event
    * that recorded the version, keyed by its number.
    *
@@ -163,11 +193,7 @@ export class ContentEventsRepository extends BaseService {
           .from(e)
           .where(
             and(
-              eq(e.subjectKind, subject.kind),
-              subject.kind === "release"
-                ? isNull(e.subjectSlug)
-                : eq(e.subjectSlug, subject.slug),
-              eq(e.subjectId, subject.id),
+              this.subjectConditions(subject),
               inArray(e.versionNo, [...versionNos]),
               inArray(e.kind, [...PRODUCING_KINDS])
             )
@@ -184,15 +210,20 @@ export class ContentEventsRepository extends BaseService {
     return producers;
   }
 
-  /** What narrows the read: the subject, then any kinds, cursor and parts. */
-  private conditions(subject: ContentEventSubject, query: ContentEventQuery) {
-    const conditions: SQL[] = [
+  /** The subject an event is about. */
+  private subjectConditions(subject: ContentEventSubject): SQL {
+    return and(
       eq(this.events.subjectKind, subject.kind),
       subject.kind === "release"
         ? isNull(this.events.subjectSlug)
         : eq(this.events.subjectSlug, subject.slug),
-      eq(this.events.subjectId, subject.id),
-    ];
+      eq(this.events.subjectId, subject.id)
+    )!;
+  }
+
+  /** What narrows the read: the subject, then any kinds, cursor and parts. */
+  private conditions(subject: ContentEventSubject, query: ContentEventQuery) {
+    const conditions: SQL[] = [this.subjectConditions(subject)];
     if (query.kinds?.length) {
       conditions.push(inArray(this.events.kind, [...query.kinds]));
     }
@@ -201,6 +232,13 @@ export class ContentEventsRepository extends BaseService {
     }
     if (query.parts?.length) {
       conditions.push(inArray(this.parts.part, [...query.parts]));
+    }
+    if (query.life !== undefined) {
+      conditions.push(
+        query.life === "current"
+          ? isNull(this.events.endedBy)
+          : eq(this.events.endedBy, query.life.endedBy)
+      );
     }
     return and(...conditions);
   }
@@ -278,8 +316,11 @@ export class ContentEventsRepository extends BaseService {
   }
 }
 
-/** Refuse a page size outside what one read may return. */
-function assertPageSize(limit: number): void {
+/**
+ * Refuse a page size outside what one read may return. Exported so a caller
+ * can refuse it before its access check, by the same bounds.
+ */
+export function assertPageSize(limit: number): void {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_PAGE) {
     throw NextlyError.invalidInput({
       message: `A page of content events holds between 1 and ${MAX_PAGE} events.`,

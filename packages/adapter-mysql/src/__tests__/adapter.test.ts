@@ -34,10 +34,15 @@ const mockPool = {
   getConnection: vi.fn().mockResolvedValue(mockConnection),
   query: vi.fn(),
   end: vi.fn().mockResolvedValue(undefined),
+  // The callback pool under the promise wrapper, as mysql2 gives it: the
+  // adapter bounds the wait in its `getConnection`, and reads its queues.
   pool: {
     _allConnections: { length: 5 },
     _freeConnections: { length: 3 },
     _connectionQueue: { length: 1 },
+    getConnection: vi.fn(),
+    once: vi.fn(),
+    removeListener: vi.fn(),
   },
 };
 

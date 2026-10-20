@@ -10,16 +10,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // rule's permission check is driven by the test rather than by a database, and
 // so the number of LOOKUPS is observable — the resolver promises to make one
 // per call however many rules ask.
-const listEffectivePermissions = vi.fn(
-  async (_userId: string) => [] as string[]
+const listEffectiveGrants = vi.fn(
+  async (_userId: string) => [] as GrantedPermission[]
 );
 const listRoleSlugsForUser = vi.fn(async (_userId: string) => [] as string[]);
 vi.mock("../../../services/lib/permissions", () => ({
-  listEffectivePermissions: (userId: string) =>
-    listEffectivePermissions(userId),
+  listEffectiveGrants: (userId: string) => listEffectiveGrants(userId),
   listRoleSlugsForUser: (userId: string) => listRoleSlugsForUser(userId),
 }));
 
+/** One permission row, its slug spelled as the role screen spells it. */
+const grant = (action: string, resource: string): GrantedPermission => ({
+  slug: `${action}-${resource}`,
+  action,
+  resource,
+});
+
+import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { validateEntryData } from "../entry-validation";
 import {
   applyFieldReadAccess,
@@ -37,7 +44,7 @@ afterEach(() => clearFieldFunctions());
 
 describe("field access can ask what the caller is granted", () => {
   beforeEach(() => {
-    listEffectivePermissions.mockReset().mockResolvedValue([]);
+    listEffectiveGrants.mockReset().mockResolvedValue([]);
     listRoleSlugsForUser.mockReset().mockResolvedValue([]);
   });
 
@@ -48,13 +55,13 @@ describe("field access can ask what the caller is granted", () => {
         name: "customCss",
         access: {
           update: ({ permissions }: { permissions: string[] }) =>
-            permissions.includes("builder-custom-css:write"),
+            permissions.includes("write-builder-custom-css"),
         },
       },
     ]);
 
   it("strips the field when the caller lacks the permission", async () => {
-    listEffectivePermissions.mockResolvedValue(["pages:update"]);
+    listEffectiveGrants.mockResolvedValue([grant("update", "pages")]);
     registerGated();
     const data: Record<string, unknown> = { title: "Home", customCss: ".a{}" };
     await applyFieldWriteAccess({
@@ -70,9 +77,9 @@ describe("field access can ask what the caller is granted", () => {
   });
 
   it("keeps the field when the caller has it", async () => {
-    listEffectivePermissions.mockResolvedValue([
-      "pages:update",
-      "builder-custom-css:write",
+    listEffectiveGrants.mockResolvedValue([
+      grant("update", "pages"),
+      grant("write", "builder-custom-css"),
     ]);
     registerGated();
     const data: Record<string, unknown> = { title: "Home", customCss: ".a{}" };
@@ -87,7 +94,7 @@ describe("field access can ask what the caller is granted", () => {
   });
 
   it("resolves the grants once however many rules ask", async () => {
-    listEffectivePermissions.mockResolvedValue(["a:read"]);
+    listEffectiveGrants.mockResolvedValue([grant("read", "a")]);
     registerFieldFunctions("collection", "pages", [
       {
         name: "one",
@@ -120,7 +127,7 @@ describe("field access can ask what the caller is granted", () => {
     });
     // Three rules, one lookup. Field access runs on every authenticated write,
     // so a per-rule lookup would multiply the cost by the field count.
-    expect(listEffectivePermissions).toHaveBeenCalledTimes(1);
+    expect(listEffectiveGrants).toHaveBeenCalledTimes(1);
   });
 
   it("reads grants once across two read passes handed one resolver", async () => {
@@ -128,13 +135,13 @@ describe("field access can ask what the caller is granted", () => {
     // over one document. Each pass builds its own resolver unless handed one,
     // and two lookups can answer with two authorities if grants change in
     // between; one resolver is one lookup and one answer.
-    listEffectivePermissions.mockResolvedValue(["pages:read"]);
+    listEffectiveGrants.mockResolvedValue([grant("read", "pages")]);
     registerFieldFunctions("collection", "pages", [
       {
         name: "secret",
         access: {
           read: ({ permissions }: { permissions: string[] }) =>
-            permissions.includes("pages:read"),
+            permissions.includes("read-pages"),
         },
       },
     ]);
@@ -155,7 +162,7 @@ describe("field access can ask what the caller is granted", () => {
       grants,
     });
     expect(entry).toEqual({ secret: "s" });
-    expect(listEffectivePermissions).toHaveBeenCalledTimes(1);
+    expect(listEffectiveGrants).toHaveBeenCalledTimes(1);
   });
 
   it("makes no lookup at all when no rule runs", async () => {
@@ -169,11 +176,11 @@ describe("field access can ask what the caller is granted", () => {
       operation: "update",
       user: { id: "u1" },
     });
-    expect(listEffectivePermissions).not.toHaveBeenCalled();
+    expect(listEffectiveGrants).not.toHaveBeenCalled();
   });
 
   it("denies when the grant lookup fails", async () => {
-    listEffectivePermissions.mockRejectedValue(new Error("db down"));
+    listEffectiveGrants.mockRejectedValue(new Error("db down"));
     registerGated();
     const data: Record<string, unknown> = { title: "Home", customCss: ".a{}" };
     await applyFieldWriteAccess({
