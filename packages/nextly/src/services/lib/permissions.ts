@@ -19,6 +19,10 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 // these aliases when this module loads in certain test orders
 // (e.g. first dispatcher-touched module in the run). Relative paths
 // are deterministic.
+import {
+  forgetRequestAccess,
+  rememberForRequest,
+} from "../../auth/access/request-memo";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
@@ -203,11 +207,16 @@ class PermissionChecker {
   private t: ReturnType<typeof getTablesLazy>;
   private cacheService: PermissionCacheService | null = null;
 
+  // Whether the reads run on a database the caller brought, whose answers the
+  // request's memo of the configured database must never serve.
+  private readonly ownDatabase: boolean;
+
   constructor(dialect?: string) {
     // The tables of the dialect the reads run on: the caller's, when it reads
     // through a database of its own, whose dialect the process's setting need
     // not name; the configured one otherwise.
     this.t = dialect ? getDialectTables(dialect) : getTablesLazy();
+    this.ownDatabase = dialect !== undefined;
 
     // Initialize DB cache service if enabled
     if (CACHE_ENABLED) {
@@ -501,6 +510,20 @@ class PermissionChecker {
     // Optional transaction-bound executor; see `hasPermission`.
     executor?: unknown
   ): Promise<ResolvedRoles> {
+    // Walked once per request on the pool: every gate, rule context and field
+    // rule of the request asks this of the same rows.
+    if (executor !== undefined || this.ownDatabase) {
+      return this.walkRoles(userId, executor);
+    }
+    return rememberForRequest(`roles\u0000${userId}`, () =>
+      this.walkRoles(userId)
+    );
+  }
+
+  private async walkRoles(
+    userId: string,
+    executor?: unknown
+  ): Promise<ResolvedRoles> {
     const { roleIds: direct, validUntil } = await this.getDirectRoleAssignments(
       userId,
       executor
@@ -722,7 +745,13 @@ export async function hasPermission(
 ): Promise<boolean> {
   try {
     const checker = new PermissionChecker(dialect);
-    return await checker.hasPermission(userId, action, resource, executor);
+    const ask = () => checker.hasPermission(userId, action, resource, executor);
+    // Asked once per request for each user, action and resource, on the pool.
+    if (executor !== undefined || dialect !== undefined) return await ask();
+    return await rememberForRequest(
+      `permission\u0000${userId}\u0000${action}\u0000${resource}`,
+      ask
+    );
   } catch {
     getAuthLogger()?.log?.("error", {
       category: "auth",
@@ -795,6 +824,31 @@ export async function listEffectivePermissions(
   }
 
   try {
+    // Looked up once per request on the pool, so the field rules on every row
+    // of a list read one answer rather than each asking again.
+    if (executor !== undefined) {
+      return await loadEffectivePermissions(userId, executor);
+    }
+    return await rememberForRequest(`permissions\u0000${userId}`, () =>
+      loadEffectivePermissions(userId)
+    );
+  } catch (error) {
+    getAuthLogger()?.log?.("error", {
+      category: "auth",
+      op: "permissions",
+      userId,
+      error: String(error),
+    });
+    return []; // fail-closed
+  }
+}
+
+/** The lookup behind {@link listEffectivePermissions}; throws on a failed read. */
+async function loadEffectivePermissions(
+  userId: string,
+  executor?: unknown
+): Promise<string[]> {
+  {
     const checker = new PermissionChecker();
     const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 
@@ -834,14 +888,6 @@ export async function listEffectivePermissions(
     }
 
     return result;
-  } catch (error) {
-    getAuthLogger()?.log?.("error", {
-      category: "auth",
-      op: "permissions",
-      userId,
-      error: String(error),
-    });
-    return []; // fail-closed
   }
 }
 
@@ -1014,6 +1060,8 @@ function clearInMemoryTiers(): void {
 }
 
 export async function invalidateAllPermissionCaches(): Promise<void> {
+  // This request wrote roles or permissions, so nothing it looked up stands.
+  forgetRequestAccess();
   // Inside a sweep the caches are retired once, at the end. The revision still
   // advances immediately, so nothing in flight can file a result as current
   // while the batch is running — only the expensive table write is deferred.
@@ -1154,6 +1202,8 @@ export async function invalidatePermissionCache(
   _hint: { userId?: string; roleId?: string } = {}
 ): Promise<void> {
   const { userId, roleId } = _hint || {};
+  // This request changed someone's roles; nothing it looked up stands.
+  forgetRequestAccess();
 
   // The super-admin answer is a cache of its own and has to go with them.
   //
@@ -1237,31 +1287,55 @@ export async function isSuperAdmin(
   executor?: unknown
 ): Promise<boolean> {
   if (!userId) return false;
-
-  // Before the reads below, never after. An invalidation landing while they are
-  // in flight would otherwise be undone by the write at the end of this
-  // function, which repopulates the answer that was just cleared — and a key's
-  // grants resolved from it would then be cached under the NEW revision,
-  // putting the catalogue back for a full five minutes in the hands of somebody
-  // who had just lost the role.
-  //
-  // Refreshed rather than read, for the reason `hasPermission` gives: a
-  // demotion performed on another instance has to reach this one. And skipped
-  // for an executor-backed check, for the other reason `hasPermission` gives:
-  // the refresh is a pooled query, and the caller's transaction may be holding
-  // the only connection there is.
-  const resolvedUnder = executor ? currentEpoch() : await refreshEpoch();
-
-  // Check in-memory cache (only for pooled, committed-view checks).
-  if (!executor) {
-    const cached = superAdminCache.get(userId);
-    if (cached && servable(cached)) {
-      return cached.value;
+  // Decided once per request on the pool. A failed decision is not kept, and
+  // answers `false` as before.
+  if (executor === undefined) {
+    try {
+      return await rememberForRequest(`super-admin\u0000${userId}`, () =>
+        superAdminOnPool(userId)
+      );
+    } catch (error) {
+      getAuthLogger()?.log?.("error", {
+        category: "auth",
+        op: "permissions",
+        userId,
+        error: String(error),
+      });
+      return false; // fail-closed
     }
   }
+  return superAdminAnswer(userId, executor);
+}
 
+/** The pooled super-admin decision, served from the process cache when fresh. */
+async function superAdminOnPool(userId: string): Promise<boolean> {
+  // Before the reads below, never after. An invalidation landing while they are
+  // in flight would otherwise be undone by the write at the end of
+  // `decideSuperAdmin`, which repopulates the answer that was just cleared —
+  // and a key's grants resolved from it would then be cached under the NEW
+  // revision, putting the catalogue back for a full five minutes in the hands
+  // of somebody who had just lost the role.
+  //
+  // Refreshed rather than read, for the reason `hasPermission` gives: a
+  // demotion performed on another instance has to reach this one.
+  const resolvedUnder = await refreshEpoch();
+  const cached = superAdminCache.get(userId);
+  if (cached && servable(cached)) return cached.value;
+  return decideSuperAdmin(userId, undefined, resolvedUnder);
+}
+
+/**
+ * The super-admin answer for a check made through a transaction. The epoch is
+ * read, not refreshed: the refresh is a pooled query, and the caller's
+ * transaction may be holding the only connection there is. No cache is read or
+ * written, since the answer reflects the transaction's uncommitted rows.
+ */
+async function superAdminAnswer(
+  userId: string,
+  executor: unknown
+): Promise<boolean> {
   try {
-    return await decideSuperAdmin(userId, executor, resolvedUnder);
+    return await decideSuperAdmin(userId, executor, currentEpoch());
   } catch (error) {
     getAuthLogger()?.log?.("error", {
       category: "auth",
@@ -1534,7 +1608,18 @@ export async function listRoleSlugsForUserStrict(
   // An absent id names nobody rather than failing, matching the row-level
   // reading of an anonymous caller: there is no lookup to fail at.
   if (!userId) return [];
+  // Looked up once per request on the pool; see `listEffectivePermissions`.
+  if (executor !== undefined) return loadRoleSlugs(userId, executor);
+  return rememberForRequest(`role-slugs\u0000${userId}`, () =>
+    loadRoleSlugs(userId)
+  );
+}
 
+/** The lookup behind {@link listRoleSlugsForUserStrict}; throws on failure. */
+async function loadRoleSlugs(
+  userId: string,
+  executor?: unknown
+): Promise<string[]> {
   const checker = new PermissionChecker();
   const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 

@@ -103,6 +103,7 @@ import {
   putWidgetLayout,
 } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
+import { runWithAccessMemo } from "./auth/access/request-memo";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import { runWithCallerScope } from "./auth/caller-scope";
 import {
@@ -2479,7 +2480,12 @@ export function createDynamicHandlers(options?: {
     let flattenedInRequest: NextlyError[] = [];
     const { result: response } = await withSideEffectWarnings(async () => {
       try {
-        return await runWithRestLimitGate(gate, handler);
+        // One memo of access lookups per request, so every gate, rule and
+        // field rule the request reaches asks the database about its caller
+        // once rather than each time.
+        return await runWithAccessMemo(() =>
+          runWithRestLimitGate(gate, handler)
+        );
       } finally {
         flattenedInRequest = currentFlattenedErrors();
       }
