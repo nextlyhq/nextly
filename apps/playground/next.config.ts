@@ -90,6 +90,15 @@ const nextConfig: NextConfig = {
   // bundled by Next.js via the source aliases, which is what enables HMR
   // for server files like packages/nextly/src/init/build-service-config.ts
   // and packages/plugin-form-builder/src/plugin.ts.
+  //
+  // Under webpack, Next.js keeps a package here external only when this app
+  // resolves it to the same file Nextly's code does (`resolveExternal` in
+  // next/dist/build/handle-externals.js); otherwise it bundles it, and
+  // drizzle-kit's bundle fails on an optional import. So every one Nextly's
+  // server code requires at runtime is also a devDependency of this app, at
+  // the copy the lockfile gives Nextly: only `next dev` bundles Nextly from
+  // source, and a production build loads it, external, from its own folder.
+  // Turbopack makes no such check.
   serverExternalPackages: [
     "@aws-sdk/client-s3",
     "@aws-sdk/lib-storage",

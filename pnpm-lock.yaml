@@ -430,12 +430,21 @@ importers:
       '@types/react-dom':
         specifier: 19.2.0
         version: 19.2.0(@types/react@19.2.0)
+      bcryptjs:
+        specifier: ^3.0.2
+        version: 3.0.2
       better-sqlite3:
         specifier: ^12.10.0
         version: 12.11.1
       culori:
         specifier: ^4.0.2
         version: 4.0.2
+      drizzle-kit:
+        specifier: 1.0.0-rc.4
+        version: 1.0.0-rc.4
+      esbuild:
+        specifier: '>=0.25.0'
+        version: 0.28.1
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)(supports-color@7.2.0)
@@ -445,6 +454,9 @@ importers:
       jsdom:
         specifier: ^27.1.0
         version: 27.1.0(supports-color@7.2.0)
+      nodemailer:
+        specifier: ^9.1.0
+        version: 9.1.1
       playwright:
         specifier: ^1.61.1
         version: 1.61.1
