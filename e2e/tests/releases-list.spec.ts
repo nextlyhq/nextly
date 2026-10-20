@@ -6,50 +6,17 @@
  * owns, and the list is searched for that stamp, so the counts and rows are
  * exactly the ones written here whatever else the database holds.
  */
-import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
-
 import { test, expect, type Page } from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
+import {
+  leaveReleasesAsTheRunnerWould,
+  type RunnerOutcome,
+} from "./support/release-states";
 
 const API = "/admin/api";
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-
-/**
- * The suite's own throwaway database (see `playwright.config.ts`), emptied
- * before every run.
- */
-const E2E_DB = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "../../apps/playground/data/e2e.db"
-);
-
-/**
- * Leave a scheduled release as the runner leaves one it never reached or
- * could not finish.
- *
- * Written to the row because no request does this on purpose: scheduling a
- * time already past runs the release there and then, and a release with a
- * problem is refused a schedule. Overdue is a scheduled release more than ten
- * minutes past its time; stopped is the runner's `blocked`.
- */
-function leaveAsTheRunnerWould(
-  id: string,
-  outcome: "overdue" | "stopped"
-): void {
-  const db = new DatabaseSync(E2E_DB);
-  try {
-    const anHourAgo = Math.floor((Date.now() - HOUR) / 1000);
-    db.prepare(
-      "UPDATE nextly_releases SET state = ?, scheduled_at = ? WHERE id = ?"
-    ).run(outcome === "stopped" ? "blocked" : "scheduled", anHourAgo, id);
-  } finally {
-    db.close();
-  }
-}
 
 async function ok<T>(
   response: Awaited<ReturnType<Page["request"]["post"]>>
@@ -176,14 +143,14 @@ test.describe("the Releases list", () => {
     // run an overdue release it found.
     const overdue = name("Overdue");
     const stopped = name("Stopped");
-    const needAttention: Array<[string, "overdue" | "stopped"]> = [];
+    const needAttention: Array<{ id: string; outcome: RunnerOutcome }> = [];
     for (const [title, outcome] of [
       [overdue, "overdue"],
       [stopped, "stopped"],
     ] as const) {
       const id = await release(page, title, postId);
       await schedule(page, id, new Date(Date.now() + 40 * DAY), "UTC");
-      needAttention.push([id, outcome]);
+      needAttention.push({ id, outcome });
     }
     const draft = name("Draft");
     await release(page, draft, postId);
@@ -202,9 +169,7 @@ test.describe("the Releases list", () => {
       )
     );
 
-    for (const [id, outcome] of needAttention) {
-      leaveAsTheRunnerWould(id, outcome);
-    }
+    await leaveReleasesAsTheRunnerWould(page, needAttention);
 
     await gotoAdmin(page, "/releases");
     await searchFor(page, stamp);
