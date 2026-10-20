@@ -129,6 +129,24 @@ describe("summariseReadiness", () => {
     expect(describeNeedFix(summary.needFix)).toBe("1 needs a fix");
   });
 
+  it("counts documents the reader cannot view among those to fix", () => {
+    // Four documents, one visible one and one hidden one with a hard problem:
+    // the bar must not read "3 of 4" because the reader is missing one.
+    const summary = summariseReadiness(4, {
+      hard: [finding("m1")],
+      hidden: [
+        {
+          scopeKind: "collection",
+          scopeSlug: "secrets",
+          count: 2,
+          hard: 1,
+          soft: 0,
+        },
+      ],
+    });
+    expect(summary).toEqual({ total: 4, ready: 2, needFix: 2 });
+  });
+
   it("calls a release with no hard problems ready", () => {
     expect(describeReadiness(summariseReadiness(3, { hard: [] }))).toBe(
       "All 3 ready"

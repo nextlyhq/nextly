@@ -45,6 +45,7 @@ import type {
 import { BlockedReleaseNotice } from "./BlockedReleaseNotice";
 import { CancelReleaseButton } from "./CancelReleaseButton";
 import { releaseErrorMessage } from "./release-error";
+import { describeHidden } from "./release-hidden";
 import { describeRelease, RELEASE_STATE_LABEL } from "./release-schedule";
 import { ScheduleReleaseDialog } from "./ScheduleReleaseDialog";
 
@@ -352,8 +353,6 @@ export function ReleaseDetail({ id }: { id: string }) {
     );
   }
 
-  const rows = members.data?.items ?? [];
-
   // The server's verdict again. Membership is editable freely in some states and
   // only by a publisher in others — the drain reads membership AT the instant,
   // so changing a scheduled release changes what a publisher committed to — and
@@ -371,53 +370,138 @@ export function ReleaseDetail({ id }: { id: string }) {
       {/* Above the contents, because it changes what the contents MEAN: this
           is not a list of what will ship, it is a list of what did not. */}
       {release.data.state === "blocked" ? (
-        <BlockedReleaseNotice blockers={release.data.blockedBy ?? []} />
+        <BlockedReleaseNotice
+          blockers={release.data.blockedBy ?? []}
+          hidden={release.data.hiddenBlockers}
+        />
       ) : null}
 
-      <section aria-labelledby="release-contents">
-        <div className="mb-3 flex items-baseline justify-between gap-3">
-          <h2 id="release-contents" className="text-base font-medium">
-            What is in it
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            {members.isPending ? "Loading…" : contentsSummary(rows)}
-          </p>
-        </div>
-
-        {!members.isPending && !members.isError && rows.length === 0 ? (
-          <Card className="px-6 py-10 text-center">
-            <p className="text-sm text-muted-foreground">
-              Nothing has been added yet. Open a document and add it to this
-              release from there — that is where you can see what you are
-              scheduling.
-            </p>
-          </Card>
-        ) : (
-          <DataTableView<ReleaseMember>
-            columns={memberColumns(id, removable)}
-            rows={rows}
-            // BOTH forwarded, because an unanswered query and an empty release
-            // are not the same thing. Without them the table renders "nothing
-            // has been added" while the query is still running or has failed,
-            // presenting unavailable data as a confident and wrong answer.
-            //
-            // The failure is said HERE rather than in a paragraph above, so
-            // there is one message rather than an error notice sitting over a
-            // table that also claims the release is empty.
-            loading={members.isPending}
-            error={
-              members.isError
-                ? "The contents of this release could not be loaded."
-                : null
-            }
-            getRowId={member => member.id}
-            primaryColumn="document"
-            registryKey="release-members"
-            ariaLabel="Documents in this release"
-            emptyMessage="Nothing has been added to this release yet."
-          />
-        )}
-      </section>
+      <ReleaseContents id={id} members={members} removable={removable} />
     </>
   );
+}
+
+/** The contents' heading: what the release does, and what the reader cannot see of it. */
+function ContentsHeading({
+  summary,
+  hiddenLine,
+}: {
+  summary: string;
+  hiddenLine: string | null;
+}) {
+  return (
+    <>
+      <div className="mb-3 flex items-baseline justify-between gap-3">
+        <h2 id="release-contents" className="text-base font-medium">
+          What is in it
+        </h2>
+        <p className="text-sm text-muted-foreground">{summary}</p>
+      </div>
+      {hiddenLine ? (
+        <p className="mb-3 text-sm text-muted-foreground">{hiddenLine}</p>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * What is in the release: the documents the reader may read, named, and the
+ * rest counted by collection beside them, so the release never reads as
+ * smaller, or emptier, than it is.
+ */
+function ReleaseContents({
+  id,
+  members,
+  removable,
+}: {
+  id: string;
+  members: ReturnType<typeof useReleaseMembers>;
+  removable: boolean;
+}) {
+  const view = contentsView(members);
+  return (
+    <section aria-labelledby="release-contents">
+      <ContentsHeading summary={view.summary} hiddenLine={view.hiddenLine} />
+
+      {view.nothingAdded ? (
+        <Card className="px-6 py-10 text-center">
+          <p className="text-sm text-muted-foreground">
+            Nothing has been added yet. Open a document and add it to this
+            release from there — that is where you can see what you are
+            scheduling.
+          </p>
+        </Card>
+      ) : (
+        <DataTableView<ReleaseMember>
+          columns={memberColumns(id, removable)}
+          rows={view.rows}
+          // BOTH forwarded, because an unanswered query and an empty release
+          // are not the same thing. Without them the table renders "nothing
+          // has been added" while the query is still running or has failed,
+          // presenting unavailable data as a confident and wrong answer.
+          //
+          // The failure is said HERE rather than in a paragraph above, so
+          // there is one message rather than an error notice sitting over a
+          // table that also claims the release is empty.
+          loading={members.isPending}
+          error={view.error}
+          getRowId={member => member.id}
+          primaryColumn="document"
+          registryKey="release-members"
+          ariaLabel="Documents in this release"
+          emptyMessage={view.emptyMessage}
+        />
+      )}
+    </section>
+  );
+}
+
+/**
+ * What the contents section says, from the members read: the documents the
+ * reader may read, the line counting those they may not, and whether the
+ * release is truly empty rather than empty of documents they can view.
+ */
+function contentsView(members: ReturnType<typeof useReleaseMembers>): {
+  rows: ReleaseMember[];
+  hiddenLine: string | null;
+  summary: string;
+  nothingAdded: boolean;
+  error: string | null;
+  emptyMessage: string;
+} {
+  const rows = members.data?.items ?? [];
+  // The documents the reader may not read: counted by collection, never named.
+  const hiddenLine = describeHidden(members.data?.meta.hidden);
+  const allHidden = rows.length === 0 && hiddenLine !== null;
+  return {
+    rows,
+    hiddenLine,
+    summary: contentsHeadline(members.isPending, rows, allHidden),
+    nothingAdded: answeredEmpty(members, rows) && hiddenLine === null,
+    error: members.isError
+      ? "The contents of this release could not be loaded."
+      : null,
+    emptyMessage: allHidden
+      ? "Nothing in this release is a document you can view."
+      : "Nothing has been added to this release yet.",
+  };
+}
+
+/** The line beside the heading: loading, nothing visible, or what it does. */
+function contentsHeadline(
+  pending: boolean,
+  rows: ReleaseMember[],
+  allHidden: boolean
+): string {
+  if (pending) return "Loading…";
+  if (allHidden) return "Nothing in it you can view.";
+  return contentsSummary(rows);
+}
+
+/** Whether the members read answered, and answered with nothing to name. */
+function answeredEmpty(
+  members: ReturnType<typeof useReleaseMembers>,
+  rows: ReleaseMember[]
+): boolean {
+  return !members.isPending && !members.isError && rows.length === 0;
 }

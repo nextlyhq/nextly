@@ -32,6 +32,11 @@ import {
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
+import type { ReadCaller } from "../../services/dashboard/readable-resources";
+import {
+  resolveDocumentVisibilityScope,
+  visibleDocuments,
+} from "../../services/lib/document-visibility";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
@@ -162,6 +167,41 @@ export function registerReleaseServices({
         // What the readiness checks ask of a member's document and author,
         // answered as the release's run would answer it.
         checks: releaseDocumentChecks(adapter, logger),
+
+        // Which members' documents a reader may read: the list views' own
+        // question (`visibleDocuments`), batched for the whole set. The
+        // registry and the configured languages are resolved per call, as the
+        // list views resolve them per query, so a collection registered or
+        // removed since boot is judged as it is now.
+        readableMembers: async (members, actor) => {
+          // Release reads refuse an anonymous caller before they get here; one
+          // that arrives anyway may read none of them.
+          if (actor.userId === null) return new Set<string>();
+          const caller: ReadCaller = {
+            user: {
+              id: actor.userId,
+              ...(actor.userRoles ? { roles: actor.userRoles } : {}),
+            },
+            ...(actor.authenticatedScope
+              ? { authenticatedScope: actor.authenticatedScope }
+              : {}),
+          };
+          const readable = await visibleDocuments(
+            members,
+            member =>
+              member.scopeKind === "collection" || member.scopeKind === "single"
+                ? {
+                    kind: member.scopeKind,
+                    slug: member.scopeSlug,
+                    entryId: member.entryId,
+                    locale: member.locale,
+                  }
+                : null,
+            caller,
+            await resolveDocumentVisibilityScope()
+          );
+          return new Set(readable.map(member => member.id));
+        },
 
         // Renames and deletions go to the activity log through the settings
         // seam, which resolves the log from the container per call, so this
