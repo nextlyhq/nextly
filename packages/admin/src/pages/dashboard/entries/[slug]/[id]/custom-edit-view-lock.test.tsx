@@ -68,6 +68,22 @@ let entryQuery: Record<string, unknown> = {};
 vi.mock("@admin/hooks/queries/useEntry", () => ({
   useEntry: () => entryQuery,
 }));
+// The merge with the stored links is useStoredReferences.test.tsx's concern;
+// here the page is handed the entry as the populated read gives it, unless a
+// case sets `mergedEntry` to stand for a merge that differs from it.
+let mergedEntry: Record<string, unknown> | undefined;
+vi.mock("@admin/hooks/queries/useStoredReferences", () => ({
+  useStoredEntry: () => ({ data: undefined, isLoading: false, error: null }),
+  useWithStoredReferences: ({
+    populated,
+  }: {
+    populated: { data: unknown; isLoading: boolean; error: unknown };
+  }) => ({
+    document: mergedEntry ?? populated.data,
+    isLoading: populated.isLoading,
+    error: populated.error,
+  }),
+}));
 vi.mock("@admin/hooks/useLocalization", () => ({
   useLocalization: () => ({ defaultLocale: undefined, enabled: false }),
 }));
@@ -117,6 +133,7 @@ beforeEach(() => {
     error: null,
   };
   // Cleared, so a case reading these cannot pass on the previous case's render.
+  mergedEntry = undefined;
   customViewProps = undefined;
   entryFormProps = undefined;
 });
@@ -139,6 +156,29 @@ afterEach(() => {
 });
 
 describe("a custom collection edit view", () => {
+  it("is handed the entry as the API populated it, not the default form's placeholders", () => {
+    // A placeholder for a link the editor cannot see is the default form's
+    // own representation; a custom view keeps receiving the API's shape.
+    mergedEntry = {
+      id: "42",
+      title: "A post",
+      tags: [{ id: "t1", __restrictedReference: true }],
+    };
+    withCustomView();
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(customViewProps?.initialData).toEqual({ id: "42", title: "A post" });
+  });
+
+  it("leaves the default form the merged entry", () => {
+    mergedEntry = {
+      id: "42",
+      title: "A post",
+      tags: [{ id: "t1", __restrictedReference: true }],
+    };
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+    expect(entryFormProps?.entry).toBe(mergedEntry);
+  });
+
   it("claims the document it is editing", () => {
     registerComponent(CUSTOM_VIEW, () => <div>bespoke product editor</div>);
     collectionSchema = {

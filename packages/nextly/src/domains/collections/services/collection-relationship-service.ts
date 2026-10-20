@@ -69,6 +69,7 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
+import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
@@ -96,6 +97,18 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  * Maximum allowed depth to prevent performance issues.
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
+
+/**
+ * The depth an expansion runs to for the depth a read asked for: absent means
+ * the default, and the result is held between 0 and the maximum. At 0 a read
+ * populates nothing and gives every relationship as stored.
+ */
+export function effectiveRelationshipDepth(depth: number | undefined): number {
+  return Math.min(
+    Math.max(depth ?? DEFAULT_RELATIONSHIP_DEPTH, 0),
+    MAX_RELATIONSHIP_DEPTH
+  );
+}
 
 /** Carried across one read's nested-hook pass. */
 interface NestedHookStateBase {
@@ -712,6 +725,48 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The caller an expansion judges every related row for, from the options it was
+ * handed. Built in one place so a single-entry and a batched expansion can
+ * never carry different callers for the same request.
+ */
+function relatedRowAccessOf(
+  options: RelationshipExpansionOptions
+): RelatedRowAccess {
+  return {
+    enforceFieldAccess: options.enforceFieldAccess,
+    enforceCollectionAccess: options.enforceCollectionAccess,
+    fieldAccessStage: options.fieldAccessStage,
+    user: options.user,
+    // Carried BESIDE `user`, never folded into it. A preview judges a related
+    // row's fields as the sharer while every hook goes on seeing the
+    // anonymous bearer; dropping it here silently restores the anonymous
+    // reading for the whole expansion, which is the direction that leaks.
+    fieldAccessUser: options.fieldAccessUser,
+    overrideAccess: options.overrideAccess,
+    trusted: assumedBound(options.trusted),
+    authenticatedScope: options.authenticatedScope,
+    locale: options.locale,
+    status: options.status,
+    withheldByAccess: options.withheldByAccess,
+    // One per expansion, so a relationship holding many references reads its
+    // target's rules once rather than once per value. A nested hop inherits
+    // the map rather than starting its own: several children populating the
+    // same collection would otherwise each resolve its policy again, which
+    // is the repetition this cache exists to remove. Created fresh only for
+    // the outermost call, because a collection's rules can change between
+    // requests.
+    targetPolicies: options.targetPolicies ?? new Map(),
+    // Shared and inherited exactly as the policy map is, for the same reason:
+    // a nested hop starting its own would re-read the metadata of a collection
+    // an ancestor already looked up.
+    targetCompanions: options.targetCompanions ?? new Map(),
+    // And the access verdicts, likewise: the caller is the same on every hop,
+    // so a target already judged for it is not asked again.
+    targetVerdicts: options.targetVerdicts ?? new Map(),
+  };
 }
 
 /**
@@ -1949,12 +2004,12 @@ export class CollectionRelationshipService extends BaseService {
         );
 
         if (fieldExists) {
-          console.log(
+          this.logger.info(
             `[LabelField] Using specified targetLabelField "${targetLabelField}" for collection "${collectionName}"`
           );
           return targetLabelField;
         } else {
-          console.warn(
+          this.logger.warn(
             `[LabelField] Specified targetLabelField "${targetLabelField}" not found in collection "${collectionName}", falling back to auto-detection`
           );
         }
@@ -1982,7 +2037,7 @@ export class CollectionRelationshipService extends BaseService {
               f.type !== "password"
           )
         ) {
-          console.log(
+          this.logger.info(
             `[LabelField] Using priority field "${labelField}" for collection "${collectionName}"`
           );
           return labelField;
@@ -2000,21 +2055,21 @@ export class CollectionRelationshipService extends BaseService {
       );
 
       if (textField) {
-        console.log(
+        this.logger.info(
           `[LabelField] Using first text field "${textField.name}" for collection "${collectionName}"`
         );
         return textField.name;
       }
 
       // Last resort: use id
-      console.warn(
+      this.logger.warn(
         `[LabelField] No suitable label field found for "${collectionName}", falling back to ID`
       );
       return "id";
     } catch (error) {
-      console.error(
-        `[LabelField] Error getting label field for "${collectionName}":`,
-        error
+      this.logger.error(
+        `[LabelField] Error getting label field for "${collectionName}"`,
+        { error: error }
       );
       return "id";
     }
@@ -2045,41 +2100,10 @@ export class CollectionRelationshipService extends BaseService {
     const { depth = DEFAULT_RELATIONSHIP_DEPTH } = options;
     // The caller travels with every fetch below so each related row is judged
     // by its own collection's field rules.
-    const access: RelatedRowAccess = {
-      enforceFieldAccess: options.enforceFieldAccess,
-      enforceCollectionAccess: options.enforceCollectionAccess,
-      fieldAccessStage: options.fieldAccessStage,
-      user: options.user,
-      // Carried BESIDE `user`, never folded into it. A preview judges a related
-      // row's fields as the sharer while every hook goes on seeing the
-      // anonymous bearer; dropping it here silently restores the anonymous
-      // reading for the whole expansion, which is the direction that leaks.
-      fieldAccessUser: options.fieldAccessUser,
-      overrideAccess: options.overrideAccess,
-      trusted: assumedBound(options.trusted),
-      authenticatedScope: options.authenticatedScope,
-      locale: options.locale,
-      status: options.status,
-      withheldByAccess: options.withheldByAccess,
-      // One per expansion, so a relationship holding many references reads its
-      // target's rules once rather than once per value. A nested hop inherits
-      // the map rather than starting its own: several children populating the
-      // same collection would otherwise each resolve its policy again, which
-      // is the repetition this cache exists to remove. Created fresh only for
-      // the outermost call, because a collection's rules can change between
-      // requests.
-      targetPolicies: options.targetPolicies ?? new Map(),
-      // Shared and inherited exactly as the policy map is, for the same reason:
-      // a nested hop starting its own would re-read the metadata of a collection
-      // an ancestor already looked up.
-      targetCompanions: options.targetCompanions ?? new Map(),
-      // And the access verdicts, likewise: the caller is the same on every hop,
-      // so a target already judged for it is not asked again.
-      targetVerdicts: options.targetVerdicts ?? new Map(),
-    };
+    const access = relatedRowAccessOf(options);
 
     // Clamp depth to valid range
-    const effectiveDepth = Math.min(Math.max(depth, 0), MAX_RELATIONSHIP_DEPTH);
+    const effectiveDepth = effectiveRelationshipDepth(depth);
 
     // If depth is 0, don't expand relationships but still normalize
     // repeater/group fields to strip any embedded relationship objects to IDs.
@@ -2449,7 +2473,7 @@ export class CollectionRelationshipService extends BaseService {
       if (isSystemEntity(targetCollection)) {
         const targetSchema = getSystemEntityTable(targetCollection);
         if (!targetSchema) {
-          console.warn(`Unknown system entity: ${targetCollection}`);
+          this.logger.warn(`Unknown system entity: ${targetCollection}`);
           return resultMap;
         }
 
@@ -2494,9 +2518,9 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
     } catch (error) {
-      console.error(
-        `Failed to batch fetch entries for ${targetCollection}:`,
-        error
+      this.logger.error(
+        `Failed to batch fetch entries for ${targetCollection}`,
+        { error: error }
       );
     }
 
@@ -2529,7 +2553,7 @@ export class CollectionRelationshipService extends BaseService {
     // code-first inserts crash with "Cannot read properties of undefined".
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] Cannot determine target collection for field "${field.name}" - check that either field.relationTo or field.options.target is set.`
       );
       return resultMap;
@@ -2586,7 +2610,9 @@ export class CollectionRelationshipService extends BaseService {
         );
       }
     } catch (error) {
-      console.error("Failed to batch fetch manyToMany relations:", error);
+      this.logger.error("Failed to batch fetch manyToMany relations", {
+        error: error,
+      });
       // Initialize empty arrays for all source entries on error
       for (const sourceId of sourceEntryIds) {
         resultMap.set(sourceId, []);
@@ -2622,41 +2648,10 @@ export class CollectionRelationshipService extends BaseService {
     const { depth = DEFAULT_RELATIONSHIP_DEPTH, currentDepth = 0 } = options;
     // Travels with every nested expansion and row fetch, so a related row at
     // any depth is judged by its own collection's field rules.
-    const access: RelatedRowAccess = {
-      enforceFieldAccess: options.enforceFieldAccess,
-      enforceCollectionAccess: options.enforceCollectionAccess,
-      fieldAccessStage: options.fieldAccessStage,
-      user: options.user,
-      // Carried BESIDE `user`, never folded into it. A preview judges a related
-      // row's fields as the sharer while every hook goes on seeing the
-      // anonymous bearer; dropping it here silently restores the anonymous
-      // reading for the whole expansion, which is the direction that leaks.
-      fieldAccessUser: options.fieldAccessUser,
-      overrideAccess: options.overrideAccess,
-      trusted: assumedBound(options.trusted),
-      authenticatedScope: options.authenticatedScope,
-      locale: options.locale,
-      status: options.status,
-      withheldByAccess: options.withheldByAccess,
-      // One per expansion, so a relationship holding many references reads its
-      // target's rules once rather than once per value. A nested hop inherits
-      // the map rather than starting its own: several children populating the
-      // same collection would otherwise each resolve its policy again, which
-      // is the repetition this cache exists to remove. Created fresh only for
-      // the outermost call, because a collection's rules can change between
-      // requests.
-      targetPolicies: options.targetPolicies ?? new Map(),
-      // Shared and inherited exactly as the policy map is, for the same reason:
-      // a nested hop starting its own would re-read the metadata of a collection
-      // an ancestor already looked up.
-      targetCompanions: options.targetCompanions ?? new Map(),
-      // And the access verdicts, likewise: the caller is the same on every hop,
-      // so a target already judged for it is not asked again.
-      targetVerdicts: options.targetVerdicts ?? new Map(),
-    };
+    const access = relatedRowAccessOf(options);
 
     // Clamp depth to valid range
-    const effectiveDepth = Math.min(Math.max(depth, 0), MAX_RELATIONSHIP_DEPTH);
+    const effectiveDepth = effectiveRelationshipDepth(depth);
 
     // If we've reached the requested depth, don't expand further
     // but still normalize repeater/group fields to strip embedded relationship objects
@@ -2889,7 +2884,9 @@ export class CollectionRelationshipService extends BaseService {
         }
       } catch (error) {
         // If expansion fails, keep the original value
-        console.error(`Failed to expand relation ${field.name}:`, error);
+        this.logger.error(`Failed to expand relation ${field.name}`, {
+          error: error,
+        });
       }
     }
 
@@ -3525,9 +3522,9 @@ export class CollectionRelationshipService extends BaseService {
       // that as an untyped "not found", the same shape a genuine failure takes.
       // Since the two cannot be told apart here, refusing would deny ordinary
       // reads, so this logs and leaves the target's hooks unrun.
-      console.error(
+      this.logger.error(
         `Nested field hooks skipped for "${collectionName}": its schema could not be read.`,
-        error
+        { error: error }
       );
     }
 
@@ -4124,7 +4121,7 @@ export class CollectionRelationshipService extends BaseService {
     if (sourceEntryIds.length === 0) return byEntry;
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] fetchManyToManyTargetIds: cannot determine target for field "${field.name}".`
       );
       return byEntry;
@@ -4155,6 +4152,40 @@ export class CollectionRelationshipService extends BaseService {
   }
 
   /**
+   * Gives each junction-backed many-to-many field on `entries` the ids its
+   * junction stores. That is what a read that populates nothing answers for
+   * every other relationship: the references as stored, not judged against the
+   * caller, and whether or not each target still exists. Such a field has no
+   * column, so without this a read at depth 0 has no value for it at all.
+   *
+   * One junction query per field for all the entries. A failed read throws
+   * rather than giving an empty list, which an editor saving the document back
+   * would store, removing every link. A junction keeps no order, so the ids
+   * come in the order the database returns them.
+   */
+  async withStoredManyToManyIds(
+    entries: Record<string, unknown>[],
+    collectionName: string,
+    fields: FieldDefinition[]
+  ): Promise<Record<string, unknown>[]> {
+    const junctionFields = fields.filter(field => usesJunctionTable(field));
+    if (junctionFields.length === 0 || entries.length === 0) return entries;
+    const ids = entries.map(entry => String(entry.id));
+    const withIds = entries.map(entry => ({ ...entry }));
+    for (const field of junctionFields) {
+      const stored = await this.fetchManyToManyTargetIdsOf(
+        collectionName,
+        ids,
+        field
+      );
+      withIds.forEach((entry, index) => {
+        entry[field.name] = stored.get(ids[index]) ?? [];
+      });
+    }
+    return withIds;
+  }
+
+  /**
    * Fetch many-to-many related entries.
    * Optimized with MySQL-compatible IN clause.
    *
@@ -4179,7 +4210,7 @@ export class CollectionRelationshipService extends BaseService {
     // See that comment for the code-first vs UI-built shape rationale.
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] fetchManyToManyRelations: cannot determine target for field "${field.name}".`
       );
       return [];
@@ -4223,7 +4254,9 @@ export class CollectionRelationshipService extends BaseService {
         access
       );
     } catch (error) {
-      console.error("Failed to fetch many-to-many relations:", error);
+      this.logger.error("Failed to fetch many-to-many relations", {
+        error: error,
+      });
       return [];
     }
   }
@@ -4254,7 +4287,7 @@ export class CollectionRelationshipService extends BaseService {
     // See that comment for the code-first vs UI-built shape rationale.
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] insertManyToManyRelations: cannot determine target for field "${field.name}".`
       );
       return;
@@ -4265,13 +4298,13 @@ export class CollectionRelationshipService extends BaseService {
       field
     );
 
-    console.log(
+    this.logger.info(
       `[ManyToMany] Inserting into junction table: ${junctionTableName}`
     );
-    console.log(
+    this.logger.info(
       `[ManyToMany] Source: ${sourceCollectionName}, Target: ${targetCollectionName}`
     );
-    console.log(
+    this.logger.info(
       `[ManyToMany] Field: ${field.name}, IDs: ${relatedIds.join(", ")}`
     );
 
@@ -4317,9 +4350,13 @@ export class CollectionRelationshipService extends BaseService {
             `Check migration files in src/db/migrations/dynamic/`
         );
       }
-      console.log(`[ManyToMany] ✓ Junction table exists: ${junctionTableName}`);
+      this.logger.info(
+        `[ManyToMany] ✓ Junction table exists: ${junctionTableName}`
+      );
     } catch (error: unknown) {
-      console.error(`[ManyToMany] Junction table check failed:`, error);
+      this.logger.error(`[ManyToMany] Junction table check failed`, {
+        error: error,
+      });
       throw error;
     }
 
@@ -4387,7 +4424,7 @@ export class CollectionRelationshipService extends BaseService {
     // See that comment for the code-first vs UI-built shape rationale.
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] deleteManyToManyRelations: cannot determine target for field "${field.name}".`
       );
       return;

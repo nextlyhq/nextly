@@ -49,6 +49,8 @@ next.config.*                @mobeenabdullah
 /packages/nextly/eslint-bare-error-rule.js @mobeenabdullah
 /packages/nextly/eslint-api-key-scope-rule.js @mobeenabdullah
 /packages/nextly/eslint-bare-error-allowlist.json @mobeenabdullah
+/packages/nextly/eslint-console-rule.js @mobeenabdullah
+/packages/nextly/eslint-console-allowlist.json @mobeenabdullah
 /pnpm-lock.yaml              @mobeenabdullah
 
 # What a package's own build runs, named in its manifest, the modules a test

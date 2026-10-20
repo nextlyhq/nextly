@@ -8,7 +8,7 @@
  * This component provides:
  * - Dynamic field rendering based on Single schema
  * - Form validation with Zod
- * - Auto-save to localStorage
+ * - Autosave to a server-side recovery point
  * - Unsaved changes protection
  * - Keyboard shortcuts
  *
@@ -72,7 +72,6 @@ import {
   mayRecordRecovery,
   useViewedVersion,
   writeActionsHeld,
-  ViewedVersionBanner,
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
@@ -89,6 +88,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
+import { withoutPlaceholders } from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { SingleAdminOptions } from "@admin/types/entities";
 
@@ -284,17 +284,21 @@ function SingleFormFieldsPanel({
   isSubmitting,
   mainFields,
   readOnly,
+  versionActionsHeld,
 }: {
   historicalFields: FieldConfig[] | null;
   historicalValues: Record<string, unknown> | null;
   isSubmitting: boolean;
   mainFields: FieldConfig[];
   readOnly: boolean;
+  /** Why a past version's restore is withheld (see `useVersionActions`). */
+  versionActionsHeld: boolean;
 }) {
   return (
     <ViewedVersionBody
       fields={historicalFields ?? mainFields}
       values={historicalValues ?? undefined}
+      actionsDisabled={versionActionsHeld}
     >
       {mainFields.length > 0 && (
         <div className="@4xl/content:p-8 pt-6">
@@ -370,8 +374,7 @@ function SingleFormRail({
  * - Loading and submitting states
  * - Dirty state tracking
  * - Unsaved changes protection
- * - Auto-save to localStorage
- * - Draft recovery
+ * - Autosave to a server-side recovery point, offered back on return
  * - Keyboard shortcuts (Cmd/Ctrl+S to save)
  *
  * @example
@@ -600,7 +603,10 @@ export function SingleForm({
           const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
 
           try {
-            await onSubmit(data);
+            // A link the editor cannot see is held in the form as a
+            // placeholder and written as the reference it stands for. The
+            // form keeps the placeholder, so it is reset to `data`.
+            await onSubmit(withoutPlaceholders(schema.fields, data));
             // After the write lands and before the reset: this is the only
             // point that knows a save succeeded, and a revision that misses
             // one leaves the pane showing the previous draft.
@@ -614,7 +620,7 @@ export function SingleForm({
         submissionLatch.current = false;
       }
     },
-    [form, onSubmit, blankPasswordFields, busy, writesHeld]
+    [form, onSubmit, blankPasswordFields, busy, writesHeld, schema.fields]
   );
 
   const handleCancel = useCallback(() => {
@@ -1056,17 +1062,6 @@ export function SingleForm({
                                 className="mx-6 mt-3"
                               />
 
-                              {/* The banner over the version being read, with the
-                              document's other notices: above the fields it
-                              describes, below the header that offered the
-                              panel. Renders nothing while the live document is
-                              on screen. A submit in flight withholds restore
-                              too — a restore racing the ordinary save would let
-                              completion order decide which contents survive. */}
-                              <ViewedVersionBanner
-                                actionsDisabled={lock.actionsDisabled || busy}
-                              />
-
                               {/* The language panel, inline: the exact complement
                               of the rail, shown where the rail is not. */}
                               <SingleFormLanguagePanel
@@ -1091,6 +1086,13 @@ export function SingleForm({
                                 isSubmitting={isSubmitting}
                                 mainFields={mainFields}
                                 readOnly={lock.readOnly}
+                                // A submit in flight withholds restore too: a
+                                // restore racing the ordinary save would let
+                                // completion order decide which contents
+                                // survive.
+                                versionActionsHeld={
+                                  lock.actionsDisabled || busy
+                                }
                               />
                             </div>
 

@@ -28,8 +28,16 @@ describe("attachVersionAuthors", () => {
 
     expect(listByIdsSpy).toHaveBeenCalledTimes(1);
     expect(listByIdsSpy).toHaveBeenCalledWith(["u1"]);
-    expect(result[0]?.author).toEqual({ id: "u1", name: "Ada" });
-    expect(result[1]?.author).toEqual({ id: "u1", name: "Ada" });
+    expect(result[0]?.author).toEqual({
+      kind: "person",
+      id: "u1",
+      name: "Ada",
+    });
+    expect(result[1]?.author).toEqual({
+      kind: "person",
+      id: "u1",
+      name: "Ada",
+    });
   });
 
   it("leaves a system-written row unattributed without querying", async () => {
@@ -64,6 +72,10 @@ describe("attachVersionAuthors", () => {
 
     expect(result.map(r => r.id)).toEqual(["v-u1", "v-u2"]);
     expect(result[0]?.author).toBeNull();
-    expect(result[1]?.author).toEqual({ id: "u2", name: "Grace" });
+    expect(result[1]?.author).toEqual({
+      kind: "person",
+      id: "u2",
+      name: "Grace",
+    });
   });
 });

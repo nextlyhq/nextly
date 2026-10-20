@@ -506,6 +506,31 @@ export class UserFieldDefinitionService extends BaseService {
       return;
     }
 
+    // Processes starting at once each find a code field missing and insert
+    // it; one wins, and the rest roll back on its name, taking every other
+    // change they meant to write with them. So a sync that lost on a
+    // duplicate runs once more, from the rows now stored: the field that won
+    // is updated rather than inserted, and the rest of this config's changes
+    // are written. A name an admin's own field holds collides again, and
+    // that, like any other failure, is thrown.
+    try {
+      await this.writeCodeFields(codeFields);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      this.logger.debug(
+        "Code-defined user fields were written by another process; syncing again from the stored rows"
+      );
+      await this.writeCodeFields(codeFields);
+    }
+  }
+
+  /**
+   * Bring the stored code fields into line with `codeFields`, in one
+   * transaction, from the rows as they are when it starts.
+   */
+  private async writeCodeFields(
+    codeFields: { name: string; [key: string]: unknown }[]
+  ): Promise<void> {
     // Fetch all existing code-sourced field definitions
     const existingCodeFields: UserFieldDefinitionRecord[] = await this.db
       .select()
@@ -643,34 +668,7 @@ export class UserFieldDefinitionService extends BaseService {
             )
           );
       }
-    }).catch(error => this.settleConcurrentSync(error, incomingNames));
-  }
-
-  /**
-   * Decide whether a failed code-field sync lost a race or failed.
-   *
-   * Processes starting at once each find a code field missing and insert it;
-   * one wins, and the rest roll back on its name. When every field is now there
-   * as a code field, the sync is done. A name an admin's own field already
-   * holds collides the same way and leaves the code field missing, so that is
-   * still a failure, and so is anything other than a duplicate.
-   */
-  private async settleConcurrentSync(
-    error: unknown,
-    incomingNames: Set<string>
-  ): Promise<void> {
-    if (!isUniqueViolation(error)) throw error;
-    const present = await this.db
-      .select({ name: this.userFieldDefinitions.name })
-      .from(this.userFieldDefinitions)
-      .where(
-        and(
-          eq(this.userFieldDefinitions.source, "code"),
-          inArray(this.userFieldDefinitions.name, [...incomingNames])
-        )
-      );
-    if (present.length < incomingNames.size) throw error;
-    this.logger.debug("User fields were synced by another process");
+    });
   }
 
   /**

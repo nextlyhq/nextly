@@ -8,10 +8,40 @@
  * @module filters/seams
  */
 
-/** @experimental Payload threaded through `email.beforeSend` filter handlers (D63). */
+/**
+ * @experimental One recipient of an email, and the line it is on.
+ */
+export interface EmailRecipient {
+  address: string;
+  kind: "to" | "cc" | "bcc";
+}
+
+/**
+ * @experimental Payload threaded through `email.beforeSend` filter handlers (D63).
+ *
+ * The whole envelope of the send. A value a handler changes is the value sent,
+ * and the result is checked again before any provider is contacted: a send left
+ * with no valid `to`, more `to` addresses than the provider takes, or a changed
+ * recipient on a send that names a person, is refused.
+ */
 export interface EmailPayloadFilterValue {
-  to: string;
+  /**
+   * The recipient as one string when the send has one `to` address, which is
+   * every send a handler has seen so far; a list when it has several. Leaving
+   * it out of a returned value keeps the recipients as they were.
+   */
+  to: string | string[];
+  /**
+   * @experimental Every recipient, `to`, `cc` and `bcc`, in that order.
+   *
+   * Read-only: derived from `to`, `cc` and `bcc` again after every handler, so
+   * the next handler always reads the recipients as they now stand. Change
+   * recipients through `to`, `cc` and `bcc`; a change made here is replaced.
+   */
+  recipients?: EmailRecipient[];
   from: string;
+  /** @experimental The Reply-To address, when the send has one. */
+  replyTo?: string;
   subject: string;
   html: string;
   /** Plain-text alternative body (multipart). Auto-generated from `html` when the caller omits it. */
@@ -25,9 +55,22 @@ export interface EmailFilterContext {
   providerId?: string;
 }
 
-/** @experimental Payload for the `email.afterSend` action seam (D63). */
+/**
+ * @experimental Payload for the `email.afterSend` action seam (D63).
+ *
+ * Runs once for each message handed to the provider. A send to several people
+ * through a provider that takes one `to` per message is several messages, and
+ * each has its own outcome and message id.
+ */
 export interface EmailAfterSendValue {
-  to: string;
+  /** One string for a message to one `to` address, as before; a list when several. */
+  to: string | string[];
+  /**
+   * @experimental Every recipient of the message, `to`, `cc` and `bcc`, in
+   * that order. Blind copies are included: an action that forwards this value
+   * elsewhere discloses them, so treat it as the message's full address list.
+   */
+  recipients?: EmailRecipient[];
   subject: string;
   success: boolean;
   messageId?: string;

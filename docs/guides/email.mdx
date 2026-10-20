@@ -99,13 +99,13 @@ export default defineConfig({
 
 ## Email config options
 
-| Option              | Type     | Default                      | Description                                |
-|---------------------|----------|------------------------------|--------------------------------------------|
-| `providerConfig`    | object   | required                     | Provider-specific configuration.           |
-| `from`              | `string` | required                     | Default sender address.                    |
-| `baseUrl`           | `string` | `NEXT_PUBLIC_APP_URL` env    | Base URL for links in emails.              |
-| `resetPasswordPath` | `string` | `'/admin/reset-password'`    | Path for password-reset links.             |
-| `verifyEmailPath`   | `string` | `'/admin/verify-email'`      | Path for email-verification links.         |
+| Option              | Type     | Default                   | Description                        |
+| ------------------- | -------- | ------------------------- | ---------------------------------- |
+| `providerConfig`    | object   | required                  | Provider-specific configuration.   |
+| `from`              | `string` | required                  | Default sender address.            |
+| `baseUrl`           | `string` | `NEXT_PUBLIC_APP_URL` env | Base URL for links in emails.      |
+| `resetPasswordPath` | `string` | `'/admin/reset-password'` | Path for password-reset links.     |
+| `verifyEmailPath`   | `string` | `'/admin/verify-email'`   | Path for email-verification links. |
 
 ## Provider resolution order
 
@@ -114,19 +114,25 @@ When sending an email, Nextly resolves the provider in this order:
 1. **Specific provider ID** -- if the call passes a `providerId`.
 2. **Database default provider** -- the provider marked as default in admin Settings.
 3. **Code-first config** -- the `providerConfig` from `defineConfig()`.
-4. **Error** -- if none of the above resolve.
+4. **The log transport** -- if none of the above resolve, the message is written to the server log instead of being sent, so a fresh install's password-reset flow still works. A `providerId` that doesn't resolve is still an error.
 
 This lets you wire a code-first provider for development and configure a production provider through the admin UI without changing code.
+
+The log transport writes the full message, body included, only when `NODE_ENV` is `development` or `test`, so you can follow a reset link locally. Anywhere else, an unset `NODE_ENV` included, it masks every address and leaves the body out, because the body carries live reset and verification tokens.
+
+## Email addresses in logs
+
+Outside development and test (an unset `NODE_ENV` included), Nextly masks every email address it writes to the logs down to its first character and its domain: `john@example.com` becomes `j***@example.com`. That covers the log transport, a failed send whose provider error quotes the recipient, and every line written through Nextly's structured logger (including a logger you install with `setNextlyLogger`), and every line its services write, to the `logger` you pass Nextly or to its fallback console logger. To find a message in production logs, search by the domain and first character. Output that Nextly writes to the console directly, outside these loggers, isn't masked yet. Logs your own code writes outside Nextly's loggers are yours to handle.
 
 ## Built-in email templates
 
 Nextly automatically creates three email templates on first startup:
 
-| Template             | Slug                  | Purpose                              |
-|----------------------|-----------------------|--------------------------------------|
-| Welcome              | `welcome`             | Sent after user registration.        |
-| Password Reset       | `password-reset`      | Contains the reset link.             |
-| Email Verification   | `email-verification`  | Contains the verification link.      |
+| Template           | Slug                 | Purpose                         |
+| ------------------ | -------------------- | ------------------------------- |
+| Welcome            | `welcome`            | Sent after user registration.   |
+| Password Reset     | `password-reset`     | Contains the reset link.        |
+| Email Verification | `email-verification` | Contains the verification link. |
 
 Templates are stored in the database and edited through the admin UI (**Settings -> Email Templates**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
 
@@ -135,6 +141,7 @@ Templates are stored in the database and edited through the admin UI (**Settings
 Templates receive context-appropriate variables.
 
 **Password Reset:**
+
 - `{{resetLink}}` -- full password reset URL.
 - `{{userName}}` -- user's name or email.
 - `{{userEmail}}` -- user's email.
@@ -143,10 +150,12 @@ Templates receive context-appropriate variables.
 - `{{year}}` -- current year.
 
 **Email Verification:**
+
 - `{{verifyLink}}` -- full verification URL.
 - `{{userName}}`, `{{userEmail}}`, `{{appName}}`, `{{expiresIn}}`, `{{year}}`.
 
 **Welcome:**
+
 - `{{userName}}`, `{{userEmail}}`, `{{appName}}`, `{{year}}`.
 
 ### Shared header / footer layout
@@ -173,7 +182,7 @@ export default defineConfig({
     },
     from: "noreply@example.com",
     templates: {
-      passwordReset: (data) => ({
+      passwordReset: data => ({
         subject: "Reset your password",
         html: `
           <p>Hi ${data.user.name ?? data.user.email},</p>
@@ -181,11 +190,11 @@ export default defineConfig({
           <p>This link expires in 1 hour.</p>
         `,
       }),
-      welcome: (data) => ({
+      welcome: data => ({
         subject: `Welcome to our app!`,
         html: `<p>Hi ${data.user.name}, thanks for signing up!</p>`,
       }),
-      emailVerification: (data) => ({
+      emailVerification: data => ({
         subject: "Verify your email",
         html: `<p>Click <a href="${data.url}">here</a> to verify your email.</p>`,
       }),
@@ -227,6 +236,68 @@ await nextly.email.send({
 ```
 
 Both calls return `{ success: boolean; messageId?: string }`.
+
+### Sending to several people
+
+`to` takes one address or a list, on the Direct API, a plugin's `ctx.services.email`
+and both REST send routes. Every address receives the email:
+
+```typescript
+await nextly.email.sendWithTemplate({
+  template: "order-alert",
+  to: ["orders@example.com", "owner@example.com"],
+  replyTo: "support@example.com",
+});
+```
+
+- Through SMTP, Resend or SendLayer, the list goes out as one message, with every
+  `to` address on it. Each provider takes a limited number of `to` addresses in one
+  message: 100 for SMTP (the number RFC 5321 requires every server to accept), 50
+  for Resend and 10 for SendLayer. A longer list is refused before anything is
+  sent, with an error naming the limit; no recipient is dropped. Whatever the
+  provider, one send has at most 100 `to` addresses.
+- Through a provider that takes one `to` per message, which is any provider plugin
+  that does not declare otherwise (see [Writing a provider](#writing-a-provider)),
+  each address gets a message of its own. `cc` and `bcc` go with the first message
+  only, so a copied address receives the email once, and an address that is also
+  a `to` gets only its own message. Every message is sent before any
+  `email.afterSend` action runs. The send succeeds only when every message did.
+- Every recipient, copied ones included, has a record in the delivery log.
+- A send with no `to` address, or one that is not an email address, is refused
+  before anything is sent. So is a send that names a `person` and has more than one
+  `to` address: a person is one recipient, so copy anyone else with `cc` or `bcc`.
+
+The `to` list is `@experimental` until the send contract is complete.
+
+### From and Reply-To
+
+`from` and `replyTo` set the message's sender and Reply-To on every way of sending.
+The send's own value wins, then the template's, then the provider's default
+sender. `replyTo` is `@experimental`.
+
+The REST send routes answer `Email sent.` when the provider accepted the message,
+and `Email could not be sent.` when it did not, beside the `success` and
+`messageId` fields they have always returned.
+
+### Changing a send before it goes out
+
+An `email.beforeSend` filter receives the whole envelope: `to`, `recipients`,
+`from`, `replyTo`, `subject`, `html`, `text`, `cc` and `bcc`. `to` is a single
+string when the send has one recipient, as it always was, and a list when it has
+several. `recipients` lists every address, `to`, `cc` and `bcc`, each with its
+line (`{ address, kind }`). Change recipients through `to`, `cc` and `bcc`:
+`recipients` is rebuilt from them after every filter, so the next filter reads the
+recipients as they now stand, and a change made only to `recipients` is replaced.
+What the filter returns is what is sent, and it is checked again first: a filter
+that leaves no valid `to`, adds more `to` addresses than the provider takes, or
+changes the recipient of a send that names a person, has the send refused.
+
+An `email.afterSend` action runs once for each message handed to the provider, with
+the message's `to`, its `recipients` (blind copies included), the outcome and the
+message id. An action that forwards its argument elsewhere sends every address of
+the message with it, blind copies too, so forward only what you need.
+
+`recipients`, `replyTo`, and `to` as a list are `@experimental`.
 
 ### Email to a person a plugin signs in
 
@@ -305,15 +376,45 @@ The container is dev-only and gated behind a Compose profile, so it does **not**
 
 ## Environment variables
 
-| Variable           | Provider   | Description                      |
-|--------------------|------------|----------------------------------|
-| `RESEND_API_KEY`   | Resend     | API key from the Resend dashboard. |
-| `SENDLAYER_API_KEY`| SendLayer  | API key (Bearer token).          |
-| `SMTP_HOST`        | SMTP       | Server hostname.                 |
-| `SMTP_PORT`        | SMTP       | Server port (587 for TLS, 1025 for Mailpit). |
-| `SMTP_USER`        | SMTP       | Authentication username (empty for Mailpit). |
-| `SMTP_PASS`        | SMTP       | Authentication password (empty for Mailpit). |
-| `SMTP_FROM`        | Any        | Default sender address.          |
+| Variable            | Provider  | Description                                  |
+| ------------------- | --------- | -------------------------------------------- |
+| `RESEND_API_KEY`    | Resend    | API key from the Resend dashboard.           |
+| `SENDLAYER_API_KEY` | SendLayer | API key (Bearer token).                      |
+| `SMTP_HOST`         | SMTP      | Server hostname.                             |
+| `SMTP_PORT`         | SMTP      | Server port (587 for TLS, 1025 for Mailpit). |
+| `SMTP_USER`         | SMTP      | Authentication username (empty for Mailpit). |
+| `SMTP_PASS`         | SMTP      | Authentication password (empty for Mailpit). |
+| `SMTP_FROM`         | Any       | Default sender address.                      |
+
+## Writing a provider
+
+A plugin adds a provider through `contributes.emailProviders`, with
+`defineEmailProvider`. Its `createAdapter` returns an adapter whose `send` receives
+one message: `to`, `from`, `subject`, `html`, and optionally `text`, `replyTo`,
+`cc`, `bcc` and `attachments`.
+
+An adapter receives one `to` address per message unless it declares more. When
+its provider addresses one message to several people, declare how many `to`
+addresses it takes:
+
+```typescript
+createAdapter: config => ({
+  maxToPerMessage: 50,
+  async send(options) {
+    // `toList` is present only when the message has more than one `to`.
+    const to = options.toList ?? [options.to];
+    // ...send `to`, `options.cc` and `options.bcc` to the provider...
+  },
+}),
+```
+
+- Nextly refuses a send with more `to` addresses than `maxToPerMessage` before
+  calling the adapter, so the adapter never has to drop or split recipients.
+- A message to one person reaches the adapter exactly as it always has, with `to`
+  alone, so an adapter written before `maxToPerMessage` keeps working unchanged:
+  Nextly sends it one message per `to` address.
+
+`maxToPerMessage` and `toList` are `@experimental`.
 
 ## Next steps
 

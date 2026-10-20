@@ -39,6 +39,7 @@ import {
   edgeProxyWarning,
   unkeyedStrategyWarnings,
 } from "../auth/handlers/proxy-posture";
+import { issueSetupTokenAtBoot } from "../auth/setup-token/setup-gate";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -144,6 +145,7 @@ import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import { env } from "../lib/env";
+import { maskingServiceLogger } from "../observability/mask-emails";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -819,7 +821,10 @@ async function registerServicesOnce(
   // rather than whichever one happens to be global at the time.
   setActiveHookRegistry(hookRegistry);
 
-  const resolvedLogger = logger ?? consoleLogger;
+  // Masked once here, whatever logger the app supplied: every service is
+  // handed this one, so no line it writes carries a full email address
+  // outside development and test, the app's own logger included.
+  const resolvedLogger = maskingServiceLogger(logger ?? consoleLogger);
   const resolvedBasePath = basePath ?? process.cwd();
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
@@ -1032,6 +1037,21 @@ async function registerServicesOnce(
   // sealed again under the current one, so the retired secret can go once
   // the app has started with both.
   await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
+
+  // In production, until the install has an administrator, setup needs a
+  // token: an install with none gets one here, printed once to this output.
+  if (env.NODE_ENV === "production") {
+    const { superAdminRoleHeld } = await import(
+      "../domains/users/services/last-super-admin"
+    );
+    const { getDialectTables } = await import("../database/index");
+    await issueSetupTokenAtBoot({
+      meta: getService("metaService"),
+      hasAdministrator: () =>
+        superAdminRoleHeld(adapter.getDrizzle(), getDialectTables()),
+      logger: resolvedLogger,
+    });
+  }
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -2519,7 +2539,8 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     resolvedPlugins,
     pluginConsent
   )) {
-    (config.logger ?? consoleLogger).warn(warning);
+    // Masked as every line the services write is (`resolvedLogger`).
+    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
   }
   const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
@@ -2539,7 +2560,8 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
   for (const warning of breachedPasswordsWarnings(
     setupConfig.security?.breachedPasswords
   )) {
-    (config.logger ?? consoleLogger).warn(warning);
+    // Masked as every line the services write is (`resolvedLogger`).
+    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
   }
 
   // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may

@@ -8,6 +8,8 @@
  * @module services/upload-validation/mime
  */
 
+import { consoleLogger } from "../../shared/types";
+
 import {
   canonicalWebFontMime,
   matchesWebFontSignature,
@@ -111,7 +113,7 @@ export function resolveAllowlist(
 
   const blockedInConfig = resolved.filter(t => BLOCKED_MIME_TYPES.has(t));
   for (const t of blockedInConfig) {
-    console.warn(
+    consoleLogger.warn(
       `[nextly] Warning: '${t}' was in allowedMimeTypes but is blocked for security. Stripped.`
     );
   }

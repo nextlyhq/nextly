@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { load } from "js-yaml";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -716,6 +717,85 @@ describe("where the workflow's checker comes from", () => {
     expect(workflow.jobs.credit.permissions).toEqual({ contents: "read" });
     expect(checker.with.path).toBe("trusted");
     expect(steps.at(-1).run.startsWith(`node ${checker.with.path}/`)).toBe(true);
+  });
+});
+
+describe("what the checker runs with a fork's head checked out", () => {
+  // Checkout refuses a fork's head under `pull_request_target` unless told
+  // otherwise, and this job opts in. That is safe only while nothing from the
+  // change runs: the checker is checked out inside the change's tree, so a bare
+  // specifier it imported would resolve to the change's own `node_modules`.
+  const workflowText = readFileSync(new URL("../.github/workflows/ai-credit.yml", import.meta.url), "utf8");
+  const workflow = load(workflowText);
+  const steps = workflow.jobs.credit.steps;
+  const [change, checker] = steps.filter(step => String(step.uses).startsWith("actions/checkout@"));
+
+  const CHECKER_FILES = ["ai-credit.mjs", "change-scope.mjs", "cli-entry.mjs", "workflow-context.mjs"];
+
+  /**
+   * Every URL Node resolves while loading `entry`, as its own resolver sees
+   * it: a hook in a child process records each resolution, so a dependency
+   * resolves from this repository's `node_modules` exactly as it would from
+   * the change's.
+   */
+  function resolvedLoading(entry) {
+    const script = [
+      'import { registerHooks } from "node:module";',
+      "const seen = [];",
+      "registerHooks({ resolve(specifier, context, next) { const result = next(specifier, context); seen.push(result.url); return result; } });",
+      `await import(${JSON.stringify(entry.href)});`,
+      "process.stdout.write(JSON.stringify(seen));",
+    ].join("\n");
+    return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8" }));
+  }
+
+  /** Of `urls`, the ones neither Node's own nor a file of the checker's folder. */
+  const fromOutside = (urls, folder) => urls.filter(url => !url.startsWith("node:") && !(url.startsWith(folder.href) && !url.slice(folder.href.length).includes("/")));
+
+  it("loads only Node's own modules and its own files, so nothing resolves from the change", () => {
+    const folder = new URL("./", import.meta.url);
+    const resolved = resolvedLoading(new URL("./ai-credit.mjs", import.meta.url));
+    // The checker reaches its three local modules, so the hook saw the loading.
+    expect(new Set(resolved.filter(url => url.startsWith(folder.href)))).toEqual(new Set(CHECKER_FILES.map(file => new URL(file, folder).href)));
+    expect(fromOutside(resolved, folder)).toEqual([]);
+  });
+
+  it("loads nothing later, by a dynamic import or a require, that the hook would not see", () => {
+    for (const file of CHECKER_FILES) {
+      expect(readFileSync(new URL(file, import.meta.url), "utf8")).not.toMatch(/\bimport\s*\(|\brequire\s*\(|\bcreateRequire\b/);
+    }
+  });
+
+  it("would see a dependency the checker came to load", () => {
+    const folder = new URL("./", import.meta.url);
+    // A module beside the checker that loads a dependency by its bare name.
+    const dir = mkdtempSync(join(fileURLToPath(folder), ".ai-credit-loads-"));
+    try {
+      writeFileSync(join(dir, "loads-a-dependency.mjs"), 'import "js-yaml";\n', { flag: "wx" });
+      const resolved = resolvedLoading(pathToFileURL(join(dir, "loads-a-dependency.mjs")));
+      expect(fromOutside(resolved, folder).some(url => url.includes("/node_modules/") && url.includes("js-yaml"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("opts into the fork's head on the change's checkout only, with no credentials kept", () => {
+    expect(change.with["allow-unsafe-pr-checkout"]).toBe(true);
+    expect(checker.with["allow-unsafe-pr-checkout"]).toBeUndefined();
+    expect(change.with["persist-credentials"]).toBe(false);
+    expect(checker.with["persist-credentials"]).toBe(false);
+    expect(checker.with["sparse-checkout"]).toBe("scripts");
+  });
+
+  it("uses no secret, grants only a read, and runs nothing but the checker", () => {
+    expect(workflowText).not.toMatch(/\bsecrets\./);
+    expect(workflow.permissions).toEqual({});
+    expect(workflow.jobs.credit.permissions).toEqual({ contents: "read" });
+    // Node's version is read from main's checkout, not from the change.
+    const setupNode = steps.find(step => String(step.uses).startsWith("actions/setup-node@"));
+    expect(setupNode.with["node-version-file"]).toBe(`${checker.with.path}/.nvmrc`);
+    expect(steps.filter(step => step.run !== undefined).map(step => step.run)).toEqual([`node ${checker.with.path}/scripts/ai-credit.mjs`]);
+    expect(steps.every(step => step.run !== undefined || /^actions\/(checkout|setup-node)@[0-9a-f]{40}$/.test(String(step.uses)))).toBe(true);
   });
 });
 

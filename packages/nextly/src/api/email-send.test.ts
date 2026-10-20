@@ -58,7 +58,7 @@ describe("POST /api/email/send", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("data");
-    expect(json.message).toMatch(/queued/i);
+    expect(json.message).toBe("Email sent.");
     expect(json.messageId).toBe("msg-123");
     expect(json.success).toBe(true);
   });
@@ -82,7 +82,7 @@ describe("POST /api/email/send", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("data");
-    expect(json.message).toMatch(/queued/i);
+    expect(json.message).toBe("Email could not be sent.");
     expect(json.success).toBe(false);
   });
 });

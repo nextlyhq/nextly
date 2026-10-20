@@ -623,3 +623,51 @@ describe("generateClientSchema — email applies length bounds but not pattern",
     expect(result.success).toBe(true);
   });
 });
+
+describe("generateClientSchema — an upload naming several collections", () => {
+  const field = (relationTo: string | string[]) =>
+    ({
+      type: "upload",
+      name: "gallery",
+      relationTo,
+      hasMany: true,
+    }) as unknown as FieldConfig;
+  const pair = {
+    relationTo: "files",
+    value: "f1",
+    __restrictedReference: true,
+  };
+
+  it("accepts the { relationTo, value } pair it stores, so a form holding one can save", () => {
+    const schema = generateClientSchema([field(["media", "files"])]);
+    expect(schema.safeParse({ gallery: [pair, "m1"] }).success).toBe(true);
+  });
+
+  it("still refuses a pair on a field naming one collection", () => {
+    const schema = generateClientSchema([field("media")]);
+    expect(schema.safeParse({ gallery: [pair] }).success).toBe(false);
+  });
+});
+
+describe("generateClientSchema — a relationship naming several collections", () => {
+  it("keeps the marker on a pair the editor cannot see, so the form still shows it after a save", () => {
+    const schema = generateClientSchema([
+      {
+        type: "relationship",
+        name: "related",
+        relationTo: ["pages", "notes"],
+        hasMany: true,
+      } as unknown as FieldConfig,
+    ]);
+    const pair = {
+      relationTo: "notes",
+      value: "n1",
+      __restrictedReference: true,
+    };
+    const parsed = schema.safeParse({ related: [pair] });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect((parsed.data as { related: unknown[] }).related).toEqual([pair]);
+    }
+  });
+});

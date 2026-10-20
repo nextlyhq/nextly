@@ -37,6 +37,26 @@ describe("password strategy", () => {
     expect(out).toEqual({ type: "authenticated", user });
   });
 
+  it("refuses a proof that names its password version but not its epoch", async () => {
+    // The two are judged together under the lock; a proof carrying only the
+    // version would leave the epoch to a later read, which a reset in the
+    // same second as the proof already moved.
+    const s = createPasswordStrategy({
+      verify: async () => ({ ...user, passwordUpdatedAt: null }),
+    });
+
+    await expect(
+      s.authenticate(
+        {
+          request: new Request("http://x"),
+          body: { email: "a@b.c", password: "p" },
+          strategyName: "password",
+        },
+        {} as never
+      )
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
   it("re-throws the verifier's error (failure legs preserved)", async () => {
     const s = createPasswordStrategy({
       verify: async () => {
