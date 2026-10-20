@@ -21,8 +21,8 @@ export const emailSendClaimsSqlite = sqliteTable(
   {
     id: text("id").primaryKey(),
     scope: text("scope").notNull(),
-    keyDigest: text("key_digest").notNull(),
-    messageDigest: text("message_digest").notNull(),
+    keyDigest: text("key_digest"),
+    messageDigest: text("message_digest"),
     state: text("state").notNull(),
     holder: text("holder").notNull(),
     result: text("result"),
@@ -31,7 +31,7 @@ export const emailSendClaimsSqlite = sqliteTable(
     settledAt: integer("settled_at"),
   },
   t => [
-    uniqueIndex("email_send_claims_key_idx").on(t.scope, t.keyDigest),
+    uniqueIndex("email_send_claims_key_idx").on(t.keyDigest),
     index("email_send_claims_state_idx").on(t.state, t.settledAt),
     index("email_send_claims_lease_idx").on(t.leaseExpiresAt),
   ]

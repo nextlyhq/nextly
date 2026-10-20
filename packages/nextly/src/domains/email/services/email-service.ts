@@ -49,10 +49,8 @@ import { describeProviderFailure } from "../provider-definition";
 import {
   assertIdempotencyKey,
   CORE_KEY_SCOPE,
-  providerKeyFor,
   sendKeyOf,
   type HeldClaim,
-  type SendKey,
 } from "../send-claims";
 import {
   renderTemplateFrom,
@@ -187,8 +185,9 @@ interface DispatchContext {
 
 /** A keyed send's claim, while it sends. */
 interface KeyedSend {
-  sendKey: SendKey;
   claim: HeldClaim;
+  /** Push the claim's lease on, before each provider call. */
+  renew(): Promise<void>;
 }
 
 /**
@@ -211,7 +210,7 @@ function adapterMessage(
     // Only to an adapter that declares it takes one, so every other adapter
     // is handed exactly what it was before keys existed.
     ...(context.keyed && context.adapter.acceptsIdempotencyKey === true
-      ? { idempotencyKey: providerKeyFor(context.keyed.sendKey, message) }
+      ? { idempotencyKey: context.keyed.claim.providerKey(message) }
       : {}),
     to: message.to[0],
     // Only for a message to several people, so a one-recipient message
@@ -824,8 +823,13 @@ export class EmailService extends BaseService {
     const sendKey = sendKeyOf(this.keyScope, key, message);
     const decided = await this.deliveries.claimSend(sendKey);
     switch (decided.kind) {
-      case "claimed":
-        return { keyed: { sendKey, claim: decided.claim } };
+      case "claimed": {
+        const { claim } = decided;
+        const deliveries = this.deliveries;
+        return {
+          keyed: { claim, renew: () => deliveries.renewSend(claim) },
+        };
+      }
       case "repeat":
         return { answer: { ...decided.result, repeat: true } };
       case "in-progress":
@@ -865,6 +869,9 @@ export class EmailService extends BaseService {
     // failed, and an auth flow withholding a token for a message that was
     // delivered.
     const state: DispatchState = {};
+    // A keyed send of several messages renews its claim before each one, so a
+    // later send with the key does not take over a send still in progress.
+    await context.keyed?.renew();
 
     try {
       const result = await context.adapter.send(

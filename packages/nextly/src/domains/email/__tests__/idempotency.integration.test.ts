@@ -53,7 +53,9 @@ import {
 } from "../../../plugins/test-nextly";
 import { recipientDigest } from "../delivery-record";
 import { defineEmailProvider } from "../provider-definition";
-import { CLAIM_TAKEOVER_MS, sweepSendClaims } from "../send-claims";
+import { pruneEmailDataSafely, pruneSendClaims } from "../prune";
+import { resolveEmailRetentionConfig } from "../retention-config";
+import { CLAIM_TAKEOVER_MS } from "../send-claims";
 import type { EmailProviderAdapter } from "../types";
 
 type SentOptions = Parameters<EmailProviderAdapter["send"]>[0];
@@ -558,22 +560,37 @@ describe.each(getConfiguredTestDialects())(
           .map(row => row.state)
           .sort();
 
-      await sweepSendClaims(t.adapter as never, 90 * day, Date.now());
+      const at = (offset: number) => new Date(Date.now() + offset);
+      const adapter = t.adapter as never;
+
+      await pruneSendClaims(adapter, 90 * day, at(0));
       expect(await states()).toEqual(["failed", "sent"]);
-      await sweepSendClaims(
-        t.adapter as never,
-        90 * day,
-        Date.now() + CLAIM_TAKEOVER_MS + 1000
-      );
+      await pruneSendClaims(adapter, 90 * day, at(CLAIM_TAKEOVER_MS + 1000));
       expect(await states()).toEqual(["sent"]);
-      await sweepSendClaims(t.adapter as never, false, Date.now() + 91 * day);
+      await pruneSendClaims(adapter, false, at(91 * day));
       expect(await states()).toEqual(["sent"]);
-      await sweepSendClaims(
-        t.adapter as never,
-        90 * day,
-        Date.now() + 91 * day
-      );
+      await pruneSendClaims(adapter, 90 * day, at(91 * day));
       expect(await states()).toEqual([]);
+    }, 120_000);
+
+    it("prunes claims from the retention pass, whether or not keyed sends continue", async () => {
+      const { t } = await boot(dialect);
+      await t.nextly.email.send({
+        to: [A],
+        subject: "Sent",
+        html: "<p>x</p>",
+        idempotencyKey: "sent",
+      });
+
+      await pruneEmailDataSafely(
+        {
+          adapter: t.adapter as never,
+          now: () => new Date(Date.now() + 31 * 24 * 60 * 60 * 1000),
+        },
+        resolveEmailRetentionConfig({ maxAgeMs: 30 * 24 * 60 * 60 * 1000 })
+      );
+
+      expect(await t.adapter.select("email_send_claims")).toEqual([]);
     }, 120_000);
 
     it("records a send without a key exactly as before", async () => {

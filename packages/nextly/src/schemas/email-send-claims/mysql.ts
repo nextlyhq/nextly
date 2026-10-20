@@ -9,6 +9,7 @@
 import {
   bigint,
   index,
+  longtext,
   mysqlTable,
   text,
   uniqueIndex,
@@ -21,18 +22,19 @@ export const emailSendClaimsMysql = mysqlTable(
   EMAIL_SEND_CLAIMS_TABLE,
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    scope: varchar("scope", { length: 191 }).notNull(),
-    keyDigest: varchar("key_digest", { length: 64 }).notNull(),
-    messageDigest: varchar("message_digest", { length: 64 }).notNull(),
+    scope: text("scope").notNull(),
+    keyDigest: varchar("key_digest", { length: 64 }),
+    messageDigest: varchar("message_digest", { length: 64 }),
     state: varchar("state", { length: 16 }).notNull(),
     holder: varchar("holder", { length: 36 }).notNull(),
-    result: text("result"),
+    // `longtext`: a result lists every refused copy, and `text` stops at 64 KB.
+    result: longtext("result"),
     claimedAt: bigint("claimed_at", { mode: "number" }).notNull(),
     leaseExpiresAt: bigint("lease_expires_at", { mode: "number" }).notNull(),
     settledAt: bigint("settled_at", { mode: "number" }),
   },
   t => [
-    uniqueIndex("email_send_claims_key_idx").on(t.scope, t.keyDigest),
+    uniqueIndex("email_send_claims_key_idx").on(t.keyDigest),
     index("email_send_claims_state_idx").on(t.state, t.settledAt),
     index("email_send_claims_lease_idx").on(t.leaseExpiresAt),
   ]

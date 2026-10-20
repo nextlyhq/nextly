@@ -339,8 +339,10 @@ Nextly keeps a keyed digest of the key, never the key itself, and no address. A
 successful send's key is remembered for as long as the delivery log keeps the
 send's records (90 days by default, following the retention setting). With a
 retention of zero nothing is kept, and a key protects only within the
-provider's own window. Erasing a person clears the key's digest from every
-record of the sends they were on.
+provider's own window. The digests are kept under the install's stored digest
+key, so a key keeps working across a rotation of `NEXTLY_SECRET`. Erasing a
+person clears the key's digest from every record of the sends they were on, and
+from those sends' claims.
 
 If the process stops while sending, the key is held for 15 minutes, after which
 a later send with it may send again. Through a provider without keys (SMTP,

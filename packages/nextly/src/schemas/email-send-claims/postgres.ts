@@ -28,12 +28,18 @@ export const emailSendClaimsPg = pgTable(
   EMAIL_SEND_CLAIMS_TABLE,
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    /** Who sent: `site`, `core`, or `plugin:<name>`. Never chosen by a caller. */
-    scope: varchar("scope", { length: 191 }).notNull(),
-    /** Keyed digest of the scope and key, as the delivery records carry it. */
-    keyDigest: varchar("key_digest", { length: 64 }).notNull(),
+    /**
+     * Who sent: `site`, `core`, or `plugin:<name>`. Never chosen by a caller,
+     * and unbounded, as a plugin's name is; the key digest includes it.
+     */
+    scope: text("scope").notNull(),
+    /**
+     * Keyed digest of the scope and key, as the delivery records carry it.
+     * Null once a person the send went to is erased.
+     */
+    keyDigest: varchar("key_digest", { length: 64 }),
     /** Keyed digest of the message, to refuse a key reused for another. */
-    messageDigest: varchar("message_digest", { length: 64 }).notNull(),
+    messageDigest: varchar("message_digest", { length: 64 }),
     /** `claimed`, `sent` or `failed`. */
     state: varchar("state", { length: 16 }).notNull(),
     /** The attempt holding the claim, so only it can settle it. */
@@ -48,7 +54,7 @@ export const emailSendClaimsPg = pgTable(
   },
   t => [
     // What decides a race: two sends with one key insert one row.
-    uniqueIndex("email_send_claims_key_idx").on(t.scope, t.keyDigest),
+    uniqueIndex("email_send_claims_key_idx").on(t.keyDigest),
     index("email_send_claims_state_idx").on(t.state, t.settledAt),
     index("email_send_claims_lease_idx").on(t.leaseExpiresAt),
   ]

@@ -399,6 +399,11 @@ describe.each(getConfiguredTestDialects())(
       expect(after.map(keyOf)).toEqual([null, null]);
       const copy = after.find(row => row.recipientKind === "cc")!;
       expect(copy.recipientHash).toBe(recipientDigest("staff@example.com"));
+      // The send's claim keeps neither digest.
+      const claims = await t.adapter.select("email_send_claims");
+      expect(claims).toEqual([
+        expect.objectContaining({ keyDigest: null, messageDigest: null }),
+      ]);
     }, 120_000);
 
     it("writes the deletion email erased when it is sent in the reporting transaction", async () => {

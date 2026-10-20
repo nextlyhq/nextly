@@ -781,8 +781,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE TABLE IF NOT EXISTS "${EMAIL_SEND_CLAIMS_TABLE}" (
       "id" TEXT PRIMARY KEY,
       "scope" TEXT NOT NULL,
-      "key_digest" TEXT NOT NULL,
-      "message_digest" TEXT NOT NULL,
+      "key_digest" TEXT,
+      "message_digest" TEXT,
       "state" TEXT NOT NULL,
       "holder" TEXT NOT NULL,
       "result" TEXT,
@@ -791,7 +791,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "settled_at" INTEGER
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "email_send_claims_key_idx"
-      ON "${EMAIL_SEND_CLAIMS_TABLE}" ("scope", "key_digest")`,
+      ON "${EMAIL_SEND_CLAIMS_TABLE}" ("key_digest")`,
     `CREATE INDEX IF NOT EXISTS "email_send_claims_state_idx"
       ON "${EMAIL_SEND_CLAIMS_TABLE}" ("state", "settled_at")`,
     `CREATE INDEX IF NOT EXISTS "email_send_claims_lease_idx"

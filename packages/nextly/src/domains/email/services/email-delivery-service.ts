@@ -60,11 +60,12 @@ import {
   type EmailDeliveryStatus,
 } from "../delivery-record";
 import { eraseRecipientDeliveries } from "../erase-recipient";
+import { pruneSendClaims } from "../prune";
 import type { ResolvedEmailRetentionConfig } from "../retention-config";
 import {
   claimSendKey,
+  renewSendClaim,
   settleSendClaim,
-  sweepSendClaims,
   type ClaimDecision,
   type HeldClaim,
   type SendKey,
@@ -269,7 +270,7 @@ export class EmailDeliveryService extends BaseService {
    */
   async claimSend(sendKey: SendKey): Promise<ClaimDecision> {
     try {
-      return await claimSendKey(this.adapter, sendKey);
+      return await claimSendKey(this.adapter, sendKey, this.digestSecrets());
     } catch (error) {
       if (NextlyError.is(error)) throw error;
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
@@ -295,9 +296,23 @@ export class EmailDeliveryService extends BaseService {
       });
     }
     try {
-      await sweepSendClaims(this.adapter, this.sentClaimLifetime());
+      await pruneSendClaims(this.adapter, this.sentClaimLifetime(), new Date());
     } catch (error) {
       warnQuietly(this.logger, "Email send claims could not be swept", {
+        error,
+      });
+    }
+  }
+
+  /**
+   * Push a held claim's lease on before the next provider call of a send.
+   * Never throws: a renewal that fails leaves the lease as it was.
+   */
+  async renewSend(claim: HeldClaim): Promise<void> {
+    try {
+      await renewSendClaim(this.adapter, claim);
+    } catch (error) {
+      warnQuietly(this.logger, "Email send claim could not be renewed", {
         error,
       });
     }

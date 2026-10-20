@@ -8,12 +8,15 @@
  * the contract says, on a real SQLite table built from the shipped schema.
  */
 
+import { createHash } from "crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getCoreSchema } from "../../../schemas";
+import { DELETED_PRINCIPALS_TABLE } from "../../../schemas/deleted-principals/table-name";
 import type { Logger } from "../../../services/shared";
 import { createTableBody } from "../../schema/pipeline/sql-templates/create-table-body";
 import { resolveEmailRetentionConfig } from "../retention-config";
@@ -21,10 +24,11 @@ import {
   assertIdempotencyKey,
   claimSendKey,
   MAX_IDEMPOTENCY_KEY_LENGTH,
-  providerKeyFor,
+  messageIdentity,
   scopedSender,
   sendKeyOf,
   type ClaimedMessage,
+  type SendKey,
 } from "../send-claims";
 import { EmailDeliveryService } from "../services/email-delivery-service";
 
@@ -43,6 +47,8 @@ const logger: Logger = {
   error: vi.fn(),
   debug: vi.fn(),
 };
+
+const FIRST_SECRET = "first-secret-long-enough-for-hmac-derivation";
 
 const MESSAGE: ClaimedMessage = {
   to: ["a@example.com"],
@@ -64,8 +70,7 @@ const MESSAGE: ClaimedMessage = {
 };
 
 describe("the message a key names", () => {
-  const digestOf = (message: ClaimedMessage) =>
-    sendKeyOf("site", "order-1", message).messageDigests[0];
+  const digestOf = (message: ClaimedMessage) => messageIdentity(message);
 
   it("is the same message when nothing changed", () => {
     expect(digestOf({ ...MESSAGE })).toBe(digestOf(MESSAGE));
@@ -111,33 +116,11 @@ describe("the message a key names", () => {
     expect(digestOf({ ...MESSAGE, ...change })).not.toBe(digestOf(MESSAGE));
   });
 
-  it("names the key by its scope too, so two callers' keys differ", () => {
-    expect(sendKeyOf("plugin:a", "k", MESSAGE).keyDigests[0]).not.toBe(
-      sendKeyOf("plugin:b", "k", MESSAGE).keyDigests[0]
-    );
-  });
-
-  it("stores neither the key nor an address in a digest", () => {
-    const sendKey = sendKeyOf("site", "order-1:a@example.com", MESSAGE);
-    for (const digest of [...sendKey.keyDigests, ...sendKey.messageDigests]) {
-      expect(digest).toMatch(/^[0-9a-f]{64}$/);
-    }
-  });
-});
-
-describe("the key a provider is handed", () => {
-  const sendKey = sendKeyOf("site", "order-1:a@example.com", MESSAGE);
-
-  it("is the same for the same call, and never the caller's key", () => {
-    const key = providerKeyFor(sendKey, MESSAGE);
-    expect(providerKeyFor(sendKey, MESSAGE)).toBe(key);
-    expect(key).toMatch(/^nextly-[0-9a-f]{64}$/);
-    expect(key.length).toBeLessThanOrEqual(MAX_IDEMPOTENCY_KEY_LENGTH);
-  });
-
-  it("differs between the calls of a split send", () => {
-    expect(providerKeyFor(sendKey, { to: ["a@example.com"] })).not.toBe(
-      providerKeyFor(sendKey, { to: ["b@example.com"] })
+  it("names an attachment by its bytes alone, never by a secret", () => {
+    // Digested under the claim's key as a whole, so the identity itself must
+    // not change with the install's secret.
+    expect(messageIdentity(MESSAGE)).toContain(
+      createHash("sha256").update(Buffer.from("receipt")).digest("hex")
     );
   });
 });
@@ -192,10 +175,24 @@ describe("the claim store", () => {
     } as unknown as DrizzleAdapter;
   }
 
-  function service(maxAgeMs: number | false = 90 * 86_400_000) {
-    return new EmailDeliveryService(adapter(), logger, undefined, () =>
-      resolveEmailRetentionConfig({ maxAgeMs })
+  function service(
+    maxAgeMs: number | false = 90 * 86_400_000,
+    secrets: readonly string[] = [FIRST_SECRET]
+  ) {
+    return new EmailDeliveryService(
+      adapter(),
+      logger,
+      undefined,
+      () => resolveEmailRetentionConfig({ maxAgeMs }),
+      () => secrets
     );
+  }
+
+  /** Claim a key, failing the test unless it was claimed. */
+  async function held(store: EmailDeliveryService, sendKey: SendKey) {
+    const decided = await store.claimSend(sendKey);
+    if (decided.kind !== "claimed") expect.fail(decided.kind);
+    return decided.claim;
   }
 
   const claims = () =>
@@ -208,11 +205,18 @@ describe("the claim store", () => {
     sqlite = new Database(":memory:");
     openTransaction = false;
     const { tables } = getCoreSchema("sqlite");
-    const spec = tables.find(table => table.name === "email_send_claims");
-    if (!spec) expect.fail("email_send_claims is absent from the core schema");
-    sqlite.exec(
-      `CREATE TABLE "email_send_claims" (\n${createTableBody(spec, (id: string) => `"${id}"`)}\n)`
-    );
+    // The claims, and the tables the stored digest key lives in.
+    for (const name of [
+      "email_send_claims",
+      "nextly_meta",
+      DELETED_PRINCIPALS_TABLE,
+    ]) {
+      const spec = tables.find(table => table.name === name);
+      if (!spec) expect.fail(`${name} is absent from the core schema`);
+      sqlite.exec(
+        `CREATE TABLE "${name}" (\n${createTableBody(spec, (id: string) => `"${id}"`)}\n)`
+      );
+    }
   });
 
   afterEach(() => sqlite.close());
@@ -273,11 +277,62 @@ describe("the claim store", () => {
     expect(claims()).toEqual([]);
   });
 
+  it("keeps two callers' keys apart and stores neither key nor address", async () => {
+    const store = service();
+    const key = "order-1:a@example.com";
+
+    await held(store, sendKeyOf("plugin:a", key, MESSAGE));
+    await held(store, sendKeyOf("plugin:b", key, MESSAGE));
+
+    const rows = claims() as unknown as Array<Record<string, unknown>>;
+    expect(rows.map(row => row.scope).sort()).toEqual(["plugin:a", "plugin:b"]);
+    for (const row of rows) {
+      expect(row.key_digest).toMatch(/^[0-9a-f]{64}$/);
+      expect(row.message_digest).toMatch(/^[0-9a-f]{64}$/);
+    }
+    expect(JSON.stringify(rows)).not.toContain("a@example.com");
+  });
+
+  it("hands a provider the same key for the same call, and another for another call", async () => {
+    const claim = await held(service(), sendKeyOf("site", "order-1", MESSAGE));
+
+    const key = claim.providerKey(MESSAGE);
+    expect(claim.providerKey(MESSAGE)).toBe(key);
+    expect(key).toMatch(/^nextly-[0-9a-f]{64}$/);
+    expect(key.length).toBeLessThanOrEqual(MAX_IDEMPOTENCY_KEY_LENGTH);
+    expect(claim.providerKey({ to: ["a@example.com"] })).not.toBe(
+      claim.providerKey({ to: ["b@example.com"] })
+    );
+  });
+
+  it("names the send the same way across a secret rotation, and never claims it twice", async () => {
+    // A rolling deployment: the new instance, with the old secret listed as
+    // previous, reaches the claim the old one made. Once it has sealed the
+    // stored key under the new secret, an instance still on the old one can
+    // no longer read it and refuses the send: it never makes a second claim.
+    const sendKey = sendKeyOf("site", "order-1", MESSAGE);
+    const first = service();
+    const claim = await held(first, sendKey);
+    await first.settleSend(claim, { success: true, messageId: "m-1" });
+    const rotated = service(undefined, [
+      "second-secret-long-enough-for-hmac-derivation",
+      FIRST_SECRET,
+    ]);
+
+    await expect(rotated.claimSend(sendKey)).resolves.toMatchObject({
+      kind: "repeat",
+    });
+    await expect(service().claimSend(sendKey)).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+    });
+    expect(claims()).toHaveLength(1);
+  });
+
   it("refuses to claim inside an open transaction, writing nothing", async () => {
     openTransaction = true;
 
     await expect(
-      claimSendKey(adapter(), sendKeyOf("site", "k", MESSAGE))
+      claimSendKey(adapter(), sendKeyOf("site", "k", MESSAGE), [FIRST_SECRET])
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
     expect(claims()).toEqual([]);
   });

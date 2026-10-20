@@ -3,13 +3,15 @@
  * contacted, so the key's message goes out once however often it is sent.
  *
  * A claim names its send by keyed digests only: of the caller's scope and key,
- * and of the message, which is everything that reaches the provider. The first
+ * and of the message, which is everything that reaches the provider, under
+ * the install's stored digest key, which survives rotations of the secret. The first
  * successful send's result is kept on it, with recipients by position and no
  * address, and a repeat is answered from it. A failed send leaves the claim
  * open to a retry of the same message; a different message under the key is
  * refused.
  *
- * Two sends with one key race on the unique (scope, key digest) index: one
+ * Two sends with one key race on the unique key digest, which includes the
+ * scope: one
  * inserts the row and sends, the other finds it and reports the send in
  * progress. A claim whose holder never recorded an outcome, because its process
  * stopped, may be taken over once its lease has lapsed.
@@ -21,24 +23,34 @@
  * @module domains/email/send-claims
  */
 
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray, lt, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
+import { getDialectTables } from "../../database/index";
 import { getStaticRelations } from "../../database/static-relations";
 import { NextlyError } from "../../errors";
 import type { PrincipalRef } from "../../plugins/principals/types";
+import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
+import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
+import { emailDeliveriesSqlite } from "../../schemas/email-deliveries/sqlite";
 import { emailSendClaimsMysql } from "../../schemas/email-send-claims/mysql";
 import { emailSendClaimsPg } from "../../schemas/email-send-claims/postgres";
 import { emailSendClaimsSqlite } from "../../schemas/email-send-claims/sqlite";
 import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
 import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
+import { rowLockServer } from "../audit/audit-log-writer";
+import {
+  principalDigestTablesOf,
+  readPrincipalDigests,
+  type PrincipalDigestDb,
+  type PrincipalDigests,
+} from "../audit/principal-digest";
 
-import { keyedDigest, keyedDigests } from "./delivery-record";
 import type { EmailSendOutcome } from "./services/send-failures";
 import type { ResolvedAttachment } from "./types";
 
@@ -112,11 +124,11 @@ export interface ClaimedMessage {
 /**
  * The message as one string, so any change to what reaches the provider is a
  * different message: a recipient, the sender, the rendered content, an
- * attachment's bytes, the person named.
+ * attachment's bytes, the person named. An attachment is named by a plain
+ * digest of its bytes; the whole string is digested under the claim's key.
  */
-function messageIdentity(message: ClaimedMessage): string {
+export function messageIdentity(message: ClaimedMessage): string {
   return JSON.stringify([
-    "message",
     [...message.to],
     [...(message.cc ?? [])],
     [...(message.bcc ?? [])],
@@ -128,66 +140,75 @@ function messageIdentity(message: ClaimedMessage): string {
     (message.attachments ?? []).map(attachment => [
       attachment.filename,
       attachment.mimeType,
-      keyedDigest(attachment.content.toString("base64")),
+      createHash("sha256").update(attachment.content).digest("hex"),
     ]),
     message.person ? [message.person.kind, message.person.id] : null,
   ]);
 }
 
-/** The key as its scope sent it, as one string. */
-function keyIdentity(scope: string, key: string): string {
-  return JSON.stringify(["key", scope, key]);
-}
-
-/** A send's key and message, as a claim and its delivery records store them. */
+/** A send's key and message, as the claim names them before digesting. */
 export interface SendKey {
   scope: string;
   key: string;
-  /** Under the current secret first, then every one still readable. */
-  keyDigests: string[];
-  messageDigests: string[];
+  message: string;
 }
 
-/** The digests a keyed send is claimed and recorded by. */
+/** What a keyed send is claimed by. */
 export function sendKeyOf(
   scope: string,
   key: string,
   message: ClaimedMessage
 ): SendKey {
-  return {
-    scope,
-    key,
-    keyDigests: keyedDigests(keyIdentity(scope, key)),
-    messageDigests: keyedDigests(messageIdentity(message)),
-  };
+  return { scope, key, message: messageIdentity(message) };
 }
 
 /**
- * The key handed to a provider for one call: derived from the scope, the key,
- * that call's recipients and the message, so it is the same on every retry of
- * the call and differs between the calls of a split send. Never the caller's
- * key itself, which may be built from an address.
+ * The digests a claim stores, under the install's stored digest key: the one
+ * that names deleted people, sealed under `NEXTLY_SECRET` and kept across its
+ * rotations, so every instance of a rolling deployment computes the same
+ * digest, before a rotation and after it. Each kind of value is digested
+ * under a kind of its own, so none can stand for another.
  */
-export function providerKeyFor(
-  sendKey: SendKey,
-  call: {
-    to: readonly string[];
-    cc?: readonly string[];
-    bcc?: readonly string[];
-  }
-): string {
-  const derived = keyedDigest(
-    JSON.stringify([
-      "provider-key",
-      sendKey.scope,
-      sendKey.key,
-      [...call.to],
-      [...(call.cc ?? [])],
-      [...(call.bcc ?? [])],
-      sendKey.messageDigests[0],
-    ])
-  );
-  return `nextly-${derived}`;
+interface ClaimDigests {
+  key: string;
+  message: string;
+  /** The provider's key for one call of the send. */
+  providerKey: (call: ProviderCall) => string;
+}
+
+/** The recipients of one provider call. */
+interface ProviderCall {
+  to: readonly string[];
+  cc?: readonly string[];
+  bcc?: readonly string[];
+}
+
+function claimDigests(
+  digest: PrincipalDigests["digest"],
+  sendKey: SendKey
+): ClaimDigests {
+  const key = digest({
+    kind: "nextly.email.idempotency-key",
+    id: JSON.stringify([sendKey.scope, sendKey.key]),
+  });
+  const message = digest({ kind: "nextly.email.message", id: sendKey.message });
+  return {
+    key,
+    message,
+    // The same for every retry of the call, and different between the calls
+    // of a split send. Never the caller's key, which may name an address.
+    providerKey: call =>
+      `nextly-${digest({
+        kind: "nextly.email.provider-key",
+        id: JSON.stringify([
+          key,
+          message,
+          [...call.to],
+          [...(call.cc ?? [])],
+          [...(call.bcc ?? [])],
+        ]),
+      })}`,
+  };
 }
 
 /** The claim table, as the three dialect bundles define it. */
@@ -215,11 +236,24 @@ export function sendClaimsTableFor(dialect: string): EmailSendClaimsTable {
   }
 }
 
+/**
+ * The claim table beside a dialect's delivery table, for an erasure handed
+ * only the latter. Undefined for a table that is neither.
+ */
+export function sendClaimsTableBeside(
+  deliveries: unknown
+): EmailSendClaimsTable | undefined {
+  if (deliveries === emailDeliveriesPg) return emailSendClaimsPg;
+  if (deliveries === emailDeliveriesMysql) return emailSendClaimsMysql;
+  if (deliveries === emailDeliveriesSqlite) return emailSendClaimsSqlite;
+  return undefined;
+}
+
 /** A claim row, as the three dialect tables produce it. */
 interface ClaimRow {
   id: string;
-  keyDigest: string;
-  messageDigest: string;
+  keyDigest: string | null;
+  messageDigest: string | null;
   state: string;
   holder: string;
   result: string | null;
@@ -248,6 +282,8 @@ export interface HeldClaim {
   holder: string;
   /** The digest the send's delivery records carry. */
   keyDigest: string;
+  /** The key handed to a provider that takes one, for one call. */
+  providerKey: (call: ProviderCall) => string;
 }
 
 /** What claiming a key decided. */
@@ -301,10 +337,10 @@ function repeatOf(row: ClaimRow): EmailSendOutcome {
  */
 function decisionOn(
   row: ClaimRow,
-  sendKey: SendKey,
+  digests: ClaimDigests,
   now: number
 ): ClaimDecision | undefined {
-  if (!sendKey.messageDigests.includes(row.messageDigest)) {
+  if (row.messageDigest !== digests.message) {
     return { kind: "different-message" };
   }
   if (row.state === "sent") return { kind: "repeat", result: repeatOf(row) };
@@ -318,39 +354,42 @@ function decisionOn(
 async function attemptClaim(
   db: ClaimDb,
   table: EmailSendClaimsTable,
-  sendKey: SendKey,
-  now: number
+  digests: ClaimDigests,
+  context: { scope: string; now: number }
 ): Promise<ClaimDecision | undefined> {
+  const { now } = context;
   const [found] = (await db
     .select()
     .from(table)
-    .where(
-      and(
-        eq(table.scope, sendKey.scope),
-        inArray(table.keyDigest, sendKey.keyDigests)
-      )
-    )
+    .where(eq(table.keyDigest, digests.key))
     .limit(1)) as ClaimRow[];
   const holder = randomUUID();
-  if (!found) {
-    const claim = {
-      id: randomUUID(),
+  const held = (id: string): ClaimDecision => ({
+    kind: "claimed",
+    claim: {
+      id,
       holder,
-      keyDigest: sendKey.keyDigests[0],
-    };
+      keyDigest: digests.key,
+      providerKey: digests.providerKey,
+    },
+  });
+  if (!found) {
+    const id = randomUUID();
     await db.insert(table).values({
-      ...claim,
-      scope: sendKey.scope,
-      messageDigest: sendKey.messageDigests[0],
+      id,
+      holder,
+      scope: context.scope,
+      keyDigest: digests.key,
+      messageDigest: digests.message,
       state: "claimed",
       result: null,
       claimedAt: now,
       leaseExpiresAt: now + CLAIM_TAKEOVER_MS,
       settledAt: null,
     });
-    return { kind: "claimed", claim };
+    return held(id);
   }
-  const decided = decisionOn(found, sendKey, now);
+  const decided = decisionOn(found, digests, now);
   if (decided) return decided;
   // Taken over only from the holder that was read: a send that took it first
   // has changed the holder, and this one then reads that claim again.
@@ -370,17 +409,14 @@ async function attemptClaim(
     .from(table)
     .where(eq(table.id, found.id))
     .limit(1)) as Array<{ holder: string }>;
-  return after?.holder === holder
-    ? {
-        kind: "claimed",
-        claim: { id: found.id, holder, keyDigest: found.keyDigest },
-      }
-    : undefined;
+  return after?.holder === holder ? held(found.id) : undefined;
 }
 
 /**
  * Claim a key for a send, before any provider is contacted.
  *
+ * @param secrets - The install's secrets, current first, that open the stored
+ *   digest key.
  * @throws {NextlyError} `INTERNAL_ERROR` when the calling flow has a
  *   transaction open, and a database error when the claim cannot be read or
  *   written: nothing has been sent either way.
@@ -388,22 +424,63 @@ async function attemptClaim(
 export async function claimSendKey(
   adapter: DrizzleAdapter,
   sendKey: SendKey,
+  secrets: readonly string[],
   now: number = Date.now()
 ): Promise<ClaimDecision> {
   assertNoOpenTransaction(adapter, "A send with an idempotency key");
-  const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
+  const dialect = adapter.getCapabilities().dialect;
+  const table = sendClaimsTableFor(dialect);
   const transact = ownTransaction(adapter);
   for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
     try {
-      const decided = await transact(db =>
-        attemptClaim(db, table, sendKey, now)
-      );
+      const decided = await transact(async db => {
+        const stored = await readPrincipalDigests(
+          db as unknown as PrincipalDigestDb,
+          rowLockServer(adapter, dialect),
+          principalDigestTablesOf(getDialectTables(dialect)),
+          "shared",
+          secrets
+        );
+        const digests = claimDigests(
+          subject => stored.digest(subject),
+          sendKey
+        );
+        return attemptClaim(db, table, digests, {
+          scope: sendKey.scope,
+          now,
+        });
+      });
       if (decided) return decided;
     } catch (error) {
       if (!lostToAnotherSend(adapter, error)) throw error;
     }
   }
   return { kind: "in-progress" };
+}
+
+/**
+ * Push a held claim's lease on, between the provider calls of a send, so a
+ * send of several messages is not taken over while it is still sending.
+ * Written only while this send still holds the claim.
+ */
+export async function renewSendClaim(
+  adapter: DrizzleAdapter,
+  claim: HeldClaim,
+  now: number = Date.now()
+): Promise<void> {
+  const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
+  await ownTransaction(adapter)(async db => {
+    await db
+      .update(table)
+      .set({ leaseExpiresAt: now + CLAIM_TAKEOVER_MS })
+      .where(
+        and(
+          eq(table.id, claim.id),
+          eq(table.holder, claim.holder),
+          eq(table.state, "claimed")
+        )
+      );
+  });
 }
 
 /**
@@ -436,49 +513,5 @@ export async function settleSendClaim(
           : { state: "failed", leaseExpiresAt: now, settledAt: now }
       )
       .where(held);
-  });
-}
-
-/** Claims removed per sweep. */
-const SWEEP_BATCH = 500;
-
-/**
- * Remove claims past their lifetime: a successful one once the delivery log's
- * window has passed since it was sent (`false` keeps it as long as the log
- * keeps its records, which is for good), and one that failed or never got an
- * outcome a takeover period after its lease lapsed. One bounded batch.
- */
-export async function sweepSendClaims(
-  adapter: DrizzleAdapter,
-  sentLifetimeMs: number | false,
-  now: number = Date.now()
-): Promise<number> {
-  const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
-  const expired = or(
-    and(
-      inArray(table.state, ["claimed", "failed"]),
-      lt(table.leaseExpiresAt, now - CLAIM_TAKEOVER_MS)
-    ),
-    sentLifetimeMs === false
-      ? undefined
-      : and(eq(table.state, "sent"), lt(table.settledAt, now - sentLifetimeMs))
-  );
-  return ownTransaction(adapter)(async db => {
-    const rows = (await db
-      .select({ id: table.id })
-      .from(table)
-      .where(expired)
-      .limit(SWEEP_BATCH)) as Array<{ id: string }>;
-    if (rows.length === 0) return 0;
-    await db.delete(table).where(
-      and(
-        inArray(
-          table.id,
-          rows.map(row => row.id)
-        ),
-        expired
-      )
-    );
-    return rows.length;
   });
 }

@@ -38,8 +38,11 @@ import {
   type EmailRetentionClass,
   type ResolvedEmailRetentionConfig,
 } from "./retention-config";
+import { CLAIM_TAKEOVER_MS } from "./send-claims";
 
 const DELIVERIES_TABLE = "email_deliveries";
+
+const CLAIMS_TABLE = "email_send_claims";
 
 /**
  * Rows removed per statement.
@@ -194,7 +197,53 @@ export async function pruneEmailData(
 }
 
 /**
- * {@link pruneEmailData}, with failure absorbed and reported.
+ * Remove send claims past their lifetime, one bounded batch of each kind: a
+ * claim that failed or never got an outcome a takeover period after its lease
+ * lapsed, and a successful one once `sentLifetimeMs` has passed since it was
+ * sent, as its delivery records are (`false` keeps it as they are kept).
+ *
+ * Run by the retention pass, and after every keyed send, so claims are bounded
+ * whether or not the install still sends with keys.
+ */
+export async function pruneSendClaims(
+  adapter: EmailPruneAdapter,
+  sentLifetimeMs: number | false,
+  now: Date
+): Promise<number> {
+  const at = now.getTime();
+  const expired: WhereCondition[][] = [
+    [
+      { column: "state", op: "IN", value: ["claimed", "failed"] },
+      { column: "leaseExpiresAt", op: "<", value: at - CLAIM_TAKEOVER_MS },
+    ],
+  ];
+  if (sentLifetimeMs !== false) {
+    expired.push([
+      { column: "state", op: "=", value: "sent" },
+      { column: "settledAt", op: "<", value: at - sentLifetimeMs },
+    ]);
+  }
+  let removed = 0;
+  for (const conditions of expired) {
+    const rows = await adapter.select<{ id: string }>(CLAIMS_TABLE, {
+      where: { and: conditions },
+      limit: EMAIL_PRUNE_BATCH_SIZE,
+      columns: ["id"],
+    });
+    if (rows.length === 0) continue;
+    removed += await adapter.delete(CLAIMS_TABLE, {
+      and: [
+        { column: "id", op: "IN", value: rows.map(row => row.id) },
+        ...conditions,
+      ],
+    });
+  }
+  return removed;
+}
+
+/**
+ * {@link pruneEmailData}, with failure absorbed and reported, and then the
+ * send claims, which the same window governs.
  *
  * A send must not fail because housekeeping did. The failure is logged with its
  * cause rather than swallowed, because a pass that silently stops leaves the
@@ -207,7 +256,16 @@ export async function pruneEmailDataSafely(
   maxBatches?: number
 ): Promise<EmailPruneResult> {
   try {
-    return await pruneEmailData(deps, policy, maxBatches);
+    const result = await pruneEmailData(deps, policy, maxBatches);
+    const now = (deps.now ?? (() => new Date()))();
+    if (deps.deadline === undefined || now < deps.deadline) {
+      await pruneSendClaims(
+        deps.adapter,
+        windowForEmailClass(policy, EMAIL_RETENTION_CLASSES[0]),
+        now
+      );
+    }
+    return result;
   } catch (error) {
     // `warnQuietly` rather than the logger directly: this is inside the catch
     // that exists to keep a prune failure away from the send, so an
