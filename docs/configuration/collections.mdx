@@ -361,7 +361,7 @@ Every access rule — a collection's, a Single's and a field's — is handed one
 | Property | Type | Description |
 |---|---|---|
 | `user` | `MinimalUser \| null` | The authenticated user (or `null` for unauthenticated requests). For an API key, the user who made it. |
-| `req` | `RequestContext` | The request; `req.user` is the user object it carries. |
+| `req` | `RequestContext` | The request. For a field rule, `req.user` is the user object the request carries; for any other rule, the caller's `id`, `email` where known, and `roles`. |
 | `roles` | `string[]` | The user's role slugs (resolved from DB, includes inherited roles). Don't decide by these: check `permissions`. |
 | `permissions` | `string[]` | Effective permissions, spelled as the Roles screen spells them: `update-posts`. |
 | `principal` | `Principal \| null` | A plugin-defined signed-in person, or `null`. |

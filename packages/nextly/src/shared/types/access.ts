@@ -87,9 +87,11 @@ export interface AccessRuleContext {
    */
   user: MinimalUser | null;
   /**
-   * The request the rule is judged for. `req.user` is the user object the
-   * request carries, which may hold more than `user`'s id and email; it is
-   * absent wherever `user` is `null`.
+   * The request the rule is judged for. `req.user` is absent wherever `user`
+   * is `null`. A field rule judged for a request gets the user object that
+   * request carries; any other rule gets the caller's `id`, `email` where
+   * known, and `roles`, and nothing else. Decide by `permissions` rather
+   * than by anything on `req.user`.
    */
   req: RequestContext;
   /**

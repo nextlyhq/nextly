@@ -111,7 +111,7 @@ describe("a collection or Single rule", () => {
     ).resolves.toBe(true);
     expect(seen[0].target).toEqual({ kind: "collection", slug: "posts" });
     expect(seen[0].user).toEqual({ id: "u1" });
-    expect(seen[0].req.user).toEqual({ id: "u1" });
+    expect(seen[0].req.user).toEqual({ id: "u1", roles: ["editor"] });
   });
 
   it("names a Single as a Single", async () => {

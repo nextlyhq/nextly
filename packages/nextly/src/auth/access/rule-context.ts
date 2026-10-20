@@ -42,7 +42,7 @@ export interface RuleCaller {
   user: MinimalUser | null;
   /**
    * The user object the request carries, when it holds more than `user`.
-   * Defaults to `user`.
+   * Defaults to `user` with the caller's `roles`.
    */
   requestUser?: RequestContext["user"];
   roles: readonly string[];
@@ -155,8 +155,14 @@ export function buildRuleContext(
   const context: AccessRuleContext = {
     user: caller.user,
     req: {
+      // Where no richer request user is at hand, the caller's id and roles,
+      // the fields of a request user a rule can be told truthfully. Nothing
+      // else is invented, so a predicate on a field it lacks reads absent.
       user:
-        caller.requestUser ?? (caller.user ? { ...caller.user } : undefined),
+        caller.requestUser ??
+        (caller.user
+          ? { ...caller.user, roles: [...caller.roles] }
+          : undefined),
     },
     roles: [...caller.roles],
     permissions: permissionList(caller.permissions, rule, question),

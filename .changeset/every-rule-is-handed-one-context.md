@@ -48,7 +48,9 @@ allows; until now it was handed `posts:update` and refused. A permission whose
 stored slug is custom, such as `manage-api-keys`, is handed as stored.
 
 The earlier spelling, `posts:update`, is still in the list for this release,
-after the new one, so an existing rule keeps its answer. A rule that checks it
+after the new one, so a rule that looks a permission up keeps its answer. A
+rule that reads the list's order, its length or its first entry sees the new
+entries, which come first, and each permission twice. A rule that checks it
 with `includes`, `indexOf` or `lastIndexOf` is warned once, naming the spelling
 to write instead. It stops being accepted in a later release: change
 ``permissions.includes(`${collection}:${operation}`)`` to

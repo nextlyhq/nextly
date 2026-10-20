@@ -154,7 +154,9 @@ describe("the one context", () => {
       target: { kind: "collection", slug: "posts" },
     });
     expect(ctx.user).toEqual({ id: "u1" });
-    expect(ctx.req.user).toEqual({ id: "u1" });
+    // The caller's id and roles, as the request user a field rule reads them,
+    // so a rule reading `req.user.roles` is not told the caller has none.
+    expect(ctx.req.user).toEqual({ id: "u1", roles: ["editor"] });
     expect(ctx.roles).toEqual(["editor"]);
     expect(ctx.principal).toBeNull();
     expect(ctx.operation).toBe("delete");
