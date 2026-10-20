@@ -36,7 +36,19 @@ import type { FieldConfig } from "nextly/config";
 // — aligned across both stored field-group spellings.
 import { isFieldGroupFieldType } from "nextly/field-group-type";
 
-/** Convert camelCase to snake_case, for the DB column-name fallback below. */
+/**
+ * A field's stored value in a document the API returned: under its own name,
+ * or under its snake_case column name, which the entry API may use while field
+ * configs are camelCase. The one place that spelling rule lives.
+ */
+export function storedValueOf(
+  data: Record<string, unknown> | undefined,
+  name: string
+): unknown {
+  return data?.[name] ?? data?.[toSnakeCase(name)];
+}
+
+/** Convert camelCase to snake_case, for the DB column-name fallback above. */
 function toSnakeCase(str: string): string {
   return str.replace(/[A-Z]/g, c => `_${c.toLowerCase()}`);
 }
@@ -311,10 +323,7 @@ export function getDefaultValues(
 ): Record<string, unknown> {
   const defaults: Record<string, unknown> = {};
 
-  // The entry API may return DB column names (snake_case) while field configs
-  // use camelCase. Try camelCase first, then the snake_case column.
-  const storedValue = (name: string) =>
-    existingData?.[name] ?? existingData?.[toSnakeCase(name)];
+  const storedValue = (name: string) => storedValueOf(existingData, name);
 
   // What a functional default reads. It starts as the whole stored document
   // rather than filling up field by field, because declaration ORDER is not the

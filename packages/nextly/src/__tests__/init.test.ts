@@ -22,13 +22,14 @@ import {
   type Nextly,
 } from "../init";
 
-// Mock console.log to avoid noise in tests
-const originalLog = console.log;
+// Mock console.info to avoid noise in tests: Nextly reports through
+// consoleLogger, whose info level writes there.
+const originalLog = console.info;
 beforeEach(() => {
-  console.log = vi.fn();
+  console.info = vi.fn();
 });
 afterEach(() => {
-  console.log = originalLog;
+  console.info = originalLog;
 });
 
 function testOptions(): Parameters<typeof getNextly>[0] {
@@ -93,6 +94,31 @@ describe("init - Nextly API", () => {
       ).toEqual([]);
     });
 
+    it("carries every namespace the lazy Direct API offers", async () => {
+      // The same derivation for namespaces, which are objects rather than
+      // functions and so pass the method check above unseen: a namespace
+      // added to the Direct API and not forwarded is `undefined` through
+      // `getNextly({ config })` while the lazy object answers.
+      const instance = await getNextly(testOptions());
+      const { nextly: lazy } = await import("../direct-api/nextly");
+
+      const offered = Object.entries(lazy as Record<string, unknown>)
+        .filter(([, value]) => typeof value === "object" && value !== null)
+        .map(([name]) => name);
+
+      expect(offered).toContain("releases");
+      expect(offered).toContain("apiKeys");
+
+      const missing = offered.filter(name => {
+        const value = (instance as unknown as Record<string, unknown>)[name];
+        return typeof value !== "object" || value === null;
+      });
+      expect(
+        missing,
+        "namespaces the lazy API offers that getNextly() lacks"
+      ).toEqual([]);
+    });
+
     it("should return the same instance on subsequent calls (singleton)", async () => {
       const nextly1 = await getNextly(testOptions());
       const nextly2 = await getNextly(testOptions());
@@ -104,7 +130,7 @@ describe("init - Nextly API", () => {
 
     it("should log database capabilities on first initialization", async () => {
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
 
       await getNextly(testOptions());
 
@@ -123,7 +149,7 @@ describe("init - Nextly API", () => {
 
       // Clear mock
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
 
       // Second call - should not log
       await getNextly(testOptions());
@@ -148,7 +174,7 @@ describe("init - Nextly API", () => {
       await getNextly(testOptions());
 
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
 
       await shutdownNextly();
 
@@ -168,7 +194,7 @@ describe("init - Nextly API", () => {
       const nextly = await getNextly(testOptions());
 
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
 
       await nextly.shutdown();
 
@@ -200,9 +226,11 @@ describe("init - Nextly API", () => {
     const PUBLIC_MEMBERS = [
       "access",
       "adapter",
+      "apiKeys",
       "bulkDelete",
       "changePassword",
       "collections",
+      "contentEvents",
       "count",
       "create",
       "delete",
@@ -279,13 +307,13 @@ describe("init - Nextly API", () => {
       expect(second).toBe(first);
 
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
       await first.shutdown();
       expect(isServicesRegistered()).toBe(false);
       // Both construction paths share one shutdown, so the fallback logs
       // the completion line the factory path always has. Pins the unified
       // behavior.
-      expect(mockLog).toHaveBeenCalledWith("Nextly shutdown complete");
+      expect(mockLog).toHaveBeenCalledWith("[INFO] Nextly shutdown complete");
     });
   });
 });

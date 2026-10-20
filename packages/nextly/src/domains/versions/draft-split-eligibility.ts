@@ -27,6 +27,7 @@
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
 import { hasPasswordField } from "../../shared/lib/password-fields";
+import { consoleLogger } from "../../shared/types";
 
 import { resolveVersionsConfig } from "./resolve-config";
 import type { ComponentSchemas } from "./restore-snapshot";
@@ -236,7 +237,7 @@ function reportUnresolvableComponent(
   const key = `${entity}:${componentSlug}`;
   if (reportedUnresolvable.has(key)) return;
   reportedUnresolvable.add(key);
-  console.warn(
+  consoleLogger.warn(
     `[nextly] "${entity}" enables drafts but references the component ` +
       `"${componentSlug}", which has no record. Pending changes are disabled ` +
       `for it: a draft snapshot cannot represent a component it cannot read. ` +

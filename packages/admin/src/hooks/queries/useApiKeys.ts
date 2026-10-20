@@ -22,10 +22,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
+  fetchApiKeyAbilities,
   fetchApiKeys,
   createApiKey,
   updateApiKey,
   revokeApiKey,
+  type ApiKeyAbilitiesQuery,
+  type ApiKeyAbility,
   type ApiKeyMeta,
   type ApiKeyListResponse,
   type CreateApiKeyPayload,
@@ -40,6 +43,13 @@ import {
 export const apiKeyKeys = {
   all: () => ["apiKeys"] as const,
   lists: () => [...apiKeyKeys.all(), "list"] as const,
+  abilities: (query: ApiKeyAbilitiesQuery) =>
+    [
+      ...apiKeyKeys.all(),
+      "abilities",
+      query.tokenType,
+      query.roleId ?? null,
+    ] as const,
 };
 
 // ============================================================
@@ -58,6 +68,30 @@ export function useApiKeys() {
     queryKey: apiKeyKeys.lists(),
     queryFn: () => fetchApiKeys(),
     staleTime: 30_000,
+  });
+}
+
+/**
+ * useApiKeyAbilities — What a key of this type and role would be able to do,
+ * as the server answers it, for the form's summary before creation.
+ *
+ * Asked only once it can be answered: a role-based key needs its role.
+ *
+ * Asked again while the form is open, every half minute and when the window
+ * regains focus. A read-only or full-access key follows its creator's
+ * permissions and a role-based one its role, so the answer can change before
+ * the key is created; focus refetching is off across the admin and nothing
+ * on this screen invalidates the summary, so without this the form would go
+ * on showing the old answer while the key it creates gets the new one.
+ */
+export function useApiKeyAbilities(query: ApiKeyAbilitiesQuery) {
+  return useQuery<ApiKeyAbility[], Error>({
+    queryKey: apiKeyKeys.abilities(query),
+    queryFn: () => fetchApiKeyAbilities(query),
+    enabled: query.tokenType !== "role-based" || Boolean(query.roleId),
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: "always",
   });
 }
 

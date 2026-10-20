@@ -19,6 +19,7 @@ import { entryTitleValue } from "@admin/components/features/entries/entry-title"
 import {
   DocumentLockBanner,
   EntryForm,
+  getCollectionFields as getEntryFormFields,
   useDocumentLockSurface,
   type DocumentViewMount,
   type EntryFormCollection,
@@ -41,6 +42,10 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useCollectionSchema } from "@admin/hooks/queries/useCollections";
 import { useEntry } from "@admin/hooks/queries/useEntry";
+import {
+  useStoredEntry,
+  useWithStoredReferences,
+} from "@admin/hooks/queries/useStoredReferences";
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
@@ -51,6 +56,7 @@ import {
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
 import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
+import { entryKeys } from "@admin/services/entryApi";
 import { getCollectionFields } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -266,11 +272,7 @@ export default function EditEntryPage({
   // can show per-language status pills. Inert (param omitted) for non-localized apps.
   const { defaultLocale, enabled: localizationEnabled } = useLocalization();
 
-  const {
-    data: entry,
-    isLoading: isLoadingEntry,
-    error: entryError,
-  } = useEntry({
+  const populatedEntry = useEntry({
     collectionSlug: slug || "",
     entryId: id,
     depth: 2,
@@ -286,6 +288,32 @@ export default function EditEntryPage({
     // hint. Gated on localizationEnabled so a non-localized app sends no fallback param.
     fallbackLocale: localizationEnabled ? "none" : undefined,
     translationStatus: localizationEnabled,
+  });
+  // The same document as stored, read in the same language and view. The
+  // populated read above leaves out a related item the editor may not read,
+  // and the form saves the whole entry back, so the editor edits the two
+  // merged: such an item stays in the form as a placeholder, and a save keeps
+  // it unless the editor removes it.
+  const storedEntry = useStoredEntry({
+    collectionSlug: slug,
+    entryId: id,
+    draft: collection?.draftsEnabled === true,
+    locale,
+    fallbackLocale: localizationEnabled ? "none" : undefined,
+  });
+  const {
+    document: entry,
+    isLoading: isLoadingEntry,
+    error: entryError,
+  } = useWithStoredReferences({
+    // The fields the form renders, so the merge and the form read one list.
+    fields: collection
+      ? getEntryFormFields(collection as unknown as EntryFormCollection)
+      : undefined,
+    populated: populatedEntry,
+    stored: storedEntry,
+    scope: JSON.stringify([slug, id, locale]),
+    documentKey: entryKeys.detail(slug ?? "", id ?? ""),
   });
 
   // While translating a non-default language, also load the default-language entry so
@@ -509,6 +537,13 @@ export default function EditEntryPage({
   // Cast entry to Record<string, unknown> for getEntryTitle helper
   const entryData = entry as unknown as Record<string, unknown>;
   const entryTitle = getEntryTitle(entryData, id, collection.admin?.useAsTitle);
+  // What a plugin is handed: the entry as the API populated it. A placeholder
+  // for a link the editor cannot see is the default form's own representation,
+  // not part of what a custom view or an injection slot is given.
+  const apiEntryData = (populatedEntry.data ?? entry) as unknown as Record<
+    string,
+    unknown
+  >;
 
   // Shared callbacks for both default and custom views
   const handleSuccess = () => {
@@ -531,7 +566,7 @@ export default function EditEntryPage({
       collectionSlug: slug,
       entryId: id,
       isCreating: false,
-      initialData: entryData,
+      initialData: apiEntryData,
       onSuccess: handleSuccess,
       onDelete: handleDelete,
       onCancel: handleCancel,
@@ -601,7 +636,7 @@ export default function EditEntryPage({
     collectionSlug: slug,
     entryId: id,
     collection: collection,
-    entry: entryData,
+    entry: apiEntryData,
   };
 
   return (

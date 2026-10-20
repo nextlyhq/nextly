@@ -8,7 +8,7 @@
  * of this app, and it is stopped and waited for before anything it wrote is
  * removed.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,6 +19,30 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 export const PLAYGROUND = path.resolve(HERE, "..", "..", "apps", "playground");
 export const NEXT_BIN = path.join(PLAYGROUND, "node_modules", ".bin", "next");
+
+/**
+ * Throws unless git ignores the playground build directory `distDir`.
+ *
+ * Tailwind finds class names by scanning every file under the app that git
+ * does not ignore. A build directory it can see feeds it Next's binary cache,
+ * the classes it mints from those bytes do not parse as CSS, and the
+ * stylesheet every running server of the app compiles breaks with them, the
+ * suite's own server included. Asked as a directory (the trailing slash),
+ * since it is asked before the directory exists.
+ */
+export function assertBuildDirIgnored(distDir: string): void {
+  const result = spawnSync(
+    "git",
+    ["check-ignore", "-q", `${path.join(PLAYGROUND, distDir)}/`],
+    { cwd: PLAYGROUND, encoding: "utf8" }
+  );
+  if (result.status === 0) return;
+  throw new Error(
+    result.status === 1
+      ? `The build directory apps/playground/${distDir} is not ignored by git, so Tailwind would scan it. Name it to match an ignored pattern (.next-*).`
+      : `Could not ask git whether apps/playground/${distDir} is ignored: ${result.error?.message ?? result.stderr}`
+  );
+}
 
 /** A port no other process holds right now, chosen by the operating system. */
 export function freePort(): Promise<number> {
@@ -128,6 +152,7 @@ export async function startEmptyPlayground(
   const port = await freePort();
   const work = mkdtempSync(path.join(tmpdir(), `nextly-${label}-`));
   const distDir = `.next-${label}`;
+  assertBuildDirIgnored(distDir);
   let output = "";
   const app = spawn(NEXT_BIN, ["dev", "-p", String(port)], {
     cwd: PLAYGROUND,

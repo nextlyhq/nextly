@@ -26,6 +26,7 @@
 import type { StoredHookConfig } from "@nextly/schemas/dynamic-collections/types";
 
 import { NextlyError } from "../errors/nextly-error";
+import { consoleLogger } from "../shared/types";
 
 import type { SideEffectHookFailure } from "./hook-registry";
 import { isSideEffectHookType } from "./hook-registry";
@@ -182,7 +183,7 @@ export class StoredHookExecutor {
       if (!storedHook.enabled) {
         skippedHookIds.push(storedHook.hookId);
         if (this.options.debug) {
-          console.debug(
+          consoleLogger.debug(
             `[Nextly] Skipping disabled hook: ${storedHook.hookId}`
           );
         }
@@ -195,7 +196,7 @@ export class StoredHookExecutor {
       if (!prebuiltHook) {
         skippedHookIds.push(storedHook.hookId);
         if (this.options.debug) {
-          console.warn(
+          consoleLogger.warn(
             `[Nextly] Pre-built hook not found: ${storedHook.hookId}`
           );
         }
@@ -224,7 +225,7 @@ export class StoredHookExecutor {
         executedCount++;
 
         if (this.options.debug) {
-          console.debug(
+          consoleLogger.debug(
             `[Nextly] Executed stored hook: ${storedHook.hookId} (${hookType})`
           );
         }
@@ -247,9 +248,9 @@ export class StoredHookExecutor {
         if (!isSideEffectHookType(hookType)) throw normalized;
 
         // Logged here because the operation is about to report success.
-        console.error(
-          `Stored hook "${storedHook.hookId}" failed for "${context.collection}" after the write committed:`,
-          normalized
+        consoleLogger.error(
+          `Stored hook "${storedHook.hookId}" failed for "${context.collection}" after the write committed`,
+          { normalized }
         );
         const failure: SideEffectHookFailure = {
           phase: hookType,

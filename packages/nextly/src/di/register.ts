@@ -40,6 +40,7 @@ import {
   unkeyedStrategyWarnings,
 } from "../auth/handlers/proxy-posture";
 import { resetPasswordPolicy } from "../auth/password/policy";
+import { issueSetupTokenAtBoot } from "../auth/setup-token/setup-gate";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -1042,6 +1043,21 @@ async function registerServicesOnce(
   // sealed again under the current one, so the retired secret can go once
   // the app has started with both.
   await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
+
+  // In production, until the install has an administrator, setup needs a
+  // token: an install with none gets one here, printed once to this output.
+  if (env.NODE_ENV === "production") {
+    const { superAdminRoleHeld } = await import(
+      "../domains/users/services/last-super-admin"
+    );
+    const { getDialectTables } = await import("../database/index");
+    await issueSetupTokenAtBoot({
+      meta: getService("metaService"),
+      hasAdministrator: () =>
+        superAdminRoleHeld(adapter.getDrizzle(), getDialectTables()),
+      logger: resolvedLogger,
+    });
+  }
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -2682,15 +2698,15 @@ async function initializeSchemaRegistry(
         adapter,
         extensionSchema,
         logger: {
-          debug: msg => console.debug(msg),
-          info: msg => console.log(msg),
-          warn: msg => console.warn(msg),
-          error: msg => console.error(msg),
+          debug: msg => consoleLogger.debug(msg),
+          info: msg => consoleLogger.info(msg),
+          warn: msg => consoleLogger.warn(msg),
+          error: msg => consoleLogger.error(msg),
         },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
+      consoleLogger.warn(
         `[registerServices] First-run setup helper crashed: ${msg}. Continuing.`
       );
     }
@@ -2819,7 +2835,7 @@ async function initializeSchemaRegistry(
         // unknown table, which says what actually happened. The same policy
         // `loadDynamicTables` already applies to a row it cannot turn into a
         // schema.
-        console.warn(
+        consoleLogger.warn(
           `[Nextly schema] Could not read the discriminator column of ` +
             `'${tableName}'; leaving it unregistered rather than addressing ` +
             `it by a name that was not verified. Field-group reads and writes ` +
@@ -4607,7 +4623,7 @@ export async function destroyRegisteredPlugins(): Promise<void> {
       await plugin.destroy(context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
+      consoleLogger.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
     }
   }
   if (globalForReg.__nextly_pluginServiceContainer === services) {
@@ -4653,7 +4669,7 @@ async function releaseServices(opts: {
       await adapter.disconnect();
     }
   } catch (error) {
-    console.error("Error during service shutdown:", error);
+    consoleLogger.error("Error during service shutdown", { error: error });
   } finally {
     container.clear();
     // The recording policy is a process-global registry, so it must be cleared

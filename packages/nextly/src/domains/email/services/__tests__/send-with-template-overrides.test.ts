@@ -46,6 +46,10 @@ function buildService() {
 
   const templateService = {
     getTemplateBySlug: vi.fn().mockResolvedValue(dbTemplate),
+    // The send path asks which version to render; the stored row comes first.
+    resolveForSend: vi
+      .fn()
+      .mockResolvedValue({ template: dbTemplate, preferCode: false }),
   } as unknown as EmailTemplateService;
 
   const service = new EmailService(

@@ -28,10 +28,12 @@ import type { Answer, Door, Row } from "./table";
 import {
   MEDIA_MARKER,
   ORIGIN,
+  PROBE_WHERE,
   USER_MARKER,
   collectionOf,
   ownKey,
   personRoute,
+  pubSingleOf,
   relationOf,
   singleOf,
   type CallerHandle,
@@ -67,6 +69,9 @@ async function settle(work: () => Promise<Answer>): Promise<Answer> {
 /** The target's slug, and the row id a collection action names. */
 function addressOf(world: World, row: Row, door: string) {
   if (row.target === "single") return { slug: singleOf(row.rule), id: "" };
+  if (row.target === "single-pub") {
+    return { slug: pubSingleOf(row.rule), id: "" };
+  }
   const slug = collectionOf(row.rule);
   const seeded = world.seeded.get(slug);
   if (!seeded) throw new Error(`nothing seeded for ${slug}`);
@@ -105,7 +110,7 @@ type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
 /** The REST request each collection action is, against `entries` and `id`. */
 const COLLECTION_REQUESTS: Record<
-  Row["action"],
+  Exclude<Row["action"], "list" | "count">,
   { method: Method; byId: boolean; body?: Record<string, unknown> }
 > = {
   read: { method: "GET", byId: true },
@@ -127,6 +132,16 @@ async function restMedia(headers: Record<string, string>) {
   return fromStatus(res.status);
 }
 
+/** The REST request a Single's row is: a read, an edit, or a status change. */
+function restSingle(row: Row, slug: string, headers: Record<string, string>) {
+  if (row.action === "read") return request("GET", ["singles", slug], headers);
+  const body =
+    row.target === "single-pub"
+      ? { status: row.action === "publish" ? "published" : "draft" }
+      : { headline: "edit" };
+  return request("PATCH", ["singles", slug], headers, body);
+}
+
 async function rest(world: World, row: Row, who: CallerHandle) {
   const h = who.headers;
   if (row.target === "media") return restMedia(h);
@@ -134,17 +149,47 @@ async function rest(world: World, row: Row, who: CallerHandle) {
     return fromStatus((await request("GET", ["users"], h)).status);
   }
   const { slug, id } = addressOf(world, row, "rest");
-  if (row.target === "single") {
-    const res =
-      row.action === "read"
-        ? await request("GET", ["singles", slug], h)
-        : await request("PATCH", ["singles", slug], h, { headline: "edit" });
-    return fromStatus(res.status);
+  if (row.target === "single" || row.target === "single-pub") {
+    return fromStatus((await restSingle(row, slug, h)).status);
+  }
+  if (row.action === "list" || row.action === "count") {
+    return restRead(slug, row.action, h);
   }
   const { method, byId, body } = COLLECTION_REQUESTS[row.action];
   const entries = ["collections", slug, "entries"];
   const res = await request(method, byId ? [...entries, id] : entries, h, body);
   return fromStatus(res.status);
+}
+
+/**
+ * A REST list or count of the entries `PROBE_WHERE` matches: allowed when the
+ * probe row is among what was returned, refused when it was left out.
+ */
+async function restRead(
+  slug: string,
+  action: "list" | "count",
+  headers: Record<string, string>
+): Promise<Answer> {
+  const path = ["collections", slug, "entries"];
+  const res = await request(
+    "GET",
+    action === "count" ? [...path, "count"] : path,
+    headers,
+    undefined,
+    "?where[slug][equals]=probe"
+  );
+  if (res.status !== 200) return fromStatus(res.status);
+  const body = (await res.json()) as {
+    items?: { slug?: unknown }[];
+    total?: unknown;
+  };
+  if (action === "list") {
+    return body.items?.some(item => item.slug === "probe") ? "A" : "R";
+  }
+  // `total` is the count route's answer; any other shape is recorded as is.
+  const total = body.total;
+  if (typeof total !== "number") return `=${JSON.stringify(body)}`;
+  return total > 0 ? "A" : "R";
 }
 
 /** The caller as a Direct API call names it. */
@@ -180,6 +225,13 @@ const DIRECT_CALLS: Record<
     n.update({ collection, id, data: { status: "published" }, ...as }),
   unpublish: (n, collection, id, as) =>
     n.update({ collection, id, data: { status: "draft" }, ...as }),
+  // A list and a count answer whether the probe row was among what they read.
+  list: async (n, collection, _id, as) =>
+    (await n.find({ collection, where: PROBE_WHERE, ...as })).items.some(
+      item => (item as { slug?: unknown }).slug === "probe"
+    ),
+  count: async (n, collection, _id, as) =>
+    (await n.count({ collection, where: PROBE_WHERE, ...as })).total > 0,
 };
 
 async function direct(world: World, row: Row, who: CallerHandle) {
@@ -191,8 +243,13 @@ async function direct(world: World, row: Row, who: CallerHandle) {
     else await nextly.updateSingle({ slug, data: { headline: "edit" }, ...as });
     return "A";
   }
-  await DIRECT_CALLS[row.action](nextly, slug, id, as);
-  return "A";
+  if (row.target === "single-pub") {
+    const status = row.action === "publish" ? "published" : "draft";
+    await nextly.updateSingle({ slug, data: { status }, ...as });
+    return "A";
+  }
+  const found = await DIRECT_CALLS[row.action](nextly, slug, id, as);
+  return found === false ? "R" : "A";
 }
 
 /**
@@ -257,6 +314,7 @@ async function route(world: World, row: Row, who: CallerHandle) {
 function targetSlug(row: Row): string {
   if (row.target === "collection") return collectionOf(row.rule);
   if (row.target === "single") return singleOf(row.rule);
+  if (row.target === "single-pub") return pubSingleOf(row.rule);
   return row.target;
 }
 
@@ -291,8 +349,12 @@ async function service(world: World, row: Row, who: CallerHandle) {
         search
       );
   if (res.status !== 200) return String(res.status);
-  const body = (await res.json()) as { ok: boolean; status: number | null };
-  if (body.ok) return "A";
+  const body = (await res.json()) as {
+    ok: boolean;
+    status: number | null;
+    found?: boolean;
+  };
+  if (body.ok) return body.found === false ? "R" : "A";
   return body.status === null ? "E" : String(body.status);
 }
 
@@ -440,20 +502,24 @@ const WRITING_DOORS: ReadonlySet<Door> = new Set<Door>([
   "service",
 ]);
 
+const READS: ReadonlySet<Row["action"]> = new Set(["read", "list", "count"]);
+
 function writes(row: Row, door: Door): boolean {
   return (
     row.setup === "service" &&
-    row.action !== "read" &&
-    (row.target === "collection" || row.target === "single") &&
+    !READS.has(row.action) &&
+    (row.target === "collection" ||
+      row.target === "single" ||
+      row.target === "single-pub") &&
     WRITING_DOORS.has(door)
   );
 }
 
 /** The table a write to the row's target lands in. */
 function tableOf(row: Row): string {
-  return row.target === "single"
-    ? `single_${singleOf(row.rule)}`
-    : `dc_${collectionOf(row.rule)}`;
+  if (row.target === "single") return `single_${singleOf(row.rule)}`;
+  if (row.target === "single-pub") return `single_${pubSingleOf(row.rule)}`;
+  return `dc_${collectionOf(row.rule)}`;
 }
 
 /**
@@ -478,6 +544,7 @@ let marks = 0;
  * means any update that lands, allowed or refused, changes it.
  */
 async function markUpdated(world: World, row: Row): Promise<void> {
+  if (row.target === "single-pub") return setPubStatus(world, row);
   if (row.action !== "update") return;
   const table = tableOf(row);
   const single = row.target === "single";
@@ -495,18 +562,55 @@ async function markUpdated(world: World, row: Row): Promise<void> {
 }
 
 /**
- * A door's answer to one row, and, for a write, whether it reached the
- * database: `landed` is set only where the door writes.
+ * Puts a Single with a status where its publish or unpublish starts: a draft
+ * to publish, published to unpublish. Rows run in order, so each ask finds the
+ * Single as the one before it left it otherwise.
+ *
+ * Written to its row directly and read back, never through a way in the
+ * table asks: a door that dropped the status would otherwise prepare its own
+ * starting point, and an ask that changed nothing would look done.
+ */
+async function setPubStatus(world: World, row: Row): Promise<void> {
+  const before = row.action === "publish" ? "draft" : "published";
+  const [single] = await storedTable(world, row);
+  if (!single) throw new Error(`${tableOf(row)} holds no row`);
+  await world.t.adapter.update(
+    tableOf(row),
+    { status: before },
+    { and: [{ column: "id", op: "=", value: String(single.id) }] }
+  );
+  const [set] = await storedTable(world, row);
+  if (set?.status !== before) {
+    throw new Error(`${tableOf(row)} did not take status ${before}`);
+  }
+}
+
+/** The status a Single's publish or unpublish leaves it in. */
+const statusAfter = (row: Row) =>
+  row.action === "publish" ? "published" : "draft";
+
+/**
+ * A door's answer to one row, and, for a write, what it did to the database:
+ * `landed` says it changed the target's table at all, and `done` that it made
+ * the change asked for. Both are set only where the door writes.
  */
 export async function ask(
   world: World,
   row: Row,
   door: Door
-): Promise<{ answer: Answer; landed?: boolean }> {
+): Promise<{ answer: Answer; landed?: boolean; done?: boolean }> {
   if (!writes(row, door)) return { answer: await answer(world, row, door) };
   await markUpdated(world, row);
   const before = await storedTable(world, row);
   const given = await answer(world, row, door);
   const after = await storedTable(world, row);
-  return { answer: given, landed: !isDeepStrictEqual(before, after) };
+  const landed = !isDeepStrictEqual(before, after);
+  // A Single's publish or unpublish is done only when its status moved: a
+  // save that bumps the row's timestamps but drops the status changes the
+  // table without doing what was asked.
+  const done =
+    row.target === "single-pub"
+      ? after[0]?.status === statusAfter(row)
+      : landed;
+  return { answer: given, landed, done };
 }

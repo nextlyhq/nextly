@@ -40,12 +40,14 @@ still complete it by its link. No migration is needed.
 
 **A registered account never becomes the install's first administrator.**
 Until now, whoever created the first account on an empty install, through
-registration included, was made Super Admin. Now only an account the app
-provisions itself (the setup route, the admin, or its own server code) becomes
-the first administrator, and only while nobody holds the Super Admin role, so a
-role-less account registered first no longer blocks it. Two accounts
-provisioned at once on an empty install leave exactly one administrator, on
-every database; before, both could become Super Admin.
+registration included, was made Super Admin. Now a registered account never
+is. An account the app provisions itself (its admin or its own server code)
+becomes the administrator only when it is the install's very first account;
+once any account exists, a sign-up included, an account the app creates is
+never promoted. Setup creates the administrator whenever nobody holds the
+Super Admin role, so a role-less account registered first never blocks it. Two
+accounts provisioned at once on an empty install leave exactly one
+administrator, on every database; before, both could become Super Admin.
 
 **Setup stays open until someone holds the Super Admin role**, rather than
 closing at the first account, so the owner can still create the administrator

@@ -254,6 +254,9 @@ export function useUpdateEntry<
     UpdateEntryPayload,
     UpdateContext<T>
   >({
+    // Under the entry's own detail key, so a reader of this document can ask
+    // whether a save of it is in flight without counting anyone else's.
+    mutationKey: [...entryKeys.detail(collectionSlug, entryId), "update"],
     mutationFn: async (data: UpdateEntryPayload) => {
       const result = await entryApi.update(
         collectionSlug,

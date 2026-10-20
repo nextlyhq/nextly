@@ -82,7 +82,8 @@ export interface TypeScriptConfig {
    * Can be absolute or relative to the project root.
    *
    * Left unset, an existing `payload-types.ts` beside the default, the name
-   * earlier versions used, is turned into a re-export of the new file.
+   * earlier versions used, is left as it is, and generating types says what
+   * to do with it: delete it once imports name `nextly-types`.
    *
    * @default './src/types/generated/nextly-types.ts'
    */

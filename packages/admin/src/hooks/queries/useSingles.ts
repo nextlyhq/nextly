@@ -657,6 +657,9 @@ export function useUpdateSingleDocument(
   // `validationIssues` recover the refusal payload where there is one, and they
   // CHECK for it rather than asserting it.
   return useMutation<SingleDocument, Error, Record<string, unknown>>({
+    // Under the Single's own document key, so a reader of it can ask whether a
+    // save of it is in flight without counting anyone else's.
+    mutationKey: [...singleDocumentKeys.detail(slug), "update"],
     ...(options?.scopeId === undefined
       ? {}
       : { scope: { id: options.scopeId } }),

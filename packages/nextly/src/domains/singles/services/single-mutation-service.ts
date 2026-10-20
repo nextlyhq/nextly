@@ -75,6 +75,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import type { Logger } from "../../../shared/types";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import {
@@ -113,6 +114,7 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   draftComponentValues,
@@ -121,6 +123,7 @@ import {
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
+import { hasLifecycle } from "../../versions/recorded-status";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -2758,6 +2761,7 @@ export class SingleMutationService extends BaseService {
                 await captureInTx(tx, this.versionCapture, {
                   // An update: a save that changes nothing records nothing.
                   onlyIfChanged: true,
+                  lifecycle: hasLifecycle(singleMeta),
                   ref: {
                     scopeKind: "single",
                     scopeSlug: slug,
@@ -2830,6 +2834,7 @@ export class SingleMutationService extends BaseService {
               const { versionNo } = await captureInTx(tx, this.versionCapture, {
                 // An update: a save that changes nothing records nothing.
                 onlyIfChanged: true,
+                lifecycle: hasLifecycle(singleMeta),
                 ref: {
                   scopeKind: "single",
                   scopeSlug: slug,
@@ -3124,6 +3129,27 @@ export class SingleMutationService extends BaseService {
               );
             }
 
+            // A receipt a caller pinned for this Single is kept here, in the
+            // write's own transaction, so it commits exactly when the write
+            // does. Only a write to the live row: a held edit left the live
+            // document as it was. The status is the one the UPDATE returned,
+            // as stored, not a hook's view of it.
+            if (!holdEdit) {
+              const storedStatus = (rows[0] as { status?: unknown }).status;
+              await recordWriteReceipt(
+                tx,
+                {
+                  scopeKind: "single",
+                  scopeSlug: slug,
+                  entryId: existingDoc.id,
+                },
+                {
+                  status:
+                    typeof storedStatus === "string" ? storedStatus : undefined,
+                }
+              );
+            }
+
             return rows;
           })
         );
@@ -3172,6 +3198,20 @@ export class SingleMutationService extends BaseService {
       }
 
       let updatedDoc = updatedRows[0];
+
+      // A saved Single, its pending work included, can give a scheduled
+      // release holding it a hard problem: handed to the early stop once the
+      // write is durable, so that release stops now rather than at its
+      // instant. Inside an enclosing SQLite transaction this waits for its
+      // commit, and never runs for a write it rolls back.
+      const savedId = String(updatedDoc.id);
+      await this.afterCommit(() =>
+        stopReleasesHolding({
+          documents: [
+            { scopeKind: "single", scopeSlug: slug, entryId: savedId },
+          ],
+        })
+      );
 
       // 10. Deserialize JSON fields for response
       updatedDoc = this.queryService.deserializeJsonFields(

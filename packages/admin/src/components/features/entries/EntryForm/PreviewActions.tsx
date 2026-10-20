@@ -28,12 +28,10 @@
 import type { ReactElement } from "react";
 
 import {
-  Check,
   ChevronDown,
-  Copy,
   ExternalLink,
   Eye,
-  Loader2,
+  Link,
   PanelRight,
 } from "@admin/components/icons";
 import {
@@ -47,7 +45,9 @@ import { cn } from "@admin/lib/utils";
 
 import { ToolbarLabel } from "./toolbar-density";
 
-const COPY_LABEL = "Copy shareable link";
+// An ellipsis because it opens the share popover rather than acting at once:
+// the lifetime is chosen there, and the link is made and copied from it.
+const SHARE_LABEL = "Share preview link…";
 const OPEN_LABEL = "Open in new tab";
 
 export interface PreviewActionsProps {
@@ -77,12 +77,13 @@ export interface PreviewActionsProps {
    * has no id to name, and for an author without `update` on the collection.
    */
   isLinkAvailable?: boolean;
-  /** Mints a link and copies it. */
-  onCopyLink?: () => void;
-  /** Whether a link is being minted right now. */
-  isCopyingLink?: boolean;
-  /** Whether the link was just copied, for the control's acknowledgement. */
-  isLinkCopied?: boolean;
+  /**
+   * Opens the share popover, where the link's lifetime is chosen, the link is
+   * made and copied, and the document's live links are listed and revoked.
+   * The surface holding this control owns the popover, so it can anchor it
+   * somewhere that stays on screen.
+   */
+  onShareLink?: () => void;
   /** Whether the surrounding form is submitting. */
   disabled?: boolean;
   /**
@@ -135,7 +136,6 @@ function SplitControl({
   size,
   disabled,
   optionsLabel,
-  copying,
 }: {
   press: ReactElement;
   options: ReactElement[];
@@ -148,8 +148,6 @@ function SplitControl({
    * fixed one detaches it from a press whose label the collection chose.
    */
   optionsLabel: string;
-  /** Whether a link is being minted, which only this control can still show. */
-  copying: boolean;
 }) {
   if (options.length === 0) return press;
   return (
@@ -166,17 +164,7 @@ function SplitControl({
             aria-label={optionsLabel}
             title={optionsLabel}
           >
-            {/*
-              Progress belongs on the control that STAYS. Choosing to copy
-              closes the menu, so the item that showed the spinner is gone the
-              instant it would start — a slow mint then looks like nothing
-              happened at all.
-            */}
-            {copying ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ChevronDown className="h-4 w-4" aria-hidden="true" />
-            )}
+            <ChevronDown className="h-4 w-4" aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">{options}</DropdownMenuContent>
@@ -192,19 +180,17 @@ export function PreviewActions({
   onTogglePreviewPane,
   previewPaneOpen = false,
   isLinkAvailable = false,
-  onCopyLink,
-  isCopyingLink = false,
-  isLinkCopied = false,
+  onShareLink,
   disabled = false,
   size = "default",
 }: PreviewActionsProps) {
   const canPane = onTogglePreviewPane !== undefined;
   const canOpen = isPreviewAvailable && onPreview !== undefined;
-  const canCopy = isLinkAvailable && onCopyLink !== undefined;
+  const canShare = isLinkAvailable && onShareLink !== undefined;
 
   // Nothing to offer is nothing to draw. A control that opens onto no options
   // is the empty-menu defect, and a disabled one here would be furniture.
-  if (!canPane && !canOpen && !canCopy) return null;
+  if (!canPane && !canOpen && !canShare) return null;
 
   const labels = previewLabels(previewLabel, previewPaneOpen, canPane);
 
@@ -228,16 +214,16 @@ export function PreviewActions({
       </DropdownMenuItem>
     );
   }
-  if (canCopy) {
+  if (canShare) {
     options.push(
       <DropdownMenuItem
-        key="copy"
-        onSelect={() => onCopyLink?.()}
-        disabled={disabled || isCopyingLink}
-        data-preview-option="copy"
+        key="share"
+        onSelect={() => onShareLink?.()}
+        disabled={disabled}
+        data-preview-option="share"
       >
-        {copyIcon(isCopyingLink, isLinkCopied)}
-        {COPY_LABEL}
+        <Link className="h-4 w-4" aria-hidden="true" />
+        {SHARE_LABEL}
       </DropdownMenuItem>
     );
   }
@@ -258,7 +244,6 @@ export function PreviewActions({
         disabled={disabled}
         options={options}
         optionsLabel={`${labels.pane} options`}
-        copying={isCopyingLink}
         press={
           <Button
             type="button"
@@ -282,27 +267,25 @@ export function PreviewActions({
   /*
    * WITHOUT A PANE the shape is unchanged, deliberately.
    *
-   * There is no obvious lead between opening and copying — neither is cheaper
+   * There is no obvious lead between opening and sharing — neither is cheaper
    * nor more reversible than the other — so promoting one would ADD a button
    * rather than remove one. Collapsing to a plain button when only one thing
    * can be done, and to one menu when both can, is what this already did and is
    * right for that case.
    */
-  if (canOpen !== canCopy) {
+  if (canOpen !== canShare) {
     const solo = canOpen
       ? {
           label: labels.solo,
           icon: <Eye className="h-4 w-4" aria-hidden="true" />,
           run: () => void onPreview?.(),
-          busy: false,
           lead: "open",
         }
       : {
-          label: COPY_LABEL,
-          icon: copyIcon(isCopyingLink, isLinkCopied),
-          run: () => onCopyLink?.(),
-          busy: isCopyingLink,
-          lead: "copy",
+          label: SHARE_LABEL,
+          icon: <Link className="h-4 w-4" aria-hidden="true" />,
+          run: () => onShareLink?.(),
+          lead: "share",
         };
     return (
       <Button
@@ -310,7 +293,7 @@ export function PreviewActions({
         variant="outline"
         size={size}
         onClick={solo.run}
-        disabled={disabled || solo.busy}
+        disabled={disabled}
         title={solo.label}
         data-preview-lead={solo.lead}
       >
@@ -339,16 +322,7 @@ export function PreviewActions({
           title={`${labels.menuTrigger} options`}
           data-preview-lead="menu"
         >
-          {/*
-            Progress belongs on the control that STAYS: choosing to copy closes
-            the menu, so the item that would show the spinner is gone the
-            instant it starts.
-          */}
-          {isCopyingLink ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Eye className="h-4 w-4" aria-hidden="true" />
-          )}
+          <Eye className="h-4 w-4" aria-hidden="true" />
           <ToolbarLabel priority="secondary">{labels.menuTrigger}</ToolbarLabel>
           <ChevronDown className="h-4 w-4" aria-hidden="true" />
         </Button>
@@ -360,7 +334,7 @@ export function PreviewActions({
 
 /** One thing an author can do with the preview, as a menu row. */
 export interface PreviewChoice {
-  id: "pane" | "open" | "copy";
+  id: "pane" | "open" | "share";
   label: string;
   run: () => void;
   disabled: boolean;
@@ -382,13 +356,12 @@ export function previewChoices({
   onTogglePreviewPane,
   previewPaneOpen = false,
   isLinkAvailable = false,
-  onCopyLink,
-  isCopyingLink = false,
+  onShareLink,
   disabled = false,
 }: PreviewActionsProps): PreviewChoice[] {
   const canPane = onTogglePreviewPane !== undefined;
   const canOpen = isPreviewAvailable && onPreview !== undefined;
-  const canCopy = isLinkAvailable && onCopyLink !== undefined;
+  const canShare = isLinkAvailable && onShareLink !== undefined;
   const choices: PreviewChoice[] = [];
   /*
    * Named by what each row DOES, not by the preview's own label. Folded into
@@ -415,20 +388,13 @@ export function previewChoices({
       disabled,
     });
   }
-  if (canCopy) {
+  if (canShare) {
     choices.push({
-      id: "copy",
-      label: COPY_LABEL,
-      run: () => onCopyLink?.(),
-      disabled: disabled || isCopyingLink,
+      id: "share",
+      label: SHARE_LABEL,
+      run: () => onShareLink?.(),
+      disabled,
     });
   }
   return choices;
-}
-
-/** Copying reports its own progress: in flight, just done, or ready. */
-function copyIcon(copying: boolean, copied: boolean): ReactElement {
-  if (copying) return <Loader2 className="h-4 w-4 animate-spin" />;
-  if (copied) return <Check className="h-4 w-4 text-success" />;
-  return <Copy className="h-4 w-4" aria-hidden="true" />;
 }

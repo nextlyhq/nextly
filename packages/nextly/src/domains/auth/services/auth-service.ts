@@ -1,7 +1,7 @@
 import { randomBytes, createHash } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, gt, lt, isNull } from "drizzle-orm";
+import { eq, and, gt, lt, isNull, or } from "drizzle-orm";
 
 import {
   verifyPassword as verifyPasswordBcrypt,
@@ -34,6 +34,15 @@ import {
 import { UserAccountService } from "../../users/services/user-account-service";
 import { UserQueryService } from "../../users/services/user-query-service";
 import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
+
+import {
+  AUTH_TOKEN_LIFETIME_MS,
+  lockAccount,
+  tokenTable,
+  type AuthTokenKind,
+  type BindingAccount,
+  type TokenBindingDb,
+} from "./token-account-binding";
 
 // Re-exported: this module owned `affectedRowCount` before it was shared, and
 // both its unit test and the invite flow import it from here.
@@ -98,6 +107,14 @@ interface TransactionLike extends PasswordWriteTx {
 }
 
 /**
+ * The slice of a transaction the reset and verification flows use: the
+ * account lock and token writes, and the shared password write.
+ */
+type TokenTransaction = TokenBindingDb &
+  PasswordWriteTx &
+  Pick<TransactionLike, "insert">;
+
+/**
  * Authentication Service
  *
  * Handles user authentication, password management, and email verification.
@@ -131,6 +148,8 @@ function tokenExpired(row: { expires: Date }): boolean {
 interface StoredTokenRow {
   id: number;
   identifier: string;
+  /** The account it was issued for; null on a token from before that was recorded. */
+  userId: string | null;
   expires: Date;
 }
 
@@ -140,8 +159,6 @@ function storedTokenHash(token: string): string {
 }
 
 export class AuthService extends BaseService {
-  private readonly TOKEN_EXPIRY_HOURS = 24;
-
   readonly emailService?: EmailService;
 
   constructor(
@@ -202,6 +219,105 @@ export class AuthService extends BaseService {
         })),
       });
     }
+
+   * Issue a reset or verification token for the account holding `email`
+   * (and, when given, with id `userId`), replacing any earlier token of that
+   * kind it holds. Returns the account, or undefined when none holds the
+   * address, in which case nothing is written.
+   *
+   * One transaction, holding the account's row from the lookup to the
+   * insert. An address change or a deletion of the account takes the same
+   * row, so it either commits first, and this finds no account at the
+   * address, or waits, and then revokes the token this wrote. Without the
+   * lock a token could be inserted after the change revoked the account's
+   * tokens, and work again once the account returned to the address.
+   */
+  private async issueToken(
+    kind: AuthTokenKind,
+    args: { email: string; userId?: string; tokenHash: string; expiresAt: Date }
+  ): Promise<{ id: string; email: string; name: string | null } | undefined> {
+    const table = tokenTable(this.tables, kind);
+    let issued: { id: string; email: string; name: string | null } | undefined;
+    await this.withTransaction(async txRaw => {
+      const tx = txRaw as TokenTransaction;
+      const account = await lockAccount(tx, this.tables, this.dialect, {
+        email: args.email,
+        userId: args.userId,
+      });
+      if (!account) return;
+      // One live token of each kind per account: the newest link supersedes
+      // the earlier ones, including one from before tokens recorded their
+      // account.
+      await tx
+        .delete(table)
+        .where(
+          or(
+            eq(table.userId, account.id),
+            and(isNull(table.userId), eq(table.identifier, args.email))
+          )
+        );
+      await tx.insert(table).values({
+        identifier: args.email,
+        userId: account.id,
+        tokenHash: args.tokenHash,
+        expires: args.expiresAt,
+      });
+      issued = { id: account.id, email: account.email, name: account.name };
+    });
+    return issued;
+  }
+
+  /**
+   * The account a token being redeemed acts on, holding its row for the rest
+   * of the transaction `tx` belongs to, or undefined when there is none: the
+   * account it was issued for, while it still holds the token's address.
+   *
+   * A token from before tokens recorded their account acts on none. The core
+   * reconcile binds it to its account, or removes it, the next time it runs;
+   * judging it here as well would be a second, later reading of a rule the
+   * upgrade applies once.
+   */
+  private async redeemingAccount(
+    tx: TokenTransaction,
+    token: { identifier: string; userId: string | null }
+  ): Promise<BindingAccount | undefined> {
+    if (token.userId === null) return undefined;
+    return lockAccount(tx, this.tables, this.dialect, {
+      email: token.identifier,
+      userId: token.userId,
+    });
+  }
+
+  /** The one public error an unusable reset link returns. */
+  private invalidResetLinkError(
+    logContext: Record<string, unknown>
+  ): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: "token",
+          code: "INVALID",
+          message: "The reset link is invalid.",
+        },
+      ],
+      logContext,
+    });
+  }
+
+  /** The one public error an unusable verification link returns. */
+  private invalidVerificationLinkError(
+    logContext: Record<string, unknown>
+  ): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: "token",
+          code: "INVALID",
+          message: "The verification link is invalid or has already been used.",
+        },
+      ],
+      logContext,
+    });
   }
 
   /**
@@ -444,7 +560,7 @@ export class AuthService extends BaseService {
    *
    * @param email - User email address
    * @param options.disableEmail - Skip sending the reset email and always return the token
-   * @param options.expiration - Token lifetime in seconds (defaults to TOKEN_EXPIRY_HOURS)
+   * @param options.expiration - Token lifetime in seconds (defaults to AUTH_TOKEN_LIFETIME_MS)
    */
   async generatePasswordResetToken(
     email: string,
@@ -458,19 +574,24 @@ export class AuthService extends BaseService {
     const expirationMs =
       options?.expiration != null
         ? options.expiration * 1000
-        : this.TOKEN_EXPIRY_HOURS * 60 * 60 * 1000;
+        : AUTH_TOKEN_LIFETIME_MS;
 
     // Normalize email to ensure consistent matching with verifyCredentials
     const normalizedEmail = email.trim().toLowerCase();
 
     try {
-      const user = await this.db.query.users.findFirst({
-        where: { email: requireFilterValue(normalizedEmail, "email") },
-        columns: {
-          id: true,
-          email: true,
-          name: true,
-        },
+      const rawToken = randomBytes(32).toString("hex");
+      const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + expirationMs);
+
+      // Issued for the account holding the address, holding its row so an
+      // address change or a deletion running at the same time is ordered
+      // against this: either it lands first and this finds no account at the
+      // address, or this lands first and it revokes the token.
+      const user = await this.issueToken("password-reset", {
+        email: normalizedEmail,
+        tokenHash,
+        expiresAt,
       });
 
       if (!user) {
@@ -479,21 +600,6 @@ export class AuthService extends BaseService {
         // sent" in the normal flow).
         return {};
       }
-
-      const rawToken = randomBytes(32).toString("hex");
-      const tokenHash = createHash("sha256").update(rawToken).digest("hex");
-
-      await this.db
-        .delete(this.tables.passwordResetTokens)
-        .where(eq(this.tables.passwordResetTokens.identifier, normalizedEmail));
-
-      const expiresAt = new Date(Date.now() + expirationMs);
-
-      await this.db.insert(this.tables.passwordResetTokens).values({
-        identifier: normalizedEmail,
-        tokenHash,
-        expires: expiresAt,
-      });
 
       if (disableEmail) {
         return { token: rawToken };
@@ -510,7 +616,8 @@ export class AuthService extends BaseService {
             normalizedEmail,
             { name: user.name, email: user.email },
             rawToken,
-            { path: options?.redirectPath }
+            // Names the staff user on the delivery records.
+            { path: options?.redirectPath, staffUserId: String(user.id) }
           );
           delivered = result.success;
           if (!delivered) {
@@ -596,25 +703,28 @@ export class AuthService extends BaseService {
     }
 
     const email = resetToken.identifier;
+    // The account the token was issued for. A token from before tokens
+    // recorded one names none, and is refused in the transaction below.
+    const boundTo = resetToken.userId ?? undefined;
 
     const targetUser = await this.db.query.users.findFirst({
-      where: { email: requireFilterValue(email, "email") },
+      where: {
+        email: requireFilterValue(email, "email"),
+        ...(boundTo === undefined
+          ? {}
+          : { id: requireFilterValue(boundTo, "userId") }),
+      },
       columns: { id: true, deactivatedAt: true },
     });
 
     if (!targetUser) {
-      // Token claims to belong to an email that no longer maps to a user.
-      // Treat as invalid token rather than 500 — public message stays
-      // generic; the orphan token is logged for operators.
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "token",
-            code: "INVALID",
-            message: "The reset link is invalid.",
-          },
-        ],
-        logContext: { reason: "reset-token-orphan", tokenId: resetToken.id },
+      // The account the token was issued for is gone, or no longer holds the
+      // address the link was sent to. Treat as invalid token rather than 500
+      // — public message stays generic; the orphan token is logged for
+      // operators.
+      throw this.invalidResetLinkError({
+        reason: "reset-token-orphan",
+        tokenId: resetToken.id,
       });
     }
 
@@ -624,18 +734,9 @@ export class AuthService extends BaseService {
       // a password or clear an admin-set must-change requirement. The wire
       // stays the generic invalid-link answer, so the account's state is
       // not confirmed to whoever holds the link.
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "token",
-            code: "INVALID",
-            message: "The reset link is invalid.",
-          },
-        ],
-        logContext: {
-          reason: "reset-token-deactivated",
-          tokenId: resetToken.id,
-        },
+      throw this.invalidResetLinkError({
+        reason: "reset-token-deactivated",
+        tokenId: resetToken.id,
       });
     }
 
@@ -643,41 +744,71 @@ export class AuthService extends BaseService {
 
     try {
       const passwordHash = await hashPasswordBcrypt(newPassword);
+      const { passwordResetTokens, users } = this.tables;
 
-      // The own-password write `changePassword` makes: conditional on the
-      // account not being deactivated, in the same statement that sets the
-      // password, and ending every session the account holds. An
-      // administrator may have switched the account off while the new
-      // password was being hashed, and the read above would not have seen
-      // it; the credentials stay frozen in that window too. Whoever asked
-      // for the reset may not be the only one holding a session, so the
-      // reset ends them all on every path that resets.
-      const reset = await new UserAccountService(
-        this.adapter,
-        this.logger
-      ).changeOwnPasswordHash(targetUser.id, passwordHash);
-      if (!reset) {
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "token",
-              code: "INVALID",
-              message: "The reset link is invalid.",
-            },
-          ],
-          logContext: {
+      // Checked, applied and spent in one transaction, holding the account's
+      // row: an address change or a deletion running at the same time either
+      // commits first, and the link is refused, or waits for the reset.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TokenTransaction;
+        const account = await this.redeemingAccount(tx, resetToken);
+        if (!account) {
+          throw this.invalidResetLinkError({
+            reason: "reset-token-account-changed",
+            tokenId: resetToken.id,
+          });
+        }
+
+        // Spent before the password is written, and only by one caller: two
+        // redemptions of one link can both pass the read above, and the
+        // conditional update lets exactly one flip used_at. Zero rows also
+        // means the link was revoked, or expired, since it was read.
+        const spent = await tx
+          .update(passwordResetTokens)
+          .set({ usedAt: new Date() })
+          .where(
+            and(
+              eq(passwordResetTokens.id, resetToken.id),
+              isNull(passwordResetTokens.usedAt),
+              gt(passwordResetTokens.expires, new Date()),
+              eq(passwordResetTokens.userId, account.id)
+            )
+          );
+        if (affectedRowCount(spent, this.dialect) !== 1) {
+          throw this.invalidResetLinkError({
+            reason: "reset-token-spent-or-revoked",
+            tokenId: resetToken.id,
+          });
+        }
+
+        // The own-password write `changePassword` makes: conditional on the
+        // account not being deactivated, in the same statement that sets the
+        // password, and ending every session the account holds. An
+        // administrator may have switched the account off while the new
+        // password was being hashed, and the read above would not have seen
+        // it; the credentials stay frozen in that window too. Whoever asked
+        // for the reset may not be the only one holding a session, so the
+        // reset ends them all on every path that resets. Throwing rolls the
+        // spend back with it.
+        const reset = await updateUserEndingSessions(
+          tx,
+          this.tables,
+          this.dialect,
+          {
+            userId: account.id,
+            adapter: this.adapter,
+            set: passwordColumns(passwordHash),
+            unlessDeactivated: true,
+            when: eq(users.email, email),
+          }
+        );
+        if (reset !== 1) {
+          throw this.invalidResetLinkError({
             reason: "reset-token-deactivated",
             tokenId: resetToken.id,
-          },
-        });
-      }
-
-      await this.db
-        .update(this.tables.passwordResetTokens)
-        .set({
-          usedAt: new Date(),
-        })
-        .where(eq(this.tables.passwordResetTokens.id, resetToken.id));
+          });
+        }
+      });
     } catch (error) {
       if (NextlyError.is(error)) throw error;
       // Normalise raw driver errors before mapping.
@@ -720,24 +851,21 @@ export class AuthService extends BaseService {
       const tokenHash = createHash("sha256").update(rawToken).digest("hex");
 
       // The token is keyed to the matched account's STORED spelling:
-      // verifyEmail updates the user by an exact email = identifier match,
-      // so a legacy mixed-case row keyed by its canonical form would verify
-      // zero rows and still report success.
+      // verifyEmail redeems it only while the account holds exactly that
+      // address, so a legacy mixed-case row keyed by its canonical form could
+      // never be verified.
       const identifier = user.email;
+      const expiresAt = new Date(Date.now() + AUTH_TOKEN_LIFETIME_MS);
 
-      await this.db
-        .delete(this.tables.emailVerificationTokens)
-        .where(eq(this.tables.emailVerificationTokens.identifier, identifier));
-
-      const expiresAt = new Date(
-        Date.now() + this.TOKEN_EXPIRY_HOURS * 60 * 60 * 1000
-      );
-
-      await this.db.insert(this.tables.emailVerificationTokens).values({
-        identifier,
+      // Issued for the matched account, holding its row, as a reset link is.
+      // An account that moved or was deleted since the lookup gets nothing.
+      const issued = await this.issueToken("email-verification", {
+        email: identifier,
+        userId: String(user.id),
         tokenHash,
-        expires: expiresAt,
+        expiresAt,
       });
+      if (!issued) return {};
 
       if (options?.disableEmail) {
         return { token: rawToken };
@@ -745,7 +873,7 @@ export class AuthService extends BaseService {
 
       return await this.deliverVerificationEmail(
         email,
-        { name: user.name, email: user.email },
+        { id: String(user.id), name: user.name, email: user.email },
         rawToken,
         options?.redirectPath
       );
@@ -787,7 +915,7 @@ export class AuthService extends BaseService {
    */
   private async deliverVerificationEmail(
     email: string,
-    recipient: { name: string | null; email: string },
+    recipient: { id: string; name: string | null; email: string },
     rawToken: string,
     redirectPath: string | undefined
   ): Promise<{ token?: string }> {
@@ -806,9 +934,10 @@ export class AuthService extends BaseService {
       // the only evidence that nothing reached the user.
       const result = await this.emailService.sendEmailVerificationEmail(
         email,
-        recipient,
+        { name: recipient.name, email: recipient.email },
         rawToken,
-        { path: redirectPath }
+        // Names the staff user on the delivery records.
+        { path: redirectPath, staffUserId: recipient.id }
       );
       delivered = result.success;
       if (!delivered) {
@@ -866,43 +995,60 @@ export class AuthService extends BaseService {
     }
 
     const email = verificationToken.identifier;
+    const { emailVerificationTokens, users } = this.tables;
 
     try {
-      // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
-      // BetterSQLite3Transaction depending on dialect) that exposes the same
-      // fluent query API as this.db.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await this.withTransaction(async (tx: any) => {
+      // Checked, applied and spent in one transaction, holding the account's
+      // row, so an address change or a deletion running at the same time is
+      // ordered against it.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TokenTransaction;
+        const account = await this.redeemingAccount(tx, verificationToken);
+        if (!account) {
+          throw this.invalidVerificationLinkError({
+            reason: "verification-token-account-changed",
+            tokenId: verificationToken.id,
+          });
+        }
+
+        // Spent first, by exactly one caller; zero rows means another
+        // redemption spent it, or an address change revoked it, since the
+        // read above.
+        const spent = await tx
+          .delete(emailVerificationTokens)
+          .where(
+            and(
+              eq(emailVerificationTokens.id, verificationToken.id),
+              eq(emailVerificationTokens.userId, account.id)
+            )
+          );
+        if (affectedRowCount(spent, this.dialect) !== 1) {
+          throw this.invalidVerificationLinkError({
+            reason: "verification-token-spent-or-revoked",
+            tokenId: verificationToken.id,
+          });
+        }
+
         // Mark the email verified, and activate the account. Self-verification
         // (whether initiated by /auth/register or by an admin invite with
         // sendWelcomeEmail=true) is what activates the account — both
         // paths funnel through here. An admin can still manually activate
         // a user without email verification via the user-mutation path.
         await tx
-          .update(this.tables.users)
+          .update(users)
           .set(emailVerificationColumns(new Date(), "link"))
-          .where(eq(this.tables.users.email, email));
+          .where(eq(users.id, account.id));
         // Activation is conditional in the statement itself: an account an
         // administrator deactivated stays inactive, including when its link
         // was sent before the deactivation. The address is still verified —
         // following the link proved it — so reactivating needs no new link.
         await tx
-          .update(this.tables.users)
+          .update(users)
           .set({ isActive: true })
-          .where(
-            and(
-              eq(this.tables.users.email, email),
-              isNull(this.tables.users.deactivatedAt)
-            )
-          );
-
-        await tx
-          .delete(this.tables.emailVerificationTokens)
-          .where(
-            eq(this.tables.emailVerificationTokens.id, verificationToken.id)
-          );
+          .where(and(eq(users.id, account.id), isNull(users.deactivatedAt)));
       });
     } catch (error) {
+      if (NextlyError.is(error)) throw error;
       // Normalise raw driver errors before mapping.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
@@ -1064,6 +1210,7 @@ export class AuthService extends BaseService {
           this.dialect,
           {
             userId: invite.userId,
+            adapter: this.adapter,
             set: {
               ...passwordColumns(passwordHash),
               // Receiving the invite at this address is what proves it.
@@ -1186,6 +1333,7 @@ export class AuthService extends BaseService {
             set: passwordColumns(passwordHash),
             unlessDeactivated: true,
             when: eq(this.tables.users.mustChangePassword, true),
+            adapter: this.adapter,
           }
         );
         if (claimed !== 1) return;
@@ -1226,7 +1374,11 @@ export class AuthService extends BaseService {
    */
   async resetTokenOwner(token: string): Promise<string | null> {
     const row = await this.findUnusedResetToken(token);
-    return row && !tokenExpired(row) ? row.identifier : null;
+    // Only a token redemption would honour names an owner: one with no
+    // account is refused there until the core reconcile binds it.
+    return row && row.userId !== null && !tokenExpired(row)
+      ? row.identifier
+      : null;
   }
 
   /**
@@ -1235,7 +1387,11 @@ export class AuthService extends BaseService {
    */
   async verificationTokenOwner(token: string): Promise<string | null> {
     const row = await this.findVerificationToken(token);
-    return row && !tokenExpired(row) ? row.identifier : null;
+    // Only a token redemption would honour names an owner: one with no
+    // account is refused there until the core reconcile binds it.
+    return row && row.userId !== null && !tokenExpired(row)
+      ? row.identifier
+      : null;
   }
 
   /**
@@ -1276,7 +1432,7 @@ export class AuthService extends BaseService {
           tokenHash: requireFilterValue(tokenHash, "tokenHash"),
           usedAt: { isNull: true },
         },
-        columns: { id: true, identifier: true, expires: true },
+        columns: { id: true, identifier: true, userId: true, expires: true },
       });
     } catch (error) {
       // Normalise raw driver errors so the DB kind is preserved.
@@ -1292,7 +1448,7 @@ export class AuthService extends BaseService {
     try {
       return await this.db.query.emailVerificationTokens.findFirst({
         where: { tokenHash: requireFilterValue(tokenHash, "tokenHash") },
-        columns: { id: true, identifier: true, expires: true },
+        columns: { id: true, identifier: true, userId: true, expires: true },
       });
     } catch (error) {
       // Normalise raw driver errors so the DB kind is preserved.
@@ -1335,7 +1491,7 @@ export class AuthService extends BaseService {
         .delete(this.tables.userInviteTokens)
         .where(lt(this.tables.userInviteTokens.expires, now));
     } catch (error) {
-      console.error("Failed to cleanup expired tokens:", error);
+      this.logger.error("Failed to cleanup expired tokens", { error: error });
     }
   }
 }

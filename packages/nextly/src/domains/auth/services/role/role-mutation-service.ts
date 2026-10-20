@@ -17,6 +17,7 @@ import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../../shared/lib/unique-violation";
+import { afterRoleGrantsChanged } from "../role-grants-changed";
 
 import { toDialectBool, validateRoleId } from "./utils";
 
@@ -603,72 +604,71 @@ export class RoleMutationService extends BaseService {
         }
       }
 
-      // Wrap all database mutations in a transaction for atomicity
+      // Wrap all database mutations in a transaction for atomicity. The
+      // adapter's, as deleteRole uses: it is async on every dialect, where the
+      // query builder's transaction on SQLite runs its callback synchronously
+      // and refuses one that returns a promise, so the edit failed there
+      // before it changed anything.
       try {
-        // Required by Drizzle ORM: transaction callback type varies by dialect.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await this.db.transaction(async (tx: any) => {
+        await this.adapter.transaction(async tx => {
           // Update role basic fields if any provided
           if (Object.keys(updateData).length > 0) {
-            await tx
-              .update(this.tables.roles)
-              .set(updateData)
-              .where(eq(this.tables.roles.id, roleId));
+            await tx.update("roles", updateData, this.whereEq("id", roleId));
           }
 
           // Handle permission updates
           if (changes.permissionIds !== undefined) {
             // Delete all existing role-permission mappings
-            await tx
-              .delete(this.tables.rolePermissions)
-              .where(eq(this.tables.rolePermissions.roleId, roleId));
+            await tx.delete("role_permissions", this.whereEq("roleId", roleId));
 
-            // Insert new role-permission mappings
+            // Insert new role-permission mappings. `createdAt` is set here
+            // because the schema's default for it is applied by the query
+            // builder, which the adapter's insert does not go through.
             if (uniquePermissionIds.length > 0) {
-              const rolePermissionData = uniquePermissionIds.map(
-                permissionId => ({
+              const createdAt = new Date();
+              await tx.insertMany(
+                "role_permissions",
+                uniquePermissionIds.map(permissionId => ({
                   id: randomUUID(),
                   roleId,
                   permissionId,
-                })
+                  createdAt,
+                }))
               );
-
-              await tx
-                .insert(this.tables.rolePermissions)
-                .values(rolePermissionData);
             }
           }
 
           // Handle child role updates
           if (changes.childRoleIds !== undefined) {
             // Delete all existing role inheritance relationships for this parent
-            await tx
-              .delete(this.tables.roleInherits)
-              .where(eq(this.tables.roleInherits.parentRoleId, roleId));
+            await tx.delete(
+              "role_inherits",
+              this.whereEq("parentRoleId", roleId)
+            );
 
             // Insert new role inheritance relationships
             if (uniqueChildRoleIds.length > 0) {
-              const roleInheritanceData = uniqueChildRoleIds.map(
-                childRoleId => ({
+              await tx.insertMany(
+                "role_inherits",
+                uniqueChildRoleIds.map(childRoleId => ({
                   id: randomUUID(),
                   parentRoleId: roleId,
                   childRoleId,
-                })
+                }))
               );
-
-              await tx
-                .insert(this.tables.roleInherits)
-                .values(roleInheritanceData);
             }
           }
         });
 
-        // Invalidate cache after successful transaction
+        // Invalidate cache after successful transaction. A new slug changes
+        // the roles a code-defined rule reads, as new grants change the
+        // permissions it reads.
         if (
           changes.permissionIds !== undefined ||
-          changes.childRoleIds !== undefined
+          changes.childRoleIds !== undefined ||
+          changes.slug !== undefined
         ) {
-          await invalidatePermissionCache({ roleId });
+          await afterRoleGrantsChanged(roleId);
         }
 
         return;
@@ -754,7 +754,7 @@ export class RoleMutationService extends BaseService {
 
       // Awaited, for the reason `createRole` gives: an abandoned shared write
       // leaves the other instances holding answers this delete retired.
-      await invalidatePermissionCache({ roleId });
+      await afterRoleGrantsChanged(roleId);
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Raw DB errors map via
       // fromDatabaseError, which provides the spec-compliant generic public

@@ -22,6 +22,7 @@
 import { z } from "zod";
 
 import { NextlyError } from "../../errors/nextly-error";
+import { consoleLogger } from "../../shared/types";
 import type { HookContext, HookType } from "../types";
 
 // ============================================================
@@ -474,7 +475,7 @@ export const uniqueValidation: PrebuiltHookConfig<UniqueValidationConfig> = {
 
     // Check if queryDatabase function is available
     if (!context.queryDatabase) {
-      console.warn(
+      consoleLogger.warn(
         `[Nextly] Uniqueness validation for ${field} skipped: queryDatabase function not available`
       );
       return data;
