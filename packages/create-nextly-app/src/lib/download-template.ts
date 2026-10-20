@@ -2,9 +2,10 @@
  * Template Download via GitHub Codeload
  *
  * Downloads templates from the Nextly GitHub repo at runtime using the
- * Codeload API. This follows the same pattern as Payload CMS's
- * create-payload-app. Templates are NOT bundled in the npm package -
- * they're fetched on demand so template updates don't require a CLI release.
+ * Codeload API. Content templates are not bundled in the npm package; they
+ * are fetched at the tag of this CLI's own release, so a template and the
+ * Nextly packages the project declares come from one release. A --branch
+ * takes the template from that branch instead.
  *
  * Fallback: --local-template flag reads from the filesystem (for development).
  */
@@ -15,6 +16,8 @@ import path from "path";
 
 import fs from "fs-extra";
 import { x } from "tar";
+
+import type { NextlySource } from "./nextly-release";
 
 // GitHub repository coordinates for the Nextly monorepo
 const GITHUB_ORG = "nextlyhq";
@@ -31,6 +34,13 @@ export interface TemplateSource {
 }
 
 /**
+ * What to download: a branch the run named, or the release this CLI belongs
+ * to, by its tag (`v<version>`), so the template comes from the same release
+ * as the packages the project declares.
+ */
+export type TemplateRef = { branch: string } | { release: string };
+
+/**
  * Download and extract a template from GitHub Codeload.
  *
  * Fetches the repo tarball and extracts only templates/base/ and
@@ -38,13 +48,14 @@ export interface TemplateSource {
  * paths to both extracted directories.
  *
  * @param templateName - Template to download (e.g., "blog")
- * @param branch - Git branch to download from (defaults to "main")
+ * @param ref - The branch or the release to download it from
  */
 export async function downloadTemplate(
   templateName: string,
-  branch: string = "main"
+  ref: TemplateRef = { branch: "main" }
 ): Promise<TemplateSource> {
-  const url = `https://codeload.github.com/${GITHUB_ORG}/${GITHUB_REPO}/tar.gz/${branch}`;
+  const name = "branch" in ref ? ref.branch : `v${ref.release}`;
+  const url = `https://codeload.github.com/${GITHUB_ORG}/${GITHUB_REPO}/tar.gz/${name}`;
 
   // Create a temp directory for extraction
   const tmpDir = path.join(
@@ -53,22 +64,32 @@ export async function downloadTemplate(
   );
   await fs.ensureDir(tmpDir);
 
-  // The tarball contains files prefixed with "{repo}-{branch}/"
-  // We need to extract templates/base/ and templates/{templateName}/
-  const repoPrefix = `${GITHUB_REPO}-${branch}`;
-  const baseFilter = `${repoPrefix}/templates/base/`;
-  const templateFilter = `${repoPrefix}/templates/${templateName}/`;
+  // Every file of the archive sits under one top folder, which Codeload
+  // names after the repository and the ref, though not as the ref is
+  // spelled: a tag loses its `v` (`v0.0.2-alpha.66` gives
+  // `nextly-0.0.2-alpha.66/`) and a branch's `/` becomes `-`. So files are
+  // matched by their path below that folder, whatever it is called.
+  const wanted = [`templates/base/`, `templates/${templateName}/`];
+  const belowTop = (p: string): string => p.slice(p.indexOf("/") + 1);
 
   try {
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(30000), // 30s timeout for download
-    });
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        signal: AbortSignal.timeout(30000), // 30s timeout for download
+      });
+    } catch (error) {
+      throw unreachable(templateName, error);
+    }
 
     if (!response.ok) {
       throw new Error(
-        `Failed to download template from GitHub (${response.status}). ` +
-          `URL: ${url}. ` +
-          `Make sure the branch "${branch}" exists and the repository is accessible.`
+        response.status === 404 && "release" in ref
+          ? `GitHub has no ${templateName} template for this create-nextly-app's release, ${ref.release} (no tag ${name}). ` +
+            "To take the templates from a branch instead, run it again with --branch <name>, such as --branch main."
+          : `Failed to download template from GitHub (${response.status}). ` +
+            `URL: ${url}. ` +
+            `Make sure the branch "${name}" exists and the repository is accessible.`
       );
     }
 
@@ -80,27 +101,24 @@ export async function downloadTemplate(
 
     // Stream the tarball through tar extraction
     // Only extract files matching base or selected template paths
-    await pipeline(
-      Readable.from(response.body as unknown as NodeJS.ReadableStream),
-      x({
-        cwd: tmpDir,
-        filter: (p: string) =>
-          p.startsWith(baseFilter) || p.startsWith(templateFilter),
-        // Strip the "{repo}-{branch}/" prefix so templates/ is at the root
-        strip: 1,
-      })
-    );
+    try {
+      await pipeline(
+        Readable.from(response.body as unknown as NodeJS.ReadableStream),
+        x({
+          cwd: tmpDir,
+          filter: (p: string) =>
+            wanted.some(prefix => belowTop(p).startsWith(prefix)),
+          // Strip the top folder so templates/ is at the root
+          strip: 1,
+        })
+      );
+    } catch (error) {
+      // The connection can fail partway through the archive too.
+      throw unreachable(templateName, error);
+    }
   } catch (error) {
     // Clean up temp directory on failure
     await fs.remove(tmpDir).catch(() => {});
-
-    if (error instanceof Error && error.name === "TimeoutError") {
-      throw new Error(
-        "Template download timed out after 30 seconds. " +
-          "Check your internet connection or use --local-template for offline development."
-      );
-    }
-
     throw error;
   }
 
@@ -112,7 +130,7 @@ export async function downloadTemplate(
     await fs.remove(tmpDir).catch(() => {});
     throw new Error(
       `Base template not found in downloaded archive. ` +
-        `The branch "${branch}" may not contain templates.`
+        `"${name}" may not contain templates.`
     );
   }
 
@@ -120,11 +138,30 @@ export async function downloadTemplate(
     await fs.remove(tmpDir).catch(() => {});
     throw new Error(
       `Template "${templateName}" not found in downloaded archive. ` +
-        `Available templates may differ on branch "${branch}".`
+        `Available templates may differ on "${name}".`
     );
   }
 
   return { basePath, templatePath };
+}
+
+/**
+ * GitHub could not be reached, or stopped answering: a missing network, a
+ * proxy or a timeout. Another ref would fail the same way, so the ways on are
+ * to try again or to read the templates from disk.
+ */
+function unreachable(templateName: string, cause: unknown): Error {
+  const reason =
+    cause instanceof Error && cause.name === "TimeoutError"
+      ? "it did not answer within 30 seconds"
+      : cause instanceof Error
+        ? cause.message
+        : String(cause);
+  return new Error(
+    `Could not reach GitHub to download the ${templateName} template: ${reason}. ` +
+      "Try again, or run with --local-template <path> pointing at a copy of the templates.",
+    { cause }
+  );
 }
 
 /**
@@ -182,15 +219,27 @@ export async function resolveTemplateSource(
   options: {
     localTemplatePath?: string;
     branch?: string;
+    /**
+     * Where the project's Nextly packages come from: with no branch named,
+     * the template is downloaded at the same release.
+     */
+    source?: NextlySource;
   } = {}
 ): Promise<TemplateSource> {
-  const { localTemplatePath, branch = "main" } = options;
+  const { localTemplatePath, branch, source } = options;
 
   if (localTemplatePath) {
     return resolveLocalTemplate(localTemplatePath, templateName);
   }
 
-  return downloadTemplate(templateName, branch);
+  return downloadTemplate(
+    templateName,
+    branch !== undefined
+      ? { branch }
+      : source?.kind === "release"
+        ? { release: source.cliVersion }
+        : { branch: "main" }
+  );
 }
 
 /**

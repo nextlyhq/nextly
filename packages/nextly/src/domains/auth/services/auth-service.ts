@@ -1347,7 +1347,7 @@ export class AuthService extends BaseService {
         .delete(this.tables.userInviteTokens)
         .where(lt(this.tables.userInviteTokens.expires, now));
     } catch (error) {
-      console.error("Failed to cleanup expired tokens:", error);
+      this.logger.error("Failed to cleanup expired tokens", { error: error });
     }
   }
 }

@@ -49,7 +49,21 @@ import { SiteSettings } from "./src/singles/site-settings";
 // "1" rather than checked for presence so an empty value reads as off.
 const brandingColorsEnabled = process.env.NEXTLY_E2E_BRANDING === "1";
 
+// Set by e2e/playwright.config.ts for the suite's dev server. The suite signs
+// in once and drives every spec through that one session at machine pace, far
+// past the 500 reads a minute the default session budget allows a person, so
+// it is given a session budget of its own. Every other limit keeps its
+// default, and the admin request budget test still holds each page to its bar
+// at the default numbers. Never honoured in a production build, so neither the
+// production suite nor a deployment can raise the limit through this flag.
+const e2eSessionBudget =
+  process.env.NEXTLY_E2E_SESSION_BUDGET === "1" &&
+  process.env.NODE_ENV !== "production";
+
 export default defineConfig({
+  ...(e2eSessionBudget
+    ? { rateLimit: { sessions: { readLimit: 5000, writeLimit: 1500 } } }
+    : {}),
   admin: {
     branding: {
       logoUrlLight: "/Nextly_Icon_dark.svg",

@@ -13,6 +13,7 @@
  */
 
 import type { EmailProviderAdapter } from "../../types";
+import { messageToAddresses } from "../recipients";
 
 /** Resend's public API host, used when nothing overrides it. */
 const RESEND_DEFAULT_BASE_URL = "https://api.resend.com";
@@ -55,6 +56,15 @@ interface ResendProviderConfig {
 }
 
 /**
+ * The most `to` addresses Resend accepts on one message.
+ *
+ * Resend's send-email reference gives `to` a maximum of 50 and states no limit
+ * for `cc` or `bcc`. Declared so a longer list is refused before the request
+ * with the limit named, instead of failing at Resend.
+ */
+export const RESEND_MAX_TO = 50;
+
+/**
  * Error body Resend returns for a rejected send. Every field is optional
  * because an error response is the one shape a caller cannot assume: a gateway
  * or proxy failure yields a status without this envelope at all.
@@ -89,14 +99,16 @@ export function createResendProvider(
   config: ResendProviderConfig
 ): EmailProviderAdapter {
   return {
+    maxToPerMessage: RESEND_MAX_TO,
     async send(options) {
       // Built conditionally so unset fields are absent from the JSON rather
       // than present and null, which Resend rejects for `reply_to`.
       const body: Record<string, unknown> = {
         from: options.from,
         // The REST API takes a recipient LIST even for a single address; the
-        // SDK accepted a bare string and wrapped it.
-        to: [options.to],
+        // SDK accepted a bare string and wrapped it. `toList` carries every
+        // `to` address when there is more than one.
+        to: messageToAddresses(options),
         subject: options.subject,
         html: options.html,
       };
