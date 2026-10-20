@@ -70,7 +70,7 @@ export interface AuthenticatedScope {
   /**
    * The rows the grants came from — the single source both spellings derive
    * from. Absent on a scope built from a caller whose grants were already
-   * resolved to slugs; {@link ruleFacingPermissions} says what that costs.
+   * resolved to slugs; {@link scopeGrants} says what that costs.
    */
   readonly grants?: readonly GrantedPermission[];
   /**
