@@ -36,7 +36,7 @@ Who may read, change and revoke API keys follows the permission, not the key's o
 - `update-api-keys` renames any key, and `delete-api-keys` (or `update-api-keys`) revokes any key. Creating a key is still only for yourself.
 - The dashboard's key count covers every key, as the list does.
 
-The Direct API's `apiKeys` namespace now honours `overrideAccess: false`, set on the call or on the instance, and judges its `user` by these same rules.
+The Direct API's `apiKeys` namespace now honours `overrideAccess: false`, set on the call or on the instance, and judges its `user` by these same rules. It is now on `await getNextly()`'s instance too, as on the module-level `nextly`.
 
 - Making or changing keys as an API key is refused.
 - A checked call that names no `user` is refused with `AUTH_REQUIRED`.

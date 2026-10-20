@@ -679,7 +679,7 @@ The Direct API also exposes typed namespaces for users, media, forms, field grou
 | `nextly.access` | Permission checks | `check`, `checkApiKey` |
 | `nextly.apiKeys` | API keys | `list`, `findByID`, `create`, `update`, `revoke` |
 
-`nextly.apiKeys` honours `overrideAccess: false`, set on the call or on the instance (`new Nextly({ overrideAccess: false, user })`), and judges the `user` the way the admin's API key routes judge them:
+`nextly.apiKeys`, on the module-level `nextly` and on `await getNextly()` alike, honours `overrideAccess: false`, set on the call or on the instance (`new Nextly({ overrideAccess: false, user })`), and judges the `user` the way the admin's API key routes judge them:
 
 - Each operation needs the matching `api-keys` permission, which then reaches every key: reading, updating and revoking anyone's.
 - `create` makes a key only for that user.
