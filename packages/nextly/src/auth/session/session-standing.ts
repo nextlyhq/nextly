@@ -105,6 +105,12 @@ export interface SessionStandingCache {
    * however long that takes; without it, nothing is kept for one lifetime.
    */
   forget(userId: string, writing?: () => boolean): void;
+  /**
+   * The forgets whose change is still uncommitted, each with the check that
+   * says when it commits. A cache replaced while one is open hands them to
+   * its replacement, which must not keep that change's old row either.
+   */
+  uncommitted(): Array<{ userId: string; writing: () => boolean }>;
 }
 
 /** A read of one account's row, and whether a `forget` has overtaken it. */
@@ -287,6 +293,16 @@ export function createSessionStandingCache(options: {
         running.superseded = true;
         reading.delete(userId);
       }
+    },
+
+    uncommitted() {
+      const open: Array<{ userId: string; writing: () => boolean }> = [];
+      for (const [userId, mark] of forgotten) {
+        if (mark.writing?.() === true) {
+          open.push({ userId, writing: mark.writing });
+        }
+      }
+      return open;
     },
   };
 }
@@ -490,6 +506,11 @@ function rememberAdapter(adapter: DrizzleAdapter): void {
 function cacheFor(adapter: DrizzleAdapter): SessionStandingCache {
   if (held?.adapter !== adapter) {
     rememberAdapter(adapter);
+    // A change still uncommitted when services are registered again keeps
+    // its mark: the new cache would otherwise keep a read of the old row the
+    // moment its first request arrives. The answers held are not carried;
+    // they belong to the database that gave them.
+    const carried = held?.cache.uncommitted() ?? [];
     held = {
       cache: createSessionStandingCache({
         read: userId => readSessionStanding(userId, adapter),
@@ -500,6 +521,9 @@ function cacheFor(adapter: DrizzleAdapter): SessionStandingCache {
       }),
       adapter,
     };
+    for (const { userId, writing } of carried) {
+      held.cache.forget(userId, writing);
+    }
   }
   return held.cache;
 }
@@ -544,8 +568,14 @@ export async function accountIsActive(userId: string): Promise<boolean> {
  * Drop this process's answer for the account, after a change that ends its
  * sessions, so the instance that made the change refuses the old tokens
  * without waiting out the cache.
+ *
+ * `writer` is the adapter the change's transaction runs on, which is the one
+ * that can say when it commits.
  */
-export function forgetSessionStanding(userId: string | number): void {
+export function forgetSessionStanding(
+  userId: string | number,
+  writer?: DrizzleAdapter
+): void {
   // The registered adapter first: after services are registered again, the
   // cache can still belong to the adapter they replaced until something reads
   // through the new one, and a mark left there is one the next read never
@@ -556,11 +586,14 @@ export function forgetSessionStanding(userId: string | number): void {
     : held?.adapter;
   if (adapter === undefined) return;
   // Whether the change that made this call has committed: a transaction this
-  // flow is inside is still open, which every dialect answers. Asked of the
-  // adapters the cache served lately too: while services are registered
-  // again, the write can be open on one they replaced, and only that adapter
-  // knows, even once a read has moved the cache to the new one.
-  const writers = new Set<DrizzleAdapter>([adapter]);
+  // flow is inside is still open, which every dialect answers. Asked first of
+  // `writer`, the adapter the change's transaction was opened on, which alone
+  // knows when services registered again have replaced it before the cache
+  // ever read through it; then of the registered adapter and of those the
+  // cache served lately, for a caller that cannot say.
+  const writers = new Set<DrizzleAdapter>(
+    writer ? [writer, adapter] : [adapter]
+  );
   for (const ref of recentAdapters) {
     const known = ref.deref();
     if (known !== undefined) writers.add(known);

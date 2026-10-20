@@ -1067,6 +1067,7 @@ export class AuthService extends BaseService {
           this.dialect,
           {
             userId: invite.userId,
+            adapter: this.adapter,
             set: {
               ...passwordColumns(passwordHash),
               // Receiving the invite at this address is what proves it.
@@ -1198,6 +1199,7 @@ export class AuthService extends BaseService {
             set: passwordColumns(passwordHash),
             unlessDeactivated: true,
             when: eq(this.tables.users.mustChangePassword, true),
+            adapter: this.adapter,
           }
         );
         if (claimed !== 1) return;

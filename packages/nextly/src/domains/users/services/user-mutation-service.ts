@@ -2061,6 +2061,7 @@ export class UserMutationService extends BaseService {
               await updateUserEndingSessions(txDb, this.tables, this.dialect, {
                 userId: currentUser.id,
                 set: updateData,
+                adapter: this.adapter,
               });
             } else if (hasFieldUpdates) {
               await txDb
