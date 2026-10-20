@@ -3,14 +3,8 @@ import { inArray, sql } from "drizzle-orm";
 
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
-import {
-  apiKeyScopeAllows,
-  type AuthenticatedScope,
-} from "../../../auth/authenticated-scope";
-import {
-  codeAccessAllows,
-  readAccessCaller,
-} from "../../../auth/entity-read-access";
+import { relatedRowReads } from "../../../auth/access/population-read";
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
 import { getDialectTables } from "../../../database";
@@ -46,7 +40,6 @@ import {
   boundReaches,
   TRUSTS_EVERY_COLLECTION,
 } from "../../../services/collections/trust-grant";
-import { hasPermission } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { detachData } from "../../../shared/lib/detach";
@@ -1679,17 +1672,9 @@ export class CollectionRelationshipService extends BaseService {
       });
     }
 
-    const accessService = this.resolveAccessService();
-
     // The redaction basis when the read names one, as a preview does, so a
     // link never shows a row its sharer could not read.
     const user = judgedFor(access) as UserContext | undefined;
-    // Super-admins bypass the read gate on every other transport. A scoped API
-    // key is authoritative on its OWN grant and never on its owner's roles, so
-    // the bypass does not extend to one — the same carve-out the direct read
-    // paths make.
-    const isScopedApiKey = access.authenticatedScope?.actorType === "apiKey";
-    if (!isScopedApiKey && accessService.isSuperAdmin(user)) return true;
 
     // One verdict for the whole target: every row of it is admitted or
     // withheld together, and the rule is asked once — per EXPANSION, not per
@@ -1794,7 +1779,21 @@ export class CollectionRelationshipService extends BaseService {
     access: RelatedRowAccess
   ): Promise<boolean> {
     return this.memoizedVerdict(access, targetCollection, () =>
-      this.judgeTarget(user, targetCollection, access.authenticatedScope)
+      relatedRowReads(
+        targetCollection,
+        {
+          user: user && {
+            id: String(user.id),
+            role: user.role,
+            roles: user.roles,
+          },
+          scope: access.authenticatedScope,
+          principal: currentPrincipal(),
+        },
+        container.has("rbacAccessControlService")
+          ? container.get<RBACAccessControlService>("rbacAccessControlService")
+          : undefined
+      )
     );
   }
 
@@ -1813,130 +1812,6 @@ export class CollectionRelationshipService extends BaseService {
     const pending = decide();
     access.targetVerdicts?.set(targetCollection, pending);
     return pending;
-  }
-
-  /**
-   * Whether the caller may read the target collection at all.
-   *
-   * One verdict for the whole target, asked once per expansion rather than once
-   * per row. The gate answers per caller and operation and has no per-row
-   * shape, so every row of one target is admitted or refused together — and a
-   * rule that reaches out to another service is asked once, not five hundred
-   * times concurrently for a five-hundred-row relationship.
-   *
-   * The question is the one a permission-checked direct read of the target
-   * asks, so a row refused by name is withheld from a relationship too. The
-   * route authorized this caller for the PARENT collection only, and says
-   * nothing about a target they never asked for.
-   *
-   * - A scoped API key must hold `read-<target>` in its OWN scope, and then
-   *   answers to the target's rule when one is declared. The grant is asked
-   *   first, so a key its scope never admitted to the target is refused
-   *   whatever the rule would say, and never on its owner's authority.
-   * - A session caller answers to the target's rule when one is declared,
-   *   without a per-collection grant, so a site that leans on code-defined
-   *   access keeps its relationships. Where the target declares no read rule,
-   *   the caller falls through to their database grants, as the direct read
-   *   does.
-   *
-   * The rule is shown the SAME context a direct read shows it. A session
-   * caller's rule reads real roles and effective permissions, built by the RBAC
-   * service exactly as `checkAccess` builds them for a direct read; a scoped API
-   * key's rule reads the key's own stamped grants, as the direct read's api-key
-   * branch does. A narrower reconstruction here — an empty permission list, say
-   * — makes the same row vanish from a relationship that the caller can read
-   * directly, which reports as a ghost.
-   *
-   * An absent rule decides nothing on its own: a key answers to its grant
-   * alone, and a person to their database grants, as each one's direct read
-   * does. A rule that throws denies, so a broken one fails closed.
-   *
-   * An ANONYMOUS caller is judged too, by the same question a direct anonymous
-   * read of the target asks: the rule, handed a real anonymous context. The
-   * permission half of the gate needs a user and does not run for them, but
-   * the rule reads nothing off the caller — and `read: false` on a target
-   * describes an anonymous reader most clearly of all. Admitting them here
-   * would let a public parent expose, through a relationship, rows the same
-   * visitor is refused when asking for them by name.
-   */
-  private async judgeTarget(
-    user: UserContext | undefined,
-    targetCollection: string,
-    authenticatedScope: AuthenticatedScope | undefined
-  ): Promise<boolean> {
-    const rbac = container.has("rbacAccessControlService")
-      ? container.get<RBACAccessControlService>("rbacAccessControlService")
-      : undefined;
-
-    // A call made as a plugin-defined person reads a populated target only
-    // where the target's own rule admits them: the one decision the direct
-    // read of the target asks, so a relationship serves a person nothing they
-    // would be refused by name. No rule, or no service to consult, refuses.
-    const principal = currentPrincipal();
-    if (principal !== null) {
-      return (
-        rbac !== undefined &&
-        rbac.checkPrincipalCodeAccess({
-          operation: "read",
-          resource: targetCollection,
-          principal,
-        })
-      );
-    }
-
-    if (!user) {
-      // `undefined` is no opinion — the target names no rule for reading, and
-      // the anonymous read falls through to its public default, as the direct
-      // read does. A boolean is the rule's own verdict.
-      const verdict = await rbac?.checkAnonymousCodeAccess({
-        operation: "read",
-        resource: targetCollection,
-      });
-      return verdict !== false;
-    }
-
-    // A key's own scope is authoritative on the target, before any rule: the
-    // same grant a direct read of the target requires of it.
-    if (
-      apiKeyScopeAllows(authenticatedScope, "read", targetCollection) === false
-    ) {
-      return false;
-    }
-
-    // Without the access-control service, the answer the direct read's gate
-    // gives without it: a key's grant, already asked above, and a person's
-    // database grants. Admitting the person here let a relationship serve rows
-    // the same caller was refused by name.
-    if (!rbac) {
-      return authenticatedScope?.actorType === "apiKey"
-        ? true
-        : hasPermission(user.id, "read", targetCollection);
-    }
-    const target = rbac.getRegisteredTarget(targetCollection);
-    const codeAccess = target?.access;
-
-    if (authenticatedScope?.actorType === "apiKey") {
-      // Judged on the operation rather than the object, because a collection
-      // that declares `access.create` alone has still said nothing about
-      // reading. With no read rule, the grant above is the whole answer, as it
-      // is on the direct read's key branch.
-      if (!target || codeAccess?.read === undefined) return true;
-      return codeAccessAllows(
-        target,
-        "read",
-        readAccessCaller({ user, authenticatedScope })
-      );
-    }
-
-    // A declared read rule answers alone, with its context built the canonical
-    // way. Without one, `checkAccess` falls through to the caller's database
-    // grants, which is the answer a permission-checked direct read gives.
-    return rbac.checkAccess({
-      userId: user.id,
-      operation: "read",
-      resource: targetCollection,
-      codeAccess,
-    });
   }
 
   /**

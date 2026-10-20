@@ -11,6 +11,11 @@
 # deviations.ts`). The cell must disagree having recorded exactly those, so
 # removing a deviation fails each cell it explained until the cell is taken
 # off.
+#
+# At `population`, a visitor's cell also names the deviations of the read that
+# reaches the relationship: the visitor's read of `refs` itself, which the
+# collection gate admits by the public default, and the media it populates on
+# the way, which a read with no caller keeps.
 
 service visitor read collection none at direct  # visitor-public-default
 service visitor read collection none at website  # visitor-public-default
@@ -349,19 +354,19 @@ service user-without update single async-true at direct  # rule-alone-for-people
 service user-without update single async-true at route  # rule-alone-for-people
 service user-without update single async-true at can
 service visitor read single other-operation at direct  # visitor-public-default
-service visitor read related none at population
-service visitor read related true at population
-service user-without read related true at population
-service visitor read related returns-true at population
-service user-without read related returns-true at population
-service visitor read related returns-null at population
-service visitor read related returns-undefined at population
-service visitor read related async-true at population
-service user-without read related async-true at population
-service visitor read related other-operation at population
-service visitor read media none at population
-service principal read media none at population
-service principal-other read media none at population
+service visitor read related none at population  # visitor-public-default, visitor-keeps-media
+service visitor read related true at population  # visitor-public-default, visitor-keeps-media
+service user-without read related true at population  # rule-alone-for-people
+service visitor read related returns-true at population  # visitor-public-default, visitor-keeps-media
+service user-without read related returns-true at population  # rule-alone-for-people
+service visitor read related returns-null at population  # visitor-public-default, visitor-keeps-media
+service visitor read related returns-undefined at population  # visitor-public-default, visitor-keeps-media
+service visitor read related async-true at population  # visitor-public-default, visitor-keeps-media
+service user-without read related async-true at population  # rule-alone-for-people
+service visitor read related other-operation at population  # visitor-public-default, visitor-keeps-media
+service visitor read media none at population  # visitor-public-default, visitor-keeps-media
+service principal read media none at population  # visitor-keeps-media
+service principal-other read media none at population  # visitor-keeps-media
 no-service visitor read collection none at direct  # visitor-public-default
 no-service user-with read collection none at can
 no-service user-with read collection none at entity  # no-service
@@ -406,14 +411,14 @@ no-service key-role-based read single returns-null at rest
 no-service key-role-based read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at can
 no-service key-role-based read single returns-null at entity  # no-service
-no-service visitor read related none at population
-no-service visitor read related returns-true at population
-no-service visitor read related returns-false at population
-no-service user-with read related returns-false at population
-no-service key-role-based read related returns-false at population
-no-service visitor read related returns-null at population
-no-service user-with read related returns-null at population
-no-service key-role-based read related returns-null at population
+no-service visitor read related none at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service visitor read related returns-true at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service visitor read related returns-false at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service user-with read related returns-false at population  # no-service
+no-service key-role-based read related returns-false at population  # no-service
+no-service visitor read related returns-null at population  # visitor-public-default, no-service, visitor-keeps-media
+no-service user-with read related returns-null at population  # no-service
+no-service key-role-based read related returns-null at population  # no-service
 service user-with read collection async-throws at schema
 service custom-role read collection async-throws at schema
 service key-read-only read collection async-throws at schema
@@ -579,65 +584,65 @@ service visitor list collection publish-false at service  # visitor-public-defau
 service visitor count collection publish-false at direct  # visitor-public-default
 service visitor count collection publish-false at service  # visitor-public-default
 service visitor read single publish-false at direct  # visitor-public-default
-service visitor read related publish-false at population
+service visitor read related publish-false at population  # visitor-public-default, visitor-keeps-media
 
 # Readers handed a caller: a scope without its permission rows, a Direct API
 # user naming a role it does not hold, reads without the service of media
 # and users, and a trusted read bounded to its own collection.
 service key-without-rows read collection permission-spelling at entity  # key-slug-string-match
-service key-without-rows read related permission-spelling at population
+service key-without-rows read related permission-spelling at population  # key-slug-string-match
 service key-without-rows read single permission-spelling at entity  # key-slug-string-match
-service user-naming-super-admin read related async-false at population
-service user-naming-super-admin read related async-throws at population
-service user-naming-super-admin read related async-true at population
-service user-naming-super-admin read related false at population
-service user-naming-super-admin read related none at population
-service user-naming-super-admin read related other-operation at population
-service user-naming-super-admin read related permission-spelling at population
-service user-naming-super-admin read related principal-kind at population
-service user-naming-super-admin read related publish-false at population
-service user-naming-super-admin read related returns-false at population
-service user-naming-super-admin read related returns-null at population
-service user-naming-super-admin read related returns-true at population
-service user-naming-super-admin read related returns-undefined at population
-service user-naming-super-admin read related role-name at population
-service user-naming-super-admin read related role-screen-spelling at population
-service user-naming-super-admin read related throws at population
-service user-naming-super-admin read related true at population
-service user-naming-super-admin read related user-is-key-maker at population
-no-service user-with read media none at population
+service user-naming-super-admin read related async-false at population  # claimed-super-admin
+service user-naming-super-admin read related async-throws at population  # claimed-super-admin
+service user-naming-super-admin read related async-true at population  # claimed-super-admin
+service user-naming-super-admin read related false at population  # claimed-super-admin
+service user-naming-super-admin read related none at population  # claimed-super-admin
+service user-naming-super-admin read related other-operation at population  # claimed-super-admin
+service user-naming-super-admin read related permission-spelling at population  # claimed-super-admin
+service user-naming-super-admin read related principal-kind at population  # claimed-super-admin
+service user-naming-super-admin read related publish-false at population  # claimed-super-admin
+service user-naming-super-admin read related returns-false at population  # claimed-super-admin
+service user-naming-super-admin read related returns-null at population  # claimed-super-admin
+service user-naming-super-admin read related returns-true at population  # claimed-super-admin
+service user-naming-super-admin read related returns-undefined at population  # claimed-super-admin
+service user-naming-super-admin read related role-name at population  # claimed-super-admin
+service user-naming-super-admin read related role-screen-spelling at population  # claimed-super-admin
+service user-naming-super-admin read related throws at population  # claimed-super-admin
+service user-naming-super-admin read related true at population  # claimed-super-admin
+service user-naming-super-admin read related user-is-key-maker at population  # claimed-super-admin
+no-service user-with read media none at population  # no-service
 no-service user-with read media none at system  # no-service
-no-service visitor read media none at population
-bound key-without-rows read related permission-spelling at population
-bound user-naming-super-admin read related async-false at population
-bound user-naming-super-admin read related async-throws at population
-bound user-naming-super-admin read related async-true at population
-bound user-naming-super-admin read related false at population
-bound user-naming-super-admin read related none at population
-bound user-naming-super-admin read related other-operation at population
-bound user-naming-super-admin read related permission-spelling at population
-bound user-naming-super-admin read related principal-kind at population
-bound user-naming-super-admin read related publish-false at population
-bound user-naming-super-admin read related returns-false at population
-bound user-naming-super-admin read related returns-null at population
-bound user-naming-super-admin read related returns-true at population
-bound user-naming-super-admin read related returns-undefined at population
-bound user-naming-super-admin read related role-name at population
-bound user-naming-super-admin read related role-screen-spelling at population
-bound user-naming-super-admin read related throws at population
-bound user-naming-super-admin read related true at population
-bound user-naming-super-admin read related user-is-key-maker at population
-bound user-without read related async-true at population
-bound user-without read related returns-true at population
-bound user-without read related true at population
-bound visitor read related async-true at population
-bound visitor read related none at population
-bound visitor read related other-operation at population
-bound visitor read related publish-false at population
-bound visitor read related returns-null at population
-bound visitor read related returns-true at population
-bound visitor read related returns-undefined at population
-bound visitor read related true at population
+no-service visitor read media none at population  # visitor-public-default, no-service, visitor-keeps-media
+bound key-without-rows read related permission-spelling at population  # key-slug-string-match
+bound user-naming-super-admin read related async-false at population  # claimed-super-admin
+bound user-naming-super-admin read related async-throws at population  # claimed-super-admin
+bound user-naming-super-admin read related async-true at population  # claimed-super-admin
+bound user-naming-super-admin read related false at population  # claimed-super-admin
+bound user-naming-super-admin read related none at population  # claimed-super-admin
+bound user-naming-super-admin read related other-operation at population  # claimed-super-admin
+bound user-naming-super-admin read related permission-spelling at population  # claimed-super-admin
+bound user-naming-super-admin read related principal-kind at population  # claimed-super-admin
+bound user-naming-super-admin read related publish-false at population  # claimed-super-admin
+bound user-naming-super-admin read related returns-false at population  # claimed-super-admin
+bound user-naming-super-admin read related returns-null at population  # claimed-super-admin
+bound user-naming-super-admin read related returns-true at population  # claimed-super-admin
+bound user-naming-super-admin read related returns-undefined at population  # claimed-super-admin
+bound user-naming-super-admin read related role-name at population  # claimed-super-admin
+bound user-naming-super-admin read related role-screen-spelling at population  # claimed-super-admin
+bound user-naming-super-admin read related throws at population  # claimed-super-admin
+bound user-naming-super-admin read related true at population  # claimed-super-admin
+bound user-naming-super-admin read related user-is-key-maker at population  # claimed-super-admin
+bound user-without read related async-true at population  # rule-alone-for-people
+bound user-without read related returns-true at population  # rule-alone-for-people
+bound user-without read related true at population  # rule-alone-for-people
+bound visitor read related async-true at population  # visitor-public-default
+bound visitor read related none at population  # visitor-public-default
+bound visitor read related other-operation at population  # visitor-public-default
+bound visitor read related publish-false at population  # visitor-public-default
+bound visitor read related returns-null at population  # visitor-public-default
+bound visitor read related returns-true at population  # visitor-public-default
+bound visitor read related returns-undefined at population  # visitor-public-default
+bound visitor read related true at population  # visitor-public-default
 service key-super-admin update providers none at route  # manage-not-counted
 service key-super-admin update providers none at can
 service key-super-admin update providers none at widget
