@@ -473,6 +473,165 @@ for (const dialect of getConfiguredTestDialects()) {
       ).toBe("<p>Hi PRIYA &lt;3</p>");
     });
 
+    describe("the engine a plugin declares", () => {
+      // A complete `{% if %}` block and a filter, which Liquid would run and
+      // the old engine sends as written.
+      const LEGACY_TEXT =
+        "<p>{% if vip %}VIP{% endif %} {{ name | upcase }} {{name}}</p>";
+      const shipping = (
+        t: TestNextly,
+        htmlContent: string,
+        engine?: "liquid" | "legacy"
+      ) =>
+        seedPluginTemplates(t, [
+          {
+            name: "Promo",
+            slug: "promo",
+            // As a row stored before Liquid has it (see storeAsBefore).
+            subject: "Hello {{name}}",
+            htmlContent,
+            useLayout: false,
+            ...(engine ? { engine } : {}),
+          },
+        ]);
+      const promo = async (t: TestNextly) =>
+        (await t.nextly.emailTemplates.findBySlug({ slug: "promo" }))!;
+      const rendered = async (t: TestNextly) =>
+        t.nextly.emailTemplates.preview({
+          id: (await promo(t)).id,
+          data: DATA,
+        });
+
+      it("renders a legacy template exactly as the old engine did", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        const contributed = (slug: string, engine?: "legacy") => ({
+          name: slug,
+          slug,
+          subject: "Hello {{name}}",
+          htmlContent: LEGACY_TEXT,
+          useLayout: false,
+          ...(engine ? { engine } : {}),
+        });
+        // The control beside it: the same text, undeclared, is Liquid.
+        await seedPluginTemplates(t, [
+          contributed("promo", "legacy"),
+          contributed("promo-undeclared"),
+        ]);
+        const out = await rendered(t);
+        expect(out.html).toBe(interpolateTemplate(LEGACY_TEXT, DATA));
+        expect(out.subject).toBe("Hello Priya <3");
+        const control = await t.nextly.emailTemplates.findBySlug({
+          slug: "promo-undeclared",
+        });
+        expect(
+          (
+            await t.nextly.emailTemplates.preview({
+              id: control!.id,
+              data: DATA,
+            })
+          ).html
+        ).toBe("<p>VIP PRIYA &lt;3 Priya &lt;3</p>");
+      });
+
+      it("renders a template declared Liquid, or undeclared, as Liquid", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        await shipping(t, FILTER, "liquid");
+        expect((await rendered(t)).html).toBe("<p>Hi PRIYA &lt;3</p>");
+        await shipping(t, FILTER);
+        expect((await rendered(t)).html).toBe("<p>Hi PRIYA &lt;3</p>");
+      });
+
+      it("follows a change of declaration with the same text", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        await shipping(t, FILTER, "liquid");
+        await shipping(t, FILTER, "legacy");
+        expect(
+          (await templates(t).oldEngineStatus((await promo(t)).id)).kept
+        ).toBe(true);
+        expect((await rendered(t)).html).toBe(
+          interpolateTemplate(FILTER, DATA)
+        );
+        await shipping(t, FILTER, "liquid");
+        expect(
+          (await templates(t).oldEngineStatus((await promo(t)).id)).kept
+        ).toBe(false);
+      });
+
+      it("refuses a template that names any other engine, naming the plugin and the template", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        const service = templates(t) as unknown as {
+          logger: { error: (...args: unknown[]) => void };
+        };
+        const errors = vi.spyOn(service.logger, "error");
+        await seedPluginTemplates(t, [
+          {
+            name: "Promo",
+            slug: "promo",
+            subject: "Hi",
+            htmlContent: PLAIN,
+            engine: "handlebars" as "liquid",
+          },
+        ]);
+        expect(errors).toHaveBeenCalledWith(
+          expect.stringContaining("Refused a plugin's email template"),
+          expect.objectContaining({
+            slug: "promo",
+            plugin: "promo-plugin",
+            engine: "handlebars",
+          })
+        );
+        errors.mockRestore();
+        expect(
+          await t.nextly.emailTemplates.findBySlug({
+            slug: "promo",
+            disableErrors: true,
+          })
+        ).toBeNull();
+      });
+
+      it("keeps a template the switch kept while its owner's version is unchanged", async () => {
+        const t = await boot(dialect);
+        // Stored before Liquid as the plugin ships it: the switch keeps it,
+        // and later boots, finding the owner's version unchanged, leave it so.
+        const id = await storeAsBefore(t, dialect, "promo", LITERAL_IF);
+        await shipping(t, LITERAL_IF);
+        await shipping(t, LITERAL_IF);
+        expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
+        expect((await rendered(t)).html).toBe(
+          interpolateTemplate(LITERAL_IF, DATA)
+        );
+      });
+
+      it("releases at the next boot a template whose release failed after its owner's version was written", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        await shipping(t, UNREADABLE);
+        const id = (await promo(t)).id;
+        expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
+        const meta = (
+          templates(t) as unknown as {
+            meta: { delete: () => Promise<unknown> };
+          }
+        ).meta;
+        const failing = vi
+          .spyOn(meta, "delete")
+          .mockRejectedValueOnce(new Error("connection reset"));
+        await expect(shipping(t, FILTER)).rejects.toThrow("connection reset");
+        failing.mockRestore();
+        // The row holds the owner's Liquid version, still marked for the
+        // version before it.
+        expect((await promo(t)).htmlContent).toBe(FILTER);
+        expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
+        await shipping(t, FILTER);
+        expect((await templates(t).oldEngineStatus(id)).kept).toBe(false);
+        expect((await rendered(t)).html).toBe("<p>Hi PRIYA &lt;3</p>");
+      });
+    });
+
     it("renders a plugin's template on the engine its current version was written for", async () => {
       const t = await boot(dialect);
       await templates(t).ensureBuiltInTemplates();

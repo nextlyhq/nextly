@@ -171,6 +171,20 @@ export interface PluginEmailTemplate {
    * it is the site's setting, as the provider and From are.
    */
   replyTo?: string;
+  /**
+   * @experimental The engine the template was written for.
+   *
+   * - `"liquid"`: rendered as Liquid (loops, conditions, filters), escaped.
+   * - `"legacy"`: rendered exactly as the `{{variable}}` engine before Liquid
+   *   did: `{{name}}` and `{{a.b}}` are filled, and every other brace,
+   *   `{% … %}` included, is sent as written. For a template published before
+   *   Liquid whose text means something else to Liquid.
+   *
+   * Left out, a template is rendered as Liquid, unless Liquid can't read it,
+   * in which case it is rendered as `"legacy"` is. Any other value is
+   * refused at startup and the template is not registered.
+   */
+  engine?: "liquid" | "legacy";
 }
 
 /**

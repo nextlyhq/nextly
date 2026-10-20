@@ -47,7 +47,19 @@ export interface OwnedTemplate {
   digest: string;
   /** Whether the owner marks it as carrying a secret. */
   carriesSecret: boolean;
+  /**
+   * The engine the owner wrote its version for, where it says. Unsaid, the
+   * version is Liquid unless Liquid can't read it.
+   */
+  engine?: TemplateEngine;
 }
+
+/** The engines a plugin can declare a template was written for. */
+export type TemplateEngine = NonNullable<PluginEmailTemplate["engine"]>;
+const TEMPLATE_ENGINES: ReadonlySet<string> = new Set<TemplateEngine>([
+  "liquid",
+  "legacy",
+]);
 
 export interface TemplateOwnerRegistry {
   /** Every owned template, by slug. */
@@ -197,7 +209,11 @@ export function sameVersion(
   return versionDigest(a) === versionDigest(b);
 }
 
-function owned(owner: RegisteredOwner, declared: OwnerTemplate): OwnedTemplate {
+function owned(
+  owner: RegisteredOwner,
+  declared: OwnerTemplate,
+  engine?: TemplateEngine
+): OwnedTemplate {
   const { carriesSecret, ...defaults } = declared;
   const version = versionOf(defaults);
   return {
@@ -209,6 +225,7 @@ function owned(owner: RegisteredOwner, declared: OwnerTemplate): OwnedTemplate {
     // Strictly true: a plugin is plain JavaScript at runtime, and only an
     // explicit mark should count as one.
     carriesSecret: carriesSecret === true,
+    ...(engine ? { engine } : {}),
   };
 }
 
@@ -324,6 +341,13 @@ export interface RegistryConflict {
   ignored: string;
 }
 
+/** A contribution refused because it names an engine there is none of. */
+export interface RefusedEngine {
+  slug: string;
+  plugin: string;
+  engine: unknown;
+}
+
 /**
  * Build the registry from what core ships and the running plugins contribute.
  *
@@ -335,15 +359,25 @@ export interface RegistryConflict {
 export function buildTemplateOwnerRegistry(input: RegistryInput): {
   registry: TemplateOwnerRegistry;
   conflicts: RegistryConflict[];
+  refused: RefusedEngine[];
 } {
   const map = new Map<string, OwnedTemplate>();
   const conflicts: RegistryConflict[] = [];
+  const refused: RefusedEngine[] = [];
 
   for (const template of input.builtIns) {
     map.set(template.slug, owned({ kind: "core" }, template));
   }
   for (const plugin of input.plugins) {
     for (const template of plugin.templates) {
+      // Checked here as well as by the type: a plugin built without it, or
+      // one older than a rename, must not have its template rendered on an
+      // engine it never named.
+      const engine: unknown = template.engine;
+      if (engine !== undefined && !TEMPLATE_ENGINES.has(engine as string)) {
+        refused.push({ slug: template.slug, plugin: plugin.name, engine });
+        continue;
+      }
       const existing = map.get(template.slug);
       if (existing) {
         conflicts.push({
@@ -355,7 +389,11 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
       }
       map.set(
         template.slug,
-        owned({ kind: "plugin", name: plugin.name }, pluginDefaults(template))
+        owned(
+          { kind: "plugin", name: plugin.name },
+          pluginDefaults(template),
+          template.engine
+        )
       );
     }
   }
@@ -368,6 +406,7 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
   return {
     registry: { owned: map, setInCode, complete: input.complete },
     conflicts,
+    refused,
   };
 }
 
