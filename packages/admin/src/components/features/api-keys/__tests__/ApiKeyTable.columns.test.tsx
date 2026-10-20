@@ -60,6 +60,7 @@ describe("ApiKeyTable columns", () => {
         onRevoke={vi.fn()}
         canEdit
         canRevoke
+        ownersVisible
       />
     );
     const table = screen.getByRole("table");
@@ -79,11 +80,31 @@ describe("ApiKeyTable columns", () => {
         onRevoke={vi.fn()}
         canEdit
         canRevoke
+        ownersVisible
       />
     );
     const table = screen.getByRole("table");
     expect(within(table).getAllByText("Owner").length).toBeGreaterThan(0);
     expect(within(table).getByText("Ada Lovelace")).toBeTruthy();
     expect(within(table).getByText("Deleted user")).toBeTruthy();
+  });
+
+  it("says an owner withheld from a reader who may not read users is hidden, not deleted", () => {
+    // The server withholds the owner of someone else's key from a reader
+    // without `read-users`; that is not an account that no longer exists.
+    render(
+      <ApiKeyTable
+        data={[KEY, { ...KEY, id: "someone-elses-key", owner: null }]}
+        onEdit={vi.fn()}
+        onRevoke={vi.fn()}
+        canEdit
+        canRevoke
+        ownersVisible={false}
+      />
+    );
+    const table = screen.getByRole("table");
+    expect(within(table).getByText("Ada Lovelace")).toBeTruthy();
+    expect(within(table).getByText("Hidden")).toBeTruthy();
+    expect(within(table).queryByText("Deleted user")).toBeNull();
   });
 });

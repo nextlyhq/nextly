@@ -30,9 +30,9 @@ import {
   apiKeyPermissionsFor,
   type ApiKeyOperation,
 } from "../domains/auth/api-key-policy";
-import type {
-  ApiKeyMeta,
-  ApiKeyService,
+import {
+  apiKeyViewer,
+  type ApiKeyService,
 } from "../domains/auth/services/api-key-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -41,8 +41,6 @@ import {
   CreateApiKeySchema,
   UpdateApiKeySchema,
 } from "../schemas/_zod/api-keys";
-import { permissionSlug } from "../schemas/_zod/rbac";
-import { isSuperAdmin } from "../services/lib/permissions";
 
 import { readJsonBody } from "./read-json-body";
 import {
@@ -92,32 +90,14 @@ async function requireKeyCreator(req: Request) {
 }
 
 /**
- * A key's metadata as `caller` may see it.
+ * List API keys.
  *
- * A key's owner is a person, so an API key is told who it is only when its
- * own scope may read users, as it must before any other user data reaches it;
- * otherwise `owner` is null. A super-admin's key with a role that reads keys
- * but not people lists every key, and learns from it no one's name or
- * address. A signed-in person sees the owner: a super-admin reads users, and
- * anyone else sees only their own keys.
- */
-function asSeenBy(
-  caller: { authMethod: string; permissions: string[] },
-  key: ApiKeyMeta
-): ApiKeyMeta {
-  const readsUsers =
-    caller.authMethod !== "api-key" ||
-    caller.permissions.includes(permissionSlug("read", "users"));
-  return readsUsers ? key : { ...key, owner: null };
-}
-
-/**
- * List API keys for the authenticated user.
+ * Anyone who may read keys sees every key (`allUsers: true`). A key's owner
+ * is shown only to a caller who may also read users, and a person always on
+ * their own keys (`apiKeyViewer`). The secret itself is never listed: a key
+ * shows only its prefix after it is created.
  *
- * Super-admins see all keys across all users (`allUsers: true`).
- * Regular users see only their own keys.
- *
- * Auth: session or API key + `update-api-keys` permission.
+ * Auth: session or API key + `read-api-keys` (or `update-api-keys`).
  *
  * Response: `{ items: ApiKeyMeta[], meta: PaginationMeta }`. The list is
  * not server-paginated (callers see every key they're allowed to read);
@@ -130,10 +110,10 @@ export const listApiKeys = privateToSession(
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
     const service = await getApiKeyService();
-    const allUsers = await isSuperAdmin(authResult.userId);
+    const see = await apiKeyViewer(authResult);
     const keys = (
-      await service.listApiKeys(authResult.userId, { allUsers })
-    ).map(key => asSeenBy(authResult, key));
+      await service.listApiKeys(authResult.userId, { allUsers: true })
+    ).map(see);
 
     // Synthetic single-page meta keeps the canonical list shape even though
     // the underlying service does not paginate.
@@ -151,11 +131,10 @@ export const listApiKeys = privateToSession(
 /**
  * Fetch a single API key by ID.
  *
- * Non-super-admin callers can only fetch their own keys. The service returns
- * `null` for keys that don't exist or aren't owned by the caller, and this
- * handler returns 404 in both cases (no ownership leakage).
+ * Any key, as the list shows it to this caller (`apiKeyViewer`); a key that
+ * does not exist is 404.
  *
- * Auth: session or API key + `update-api-keys` permission.
+ * Auth: session or API key + `read-api-keys` (or `update-api-keys`).
  *
  * Response: bare `ApiKeyMeta` document body via `respondDoc`.
  */
@@ -166,20 +145,18 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
       if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
       const service = await getApiKeyService();
-      const allUsers = await isSuperAdmin(authResult.userId);
       const key = await service.getApiKeyById(id, authResult.userId, {
-        allUsers,
+        allUsers: true,
       });
 
       if (!key) {
-        // Per §13.7 the public message stays "Not found." regardless of
-        // whether the row was missing or merely owned by another user.
+        // Per §13.7 the public message stays "Not found.".
         throw NextlyError.notFound({
           logContext: { entity: "api-key", id, callerId: authResult.userId },
         });
       }
 
-      return respondDoc(asSeenBy(authResult, key));
+      return respondDoc((await apiKeyViewer(authResult))(key));
     })
   )(req);
 }
@@ -303,7 +280,8 @@ export const createApiKey = withErrorHandler(
  * Update an existing API key's name or description.
  *
  * Token type, role, and duration are immutable; revoke and recreate to
- * change them. Ownership is enforced at the service layer.
+ * change them. Any key, the caller's or anyone else's: the permission to
+ * update keys is the permission to update every key.
  *
  * Session-only; cannot be called via an API key.
  *
@@ -332,10 +310,15 @@ export function updateApiKey(req: Request, id: string): Promise<Response> {
     const updated = await service.updateApiKey(
       id,
       authResult.userId,
-      validated
+      validated,
+      { allUsers: true }
     );
 
-    return respondMutation("API key updated.", updated);
+    // Answered as the list shows this caller the key, owner included.
+    return respondMutation(
+      "API key updated.",
+      (await apiKeyViewer(authResult))(updated)
+    );
   })(req);
 }
 
@@ -343,11 +326,12 @@ export function updateApiKey(req: Request, id: string): Promise<Response> {
  * Revoke (soft-delete) an API key.
  *
  * Sets `isActive = false` on the key. The row is preserved for audit trail
- * purposes. Ownership is enforced at the service layer.
+ * purposes. Any key, the caller's or anyone else's: the permission to
+ * revoke keys is the permission to revoke every key.
  *
  * Session-only; cannot be called via an API key.
  *
- * Auth: **session only** + `update-api-keys` permission.
+ * Auth: **session only** + `delete-api-keys` (or `update-api-keys`).
  *
  * Response: `{ message, id }` via `respondAction`. Revoke is non-CRUD
  * (the row is preserved with `isActive = false`), so the action shape
@@ -361,7 +345,7 @@ export function revokeApiKey(req: Request, id: string): Promise<Response> {
     if (authResult.authMethod !== "session") denySessionOnly("delete");
 
     const service = await getApiKeyService();
-    await service.revokeApiKey(id, authResult.userId);
+    await service.revokeApiKey(id, authResult.userId, { allUsers: true });
 
     // Revocation is a state transition rather than a row mutation; surface
     // the affected id alongside the toast.
