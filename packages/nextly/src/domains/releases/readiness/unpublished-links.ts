@@ -2,33 +2,34 @@
  * Links that will not be live when a document goes live.
  *
  * A document going live in a release may point at other documents through its
- * relationship fields: an author, a category, related posts. When one of those
- * will not be published at the release's moment, the document goes live
- * linking to something a visitor cannot open. That is a note, never a reason
- * to stop the release, so it is a SOFT source: scheduling, Publish now and the
- * drain only ever ask the hard ones.
+ * relationship and upload fields: an author, a category, related posts. When
+ * one of those will not be published at the release's moment, or no longer
+ * exists, the document goes live linking to something a visitor cannot open.
+ * That is a note, never a reason to stop the release, so it is a SOFT source:
+ * scheduling, Publish now and the drain only ever ask the hard ones.
  *
  * "Will not be live at the moment" is projected, not read off the target's
  * status now: every pending release that publishes or unpublishes the target
- * up to the moment counts, this release included, by the one rule the read
- * path and the drain decide with ({@link resolveReleaseEffect}). So a target
- * another release publishes first is not reported, and one due to come down
- * before the moment is, though it is live today.
+ * up to the moment counts, this release included, by the rule the read path
+ * and the drain decide with: the winner by {@link resolveReleaseEffect}, and
+ * no effect when its author cannot act ({@link winnerAuthorCanAct}). So a
+ * target another release publishes first is not reported, one due to come
+ * down before the moment is, though it is live today, and one whose winning
+ * publish nobody can perform still is.
  *
  * Which links count:
- * - relationship fields, one level deep: the document's own fields, inside
- *   groups and repeaters too, but not the links of the documents it links to;
- * - only targets in a collection with a draft/published lifecycle, since a
- *   document in a collection without one is live as soon as it exists;
- * - not uploads: an upload points at the media library, which has no
- *   lifecycle, so its target is always live;
+ * - relationship and upload fields, one level deep: the document's own fields
+ *   at any nesting, components and dynamic zones included, but not the links
+ *   of the documents it links to;
+ * - a target in a collection without a draft/published lifecycle is live
+ *   whenever it exists; one in the media library, which is no collection, is
+ *   never reported;
  * - not links inside rich text: the editor stores those as URLs rather than
  *   references to documents, so there is no document to check.
  *
- * A finding names its target by id. Who may be told that is the reader's
- * question, not the release's: the service narrows the findings for each
- * reader ({@link narrowLinkFindings}), so a target the reader may not read is
- * only counted.
+ * A finding names its target by id, or for a deleted target only the field.
+ * Who may be told that is the reader's question, not the release's: the
+ * service narrows the findings for each reader ({@link narrowLinkFindings}).
  *
  * @module domains/releases/readiness/unpublished-links
  * @experimental
@@ -40,6 +41,7 @@ import {
 } from "../releases-repository";
 import {
   resolveReleaseEffect,
+  winnerAuthorCanAct,
   type DueMember,
 } from "../resolve-release-effect";
 
@@ -56,14 +58,15 @@ import type { ReadinessFinding } from "./evaluate-readiness";
 export const UNPUBLISHED_LINKS_SOURCE_KEY = "core.unpublished-links";
 
 /**
- * What the source reports: a link a reader may be told about, and how many a
- * reader may not.
+ * What the source reports: a link a reader may be told about, how many a
+ * reader may not, and a link in a field the reader may not view.
  *
  * @experimental
  */
 export const UNPUBLISHED_LINK_CODES = [
   "UNPUBLISHED_LINK",
   "UNPUBLISHED_LINKS_HIDDEN",
+  "UNPUBLISHED_LINK_IN_HIDDEN_FIELD",
 ] as const;
 export type UnpublishedLinkCode = (typeof UNPUBLISHED_LINK_CODES)[number];
 
@@ -81,11 +84,12 @@ export interface DocumentLink {
 
 /**
  * Why a linked document will not be live at the moment: it is a draft and
- * nothing publishes it by then, or a release takes it down by then.
+ * nothing publishes it by then, a release takes it down by then, or it no
+ * longer exists.
  *
  * @experimental
  */
-export type UnpublishedLinkCause = "draft" | "comes-down";
+export type UnpublishedLinkCause = "draft" | "comes-down" | "deleted";
 
 /**
  * What the source asks of the content outside the releases domain.
@@ -95,21 +99,23 @@ export type UnpublishedLinkCause = "draft" | "comes-down";
 export interface ReleaseLinkReads {
   /**
    * For each of these documents of one scope, what it links to as it would
-   * go live: its working draft where it has one, else its stored content.
-   * Keyed by entry id; a document that is not there is absent.
+   * go live, read as stored. Keyed by entry id; a document that is not there
+   * is absent.
    */
   linksOf(
     scope: ReleaseCheckScope,
     entryIds: readonly string[]
   ): Promise<ReadonlyMap<string, readonly DocumentLink[]>>;
   /**
-   * For each of these documents of one collection that exists, whether its
-   * stored status is published. A document that is not there is absent.
+   * For each of these documents of one collection that exists, whether it is
+   * live now: stored as published, or in a collection without a lifecycle. A
+   * document that is not there is absent. `null` for a slug that is not a
+   * collection, about whose documents nothing can be said.
    */
   publishedOf(
     collection: string,
     entryIds: readonly string[]
-  ): Promise<ReadonlyMap<string, boolean>>;
+  ): Promise<ReadonlyMap<string, boolean> | null>;
 }
 
 /**
@@ -145,19 +151,28 @@ export function linkMoment(release: ReleaseRow, now: Date): Date {
  * Whether a linked document is live at `moment`, and why not when it is not.
  *
  * The latest membership due by the moment decides, by the rule the read path
- * and the drain apply; with none due, the document stays as it is stored now.
+ * and the drain apply, and only when its author can still act (`live` holds
+ * the authors who can); otherwise the document stays as it is stored now.
  */
 export function linkTargetState(input: {
   published: boolean;
   memberships: readonly DueMember[];
   moment: Date;
-}): "live" | UnpublishedLinkCause {
+  live: ReadonlySet<string>;
+}): "live" | Exclude<UnpublishedLinkCause, "deleted"> {
   const decision = resolveReleaseEffect({
     members: [...input.memberships],
     now: input.moment,
   });
-  if (decision.effect === "publish") return "live";
-  if (decision.effect === "unpublish") return "comes-down";
+  const winner = input.memberships.find(
+    member => member.memberId === decision.memberId
+  );
+  if (
+    decision.effect !== "none" &&
+    winnerAuthorCanAct(winner?.createdBy, input.live)
+  ) {
+    return decision.effect === "publish" ? "live" : "comes-down";
+  }
   return input.published ? "live" : "draft";
 }
 
@@ -249,32 +264,48 @@ async function membershipsOf(
       action: member.action,
       scheduledAt: moment,
       createdAt: member.createdAt,
+      createdBy: member.createdBy,
     });
   }
   return decided;
 }
 
-/** Which of these collections declare a draft/published lifecycle. */
-async function withLifecycle(
+/**
+ * The authors among `memberships`' winners who can still act, asked once for
+ * them all, in runs the parameter limit admits.
+ */
+async function liveWinnerAuthors(
   ctx: ReleaseCheckContext,
-  collections: readonly string[]
-): Promise<Set<string>> {
-  const declared = new Set<string>();
-  for (const collection of collections) {
-    const has = await ctx.reads.declaresLifecycle({
-      scopeKind: "collection",
-      scopeSlug: collection,
+  memberships: ReadonlyMap<string, readonly DueMember[]>,
+  moment: Date
+): Promise<ReadonlySet<string>> {
+  const authors = new Set<string>();
+  for (const members of memberships.values()) {
+    const decision = resolveReleaseEffect({
+      members: [...members],
+      now: moment,
     });
-    if (has) declared.add(collection);
+    const author = members.find(
+      m => m.memberId === decision.memberId
+    )?.createdBy;
+    if (typeof author === "string" && author !== "") authors.add(author);
   }
-  return declared;
+  const live = new Set<string>();
+  for (const run of chunked([...authors])) {
+    for (const id of await ctx.reads.liveAuthors(run)) live.add(id);
+  }
+  return live;
 }
 
-/** Whether each target that exists is published now, keyed by target. */
+/**
+ * Whether each target is live now, keyed by target: absent for one that no
+ * longer exists, and every target of a slug that is not a collection left out
+ * of `judged`, since nothing can be said of it.
+ */
 async function publishedNow(
   reads: ReleaseLinkReads,
   targets: ReadonlyArray<{ collection: string; entryId: string }>
-): Promise<Map<string, boolean>> {
+): Promise<{ published: Map<string, boolean>; judged: Set<string> }> {
   const byCollection = new Map<string, string[]>();
   for (const target of targets) {
     byCollection.set(target.collection, [
@@ -283,26 +314,27 @@ async function publishedNow(
     ]);
   }
   const published = new Map<string, boolean>();
+  const judged = new Set<string>();
   for (const [collection, ids] of byCollection) {
     for (const run of chunked(ids)) {
-      for (const [id, isPublished] of await reads.publishedOf(
-        collection,
-        run
-      )) {
+      const answer = await reads.publishedOf(collection, run);
+      if (answer === null) continue;
+      judged.add(collection);
+      for (const [id, isPublished] of answer) {
         published.set(targetKey(collection, id), isPublished);
       }
     }
   }
-  return published;
+  return { published, judged };
 }
 
 /**
  * The source, reading content through `deps.reads` and this release's
  * members through `deps.membersOf`.
  *
- * Every read is batched: links once per scope, lifecycles once per target
- * collection, statuses and memberships once per run of targets, so a release
- * of two hundred documents costs a handful of queries, not one per link.
+ * Every read is batched: links once per scope, and statuses, memberships and
+ * authors once per run of targets, so a release of two hundred documents
+ * costs a handful of queries, not one per link.
  *
  * @experimental
  */
@@ -320,17 +352,11 @@ export function unpublishedLinksSource(deps: {
       const going = batch.filter(member => member.action === "publish");
       if (going.length === 0) return [];
       const links = await linksOfMembers(deps.reads, ctx, going);
-
-      const lifecycle = await withLifecycle(ctx, [
-        ...new Set([...links.values()].flat().map(link => link.collection)),
-      ]);
-      const targets = uniqueTargets(
-        [...links.values()].flat().filter(l => lifecycle.has(l.collection))
-      );
+      const targets = uniqueTargets([...links.values()].flat());
       if (targets.length === 0) return [];
 
       const moment = linkMoment(ctx.release, ctx.now);
-      const published = await publishedNow(deps.reads, targets);
+      const { published, judged } = await publishedNow(deps.reads, targets);
       // This release's own members decide its targets as much as any other
       // release's: a linked document going live in the same release is live.
       // A scheduled release's stored members are among the scheduled ones
@@ -341,18 +367,19 @@ export function unpublishedLinksSource(deps: {
           ? batch
           : [...(await deps.membersOf(ctx.release.id)), ...batch];
       const memberships = await membershipsOf(ctx, own, targets, moment);
+      const live = await liveWinnerAuthors(ctx, memberships, moment);
 
       return going.flatMap(member =>
-        findingsFor(member, links.get(member.id) ?? [], key => {
+        findingsFor(member, links.get(member.id) ?? [], link => {
+          if (!judged.has(link.collection)) return "live";
+          const key = targetKey(link.collection, link.entryId);
           const isPublished = published.get(key);
-          // Absent for a target that is not there, which cannot be offered,
-          // and for one in a collection without a lifecycle, which is live
-          // whenever it exists: neither is reported.
-          if (isPublished === undefined) return "live";
+          if (isPublished === undefined) return "deleted";
           return linkTargetState({
             published: isPublished,
             memberships: memberships.get(key) ?? [],
             moment,
+            live,
           });
         })
       );
@@ -364,67 +391,83 @@ export function unpublishedLinksSource(deps: {
 function uniqueTargets(
   links: readonly DocumentLink[]
 ): Array<{ collection: string; entryId: string }> {
-  const seen = new Map<string, { collection: string; entryId: string }>();
-  for (const link of links) {
-    const key = targetKey(link.collection, link.entryId);
-    if (!seen.has(key)) {
-      seen.set(key, { collection: link.collection, entryId: link.entryId });
-    }
-  }
-  return [...seen.values()];
+  return byTarget(links).map(({ link }) => ({
+    collection: link.collection,
+    entryId: link.entryId,
+  }));
 }
 
 /**
- * One finding per target this member links to that will not be live, naming
- * every field that links to it, in the order the targets are first met.
+ * This member's findings: one per target that will not be live, naming every
+ * field that links to it, in the order the targets are first met; then one
+ * per field holding links to deleted documents, with how many, naming no
+ * target, since a deleted document has nothing left to name it by.
  */
 function findingsFor(
   member: ReleaseMemberRow,
   links: readonly DocumentLink[],
-  stateOf: (key: string) => "live" | UnpublishedLinkCause
+  stateOf: (link: DocumentLink) => "live" | UnpublishedLinkCause
 ): ReleaseCheckFinding<UnpublishedLinkCode>[] {
-  const fields = new Map<string, string[]>();
-  const order: DocumentLink[] = [];
-  for (const link of links) {
-    const key = targetKey(link.collection, link.entryId);
-    const held = fields.get(key);
-    if (held === undefined) {
-      fields.set(key, [link.field]);
-      order.push(link);
-    } else if (!held.includes(link.field)) {
-      held.push(link.field);
+  const findings: ReleaseCheckFinding<UnpublishedLinkCode>[] = [];
+  const deleted = new Map<string, number>();
+  for (const { link, fields } of byTarget(links)) {
+    const state = stateOf(link);
+    if (state === "live") continue;
+    if (state === "deleted") {
+      for (const field of fields) {
+        deleted.set(field, (deleted.get(field) ?? 0) + 1);
+      }
+      continue;
     }
-  }
-  return order.flatMap(link => {
-    const key = targetKey(link.collection, link.entryId);
-    const state = stateOf(key);
-    if (state === "live") return [];
-    return [
-      {
-        memberId: member.id,
-        code: "UNPUBLISHED_LINK" as const,
-        detail: {
-          scopeKind: "collection",
-          scopeSlug: link.collection,
-          entryId: link.entryId,
-          fields: fields.get(key) ?? [link.field],
-          cause: state,
-        },
+    findings.push({
+      memberId: member.id,
+      code: "UNPUBLISHED_LINK",
+      detail: {
+        scopeKind: "collection",
+        scopeSlug: link.collection,
+        entryId: link.entryId,
+        fields,
+        cause: state,
       },
-    ];
-  });
+    });
+  }
+  for (const [field, count] of deleted) {
+    findings.push({
+      memberId: member.id,
+      code: "UNPUBLISHED_LINK",
+      detail: { fields: [field], cause: "deleted", count: String(count) },
+    });
+  }
+  return findings;
 }
 
 /**
- * The document a link finding names, or `null` for any other finding.
+ * Each target once, in the order first met, with every field that links to
+ * it, each field once.
+ */
+function byTarget(
+  links: readonly DocumentLink[]
+): Array<{ link: DocumentLink; fields: string[] }> {
+  const targets = new Map<string, { link: DocumentLink; fields: string[] }>();
+  for (const link of links) {
+    const key = targetKey(link.collection, link.entryId);
+    const held = targets.get(key);
+    if (held === undefined) targets.set(key, { link, fields: [link.field] });
+    else if (!held.fields.includes(link.field)) held.fields.push(link.field);
+  }
+  return [...targets.values()];
+}
+
+/**
+ * The document a link finding names, or `null` for a finding that names none:
+ * any other finding, and a link to a deleted document.
  *
  * @experimental
  */
 export function linkTargetOf(
   finding: ReadinessFinding
 ): { collection: string; entryId: string } | null {
-  if (finding.source !== UNPUBLISHED_LINKS_SOURCE_KEY) return null;
-  if (finding.code !== "UNPUBLISHED_LINK") return null;
+  if (!isLinkFinding(finding)) return null;
   const collection = finding.detail?.scopeSlug;
   const entryId = finding.detail?.entryId;
   if (typeof collection !== "string" || typeof entryId !== "string") {
@@ -433,35 +476,60 @@ export function linkTargetOf(
   return { collection, entryId };
 }
 
+/** Whether a finding is one of this source's link findings. */
+function isLinkFinding(finding: ReadinessFinding): boolean {
+  return (
+    finding.source === UNPUBLISHED_LINKS_SOURCE_KEY &&
+    finding.code === "UNPUBLISHED_LINK"
+  );
+}
+
 /**
- * `findings` as a reader may be told them: a link finding whose target the
- * reader may not read is dropped, and each member's dropped links are counted
- * in one `UNPUBLISHED_LINKS_HIDDEN` finding in their place, naming no target.
+ * What a reader may be told, as {@link narrowLinkFindings} asks it.
  *
- * `readable` holds the targets the reader may read, by `isReadable`. Every
- * other finding passes through untouched, in its order.
+ * @experimental
+ */
+export interface LinkReaderVerdicts {
+  /** Whether the reader may read the document the link is FROM. */
+  sourceReadable(finding: ReadinessFinding): boolean;
+  /**
+   * The field paths of that document's links the reader is shown, or `null`
+   * when every field is.
+   */
+  visibleFields(finding: ReadinessFinding): ReadonlySet<string> | null;
+  /** Whether the reader may read the document the link is TO. */
+  targetReadable(target: { collection: string; entryId: string }): boolean;
+}
+
+/**
+ * `findings` as a reader may be told them:
+ * - a link from a document the reader may not read, or to one they may not
+ *   read, is counted in one `UNPUBLISHED_LINKS_HIDDEN` per member in its
+ *   place, naming nothing;
+ * - a link in a field the reader may not view is replaced by an
+ *   `UNPUBLISHED_LINK_IN_HIDDEN_FIELD` naming neither the field nor the target,
+ *   so it still counts;
+ * - a link to a deleted document names no target, so only its field is
+ *   judged;
+ * - the fields a kept finding names are those the reader is shown.
+ *
+ * Every other finding passes through untouched, in its order.
  *
  * @experimental
  */
 export function narrowLinkFindings(
   findings: readonly ReadinessFinding[],
-  isReadable: (target: { collection: string; entryId: string }) => boolean
+  verdicts: LinkReaderVerdicts
 ): ReadinessFinding[] {
   const shown: ReadinessFinding[] = [];
   let hidden: { finding: ReadinessFinding; count: number } | null = null;
   const flush = (): void => {
     if (hidden === null) return;
-    const { finding, count } = hidden;
-    shown.push({
-      memberId: finding.memberId,
-      code: "UNPUBLISHED_LINKS_HIDDEN",
-      detail: { count: String(count) },
-      source: finding.source,
-      action: finding.action,
-      scopeKind: finding.scopeKind,
-      scopeSlug: finding.scopeSlug,
-      entryId: finding.entryId,
-    });
+    shown.push(
+      bare(hidden.finding, "UNPUBLISHED_LINKS_HIDDEN", {
+        count: String(hidden.count),
+      })
+    );
     hidden = null;
   };
   for (const finding of findings) {
@@ -470,18 +538,60 @@ export function narrowLinkFindings(
     if (hidden !== null && hidden.finding.memberId !== finding.memberId) {
       flush();
     }
-    const target = linkTargetOf(finding);
-    if (target === null || isReadable(target)) {
-      shown.push(finding);
+    const judged = isLinkFinding(finding)
+      ? judgedForReader(finding, verdicts)
+      : finding;
+    if (judged === null) {
+      hidden =
+        hidden === null
+          ? { finding, count: 1 }
+          : { finding: hidden.finding, count: hidden.count + 1 };
       continue;
     }
-    hidden =
-      hidden === null
-        ? { finding, count: 1 }
-        : { finding: hidden.finding, count: hidden.count + 1 };
+    shown.push(judged);
   }
   flush();
   return shown;
+}
+
+/**
+ * One link finding as the reader may see it, or `null` when it is only to be
+ * counted.
+ */
+function judgedForReader(
+  finding: ReadinessFinding,
+  verdicts: LinkReaderVerdicts
+): ReadinessFinding | null {
+  if (!verdicts.sourceReadable(finding)) return null;
+  const fields = finding.detail?.fields;
+  const named = Array.isArray(fields) ? fields : [];
+  const visible = verdicts.visibleFields(finding);
+  const shownFields =
+    visible === null ? named : named.filter(field => visible.has(field));
+  if (shownFields.length === 0) {
+    return bare(finding, "UNPUBLISHED_LINK_IN_HIDDEN_FIELD", undefined);
+  }
+  const target = linkTargetOf(finding);
+  if (target !== null && !verdicts.targetReadable(target)) return null;
+  return { ...finding, detail: { ...finding.detail, fields: shownFields } };
+}
+
+/** A finding about the same member, with only `code` and `detail` of its own. */
+function bare(
+  finding: ReadinessFinding,
+  code: UnpublishedLinkCode,
+  detail: ReadinessFinding["detail"]
+): ReadinessFinding {
+  return {
+    memberId: finding.memberId,
+    code,
+    ...(detail === undefined ? {} : { detail }),
+    source: finding.source,
+    action: finding.action,
+    scopeKind: finding.scopeKind,
+    scopeSlug: finding.scopeSlug,
+    entryId: finding.entryId,
+  };
 }
 
 /**
@@ -496,19 +606,24 @@ export interface UnpublishedLink {
   entryId: string;
   /** Every field of the added document that links to it. */
   fields: string[];
-  cause: UnpublishedLinkCause;
+  cause: Exclude<UnpublishedLinkCause, "deleted">;
 }
 
 /**
  * The links an added document has that will not be live at its release's
- * moment: those the caller may read, and how many more there are that the
- * caller may not.
+ * moment, as the caller may be told them.
  *
  * @experimental
  */
 export interface UnpublishedLinksReport {
+  /** The linked documents the caller may read. */
   links: UnpublishedLink[];
+  /** Links to, or from, documents the caller may not read. */
   hiddenCount: number;
+  /** Links in fields the caller may not view. */
+  inHiddenFields: number;
+  /** Fields linking to documents that no longer exist, and how many each. */
+  deletedLinks: Array<{ field: string; count: number }>;
 }
 
 /**
@@ -520,25 +635,63 @@ export interface UnpublishedLinksReport {
 export function unpublishedLinksReport(
   findings: readonly ReadinessFinding[]
 ): UnpublishedLinksReport {
-  const links: UnpublishedLink[] = [];
-  let hiddenCount = 0;
+  const report: UnpublishedLinksReport = {
+    links: [],
+    hiddenCount: 0,
+    inHiddenFields: 0,
+    deletedLinks: [],
+  };
   for (const finding of findings) {
-    if (finding.source !== UNPUBLISHED_LINKS_SOURCE_KEY) continue;
-    if (finding.code === "UNPUBLISHED_LINKS_HIDDEN") {
-      hiddenCount += Number(finding.detail?.count ?? 0);
-      continue;
+    if (finding.source === UNPUBLISHED_LINKS_SOURCE_KEY) {
+      addToReport(report, finding);
     }
-    const target = linkTargetOf(finding);
-    const fields = finding.detail?.fields;
-    const cause = finding.detail?.cause;
-    if (target === null) continue;
-    links.push({
-      scopeKind: "collection",
-      scopeSlug: target.collection,
-      entryId: target.entryId,
-      fields: Array.isArray(fields) ? [...fields] : [],
-      cause: cause === "comes-down" ? "comes-down" : "draft",
-    });
   }
-  return { links, hiddenCount };
+  return report;
+}
+
+/** One of this source's findings, added to the report it belongs in. */
+function addToReport(
+  report: UnpublishedLinksReport,
+  finding: ReadinessFinding
+): void {
+  const detail = finding.detail ?? {};
+  if (finding.code === "UNPUBLISHED_LINKS_HIDDEN") {
+    report.hiddenCount += countOf(detail);
+  } else if (finding.code === "UNPUBLISHED_LINK_IN_HIDDEN_FIELD") {
+    report.inHiddenFields += 1;
+  } else if (detail.cause === "deleted") {
+    const count = countOf(detail);
+    report.deletedLinks.push(
+      ...fieldsOf(detail).map(field => ({ field, count }))
+    );
+  } else {
+    const link = namedLink(finding);
+    if (link !== null) report.links.push(link);
+  }
+}
+
+type FindingDetail = NonNullable<ReadinessFinding["detail"]>;
+
+/** A finding's `count`, as a number. */
+function countOf(detail: FindingDetail): number {
+  return Number(detail.count ?? 0);
+}
+
+/** The fields a finding names. */
+function fieldsOf(detail: FindingDetail): string[] {
+  return Array.isArray(detail.fields) ? [...detail.fields] : [];
+}
+
+/** A link finding as the linked document it names, or `null`. */
+function namedLink(finding: ReadinessFinding): UnpublishedLink | null {
+  const target = linkTargetOf(finding);
+  if (target === null) return null;
+  const detail = finding.detail ?? {};
+  return {
+    scopeKind: "collection",
+    scopeSlug: target.collection,
+    entryId: target.entryId,
+    fields: fieldsOf(detail),
+    cause: detail.cause === "comes-down" ? "comes-down" : "draft",
+  };
 }

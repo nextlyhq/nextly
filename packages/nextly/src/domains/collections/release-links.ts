@@ -2,31 +2,34 @@
  * What a document links to as it would go live, for a release's checks.
  *
  * A release publishes a document's working draft where it has one, and its
- * stored content otherwise, so its links are read from the same place: the
- * working draft's snapshot, or the stored row read at depth 0. Both hold each
- * relationship as stored, which is the shape {@link relationshipTargetsOf}
- * reads, so the targets named here are the ones a read would populate.
+ * stored content otherwise, so its links are read from the same place, as
+ * storage holds it: `releaseGoingLiveDocuments` for a collection's entries and
+ * `releaseGoingLiveDocument` for a Single. Neither runs read hooks or a
+ * reader's access, so a hook that hides a value from readers does not hide a
+ * link that is stored, and neither creates a Single's row.
  *
- * Every read is batched per collection: the rows of all the documents asked
- * about in one query, their working drafts in another, and the statuses of
- * linked documents in a third, whatever the number of documents or links.
+ * Links are found by the one walk over relationship and upload fields that
+ * the version preview uses ({@link walkReferenceFields}), into groups,
+ * repeaters, components and dynamic zones alike, and each value is read as
+ * expansion reads it ({@link relationshipTargetsOf}).
  *
  * @module domains/collections/release-links
  * @experimental
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
-import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
-
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
-import type { NextlyServiceConfig } from "../../di/register";
-import { nextly } from "../../direct-api/nextly";
+import type { CollectionsHandler } from "../../services/collections-handler";
+import { applyFieldReadAccess } from "../../shared/lib/field-level-registry";
+import type { ReleaseCheckScope } from "../releases/readiness/check-sources";
 import type {
   DocumentLink,
   ReleaseLinkReads,
 } from "../releases/readiness/unpublished-links";
-import { VersionsRepository } from "../versions/versions-repository";
-import { workingDraftLocale } from "../versions/working-draft-locale";
+import type { SingleEntryService } from "../singles/services/single-entry-service";
+import { walkReferenceFields } from "../versions/snapshot-references";
 
 import { relationshipTargetsOf } from "./services/collection-relationship-service";
 import {
@@ -34,80 +37,110 @@ import {
   collectionTableName,
 } from "./services/collection-utils";
 
-/** A value stored as JSON text on a dialect without a native JSON column. */
-function decoded(value: unknown): unknown {
-  if (typeof value !== "string") return value;
-  const text = value.trim();
-  if (!text.startsWith("{") && !text.startsWith("[")) return value;
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return value;
-  }
+/**
+ * Where a link sits: the top-level field, then the field holding the value
+ * when that is a different one inside it, such as `meta.editor` or
+ * `blocks.cite`. Levels between the two are not named.
+ */
+function fieldPath(top: string, leaf: string): string {
+  return top === leaf ? top : `${top}.${leaf}`;
 }
 
-/** A plain object, or `null` for anything else. */
-function asRecord(value: unknown): Record<string, unknown> | null {
-  const found = decoded(value);
-  return typeof found === "object" && found !== null && !Array.isArray(found)
-    ? (found as Record<string, unknown>)
-    : null;
+/** A deep copy of plain document data, for a walk that normalises in place. */
+function copied(data: Record<string, unknown>): Record<string, unknown> {
+  return structuredClone(data);
 }
 
 /**
- * Every document `data` links to through its relationship fields, one level
- * deep: its own fields, inside groups and repeaters too, but never the links
- * of the documents it links to. `field` is the path of field names, without
- * repeater row numbers, so one field shows once however many rows it holds.
+ * Run the reference walk over `data` one top-level field at a time, so each
+ * leaf it reaches is reported with the field path it sits under.
+ */
+function eachReference(
+  fields: readonly FieldConfig[],
+  data: Record<string, unknown>,
+  includeReadRuleFields: boolean,
+  visit: (field: FieldConfig, value: unknown, path: string) => void
+): void {
+  for (const top of fields) {
+    const name = (top as { name?: unknown }).name;
+    walkReferenceFields(
+      data,
+      [top],
+      (field, holder, leaf) =>
+        visit(
+          field,
+          holder[leaf],
+          typeof name === "string" && name !== "" ? fieldPath(name, leaf) : leaf
+        ),
+      false,
+      { includeReadRuleFields }
+    );
+  }
+}
+
+/**
+ * Every document `data` links to through its relationship and upload fields,
+ * one level deep: its own fields at any nesting, components and dynamic zones
+ * included, but never the links of the documents it links to. Fields protected
+ * by a read rule are included: whether a reader may be told about them is
+ * decided per reader ({@link linkFieldsVisibleIn}).
  *
- * Uploads are not read: an upload points at the media library, which has no
- * draft/published lifecycle, so there is nothing about it to report.
+ * `fields` are enriched with their component schemas, as the walk reads them.
  *
  * @experimental
  */
 export function linksInDocument(
-  fields: readonly FieldDefinition[],
-  data: Record<string, unknown>,
-  prefix = ""
+  fields: readonly FieldConfig[],
+  data: Record<string, unknown>
 ): DocumentLink[] {
-  return fields.flatMap(field => {
-    if (typeof field.name !== "string" || field.name === "") return [];
-    const path = prefix === "" ? field.name : `${prefix}.${field.name}`;
-    return linksInField(field, data[field.name], path);
+  const links: DocumentLink[] = [];
+  eachReference(fields, copied(data), true, (field, value, path) => {
+    for (const target of relationshipTargetsOf(
+      field as unknown as Parameters<typeof relationshipTargetsOf>[0],
+      value
+    )) {
+      links.push({
+        field: path,
+        collection: target.collection,
+        entryId: target.id,
+      });
+    }
   });
+  return links;
 }
 
-/** The links one field's value holds, at `path`. */
-function linksInField(
-  field: FieldDefinition,
-  value: unknown,
-  path: string
-): DocumentLink[] {
-  if (field.type === "relationship") {
-    return relationshipTargetsOf(field, value).map(target => ({
-      field: path,
-      collection: target.collection,
-      entryId: target.id,
-    }));
-  }
-  const nested = Array.isArray(field.fields) ? field.fields : [];
-  if (nested.length === 0) return [];
-  // A group holds one object of its fields; a repeater, a list of them.
-  const records =
-    field.type === "group"
-      ? [asRecord(value)]
-      : field.type === "repeater"
-        ? rowsOf(value)
-        : [];
-  return records.flatMap(record =>
-    record === null ? [] : linksInDocument(nested, record, path)
-  );
-}
-
-/** A repeater's rows, each as an object or `null`. */
-function rowsOf(value: unknown): Array<Record<string, unknown> | null> {
-  const rows = decoded(value);
-  return Array.isArray(rows) ? rows.map(asRecord) : [];
+/**
+ * The field paths of `data`'s links that a reader is shown: the document with
+ * the field read rules applied for that reader, as a read applies them, then
+ * walked as the preview walks it, which leaves out a protected field inside a
+ * component, where a rule cannot be judged. A link outside these is in a field
+ * the reader may not view.
+ *
+ * @experimental
+ */
+export async function linkFieldsVisibleIn(args: {
+  kind: "collection" | "single";
+  slug: string;
+  fields: readonly FieldConfig[];
+  data: Record<string, unknown>;
+  user: Record<string, unknown>;
+  authenticatedScope?: AuthenticatedScope;
+}): Promise<Set<string>> {
+  const entry = copied(args.data);
+  await applyFieldReadAccess({
+    kind: args.kind,
+    slug: args.slug,
+    entry,
+    user: args.user,
+    ...(args.authenticatedScope
+      ? { authenticatedScope: args.authenticatedScope }
+      : {}),
+  });
+  const visible = new Set<string>();
+  eachReference(args.fields, entry, false, (_field, _value, path) => {
+    visible.add(path);
+  });
+  return visible;
 }
 
 /** The registry record of a collection or Single, or `null`. */
@@ -125,147 +158,160 @@ async function registryRecord(
   const record = await (kind === "single"
     ? registry.getSingleBySlug?.(slug)
     : registry.getCollectionBySlug?.(slug));
-  return asRecord(record);
+  return typeof record === "object" && record !== null
+    ? (record as Record<string, unknown>)
+    : null;
 }
 
-/** The install's default language, for keying a localized working draft. */
-function defaultLocale(): string | null {
-  if (!container.has("config")) return null;
-  return (
-    container.get<NextlyServiceConfig>("config").localization?.defaultLocale ??
-    null
-  );
-}
-
-/** Whether the collection keeps working drafts apart from its live row. */
-function keepsWorkingDrafts(record: Record<string, unknown>): boolean {
-  const versions = asRecord(record.versions);
-  const drafts = asRecord(versions?.drafts);
-  return record.status === true && drafts?.enabled === true;
+/** A schema's fields, enriched with the component schemas the walk reads. */
+async function enrichedFields(
+  record: Record<string, unknown>
+): Promise<FieldConfig[]> {
+  const fields = collectionFields(record) as unknown as Record<
+    string,
+    unknown
+  >[];
+  if (!container.has("fieldGroupRegistryService")) {
+    return fields as unknown as FieldConfig[];
+  }
+  const registry = container.get<{
+    enrichFieldsWithComponentSchemas(
+      fields: Record<string, unknown>[]
+    ): Promise<unknown[]>;
+  }>("fieldGroupRegistryService");
+  return (await registry.enrichFieldsWithComponentSchemas(
+    fields
+  )) as unknown as FieldConfig[];
 }
 
 /**
- * What each of these documents of one collection links to as it would go
- * live, keyed by entry id. A document that is not there is absent.
+ * The documents of one scope as they would go live, keyed by entry id, with
+ * the scope's enriched fields. A document that is not there is absent.
  */
-async function collectionLinks(
-  adapter: DrizzleAdapter,
-  collection: string,
+async function goingLiveDocuments(
+  scope: ReleaseCheckScope,
   entryIds: readonly string[]
-): Promise<Map<string, DocumentLink[]>> {
-  const found = new Map<string, DocumentLink[]>();
-  const record = await registryRecord("collection", collection);
-  if (record === null || entryIds.length === 0) return found;
-  const fields = collectionFields(record);
-  // Trusted and at depth 0: this reads what the document holds, to judge it,
-  // and nothing read here reaches a caller until the reader's own access has
-  // narrowed it.
-  const stored = await nextly.find({
-    collection: collection as never,
-    where: { id: { in: [...entryIds] } } as never,
-    status: "all",
-    depth: 0,
-    limit: entryIds.length,
-    pagination: false,
-    overrideAccess: true,
-  } as never);
-  const rows = (stored as unknown as { items?: unknown[] }).items ?? [];
-  const drafts = keepsWorkingDrafts(record)
-    ? await new VersionsRepository(adapter).findWorkingDraftsOf(
-        { scopeKind: "collection", scopeSlug: collection },
+): Promise<{
+  fields: FieldConfig[];
+  documents: Map<string, Record<string, unknown>>;
+}> {
+  const kind = scope.scopeKind === "single" ? "single" : "collection";
+  const record = await registryRecord(kind, scope.scopeSlug);
+  if (record === null || entryIds.length === 0) {
+    return { fields: [], documents: new Map() };
+  }
+  const fields = await enrichedFields(record);
+  if (kind === "collection") {
+    const documents = await container
+      .get<CollectionsHandler>("collectionsHandler")
+      .releaseGoingLiveDocuments({
+        collectionName: scope.scopeSlug,
         entryIds,
-        workingDraftLocale({
-          documentLocalized: record.localized === true,
-          requestLocale: null,
-          defaultLocale: defaultLocale(),
-        })
-      )
-    : new Map();
-  for (const row of rows) {
-    const live = asRecord(row);
-    if (live === null) continue;
-    const id = String(live.id);
-    // The working draft is what the release's write folds in and publishes.
-    const goingLive = asRecord(drafts.get(id)?.snapshot) ?? live;
-    found.set(id, linksInDocument(fields, goingLive));
+      });
+    return { fields, documents };
   }
-  return found;
-}
-
-/**
- * What a Single links to as it would go live, keyed by its row's id, or
- * nothing when it has no stored row: its ordinary read would create one.
- */
-async function singleLinks(
-  slug: string,
-  entryIds: readonly string[],
-  singleExists: (slug: string) => Promise<boolean>
-): Promise<Map<string, DocumentLink[]>> {
-  const found = new Map<string, DocumentLink[]>();
-  const record = await registryRecord("single", slug);
-  if (record === null || !(await singleExists(slug))) return found;
-  // `draft: true` under trust reads the working draft where there is one,
-  // which is what the release publishes.
-  const document = asRecord(
-    await nextly.findSingle({
-      slug: slug as never,
-      status: "all",
-      draft: true,
-      depth: 0,
-      overrideAccess: true,
-    } as never)
-  );
-  if (document === null) return found;
-  const id = String(document.id);
-  if (entryIds.includes(id)) {
-    found.set(id, linksInDocument(collectionFields(record), document));
+  const single = await container
+    .get<SingleEntryService>("singleEntryService")
+    .releaseGoingLiveDocument({ slug: scope.scopeSlug });
+  // Only a member naming the Single's current row is answered about it.
+  const documents = new Map<string, Record<string, unknown>>();
+  if (single !== null && entryIds.includes(single.entryId)) {
+    documents.set(single.entryId, single.document);
   }
-  return found;
+  return { fields, documents };
 }
 
 /**
  * Of these documents of one collection that exist, whether each is stored as
- * published, read from its table in one query of two columns.
+ * published, read from its table in one query of at most two columns. Every
+ * document of a collection without a draft/published lifecycle is live once
+ * it exists. `null` for a slug that is not a registered collection, such as
+ * the media library, about whose documents nothing here can say.
  */
 async function publishedEntries(
   adapter: DrizzleAdapter,
   collection: string,
   entryIds: readonly string[]
-): Promise<Map<string, boolean>> {
-  const published = new Map<string, boolean>();
+): Promise<Map<string, boolean> | null> {
   const record = await registryRecord("collection", collection);
-  if (record === null || entryIds.length === 0) return published;
+  if (record === null) return null;
+  const published = new Map<string, boolean>();
+  if (entryIds.length === 0) return published;
   const table = collectionTableName(record, collection);
   if (!(await adapter.tableExists(table))) return published;
-  const rows = await adapter.select<{ id: unknown; status: unknown }>(table, {
-    columns: ["id", "status"],
+  const lifecycle = record.status === true;
+  const rows = await adapter.select<{ id: unknown; status?: unknown }>(table, {
+    columns: lifecycle ? ["id", "status"] : ["id"],
     where: {
       and: [{ column: "id", op: "IN", value: [...new Set(entryIds)] }],
     },
   });
   for (const row of rows) {
-    published.set(String(row.id), row.status === "published");
+    published.set(String(row.id), !lifecycle || row.status === "published");
   }
   return published;
 }
 
 /**
  * The reads the releases domain's link check asks, bound to one adapter.
- * `singleExists` says whether a Single has its stored row without creating
- * it, which the Single's ordinary read would.
  *
  * @experimental
  */
-export function releaseLinkReads(
-  adapter: DrizzleAdapter,
-  singleExists: (slug: string) => Promise<boolean>
-): ReleaseLinkReads {
+export function releaseLinkReads(adapter: DrizzleAdapter): ReleaseLinkReads {
   return {
-    linksOf: (scope, entryIds) =>
-      scope.scopeKind === "single"
-        ? singleLinks(scope.scopeSlug, entryIds, singleExists)
-        : collectionLinks(adapter, scope.scopeSlug, entryIds),
+    linksOf: async (scope, entryIds) => {
+      const { fields, documents } = await goingLiveDocuments(scope, entryIds);
+      return new Map(
+        [...documents].map(([id, document]) => [
+          id,
+          linksInDocument(fields, document),
+        ])
+      );
+    },
     publishedOf: (collection, entryIds) =>
       publishedEntries(adapter, collection, entryIds),
   };
+}
+
+/**
+ * For each of these documents, by `id`, the field paths of its links a reader
+ * is shown ({@link linkFieldsVisibleIn}), read a scope at a time. A document
+ * that is not there is absent.
+ *
+ * @experimental
+ */
+export async function linkFieldsVisibleTo(
+  documents: ReadonlyArray<ReleaseCheckScope & { entryId: string; id: string }>,
+  caller: {
+    user: Record<string, unknown>;
+    authenticatedScope?: AuthenticatedScope;
+  }
+): Promise<Map<string, Set<string>>> {
+  const byScope = new Map<string, typeof documents>();
+  for (const document of documents) {
+    const key = `${document.scopeKind}:${document.scopeSlug}`;
+    byScope.set(key, [...(byScope.get(key) ?? []), document]);
+  }
+  const visible = new Map<string, Set<string>>();
+  for (const group of byScope.values()) {
+    const { fields, documents: read } = await goingLiveDocuments(
+      group[0],
+      group.map(document => document.entryId)
+    );
+    for (const document of group) {
+      const data = read.get(document.entryId);
+      if (data === undefined) continue;
+      visible.set(
+        document.id,
+        await linkFieldsVisibleIn({
+          kind: document.scopeKind === "single" ? "single" : "collection",
+          slug: document.scopeSlug,
+          fields,
+          data,
+          ...caller,
+        })
+      );
+    }
+  }
+  return visible;
 }

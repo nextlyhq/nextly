@@ -305,6 +305,19 @@ export interface ReleasesServiceDeps {
     documents: readonly (DocumentRef & { id: string })[],
     actor: ReleaseActor
   ) => Promise<ReadonlySet<string>>;
+  /**
+   * For each of these documents, by `id`, the field paths of its links the
+   * actor is shown: the document as it would go live, with the field read
+   * rules applied for the actor as a read applies them. A link in any other
+   * field is reported without its field or target. Optional: without it, an
+   * untrusted reader is shown no linked field at all.
+   *
+   * @experimental
+   */
+  visibleLinkFields?: (
+    documents: readonly (DocumentRef & { id: string })[],
+    actor: ReleaseActor
+  ) => Promise<ReadonlyMap<string, ReadonlySet<string>>>;
 }
 
 /**
@@ -324,7 +337,7 @@ export type AddedReleaseMember = ReleaseMemberRow & {
  * it is handed to the caller, who may change it.
  */
 function noUnpublishedLinks(): UnpublishedLinksReport {
-  return { links: [], hiddenCount: 0 };
+  return { links: [], hiddenCount: 0, inHiddenFields: 0, deletedLinks: [] };
 }
 
 /**
@@ -1254,6 +1267,29 @@ export interface AddMemberInput extends Omit<DocumentRef, "scopeKind"> {
   action: ReleaseMemberAction;
 }
 
+/** The document a link finding is FROM: the member's. */
+function sourceOf(finding: ReadinessFinding): DocumentRef {
+  return {
+    scopeKind: finding.scopeKind,
+    scopeSlug: finding.scopeSlug,
+    entryId: finding.entryId,
+    locale: null,
+  };
+}
+
+/** The document a link finding is TO. */
+function targetRef(target: {
+  collection: string;
+  entryId: string;
+}): DocumentRef {
+  return {
+    scopeKind: "collection",
+    scopeSlug: target.collection,
+    entryId: target.entryId,
+    locale: null,
+  };
+}
+
 export class ReleasesService {
   constructor(private readonly deps: ReleasesServiceDeps) {}
 
@@ -1785,7 +1821,7 @@ export class ReleasesService {
       members,
       registeredReleaseCheckSources()
     );
-    // A linked document the reader may not read is counted, not named.
+    // A link the reader may not be told about is counted, not named.
     [found.soft] = await this.narrowLinksFor([found.soft], actor);
     return { releaseId: release.id, ...found };
   }
@@ -1881,10 +1917,20 @@ export class ReleasesService {
         membersByRelease.get(id) ?? [],
         registeredReleaseCheckSources()
       );
-      // As the single read narrows it.
-      [found.soft] = await this.narrowLinksFor([found.soft], actor);
       entries.push({ releaseId: id, ...found, checked: true });
     }
+    // Narrowed as the single read narrows it, in one pass for the whole page,
+    // so a document linked from several releases gets one verdict.
+    const checked = entries.filter(
+      (entry): entry is ReleaseReadiness & { checked: true } => entry.checked
+    );
+    const narrowed = await this.narrowLinksFor(
+      checked.map(entry => entry.soft),
+      actor
+    );
+    checked.forEach((entry, index) => {
+      entry.soft = narrowed[index];
+    });
     return entries;
   }
 
@@ -1899,35 +1945,59 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReadinessFinding[][]> {
     if (actor.overrideAccess === true) return [...lists];
-    // Each linked document asked about once, its document key as its id.
-    const refs = new Map<string, DocumentRef & { id: string }>();
-    for (const finding of lists.flat()) {
+    const links = lists
+      .flat()
+      .filter(
+        finding =>
+          finding.source === UNPUBLISHED_LINKS_SOURCE_KEY &&
+          finding.code === "UNPUBLISHED_LINK"
+      );
+    if (links.length === 0) return [...lists];
+    // Every document asked about once, its document key as its id: the
+    // documents the links are FROM and the ones they are TO.
+    const asked = new Map<string, DocumentRef & { id: string }>();
+    const ask = (ref: DocumentRef): string => {
+      const id = documentRefKey(ref);
+      asked.set(id, { ...ref, id });
+      return id;
+    };
+    for (const finding of links) {
+      ask(sourceOf(finding));
       const target = linkTargetOf(finding);
-      if (target === null) continue;
-      const ref: DocumentRef = {
-        scopeKind: "collection",
-        scopeSlug: target.collection,
-        entryId: target.entryId,
-        locale: null,
-      };
-      refs.set(documentRefKey(ref), { ...ref, id: documentRefKey(ref) });
+      if (target !== null) ask(targetRef(target));
     }
-    if (refs.size === 0) return [...lists];
     const readable =
       this.deps.readableDocuments === undefined
         ? new Set<string>()
-        : await this.deps.readableDocuments([...refs.values()], actor);
+        : await this.deps.readableDocuments([...asked.values()], actor);
+    // Which fields of each readable source the reader is shown, asked only
+    // of the sources the reader may read at all.
+    const sources = [
+      ...new Map(
+        links
+          .map(sourceOf)
+          .filter(ref => readable.has(documentRefKey(ref)))
+          .map(ref => [
+            documentRefKey(ref),
+            { ...ref, id: documentRefKey(ref) },
+          ])
+      ).values(),
+    ];
+    const fields =
+      this.deps.visibleLinkFields === undefined || sources.length === 0
+        ? new Map<string, ReadonlySet<string>>()
+        : await this.deps.visibleLinkFields(sources, actor);
+    const none = new Set<string>();
     return lists.map(findings =>
-      narrowLinkFindings(findings, target =>
-        readable.has(
-          documentRefKey({
-            scopeKind: "collection",
-            scopeSlug: target.collection,
-            entryId: target.entryId,
-            locale: null,
-          })
-        )
-      )
+      narrowLinkFindings(findings, {
+        sourceReadable: finding =>
+          readable.has(documentRefKey(sourceOf(finding))),
+        // Failing closed: a source nothing was learned about shows no field.
+        visibleFields: finding =>
+          fields.get(documentRefKey(sourceOf(finding))) ?? none,
+        targetReadable: target =>
+          readable.has(documentRefKey(targetRef(target))),
+      })
     );
   }
 

@@ -493,11 +493,12 @@ A document **coming down** is judged only on its status and on a pending change 
 
 **Soft problems** are notes and stop nothing:
 
-| Code                       | The document…                                                                                                                                                                                |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `IN_OTHER_RELEASE`         | is also in another scheduled release, named by `detail.releaseId`. `detail.winningReleaseId` is the one whose action stands once both have run, or `null` while this release has no time set |
-| `UNPUBLISHED_LINK`         | is going live and links to a document that will not be live at the release's moment (see [Linked documents](#linked-documents-that-will-not-be-live))                                        |
-| `UNPUBLISHED_LINKS_HIDDEN` | is going live and links to documents that will not be live, which you may not read: `detail.count` says how many, and nothing else about them is given                                       |
+| Code                               | The document…                                                                                                                                                                                |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IN_OTHER_RELEASE`                 | is also in another scheduled release, named by `detail.releaseId`. `detail.winningReleaseId` is the one whose action stands once both have run, or `null` while this release has no time set |
+| `UNPUBLISHED_LINK`                 | is going live and links to a document that will not be live at the release's moment (see [Linked documents](#linked-documents-that-will-not-be-live))                                        |
+| `UNPUBLISHED_LINKS_HIDDEN`         | is going live and links to documents that will not be live, which you may not read: `detail.count` says how many, and nothing else about them is given                                       |
+| `UNPUBLISHED_LINK_IN_HIDDEN_FIELD` | is going live and links to a document that will not be live through a field you may not view: neither the field nor the document is named                                                    |
 
 Ask for them with:
 
@@ -642,10 +643,11 @@ same `409` and the release is left as it was.
 
 > **Needs the release after 0.0.2-alpha.68.** Experimental, like the rest of readiness.
 
-A document going live may link to other documents through its relationship fields: an author,
-a category, related posts. When one of those will not be live at the release's moment, the
-document goes live linking to something a visitor cannot open. Readiness notes each such link
-as a soft problem, `UNPUBLISHED_LINK`, which never stops scheduling, Publish now or the run.
+A document going live may link to other documents through its relationship and upload
+fields: an author, a category, related posts, an attachment. When one of those will not be live
+at the release's moment, or no longer exists, the document goes live linking to something a
+visitor cannot open. Readiness notes each such link as a soft problem, `UNPUBLISHED_LINK`,
+which never stops scheduling, Publish now or the run.
 
 "Live at the moment" accounts for every other scheduled release, as the run will:
 
@@ -653,33 +655,48 @@ as a soft problem, `UNPUBLISHED_LINK`, which never stops scheduling, Publish now
 - a linked document that is live now but that another release takes down before the moment is
   reported, with `detail.cause` set to `"comes-down"`;
 - a linked draft that nothing publishes by then is reported with `detail.cause` set to `"draft"`;
+- a release whose author can no longer act (deleted or deactivated) changes nothing, as at its
+  run, so a draft only that release would publish is still reported as `"draft"`;
 - a linked document in the same release, going live with it, is not reported.
 
 The moment is the release's scheduled time while it is still ahead. For a draft, a stopped
 release or one past its time, it is now: the links are judged as if the release ran now.
 
 `detail` names the linked document (`scopeKind`, `scopeSlug`, `entryId`) and every field of
-the document going live that links to it (`fields`, such as `["author"]` or `["meta.editor"]`).
+the document going live that links to it (`fields`, such as `["author"]`, `["meta.editor"]`
+or `["blocks.cite"]`).
+
+A link to a document that **no longer exists** is reported with `detail.cause` set to
+`"deleted"`. A deleted document has nothing left to name it by, so the problem names only the
+field (`detail.fields`) and how many such links it holds (`detail.count`).
 
 What counts as a link:
 
-- **Relationship fields**, one level deep: the document's own fields, including those inside
-  groups and repeaters, but not the links of the documents it links to. A document's links are
-  read from what will go live: its pending change where it has one, otherwise what is stored.
-- Only links into a collection with Draft/Published. A document in a collection without it is
-  live as soon as it exists.
-- **Uploads are never reported.** An upload points at the media library, which has no draft
-  state, so its file is live as soon as it is uploaded.
+- **Relationship and upload fields**, one level deep: the document's own fields, including those
+  inside groups, repeaters, field groups and blocks, but not the links of the documents it links
+  to. A document's links are read from what will go live, as stored: its pending change where it
+  has one, otherwise what is saved. A read hook that hides a value from readers does not hide it
+  here.
+- A document in a collection without Draft/Published is live as soon as it exists, so a link to
+  one is reported only once it is deleted.
+- **Files in the media library are never reported.** They have no draft state. An upload field
+  that points at a collection of your own with Draft/Published is checked like a relationship.
 - **Links inside rich text are not checked yet.**
 
 A document **coming down** gets no such note: what it links to stops mattering once it is not
 live itself.
 
-**You are only told about documents you may read.** A linked document you may not read is
-never named, by id or otherwise. Each document's hidden links are counted together in one
-`UNPUBLISHED_LINKS_HIDDEN` problem, whose `detail.count` says how many there are. A trusted
-Direct API call (`overrideAccess`, the default) may read everything, so it is told about every
-link.
+**You are only told what you may read.**
+
+- A link from a document you may not read, or to a document you may not read, is never named,
+  by id or otherwise. Each document's such links are counted together in one
+  `UNPUBLISHED_LINKS_HIDDEN` problem, whose `detail.count` says how many there are.
+- A link in a field you may not view, by that field's read rule, is reported as
+  `UNPUBLISHED_LINK_IN_HIDDEN_FIELD`, "a field you can't view links to an unpublished document",
+  naming neither the field nor the document. It still counts, so the release reads the same
+  size to everyone.
+- A trusted Direct API call (`overrideAccess`, the default) may read everything, so it is told
+  about every link.
 
 #### Offering the links when a document is added
 
@@ -706,14 +723,18 @@ member.
           "cause": "draft"
         }
       ],
-      "hiddenCount": 0
+      "hiddenCount": 0,
+      "inHiddenFields": 0,
+      "deletedLinks": [{ "field": "category", "count": 1 }]
     }
   }
 }
 ```
 
-`links` holds the documents you may read; `hiddenCount` counts the rest. Both are empty for a
-document added to come down. Adding the linked documents is an ordinary add of each, going live.
+`links` holds the documents you may read. `hiddenCount` counts links to or from documents you
+may not read, `inHiddenFields` those in fields you may not view, and `deletedLinks` names each
+field linking to deleted documents. All are empty for a document added to come down. Adding the
+linked documents is an ordinary add of each, going live.
 
 ### What is not checked yet
 

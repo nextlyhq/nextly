@@ -19,7 +19,10 @@ import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
 import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
-import { releaseLinkReads } from "../../domains/collections/release-links";
+import {
+  linkFieldsVisibleTo,
+  releaseLinkReads,
+} from "../../domains/collections/release-links";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
 import { registerNoticeKind } from "../../domains/notices/notice-kinds";
@@ -64,9 +67,7 @@ export function registerReleaseServices({
   const linkMembers = new ReleasesRepository(adapter);
   registerReleaseCheckSource(
     unpublishedLinksSource({
-      reads: releaseLinkReads(adapter, slug =>
-        singleRowExists(adapter, slug, logger)
-      ),
+      reads: releaseLinkReads(adapter),
       membersOf: releaseId => linkMembers.listMembers(releaseId),
     })
   );
@@ -220,6 +221,31 @@ export function registerReleaseServices({
             scope
           );
           return new Set(readable.map(document => document.id));
+        },
+
+        // Which fields of each linked-from document a reader is shown: the
+        // document as it would go live, with the field read rules applied for
+        // the reader by the read path's own judge, a scope at a time.
+        visibleLinkFields: async (documents, actor) => {
+          const none = new Map<string, ReadonlySet<string>>();
+          if (actor.userId === null) return none;
+          // The reader whole, as a read's field rules see them: a rule may
+          // ask more of the person than an id. Nobody to read as, such as a
+          // deactivated user, is shown no field.
+          const user = await releaseDocumentChecks(adapter, logger).actingAs(
+            actor.userId
+          );
+          if (user === null) return none;
+          const caller = {
+            user: {
+              ...user,
+              ...(actor.userRoles ? { roles: actor.userRoles } : {}),
+            } as Record<string, unknown>,
+            ...(actor.authenticatedScope
+              ? { authenticatedScope: actor.authenticatedScope }
+              : {}),
+          };
+          return linkFieldsVisibleTo(documents, caller);
         },
 
         // The document's OWN authority, asked with the same operation the

@@ -12,6 +12,7 @@ import { expect } from "vitest";
 
 import type { TestNextly } from "../../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../../routeHandler";
+import { ServiceContainer } from "../../../../services/index";
 
 /** The ids of these seeded grants, seeding the system ones first. */
 async function grantIds(t: TestNextly, slugs: string[]): Promise<string[]> {
@@ -49,7 +50,12 @@ async function grantIds(t: TestNextly, slugs: string[]): Promise<string[]> {
  */
 export async function keyHolding(
   t: TestNextly,
-  slugs: string[]
+  slugs: string[],
+  /** Who mints it, so two keys in one case are two people. */
+  minter: { email: string; name: string } = {
+    email: "key-owner@example.com",
+    name: "Key owner",
+  }
 ): Promise<{ key: string; ownerId: string }> {
   const nextly = t.nextly as unknown as {
     users: {
@@ -65,19 +71,25 @@ export async function keyHolding(
   };
   const owner = await nextly.users.create({
     data: {
-      email: "key-owner@example.com",
+      email: minter.email,
       password: "Password123!",
-      name: "Key owner",
+      name: minter.name,
       isActive: true,
     },
   });
   const role = await nextly.roles.create({
     data: {
-      name: "Key role",
-      slug: "key-role",
+      name: `Key role ${minter.name}`,
+      slug: `key-role-${minter.email.split("@")[0]}`,
       permissionIds: await grantIds(t, slugs),
     },
   });
+  // The minter holds the grants too: a key may carry no more than whoever
+  // mints it.
+  await new ServiceContainer(t.adapter).userRoles.assignRoleToUser(
+    owner.item.id,
+    role.item.id
+  );
   const apiKeys = t.getService("apiKeyService") as unknown as {
     createApiKey: (
       userId: string,

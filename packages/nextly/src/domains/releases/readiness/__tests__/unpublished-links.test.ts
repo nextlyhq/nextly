@@ -1,11 +1,10 @@
 /**
  * The link check, without a database: the projection of a linked document to
- * the release's moment, the source over fake reads, and what a reader who may
- * not read a target is told.
+ * the release's moment, the source over fake reads, and what a reader is told.
  *
  * Each projection case has a twin that differs only in the property under
- * test — the instant a membership falls due, or which of two is later — so a
- * projection that ignored the moment, or the order, fails one of the pair.
+ * test — the instant a membership falls due, which of two is later, whether
+ * its author can act — so a projection that ignored it fails one of the pair.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -18,6 +17,7 @@ import {
   unpublishedLinksReport,
   unpublishedLinksSource,
   type DocumentLink,
+  type LinkReaderVerdicts,
   type ReleaseLinkReads,
 } from "../unpublished-links";
 
@@ -28,10 +28,14 @@ const MOMENT = new Date("2026-03-10T09:00:00Z");
 const BEFORE = new Date("2026-03-05T09:00:00Z");
 const AFTER = new Date("2026-03-20T09:00:00Z");
 
+/** Every author these cases name can act, unless a case says otherwise. */
+const LIVE = new Set(["author"]);
+
 function due(
   id: string,
   action: "publish" | "unpublish",
-  scheduledAt: Date
+  scheduledAt: Date,
+  createdBy: string | null = "author"
 ): DueMember {
   return {
     memberId: id,
@@ -39,76 +43,55 @@ function due(
     action,
     scheduledAt,
     createdAt: new Date("2026-02-01T00:00:00Z"),
+    createdBy,
   };
+}
+
+function state(
+  published: boolean,
+  memberships: DueMember[],
+  live: ReadonlySet<string> = LIVE
+) {
+  return linkTargetState({ published, memberships, moment: MOMENT, live });
 }
 
 describe("linkTargetState", () => {
   it("reads a draft nothing publishes as a draft, and a published one as live", () => {
-    expect(
-      linkTargetState({ published: false, memberships: [], moment: MOMENT })
-    ).toBe("draft");
-    expect(
-      linkTargetState({ published: true, memberships: [], moment: MOMENT })
-    ).toBe("live");
+    expect(state(false, [])).toBe("draft");
+    expect(state(true, [])).toBe("live");
   });
 
   it("counts a publish only when it falls due by the moment", () => {
-    expect(
-      linkTargetState({
-        published: false,
-        memberships: [due("a", "publish", BEFORE)],
-        moment: MOMENT,
-      })
-    ).toBe("live");
+    expect(state(false, [due("a", "publish", BEFORE)])).toBe("live");
     // The same publish, after the moment: the link is still a draft then.
-    expect(
-      linkTargetState({
-        published: false,
-        memberships: [due("a", "publish", AFTER)],
-        moment: MOMENT,
-      })
-    ).toBe("draft");
+    expect(state(false, [due("a", "publish", AFTER)])).toBe("draft");
   });
 
   it("counts a takedown due earlier, though the document is live now", () => {
-    expect(
-      linkTargetState({
-        published: true,
-        memberships: [due("a", "unpublish", BEFORE)],
-        moment: MOMENT,
-      })
-    ).toBe("comes-down");
-    expect(
-      linkTargetState({
-        published: true,
-        memberships: [due("a", "unpublish", AFTER)],
-        moment: MOMENT,
-      })
-    ).toBe("live");
+    expect(state(true, [due("a", "unpublish", BEFORE)])).toBe("comes-down");
+    expect(state(true, [due("a", "unpublish", AFTER)])).toBe("live");
   });
 
   it("lets the later of two due memberships decide", () => {
     const early = new Date("2026-03-02T09:00:00Z");
     expect(
-      linkTargetState({
-        published: false,
-        memberships: [
-          due("a", "publish", early),
-          due("b", "unpublish", BEFORE),
-        ],
-        moment: MOMENT,
-      })
+      state(false, [due("a", "publish", early), due("b", "unpublish", BEFORE)])
     ).toBe("comes-down");
     expect(
-      linkTargetState({
-        published: false,
-        memberships: [
-          due("a", "unpublish", early),
-          due("b", "publish", BEFORE),
-        ],
-        moment: MOMENT,
-      })
+      state(false, [due("a", "unpublish", early), due("b", "publish", BEFORE)])
     ).toBe("live");
+  });
+
+  it("gives a winning publish no effect when its author cannot act, as the read path does", () => {
+    expect(state(false, [due("a", "publish", BEFORE, "gone")])).toBe("draft");
+    expect(state(false, [due("a", "publish", BEFORE, null)])).toBe("draft");
+    // And an earlier member does not stand in for the winner nobody can run.
+    expect(
+      state(false, [
+        due("a", "publish", new Date("2026-03-02T09:00:00Z")),
+        due("b", "unpublish", BEFORE, "gone"),
+      ])
+    ).toBe("draft");
   });
 });
 
@@ -132,10 +115,14 @@ describe("linkMoment", () => {
   });
 });
 
-/** Fake content: each post's links, and which documents are published. */
+/**
+ * Fake content: each post's links, and which documents exist and are live.
+ * A collection named in `notCollections` is not a collection at all.
+ */
 function linkReads(
   links: Record<string, DocumentLink[]>,
-  published: Record<string, boolean>
+  published: Record<string, boolean>,
+  notCollections: string[] = []
 ): ReleaseLinkReads & {
   linksOf: ReturnType<typeof vi.fn>;
   publishedOf: ReturnType<typeof vi.fn>;
@@ -147,6 +134,7 @@ function linkReads(
       return found;
     }),
     publishedOf: vi.fn(async (collection: string, ids: readonly string[]) => {
+      if (notCollections.includes(collection)) return null;
       const found = new Map<string, boolean>();
       for (const id of ids) {
         const key = `${collection}/${id}`;
@@ -180,11 +168,10 @@ describe("core.unpublished-links", () => {
         "posts/live": true,
       }
     );
-    const source = unpublishedLinksSource({
+    const found = await unpublishedLinksSource({
       reads: content,
       membersOf: async () => [],
-    });
-    const found = await source.check([member("post")], {
+    }).check([member("post")], {
       release: scheduled,
       now: NOW,
       reads: reads({
@@ -192,7 +179,7 @@ describe("core.unpublished-links", () => {
           new Map(
             refs
               .filter(ref => ref.entryId === "leaving")
-              .map(ref => [
+              .map(() => [
                 `collection:categories:leaving:`,
                 [due("x", "unpublish", BEFORE)],
               ])
@@ -231,24 +218,28 @@ describe("core.unpublished-links", () => {
       { "entry-post": [link("author", "authors", "drafty")] },
       { "authors/drafty": false }
     );
-    const source = unpublishedLinksSource({
-      reads: content,
-      membersOf: async () => [],
-    });
-    const check = (at: Date) =>
-      source.check([member("post")], {
+    const check = (at: Date, author = "author") =>
+      unpublishedLinksSource({
+        reads: content,
+        membersOf: async () => [],
+      }).check([member("post")], {
         release: scheduled,
         now: NOW,
         reads: reads({
           scheduledMemberships: async () =>
             new Map([
-              ["collection:authors:drafty:", [due("x", "publish", at)]],
+              ["collection:authors:drafty:", [due("x", "publish", at, author)]],
             ]),
+          liveAuthors: async ids => new Set(ids.filter(id => id === "author")),
         }),
       });
     expect(await check(BEFORE)).toEqual([]);
-    // The control: published only after the moment, it is reported.
+    // Published only after the moment: reported.
     expect((await check(AFTER)).map(f => f.code)).toEqual(["UNPUBLISHED_LINK"]);
+    // Published before it, by an author who can no longer act: reported.
+    expect((await check(BEFORE, "gone")).map(f => f.detail?.cause)).toEqual([
+      "draft",
+    ]);
   });
 
   it("counts a draft release's own members as going live with it", async () => {
@@ -310,16 +301,20 @@ describe("core.unpublished-links", () => {
     expect((await run(false)).map(f => f.code)).toEqual(["UNPUBLISHED_LINK"]);
   });
 
-  it("leaves out links into a collection without a lifecycle, and to documents that are gone", async () => {
+  it("reports links to deleted documents by field, naming no target, and never the media library", async () => {
     const content = linkReads(
       {
         "entry-post": [
+          link("author", "authors", "gone-1"),
+          link("editor", "authors", "gone-2"),
+          link("author", "authors", "gone-3"),
+          link("cover", "media", "m1"),
           link("note", "notes", "plain"),
-          link("author", "authors", "gone"),
-          link("editor", "authors", "drafty"),
         ],
       },
-      { "notes/plain": false, "authors/drafty": false }
+      // A collection without a lifecycle reads every document as live.
+      { "notes/plain": true },
+      ["media"]
     );
     const found = await unpublishedLinksSource({
       reads: content,
@@ -327,11 +322,21 @@ describe("core.unpublished-links", () => {
     }).check([member("post")], {
       release: scheduled,
       now: NOW,
-      reads: reads({
-        declaresLifecycle: async scope => scope.scopeSlug !== "notes",
-      }),
+      reads: reads(),
     });
-    expect(found.map(f => f.detail?.entryId)).toEqual(["drafty"]);
+    expect(found).toEqual([
+      {
+        memberId: "post",
+        code: "UNPUBLISHED_LINK",
+        detail: { fields: ["author"], cause: "deleted", count: "2" },
+      },
+      {
+        memberId: "post",
+        code: "UNPUBLISHED_LINK",
+        detail: { fields: ["editor"], cause: "deleted", count: "1" },
+      },
+    ]);
+    expect(JSON.stringify(found)).not.toContain("gone");
   });
 
   it("asks for statuses in runs the smallest parameter limit admits", async () => {
@@ -364,20 +369,20 @@ describe("core.unpublished-links", () => {
   });
 });
 
-/** A link finding as the evaluator shows it. */
+/** A link finding from member `memberId`, as the evaluator shows it. */
 function shown(
   memberId: string,
   entryId: string,
-  code = "UNPUBLISHED_LINK"
+  fields: string[] = ["author"]
 ): ReadinessFinding {
   return {
     memberId,
-    code,
+    code: "UNPUBLISHED_LINK",
     detail: {
       scopeKind: "collection",
       scopeSlug: "authors",
       entryId,
-      fields: ["author"],
+      fields,
       cause: "draft",
     },
     source: "core.unpublished-links",
@@ -385,6 +390,24 @@ function shown(
     scopeKind: "collection",
     scopeSlug: "posts",
     entryId: `entry-${memberId}`,
+  };
+}
+
+/** A deleted-link finding from member `memberId`. */
+function deletedIn(memberId: string, field: string): ReadinessFinding {
+  return {
+    ...shown(memberId, "x"),
+    detail: { fields: [field], cause: "deleted", count: "1" },
+  };
+}
+
+/** A reader who may read everything except what a case names. */
+function verdicts(over: Partial<LinkReaderVerdicts> = {}): LinkReaderVerdicts {
+  return {
+    sourceReadable: () => true,
+    visibleFields: () => null,
+    targetReadable: () => true,
+    ...over,
   };
 }
 
@@ -409,7 +432,7 @@ describe("narrowLinkFindings", () => {
         other,
         shown("b", "secret-3"),
       ],
-      target => target.entryId === "open"
+      verdicts({ targetReadable: target => target.entryId === "open" })
     );
     expect(narrowed.map(f => [f.memberId, f.code, f.detail])).toEqual([
       ["a", "UNPUBLISHED_LINK", shown("a", "open").detail],
@@ -420,19 +443,72 @@ describe("narrowLinkFindings", () => {
     expect(JSON.stringify(narrowed)).not.toContain("secret");
   });
 
-  it("passes everything through for a reader who may read every target", () => {
+  it("counts every link from a document the reader may not read, deleted ones too", () => {
+    const narrowed = narrowLinkFindings(
+      [shown("a", "open"), deletedIn("a", "author")],
+      verdicts({ sourceReadable: () => false })
+    );
+    expect(narrowed.map(f => [f.code, f.detail])).toEqual([
+      ["UNPUBLISHED_LINKS_HIDDEN", { count: "2" }],
+    ]);
+    expect(JSON.stringify(narrowed)).not.toContain("author");
+  });
+
+  it("names a link in a field the reader may not view by neither field nor target, and still counts it", () => {
+    const all = [
+      shown("a", "secret-target", ["guarded"]),
+      shown("a", "open", ["author", "guarded"]),
+      deletedIn("a", "guarded"),
+    ];
+    const narrowed = narrowLinkFindings(
+      all,
+      verdicts({ visibleFields: () => new Set(["author"]) })
+    );
+    expect(narrowed.map(f => [f.code, f.detail])).toEqual([
+      ["UNPUBLISHED_LINK_IN_HIDDEN_FIELD", undefined],
+      // Shown through the field the reader may view, and only that one.
+      [
+        "UNPUBLISHED_LINK",
+        { ...shown("a", "open").detail, fields: ["author"] },
+      ],
+      ["UNPUBLISHED_LINK_IN_HIDDEN_FIELD", undefined],
+    ]);
+    expect(narrowed).toHaveLength(all.length);
+    expect(JSON.stringify(narrowed)).not.toContain("guarded");
+    expect(JSON.stringify(narrowed)).not.toContain("secret-target");
+  });
+
+  it("judges a deleted link by its field alone, never by a target it no longer has", () => {
+    const narrowed = narrowLinkFindings(
+      [deletedIn("a", "author")],
+      verdicts({ targetReadable: () => false })
+    );
+    expect(narrowed.map(f => f.detail)).toEqual([
+      { fields: ["author"], cause: "deleted", count: "1" },
+    ]);
+  });
+
+  it("passes everything through for a reader who may read everything", () => {
     const all = [shown("a", "one"), other];
-    expect(narrowLinkFindings(all, () => true)).toEqual(all);
+    expect(narrowLinkFindings(all, verdicts())).toEqual(all);
   });
 });
 
 describe("unpublishedLinksReport", () => {
-  it("lists the named links and sums the hidden ones", () => {
+  it("lists the named links, sums the hidden ones and lists deleted ones by field", () => {
     expect(
       unpublishedLinksReport(
         narrowLinkFindings(
-          [shown("a", "open"), shown("a", "secret")],
-          target => target.entryId === "open"
+          [
+            shown("a", "open"),
+            shown("a", "secret"),
+            shown("a", "guarded-target", ["guarded"]),
+            deletedIn("a", "author"),
+          ],
+          verdicts({
+            targetReadable: target => target.entryId !== "secret",
+            visibleFields: () => new Set(["author"]),
+          })
         )
       )
     ).toEqual({
@@ -446,6 +522,8 @@ describe("unpublishedLinksReport", () => {
         },
       ],
       hiddenCount: 1,
+      inHiddenFields: 1,
+      deletedLinks: [{ field: "author", count: 1 }],
     });
   });
 });
