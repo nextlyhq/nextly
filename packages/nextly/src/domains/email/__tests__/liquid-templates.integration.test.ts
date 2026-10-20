@@ -111,7 +111,8 @@ async function storeAsBefore(
   t: TestNextly,
   dialect: TestDialect,
   slug: string,
-  htmlContent: string
+  htmlContent: string,
+  kind: "template" | "layout" = "template"
 ): Promise<string> {
   const id = randomUUID();
   const q = (n: string) => (dialect === "mysql" ? `\`${n}\`` : `"${n}"`);
@@ -137,7 +138,7 @@ async function storeAsBefore(
       slug,
       "Hello {{name}}",
       htmlContent,
-      "template",
+      kind,
       dialect === "postgresql" ? false : 0,
       dialect === "postgresql" ? true : 1,
       now,
@@ -663,6 +664,30 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(
         (await t.nextly.emailTemplates.preview({ id, data: DATA })).html
       ).toBe("<p>Hi PRIYA &lt;3</p>");
+    });
+
+    it("refuses to confirm a kept layout whose body marker Liquid wouldn't write", async () => {
+      const t = await boot(dialect);
+      const id = await storeAsBefore(
+        t,
+        dialect,
+        "kept-layout",
+        "<div>{% if vip %}VIP{% endif %}{{content}}</div>",
+        "layout"
+      );
+      await templates(t).ensureBuiltInTemplates();
+      expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
+      // Saved while kept: the old engine splices the marker wherever it is.
+      await t.nextly.emailTemplates.update({
+        id,
+        data: {
+          htmlContent: "{% assign x = '{{content}}' %}<div>layout</div>",
+        },
+      });
+      await expect(templates(t).confirmLiquid(id)).rejects.toMatchObject({
+        code: "VALIDATION_ERROR",
+      });
+      expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
     });
 
     it("refuses a layout whose body marker sits where Liquid writes nothing", async () => {

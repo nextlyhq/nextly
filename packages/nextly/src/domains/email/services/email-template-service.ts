@@ -731,6 +731,9 @@ export class EmailTemplateService extends BaseService {
       });
     }
     this.assertLiquid(template);
+    // Saved while kept, a layout's marker was only checked as the old engine
+    // splices it; as Liquid it must also be an output Liquid writes.
+    this.assertMarkerOutput(template.kind, template.htmlContent);
     await this.releaseToLiquid(template, flagged);
     await this.recordActivity({
       action: "update",
