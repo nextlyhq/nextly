@@ -247,6 +247,105 @@ describe("every surface reports a failed send's kind", () => {
   });
 });
 
+describe("what a provider's own answer may and may not carry", () => {
+  const message = { to: "a@example.com", subject: "Hi", html: "<p>x</p>" };
+
+  it("reports a refused to's own classification, even when the provider also said it did not send", async () => {
+    // The result's failure and its refused entry describe the same refusal.
+    const { plugin } = build({
+      send: () =>
+        Promise.resolve({
+          success: false,
+          rejected: ["a@example.com"],
+          refusals: [
+            { address: "a@example.com", retryable: false, status: 550 },
+          ],
+        }),
+    });
+
+    const result = await plugin.send(message);
+
+    expect(result.failure).toMatchObject({ retryable: false, status: 550 });
+    expect(result.refused).toEqual([
+      { kind: "to", position: 0, retryable: false, status: 550 },
+    ]);
+  });
+
+  it("reads a malformed refusals entry as no classification, never throwing", async () => {
+    const { plugin } = build({
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "m-1",
+          rejected: ["a@example.com"],
+          refusals: [null, { retryable: false }, { address: 7 }] as never,
+        }),
+    });
+
+    const result = await plugin.send(message);
+
+    // The refused primary recipient is still reported, as retryable.
+    expect(result.success).toBe(false);
+    expect(result.failure).toMatchObject({ retryable: true });
+  });
+
+  it("never reports a number that is not a status", async () => {
+    const { plugin } = build({
+      send: () =>
+        Promise.reject(
+          withEmailFailure(new Error("x"), {
+            retryable: false,
+            status: 987654321,
+            reason: "The email provider refused the message.",
+          })
+        ),
+    });
+
+    expect((await plugin.send(message)).failure).toEqual({
+      retryable: false,
+      reason: "The email provider refused the message.",
+    });
+  });
+
+  it("withholds a status that could be a provider's declared credential", async () => {
+    // A credential too short to compare could be any number, so no status
+    // from this provider is passed on.
+    const provider = defineEmailProvider<{ pin: string }>({
+      type: "pin-mailer",
+      label: "PIN",
+      configFields: [
+        {
+          name: "pin",
+          label: "PIN",
+          kind: "password",
+          required: true,
+          secret: true,
+        },
+      ],
+      parseConfig: input => input as { pin: string },
+      createAdapter: config => ({
+        send: () =>
+          Promise.reject(
+            withEmailFailure(new Error("refused"), {
+              retryable: false,
+              status: Number(config.pin),
+              reason: "The email provider refused the message.",
+            })
+          ),
+      }),
+    });
+    const { plugin } = build(provider.createAdapterFrom({ pin: "451" }));
+
+    const result = await plugin.send(message);
+
+    expect(result.failure).toEqual({
+      retryable: false,
+      reason: "The email provider refused the message.",
+    });
+    expect(JSON.stringify(result)).not.toContain("451");
+  });
+});
+
 describe("what the send path carried over from the recipient work", () => {
   const message = { to: "a@example.com", subject: "Hi", html: "<p>x</p>" };
 

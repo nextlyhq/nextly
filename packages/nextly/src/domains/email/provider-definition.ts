@@ -1845,13 +1845,22 @@ function withoutDeclaredSecrets(
 function containedClassification<F extends EmailFailure>(
   failure: F,
   secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
-): F {
+): Omit<F, "status" | "reason"> & EmailFailure {
+  // A status is a number a provider chose, and a declared credential can be a
+  // number too: one that equals a credential, or any status at all where a
+  // credential is too short to compare, is not passed on.
+  const status =
+    failure.status !== undefined &&
+    !secrets.hasUnmatchable &&
+    !secrets.comparable.includes(String(failure.status))
+      ? failure.status
+      : undefined;
   const reason = secrets.hasUnmatchable
-    ? (failureOf({
-        emailFailure: { retryable: failure.retryable, status: failure.status },
-      })?.reason ?? failure.reason)
+    ? (failureOf({ emailFailure: { retryable: failure.retryable, status } })
+        ?.reason ?? failure.reason)
     : withoutDeclaredSecrets(failure.reason, secrets);
-  return { ...failure, reason };
+  const { status: _withheld, reason: _replaced, ...rest } = failure;
+  return { ...rest, ...(status !== undefined ? { status } : {}), reason };
 }
 
 function normalizeProviderFailure(

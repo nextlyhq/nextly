@@ -88,13 +88,26 @@ export function failureOf(error: unknown): EmailFailure | undefined {
   if (typeof retryable !== "boolean") return undefined;
   const usableReason =
     typeof reason === "string" && isCoreReason(reason) ? reason : undefined;
+  const usableStatus = isProviderStatus(status) ? status : undefined;
   return {
     retryable,
-    ...(typeof status === "number" && Number.isInteger(status)
-      ? { status }
-      : {}),
-    reason: usableReason ?? describeClass(retryable, status),
+    ...(usableStatus !== undefined ? { status: usableStatus } : {}),
+    reason: usableReason ?? describeClass(retryable, usableStatus),
   };
+}
+
+/**
+ * Whether a value can be a provider's status: a whole number in the range of
+ * HTTP statuses and SMTP reply codes, 100 to 599. Anything else is not
+ * reported, so a number that is not a status never reaches the caller.
+ */
+function isProviderStatus(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 100 &&
+    value <= 599
+  );
 }
 
 /** A sentence for a classified failure that came without a usable reason. */

@@ -46,8 +46,15 @@ export function refusalOf(
   mailbox: string
 ): EmailFailure {
   const key = mailbox.trim().toLowerCase();
-  const entry = result.refusals?.find(
-    refusal => refusal.address.trim().toLowerCase() === key
+  // Read defensively: a contributed provider is plain JavaScript at runtime,
+  // and an entry without a string address names nobody.
+  const entries: unknown[] = Array.isArray(result.refusals)
+    ? result.refusals
+    : [];
+  const entry = entries.find(
+    refusal =>
+      typeof (refusal as { address?: unknown } | null)?.address === "string" &&
+      (refusal as { address: string }).address.trim().toLowerCase() === key
   );
   const classified = entry ? failureOf({ emailFailure: entry }) : undefined;
   return classified ?? { retryable: true, reason: REFUSED_REASON };
@@ -100,13 +107,16 @@ export function answeredFailure(
   }>,
   refused: ReadonlySet<string>
 ): EmailFailure {
-  if (result.success !== true) return notAcceptedFailure();
+  // A refused `to` recipient's own classification first, whether or not the
+  // provider also answered that it did not send: it is the more specific
+  // fact, and the result's `refused` entry for it says the same.
   const primary = recipients.find(
     recipient =>
       recipient.recipientKind === "to" &&
       refused.has(recipient.to.trim().toLowerCase())
   );
-  return primary ? refusalOf(result, primary.to) : unclassifiedFailure();
+  if (primary) return refusalOf(result, primary.to);
+  return result.success !== true ? notAcceptedFailure() : unclassifiedFailure();
 }
 
 /**

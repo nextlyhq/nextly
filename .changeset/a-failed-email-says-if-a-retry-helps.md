@@ -29,8 +29,9 @@
 "nextly": patch
 ---
 
-A failed email now says whether sending it again can help: every way of sending
-returns `failure` with `retryable`, the provider's status where it gave one, and a
-short reason, and lists any recipients the provider refused. Form Builder logs a
+A failed email now says whether sending it again can help: `nextly.email`, a
+plugin's `ctx.services.email` and the REST send routes return `failure` with
+`retryable`, the provider's status where it gave one, and a short reason, and list
+any recipients the provider refused. Form Builder logs a
 notification that was not sent as failed instead of sent, and no longer writes
 recipient addresses into its logs.
