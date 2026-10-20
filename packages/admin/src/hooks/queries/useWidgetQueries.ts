@@ -87,6 +87,26 @@ export interface WidgetQueryRequest {
    * now draws more than was fetched asks again alone (see `fetchedTierFor`).
    */
   sized?: { query: WidgetQuery; tier: SizeTier };
+  /**
+   * The query as the card's SETTINGS ask it, when they change it: what is sent (sized for the
+   * tier when `sized` is given, from this), while `query` -- the widget's declared question --
+   * is what the cache is keyed by.
+   *
+   * 🔴 Kept out of the key for the reason `sized` is. Every card of a dashboard travels in one
+   * partition, so a setting in the key made one card's change a new question for the whole
+   * dashboard: every card went back to its skeleton and the grid announced them all. Sent at
+   * fetch time instead, a change of settings refetches nothing; the card whose shown answer was
+   * asked with other settings asks again alone (see `fetchedAppliedFor`).
+   */
+  applied?: WidgetQuery;
+}
+
+/**
+ * The query a request asks with, before sizing, as one comparable string: what an answer is
+ * filed as having been asked with, and what a card compares against when its settings change.
+ */
+export function appliedKey(request: WidgetQueryRequest): string {
+  return JSON.stringify(request.applied ?? request.query);
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -137,6 +157,8 @@ export interface UseWidgetQueriesResult {
    * the tier it sent here, so a card that now draws more than was fetched can ask again alone.
    */
   fetchedTierFor: (placementId: string) => SizeTier | undefined;
+  /** What each placement's answer was asked with (see `appliedKey`), read from the answer. */
+  fetchedAppliedFor: (placementId: string) => string | undefined;
 }
 
 /**
@@ -692,9 +714,15 @@ export function useWidgetQueries(
       // so a refetch sends each card's CURRENT tier.
       queryFn: async () => {
         const body = await protectedApi.post<unknown>("/dashboard/query", {
-          queries: partition.map(entry => entry.sized?.query ?? entry.query),
+          queries: partition.map(
+            entry => entry.sized?.query ?? entry.applied ?? entry.query
+          ),
         });
-        return { slots: readResults(body), tiers: tiersSent(partition) };
+        return {
+          slots: readResults(body),
+          tiers: tiersSent(partition),
+          applied: appliedSent(partition),
+        };
       },
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
@@ -714,6 +742,8 @@ export function useWidgetQueries(
   // request that wrote it may belong to a render that has since left, and the answer a returning
   // card receives is that request's, at that request's tier.
   const fetchedTiers: Record<string, SizeTier> = emptyRecord();
+  // What each answer was asked with, read from the cached answer for the same reason.
+  const fetchedApplied: Record<string, string> = emptyRecord();
   partitions.forEach((partition, index) => {
     const answer = results[index];
     if (!answer) return;
@@ -733,6 +763,7 @@ export function useWidgetQueries(
         );
       });
       Object.assign(fetchedTiers, answer.data.tiers);
+      Object.assign(fetchedApplied, answer.data.applied);
       return;
     }
 
@@ -778,6 +809,12 @@ export function useWidgetQueries(
     return (placementId: string): SizeTier | undefined =>
       Object.hasOwn(tiers, placementId) ? tiers[placementId] : undefined;
   }, [tiersKey]);
+  const appliedKeyOfAll = JSON.stringify(fetchedApplied);
+  const fetchedAppliedFor = useMemo(() => {
+    const applied = JSON.parse(appliedKeyOfAll) as Record<string, string>;
+    return (placementId: string): string | undefined =>
+      Object.hasOwn(applied, placementId) ? applied[placementId] : undefined;
+  }, [appliedKeyOfAll]);
 
   return {
     slots,
@@ -812,7 +849,24 @@ export function useWidgetQueries(
         ? new Date(Math.min(...settledAt))
         : null,
     fetchedTierFor,
+    fetchedAppliedFor,
   };
+}
+
+/**
+ * What each request in `partition` was asked with, by placement: cached with the answer, as
+ * its tier is. A `stats` card's cells are left out; settings do not change them.
+ */
+function appliedSent(
+  partition: readonly WidgetQueryRequest[]
+): Record<string, string> {
+  const applied: Record<string, string> = emptyRecord();
+  for (const entry of partition) {
+    if (entry.cellKey === undefined) {
+      applied[entry.placementId] = appliedKey(entry);
+    }
+  }
+  return applied;
 }
 
 /**
@@ -830,13 +884,14 @@ function tiersSent(
 }
 
 /**
- * A request as the cache keys it: everything but the sizing it is sent with. Named field by
- * field, so a field added to the request is a decision about the key rather than an accident;
- * TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as before.
+ * A request as the cache keys it: everything but the sizing and the settings it is sent with.
+ * Named field by field, so a field added to the request is a decision about the key rather than
+ * an accident; TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as
+ * before.
  */
 function unsized(
   request: WidgetQueryRequest
-): Omit<WidgetQueryRequest, "sized"> {
+): Omit<WidgetQueryRequest, "sized" | "applied"> {
   return {
     placementId: request.placementId,
     cellKey: request.cellKey,
