@@ -7,14 +7,16 @@ import type {
   RoleInheritanceInsertData,
 } from "@nextly/types/rbac-operations";
 
+import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
+import type { LastSuperAdminTx } from "../../users/services/last-super-admin";
 
-import { afterRoleGrantsChanged } from "./role-grants-changed";
 import {
   listDescendantRoleIds,
   MAX_ROLE_HIERARCHY_DEPTH,
 } from "./role-descendants";
+import { afterRoleGrantsChanged } from "./role-grants-changed";
 import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
 /**
@@ -59,30 +61,37 @@ export class RoleInheritanceService extends BaseService {
     parentRoleId: string
   ): Promise<void> {
     if (childRoleId === parentRoleId) throw new Error("INHERIT_SELF_FORBIDDEN");
-    // Before the write: the parent comes to confer whatever the child does,
-    // so inheriting a role that confers super-admin is giving it.
-    await refuseGrantingSuperAdmin(
-      this.db as RBACDatabaseInstance,
-      [childRoleId],
-      {
-        parentRoleId,
-        childRoleId,
-      }
-    );
+    await this.refuseEditingSystemRole(parentRoleId);
     if (await this.willCreateCycle(childRoleId, parentRoleId))
       throw new Error("INHERIT_CYCLE_FORBIDDEN");
 
-    // Avoid duplicate errors across dialects by pre-checking
-    const duplicate = await (
-      this.db as RBACDatabaseInstance
-    ).query.roleInherits.findFirst({
-      where: { parentRoleId: parentRoleId, childRoleId: childRoleId },
-      columns: {
-        id: true,
-      },
-    });
+    // One transaction for the decision and the write. The parent comes to
+    // confer whatever the child does, so inheriting a role that confers
+    // super-admin is giving it: asked first, under the lock every change to
+    // who is a super-admin takes, so no concurrent change lands in between.
+    await this.withTransaction(async tx => {
+      await refuseGrantingSuperAdmin(
+        tx as LastSuperAdminTx,
+        this.dialect,
+        [childRoleId],
+        { parentRoleId, childRoleId }
+      );
+      const txDb = tx as RBACDatabaseInstance;
+      const { roleInherits } = this.tables;
 
-    if (!duplicate) {
+      // Avoid duplicate errors across dialects by pre-checking
+      const duplicate = await (tx as LastSuperAdminTx)
+        .select({ id: roleInherits.id })
+        .from(roleInherits)
+        .where(
+          and(
+            eq(roleInherits.parentRoleId, parentRoleId),
+            eq(roleInherits.childRoleId, childRoleId)
+          )
+        )
+        .limit(1);
+      if (duplicate.length > 0) return;
+
       const id = `${parentRoleId}::${childRoleId}`;
       try {
         const inheritanceData: RoleInheritanceInsertData = {
@@ -90,9 +99,7 @@ export class RoleInheritanceService extends BaseService {
           childRoleId,
           parentRoleId,
         };
-        const insert = (this.db as RBACDatabaseInstance)
-          .insert(this.tables.roleInherits)
-          .values(inheritanceData);
+        const insert = txDb.insert(roleInherits).values(inheritanceData);
         if (typeof insert.onConflictDoNothing === "function") {
           await insert.onConflictDoNothing();
         } else {
@@ -104,7 +111,7 @@ export class RoleInheritanceService extends BaseService {
         const msg = String(error?.message || "").toLowerCase();
         if (!(code === "ER_DUP_ENTRY" || msg.includes("duplicate"))) throw e;
       }
-    }
+    });
 
     await afterRoleGrantsChanged(childRoleId);
   }
@@ -119,6 +126,7 @@ export class RoleInheritanceService extends BaseService {
     childRoleId: string,
     parentRoleId: string
   ): Promise<void> {
+    await this.refuseEditingSystemRole(parentRoleId);
     await (this.db as RBACDatabaseInstance)
       .delete(this.tables.roleInherits)
       .where(
@@ -129,6 +137,29 @@ export class RoleInheritanceService extends BaseService {
       );
 
     await afterRoleGrantsChanged(childRoleId);
+  }
+
+  /**
+   * Refuse a change to what a system role inherits.
+   *
+   * A role's inheritance is part of the role, and a system role is one core
+   * seeds and keeps as it is: role update refuses to change one, and this is
+   * the same refusal for the inheritance routes.
+   *
+   * @throws {NextlyError} `forbidden` when `roleId` is a system role.
+   */
+  private async refuseEditingSystemRole(roleId: string): Promise<void> {
+    const { roles } = this.tables;
+    const [role] = (await (this.db as LastSuperAdminTx)
+      .select({ isSystem: roles.isSystem })
+      .from(roles)
+      .where(eq(roles.id, roleId))
+      .limit(1)) as Array<{ isSystem: unknown }>;
+    if (role && Boolean(role.isSystem)) {
+      throw NextlyError.forbidden({
+        logContext: { reason: "system-role-immutable", roleId },
+      });
+    }
   }
 
   /**
@@ -184,7 +215,7 @@ export class RoleInheritanceService extends BaseService {
    * @returns Array of descendant role IDs (excluding the starting roleId)
    */
   async listDescendantRoles(roleId: string): Promise<string[]> {
-    return listDescendantRoleIds(this.db as RBACDatabaseInstance, roleId);
+    return listDescendantRoleIds(this.db as LastSuperAdminTx, roleId);
   }
 
   private async willCreateCycle(

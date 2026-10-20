@@ -26,6 +26,51 @@ process.env.NEXTLY_SECRET =
 import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+type GrantModule = typeof import("../services/super-admin-grant");
+
+/**
+ * The real grant module of the install under test, and a hook run once when
+ * the next grant check has made its decision.
+ */
+const afterGrantCheck = vi.hoisted(() => ({
+  real: undefined as GrantModule | undefined,
+  run: undefined as (() => Promise<void>) | undefined,
+}));
+
+// Pausing a change once its check has decided, inside its transaction and
+// before it writes, is the moment a second change's check would otherwise
+// read the roles as the first found them.
+//
+// Each export forwards to the real module `loadModules` imported after its
+// reset, rather than to one taken when this factory first ran: the mock
+// outlives a reset, and a module kept from before it would read the
+// environment of the dialect that booted first.
+vi.mock("../services/super-admin-grant", () => {
+  const real = (): GrantModule => afterGrantCheck.real!;
+  return {
+    runAsRoleChangeCaller: ((...args) =>
+      real().runAsRoleChangeCaller(
+        ...args
+      )) as GrantModule["runAsRoleChangeCaller"],
+    roleChangeCallerFor: ((...args) =>
+      real().roleChangeCallerFor(
+        ...args
+      )) as GrantModule["roleChangeCallerFor"],
+    rolesConferSuperAdmin: ((...args) =>
+      real().rolesConferSuperAdmin(
+        ...args
+      )) as GrantModule["rolesConferSuperAdmin"],
+    refuseGrantingSuperAdmin: (async (...args) => {
+      await real().refuseGrantingSuperAdmin(...args);
+      const hook = afterGrantCheck.run;
+      if (hook) {
+        afterGrantCheck.run = undefined;
+        await hook();
+      }
+    }) as GrantModule["refuseGrantingSuperAdmin"],
+  };
+});
+
 import {
   getConfiguredTestDialects,
   type TestDialect,
@@ -35,6 +80,9 @@ import {
 /** Fresh modules per install, so no cache outlives the database it read. */
 async function loadModules() {
   vi.resetModules();
+  afterGrantCheck.real = await vi.importActual<GrantModule>(
+    "../services/super-admin-grant"
+  );
   const harness = await import("../../../plugins/test-nextly");
   const routes = await import("../../../routeHandler");
   const database = await import("../../../database/index");
@@ -57,10 +105,12 @@ async function loadModules() {
 
 let m: Awaited<ReturnType<typeof loadModules>>;
 let handle: TestNextly | undefined;
+let dialect: TestDialect = "sqlite";
 
 const PASSWORD = "Str0ng-P@ssw0rd!";
 
 afterEach(async () => {
+  afterGrantCheck.run = undefined;
   await handle?.destroy();
   handle = undefined;
 });
@@ -138,6 +188,7 @@ async function grant(userId: string, roleId: string): Promise<void> {
 }
 
 async function boot(on: TestDialect): Promise<Install> {
+  dialect = on;
   m = await loadModules();
   m.resetEpochForTests();
   handle = await m.createTestNextly(on === "sqlite" ? {} : { dialect: on });
@@ -292,6 +343,36 @@ async function roleNamed(slug: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * Resolves once another statement on this test's database waits for a lock,
+ * or after `timeoutMs` when none does. SQLite serializes write transactions,
+ * so there it only yields. MySQL lists a statement blocked on a row lock in
+ * neither `INNODB_TRX` nor `LOCK WAIT`, so there a statement still running
+ * after a full second is the wait.
+ */
+async function untilAnotherWaitsOnALock(timeoutMs = 5000): Promise<boolean> {
+  if (dialect === "sqlite") {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    return false;
+  }
+  const probe =
+    dialect === "postgresql"
+      ? `SELECT count(*)::int AS n FROM pg_stat_activity
+         WHERE datname = current_database() AND wait_event_type = 'Lock'`
+      : `SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST
+         WHERE DB = DATABASE() AND ID <> CONNECTION_ID()
+           AND COMMAND = 'Query' AND TIME >= 1`;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await handle!.adapter.executeQuery<{ n: number | string }>(
+      probe
+    );
+    if (Number(rows[0]?.n ?? 0) > 0) return true;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
 /** One way to give someone super-admin, and how to see that it happened. */
 interface Elevation {
   name: string;
@@ -418,20 +499,70 @@ describe.each(getConfiguredTestDialects())(
       expect(await holds(install.target, install.elevatedRole)).toBe(true);
     });
 
-    it("refuses a role created through the API as a system role", async () => {
+    it.each([true, 1, "true", "false", {}])(
+      "refuses a role created through the API as a system role (isSystem: %j)",
+      async isSystem => {
+        const install = await boot(dialect);
+
+        const res = await rest({ session: install.first }, "POST", ["roles"], {
+          name: "Fixture",
+          slug: "fixture",
+          permissionIds: [install.readUsers],
+          isSystem,
+        });
+
+        const text = await res.text();
+        expect(res.status, text).toBe(400);
+        expect(await roleNamed("fixture")).toBe(false);
+      }
+    );
+
+    it("refuses a change to what a system role inherits", async () => {
       const install = await boot(dialect);
+      const { roleInherits } = m.getDialectTables();
 
-      const res = await rest({ session: install.first }, "POST", ["roles"], {
-        name: "Fixture",
-        slug: "fixture",
-        permissionIds: [install.readUsers],
-        isSystem: true,
+      const added = await rest(
+        { session: install.first },
+        "POST",
+        ["roles", install.superAdminRole, "children"],
+        { childRoleId: install.staffRole }
+      );
+      expect(added.status, await added.text()).toBe(403);
+      expect(await inherits(install.superAdminRole, install.staffRole)).toBe(
+        false
+      );
+
+      // And one written by hand stays: removing it is the same change.
+      await raw().insert(roleInherits).values({
+        id: "super-admin-inherits-staff",
+        parentRoleId: install.superAdminRole,
+        childRoleId: install.staffRole,
       });
+      const handlers = m.createDynamicHandlers({
+        config: m.sanitizeConfig({ collections: [] }),
+      });
+      const path = [
+        "roles",
+        install.superAdminRole,
+        "children",
+        install.staffRole,
+      ];
+      const removed = await handlers.DELETE(
+        new Request(`http://localhost/api/${path.join("/")}`, {
+          method: "DELETE",
+          headers: { cookie: await sessionCookie(install.first) },
+        }),
+        { params: Promise.resolve({ params: path }) }
+      );
+      expect(removed.status, await removed.text()).toBe(403);
+      expect(await inherits(install.superAdminRole, install.staffRole)).toBe(
+        true
+      );
+    });
 
-      const text = await res.text();
-      expect(res.status, text).toBe(400);
-      expect(await roleNamed("fixture")).toBe(false);
-      // The admin creates every role with `isSystem: false`, which stays fine.
+    it("accepts a role created as not a system role", async () => {
+      const install = await boot(dialect);
+      // The admin creates every role with `isSystem: false`.
       const ordinary = await rest(
         { session: install.first },
         "POST",
@@ -444,6 +575,43 @@ describe.each(getConfiguredTestDialects())(
         }
       );
       expect(ordinary.status, await ordinary.text()).toBeLessThan(300);
+    });
+
+    it("refuses a role given while a super-admin is making it inherit super-admin", async () => {
+      const install = await boot(dialect);
+      // The super-admin's change has decided, and is held open before it
+      // writes the inheritance; the manager then gives the same role.
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      let paused!: () => void;
+      const isPaused = new Promise<void>(resolve => (paused = resolve));
+      afterGrantCheck.run = async () => {
+        paused();
+        await released;
+      };
+
+      const elevation = rest(
+        { session: install.first },
+        "POST",
+        ["roles", install.staffRole, "children"],
+        { childRoleId: install.superAdminRole }
+      );
+      await Promise.race([isPaused, elevation.then(() => undefined)]);
+      const assignment = rest(
+        { session: install.manager },
+        "POST",
+        ["users", install.target, "roles"],
+        { roleId: install.staffRole }
+      );
+      const waited = await untilAnotherWaitsOnALock();
+      release();
+
+      const [elevated, assigned] = await Promise.all([elevation, assignment]);
+      expect(elevated.status, await elevated.text()).toBeLessThan(300);
+      // Judged once the elevation committed, on the role as it now stands.
+      expect(assigned.status, await assigned.text()).toBe(403);
+      expect(await holds(install.target, install.staffRole)).toBe(false);
+      if (dialect !== "sqlite") expect(waited).toBe(true);
     });
   }
 );

@@ -122,8 +122,8 @@ import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
 import {
+  roleChangeCallerFor,
   runAsRoleChangeCaller,
-  type RoleChangeCaller,
 } from "./domains/auth/services/super-admin-grant";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
@@ -309,23 +309,6 @@ async function applyGlobalDateFormatting(
   }
 
   return withTimezoneFormatting(clean);
-}
-
-// ============================================================================
-// Who makes a role change
-// ============================================================================
-
-/**
- * The caller every role change in this request is judged for: who may give
- * super-admin authority is decided in the role and user services, which read
- * it from here.
- */
-function roleChangeCallerFor(
-  authorizedUser: AuthContext | undefined
-): RoleChangeCaller {
-  if (!authorizedUser) return { kind: "visitor" };
-  if (authorizedUser.authMethod === "api-key") return { kind: "key" };
-  return { kind: "person", userId: authorizedUser.userId };
 }
 
 // ============================================================================

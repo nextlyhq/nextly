@@ -38,7 +38,6 @@ import type {
   UserInsertData,
   UserUpdateData,
 } from "@nextly/types/database-operations";
-import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
@@ -96,15 +95,15 @@ import {
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
 import {
+  refuseGrantingSuperAdmin,
+  rolesConferSuperAdmin,
+} from "../../auth/services/super-admin-grant";
+import {
   revokeAccountTokens,
   TOKEN_TABLE_NAMES,
   tokenTable,
   type TokenTable,
 } from "../../auth/services/token-account-binding";
-import {
-  refuseGrantingSuperAdmin,
-  rolesConferSuperAdmin,
-} from "../../auth/services/super-admin-grant";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import {
   eraseRecipientDeliveries,
@@ -1353,12 +1352,13 @@ export class UserMutationService extends BaseService {
             email,
           });
         } else if (caller === "app") {
+          // Early, before the account exists. Each role is asked again when it
+          // is assigned, under the lock, so a change between the two counts.
           await refuseGrantingSuperAdmin(
-            this.db as RBACDatabaseInstance,
+            this.db as LastSuperAdminTx,
+            this.dialect,
             uniqueRoleIds,
-            {
-              email,
-            }
+            { email }
           );
         }
       }
@@ -1788,8 +1788,11 @@ export class UserMutationService extends BaseService {
         changes.roles &&
         changes.roles.length > 0
       ) {
+        // Early, before anything runs for the update. Asked again inside the
+        // transaction that writes the roles, under the lock.
         await refuseGrantingSuperAdmin(
-          this.db as RBACDatabaseInstance,
+          this.db as LastSuperAdminTx,
+          this.dialect,
           Array.from(new Set(changes.roles)),
           { userId: currentUser.id }
         );
@@ -2069,6 +2072,16 @@ export class UserMutationService extends BaseService {
         const writeAccount = (withCustomFields: boolean) =>
           this.withTransaction(async tx => {
             const txDb = tx as DrizzleTransactionLike;
+            // Giving a role that confers super-admin, decided in the same
+            // transaction as the roles' write, under the lock it takes first.
+            if (caller === "app" && requestedRoleIds) {
+              await refuseGrantingSuperAdmin(
+                tx as LastSuperAdminTx,
+                this.dialect,
+                requestedRoleIds,
+                { userId: currentUser.id }
+              );
+            }
             // A deactivation or a role replacement may not leave the install
             // without an active super-admin. First, before any row lock, for
             // the lock order `refuseRemovingLastSuperAdmin` describes.
@@ -2414,7 +2427,7 @@ export class UserMutationService extends BaseService {
   ): Promise<void> {
     // The same question every role change asks, answered the same way: the
     // requested roles and everything they inherit.
-    if (await rolesConferSuperAdmin(this.db as RBACDatabaseInstance, roleIds)) {
+    if (await rolesConferSuperAdmin(this.db as LastSuperAdminTx, roleIds)) {
       throw NextlyError.forbidden({ logContext });
     }
   }

@@ -14,6 +14,8 @@
  * contract.
  */
 
+import { z } from "zod";
+
 import {
   respondAction,
   respondData,
@@ -38,6 +40,9 @@ type RbacContainer = ServiceContainer;
 // ============================================================
 // Auth methods
 // ============================================================
+
+/** A role made through a request may not be marked as a system role. */
+const notSystemRole = z.object({ isSystem: z.literal(false).optional() });
 
 const AUTH_METHODS: Record<string, MethodHandler<AuthService>> = {
   registerUser: {
@@ -207,8 +212,10 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       // that only takes its permissions from its base could not be created at
       // all. The rule lives with the service that owns it.
       // A system role is one core seeds and protects from edit and deletion.
-      // One made through a request would be a role nobody could change.
-      if ((b as { isSystem?: unknown }).isSystem === true) {
+      // One made through a request would be a role nobody could change. Only
+      // an absent flag or `false` is accepted: the service reads any truthy
+      // value as a system role.
+      if (!notSystemRole.safeParse(b).success) {
         throw NextlyError.validation({
           errors: [
             {
@@ -219,8 +226,12 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
           ],
         });
       }
+      // The stored flag never comes from the request: the check above admits
+      // only `false`, and the service decides a role made here is not a
+      // system role.
+      const { isSystem: _requested, ...input } = b as Record<string, unknown>;
       const role = await c.roles.createRole(
-        b as Parameters<typeof c.roles.createRole>[0]
+        input as Parameters<typeof c.roles.createRole>[0]
       );
       return respondMutation("Role created.", role, { status: 201 });
     },

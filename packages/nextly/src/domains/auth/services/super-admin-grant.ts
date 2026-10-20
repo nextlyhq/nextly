@@ -24,13 +24,20 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, inArray } from "drizzle-orm";
 
+import type { AuthContext } from "../../../auth/middleware";
+import { getDialectTables } from "../../../database";
 import { NextlyError } from "../../../errors";
 import { SUPER_ADMIN_SLUG } from "../../../services/access/super-admin";
 import { isSuperAdminOrThrow } from "../../../services/lib/permissions";
+import {
+  lockSuperAdminRole,
+  type LastSuperAdminTx,
+} from "../../users/services/last-super-admin";
 
-import { listDescendantRoleIds } from "./role-descendants";
+import { walkDescendantRoleIds } from "./role-descendants";
 
 /**
  * Who is making a role change, as the transport resolved them. `visitor` is a
@@ -42,6 +49,19 @@ export type RoleChangeCaller =
   | { kind: "visitor" };
 
 const roleChangeCaller = new AsyncLocalStorage<RoleChangeCaller>();
+
+/**
+ * The caller a request's authentication describes, for the role changes it
+ * makes: a person for a session, a key for an API key, a visitor with none.
+ * The one mapping, for every transport that resolved an `AuthContext`.
+ */
+export function roleChangeCallerFor(
+  authorizedUser: Pick<AuthContext, "authMethod" | "userId"> | undefined
+): RoleChangeCaller {
+  if (!authorizedUser) return { kind: "visitor" };
+  if (authorizedUser.authMethod === "api-key") return { kind: "key" };
+  return { kind: "person", userId: authorizedUser.userId };
+}
 
 /**
  * Run `operation` with `caller` as the one every role change inside it is
@@ -58,30 +78,39 @@ export function runAsRoleChangeCaller<T>(
  * Whether holding or inheriting any of `roleIds` confers super-admin: one of
  * them is the super-admin role, or inherits it however far down.
  *
- * Throws when a role or its inheritance can't be read, so a caller refuses a
- * change it could not judge rather than allowing it.
+ * Read through `db`, which may be the transaction of the write being decided.
+ * Throws when a role or its inheritance can't be read, and answers yes when
+ * the walk of a role's inheritance was cut short at its limit, so a caller
+ * refuses a change it could not judge rather than allowing it.
  */
 export async function rolesConferSuperAdmin(
-  db: RBACDatabaseInstance,
+  db: LastSuperAdminTx,
   roleIds: readonly string[]
 ): Promise<boolean> {
   if (roleIds.length === 0) return false;
 
-  // The roles AND everything they reach. `listDescendantRoles` returns
-  // descendants only, never the role it was asked about, so seeding the set
-  // with the requested ids is what keeps the direct case beside the
-  // inherited one.
+  // The roles AND everything they reach. The walk returns descendants only,
+  // never the role it was asked about, so seeding the set with the requested
+  // ids is what keeps the direct case beside the inherited one.
   const reachable = new Set<string>(roleIds);
   for (const roleId of roleIds) {
-    for (const descendant of await listDescendantRoleIds(db, roleId)) {
-      reachable.add(descendant);
-    }
+    const { ids, complete } = await walkDescendantRoleIds(db, roleId);
+    // A walk cut short can't say super-admin is out of reach.
+    if (!complete) return true;
+    for (const descendant of ids) reachable.add(descendant);
   }
 
-  const found = await db.query.roles.findMany({
-    where: { id: { in: Array.from(reachable) }, slug: SUPER_ADMIN_SLUG },
-    columns: { id: true },
-  });
+  const { roles } = getDialectTables();
+  const found = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(
+      and(
+        inArray(roles.id, Array.from(reachable)),
+        eq(roles.slug, SUPER_ADMIN_SLUG)
+      )
+    )
+    .limit(1);
   return found.length > 0;
 }
 
@@ -90,27 +119,37 @@ export async function rolesConferSuperAdmin(
  * a super-admin person makes it.
  *
  * `roleIds` are the roles the change would have someone hold or a role
- * inherit. Asked before the change writes anything, since it is the change's
- * precondition. A super-admin person is judged on their roles as stored,
- * inheritance included, never on what a request claims; a key is refused
- * whoever made it, as is a request with no credentials.
+ * inherit. Asked inside the change's own transaction, `tx`, before it writes
+ * anything, since it is the change's precondition. A super-admin person is
+ * judged on their roles as stored, inheritance included, never on what a
+ * request claims; a key is refused whoever made it, as is a request with no
+ * credentials.
+ *
+ * The `super-admin` role's row is locked first, the lock every change to who
+ * is a super-admin takes (`lockSuperAdminRole`). So the decision and the write
+ * are one step: a change that would make one of these roles inherit
+ * super-admin waits for this one to commit, or this one for it, and is then
+ * judged on what that one wrote.
  *
  * @throws {NextlyError} `forbidden` when the change is refused. Any failure
  *   to read the roles it needs propagates, which refuses the change too.
  */
 export async function refuseGrantingSuperAdmin(
-  db: RBACDatabaseInstance,
+  tx: LastSuperAdminTx,
+  dialect: SupportedDialect,
   roleIds: readonly string[],
   logContext: Record<string, unknown>
 ): Promise<void> {
-  if (!(await rolesConferSuperAdmin(db, roleIds))) return;
+  if (roleIds.length === 0) return;
+  await lockSuperAdminRole(tx, getDialectTables(), dialect);
+  if (!(await rolesConferSuperAdmin(tx, roleIds))) return;
 
   const caller = roleChangeCaller.getStore();
   // No request caller: trusted server code, which decides for itself.
   if (caller === undefined) return;
   if (
     caller.kind === "person" &&
-    (await isSuperAdminOrThrow(caller.userId, db))
+    (await isSuperAdminOrThrow(caller.userId, tx))
   ) {
     return;
   }

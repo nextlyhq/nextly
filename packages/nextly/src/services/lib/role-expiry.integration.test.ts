@@ -499,28 +499,39 @@ describe.each(getConfiguredTestDialects())(
         await raw(t).delete(userRoles).where(eq(userRoles.userId, userId));
         await assign(t, userId, ROLES.lapsed.id, null);
       };
-      const realDb = (service as unknown as { db: object }).db;
-      const db = new Proxy(realDb, {
-        get(target, prop) {
-          const value = Reflect.get(target, prop) as unknown;
-          if (prop === "delete" && typeof value === "function" && !granted) {
-            return (table: unknown) => {
-              const builder = (
-                value as (t: unknown) => {
-                  where: (cond: unknown) => Promise<unknown>;
-                }
-              ).call(target, table);
-              return {
-                where: async (cond: unknown) => {
-                  await otherRequest();
-                  return builder.where(cond);
-                },
+      // The service's handle, and any transaction it opens on it, run the
+      // other request just before their first delete: the assignment is
+      // written inside a transaction on PostgreSQL and MySQL.
+      const intercepted = <T extends object>(handle: T): T =>
+        new Proxy(handle, {
+          get(target, prop) {
+            const value = Reflect.get(target, prop) as unknown;
+            if (prop === "delete" && typeof value === "function" && !granted) {
+              return (table: unknown) => {
+                const builder = (
+                  value as (t: unknown) => {
+                    where: (cond: unknown) => Promise<unknown>;
+                  }
+                ).call(target, table);
+                return {
+                  where: async (cond: unknown) => {
+                    await otherRequest();
+                    return builder.where(cond);
+                  },
+                };
               };
-            };
-          }
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+            }
+            if (prop === "transaction" && typeof value === "function") {
+              return (work: (tx: object) => Promise<unknown>) =>
+                (
+                  value as (w: (tx: object) => Promise<unknown>) => unknown
+                ).call(target, (tx: object) => work(intercepted(tx)));
+            }
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      const realDb = (service as unknown as { db: object }).db;
+      const db = intercepted(realDb);
       Object.defineProperty(service, "db", { get: () => db });
 
       // This request asks for an hour; the grant made meanwhile has no end.
