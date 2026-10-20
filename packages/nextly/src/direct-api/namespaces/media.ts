@@ -5,9 +5,16 @@
  * `media.folders` sub-object). Wraps the `MediaService` with pagination and
  * error-conversion behavior.
  *
+ * A write made by an instance, or a call, that asks to be checked
+ * (`overrideAccess: false`) is judged as REST's media routes judge the same
+ * caller, before any work: `create-media` to upload or make a folder,
+ * `update-media` to edit, `delete-media` to delete, and a checked call that
+ * names nobody is refused as unauthenticated. A trusted write is unchanged.
+ *
  * @packageDocumentation
  */
 
+import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   MediaFile,
@@ -29,6 +36,7 @@ import type {
 
 import type { NextlyContext } from "./context";
 import {
+  checkWrite,
   createRequestContext,
   isNotFoundError,
   mergeConfig,
@@ -69,6 +77,12 @@ export interface MediaNamespace {
  * Build the `media` namespace for a `Nextly` instance.
  */
 export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
+  // A write is made as the caller the instance and the call name together, so
+  // a folder records its creator and a file its uploader whichever of the two
+  // named them. The raw call alone dropped an instance-level user.
+  const writeContext = (args: Parameters<typeof createRequestContext>[0]) =>
+    createRequestContext(mergeConfig(ctx.defaultConfig, args));
+
   const folders: MediaFoldersNamespace = {
     async list(args: ListFoldersArgs = {}): Promise<MediaFolder[]> {
       if (args.parent) {
@@ -81,6 +95,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     },
 
     async create(args: CreateFolderArgs): Promise<MediaFolder> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.media.createFolder
+      );
       if (!args.name) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -97,13 +116,18 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           icon: args.icon,
           parentId: args.parent ?? null,
         },
-        createRequestContext(args)
+        writeContext(args)
       );
     },
   };
 
   return {
     async upload(args: UploadMediaArgs): Promise<MediaFile> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.media.upload
+      );
       return await ctx.mediaService.upload(
         {
           buffer: args.file.data,
@@ -113,7 +137,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           altText: args.altText,
           folderId: args.folder ?? null,
         },
-        createRequestContext(args)
+        writeContext(args)
       );
     },
 
@@ -154,6 +178,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     },
 
     async update(args: UpdateMediaArgs): Promise<MutationResult<MediaFile>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.media.update
+      );
       if (!args.id) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -171,7 +200,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
           tags: args.data.tags,
           folderId: args.data.folderId,
         },
-        createRequestContext(args)
+        writeContext(args)
       );
       return {
         message: "Media updated.",
@@ -182,6 +211,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     async delete(
       args: DeleteMediaArgs
     ): Promise<MutationResult<{ id: string }>> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.media.delete
+      );
       if (!args.id) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -190,7 +224,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
         });
       }
 
-      await ctx.mediaService.delete(args.id, createRequestContext(args));
+      await ctx.mediaService.delete(args.id, writeContext(args));
       return {
         message: "Media deleted.",
         item: { id: args.id },
@@ -198,6 +232,11 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
     },
 
     async bulkDelete(args: BulkDeleteMediaArgs): Promise<BulkOperationResult> {
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.media.bulkDelete
+      );
       if (!args.ids || args.ids.length === 0) {
         return {
           successes: [],
@@ -211,7 +250,7 @@ export function createMediaNamespace(ctx: NextlyContext): MediaNamespace {
       // Phase 4.5: mediaService.bulkDelete now returns the canonical
       // BulkOperationResult shape (successes + failures) directly. No
       // translation needed at the direct-api boundary anymore.
-      return ctx.mediaService.bulkDelete(args.ids, createRequestContext(args));
+      return ctx.mediaService.bulkDelete(args.ids, writeContext(args));
     },
 
     folders,
