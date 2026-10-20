@@ -121,6 +121,10 @@ import {
   mergeComponentPatches,
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import {
+  draftDocumentFacts,
+  resolveDraftOverlay,
+} from "../../versions/draft-overlay";
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
@@ -371,6 +375,82 @@ export class SingleMutationService extends BaseService {
           }
         );
       }
+    });
+  }
+
+  /**
+   * The Single's document as a release would put it live: its working draft
+   * where the write would fold one in, otherwise its stored row with its
+   * components, read as storage holds it, with no read hooks and no reader's
+   * access. Answered with the row's id; `null` for a Single with no
+   * draft/published lifecycle or with no stored row.
+   *
+   * Never creates the row, unlike the Single's ordinary read: a Single with no
+   * stored document has nothing to put live, and asking must not write one.
+   * The pending change is found by the rule every read of "the draft" uses
+   * (`resolveDraftOverlay`), as the system and in no request language, as the
+   * document-wide write carries none.
+   *
+   * @experimental
+   */
+  async releaseGoingLiveDocument(params: {
+    slug: string;
+  }): Promise<{ entryId: string; document: Record<string, unknown> } | null> {
+    const meta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      params.slug,
+      this.logger
+    );
+    if (meta?.status !== true) return null;
+    const fieldConfigs = meta.fields ?? [];
+    const overlay = resolveDraftOverlay({
+      ...draftDocumentFacts(meta),
+      entityKind: "single",
+      fields: fieldConfigs,
+      componentSchemas: await resolveComponentSchemas(fieldConfigs),
+      includeWorkingDraft: true,
+      // As the system: this is what goes live, not what someone may see.
+      callerMayEdit: true,
+      requestLocale: null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    // In a transaction of its own, which writes nothing: the stored-document
+    // read takes one.
+    return this.adapter.transaction(async tx => {
+      const row = await tx.selectOne<SingleDocument>(meta.tableName, {});
+      if (!row) return null;
+      const pending = overlay.overlay
+        ? await new VersionsRepository(tx).findWorkingDraft(
+            { scopeKind: "single", scopeSlug: params.slug, entryId: row.id },
+            overlay.draftLocale
+          )
+        : undefined;
+      const snapshot = pending?.snapshot;
+      if (typeof snapshot === "object" && snapshot !== null) {
+        return {
+          entryId: row.id,
+          document: snapshot as Record<string, unknown>,
+        };
+      }
+      const stored = await liveStoredDocument({
+        tx,
+        row,
+        locale: null,
+        companion: null,
+        companionExists: false,
+        fieldGroupDataService: this.fieldGroupDataService,
+        parentTable: meta.tableName,
+        fieldConfigs,
+        slug: params.slug,
+      });
+      return {
+        entryId: row.id,
+        document: this.queryService.deserializeJsonFields(
+          { ...stored, id: row.id, updatedAt: row.updatedAt },
+          meta.fields
+        ),
+      };
     });
   }
 
