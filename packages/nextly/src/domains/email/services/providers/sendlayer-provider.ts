@@ -9,13 +9,7 @@
  * @since 1.0.0
  */
 
-import {
-  failureOf,
-  httpFailure,
-  networkFailure,
-  unclassifiedFailure,
-  withEmailFailure,
-} from "../../failure";
+import { httpFailure, providerFailure, withEmailFailure } from "../../failure";
 import type { EmailProviderAdapter } from "../../types";
 import { displayNameAndMailbox, messageToAddresses } from "../recipients";
 
@@ -154,12 +148,13 @@ export function createSendLayerProvider(
           messageId: data.MessageID,
         };
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "SendLayer send failed";
-        throw withEmailFailure(
-          new Error(`SendLayer provider error: ${message}`),
-          failureOf(error) ??
-            (answered ? unclassifiedFailure() : networkFailure())
+        throw providerFailure(
+          {
+            prefix: "SendLayer provider error",
+            fallback: "SendLayer send failed",
+          },
+          error,
+          answered
         );
       }
     },

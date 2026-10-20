@@ -12,13 +12,7 @@
  * @since 1.0.0
  */
 
-import {
-  failureOf,
-  httpFailure,
-  networkFailure,
-  unclassifiedFailure,
-  withEmailFailure,
-} from "../../failure";
+import { httpFailure, providerFailure, withEmailFailure } from "../../failure";
 import type { EmailProviderAdapter } from "../../types";
 import { messageToAddresses } from "../recipients";
 
@@ -202,12 +196,10 @@ export function createResendProvider(
           messageId: data.id,
         };
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Resend send failed";
-        throw withEmailFailure(
-          new Error(`Resend provider error: ${message}`),
-          failureOf(error) ??
-            (answered ? unclassifiedFailure() : networkFailure())
+        throw providerFailure(
+          { prefix: "Resend provider error", fallback: "Resend send failed" },
+          error,
+          answered
         );
       }
     },

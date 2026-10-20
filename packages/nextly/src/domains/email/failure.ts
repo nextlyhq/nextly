@@ -140,3 +140,22 @@ export function smtpFailure(code: number): EmailFailure {
   }
   return unclassifiedFailure();
 }
+
+/**
+ * The error an HTTP provider adapter rethrows: `prefix` and the original
+ * message (`fallback` when what was thrown was not an error), carrying the
+ * original's classification, or, when it had none, a network failure if the
+ * provider never answered and an unclassified one if it did.
+ */
+export function providerFailure(
+  text: { prefix: string; fallback: string },
+  error: unknown,
+  answered: boolean
+): ClassifiedEmailError {
+  const message = error instanceof Error ? error.message : text.fallback;
+  const prefix = text.prefix;
+  return withEmailFailure(
+    new Error(`${prefix}: ${message}`),
+    failureOf(error) ?? (answered ? unclassifiedFailure() : networkFailure())
+  );
+}
