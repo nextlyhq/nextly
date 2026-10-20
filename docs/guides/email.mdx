@@ -235,7 +235,8 @@ await nextly.email.send({
 });
 ```
 
-Both calls return `{ success: boolean; messageId?: string }`.
+Both calls return `{ success: boolean; messageId?: string }`, and on a failed send
+also `failure` and `error` (see [When a send fails](#when-a-send-fails)).
 
 ### Sending to several people
 
@@ -278,6 +279,34 @@ sender. `replyTo` is `@experimental`.
 The REST send routes answer `Email sent.` when the provider accepted the message,
 and `Email could not be sent.` when it did not, beside the `success` and
 `messageId` fields they have always returned.
+
+### When a send fails
+
+A provider's refusal is returned, not thrown: `success` is `false`, and `failure`
+says what happened, on the Direct API, `ctx.services.email` and both REST send
+routes alike:
+
+- `failure.retryable`: whether sending again later can succeed. A refusal of the
+  message itself (an HTTP 4xx other than 408 and 429, or an SMTP 5xx reply) is
+  not retryable; a timeout, a rate limit, a server error (408, 429, 5xx, or an
+  SMTP 4xx reply) or a provider that could not be reached is. A failure the
+  provider did not classify counts as retryable, so a retry never drops an email
+  that could still be delivered.
+- `failure.status`: the provider's HTTP status or SMTP reply code, when it gave one.
+- `failure.reason`: a short sentence, free of configuration, credentials and
+  addresses, fit for a log line. The Direct API also puts it in `error`.
+
+When the provider took the message but refused some recipients, `refused` lists
+each by its line (`to`, `cc` or `bcc`) and its position on that line, with
+`retryable` and `status`, never the address. The send is successful only when
+every `to` recipient was accepted. The delivery log records each refusal with
+whether a retry can help.
+
+A send refused before anything is sent, such as one with an address that is not
+an email address or a Reply-To that is not, is thrown as a validation error, as
+before: nothing was sent, and the same send would be refused again.
+
+`failure` and `refused` are `@experimental`.
 
 ### Changing a send before it goes out
 
@@ -456,7 +485,16 @@ createAdapter: config => ({
   alone, so an adapter written before `maxToPerMessage` keeps working unchanged:
   Nextly sends it one message per `to` address.
 
-`maxToPerMessage` and `toList` are `@experimental`.
+A provider that refuses a send throws. To say whether a retry can help, throw an
+error carrying `emailFailure: { retryable, status, reason }`; the built-in
+adapters classify their failures this way. The reason reaches the caller, after
+Nextly takes out the provider's declared credentials and the message's own
+addresses. A failure with no `emailFailure` is treated as retryable. When a
+provider takes a message but refuses some recipients, return `rejected` with
+their bare addresses, and optionally `refusals` with
+`{ address, retryable, status }` for each.
+
+`maxToPerMessage`, `toList`, `emailFailure` and `refusals` are `@experimental`.
 
 ## Next steps
 
