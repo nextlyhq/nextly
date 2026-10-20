@@ -792,6 +792,7 @@ export class AuthService extends BaseService {
           this.dialect,
           {
             userId: account.id,
+            adapter: this.adapter,
             set: passwordColumns(passwordHash),
             unlessDeactivated: true,
             when: eq(users.email, email),
