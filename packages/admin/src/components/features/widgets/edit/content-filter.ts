@@ -67,40 +67,50 @@ export function filterOperatorsFor(
   );
 }
 
+/**
+ * The operators that take no value, each with the test it writes. `isTrue`
+ * and `isNotTrue` are boolean tests and `isEmpty` and `isNotEmpty` presence
+ * tests, so none needs a value to be complete.
+ */
+const VALUELESS_TEST: Partial<Record<ConditionOperatorName, unknown>> = {
+  isEmpty: { exists: false },
+  isNotEmpty: { exists: true },
+  isTrue: { equals: true },
+  isNotTrue: { not_equals: true },
+};
+
 /** The `where` a condition writes, or `undefined` when it writes none. */
 export function conditionToWhere(
   condition: ConditionValue | undefined
 ): Record<string, unknown> | undefined {
   if (condition === undefined || condition.field === "") return undefined;
-  const { field, operator, value } = condition;
-  switch (operator) {
-    case "isEmpty":
-      return { [field]: { exists: false } };
-    case "isNotEmpty":
-      return { [field]: { exists: true } };
-    case "isTrue":
-      return { [field]: { equals: true } };
-    case "isNotTrue":
-      return { [field]: { not_equals: true } };
-    case "between": {
-      if (typeof value !== "object" || value === null) return undefined;
-      const bounds: Record<string, unknown> = {};
-      if (value.min !== undefined && value.min !== "") {
-        bounds.greater_than_equal = value.min;
-      }
-      if (value.max !== undefined && value.max !== "") {
-        bounds.less_than_equal = value.max;
-      }
-      return Object.keys(bounds).length > 0 ? { [field]: bounds } : undefined;
-    }
-    default: {
-      const op = QUERY_OPERATOR[operator];
-      if (op === undefined || value === undefined || value === "") {
-        return undefined;
-      }
-      return { [field]: { [op]: value } };
-    }
+  const test = testOf(condition);
+  return test === undefined ? undefined : { [condition.field]: test };
+}
+
+/** The one field's test a condition writes, or `undefined` when incomplete. */
+function testOf({ operator, value }: ConditionValue): unknown {
+  const valueless = VALUELESS_TEST[operator];
+  if (valueless !== undefined) return valueless;
+  if (operator === "between") return boundsOf(value);
+  const op = QUERY_OPERATOR[operator];
+  if (op === undefined || value === undefined || value === "") {
+    return undefined;
   }
+  return { [op]: value };
+}
+
+/** A between's bounds as the query writes them; either end may be open. */
+function boundsOf(value: ConditionValue["value"]): unknown {
+  if (typeof value !== "object" || value === null) return undefined;
+  const bounds: Record<string, unknown> = {};
+  if (value.min !== undefined && value.min !== "") {
+    bounds.greater_than_equal = value.min;
+  }
+  if (value.max !== undefined && value.max !== "") {
+    bounds.less_than_equal = value.max;
+  }
+  return Object.keys(bounds).length > 0 ? bounds : undefined;
 }
 
 /**
@@ -117,44 +127,73 @@ export function whereToCondition(
   if (entries.length !== 1) return undefined;
   const [field, test] = entries[0];
   if (!isRecord(test)) return undefined;
-  const ops = Object.entries(test);
-  const isDate = typeOf(field) === "date";
+  const read = readBetween(test) ?? readOneTest(test, typeOf(field) === "date");
+  return read === undefined ? undefined : { field, ...read };
+}
 
+type ReadTest = Omit<ConditionValue, "field">;
+
+/** A test holding exactly the two bounds a between writes. */
+function readBetween(test: Record<string, unknown>): ReadTest | undefined {
   if (
-    ops.length === 2 &&
-    "greater_than_equal" in test &&
-    "less_than_equal" in test
+    Object.keys(test).length !== 2 ||
+    !("greater_than_equal" in test) ||
+    !("less_than_equal" in test)
   ) {
-    return {
-      field,
-      operator: "between",
-      value: {
-        min: test.greater_than_equal as string | number,
-        max: test.less_than_equal as string | number,
-      },
-    };
+    return undefined;
   }
+  return {
+    operator: "between",
+    value: {
+      min: test.greater_than_equal as string | number,
+      max: test.less_than_equal as string | number,
+    },
+  };
+}
+
+/** A test holding one operator, read as the row operator that writes it. */
+function readOneTest(
+  test: Record<string, unknown>,
+  isDate: boolean
+): ReadTest | undefined {
+  const ops = Object.entries(test);
   if (ops.length !== 1) return undefined;
   const [op, value] = ops[0];
+  return (
+    readValueless(op, value) ??
+    (isDate ? readDateBound(op, value) : undefined) ??
+    readComparison(op, value)
+  );
+}
+
+/** A presence or boolean test, the inverse of `VALUELESS_TEST`. */
+function readValueless(op: string, value: unknown): ReadTest | undefined {
   if (op === "exists") {
-    return { field, operator: value === false ? "isEmpty" : "isNotEmpty" };
+    return { operator: value === false ? "isEmpty" : "isNotEmpty" };
   }
-  if (value === true && (op === "equals" || op === "not_equals")) {
-    return { field, operator: op === "equals" ? "isTrue" : "isNotTrue" };
+  if (value !== true) return undefined;
+  if (op === "equals") return { operator: "isTrue" };
+  return op === "not_equals" ? { operator: "isNotTrue" } : undefined;
+}
+
+/** A date's bound, which the row names `before` and `after`. */
+function readDateBound(op: string, value: unknown): ReadTest | undefined {
+  if (op === "less_than") return { operator: "before", value: value as string };
+  if (op === "greater_than") {
+    return { operator: "after", value: value as string };
   }
-  if (isDate && op === "less_than") {
-    return { field, operator: "before", value: value as string };
-  }
-  if (isDate && op === "greater_than") {
-    return { field, operator: "after", value: value as string };
-  }
+  return undefined;
+}
+
+/** Any other test, by the row operator that writes the same query operator. */
+function readComparison(op: string, value: unknown): ReadTest | undefined {
   const operator = (
     Object.keys(QUERY_OPERATOR) as ConditionOperatorName[]
   ).find(
     name => QUERY_OPERATOR[name] === op && name !== "before" && name !== "after"
   );
   if (operator === undefined) return undefined;
-  return { field, operator, value: value as string | number | boolean };
+  return { operator, value: value as string | number | boolean };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
