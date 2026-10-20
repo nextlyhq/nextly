@@ -435,3 +435,140 @@ describe("populatedAmongStored, nested and edge cases", () => {
     ).toBe(true);
   });
 });
+
+describe("inside field groups", () => {
+  // A field group's own fields, as the schema API enriches it: one
+  // component's under `componentFields`, a dynamic zone's under
+  // `componentSchemas`, each row naming its own.
+  const cardFields = [
+    f({ name: "heading", type: "text" }),
+    f({
+      name: "pages",
+      type: "relationship",
+      relationTo: "pages",
+      hasMany: true,
+    }),
+    f({ name: "image", type: "upload", relationTo: "media" }),
+  ];
+  const quoteFields = [
+    f({ name: "note", type: "relationship", relationTo: "notes" }),
+  ];
+  const fields = [
+    f({
+      name: "card",
+      type: "component",
+      component: "card",
+      componentFields: cardFields,
+    }),
+    f({
+      name: "cards",
+      type: "component",
+      component: "card",
+      repeatable: true,
+      componentFields: cardFields,
+    }),
+    f({
+      name: "blocks",
+      type: "fieldGroup",
+      fieldGroups: ["card", "quote"],
+      repeatable: true,
+      componentSchemas: {
+        card: { fields: cardFields },
+        quote: { fields: quoteFields },
+      },
+    }),
+  ];
+  const cardRow = (pages: unknown[], image: unknown) => ({
+    heading: "H",
+    pages,
+    image,
+  });
+
+  it("puts placeholders in a field group, a repeatable one and a dynamic zone", () => {
+    const merged = withStoredReferences(
+      fields,
+      {
+        card: cardRow([pageA], null),
+        cards: [cardRow([], null), cardRow([pageC], null)],
+        blocks: [
+          { _componentType: "quote", note: "n1" },
+          { _componentType: "card", ...cardRow([pageA], null) },
+        ],
+      },
+      {
+        card: cardRow(["a", "hidden"], "m1"),
+        cards: [cardRow(["gone"], null), cardRow(["c"], "m2")],
+        blocks: [
+          { _componentType: "quote", note: "n1" },
+          { _componentType: "card", ...cardRow(["hidden", "a"], null) },
+        ],
+      }
+    );
+    expect(merged.card).toEqual(
+      cardRow([pageA, placeholder("hidden")], placeholder("m1"))
+    );
+    expect(merged.cards).toEqual([
+      cardRow([placeholder("gone")], null),
+      cardRow([pageC], placeholder("m2")),
+    ]);
+    expect(merged.blocks).toEqual([
+      { _componentType: "quote", note: placeholder("n1") },
+      {
+        _componentType: "card",
+        ...cardRow([placeholder("hidden"), pageA], null),
+      },
+    ]);
+  });
+
+  it("leaves a dynamic zone row alone when the two reads disagree on its type", () => {
+    const populated = {
+      blocks: [{ _componentType: "card", ...cardRow([], null) }],
+    };
+    const merged = withStoredReferences(fields, populated, {
+      blocks: [{ _componentType: "quote", note: "n1" }],
+    });
+    expect(merged.blocks).toEqual(populated.blocks);
+  });
+
+  it("writes placeholders inside field groups as their references", () => {
+    expect(
+      withoutPlaceholders(fields, {
+        card: cardRow([pageA, placeholder("hidden")], placeholder("m1")),
+        blocks: [
+          { _componentType: "quote", note: placeholder("n1") },
+          { _componentType: "card", ...cardRow([placeholder("h")], null) },
+        ],
+      })
+    ).toEqual({
+      card: cardRow([pageA, "hidden"], "m1"),
+      blocks: [
+        { _componentType: "quote", note: "n1" },
+        { _componentType: "card", ...cardRow(["h"], null) },
+      ],
+    });
+  });
+
+  it("tells two versions apart by the links inside field groups too", () => {
+    expect(
+      populatedAmongStored(
+        fields,
+        { blocks: [{ _componentType: "card", ...cardRow([pageC], null) }] },
+        { blocks: [{ _componentType: "card", ...cardRow(["a"], null) }] }
+      )
+    ).toBe(false);
+    expect(
+      populatedAmongStored(
+        fields,
+        { cards: [cardRow([], null)] },
+        { cards: [cardRow([], null), cardRow([], null)] }
+      )
+    ).toBe(false);
+    expect(
+      populatedAmongStored(
+        fields,
+        { card: cardRow([pageA], null) },
+        { card: cardRow(["a", "hidden"], "m1") }
+      )
+    ).toBe(true);
+  });
+});
