@@ -11,12 +11,11 @@ import { BaseService } from "../../../services/base-service";
 import type { Logger } from "../../../services/shared";
 
 import { afterRoleGrantsChanged } from "./role-grants-changed";
-
-/**
- * Maximum depth for role hierarchy traversal to prevent infinite loops.
- * This safety limit stops BFS traversal after visiting this many roles.
- */
-const MAX_ROLE_HIERARCHY_DEPTH = 2000;
+import {
+  listDescendantRoleIds,
+  MAX_ROLE_HIERARCHY_DEPTH,
+} from "./role-descendants";
+import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
 /**
  * RoleInheritanceService handles role hierarchy management.
@@ -60,6 +59,16 @@ export class RoleInheritanceService extends BaseService {
     parentRoleId: string
   ): Promise<void> {
     if (childRoleId === parentRoleId) throw new Error("INHERIT_SELF_FORBIDDEN");
+    // Before the write: the parent comes to confer whatever the child does,
+    // so inheriting a role that confers super-admin is giving it.
+    await refuseGrantingSuperAdmin(
+      this.db as RBACDatabaseInstance,
+      [childRoleId],
+      {
+        parentRoleId,
+        childRoleId,
+      }
+    );
     if (await this.willCreateCycle(childRoleId, parentRoleId))
       throw new Error("INHERIT_CYCLE_FORBIDDEN");
 
@@ -175,33 +184,7 @@ export class RoleInheritanceService extends BaseService {
    * @returns Array of descendant role IDs (excluding the starting roleId)
    */
   async listDescendantRoles(roleId: string): Promise<string[]> {
-    const visited = new Set<string>();
-    const queue: string[] = [roleId];
-
-    while (queue.length) {
-      const batch = queue.splice(0, 50);
-      const inheritances = await (
-        this.db as RBACDatabaseInstance
-      ).query.roleInherits.findMany({
-        where: { parentRoleId: { in: batch } },
-        columns: {
-          childRoleId: true,
-        },
-      });
-
-      for (const r of inheritances) {
-        const child = String(r.childRoleId);
-        if (!visited.has(child)) {
-          visited.add(child);
-          queue.push(child);
-        }
-      }
-
-      // Safety limit to prevent infinite loops
-      if (visited.size > MAX_ROLE_HIERARCHY_DEPTH) break;
-    }
-
-    return Array.from(visited);
+    return listDescendantRoleIds(this.db as RBACDatabaseInstance, roleId);
   }
 
   private async willCreateCycle(

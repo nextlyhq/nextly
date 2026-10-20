@@ -22,7 +22,7 @@ import { randomUUID } from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Table, Column } from "drizzle-orm";
-import { and, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { eq, inArray, isNotNull, sql } from "drizzle-orm";
 
 import { hashPassword, isPasswordHash } from "@nextly/auth/password";
 import {
@@ -38,6 +38,7 @@ import type {
   UserInsertData,
   UserUpdateData,
 } from "@nextly/types/database-operations";
+import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
@@ -100,6 +101,10 @@ import {
   tokenTable,
   type TokenTable,
 } from "../../auth/services/token-account-binding";
+import {
+  refuseGrantingSuperAdmin,
+  rolesConferSuperAdmin,
+} from "../../auth/services/super-admin-grant";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import {
   eraseRecipientDeliveries,
@@ -125,9 +130,6 @@ import {
 import { passwordColumns, updateUserEndingSessions } from "./password-write";
 import { activationChanges } from "./user-activation";
 import type { UserExtSchemaService } from "./user-ext-schema-service";
-
-/** The one role an external identity or a plugin may never give. */
-const SUPER_ADMIN_ROLE_SLUG = "super-admin";
 
 /**
  * Who a user write is made for.
@@ -1350,6 +1352,14 @@ export class UserMutationService extends BaseService {
             reason: "plugin-user-super-admin-refused",
             email,
           });
+        } else if (caller === "app") {
+          await refuseGrantingSuperAdmin(
+            this.db as RBACDatabaseInstance,
+            uniqueRoleIds,
+            {
+              email,
+            }
+          );
         }
       }
 
@@ -1773,6 +1783,16 @@ export class UserMutationService extends BaseService {
           reason: "plugin-user-super-admin-refused",
           userId: currentUser.id,
         });
+      } else if (
+        caller === "app" &&
+        changes.roles &&
+        changes.roles.length > 0
+      ) {
+        await refuseGrantingSuperAdmin(
+          this.db as RBACDatabaseInstance,
+          Array.from(new Set(changes.roles)),
+          { userId: currentUser.id }
+        );
       }
       // The fields that control an account: whoever sets its password, email,
       // activation, verification or roles controls it. A plugin may not set
@@ -2392,35 +2412,9 @@ export class UserMutationService extends BaseService {
     roleIds: string[],
     logContext: Record<string, unknown>
   ): Promise<void> {
-    const { RoleInheritanceService } = await import(
-      "../../auth/services/role-inheritance-service"
-    );
-    const inheritance = new RoleInheritanceService(this.adapter, this.logger);
-
-    // The requested roles AND everything they reach. `listDescendantRoles`
-    // returns descendants only — it never includes the role it was asked
-    // about — so seeding the set with the requested ids is what keeps the
-    // direct case refused alongside the inherited one.
-    const reachable = new Set<string>(roleIds);
-    for (const roleId of roleIds) {
-      for (const descendant of await inheritance.listDescendantRoles(roleId)) {
-        reachable.add(descendant);
-      }
-    }
-    if (reachable.size === 0) return;
-
-    const { roles } = this.tables;
-    const superAdmin = (await this.db
-      .select({ id: roles.id })
-      .from(roles)
-      .where(
-        and(
-          inArray(roles.id, Array.from(reachable)),
-          eq(roles.slug, SUPER_ADMIN_ROLE_SLUG)
-        )
-      )) as Array<{ id: string }>;
-
-    if (superAdmin.length > 0) {
+    // The same question every role change asks, answered the same way: the
+    // requested roles and everything they inherit.
+    if (await rolesConferSuperAdmin(this.db as RBACDatabaseInstance, roleIds)) {
       throw NextlyError.forbidden({ logContext });
     }
   }

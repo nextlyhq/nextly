@@ -27,6 +27,7 @@ import {
 } from "../../users/services/last-super-admin";
 
 import { invalidateApiKeyPermissionsCache } from "./api-key-service";
+import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
 /**
  * UserRoleService handles user-role assignment management.
@@ -70,6 +71,12 @@ export class UserRoleService extends BaseService {
     roleId: string,
     opts?: { expiresAt?: Date | string }
   ): Promise<{ success: boolean; statusCode: number; message: string }> {
+    // First, and outside the `try` below, which reports a failure as a result
+    // rather than throwing: a refused grant must refuse the request.
+    await refuseGrantingSuperAdmin(this.db as RBACDatabaseInstance, [roleId], {
+      userId,
+      roleId,
+    });
     try {
       const { roles } = this.tables;
 

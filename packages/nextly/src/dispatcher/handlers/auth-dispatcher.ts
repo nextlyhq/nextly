@@ -206,6 +206,19 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       // of a rule, one of them wrong, and the wrong one ran first — so a role
       // that only takes its permissions from its base could not be created at
       // all. The rule lives with the service that owns it.
+      // A system role is one core seeds and protects from edit and deletion.
+      // One made through a request would be a role nobody could change.
+      if ((b as { isSystem?: unknown }).isSystem === true) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "isSystem",
+              code: "INVALID",
+              message: "A role made through the API can't be a system role.",
+            },
+          ],
+        });
+      }
       const role = await c.roles.createRole(
         b as Parameters<typeof c.roles.createRole>[0]
       );

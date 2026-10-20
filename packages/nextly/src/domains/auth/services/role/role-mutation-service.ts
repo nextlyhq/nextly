@@ -18,6 +18,7 @@ import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../../shared/lib/unique-violation";
 import { afterRoleGrantsChanged } from "../role-grants-changed";
+import { refuseGrantingSuperAdmin } from "../super-admin-grant";
 
 import { toDialectBool, validateRoleId } from "./utils";
 
@@ -324,6 +325,14 @@ export class RoleMutationService extends BaseService {
         }
       }
 
+      // Before any write: a role that inherits one conferring super-admin
+      // gives super-admin to whoever holds it.
+      await refuseGrantingSuperAdmin(
+        this.db as RBACDatabaseInstance,
+        uniqueChildRoleIds,
+        { roleSlug: input.slug }
+      );
+
       // Wrap mutations in a transaction when the underlying driver allows
       // async callbacks (postgres, mysql). better-sqlite3 is synchronous and
       // rejects promise-returning callbacks with "Transaction function cannot
@@ -603,6 +612,14 @@ export class RoleMutationService extends BaseService {
           }
         }
       }
+
+      // Before any write: inheriting a role that confers super-admin gives
+      // super-admin to everyone who holds this one.
+      await refuseGrantingSuperAdmin(
+        this.db as RBACDatabaseInstance,
+        uniqueChildRoleIds,
+        { roleId }
+      );
 
       // Wrap all database mutations in a transaction for atomicity. The
       // adapter's, as deleteRole uses: it is async on every dialect, where the
