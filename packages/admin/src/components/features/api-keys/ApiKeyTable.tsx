@@ -168,6 +168,19 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
         ),
       },
       {
+        // Whose key it is: a read-only or full-access key follows this
+        // person's permissions, so the list says who that is. A super-admin
+        // sees every person's keys here.
+        name: "owner",
+        header: "Owner",
+        hideOnMobile: true,
+        cell: ({ row }) => (
+          <span className="text-sm text-muted-foreground">
+            {row.owner ? (row.owner.name ?? row.owner.email) : "Deleted user"}
+          </span>
+        ),
+      },
+      {
         name: "expiresAt",
         header: "Expires",
         hideOnMobile: true,

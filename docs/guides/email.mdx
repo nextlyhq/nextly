@@ -99,13 +99,13 @@ export default defineConfig({
 
 ## Email config options
 
-| Option              | Type     | Default                      | Description                                |
-|---------------------|----------|------------------------------|--------------------------------------------|
-| `providerConfig`    | object   | required                     | Provider-specific configuration.           |
-| `from`              | `string` | required                     | Default sender address.                    |
-| `baseUrl`           | `string` | `NEXT_PUBLIC_APP_URL` env    | Base URL for links in emails.              |
-| `resetPasswordPath` | `string` | `'/admin/reset-password'`    | Path for password-reset links.             |
-| `verifyEmailPath`   | `string` | `'/admin/verify-email'`      | Path for email-verification links.         |
+| Option              | Type     | Default                   | Description                        |
+| ------------------- | -------- | ------------------------- | ---------------------------------- |
+| `providerConfig`    | object   | required                  | Provider-specific configuration.   |
+| `from`              | `string` | required                  | Default sender address.            |
+| `baseUrl`           | `string` | `NEXT_PUBLIC_APP_URL` env | Base URL for links in emails.      |
+| `resetPasswordPath` | `string` | `'/admin/reset-password'` | Path for password-reset links.     |
+| `verifyEmailPath`   | `string` | `'/admin/verify-email'`   | Path for email-verification links. |
 
 ## Provider resolution order
 
@@ -114,19 +114,25 @@ When sending an email, Nextly resolves the provider in this order:
 1. **Specific provider ID** -- if the call passes a `providerId`.
 2. **Database default provider** -- the provider marked as default in admin Settings.
 3. **Code-first config** -- the `providerConfig` from `defineConfig()`.
-4. **Error** -- if none of the above resolve.
+4. **The log transport** -- if none of the above resolve, the message is written to the server log instead of being sent, so a fresh install's password-reset flow still works. A `providerId` that doesn't resolve is still an error.
 
 This lets you wire a code-first provider for development and configure a production provider through the admin UI without changing code.
+
+The log transport writes the full message, body included, only when `NODE_ENV` is `development` or `test`, so you can follow a reset link locally. Anywhere else, an unset `NODE_ENV` included, it masks every address and leaves the body out, because the body carries live reset and verification tokens.
+
+## Email addresses in logs
+
+Outside development and test (an unset `NODE_ENV` included), Nextly masks every email address it writes to the logs down to its first character and its domain: `john@example.com` becomes `j***@example.com`. That covers the log transport, a failed send whose provider error quotes the recipient, and every line written through Nextly's structured logger (including a logger you install with `setNextlyLogger`), and every line its services write, to the `logger` you pass Nextly or to its fallback console logger. To find a message in production logs, search by the domain and first character. Output that Nextly writes to the console directly, outside these loggers, isn't masked yet. Logs your own code writes outside Nextly's loggers are yours to handle.
 
 ## Built-in email templates
 
 Nextly automatically creates three email templates on first startup:
 
-| Template             | Slug                  | Purpose                              |
-|----------------------|-----------------------|--------------------------------------|
-| Welcome              | `welcome`             | Sent after user registration.        |
-| Password Reset       | `password-reset`      | Contains the reset link.             |
-| Email Verification   | `email-verification`  | Contains the verification link.      |
+| Template           | Slug                 | Purpose                         |
+| ------------------ | -------------------- | ------------------------------- |
+| Welcome            | `welcome`            | Sent after user registration.   |
+| Password Reset     | `password-reset`     | Contains the reset link.        |
+| Email Verification | `email-verification` | Contains the verification link. |
 
 Templates are stored in the database and edited through the admin UI (**Settings -> Email Templates**) using a Lexical-based rich-text editor. They support `{{variable}}` placeholder syntax with HTML escaping.
 
@@ -135,6 +141,7 @@ Templates are stored in the database and edited through the admin UI (**Settings
 Templates receive context-appropriate variables.
 
 **Password Reset:**
+
 - `{{resetLink}}` -- full password reset URL.
 - `{{userName}}` -- user's name or email.
 - `{{userEmail}}` -- user's email.
@@ -143,10 +150,12 @@ Templates receive context-appropriate variables.
 - `{{year}}` -- current year.
 
 **Email Verification:**
+
 - `{{verifyLink}}` -- full verification URL.
 - `{{userName}}`, `{{userEmail}}`, `{{appName}}`, `{{expiresIn}}`, `{{year}}`.
 
 **Welcome:**
+
 - `{{userName}}`, `{{userEmail}}`, `{{appName}}`, `{{year}}`.
 
 ### Shared header / footer layout
@@ -173,7 +182,7 @@ export default defineConfig({
     },
     from: "noreply@example.com",
     templates: {
-      passwordReset: (data) => ({
+      passwordReset: data => ({
         subject: "Reset your password",
         html: `
           <p>Hi ${data.user.name ?? data.user.email},</p>
@@ -181,11 +190,11 @@ export default defineConfig({
           <p>This link expires in 1 hour.</p>
         `,
       }),
-      welcome: (data) => ({
+      welcome: data => ({
         subject: `Welcome to our app!`,
         html: `<p>Hi ${data.user.name}, thanks for signing up!</p>`,
       }),
-      emailVerification: (data) => ({
+      emailVerification: data => ({
         subject: "Verify your email",
         html: `<p>Click <a href="${data.url}">here</a> to verify your email.</p>`,
       }),
@@ -305,15 +314,15 @@ The container is dev-only and gated behind a Compose profile, so it does **not**
 
 ## Environment variables
 
-| Variable           | Provider   | Description                      |
-|--------------------|------------|----------------------------------|
-| `RESEND_API_KEY`   | Resend     | API key from the Resend dashboard. |
-| `SENDLAYER_API_KEY`| SendLayer  | API key (Bearer token).          |
-| `SMTP_HOST`        | SMTP       | Server hostname.                 |
-| `SMTP_PORT`        | SMTP       | Server port (587 for TLS, 1025 for Mailpit). |
-| `SMTP_USER`        | SMTP       | Authentication username (empty for Mailpit). |
-| `SMTP_PASS`        | SMTP       | Authentication password (empty for Mailpit). |
-| `SMTP_FROM`        | Any        | Default sender address.          |
+| Variable            | Provider  | Description                                  |
+| ------------------- | --------- | -------------------------------------------- |
+| `RESEND_API_KEY`    | Resend    | API key from the Resend dashboard.           |
+| `SENDLAYER_API_KEY` | SendLayer | API key (Bearer token).                      |
+| `SMTP_HOST`         | SMTP      | Server hostname.                             |
+| `SMTP_PORT`         | SMTP      | Server port (587 for TLS, 1025 for Mailpit). |
+| `SMTP_USER`         | SMTP      | Authentication username (empty for Mailpit). |
+| `SMTP_PASS`         | SMTP      | Authentication password (empty for Mailpit). |
+| `SMTP_FROM`         | Any       | Default sender address.                      |
 
 ## Next steps
 

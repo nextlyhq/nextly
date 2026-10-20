@@ -56,6 +56,22 @@ updates:
       all-actions:
         patterns:
           - "*"
+    # Three actions move only by hand, because a bump alone breaks CI or the
+    # release; Dependabot proposing them inside the group would hold every
+    # other update back with it.
+    ignore:
+      # v2 refuses @changesets/cli v2 and renames its inputs and its
+      # `hasChangesets` output, so the release workflow moves with a CLI v3
+      # migration, not on its own.
+      - dependency-name: "changesets/action"
+        update-types: ["version-update:semver-major"]
+      # The action verifies binaries of the fallow CLI pinned in package.json
+      # (an npm dependency), so the action and the CLI move together.
+      - dependency-name: "fallow-rs/fallow"
+      # The review workflow runs an agent with repository grants, pinned to a
+      # revision scripts/review-bot-workflow.test.mjs holds; a new revision is
+      # reviewed before the pin and the test move.
+      - dependency-name: "anthropics/claude-code-action"
     reviewers:
       - mobeenabdullah
     labels:

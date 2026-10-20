@@ -69,6 +69,7 @@ import {
   NO_RELEASE_VISIBILITY,
   type ReleaseVisibility,
 } from "../../releases/release-visibility";
+import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 
 import { CollectionAccessService } from "./collection-access-service";
 import type { UserContext } from "./collection-types";
@@ -96,6 +97,18 @@ export const DEFAULT_RELATIONSHIP_DEPTH = 2;
  * Maximum allowed depth to prevent performance issues.
  */
 export const MAX_RELATIONSHIP_DEPTH = 5;
+
+/**
+ * The depth an expansion runs to for the depth a read asked for: absent means
+ * the default, and the result is held between 0 and the maximum. At 0 a read
+ * populates nothing and gives every relationship as stored.
+ */
+export function effectiveRelationshipDepth(depth: number | undefined): number {
+  return Math.min(
+    Math.max(depth ?? DEFAULT_RELATIONSHIP_DEPTH, 0),
+    MAX_RELATIONSHIP_DEPTH
+  );
+}
 
 /** Carried across one read's nested-hook pass. */
 interface NestedHookStateBase {
@@ -712,6 +725,48 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The caller an expansion judges every related row for, from the options it was
+ * handed. Built in one place so a single-entry and a batched expansion can
+ * never carry different callers for the same request.
+ */
+function relatedRowAccessOf(
+  options: RelationshipExpansionOptions
+): RelatedRowAccess {
+  return {
+    enforceFieldAccess: options.enforceFieldAccess,
+    enforceCollectionAccess: options.enforceCollectionAccess,
+    fieldAccessStage: options.fieldAccessStage,
+    user: options.user,
+    // Carried BESIDE `user`, never folded into it. A preview judges a related
+    // row's fields as the sharer while every hook goes on seeing the
+    // anonymous bearer; dropping it here silently restores the anonymous
+    // reading for the whole expansion, which is the direction that leaks.
+    fieldAccessUser: options.fieldAccessUser,
+    overrideAccess: options.overrideAccess,
+    trusted: assumedBound(options.trusted),
+    authenticatedScope: options.authenticatedScope,
+    locale: options.locale,
+    status: options.status,
+    withheldByAccess: options.withheldByAccess,
+    // One per expansion, so a relationship holding many references reads its
+    // target's rules once rather than once per value. A nested hop inherits
+    // the map rather than starting its own: several children populating the
+    // same collection would otherwise each resolve its policy again, which
+    // is the repetition this cache exists to remove. Created fresh only for
+    // the outermost call, because a collection's rules can change between
+    // requests.
+    targetPolicies: options.targetPolicies ?? new Map(),
+    // Shared and inherited exactly as the policy map is, for the same reason:
+    // a nested hop starting its own would re-read the metadata of a collection
+    // an ancestor already looked up.
+    targetCompanions: options.targetCompanions ?? new Map(),
+    // And the access verdicts, likewise: the caller is the same on every hop,
+    // so a target already judged for it is not asked again.
+    targetVerdicts: options.targetVerdicts ?? new Map(),
+  };
 }
 
 /**
@@ -2045,41 +2100,10 @@ export class CollectionRelationshipService extends BaseService {
     const { depth = DEFAULT_RELATIONSHIP_DEPTH } = options;
     // The caller travels with every fetch below so each related row is judged
     // by its own collection's field rules.
-    const access: RelatedRowAccess = {
-      enforceFieldAccess: options.enforceFieldAccess,
-      enforceCollectionAccess: options.enforceCollectionAccess,
-      fieldAccessStage: options.fieldAccessStage,
-      user: options.user,
-      // Carried BESIDE `user`, never folded into it. A preview judges a related
-      // row's fields as the sharer while every hook goes on seeing the
-      // anonymous bearer; dropping it here silently restores the anonymous
-      // reading for the whole expansion, which is the direction that leaks.
-      fieldAccessUser: options.fieldAccessUser,
-      overrideAccess: options.overrideAccess,
-      trusted: assumedBound(options.trusted),
-      authenticatedScope: options.authenticatedScope,
-      locale: options.locale,
-      status: options.status,
-      withheldByAccess: options.withheldByAccess,
-      // One per expansion, so a relationship holding many references reads its
-      // target's rules once rather than once per value. A nested hop inherits
-      // the map rather than starting its own: several children populating the
-      // same collection would otherwise each resolve its policy again, which
-      // is the repetition this cache exists to remove. Created fresh only for
-      // the outermost call, because a collection's rules can change between
-      // requests.
-      targetPolicies: options.targetPolicies ?? new Map(),
-      // Shared and inherited exactly as the policy map is, for the same reason:
-      // a nested hop starting its own would re-read the metadata of a collection
-      // an ancestor already looked up.
-      targetCompanions: options.targetCompanions ?? new Map(),
-      // And the access verdicts, likewise: the caller is the same on every hop,
-      // so a target already judged for it is not asked again.
-      targetVerdicts: options.targetVerdicts ?? new Map(),
-    };
+    const access = relatedRowAccessOf(options);
 
     // Clamp depth to valid range
-    const effectiveDepth = Math.min(Math.max(depth, 0), MAX_RELATIONSHIP_DEPTH);
+    const effectiveDepth = effectiveRelationshipDepth(depth);
 
     // If depth is 0, don't expand relationships but still normalize
     // repeater/group fields to strip any embedded relationship objects to IDs.
@@ -2622,41 +2646,10 @@ export class CollectionRelationshipService extends BaseService {
     const { depth = DEFAULT_RELATIONSHIP_DEPTH, currentDepth = 0 } = options;
     // Travels with every nested expansion and row fetch, so a related row at
     // any depth is judged by its own collection's field rules.
-    const access: RelatedRowAccess = {
-      enforceFieldAccess: options.enforceFieldAccess,
-      enforceCollectionAccess: options.enforceCollectionAccess,
-      fieldAccessStage: options.fieldAccessStage,
-      user: options.user,
-      // Carried BESIDE `user`, never folded into it. A preview judges a related
-      // row's fields as the sharer while every hook goes on seeing the
-      // anonymous bearer; dropping it here silently restores the anonymous
-      // reading for the whole expansion, which is the direction that leaks.
-      fieldAccessUser: options.fieldAccessUser,
-      overrideAccess: options.overrideAccess,
-      trusted: assumedBound(options.trusted),
-      authenticatedScope: options.authenticatedScope,
-      locale: options.locale,
-      status: options.status,
-      withheldByAccess: options.withheldByAccess,
-      // One per expansion, so a relationship holding many references reads its
-      // target's rules once rather than once per value. A nested hop inherits
-      // the map rather than starting its own: several children populating the
-      // same collection would otherwise each resolve its policy again, which
-      // is the repetition this cache exists to remove. Created fresh only for
-      // the outermost call, because a collection's rules can change between
-      // requests.
-      targetPolicies: options.targetPolicies ?? new Map(),
-      // Shared and inherited exactly as the policy map is, for the same reason:
-      // a nested hop starting its own would re-read the metadata of a collection
-      // an ancestor already looked up.
-      targetCompanions: options.targetCompanions ?? new Map(),
-      // And the access verdicts, likewise: the caller is the same on every hop,
-      // so a target already judged for it is not asked again.
-      targetVerdicts: options.targetVerdicts ?? new Map(),
-    };
+    const access = relatedRowAccessOf(options);
 
     // Clamp depth to valid range
-    const effectiveDepth = Math.min(Math.max(depth, 0), MAX_RELATIONSHIP_DEPTH);
+    const effectiveDepth = effectiveRelationshipDepth(depth);
 
     // If we've reached the requested depth, don't expand further
     // but still normalize repeater/group fields to strip embedded relationship objects
@@ -4152,6 +4145,40 @@ export class CollectionRelationshipService extends BaseService {
       byEntry.get(String(row.source_id))?.push(row.target_id);
     }
     return byEntry;
+  }
+
+  /**
+   * Gives each junction-backed many-to-many field on `entries` the ids its
+   * junction stores. That is what a read that populates nothing answers for
+   * every other relationship: the references as stored, not judged against the
+   * caller, and whether or not each target still exists. Such a field has no
+   * column, so without this a read at depth 0 has no value for it at all.
+   *
+   * One junction query per field for all the entries. A failed read throws
+   * rather than giving an empty list, which an editor saving the document back
+   * would store, removing every link. A junction keeps no order, so the ids
+   * come in the order the database returns them.
+   */
+  async withStoredManyToManyIds(
+    entries: Record<string, unknown>[],
+    collectionName: string,
+    fields: FieldDefinition[]
+  ): Promise<Record<string, unknown>[]> {
+    const junctionFields = fields.filter(field => usesJunctionTable(field));
+    if (junctionFields.length === 0 || entries.length === 0) return entries;
+    const ids = entries.map(entry => String(entry.id));
+    const withIds = entries.map(entry => ({ ...entry }));
+    for (const field of junctionFields) {
+      const stored = await this.fetchManyToManyTargetIdsOf(
+        collectionName,
+        ids,
+        field
+      );
+      withIds.forEach((entry, index) => {
+        entry[field.name] = stored.get(ids[index]) ?? [];
+      });
+    }
+    return withIds;
   }
 
   /**

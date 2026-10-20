@@ -24,8 +24,14 @@ import { MediaEditDialog } from "@admin/components/features/media-library/MediaE
 import { MediaPickerDialog } from "@admin/components/features/media-library/MediaPickerDialog";
 import { Image } from "@admin/components/icons";
 import * as useMediaHooks from "@admin/hooks/queries/useMedia";
+import {
+  RESTRICTED_REFERENCE,
+  isRestrictedReference,
+} from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { Media, MediaUpdateInput } from "@admin/types/media";
+
+import { RestrictedReference } from "../RestrictedReference";
 
 import { UploadPreview, type UploadedFile } from "./UploadPreview";
 
@@ -173,6 +179,17 @@ function normalizeItem(item: unknown): UploadedFile | null {
   if (typeof item === "object" && item !== null) {
     const obj = item as Record<string, unknown>;
 
+    // A stored upload the editor cannot see: an id and nothing else, or the
+    // pair a field naming several collections stores, whose collection is
+    // kept so it is saved against the same one.
+    if (isRestrictedReference(obj)) {
+      const id = typeof obj.relationTo === "string" ? obj.value : obj.id;
+      if (typeof id !== "string") return null;
+      return typeof obj.relationTo === "string"
+        ? { id, filename: id, restricted: true, relationTo: obj.relationTo }
+        : { id, filename: id, restricted: true };
+    }
+
     // Polymorphic value { relationTo, value }
     if ("relationTo" in obj && "value" in obj) {
       const innerValue = obj.value;
@@ -244,6 +261,21 @@ function normalizeItem(item: unknown): UploadedFile | null {
   }
 
   return null;
+}
+
+/**
+ * The form value for a file: its id, or a placeholder for one the editor
+ * cannot see, which must stay one so it is still recognised after an edit.
+ */
+function toFormValue(file: UploadedFile): unknown {
+  if (!file.restricted) return file.id;
+  return file.relationTo === undefined
+    ? { id: file.id, [RESTRICTED_REFERENCE]: true }
+    : {
+        relationTo: file.relationTo,
+        value: file.id,
+        [RESTRICTED_REFERENCE]: true,
+      };
 }
 
 /**
@@ -340,13 +372,22 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
 
   // Use displayFiles if available and IDs match, otherwise use normalized value
   // This ensures we show full media info immediately after selection
+  // A cached file stands for the value's only while it is the same link: a
+  // file the editor could read can come back as a placeholder for one they no
+  // longer can, under the same id.
+  // Position by position, and the same number: a value that gained a link the
+  // cache never saw must not be shown, and later saved, as the cached subset.
   const files =
     displayFiles.length > 0 &&
-    displayFiles.every(
-      df =>
-        normalizedFromValue.some(nf => nf.id === df.id) ||
-        (Array.isArray(value) ? value.includes(df.id) : value === df.id)
-    )
+    displayFiles.length === normalizedFromValue.length &&
+    displayFiles.every((df, index) => {
+      const nf = normalizedFromValue[index];
+      return (
+        nf.id === df.id &&
+        Boolean(nf.restricted) === Boolean(df.restricted) &&
+        nf.relationTo === df.relationTo
+      );
+    })
       ? displayFiles
       : normalizedFromValue;
 
@@ -371,28 +412,42 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
    */
   const handleMediaSelect = useCallback(
     (selectedMedia: Media[]) => {
+      // The picker lists only media the editor can see, so it never returns a
+      // placeholder; those stay where they are whatever is picked.
+      const restricted = files.filter(f => f.restricted);
+
       if (selectedMedia.length === 0) {
         // User deselected everything in multi-mode, or cancelled
         if (field.hasMany) {
-          onChange([] as TFieldValues[Path<TFieldValues>]);
+          onChange(restricted.map(toFormValue));
+          setDisplayFiles(restricted);
         }
         setIsPickerOpen(false);
         return;
       }
 
       if (field.hasMany) {
-        // For hasMany, store array of media IDs
+        // Files already in the field keep their places, placeholders among
+        // them, and newly picked media follow in the order picked.
+        const picked = new Set(selectedMedia.map(m => m.id));
+        const kept = files.filter(f => f.restricted || picked.has(f.id));
+        // Only a readable file the editor kept stands for a picked one: a
+        // hidden file with the same id belongs to another collection.
+        const keptIds = new Set(kept.filter(f => !f.restricted).map(f => f.id));
+        const next = [
+          ...kept,
+          ...selectedMedia
+            .filter(m => !keptIds.has(m.id))
+            .map(mediaToUploadedFile),
+        ];
         // Respect maxRows limit
-        const limitedMedia = field.maxRows
-          ? selectedMedia.slice(0, field.maxRows)
-          : selectedMedia;
+        const limited = field.maxRows ? next.slice(0, field.maxRows) : next;
 
         // Store only IDs in the form (this is what gets saved to DB)
-        const ids = limitedMedia.map(m => m.id);
-        onChange(ids);
+        onChange(limited.map(toFormValue));
 
         // Update local display cache with full media objects for immediate preview
-        setDisplayFiles(limitedMedia.map(mediaToUploadedFile));
+        setDisplayFiles(limited);
       } else {
         // For single selection, store just the ID
         const mediaId = selectedMedia[0].id;
@@ -404,7 +459,7 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
 
       setIsPickerOpen(false);
     },
-    [field.hasMany, field.maxRows, onChange]
+    [field.hasMany, field.maxRows, files, onChange]
   );
 
   /**
@@ -412,13 +467,14 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
    * Stores only IDs in the form value.
    */
   const handleRemove = useCallback(
-    (fileId: string) => {
+    (index: number) => {
       if (field.hasMany) {
-        // Filter out the removed file
-        const updatedFiles = files.filter(f => f.id !== fileId);
-        // Store only IDs in form
-        const ids = updatedFiles.map(f => f.id);
-        onChange(ids);
+        // By position rather than by id: a file can be linked twice, and a
+        // field naming several collections can hold one id from two of them,
+        // so an id names more than the one tile that was clicked.
+        const updatedFiles = files.filter((_, at) => at !== index);
+        // Store only IDs in form, and placeholders as placeholders
+        onChange(updatedFiles.map(toFormValue));
         // Update display cache
         setDisplayFiles(updatedFiles);
       } else {
@@ -497,15 +553,29 @@ export function UploadInput<TFieldValues extends FieldValues = FieldValues>({
               : "grid-cols-1 max-w-[200px]"
           )}
         >
-          {files.map(file => (
-            <UploadPreview
-              key={file.id}
-              file={file}
-              onRemove={() => handleRemove(file.id)}
-              onEdit={() => handleEdit(file)}
-              disabled={disabled || readOnly}
-            />
-          ))}
+          {files.map((file, index) =>
+            // A stored upload the editor cannot see: kept, removable, never
+            // opened or edited.
+            file.restricted ? (
+              <RestrictedReference
+                // A file linked twice still needs a key of its own.
+                key={`${index}:${file.id}`}
+                id={file.id}
+                variant="tile"
+                onRemove={() => handleRemove(index)}
+                disabled={disabled || readOnly}
+              />
+            ) : (
+              <UploadPreview
+                // A file linked twice still needs a key of its own.
+                key={`${index}:${file.id}`}
+                file={file}
+                onRemove={() => handleRemove(index)}
+                onEdit={() => handleEdit(file)}
+                disabled={disabled || readOnly}
+              />
+            )
+          )}
         </div>
       )}
 
