@@ -28,6 +28,7 @@
  */
 import type { Metadata } from "next";
 
+import { runWithAccessMemo } from "../../auth/access/request-memo";
 import { requireNextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { NextlyError } from "../../errors/nextly-error";
@@ -654,7 +655,10 @@ function buildRoute<TNode>(
     if (!config.buildMetadata) return {};
     const slug = joinSlug(await args.params);
     if (isReservedPath(`/${slug}`)) return {};
-    const resolved = await resolve(slug);
+    // With one memo of access lookups for the render, so the person a preview
+    // was shared by, and the field rules of the draft read as them, look that
+    // person up once.
+    const resolved = await runWithAccessMemo(() => resolve(slug));
     if (!resolved) return {};
     return config.buildMetadata(resolved.entry, resolved.context);
   }
@@ -663,7 +667,10 @@ function buildRoute<TNode>(
     const slug = joinSlug(await args.params);
     // Never serve content at a framework/metadata path.
     if (isReservedPath(`/${slug}`)) triggerNotFound();
-    const resolved = await resolve(slug);
+    // With one memo of access lookups for the render, so the person a preview
+    // was shared by, and the field rules of the draft read as them, look that
+    // person up once.
+    const resolved = await runWithAccessMemo(() => resolve(slug));
     if (!resolved) triggerNotFound();
     return config.render(resolved.entry, resolved.context);
   }

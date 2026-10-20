@@ -1,5 +1,6 @@
 /**
- * How many times one REST request asks the database about its caller.
+ * How many times one REST request, one Direct API call, or one plugin service
+ * call asks the database about its caller.
  *
  * A list read asks about the caller at the route gate, in the collection
  * rule's context, and in every field rule of every row it returns. Each of
@@ -26,6 +27,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { defineCollection, text } from "../../config";
 import { getDialectTables } from "../../database/index";
 import { seedAllPermissions } from "../../init/seed-permissions";
+import { definePlugin } from "../../plugins/plugin-context";
+import type { PluginCollectionService } from "../../plugins/service-opts";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -33,6 +36,7 @@ import {
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
 import { ServiceContainer } from "../../services/index";
+import type { AuthUserId } from "../../types/auth";
 import {
   hasPermission,
   invalidateAllPermissionCaches,
@@ -181,9 +185,23 @@ describe.each(getConfiguredTestDialects())(
     let newcomerId: string;
     let userId: string;
     let superAdminId: string;
+    // The plugin service a plugin is handed, taken at boot, outside any request.
+    let services: { collections: PluginCollectionService } | undefined;
 
     beforeAll(async () => {
-      t = await createTestNextly({ dialect, collections: [notes] });
+      const capture = definePlugin({
+        name: "lookups-probe",
+        version: "1.0.0",
+        nextly: ">=0.0.1",
+        init: ctx => {
+          services = ctx.services as { collections: PluginCollectionService };
+        },
+      });
+      t = await createTestNextly({
+        dialect,
+        collections: [notes],
+        plugins: [capture],
+      });
       await seedAllPermissions();
       const readNotes = (
         await t.nextly.permissions.find({ limit: 100 })
@@ -470,6 +488,68 @@ describe.each(getConfiguredTestDialects())(
         expect(await hasPermission(holder, "read", "notes")).toBe(true);
       });
     });
+
+    /** The access tables a Direct API list made as the user reads. */
+    async function directListOf(limit: number) {
+      await invalidateAllPermissionCaches();
+      const { result, tables } = await tablesRead(t, () =>
+        t.nextly.find({
+          collection: "notes",
+          limit,
+          overrideAccess: false,
+          user: { id: userId },
+        })
+      );
+      return {
+        items: result.items as { secret?: unknown }[],
+        access: tables.filter(table => ACCESS_TABLES.has(table)),
+      };
+    }
+
+    /** The access tables a plugin service list made as the user reads. */
+    async function serviceListOf(limit: number) {
+      if (!services)
+        throw new Error("the probe plugin was not handed services");
+      const collections = services.collections;
+      await invalidateAllPermissionCaches();
+      const { result, tables } = await tablesRead(t, () =>
+        collections.listEntries(
+          "notes",
+          { pagination: { limit } },
+          {
+            as: "user",
+            user: { id: userId as AuthUserId, email: "reader@lookups.test" },
+          }
+        )
+      );
+      return {
+        items: result.data as { secret?: unknown }[],
+        access: tables.filter(table => ACCESS_TABLES.has(table)),
+      };
+    }
+
+    it.each([
+      ["a Direct API call", directListOf],
+      ["a plugin service call", serviceListOf],
+    ] as const)(
+      "%s reads the same access rows for fifty entries as for one",
+      async (_way, listing) => {
+        const one = await listing(1);
+        const fifty = await listing(50);
+        // POPULATION CONTROL: both read through the rules, and the field rule
+        // showed the caller the field on every row.
+        expect(one.items).toHaveLength(1);
+        expect(fifty.items).toHaveLength(50);
+        expect(fifty.items.every(item => typeof item.secret === "string")).toBe(
+          true
+        );
+        expect(one.access.length).toBeGreaterThan(0);
+        expect(fifty.access.length).toBe(one.access.length);
+        expect(
+          fifty.access.filter(table => table === "user_roles")
+        ).toHaveLength(1);
+      }
+    );
 
     it("walks the caller's roles once", async () => {
       const fifty = await listOf(50);
