@@ -43,7 +43,10 @@ import { ReleasesService } from "../services/releases-service";
 
 import { seedLiveAuthor } from "./helpers/live-author";
 import { READY_CHECKS } from "./helpers/ready-checks";
-import { scheduleAsItStands } from "./helpers/release-writes";
+import {
+  publishAsItStands,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
 
 const UPDATE = "update-content-releases";
 const DELETE = "delete-content-releases";
@@ -280,7 +283,7 @@ async function releaseIn(
     ).toEqual([id]);
   }
   if (state === "published") {
-    expect(await repo.markReleasePublished(id, new Date())).toBe(true);
+    expect(await publishAsItStands(repo, id, new Date())).toBe(true);
   }
   const [row] = await repo.findReleases({ ids: [id] });
   expect(row.state).toBe(state);
