@@ -34,6 +34,13 @@ const assertEntryPreviewable = vi.hoisted(() => vi.fn());
 vi.mock("../../../api/preview-access", () => ({ assertEntryPreviewable }));
 
 vi.mock("../preview-route-defaults", () => ({
+  // The link's own record. What it decides is covered by the integration
+  // suite against real rows; here it allows, so these cases stay about the
+  // token.
+  defaultLinkChecks: {
+    opened: () => Promise.resolve(true),
+    live: () => Promise.resolve(true),
+  },
   defaultSecret: () => TEST_SECRET,
   defaultGeneration: () => Promise.resolve(generation),
   defaultCookies: () =>

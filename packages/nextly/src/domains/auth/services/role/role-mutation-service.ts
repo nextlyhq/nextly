@@ -17,6 +17,7 @@ import { BaseService } from "../../../../services/base-service";
 import type { Logger } from "../../../../services/shared";
 import { requireFilterValue } from "../../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../../shared/lib/unique-violation";
+import { afterRoleGrantsChanged } from "../role-grants-changed";
 
 import { toDialectBool, validateRoleId } from "./utils";
 
@@ -659,12 +660,15 @@ export class RoleMutationService extends BaseService {
           }
         });
 
-        // Invalidate cache after successful transaction
+        // Invalidate cache after successful transaction. A new slug changes
+        // the roles a code-defined rule reads, as new grants change the
+        // permissions it reads.
         if (
           changes.permissionIds !== undefined ||
-          changes.childRoleIds !== undefined
+          changes.childRoleIds !== undefined ||
+          changes.slug !== undefined
         ) {
-          await invalidatePermissionCache({ roleId });
+          await afterRoleGrantsChanged(roleId);
         }
 
         return;
@@ -750,7 +754,7 @@ export class RoleMutationService extends BaseService {
 
       // Awaited, for the reason `createRole` gives: an abandoned shared write
       // leaves the other instances holding answers this delete retired.
-      await invalidatePermissionCache({ roleId });
+      await afterRoleGrantsChanged(roleId);
     } catch (e: unknown) {
       // Re-throw NextlyErrors unchanged. Raw DB errors map via
       // fromDatabaseError, which provides the spec-compliant generic public

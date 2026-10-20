@@ -42,6 +42,7 @@ import {
   RELEASE_LIST_ORDERS,
   type DocumentRef,
   type ReleaseListOrder,
+  type ReleaseMemberCounts,
   type ReleaseRow,
 } from "../domains/releases/releases-repository";
 import {
@@ -52,6 +53,7 @@ import {
   type ReleaseAuthority,
   type ReleaseDayFilter,
 } from "../domains/releases/services/releases-service";
+import { peopleById } from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
@@ -95,6 +97,7 @@ const RELEASE_AUTHORITY: Record<string, ReleaseAuthority> = {
   listReleaseMembers: "read",
   listReleaseBlockers: "read",
   getReleaseReadiness: "read",
+  listReleasesReadiness: "read",
   createRelease: "create",
   addReleaseMember: "create",
   // Removing a member un-does part of assembling a release and can only ever
@@ -583,6 +586,84 @@ async function withCapabilities(
 }
 
 /**
+ * Every row of a release list, whichever filter produced it, decorated the
+ * same way: what this caller may do to it, its member counts and its owner.
+ *
+ * ONE path for every branch of the list, a document's own releases included,
+ * so a client reading `row.owner` or `row.memberCounts` never meets a list
+ * that left them off. Whatever the service put on a row (a document's
+ * `memberAction`, say) is kept.
+ */
+async function decorateListPage(
+  rows: ReleaseRow[],
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+) {
+  const decorated = await withCapabilities(rows, caller, releases);
+  return withOwners(await withMemberCounts(decorated, caller, releases));
+}
+
+/**
+ * Each listed release with how many documents it holds and what it does with
+ * them, read for the whole page in one request rather than one per row.
+ *
+ * On the REST list only, as the capabilities are: it is what a list screen
+ * shows beside each release, and a Direct API caller asks `memberCounts` for
+ * it when it wants it.
+ *
+ * @experimental
+ */
+async function withMemberCounts<Row extends { id: string }>(
+  rows: Row[],
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+): Promise<Array<Row & { memberCounts: ReleaseMemberCounts }>> {
+  if (rows.length === 0) return [];
+  const counts = await releases.memberCounts({
+    ...caller,
+    releaseIds: rows.map(row => row.id),
+  });
+  return rows.map(row => ({
+    ...row,
+    memberCounts: counts[row.id] ?? { total: 0, goLive: 0, comeDown: 0 },
+  }));
+}
+
+/**
+ * Each listed release with its owner, named by the one rule version history
+ * names people by, for the whole page in one read: an id and a name, never an
+ * email, image or role. An owner who cannot be named (deleted, erased, or a
+ * failed lookup) is `null`, and the release keeps `createdBy`, so a client can
+ * tell "not recorded" from "unavailable" as history does.
+ *
+ * Shown to anyone who may read the release, as a version's author is shown to
+ * anyone who may read the document: naming who made a thing the reader can
+ * already see discloses no more than the thing itself.
+ *
+ * @experimental
+ */
+async function withOwners<Row extends { createdBy: string | null }>(
+  rows: Row[]
+): Promise<Array<Row & { owner: ReleaseOwner | null }>> {
+  const people = await peopleById(rows.map(row => row.createdBy));
+  return rows.map(row => ({ ...row, owner: ownerOf(row.createdBy, people) }));
+}
+
+/** A release's owner, by id and name only. @experimental */
+interface ReleaseOwner {
+  id: string;
+  name: string | null;
+}
+
+function ownerOf(
+  createdBy: string | null,
+  people: Awaited<ReturnType<typeof peopleById>>
+): ReleaseOwner | null {
+  const person = createdBy ? people.get(createdBy) : undefined;
+  return person?.id ? { id: person.id, name: person.name } : null;
+}
+
+/**
  * What a Publish now answer says, by the state the run left the release in.
  *
  * One sentence per state, in a record keyed by every state, so a state added
@@ -718,10 +799,38 @@ const RELEASE_OPERATIONS: Record<
         ? { ...shared, containing }
         : { ...shared, ...listOnly }
     );
-    const items = await withCapabilities(found.items, caller, releases);
     // The service's own page and total, so `meta.total` is every release the
     // query matches, not the rows this page holds.
-    return respondList(items, found.meta);
+    return respondList(
+      await decorateListPage(found.items, caller, releases),
+      found.meta
+    );
+  },
+
+  /**
+   * What the checks say about each of a page of releases, in one request.
+   *
+   * The ids travel as `?ids=a,b` or repeated `?ids=`, so a client can send a
+   * page's ids however it builds a query string. The service bounds how many.
+   */
+  listReleasesReadiness: async ({ request, caller, releases }) => {
+    const releaseIds = new URL(request.url).searchParams
+      .getAll("ids")
+      .flatMap(value => value.split(","))
+      .map(id => id.trim())
+      .filter(id => id.length > 0);
+    if (releaseIds.length === 0) {
+      throw badRequest("`ids` must name at least one release.");
+    }
+    const entries = await releases.readinessOf({ ...caller, releaseIds });
+    return respondList(entries, {
+      total: entries.length,
+      page: 1,
+      limit: entries.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
   },
 
   releaseCalendar: async ({ request, caller, releases }) => {

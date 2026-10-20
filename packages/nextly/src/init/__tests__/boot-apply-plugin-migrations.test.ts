@@ -146,7 +146,7 @@ describe("development boot migrations", () => {
   it("counts plugin modules among what it says it applied", async () => {
     // A boot that ran only plugin modules still applied something.
     applied = { applied: 0, pluginModulesApplied: 2 };
-    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const log = vi.spyOn(console, "info").mockImplementation(() => {});
     await runBootTimeApplyIfDev();
     const lines = log.mock.calls.map(call => String(call[0]));
     expect(lines.some(line => line.endsWith("Applied 2 migration(s)"))).toBe(

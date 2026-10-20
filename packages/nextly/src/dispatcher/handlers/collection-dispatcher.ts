@@ -76,6 +76,7 @@ import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
+import { consoleLogger } from "../../shared/types";
 import {
   readAuthenticatedActor,
   readAuthenticatedScope,
@@ -120,6 +121,7 @@ import {
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
+  respondSubjectEvents,
   respondVersionPage,
   markVersionSeenForDocument,
   setVersionLabelForDocument,
@@ -230,6 +232,18 @@ export const COLLECTION_VERSION_METHODS: Record<
   string,
   MethodHandler<CollectionsHandlerType>
 > = {
+  // The entry's content events, behind the same read gate as its history.
+  listEntryEvents: {
+    execute: async (_svc, p) =>
+      respondSubjectEvents(
+        {
+          kind: "collection",
+          slug: String(p.collectionName ?? ""),
+          id: String(p.entryId ?? ""),
+        },
+        p
+      ),
+  },
   listEntryVersions: {
     execute: async (_svc, p) =>
       respondVersionPage(
@@ -702,7 +716,7 @@ const COLLECTIONS_METHODS: Record<
       // without surprising operators with errors. The current version
       // ignores the field entirely.
       if (shouldLogF14HintReceipt(hints)) {
-        console.debug?.(
+        consoleLogger.debug(
           `[F14] hints received but not processed; see plans/specs/F10-notifications-and-audit-design.md §6.6`
         );
       }
@@ -1068,7 +1082,7 @@ const COLLECTIONS_METHODS: Record<
         // only the admin's view of the field name is stale, and the version
         // was not advanced (the response reports the current version so a
         // retry re-attempts the bump). Log so an operator can diagnose.
-        console.warn(
+        consoleLogger.warn(
           `[applySchemaChanges] Post-apply metadata write failed for ` +
             `'${p.collectionName}': ${msg}. Live DB schema is correct ` +
             `but admin UI may show stale field names until next reload.`
@@ -1126,7 +1140,7 @@ const COLLECTIONS_METHODS: Record<
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn(
+        consoleLogger.warn(
           `[applySchemaChanges] In-memory schema refresh failed for ` +
             `'${p.collectionName}': ${msg}. Entry queries may reference ` +
             `old column names until next server restart.`

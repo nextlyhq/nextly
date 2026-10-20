@@ -100,7 +100,7 @@ export interface CreateNextlyOptions {
   approach?: ProjectApproach;
   /** Path to local templates directory (for development, bypasses GitHub download) */
   localTemplatePath?: string;
-  /** Git branch for template download from GitHub (defaults to "main") */
+  /** Git branch to take a template from; unset, it comes from this CLI's release */
   branch?: string;
   /**
    * Whether to add the Nextly skills for coding agents to the project.

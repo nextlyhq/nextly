@@ -13,11 +13,22 @@
  * @packageDocumentation
  */
 
+import type {
+  EmailTemplateComparison,
+  OwnerUpdateUndo,
+} from "../../domains/email/services/email-template-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderRecord } from "../../schemas/email-providers/types";
 import type { EmailTemplateRecord } from "../../schemas/email-templates/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
 import type { UpdateEmailTemplateInput } from "../../services/email/email-template-service";
+import type {
+  ApplyEmailTemplateUpdateArgs,
+  CompareEmailTemplateArgs,
+  OverrideEmailTemplateArgs,
+  ResetEmailTemplateArgs,
+  UndoEmailTemplateUpdateArgs,
+} from "../types/email";
 import type {
   CreateEmailProviderArgs,
   CreateEmailTemplateArgs,
@@ -68,18 +79,21 @@ export interface EmailNamespace {
 export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
   return {
     async send(args: SendEmailArgs): Promise<SendEmailResult> {
-      const to = Array.isArray(args.to) ? args.to[0] : args.to;
-
       const result = await ctx.emailSendService.send({
-        to,
+        // Every recipient, as given: the service delivers to each one and
+        // refuses a list it cannot deliver whole.
+        to: args.to,
         subject: args.subject,
         html: args.html,
         plainText: args.text,
+        from: args.from,
+        replyTo: args.replyTo,
         // Forward cc/bcc so the Direct API matches the REST route and service.
         cc: args.cc,
         bcc: args.bcc,
         providerId: args.providerId,
         attachments: args.attachments,
+        person: args.person,
       });
       return {
         success: result.success,
@@ -90,24 +104,33 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
     async sendWithTemplate(
       args: SendTemplateEmailArgs
     ): Promise<SendEmailResult> {
-      const to = Array.isArray(args.to) ? args.to[0] : args.to;
-
       const sendOptions: {
         providerId?: string;
+        from?: string;
+        replyTo?: string;
         cc?: string[];
         bcc?: string[];
         attachments?: typeof args.attachments;
+        person?: typeof args.person;
       } = {};
       if (args.providerId) sendOptions.providerId = args.providerId;
+      // The send's own From and Reply-To win over the template's, which win
+      // over the provider's default (the service applies that order).
+      if (args.from) sendOptions.from = args.from;
+      if (args.replyTo) sendOptions.replyTo = args.replyTo;
       // Only set cc/bcc when non-empty so an empty array doesn't make
       // sendOptions truthy and override the "no options" undefined below.
       if (args.cc?.length) sendOptions.cc = args.cc;
       if (args.bcc?.length) sendOptions.bcc = args.bcc;
       if (args.attachments) sendOptions.attachments = args.attachments;
+      // Anything given is forwarded, so the send validates it as `send` does;
+      // only an absent person is left out.
+      if (args.person !== undefined) sendOptions.person = args.person;
 
       const result = await ctx.emailSendService.sendWithTemplate(
         args.template,
-        to,
+        // Every recipient, as given (see `send`).
+        args.to,
         args.variables ?? {},
         Object.keys(sendOptions).length > 0 ? sendOptions : undefined
       );
@@ -275,6 +298,24 @@ export interface EmailTemplatesNamespace {
   preview(
     args: PreviewEmailTemplateArgs
   ): Promise<{ subject: string; html: string }>;
+  /** @experimental Override a core or plugin template with the site's version. */
+  override(
+    args: OverrideEmailTemplateArgs
+  ): Promise<MutationResult<EmailTemplateRecord>>;
+  /** @experimental Return an overridden template to its owner's version. */
+  reset(
+    args: ResetEmailTemplateArgs
+  ): Promise<MutationResult<EmailTemplateRecord>>;
+  /** @experimental An overridden template beside its owner's current version, change by change. */
+  compare(args: CompareEmailTemplateArgs): Promise<EmailTemplateComparison>;
+  /** @experimental Apply a review of the owner's update. */
+  applyUpdate(
+    args: ApplyEmailTemplateUpdateArgs
+  ): Promise<MutationResult<EmailTemplateRecord> & { undo: OwnerUpdateUndo }>;
+  /** @experimental Undo an applied review. */
+  undoUpdate(
+    args: UndoEmailTemplateUpdateArgs
+  ): Promise<MutationResult<EmailTemplateRecord>>;
 }
 
 /**
@@ -351,6 +392,7 @@ export function createEmailTemplatesNamespace(
           useLayout: args.data.useLayout,
           variables: args.data.variables,
           attachments: args.data.attachments,
+          description: args.data.description,
         },
         directApiActor(ctx.defaultConfig, args)
       );
@@ -401,6 +443,59 @@ export function createEmailTemplatesNamespace(
         args.id,
         args.data ?? {}
       );
+    },
+
+    async override(
+      args: OverrideEmailTemplateArgs
+    ): Promise<MutationResult<EmailTemplateRecord>> {
+      const item = await ctx.emailTemplateService.overrideTemplate(
+        args.id,
+        { version: args.version },
+        directApiActor(ctx.defaultConfig, args)
+      );
+      return { message: "Email template overridden.", item };
+    },
+
+    async reset(
+      args: ResetEmailTemplateArgs
+    ): Promise<MutationResult<EmailTemplateRecord>> {
+      const item = await ctx.emailTemplateService.resetTemplate(
+        args.id,
+        directApiActor(ctx.defaultConfig, args)
+      );
+      return { message: "Email template reset to its owner's version.", item };
+    },
+
+    async compare(
+      args: CompareEmailTemplateArgs
+    ): Promise<EmailTemplateComparison> {
+      return await ctx.emailTemplateService.compareTemplate(args.id);
+    },
+
+    async applyUpdate(
+      args: ApplyEmailTemplateUpdateArgs
+    ): Promise<
+      MutationResult<EmailTemplateRecord> & { undo: OwnerUpdateUndo }
+    > {
+      const { template, undo } =
+        await ctx.emailTemplateService.applyOwnerUpdate(
+          args.id,
+          args.choices,
+          args.review,
+          directApiActor(ctx.defaultConfig, args)
+        );
+      return { message: "Owner's update applied.", item: template, undo };
+    },
+
+    async undoUpdate(
+      args: UndoEmailTemplateUpdateArgs
+    ): Promise<MutationResult<EmailTemplateRecord>> {
+      const item = await ctx.emailTemplateService.undoOwnerUpdate(
+        args.id,
+        args.undo,
+        directApiActor(ctx.defaultConfig, args)
+      );
+      return { message: "Owner's update undone.", item };
     },
   };
 }

@@ -43,14 +43,32 @@ export type TransportablePrimitive = string | number | boolean | null;
  * - `bigint` and `symbol` are neither primitives JSON writes nor objects, so
  *   they fall to `never` too: `JSON.stringify` throws on the first and drops
  *   the second.
+ * - A property KEYED by a symbol maps to `never` as well, whatever its value:
+ *   JSON drops the key with its value, so the browser would find nothing
+ *   where the server's type promised something (`TransportableFields`).
  */
 export type Transportable<T> = T extends TransportablePrimitive
   ? T
   : T extends (...args: never[]) => unknown
     ? never
     : T extends object
-      ? { [K in keyof T]: Transportable<T[K]> }
+      ? TransportableFields<T>
       : never;
+
+/**
+ * An object's properties, each mapped by {@link Transportable}, with a
+ * symbol-keyed one mapped to `never`.
+ *
+ * 🔴 The KEY is judged as well as the value, because a mapped type keeps every
+ * key `keyof` names, symbols included: `{ [K in keyof T]: … }` alone passed
+ * `{ [tag]: "paid" }`, whose value is safe and whose key JSON throws away. One
+ * type for both places a data function's answer is judged, the answer itself
+ * (`defineWidget`'s bound on `Data`) and every object inside it, so the two
+ * cannot disagree about which keys travel.
+ */
+export type TransportableFields<T> = {
+  [K in keyof T]: K extends symbol ? never : Transportable<T[K]>;
+};
 
 /**
  * A value already known to be transportable, as core's read services hand rows
@@ -108,6 +126,16 @@ function objectProblem(
   if (ancestors.has(value)) return `${at} refers back to itself`;
   const notPlain = notPlainProblem(value, at);
   if (notPlain !== undefined) return notPlain;
+  // The run-time half of `TransportableFields`' key rule: `JSON.stringify`
+  // skips an enumerable symbol-keyed property without a word, as it skips a
+  // non-enumerable one, so only the enumerable ones are data the author meant
+  // to send.
+  const symbolKey = Object.getOwnPropertySymbols(value).find(key =>
+    Object.prototype.propertyIsEnumerable.call(value, key)
+  );
+  if (symbolKey !== undefined) {
+    return `${at} has a property keyed by ${String(symbolKey)}, which JSON drops`;
+  }
   ancestors.add(value);
   try {
     for (const [key, item] of childrenOf(value)) {

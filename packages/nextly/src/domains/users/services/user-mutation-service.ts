@@ -62,10 +62,12 @@ import {
   liveColumnsOf,
   retiredTablesNamedForErasure,
 } from "../../../init/retired-auth-tables";
+import { env } from "../../../lib/env";
 import {
   CONTENT_EVENTS_TABLE,
   contentEventsTables,
 } from "../../../schemas/content-events";
+import { DELETED_PRINCIPALS_TABLE } from "../../../schemas/deleted-principals/table-name";
 import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
@@ -83,16 +85,29 @@ import { ServiceContainer } from "../../../services/index";
 import type { Logger } from "../../../services/shared";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { UserConfig, UserFieldConfig } from "../../../users/config/types";
 import { eraseActorPersonalData } from "../../audit/erase-actor-personal-data";
+import { beginStaffUserDeletion } from "../../audit/erase-principal";
 import {
   buildAcceptInviteLink,
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
+import {
+  revokeAccountTokens,
+  TOKEN_TABLE_NAMES,
+  tokenTable,
+  type TokenTable,
+} from "../../auth/services/token-account-binding";
 import { deliveriesTableFor } from "../../email/deliveries-table";
-import { eraseRecipientDeliveries } from "../../email/erase-recipient";
+import {
+  eraseRecipientDeliveries,
+  eraseUnnamedRecipientDeliveries,
+} from "../../email/erase-recipient";
 import { revalidateMedia } from "../../media/revalidate-media";
+import { pluginSettingsSecrets } from "../../plugins/settings-service";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { introspectLiveSnapshot } from "../../schema/pipeline/diff/introspect-live";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
@@ -341,7 +356,8 @@ export type UserMutationResponse = MinimalUser & { invite?: InviteArtifact };
  */
 export function coerceUserExtValue(
   value: unknown,
-  field: { name?: unknown; type?: unknown }
+  field: { name?: unknown; type?: unknown },
+  maxLength?: number | null
 ): unknown {
   const token = storageTypeToken(field);
   const name = typeof field.name === "string" ? field.name : "input";
@@ -380,6 +396,17 @@ export function coerceUserExtValue(
       typeof value !== "string"
     ) {
       throw userExtValueError(name, "text");
+    }
+    // A varchar column holds so many characters, and a longer value fails at
+    // the driver, where it is read as the extension table being absent.
+    // Counted as the column counts them, by character rather than by UTF-16
+    // code unit.
+    if (
+      typeof maxLength === "number" &&
+      typeof value === "string" &&
+      Array.from(value).length > maxLength
+    ) {
+      throw userExtValueError(name, `text of at most ${maxLength} characters`);
     }
     // A JSON column stores what `JSON.stringify` can represent. A BigInt or a
     // cycle throws there, a function or symbol silently becomes `undefined`,
@@ -764,9 +791,22 @@ export class UserMutationService extends BaseService {
     input: Record<string, unknown>
   ): Record<string, unknown> {
     const values: Record<string, unknown> = {};
-    const fieldNames = this.getCustomFieldNames();
+    const shape = this.customFieldShaper();
+    for (const fieldName of this.getCustomFieldNames()) {
+      const raw = fieldName in input ? (input[fieldName] ?? null) : null;
+      values[fieldName] = shape(fieldName, raw);
+    }
+    return values;
+  }
 
-    // Keyed by name so a value can be shaped by the column its field maps to.
+  /**
+   * Shapes a custom field's value for the `user_ext` column its field maps to:
+   * its kind, and its length where the column has one. One rule for the create
+   * and update paths, which bind to the same columns, and whose failure is
+   * read the same way, as the extension table being absent, so an unshaped
+   * value would be dropped rather than refused.
+   */
+  private customFieldShaper(): (fieldName: string, raw: unknown) => unknown {
     const byName = new Map(
       this.getEffectiveFields()
         .filter(
@@ -775,15 +815,16 @@ export class UserMutationService extends BaseService {
         )
         .map(field => [field.name, field])
     );
-
-    for (const fieldName of fieldNames) {
-      const raw = fieldName in input ? (input[fieldName] ?? null) : null;
+    return (fieldName, raw) => {
       const field = byName.get(fieldName);
-      values[fieldName] = field
-        ? coerceUserExtValue(raw, { name: fieldName, type: field.type })
+      return field
+        ? coerceUserExtValue(
+            raw,
+            { name: fieldName, type: field.type },
+            this.userExtSchemaService?.textColumnLength(field)
+          )
         : raw;
-    }
-    return values;
+    };
   }
 
   private readonly emailService?: EmailService;
@@ -1424,16 +1465,36 @@ export class UserMutationService extends BaseService {
 
       // Only an account the app itself provisions can become the install's
       // first administrator: never a stranger's self-registration, and never a
-      // plugin's. Granted inside the insert's own transaction, under the role
-      // row's lock, so two accounts provisioned at once on an install with no
-      // administrator leave exactly one (grantFirstAdministratorInTx). The role
-      // is ensured before the transaction opens, and only while no
-      // administrator is seen: once one exists, nothing here can grant.
+      // plugin's. The app's own provisioning (its admin, its server code) does
+      // so only for the install's very first account; once any account
+      // exists, even a role-less sign-up, an account it creates is never
+      // promoted, so a stranger who registered first cannot turn the app's
+      // next account into a super-admin. Setup alone creates the administrator
+      // whenever nobody holds the role. Granted inside the insert's own
+      // transaction, under the role row's lock, so two accounts provisioned at
+      // once leave exactly one (grantFirstAdministratorInTx). The role is
+      // ensured before the transaction opens, and only while no administrator
+      // is seen: once one exists, nothing here can grant.
       const provisionsFirstAdministrator =
-        caller === "app" || caller === "setup";
+        (caller === "app" && !anyAccount) || caller === "setup";
       const bootstrapRoleReady =
         provisionsFirstAdministrator &&
         (await this.mayBootstrapFirstAdministrator());
+      // A sign-up takes the same lock, first, while nobody holds the role,
+      // though it is never granted: on PostgreSQL the app's check for other
+      // accounts cannot see a sign-up still uncommitted beside it, so the two
+      // must run one after the other. Judged by the role's holders rather than
+      // by whether any account exists, since an account seen here can be gone
+      // by the time the transaction opens, while a holder cannot drop to none
+      // (refuseRemovingLastSuperAdmin). The role row is ensured so that it
+      // exists to be locked, as a fresh install has none until its first
+      // administrator; a sign-up never fails for it (roleForSignUpToWaitOn).
+      const signUpWaitsForFirstAdministrator =
+        caller === "self-registration" &&
+        !(await superAdminRoleHeld(this.db, this.tables));
+      if (signUpWaitsForFirstAdministrator) {
+        await this.roleForSignUpToWaitOn();
+      }
       // Setup creates the install's first administrator or nothing: refused
       // here once one is seen, and inside the insert's transaction when another
       // wins the grant, so a setup that lost a race publishes no account.
@@ -1445,7 +1506,7 @@ export class UserMutationService extends BaseService {
       const lockForBootstrap = async (
         txDb: DrizzleTransactionLike
       ): Promise<string | undefined> =>
-        bootstrapRoleReady
+        bootstrapRoleReady || signUpWaitsForFirstAdministrator
           ? lockSuperAdminRole(
               txDb as unknown as FirstAdministratorTx,
               this.tables,
@@ -1457,13 +1518,19 @@ export class UserMutationService extends BaseService {
         txDb: DrizzleTransactionLike,
         superAdminRoleId: string | undefined
       ) => {
-        if (superAdminRoleId === undefined) return;
+        if (superAdminRoleId === undefined || !provisionsFirstAdministrator) {
+          return;
+        }
         grantedFirstAdministrator = await grantFirstAdministratorInTx(
           txDb as unknown as FirstAdministratorTx,
           this.tables,
           this.dialect,
           superAdminRoleId,
-          newUserId
+          newUserId,
+          // The app's own provisioning promotes only the very first account,
+          // decided again here: a sign-up that committed after the check
+          // above was made still stops it.
+          { onlyAsFirstAccount: caller === "app" }
         );
       };
 
@@ -1523,6 +1590,12 @@ export class UserMutationService extends BaseService {
           await recordCreatedEvent(txDb);
         });
       } catch (txErr) {
+        // A unique custom field's value already held by another user: refuse
+        // the account. It is not a missing table, and retrying without the
+        // custom fields would create the user without them, in silence.
+        if (userExtInsertFailed && isUniqueViolation(txErr)) {
+          throw takenUserFieldValue(txErr);
+        }
         // Self-healing is scoped to a genuine user_ext insert failure (typical on
         // a fresh DB before the user_ext table exists): disable user_ext for this
         // process and retry the user insert alone so the caller still gets a
@@ -1877,26 +1950,12 @@ export class UserMutationService extends BaseService {
       let hasCustomFieldChanges = false;
 
       if (hasExt) {
-        const fieldNames = this.getCustomFieldNames();
-        // Shaped by the same rule the create path uses. An update binds to the
-        // same columns, and its failure is read the same way — as the extension
-        // table being absent — so an unshaped value would be skipped silently
-        // here exactly as it was dropped there.
-        const byName = new Map(
-          this.getEffectiveFields()
-            .filter(
-              (field): field is typeof field & { name: string } =>
-                "name" in field && typeof field.name === "string"
-            )
-            .map(field => [field.name, field])
-        );
-        for (const fieldName of fieldNames) {
+        // Shaped by the same rule the create path uses.
+        const shape = this.customFieldShaper();
+        for (const fieldName of this.getCustomFieldNames()) {
           if (fieldName in changes) {
             const raw = (changes as Record<string, unknown>)[fieldName] ?? null;
-            const field = byName.get(fieldName);
-            customFieldUpdates[fieldName] = field
-              ? coerceUserExtValue(raw, { name: fieldName, type: field.type })
-              : raw;
+            customFieldUpdates[fieldName] = shape(fieldName, raw);
             hasCustomFieldChanges = true;
           }
         }
@@ -1913,7 +1972,55 @@ export class UserMutationService extends BaseService {
         ? new ServiceContainer(this.adapter)
         : undefined;
 
-      if (hasFieldUpdates || requestedRoleIds) {
+      // 2c) The custom fields' user_ext row, written in the account's own
+      // transaction below so the two commit together: a unique custom field's
+      // value another user holds refuses the whole update, rather than
+      // refusing it after the account's other fields and roles had committed.
+      const customFieldTable = hasCustomFieldChanges
+        ? this.getUserExtTable()
+        : null;
+      let userExtWriteFailed = false;
+      const writeCustomFields = async (txDb: DrizzleTransactionLike) => {
+        if (!customFieldTable) return;
+        try {
+          const now = new Date();
+          // Required by Drizzle ORM — runtime-generated tables need untyped db access
+          const db = txDb as unknown as DrizzleChain;
+          // Check if user_ext row exists. DrizzleChain await resolves
+          // to Record<string, unknown>[] already.
+          const existingExt = await db
+            .select({ id: customFieldTable.id })
+            .from(customFieldTable)
+            .where(eq(customFieldTable.user_id as Column, currentUser.id))
+            .limit(1);
+
+          if (existingExt.length > 0) {
+            // UPDATE existing row with changed fields only
+            await db
+              .update(customFieldTable)
+              .set({ ...customFieldUpdates, updated_at: now })
+              .where(eq(customFieldTable.user_id as Column, currentUser.id));
+          } else {
+            // INSERT new row (upsert: row was somehow missing)
+            await db.insert(customFieldTable).values({
+              id: randomUUID(),
+              user_id: currentUser.id,
+              ...customFieldUpdates,
+              created_at: now,
+              updated_at: now,
+            });
+          }
+        } catch (err) {
+          // Mark user_ext as the failing statement and abort the transaction,
+          // so the caller below tells a taken value from a missing table.
+          // Aborting rather than continuing is required: PostgreSQL poisons
+          // the whole transaction after any statement error.
+          userExtWriteFailed = true;
+          throw err;
+        }
+      };
+
+      if (hasFieldUpdates || requestedRoleIds || customFieldTable) {
         if (hasFieldUpdates) updateData.updatedAt = new Date();
         // A deactivation, or a password an administrator set, ends every
         // session the account holds. The refresh rows are what a session is
@@ -1924,111 +2031,136 @@ export class UserMutationService extends BaseService {
         // old sessions still valid.
         const endsSessions =
           changes.isActive === false || updateData.passwordHash !== undefined;
+        // The token tables to revoke the account's links in, when the update
+        // writes its address; asked before the transaction, as the deletion's
+        // presence checks are.
+        const revokesTokens =
+          updateData.email !== undefined
+            ? await this.presentTokenTables()
+            : undefined;
         // One transaction for the fields and the roles. A plugin's write to
         // an account-controlling field asks about the account again in it,
         // holding its row, immediately before writing. Removing the roles and
         // assigning the new ones commit together, and on SQLite the
         // transaction queues behind any other request's open one rather than
         // running inside it, where that one's rollback would undo the write
-        // and hand back the roles just removed.
-        await this.withTransaction(async tx => {
-          const txDb = tx as DrizzleTransactionLike;
-          // A deactivation or a role replacement may not leave the install
-          // without an active super-admin. First, before any row lock, for
-          // the lock order `refuseRemovingLastSuperAdmin` describes.
-          if (changes.isActive === false || requestedRoleIds) {
-            await refuseRemovingLastSuperAdmin(
-              tx as LastSuperAdminTx,
-              this.tables,
-              this.dialect,
-              currentUser.id,
-              changes.isActive === false
-                ? { kind: "deactivate" }
-                : { kind: "replaceRoles", roleIds: requestedRoleIds ?? [] }
-            );
+        // and hand back the roles just removed. The custom fields' row is
+        // written last in it, when asked for.
+        const writeAccount = (withCustomFields: boolean) =>
+          this.withTransaction(async tx => {
+            const txDb = tx as DrizzleTransactionLike;
+            // A deactivation or a role replacement may not leave the install
+            // without an active super-admin. First, before any row lock, for
+            // the lock order `refuseRemovingLastSuperAdmin` describes.
+            if (changes.isActive === false || requestedRoleIds) {
+              await refuseRemovingLastSuperAdmin(
+                tx as LastSuperAdminTx,
+                this.tables,
+                this.dialect,
+                currentUser.id,
+                changes.isActive === false
+                  ? { kind: "deactivate" }
+                  : { kind: "replaceRoles", roleIds: requestedRoleIds ?? [] }
+              );
+            }
+            if (guardsAdministrator) {
+              await this.refuseSuperAdminAccount(
+                currentUser.id,
+                administratorRefusal,
+                txDb
+              );
+            }
+            if (guardsExternalIdentity) {
+              await this.refuseExternalIdentityShape(
+                currentUser.id,
+                updateData,
+                txDb,
+                options.customPasswordHasher === true
+              );
+            }
+            if (hasFieldUpdates && endsSessions) {
+              await updateUserEndingSessions(txDb, this.tables, this.dialect, {
+                userId: currentUser.id,
+                set: updateData,
+                adapter: this.adapter,
+              });
+            } else if (hasFieldUpdates) {
+              await txDb
+                .update(users)
+                .set(updateData)
+                .where(eq(users.id, currentUser.id));
+            }
+            // A link sent to the address the account is leaving must not reset
+            // or verify it, now or after it returns to that address. After the
+            // write above, which holds the account's row: a link being issued
+            // for the old address either committed first and is removed here,
+            // or finds the account no longer there.
+            if (revokesTokens) {
+              // Kept: a link already bound to the address this write leaves
+              // the account at. The snapshot above may be older than the row,
+              // so a concurrent change may already have moved the account
+              // there and a link been issued for it since; this write moves
+              // nothing then.
+              await revokeAccountTokens(txDb, revokesTokens, {
+                userId: String(currentUser.id),
+                addresses:
+                  typeof currentUser.email === "string"
+                    ? [currentUser.email]
+                    : [],
+                keepAddress: updateData.email,
+              });
+            }
+            if (requestedRoleIds && services) {
+              hasRoleUpdates = await services.userRoles.replaceUserRoles(
+                String(currentUser.id),
+                requestedRoleIds,
+                tx
+              );
+            }
+            if (withCustomFields) await writeCustomFields(txDb);
+          });
+        try {
+          await writeAccount(customFieldTable !== null);
+        } catch (txErr) {
+          // A unique custom field's value already held by another user is
+          // refused, and the transaction took the rest of the update with it.
+          // It is not a missing table: skipping would drop the change and turn
+          // custom fields off.
+          if (userExtWriteFailed && isUniqueViolation(txErr)) {
+            throw takenUserFieldValue(txErr);
           }
-          if (guardsAdministrator) {
-            await this.refuseSuperAdminAccount(
-              currentUser.id,
-              administratorRefusal,
-              txDb
-            );
-          }
-          if (guardsExternalIdentity) {
-            await this.refuseExternalIdentityShape(
-              currentUser.id,
-              updateData,
-              txDb,
-              options.customPasswordHasher === true
-            );
-          }
-          if (hasFieldUpdates && endsSessions) {
-            await updateUserEndingSessions(txDb, this.tables, this.dialect, {
-              userId: currentUser.id,
-              set: updateData,
-            });
-          } else if (hasFieldUpdates) {
-            await txDb
-              .update(users)
-              .set(updateData)
-              .where(eq(users.id, currentUser.id));
-          }
-          if (requestedRoleIds && services) {
-            hasRoleUpdates = await services.userRoles.replaceUserRoles(
-              String(currentUser.id),
-              requestedRoleIds,
-              tx
-            );
-          }
-        });
+          // Any failure other than the user_ext write is a real error.
+          if (!userExtWriteFailed) throw txErr;
+          // The user_ext table may not exist on this dialect: disable it for
+          // this process and write the rest of the update without it.
+          const cause = txErr instanceof Error ? txErr.message : String(txErr);
+          this.logger.warn(
+            `user_ext upsert skipped during updateUser: ${cause}`
+          );
+          this.userExtDisabled = true;
+          hasCustomFieldChanges = false;
+          if (hasFieldUpdates || requestedRoleIds) await writeAccount(false);
+        }
         if (hasRoleUpdates && services) {
           await this.afterCommit(() =>
             services.userRoles.invalidateRoleCaches(String(currentUser.id))
           );
         }
-      }
-
-      // 2c) Upsert custom fields in user_ext
-      if (hasCustomFieldChanges) {
-        const userExtTable = this.getUserExtTable();
-        if (userExtTable) {
-          try {
-            const now = new Date();
-            // Required by Drizzle ORM — runtime-generated tables need untyped db access
-            const db = this.db as unknown as DrizzleChain;
-            // Check if user_ext row exists. DrizzleChain await resolves
-            // to Record<string, unknown>[] already.
-            const existingExt = await db
-              .select({ id: userExtTable.id })
-              .from(userExtTable)
-              .where(eq(userExtTable.user_id as Column, currentUser.id))
-              .limit(1);
-
-            if (existingExt.length > 0) {
-              // UPDATE existing row with changed fields only
-              await db
-                .update(userExtTable)
-                .set({ ...customFieldUpdates, updated_at: now })
-                .where(eq(userExtTable.user_id as Column, currentUser.id));
-            } else {
-              // INSERT new row (upsert: row was somehow missing)
-              await db.insert(userExtTable).values({
-                id: randomUUID(),
-                user_id: currentUser.id,
-                ...customFieldUpdates,
-                created_at: now,
-                updated_at: now,
-              });
-            }
-          } catch (err) {
-            // user_ext table may not exist on this dialect — disable and skip
-            const cause = err instanceof Error ? err.message : String(err);
-            this.logger.warn(
-              `user_ext upsert skipped during updateUser: ${cause}`
-            );
-            this.userExtDisabled = true;
-            hasCustomFieldChanges = false;
-          }
+        // A deactivated author can no longer be acted as, and a changed email
+        // or name is what a code-defined rule judging the author may read, so
+        // a scheduled release holding a document they added is checked again
+        // and stopped now rather than at its instant. After the commit,
+        // outside the update's transaction; the early stop logs its own
+        // failures and never throws, so this update cannot fail over a
+        // release.
+        if (
+          updateData.isActive === false ||
+          updateData.email !== undefined ||
+          updateData.name !== undefined
+        ) {
+          await this.afterCommit(() =>
+            stopReleasesHolding({ authors: [String(currentUser.id)] })
+          );
         }
       }
 
@@ -2114,10 +2246,12 @@ export class UserMutationService extends BaseService {
       // this recipient.
       if (changes.sendWelcomeEmail && this.emailService) {
         await this.emailService
-          .sendWelcomeEmail(user!.email, {
-            name: user!.name ?? null,
-            email: user!.email,
-          })
+          .sendWelcomeEmail(
+            user!.email,
+            { name: user!.name ?? null, email: user!.email },
+            // Names the staff user on the delivery records.
+            { staffUserId: String(user!.id) }
+          )
           .then(result => {
             if (!result.success) {
               this.logger.warn("Welcome email was not delivered", {
@@ -2181,6 +2315,23 @@ export class UserMutationService extends BaseService {
   }
 
   /**
+   * Whether the delivery log has its person columns, which a database that
+   * has not run `nextly migrate` since they arrived lacks. Treated as present
+   * when the catalogue cannot be read, as a table is by `tablePresent`.
+   */
+  private async deliveriesNamePeople(): Promise<boolean> {
+    try {
+      const columns = await liveColumnsOf(
+        this.db,
+        this.dialect
+      )("email_deliveries");
+      return columns.includes("principal_kind");
+    } catch {
+      return true;
+    }
+  }
+
+  /**
    * Whether a table is present, for a probe taken BEFORE the delete
    * transaction opens.
    *
@@ -2209,6 +2360,20 @@ export class UserMutationService extends BaseService {
     } catch {
       return true;
     }
+  }
+
+  /**
+   * The reset and verification token tables this database has. An install
+   * created by an earlier release may lack either, as it may lack media.
+   */
+  private async presentTokenTables(): Promise<TokenTable[]> {
+    const present: TokenTable[] = [];
+    for (const kind of ["password-reset", "email-verification"] as const) {
+      if (await this.tablePresent(TOKEN_TABLE_NAMES[kind])) {
+        present.push(tokenTable(this.tables, kind));
+      }
+    }
+    return present;
   }
 
   /**
@@ -2275,6 +2440,24 @@ export class UserMutationService extends BaseService {
    *
    * @param logContext - Where the refusal came from, for the log only.
    */
+  /**
+   * The administrator role's row, ensured for a sign-up to lock while nobody
+   * holds the role, so that it waits for an account the app is provisioning
+   * as the install's first.
+   */
+  private async roleForSignUpToWaitOn(): Promise<void> {
+    try {
+      await new ServiceContainer(this.adapter).roles.ensureSuperAdminRole();
+    } catch {
+      // Refused when a role of the install's own already holds the
+      // administrator role's name: then no administrator role can exist, so
+      // no account can be granted it and the sign-up has nothing to wait for.
+      // It goes on unlocked (lockSuperAdminRole finds no row) rather than
+      // failing for a role it is never given; a database that is failing
+      // fails the sign-up's own insert instead.
+    }
+  }
+
   /**
    * Whether an account created now could be the install's first
    * administrator: true when nobody holds the `super-admin` role yet, in which
@@ -2526,6 +2709,11 @@ export class UserMutationService extends BaseService {
   /**
    * Delete a user and all related data (roles, media ownership).
    *
+   * Their email delivery records are erased: every record naming them,
+   * whatever address it went to, and the unnamed records sent to their current
+   * address; a record written for them afterwards is written erased. An email
+   * the provider had already accepted may still be delivered.
+   *
    * §13.8 + spec note: user existence is sensitive (account enumeration);
    * the public message stays generic. The id flows only through logContext.
    *
@@ -2605,6 +2793,31 @@ export class UserMutationService extends BaseService {
     // commits, so it is declared out here rather than in the closure.
     let deletedAddress: string | undefined;
     const deliveriesExist = await this.tablePresent("email_deliveries");
+    // The deleted-people list, which a database that has not run
+    // `nextly migrate` since it arrived may lack, as it may lack media.
+    const deletedPeopleExist = await this.tablePresent(
+      DELETED_PRINCIPALS_TABLE
+    );
+    // And whether the delivery log has its person columns yet, which arrive
+    // with that list: on a database without them, no record names anyone.
+    const personColumnsExist =
+      deliveriesExist && (await this.deliveriesNamePeople());
+    // With the columns but not the list, records can name this user and
+    // nothing can erase them by person, and the address pass leaves every
+    // record that names someone. Refused before anything is written, rather
+    // than deleting the account and keeping those records.
+    if (personColumnsExist && !deletedPeopleExist) {
+      throw new NextlyError({
+        code: "INTERNAL_ERROR",
+        publicMessage: "An unexpected error occurred.",
+        logMessage:
+          `email_deliveries names people but ${DELETED_PRINCIPALS_TABLE} ` +
+          "is missing, so deleting a user would keep the records that name " +
+          "them. Run `nextly migrate` to apply the core schema.",
+        logContext: { operation: "deleteUser" },
+      });
+    }
+    const tokenTables = await this.presentTokenTables();
 
     // Asked out here for the same reason, and treated as present when the
     // probe cannot answer, for the same reason too. `media.uploaded_by`
@@ -2716,9 +2929,23 @@ export class UserMutationService extends BaseService {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
 
-        // Never the last active super-admin, whoever asks. First in the
-        // transaction: its lock is the one every removal takes, so it comes
-        // before the row lock below, in the same order everywhere.
+        // The deleted-people lock, before every other lock this deletion takes
+        // and before it writes to the delivery log: a write naming a person
+        // holds it shared and may then need this user's row or a gap in the
+        // delivery log's index, so taking it any later could deadlock against
+        // such a write (`beginStaffUserDeletion`).
+        const staffDeletion =
+          personColumnsExist && deletedPeopleExist
+            ? await beginStaffUserDeletion(
+                txDb,
+                this.adapter,
+                pluginSettingsSecrets(env)
+              )
+            : undefined;
+
+        // Never the last active super-admin, whoever asks. First of the
+        // removal's own locks: its lock is the one every removal takes, so it
+        // comes before the row lock below, in the same order everywhere.
         await refuseRemovingLastSuperAdmin(
           tx as LastSuperAdminTx,
           this.tables,
@@ -2845,6 +3072,19 @@ export class UserMutationService extends BaseService {
 
         await this.eraseRetiredAccountRows(txDb, userId, retiredTables);
 
+        // Every reset and verification link of the account, whatever address
+        // it was sent to, and any from before links recorded their account
+        // that went to the address it holds. The bound ones would also go
+        // with the row through their foreign key; this says so where the
+        // deletion is read, and reaches the unbound ones the key cannot.
+        // Under the preimage's row lock, so a link being issued for the
+        // account now either lands first and is removed here, or finds the
+        // account gone.
+        await revokeAccountTokens(txDb, tokenTables, {
+          userId: String(userId),
+          addresses: typeof preimage.email === "string" ? [preimage.email] : [],
+        });
+
         if (mediaExists) {
           // Read before writing: the event carries a before and an after, and
           // the ids cannot be recovered once the column naming them is null.
@@ -2924,12 +3164,23 @@ export class UserMutationService extends BaseService {
         // only shape that produces it.
         deletedAddress =
           typeof preimage.email === "string" ? preimage.email : undefined;
+        // By person, every record that names this user, whatever address it
+        // went to: the user goes on the deleted-people list, and their records
+        // lose the address digest and name them by the keyed digest instead.
+        // By the id as stored, which on MySQL's case-insensitive collation can
+        // differ in spelling from the one the caller passed.
+        await staffDeletion?.complete(String(preimage.id));
+        // By address, the records written before sends named their person. A
+        // record naming a person is that person's, and someone else who holds
+        // or held the address keeps theirs. A database still waiting for
+        // `nextly migrate` has no person columns yet, so every record there
+        // names nobody.
         if (deliveriesExist && deletedAddress !== undefined) {
-          await eraseRecipientDeliveries(
-            txDb,
-            deliveriesTableFor(this.dialect),
-            deletedAddress
-          );
+          await (
+            personColumnsExist
+              ? eraseUnnamedRecipientDeliveries
+              : eraseRecipientDeliveries
+          )(txDb, deliveriesTableFor(this.dialect), deletedAddress);
         }
 
         // Delete user, capturing how many rows it removed.
@@ -3054,7 +3305,11 @@ export class UserMutationService extends BaseService {
       // an already-erased row holds the sentinel, which no address hashes to —
       // so a second pass over untouched rows costs one indexed update.
       if (deliveriesExist && deletedAddress !== undefined) {
-        await eraseRecipientDeliveries(
+        await (
+          personColumnsExist
+            ? eraseUnnamedRecipientDeliveries
+            : eraseRecipientDeliveries
+        )(
           this.db as Parameters<typeof eraseRecipientDeliveries>[0],
           deliveriesTableFor(this.dialect),
           deletedAddress
@@ -3086,4 +3341,38 @@ export class UserMutationService extends BaseService {
       if (userDeletedRecorded) this.fastDrainScheduler?.offer();
     });
   }
+}
+
+/**
+ * The refusal for a unique custom field's value another user already holds.
+ * Generic in public, as an existing email is: naming the field would say that
+ * some account holds that value. The log gets the constraint or column only:
+ * the database's message, and a wrapped query's parameters, carry the value
+ * itself, and a custom field may hold personal data.
+ */
+function takenUserFieldValue(error: unknown): NextlyError {
+  return NextlyError.duplicate({
+    logContext: {
+      reason: "user-field-value-taken",
+      constraint: uniqueConstraintIn(error),
+    },
+  });
+}
+
+/**
+ * The `user_ext` constraint or column a unique violation names, read from the
+ * error or its causes: `uq_user_ext_<column>` on PostgreSQL and MySQL,
+ * `user_ext.<column>` on SQLite. Undefined when none is named.
+ */
+function uniqueConstraintIn(error: unknown): string | undefined {
+  let cursor: unknown = error;
+  for (let depth = 0; depth < 6 && cursor != null; depth++) {
+    const message = cursor instanceof Error ? cursor.message : "";
+    const found =
+      /uq_user_ext_[a-z0-9_]+/.exec(message) ??
+      /user_ext\.[a-z0-9_]+/.exec(message);
+    if (found) return found[0];
+    cursor = (cursor as { cause?: unknown }).cause;
+  }
+  return undefined;
 }

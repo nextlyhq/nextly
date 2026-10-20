@@ -22,7 +22,6 @@ import {
   type AuthContext,
 } from "../../auth/middleware";
 import { apiKeyPermissionsFor } from "../../domains/auth/api-key-policy";
-import { isSuperAdmin } from "../lib/permissions";
 
 /** The counts, by the name the decision uses. */
 export const ADMIN_COUNTS = [
@@ -82,20 +81,18 @@ async function holds(
 }
 
 /**
- * Whose keys the API-key count covers for `auth`: every user's for a
- * super-admin, the caller's own for anyone else.
+ * Whose keys the API-key count covers for `auth`: every user's.
  *
- * The API-key list answers the same question the same way (`isSuperAdmin` on
- * the authenticated user), and the count must not describe keys the caller's
- * list would never show: holding `read-api-keys` opens one's own keys, not
- * everyone's.
+ * The API-key list answers the same question the same way: anyone who may read
+ * keys sees every key, and the count is given only to a caller who may. The
+ * count must not describe keys the caller's list would never show, so the two
+ * move together; `api-key-count-scope.test.ts` holds them to it.
  */
-export async function apiKeyCountScope(
-  auth: AuthContext
-): Promise<ApiKeyCountScope> {
-  return (await isSuperAdmin(auth.userId))
-    ? { kind: "all" }
-    : { kind: "owner", userId: auth.userId };
+export function apiKeyCountScope(auth: AuthContext): Promise<ApiKeyCountScope> {
+  // The caller is already one who may read keys; who they are no longer
+  // narrows the count.
+  void auth;
+  return Promise.resolve({ kind: "all" });
 }
 
 /**

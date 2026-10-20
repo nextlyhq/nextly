@@ -30,6 +30,7 @@
  */
 import type { Metadata } from "next";
 
+import { runWithAccessMemo } from "../../auth/access/request-memo";
 import { requireNextly } from "../../direct-api/nextly";
 import type { Nextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../direct-api/types/shared";
@@ -437,16 +438,26 @@ function buildSingleRoute<TNode>(
   }
 
   async function generateMetadata(): Promise<Metadata> {
-    if (!config.buildMetadata) return {};
-    const document = await resolve();
-    if (!document) return {};
-    return config.buildMetadata(document, context);
+    const buildMetadata = config.buildMetadata;
+    if (!buildMetadata) return {};
+    // One memo of access lookups for the resolution and the callback, so a
+    // preview's draft gate, the read it grants and any read the callback makes
+    // look the person up once.
+    return runWithAccessMemo(async () => {
+      const document = await resolve();
+      if (!document) return {};
+      return buildMetadata(document, context);
+    });
   }
 
   async function SinglePage(): Promise<TNode> {
-    const document = await resolve();
-    if (!document) triggerNotFound();
-    return config.render(document, context);
+    // One memo of access lookups for the resolution and the render; see
+    // `generateMetadata`.
+    return runWithAccessMemo(async () => {
+      const document = await resolve();
+      if (!document) triggerNotFound();
+      return config.render(document, context);
+    });
   }
 
   return { SinglePage, generateMetadata };

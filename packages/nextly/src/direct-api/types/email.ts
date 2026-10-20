@@ -7,8 +7,12 @@
  * @packageDocumentation
  */
 
+import type { OwnerUpdateUndo } from "../../domains/email/services/email-template-service";
+import type { OwnerChangeChoice } from "../../domains/email/template-merge";
 import type { EmailAttachmentInput } from "../../domains/email/types";
+import type { PrincipalRef } from "../../plugins/principals/types";
 import type { EmailProviderType } from "../../schemas/email-providers/types";
+import type { EmailTemplateVersion } from "../../schemas/email-templates/types";
 
 import type { DirectAPIConfig } from "./shared";
 
@@ -189,6 +193,11 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
      * attachments at send time; per-send wins on mediaId conflict.
      */
     attachments?: EmailAttachmentInput[];
+    /**
+     * @experimental When the template is sent, in a sentence the admin shows
+     * beside it.
+     */
+    description?: string;
   };
 }
 
@@ -198,8 +207,10 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
 export interface UpdateEmailTemplateArgs extends DirectAPIConfig {
   /** Template ID (required) */
   id: string;
-  /** Partial template data */
-  data: Partial<CreateEmailTemplateArgs["data"]>;
+  /** Partial template data; `description: null` clears the description. */
+  data: Partial<Omit<CreateEmailTemplateArgs["data"], "description">> & {
+    description?: string | null;
+  };
 }
 
 /**
@@ -208,6 +219,67 @@ export interface UpdateEmailTemplateArgs extends DirectAPIConfig {
 export interface DeleteEmailTemplateArgs extends DirectAPIConfig {
   /** Template ID (required) */
   id: string;
+}
+
+/**
+ * @experimental Arguments for overriding a core or plugin template, so it
+ * holds the site's version from now on.
+ */
+export interface OverrideEmailTemplateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+  /**
+   * Where the site's version starts. Omitted fields start from the owner's
+   * current version.
+   */
+  version?: Partial<EmailTemplateVersion>;
+}
+
+/**
+ * @experimental Arguments for returning an overridden template to its
+ * owner's current version.
+ */
+export interface ResetEmailTemplateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+}
+
+/**
+ * @experimental Arguments for comparing an overridden template with its
+ * owner's current version.
+ */
+export interface CompareEmailTemplateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+}
+
+/**
+ * @experimental Arguments for applying a review of an owner's update.
+ */
+export interface ApplyEmailTemplateUpdateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+  /**
+   * A choice for every change `compare` offered, by its `id`: keep the
+   * site's lines, use the owner's, or use text the person wrote.
+   */
+  choices: Record<string, OwnerChangeChoice>;
+  /**
+   * The `review` token `compare` returned. The update is refused if the
+   * template or either version moved since, so choices are only applied to
+   * the changes they were made on.
+   */
+  review: string;
+}
+
+/**
+ * @experimental Arguments for undoing an applied review.
+ */
+export interface UndoEmailTemplateUpdateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+  /** What `applyUpdate` returned as `undo`. */
+  undo: OwnerUpdateUndo;
 }
 
 /**
@@ -310,7 +382,11 @@ export interface ReorderUserFieldsArgs extends DirectAPIConfig {
  * Arguments for sending a raw email.
  */
 export interface SendEmailArgs extends DirectAPIConfig {
-  /** Recipient email address(es) */
+  /**
+   * Recipient email address, or several. Every one receives the email: in one
+   * message through a provider that takes several `to` addresses, else in one
+   * message each, with `cc` and `bcc` on the first.
+   */
   to: string | string[];
   /** Email subject line (required) */
   subject: string;
@@ -320,6 +396,8 @@ export interface SendEmailArgs extends DirectAPIConfig {
   text?: string;
   /** Override the "from" address */
   from?: string;
+  /** @experimental The Reply-To address. */
+  replyTo?: string;
   /** CC recipients (carbon copy). */
   cc?: string[];
   /** BCC recipients (blind carbon copy). */
@@ -332,13 +410,24 @@ export interface SendEmailArgs extends DirectAPIConfig {
    * from storage and forwards to the provider.
    */
   attachments?: EmailAttachmentInput[];
+  /**
+   * @experimental The person the first `to` address belongs to, by kind and
+   * id: a staff user (`{ kind: "staff", id }`) or a plugin-defined person.
+   * The delivery record names them, so deleting them erases it. A send naming
+   * a staff user who does not exist is refused before anything is sent.
+   */
+  person?: PrincipalRef;
 }
 
 /**
  * Arguments for sending an email using a database template.
  */
 export interface SendTemplateEmailArgs extends DirectAPIConfig {
-  /** Recipient email address(es) */
+  /**
+   * Recipient email address, or several. Every one receives the email: in one
+   * message through a provider that takes several `to` addresses, else in one
+   * message each, with `cc` and `bcc` on the first.
+   */
   to: string | string[];
   /** Template slug (required) */
   template: string;
@@ -346,6 +435,8 @@ export interface SendTemplateEmailArgs extends DirectAPIConfig {
   variables?: Record<string, string>;
   /** Override the "from" address */
   from?: string;
+  /** @experimental The Reply-To address. */
+  replyTo?: string;
   /** CC recipients (carbon copy). */
   cc?: string[];
   /** BCC recipients (blind carbon copy). */
@@ -357,6 +448,13 @@ export interface SendTemplateEmailArgs extends DirectAPIConfig {
    * template's default attachments at send-time (Phase 2).
    */
   attachments?: EmailAttachmentInput[];
+  /**
+   * @experimental The person the first `to` address belongs to, by kind and
+   * id: a staff user (`{ kind: "staff", id }`) or a plugin-defined person.
+   * The delivery record names them, so deleting them erases it. A send naming
+   * a staff user who does not exist is refused before anything is sent.
+   */
+  person?: PrincipalRef;
 }
 
 /**

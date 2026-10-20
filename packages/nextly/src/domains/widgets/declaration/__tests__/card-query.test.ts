@@ -31,6 +31,7 @@ const recentEntries = defineWidget({
     query: ({ settings }) => ({
       collection: settings.collection,
       op: "list",
+      select: ["title"],
       sort: settings.sort,
       where: { createdAt: { after: settings.range } },
       limit: settings.items,
@@ -51,6 +52,7 @@ describe("the query core runs for a card", () => {
     ).toEqual({
       source: "collection:posts",
       op: "list",
+      select: ["title"],
       sort: "title",
       where: { createdAt: { after: "7d" } },
       limit: 12,

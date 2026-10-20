@@ -151,6 +151,8 @@ function namespace() {
       blockingReasons: vi.fn(async () => [
         { memberId: "m1", reason: "AUTHOR_GONE" as const },
       ]),
+      // The list puts each release's member counts on its row.
+      memberCounts: vi.fn(async () => ({})),
       readiness: vi.fn(async () => ({
         releaseId: "r1",
         hard: [{ memberId: "m1", code: "DOCUMENT_GONE" }],

@@ -34,7 +34,9 @@ export type ServiceType =
   | "translations"
   | "notices"
   | "email"
-  | "schema";
+  | "schema"
+  // A subject's content events read by subject; its handler owns its auth.
+  | "contentEvents";
 
 export type OperationType =
   | "single"

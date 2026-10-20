@@ -189,10 +189,24 @@ export class NoticesService {
   ) {}
 
   /**
+   * Whether the notices table exists, probed now if it has not been seen.
+   *
+   * Ask it before opening a transaction that will record a notice: inside
+   * one, `record` never probes, because the probe goes through the pool and a
+   * pool whose one connection the transaction holds would wait for it
+   * forever.
+   */
+  async ready(): Promise<boolean> {
+    return this.tablePresent();
+  }
+
+  /**
    * Write a notice, once per occurrence.
    *
    * Pass the caller's transaction as `tx` so the notice stands or falls with
-   * the change it reports.
+   * the change it reports. With `tx`, the table is taken as present only if
+   * {@link ready} found it before the transaction opened; otherwise nothing
+   * is written.
    */
   async record<TData>(
     input: RecordNoticeInput<TData>,
@@ -222,7 +236,10 @@ export class NoticesService {
     }
     assertReferencesFit(input.kind.key, input.subjectId, input.occurrence);
     const data = jsonSnapshot(input.kind, parsed.data);
-    if (!(await this.tablePresent())) return { created: false, id: null };
+    // Inside the caller's transaction the pool is never asked: see `ready`.
+    const present =
+      tx === undefined ? await this.tablePresent() : this.tableKnownPresent;
+    if (!present) return { created: false, id: null };
 
     const row = {
       id: uuidV7(),

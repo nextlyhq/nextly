@@ -63,12 +63,38 @@ export function boundRefuses(
 }
 
 /**
- * The caller's id as a permission check needs it, or undefined when the read is
- * anonymous. Anonymity is a real answer rather than a missing one: a route
- * serving the public holds no grant, so a refused target stays refused.
+ * Whom a related row is judged for: the redaction basis when the read names
+ * one, otherwise the caller.
+ *
+ * A preview reads as an anonymous bearer and shows the draft as the person
+ * who shared the link would see it. That covers whether a related row may be
+ * shown at all, as well as its fields, so the whole view has one basis. Hooks
+ * are not asked this; they keep seeing the caller.
+ */
+export function judgedFor(
+  access: RelatedRowReadContext
+): Record<string, unknown> | undefined {
+  return sharerJudged(access) ? access.fieldAccessUser : access.user;
+}
+
+/**
+ * Whether the read judges its related rows as a named redaction basis rather
+ * than as its caller. The identity counts only with enforcement asked for,
+ * as for fields: one with nothing asking for enforcement is ignored.
+ */
+function sharerJudged(access: RelatedRowReadContext): boolean {
+  return (
+    access.enforceFieldAccess === true && access.fieldAccessUser !== undefined
+  );
+}
+
+/**
+ * The judged party's id as a permission check needs it, or undefined when the
+ * read is anonymous. Anonymity is a real answer rather than a missing one: a
+ * route serving the public holds no grant, so a refused target stays refused.
  */
 export function callerId(access: RelatedRowReadContext): string | undefined {
-  const id = access.user?.id;
+  const id = judgedFor(access)?.id;
   if (typeof id === "string" && id.length > 0) return id;
   if (typeof id === "number") return String(id);
   return undefined;
@@ -153,7 +179,10 @@ export async function applyMediaTrustBound(
       callerId(access),
       access.authenticatedScope
     );
-    return readable ? records : records.map(withoutInternalMediaColumns);
+    if (readable) return records;
+    // A page served to the public keeps the files it embeds. A read judged as
+    // a named person, as a preview is, shows the files that person may read.
+    return sharerJudged(access) ? [] : records.map(withoutInternalMediaColumns);
   }
   if (!access.enforceCollectionAccess && !access.enforceFieldAccess) {
     return records;

@@ -12,6 +12,7 @@ import type {
   DropTableOp,
   Operation,
 } from "../diff/types";
+import { referenceConversionStatements } from "../reference-list-conversion";
 
 import { commonStatementSql, dropConstraintSql } from "./common-statements";
 import { createIndexSql } from "./create-index";
@@ -132,6 +133,11 @@ function generateDropTable(op: DropTableOp): string {
 // migration aborts — which is the desired contract: explicit failure
 // beats silent success.
 function generateChangeColumnType(op: ChangeColumnTypeOp): string {
+  // A column becoming a relation's list of references cannot be cast, nor can its DOWN back to the
+  // scalar type; each has its own conversion of the stored values.
+  if (op.conversion !== undefined) {
+    return referenceConversionStatements(op, "postgresql").join("; ");
+  }
   return (
     `ALTER TABLE ${q(op.tableName)} ALTER COLUMN ${q(op.columnName)} ` +
     `TYPE ${op.toType} USING ${q(op.columnName)}::${op.toType}`

@@ -19,6 +19,10 @@ import { getTableName, isTable } from "drizzle-orm";
 import { getDialectTablesForPush } from "../../../database/index";
 import { NextlyError } from "../../../errors";
 import { getCoreSchema, getCoreTableNames } from "../../../schemas";
+import {
+  bindIssuedTokens,
+  type BindIssuedTokensResult,
+} from "../../auth/services/token-account-binding";
 import { markUnrecordedVerifications } from "../../users/services/email-verification-write";
 import { SchemaEventsRepository } from "../events/schema-events-repository";
 import {
@@ -137,6 +141,15 @@ export interface ReconcileCoreDeps {
     db: unknown,
     dialect: Dialect
   ) => Promise<number>;
+  /**
+   * Injectable for tests. Default: `bindIssuedTokens`, which binds each reset
+   * and verification token issued before tokens recorded their account to the
+   * account it was issued for, and removes the ones it cannot.
+   */
+  bindIssuedTokens?: (
+    db: unknown,
+    dialect: Dialect
+  ) => Promise<BindIssuedTokensResult>;
 }
 
 /**
@@ -329,9 +342,13 @@ export async function reconcileCore(
  * step only touches rows still missing their value, so a second run changes
  * nothing.
  *
- * Today one step: `users.email_verified_via` for addresses verified before
- * that column existed, marked `"legacy"` so a later decision keyed on how an
- * address was verified can tell an unknown origin from a known one.
+ * Two steps:
+ * - `users.email_verified_via` for addresses verified before that column
+ *   existed, marked `"legacy"` so a later decision keyed on how an address was
+ *   verified can tell an unknown origin from a known one;
+ * - the `user_id` of reset and verification tokens issued before that column
+ *   existed: each is bound to the account it was issued for, or removed when
+ *   that cannot be established (`domains/auth/services/token-account-binding`).
  */
 async function fillCoreData(deps: ReconcileCoreDeps): Promise<boolean> {
   const mark = deps.markUnrecordedVerifications ?? markUnrecordedVerifications;
@@ -341,7 +358,14 @@ async function fillCoreData(deps: ReconcileCoreDeps): Promise<boolean> {
       `Marked ${marked} previously verified email address${marked === 1 ? "" : "es"} as verified by "legacy" (no record of how).`
     );
   }
-  return marked > 0;
+  const bind = deps.bindIssuedTokens ?? bindIssuedTokens;
+  const tokens = await bind(deps.db, deps.dialect);
+  if (tokens.bound + tokens.removed > 0) {
+    deps.logger?.info?.(
+      `Bound ${tokens.bound} outstanding password-reset or email-verification link${tokens.bound === 1 ? "" : "s"} to ${tokens.bound === 1 ? "its account" : "their accounts"}; removed ${tokens.removed} that could not be tied to one safely.`
+    );
+  }
+  return marked > 0 || tokens.bound + tokens.removed > 0;
 }
 
 /**
