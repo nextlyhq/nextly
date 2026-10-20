@@ -362,11 +362,12 @@ for (const dialect of getConfiguredTestDialects()) {
           data: { title: "second" },
         });
         for (const who of [callers.editor, callers.editorKey]) {
-          const read = await rest(
-            "GET",
-            `collections/${HIDDEN_READ}/entries/${entryId}`,
-            who
-          );
+          const entry = `collections/${HIDDEN_READ}/entries/${entryId}`;
+          // The caller may update the entry through REST, so the route's
+          // update gate passes and only the read it asks next can refuse.
+          const update = await rest("PATCH", entry, who, { title: "edited" });
+          expect(update.ok, `PATCH ${entry}: ${update.status}`).toBe(true);
+          const read = await rest("GET", entry, who);
           expect(REFUSED).toContain(read.status);
           for (const write of writes(HIDDEN_READ, entryId)) {
             const res = await rest(write.method, write.path, who, write.body);
@@ -385,11 +386,13 @@ for (const dialect of getConfiguredTestDialects()) {
           id: entryId,
           data: { title: "second" },
         });
-        const read = await rest(
-          "GET",
-          `collections/${PLAIN}/entries/${entryId}`,
-          callers.updater
-        );
+        const entry = `collections/${PLAIN}/entries/${entryId}`;
+        // As above: the update passes, the read does not.
+        const update = await rest("PATCH", entry, callers.updater, {
+          title: "edited",
+        });
+        expect(update.ok, `PATCH ${entry}: ${update.status}`).toBe(true);
+        const read = await rest("GET", entry, callers.updater);
         expect(REFUSED).toContain(read.status);
         for (const write of writes(PLAIN, entryId)) {
           const res = await rest(
@@ -413,6 +416,15 @@ for (const dialect of getConfiguredTestDialects()) {
       const path = `collections/${PLAIN}/entries/${entryId}/duplicate`;
       // A caller who may read and create duplicates it.
       expect((await rest("POST", path, callers.editor)).ok).toBe(true);
+      // The caller below may create, so the create gate passes and only the
+      // read of the source can refuse the duplicate.
+      const create = await rest(
+        "POST",
+        `collections/${PLAIN}/entries`,
+        callers.creator,
+        { title: "made", status: "draft" }
+      );
+      expect(create.ok, `create: ${create.status}`).toBe(true);
       const before = await t.nextly.count({ collection: PLAIN });
       const res = await rest(
         "POST",
@@ -441,6 +453,15 @@ for (const dialect of getConfiguredTestDialects()) {
       expect(await statusOf(allowed)).toBe("published");
 
       const entryId = await makeEntry(t, PLAIN, { status: "draft" });
+      // The caller may update the entry, which is what the route asks, so
+      // only the publish behind it can refuse.
+      const update = await rest(
+        "PATCH",
+        `collections/${PLAIN}/entries/${entryId}`,
+        callers.noPublisher,
+        { title: "edited" }
+      );
+      expect(update.ok, `update: ${update.status}`).toBe(true);
       expect(REFUSED).toContain(
         (await publishAll(entryId, callers.noPublisher)).status
       );
@@ -476,9 +497,11 @@ for (const dialect of getConfiguredTestDialects()) {
       const mint = (collection: string, entryId: string) =>
         rest("POST", "preview-links", callers.editor, { collection, entryId });
       // Past access, a collection with no preview address is refused as
-      // unconfigured rather than forbidden.
+      // unconfigured: the conflict only a caller who passed every gate meets.
       const allowed = await mint(PLAIN, await makeEntry(t, PLAIN));
-      expect(REFUSED).not.toContain(allowed.status);
+      expect(allowed.status).toBe(409);
+      const body = (await allowed.json()) as { error?: { code?: unknown } };
+      expect(body.error?.code).toBe("CONFLICT");
       const res = await mint(HIDDEN_READ, await makeEntry(t, HIDDEN_READ));
       expect(REFUSED).toContain(res.status);
     });

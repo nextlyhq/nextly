@@ -30,10 +30,14 @@ vi.mock("../../auth/middleware", () => ({
 
 // Every operation is authorized against the document it names.
 const canReadEntity = vi.fn();
+// The grant alone, which a release still asks.
+const callerHoldsPermission = vi.fn();
 vi.mock("../../auth/entity-read-access", () => ({
   readAccessCaller: (caller: { user: unknown }) => caller.user,
   canReadEntity: (slug: string, caller: unknown) =>
     canReadEntity(slug, caller) as unknown,
+  callerHoldsPermission: (slug: string, caller: unknown) =>
+    callerHoldsPermission(slug, caller) as unknown,
 }));
 // The stored per-document update rules, which the coarse permission above does
 // not run. Spied rather than executed: what this file establishes is that the
@@ -71,6 +75,7 @@ beforeEach(() => {
   authorizeCaller.mockImplementation((caller: unknown) =>
     Promise.resolve(caller)
   );
+  callerHoldsPermission.mockResolvedValue(true);
   assertDocumentUpdatable.mockResolvedValue(undefined);
 });
 
@@ -250,6 +255,7 @@ describe("document lock route", () => {
     // document but not change it is not editing it, and must not be able to
     // displace a colleague with `takeover`.
     authorizeCaller.mockResolvedValue({ statusCode: 403 });
+    callerHoldsPermission.mockResolvedValue(false);
 
     for (const call of [
       () => acquireLock(post({ ...ref, takeover: true })),
@@ -261,6 +267,24 @@ describe("document lock route", () => {
     expect(service.acquire).not.toHaveBeenCalled();
     expect(service.renew).not.toHaveBeenCalled();
     expect(service.release).not.toHaveBeenCalled();
+  });
+
+  it("lets a holder release on the grant alone, whatever the update rule now says", async () => {
+    // The claim token fences a release, and a rule that changed while the
+    // claim was held must not strand it until its lease lapses.
+    authorizeCaller.mockResolvedValue({ statusCode: 403 });
+    service.release.mockResolvedValue(undefined);
+
+    const response = await releaseLock(
+      post({ ...ref, claimToken: "t" }, "DELETE")
+    );
+
+    expect(response.status).toBe(200);
+    expect(authorizeCaller).not.toHaveBeenCalled();
+    expect(callerHoldsPermission).toHaveBeenCalledWith(
+      "update-posts",
+      expect.anything()
+    );
   });
 
   it("asks about the document it was given, not a fixed one", async () => {

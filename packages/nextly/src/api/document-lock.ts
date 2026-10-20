@@ -21,7 +21,11 @@
  * @module api/document-lock
  */
 
-import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
+import {
+  callerHoldsPermission,
+  canReadEntity,
+  readAccessCaller,
+} from "../auth/entity-read-access";
 import {
   authorizeCaller,
   isErrorResponse,
@@ -100,8 +104,8 @@ function readRef(source: {
  * renewing need UPDATE, because a lock is a statement that you are editing, and
  * someone who cannot edit is not.
  *
- * That UPDATE is asked exactly as the REST update of the document asks it
- * (`authorizeCaller`, the route gate's decision): an API key must hold the
+ * A claim's UPDATE is asked exactly as the REST update of the document asks
+ * it (`authorizeCaller`, the route gate's decision): an API key must hold the
  * grant AND pass the collection's or Single's own `update` rule. A key judged
  * on its grant alone could claim, and take over, a document whose rule refuses
  * it every edit. The document gate below is then told the route ran, which is
@@ -116,12 +120,12 @@ function readRef(source: {
  * row. The gate the version routes already use runs here, for the reason its
  * own docblock gives.
  *
- * A release stops at the coarse permission, because it is the opposite
- * statement: that this editor has STOPPED editing. The document gate reads the
- * row, so the holder's own save can flip its answer mid-claim, and asking it on
- * the way out would refuse the departing editor's own DELETE and strand the
- * claim until its lease lapsed, leaving colleagues a holder who has already
- * left. What a release actually rests on is the claim token, which names the one
+ * A release stops at the grant alone, because it is the opposite statement:
+ * that this editor has STOPPED editing. The document gate reads the row, so
+ * the holder's own save can flip its answer mid-claim, and a code rule can
+ * change while the claim is held; asking either on the way out would refuse
+ * the departing editor's own DELETE and strand the claim until its lease
+ * lapsed, leaving colleagues a holder who has already left. What a release actually rests on is the claim token, which names the one
  * acquisition being given up and fences the DELETE itself.
  *
  * Both gates are entity-generic and read the collection and single maps
@@ -139,7 +143,9 @@ async function authorize(
   const allowed =
     intent === "read"
       ? await canReadEntity(ref.slug, caller)
-      : !isErrorResponse(await authorizeCaller(auth, "update", ref.slug));
+      : intent === "claim"
+        ? !isErrorResponse(await authorizeCaller(auth, "update", ref.slug))
+        : await callerHoldsPermission(`update-${ref.slug}`, caller);
 
   if (!allowed) {
     // The same refusal either way. Distinguishing "no such document" from "not

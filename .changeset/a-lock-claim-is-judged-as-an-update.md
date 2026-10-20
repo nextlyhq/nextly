@@ -29,4 +29,4 @@
 "@nextlyhq/ui": patch
 ---
 
-A document-lock claim is now judged as an update of that document is. Claiming, renewing or releasing a lock asks the same question a REST update of the document asks, so an API key must hold the update grant and pass the collection's or Single's own `update` rule. Sessions are judged as before.
+A document-lock claim is now judged as an update of that document is. Claiming or renewing a lock asks the same question a REST update of the document asks, so an API key must hold the update grant and pass the collection's or Single's own `update` rule. Releasing a claim still needs the grant alone, since its claim token fences it. Sessions are judged as before.
