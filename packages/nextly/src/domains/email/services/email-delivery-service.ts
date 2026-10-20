@@ -65,6 +65,7 @@ import type { ResolvedEmailRetentionConfig } from "../retention-config";
 import {
   claimSendKey,
   renewSendClaim,
+  sendClaimsTableFor,
   settleSendClaim,
   type ClaimDecision,
   type HeldClaim,
@@ -594,6 +595,9 @@ export class EmailDeliveryService extends BaseService {
       this.digestSecrets()
     );
     const decided: Record<string, unknown>[] = [];
+    // The key digests of sends to someone already reported deleted, which
+    // their erasure ran too early to find: cleared here, as it would have.
+    const erasedKeys = new Set<unknown>();
     for (const [index, row] of rows.entries()) {
       const person = people[index];
       if (!person) {
@@ -601,6 +605,7 @@ export class EmailDeliveryService extends BaseService {
         continue;
       }
       const gone = await digests.isDeleted(person);
+      if (gone && row.keyDigest) erasedKeys.add(row.keyDigest);
       decided.push({
         ...row,
         principalKind: person.kind,
@@ -608,7 +613,20 @@ export class EmailDeliveryService extends BaseService {
         ...(gone ? { recipientHash: ERASED_RECIPIENT_HASH } : {}),
       });
     }
-    await db.insert(this.deliveries).values(decided);
+    await db
+      .insert(this.deliveries)
+      .values(
+        decided.map(row =>
+          erasedKeys.has(row.keyDigest) ? { ...row, keyDigest: null } : row
+        )
+      );
+    if (erasedKeys.size > 0) {
+      const claims = sendClaimsTableFor(this.dialect);
+      await db
+        .update(claims)
+        .set({ keyDigest: null, messageDigest: null })
+        .where(inArray(claims.keyDigest, [...erasedKeys] as string[]));
+    }
   }
 
   /** The rows for one chunk, with or without the provider reference. */
