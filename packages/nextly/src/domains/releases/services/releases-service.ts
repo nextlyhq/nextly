@@ -77,6 +77,10 @@ import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import {
+  componentsToStop,
+  planReleaseMaterialisation,
+} from "../plan-release-materialisation";
+import {
   type ReleaseCheckReads,
   type ReleaseCheckSource,
 } from "../readiness/check-sources";
@@ -111,6 +115,7 @@ import {
 } from "../release-targets";
 import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
+  BlockRequest,
   DocumentRef,
   NewRelease,
   ReleaseListOrder,
@@ -1781,20 +1786,75 @@ export class ReleasesService {
    * @experimental
    */
   async stopOnHardProblems(target: ReleaseRecheckTarget): Promise<string[]> {
-    const stopped: string[] = [];
+    const now = new Date();
+    const failing: Array<BlockRequest & { revision: number }> = [];
     const affected = await this.deps.repository.scheduledMembersFor(target);
     for (const { release, members } of affected) {
       if (release.scheduledAt === null) continue;
       if ((await this.hardProblems(release, members)).length === 0) continue;
-      stopped.push(
-        ...(await this.deps.repository.blockReleases([
-          {
-            id: release.id,
-            scheduledAt: release.scheduledAt,
-            revision: release.revision,
-          },
-        ]))
-      );
+      failing.push({
+        id: release.id,
+        scheduledAt: release.scheduledAt,
+        revision: release.revision,
+      });
+    }
+    const stopped: string[] = [];
+    // One not yet due changes nothing a reader sees, and stops alone: when
+    // its instant comes, the drain plans whatever is still scheduled.
+    for (const entry of failing.filter(f => !isDueAt(f.scheduledAt, now))) {
+      stopped.push(...(await this.deps.repository.blockReleases([entry])));
+    }
+    const due = failing.filter(f => isDueAt(f.scheduledAt, now));
+    if (due.length > 0)
+      stopped.push(...(await this.stopDueComponents(due, now)));
+    return stopped;
+  }
+
+  /**
+   * Stop these due releases with every release they share a component with,
+   * one component per `blockReleases` call: the components the drain would
+   * settle them in, from the drain's own plan of what is due now, so the two
+   * paths cannot come to stop different sets.
+   *
+   * Each failing release is fenced on the revision its check judged; the
+   * rest of its component on the revision read for the plan. A release that
+   * moved since misses its fence, and its component is left whole.
+   */
+  private async stopDueComponents(
+    failing: readonly (BlockRequest & { revision: number })[],
+    now: Date
+  ): Promise<string[]> {
+    const repository = this.deps.repository;
+    const dueReleases = await repository.findDueReleases(now);
+    const plan = planReleaseMaterialisation({
+      releases: dueReleases.flatMap(row =>
+        row.scheduledAt === null
+          ? []
+          : [
+              {
+                id: row.id,
+                scheduledAt: row.scheduledAt,
+                revision: row.revision,
+              },
+            ]
+      ),
+      members: await repository.listMembersOf(dueReleases.map(row => row.id)),
+      now,
+    });
+    const checked = new Map(failing.map(entry => [entry.id, entry]));
+    const read = new Map(dueReleases.map(row => [row.id, row]));
+    const stopped: string[] = [];
+    for (const entries of componentsToStop(
+      plan,
+      new Set(checked.keys()),
+      id => {
+        const row = checked.get(id) ?? read.get(id);
+        return row?.scheduledAt
+          ? { id, scheduledAt: row.scheduledAt, revision: row.revision }
+          : undefined;
+      }
+    )) {
+      stopped.push(...(await repository.blockReleases(entries)));
     }
     return stopped;
   }

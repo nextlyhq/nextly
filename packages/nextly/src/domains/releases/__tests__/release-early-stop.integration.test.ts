@@ -517,6 +517,73 @@ describe.each(getConfiguredTestDialects())(
       expect(await stoppedNotices(t, arranged)).toBe(1);
     });
 
+    it("stops a due release with every release it shares documents with, so no reader sees the other's effect alone", async () => {
+      // Two releases on one instant, each winning one of the two documents
+      // they share: the later member wins, so the order they are added in
+      // decides. Stopping only the one with a problem would hand the other
+      // both documents, and with them an effect the pair never had.
+      const t = await boot(dialect);
+      const going = await seedPlainAuthor(t);
+      const coming = await seedPlainAuthor(t);
+      const roleId = await grantRole(t, coming, [
+        "update-memos",
+        "unpublish-memos",
+      ]);
+      const first = await entry(t, "memos", "draft");
+      const second = await entry(t, "memos", "draft");
+      const repo = new ReleasesRepository(t.adapter);
+      const pair: Pick<Arranged, "releaseId" | "owner">[] = [];
+      for (const title of ["Publishes", "Withdraws"]) {
+        const owner = await seedLiveAuthor(t);
+        const release = await repo.createRelease({ title, createdBy: owner });
+        pair.push({ releaseId: release.id, owner });
+      }
+      const [publishes, withdraws] = pair;
+      const add = (
+        release: Pick<Arranged, "releaseId">,
+        entryId: string,
+        action: "publish" | "unpublish",
+        createdBy: string
+      ) =>
+        repo.addMember(
+          {
+            releaseId: release.releaseId,
+            scopeKind: "collection",
+            scopeSlug: "memos",
+            entryId,
+            locale: null,
+            action,
+            createdBy,
+          },
+          ANY_EDITABLE_STATE
+        );
+      await add(publishes, first, "publish", going);
+      await add(withdraws, first, "unpublish", coming);
+      await add(withdraws, second, "unpublish", coming);
+      await add(publishes, second, "publish", going);
+      for (const release of pair) {
+        await scheduleAsItStands(repo, release.releaseId, PAST, "UTC");
+        expect(
+          (await t.nextly.releases.readiness({ releaseId: release.releaseId }))
+            .hard
+        ).toEqual([]);
+      }
+      // The withdrawal wins the first document, the publish the second.
+      expect(await visibleIds(t, "memos")).not.toContain(first);
+      expect(await visibleIds(t, "memos")).toContain(second);
+
+      await new ServiceContainer(t.adapter).userRoles.unassignRoleFromUser(
+        coming,
+        roleId
+      );
+
+      expect(await visibleIds(t, "memos")).not.toContain(first);
+      for (const release of pair) {
+        expect(await stateOf(t, release.releaseId)).toBe("blocked");
+        expect(await stoppedNotices(t, release)).toBe(1);
+      }
+    });
+
     it("stops it when the author of its documents is deactivated", async () => {
       // A visitor is shown nothing of it either way: the read path already
       // passes over a due document whose author cannot act. What the event
