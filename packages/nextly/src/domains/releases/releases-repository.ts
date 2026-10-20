@@ -339,6 +339,19 @@ export interface ReleaseRow {
   revision: number;
 }
 
+/**
+ * How many documents a release holds, and what it does with them.
+ *
+ * @experimental
+ */
+export interface ReleaseMemberCounts {
+  total: number;
+  /** Documents the release puts live. */
+  goLive: number;
+  /** Documents the release takes down. */
+  comeDown: number;
+}
+
 /** A field a rename can change. */
 export type ReleaseDetailsField = "title" | "description";
 
@@ -1822,6 +1835,67 @@ export class ReleasesRepository {
       );
     }
     return members;
+  }
+
+  /**
+   * How many documents each of these releases holds, and how many it puts
+   * live and takes down, keyed by release id; a release holding none is
+   * absent.
+   *
+   * ONE query for a whole page of releases, reading the two columns the
+   * counts are made of. The port has no grouped count, so the rows are
+   * counted here; a page is at most a few hundred releases of at most a few
+   * hundred documents each, two short columns a row.
+   *
+   * @experimental
+   */
+  async memberActionCountsOf(
+    releaseIds: readonly string[]
+  ): Promise<Map<string, ReleaseMemberCounts>> {
+    const counts = new Map<string, ReleaseMemberCounts>();
+    if (releaseIds.length === 0) return counts;
+    const rows = await this.db.select<{
+      releaseId: string;
+      action: ReleaseMemberAction;
+    }>(MEMBERS, {
+      columns: ["releaseId", "action"],
+      where: membersOf(releaseIds),
+    });
+    for (const row of rows) {
+      const count = counts.get(row.releaseId) ?? {
+        total: 0,
+        goLive: 0,
+        comeDown: 0,
+      };
+      count.total += 1;
+      if (row.action === "unpublish") count.comeDown += 1;
+      else count.goLive += 1;
+      counts.set(row.releaseId, count);
+    }
+    return counts;
+  }
+
+  /**
+   * The members of many releases in ONE query, each release's in the order
+   * {@link listMembers} gives them: by creation time, the id breaking ties.
+   *
+   * The order is the same one so that anything worked out over a release's
+   * members reads the same whether its members were read alone or with a
+   * page of others.
+   *
+   * @experimental
+   */
+  async listMembersInOrderOf(
+    releaseIds: readonly string[]
+  ): Promise<ReleaseMemberRow[]> {
+    if (releaseIds.length === 0) return [];
+    return this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: membersOf(releaseIds),
+      orderBy: [
+        { column: "createdAt", direction: "asc" },
+        { column: "id", direction: "asc" },
+      ],
+    });
   }
 
   /**

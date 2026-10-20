@@ -26,6 +26,11 @@ export const NEXTLY_ERROR_STATUS = {
   // First-administrator setup in production without the setup token that
   // opens it: missing, wrong, expired, or a configured one too weak to accept.
   SETUP_TOKEN_REQUIRED: 403,
+  // An API key's role allows more than the person creating it may do.
+  // Separate from FORBIDDEN, which a person who may not create keys at all
+  // receives, so the key form can say which: choose a smaller role, or ask
+  // for access. The sentence stays FORBIDDEN's and names no permission.
+  API_KEY_ROLE_ABOVE_CREATOR: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
   DUPLICATE: 409,
