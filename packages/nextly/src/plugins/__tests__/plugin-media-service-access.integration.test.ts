@@ -7,7 +7,9 @@
  * judge that person: `create-media`, `update-media`, `delete-media`. A write
  * as `{ as: "public" }` is refused as REST refuses an anonymous caller. A
  * write as the plugin itself, `{ as: "system" }` or no options, stays trusted,
- * and a `user` named beside `system` is recorded as the one who made it. Every
+ * and a `user` named beside `system` is recorded as the one who made it. A
+ * request context, the shape these writes took before, is read as the options
+ * it stands for, and a checked write records its caller as the actor. Every
  * refusal leaves the library as it was.
  */
 
@@ -52,12 +54,21 @@ function input(name: string) {
   };
 }
 
+/** The request context the media writes were typed with before `ServiceOpts`. */
+interface LegacyContext {
+  user: { id: string; email: string; role: string; permissions: string[] };
+}
+
 /**
  * The plugin media writes, called with `ServiceOpts` where each takes its
  * caller. Typed here so the test states the surface it relies on.
  */
 interface PluginMedia {
-  upload(input: unknown, opts?: ServiceOpts): Promise<{ id: string }>;
+  upload(
+    input: unknown,
+    opts?: ServiceOpts | LegacyContext,
+    actor?: { type: "user" | "apiKey"; id?: string }
+  ): Promise<{ id: string }>;
   bulkUpload(inputs: unknown[], opts?: ServiceOpts): Promise<unknown>;
   update(id: string, input: unknown, opts?: ServiceOpts): Promise<unknown>;
   delete(id: string, opts?: ServiceOpts): Promise<void>;
@@ -241,6 +252,44 @@ describe.each(getConfiguredTestDialects())(
           media.upload(input("public.pdf"), { as: "public" })
         ).rejects.toMatchObject({ code: "AUTH_REQUIRED", statusCode: 401 });
         expect(await fileCount()).toBe(before);
+      });
+
+      it("reads a request context as the options it stands for, believing none of its grants", async () => {
+        // The shape these writes were typed with before. Its user is checked
+        // as that user; the role and permissions it claims are not believed,
+        // since a person's roles are read from their account.
+        const before = await fileCount();
+        await expect(
+          media.upload(input("legacy.pdf"), {
+            user: {
+              id: lackerId,
+              email: "lacker@example.com",
+              role: "super-admin",
+              permissions: ["create-media"],
+            },
+          })
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect(await fileCount()).toBe(before);
+      });
+
+      it("refuses a checked write that names someone else as the actor", async () => {
+        const before = await fileCount();
+        await expect(
+          media.upload(input("spoofed.pdf"), asUser(holderId), {
+            type: "user",
+            id: ownerId,
+          })
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect(await fileCount()).toBe(before);
+      });
+
+      it("takes a checked write that names its own caller as the actor", async () => {
+        const uploaded = await media.upload(
+          input("own-actor.pdf"),
+          asUser(holderId),
+          { type: "user", id: holderId }
+        );
+        expect(await exists(uploaded.id)).toBe(true);
       });
 
       it("lets a person with the permission write", async () => {

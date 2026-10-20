@@ -46,6 +46,28 @@ describe("resolveServiceOpts", () => {
     });
   });
 
+  it("as:'system' with a user stays trusted and keeps the user, so the write is attributed", async () => {
+    // The user is who the plugin acts beside, not a caller to be judged: the
+    // call is still trusted, and the user is built as the user branch builds
+    // one, so a hook reading the user's roles sees the same caller either way.
+    expect(
+      await resolveServiceOpts({
+        as: "system",
+        user: { id: "editor1", email: "e@e.com", name: "E" },
+      })
+    ).toEqual({
+      overrideAccess: true,
+      user: {
+        id: "editor1",
+        email: "e@e.com",
+        name: "E",
+        role: "editor",
+        roles: ["editor", "viewer"],
+        permissions: [],
+      },
+    });
+  });
+
   it("as:'user' with a user → enforce, RequestContext.user shape", async () => {
     expect(
       await resolveServiceOpts({
