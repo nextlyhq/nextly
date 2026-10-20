@@ -1,6 +1,6 @@
 /**
  * Which packages the playground's server keeps external, and whether each
- * resolves from the playground to the copy its workspace packages load. The
+ * resolves from the playground to the copy the packages it bundles load. The
  * real playground is checked by the CI job; these cases pin the derivation
  * and the comparison on folders built for them.
  */
@@ -18,8 +18,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   bundledExternals,
+  bundledGraph,
   externalPackages,
-  loadedWorkspace,
   packageDirFrom,
   parseNextExternals,
   runtimeDependencies,
@@ -32,9 +32,12 @@ afterEach(() => {
 });
 
 /** A package's folder, with a manifest so a lookup finds it. */
-function pkgAt(dir, name) {
+function pkgAt(dir, name, dependencies = {}) {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "package.json"), JSON.stringify({ name }));
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({ name, dependencies })
+  );
   return dir;
 }
 
@@ -49,7 +52,8 @@ function workspace() {
   const lib = join(top, "packages/lib");
   pkgAt(app, "app");
   pkgAt(lib, "lib");
-  const store = name => pkgAt(join(top, "store", name), name.split("@")[0]);
+  const store = (name, dependencies) =>
+    pkgAt(join(top, "store", name), name.split("@")[0], dependencies);
   const link = (from, name, target) => {
     mkdirSync(join(from, "node_modules"), { recursive: true });
     symlinkSync(target, join(from, "node_modules", name));
@@ -142,59 +146,73 @@ describe("which externals the playground would bundle", () => {
   });
 });
 
-describe("which workspace packages webpack bundles into the playground", () => {
-  const pkg = (name, deps) => ({
-    dir: `/w/${name}`,
-    manifest: { name, dependencies: deps },
-  });
-  const ws = new Map([
-    ["nextly", pkg("nextly", { "@x/adapter": "workspace:*", zod: "1" })],
-    ["@x/adapter", pkg("@x/adapter", { "@x/base": "workspace:*", pg: "8" })],
-    ["@x/base", pkg("@x/base", { "drizzle-orm": "1" })],
-    ["unused", pkg("unused", {})],
-  ]);
-  const app = { dependencies: { nextly: "workspace:*" } };
+describe("which installed packages webpack bundles into the playground", () => {
+  /**
+   * An app loading `lib`, which loads `sanitizer` from the store, which loads
+   * `jsdom`: the shape of nextly, isomorphic-dompurify and jsdom.
+   */
+  function graph() {
+    const w = workspace();
+    pkgAt(w.lib, "lib", { sanitizer: "1", next: "1" });
+    w.link(w.app, "lib", w.lib);
+    const sanitizer = w.store("sanitizer@1", { jsdom: "28" });
+    w.link(w.lib, "sanitizer", sanitizer);
+    mkdirSync(join(sanitizer, "..", "node_modules"), { recursive: true });
+    symlinkSync(
+      w.store("jsdom@28"),
+      join(sanitizer, "..", "node_modules", "jsdom")
+    );
+    const next = w.store("next@1", { postcss: "8" });
+    w.link(w.lib, "next", next);
+    return { w, sanitizer };
+  }
+  const app = { dependencies: { lib: "workspace:*" } };
 
-  it("follows workspace dependencies through each other, and stops at outside ones", () => {
-    const loaded = loadedWorkspace(app, ws, []);
-    expect(loaded.map(l => l.name).sort()).toEqual([
-      "@x/adapter",
-      "@x/base",
-      "nextly",
-    ]);
-    expect(loaded.find(l => l.name === "@x/adapter").declares).toEqual([
-      "@x/base",
-      "pg",
+  it("follows dependencies past the workspace, into the libraries' libraries", () => {
+    const { w } = graph();
+    const loaded = bundledGraph(w.app, app, ["jsdom"]);
+    expect(loaded.map(l => l.name).sort()).toEqual(["lib", "sanitizer"]);
+    expect(loaded.find(l => l.name === "sanitizer").declares).toEqual([
+      "jsdom",
     ]);
   });
 
   it("leaves out an external one, and what is reached only through it", () => {
     // webpack never reads inside an external package, so its imports cannot
     // be bundled whatever copy they find.
-    const loaded = loadedWorkspace(app, ws, ["@x/adapter"]);
-    expect(loaded.map(l => l.name)).toEqual(["nextly"]);
+    const { w } = graph();
+    const loaded = bundledGraph(w.app, app, ["sanitizer"]);
+    expect(loaded.map(l => l.name)).toEqual(["lib"]);
+  });
+
+  it("does not read inside next, whose own dependencies never reach the app", () => {
+    const { w } = graph();
+    const loaded = bundledGraph(w.app, app, []);
+    expect(loaded.map(l => l.name)).not.toContain("next");
+    expect(loaded.flatMap(l => l.declares)).not.toContain("postcss");
+  });
+
+  it("finds an external a library's library loads as another copy than the playground's", () => {
+    const { w } = graph();
+    w.link(w.app, "jsdom", w.store("jsdom@27"));
+    const found = bundledExternals({
+      appDir: w.app,
+      packages: ["jsdom"],
+      loaders: bundledGraph(w.app, app, ["jsdom"]),
+    });
+    expect(found.map(f => f.pkg)).toEqual(["jsdom"]);
+    expect(found[0].reason).toContain("from sanitizer");
   });
 });
 
 describe("which packages the playground keeps external", () => {
-  it("takes the playground's own list for the configuration", () => {
+  it("takes the playground's own list and Next's, once each", () => {
     expect(
       externalPackages({
-        configured: ["pg", "drizzle-kit", "pg"],
-        nextExternals: [],
-        nextlyRuntime: [],
+        configured: ["pg", "drizzle-kit", "pg", "sharp"],
+        nextExternals: ["sharp", "jsdom"],
       })
-    ).toEqual(["drizzle-kit", "pg"]);
-  });
-
-  it("adds the packages on Next's own list that nextly depends on, and only those", () => {
-    expect(
-      externalPackages({
-        configured: ["pg"],
-        nextExternals: ["sharp", "zeromq"],
-        nextlyRuntime: ["sharp", "zod"],
-      })
-    ).toEqual(["pg", "sharp"]);
+    ).toEqual(["drizzle-kit", "jsdom", "pg", "sharp"]);
   });
 
   it("reads Next's list past its comments", () => {

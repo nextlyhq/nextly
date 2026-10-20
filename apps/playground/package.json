@@ -60,7 +60,7 @@
     "esbuild": "^0.28.1",
     "eslint": "^9.39.1",
     "eslint-config-next": "^16.2.11",
-    "jsdom": "^27.1.0",
+    "jsdom": "^28.1.0",
     "nodemailer": "^9.0.1",
     "playwright": "^1.61.1",
     "postcss": "^8.5.6",

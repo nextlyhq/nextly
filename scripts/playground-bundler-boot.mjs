@@ -24,6 +24,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { isCliEntry } from "./cli-entry.mjs";
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const app = join(root, "apps/playground");
 
@@ -90,7 +92,9 @@ function options() {
 
 /**
  * Starts `next dev` in a process group of its own, writing to `log`, and
- * stops the whole group when this process exits.
+ * stops the whole group when this process exits, or is interrupted or
+ * cancelled: a signal ends the process without its `exit` event, and the
+ * group would keep the port, build directory and database.
  */
 function startServer(values, { base, log, databaseUrl }) {
   const out = openSync(log, "w");
@@ -113,13 +117,17 @@ function startServer(values, { base, log, databaseUrl }) {
       },
     }
   );
-  process.on("exit", () => {
+  const stop = () => {
     try {
       process.kill(-server.pid, "SIGTERM");
     } catch {
       // Already gone.
     }
-  });
+  };
+  process.on("exit", stop);
+  // The usual shell codes for the two, 128 plus the signal's number.
+  process.on("SIGINT", () => process.exit(130));
+  process.on("SIGTERM", () => process.exit(143));
 }
 
 /** setup-status's first answer, whatever its status, or the last failure. */
@@ -191,6 +199,4 @@ function report(label, problems, log) {
   process.exit(0);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main();
-}
+if (isCliEntry(import.meta.url)) await main();
