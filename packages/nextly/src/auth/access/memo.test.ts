@@ -95,6 +95,23 @@ describe("DecisionMemo", () => {
     expect(decide).toHaveBeenCalledTimes(1);
   });
 
+  it("answers an ask from work the decision left running, once it has settled", async () => {
+    const memo = new DecisionMemo();
+    const actor = editor();
+    let later: Promise<Decision> | undefined;
+    const decide = vi.fn(async (): Promise<Decision> => {
+      // Work the decision starts and does not wait for. It inherits the
+      // decision's call chain, and asks again once the decision is done.
+      later = new Promise(resolve => setTimeout(resolve, 5)).then(() =>
+        memo.remember(actor, "read", posts, decide)
+      );
+      return ALLOW;
+    });
+    await memo.remember(actor, "read", posts, decide);
+    await expect(later).resolves.toBe(ALLOW);
+    expect(decide).toHaveBeenCalledTimes(1);
+  });
+
   it("does not keep a decision that failed", async () => {
     const memo = new DecisionMemo();
     const actor = editor();

@@ -12,6 +12,8 @@
  * request, such as a service call made as someone else, is a different actor,
  * so nothing decided for one is ever reused for the other.
  */
+import { NextlyError } from "../../errors/nextly-error";
+import { isCorePrincipal } from "../../plugins/principals/principal";
 import type { Principal } from "../../plugins/principals/types";
 import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
 import type { AccessOperation } from "../../services/access/types";
@@ -103,7 +105,20 @@ export function visitorActor(
   });
 }
 
+/**
+ * A plugin person's actor, for a principal core made. A person's access comes
+ * from rules alone, and the principal's public shape can be built by anyone,
+ * so a principal core did not make, or a copy of one, is refused here rather
+ * than trusted by whichever way in hands it over.
+ */
 export function principalActor(principal: Principal): PrincipalActor {
+  // Read before the check, which narrows a refused principal to nothing.
+  const { kind } = principal;
+  if (!isCorePrincipal(principal)) {
+    throw NextlyError.internal({
+      logContext: { reason: "principal-not-made-by-core", kind },
+    });
+  }
   return Object.freeze({ kind: "principal", principal });
 }
 

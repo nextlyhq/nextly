@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { makePrincipal } from "../../plugins/principals/principal";
 import type { Principal } from "../../plugins/principals/types";
 import type {
   AccessControlContext,
@@ -48,12 +49,7 @@ const every = (resource: string): PermissionGrant[] =>
 const only = (resource: string, actions: AccessAction[]): PermissionGrant[] =>
   actions.map(action => grant(action, resource));
 
-const MEMBER: Principal = {
-  type: "principal",
-  kind: "members:member",
-  id: "m1",
-  attributes: {},
-};
+const MEMBER: Principal = makePrincipal("members:member", "m1", {});
 
 const callers = {
   visitor: visitorActor(),
@@ -291,6 +287,13 @@ describe("an actor's permissions", () => {
 });
 
 describe("a plugin's person", () => {
+  it("is an actor only for a principal core made, not a copy of one", () => {
+    // The shape is public, so a forged or copied principal must not become a
+    // person whose rules then decide alone.
+    expect(() => principalActor({ ...MEMBER })).toThrow();
+    expect(principalActor(MEMBER).principal).toBe(MEMBER);
+  });
+
   const forMembers: AccessTarget = {
     kind: "collection",
     slug: "posts",

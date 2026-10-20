@@ -25,6 +25,12 @@ import type { AccessTarget, Decision } from "./decide";
 interface Deciding {
   readonly decisions: Map<string, Promise<Decision>>;
   readonly key: string;
+  /**
+   * True until the decision settles. Work the decision started and left
+   * running keeps its call chain afterwards, and an ask it makes then is not
+   * recursion: it is answered from the memo like any other.
+   */
+  pending: boolean;
 }
 
 /**
@@ -58,7 +64,9 @@ export class DecisionMemo {
     const decisions = this.decisionsOf(actor);
     const key = `${target.kind}\u0000${target.slug}\u0000${action}`;
     const chain = deciding.getStore() ?? [];
-    if (chain.some(e => e.decisions === decisions && e.key === key)) {
+    if (
+      chain.some(e => e.pending && e.decisions === decisions && e.key === key)
+    ) {
       return Promise.reject(
         NextlyError.internal({
           logContext: {
@@ -71,9 +79,18 @@ export class DecisionMemo {
     }
     const known = decisions.get(key);
     if (known) return known;
-    const made = deciding.run([...chain, { decisions, key }], decide);
+    const marker: Deciding = { decisions, key, pending: true };
+    const made = deciding.run([...chain, marker], decide);
     decisions.set(key, made);
-    made.catch(() => decisions.delete(key));
+    made.then(
+      () => {
+        marker.pending = false;
+      },
+      () => {
+        marker.pending = false;
+        decisions.delete(key);
+      }
+    );
     return made;
   }
 
