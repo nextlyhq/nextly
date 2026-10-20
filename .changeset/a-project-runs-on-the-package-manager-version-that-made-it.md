@@ -29,5 +29,5 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A new project records the pnpm or Yarn version that created it as `packageManager`, so Corepack installs with that version instead of its own default.
+A new project created outside a workspace records the pnpm or Yarn version that created it as `packageManager`, so Corepack installs with that version instead of its own default.
 Adding Nextly to an existing app records it too, but only when the app chooses no package manager yet and isn't part of a workspace.
