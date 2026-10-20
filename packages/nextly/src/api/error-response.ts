@@ -17,6 +17,7 @@
  */
 
 import type { NextlyError } from "../errors/nextly-error";
+import { retryAfterHeader } from "../errors/retry-after";
 
 /**
  * A value that is safe to put on a response body, or undefined.
@@ -159,19 +160,9 @@ export function buildErrorResponse(
   const responseHeaders: Record<string, string> = {
     "content-type": "application/problem+json",
     "x-request-id": options.requestId,
+    // Any error carrying a retry hint: RATE_LIMITED, DATABASE_BUSY.
+    ...retryAfterHeader(error),
   };
-  // Type-narrow on shape rather than cast -- defends against future
-  // PublicData variants.
-  if (error.code === "RATE_LIMITED") {
-    const data = error.publicData;
-    if (
-      data &&
-      "retryAfterSeconds" in data &&
-      typeof data.retryAfterSeconds === "number"
-    ) {
-      responseHeaders["retry-after"] = String(data.retryAfterSeconds);
-    }
-  }
 
   return new Response(JSON.stringify({ error: responseJson }), {
     status: error.statusCode,

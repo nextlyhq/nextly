@@ -41,6 +41,7 @@ import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import {
   createDatabaseError,
   isDatabaseError,
+  poolWaitTimeoutError,
   type SqliteAdapterConfig,
   type DatabaseCapabilities,
   type PoolStats,
@@ -137,6 +138,10 @@ const DEFAULT_CONFIG = {
   busyTimeout: 5000,
   wal: true,
   foreignKeys: true,
+  // How long a transaction waits for the connection, behind the ones before
+  // it: the same bound, and the same default, as a pooled connection's wait
+  // on the PostgreSQL and MySQL adapters.
+  connectionTimeoutMs: 15000,
 };
 
 /**
@@ -502,6 +507,14 @@ export class SqliteAdapter extends DrizzleAdapter {
    * Note: SQLite uses DEFERRED, IMMEDIATE, or EXCLUSIVE transaction modes
    * rather than isolation levels. This adapter uses IMMEDIATE.
    */
+  /** How long a transaction waits for the connection: `pool.connectionTimeoutMs`. */
+  private transactionWaitMs(): number {
+    return (
+      this.config.pool?.connectionTimeoutMs ??
+      DEFAULT_CONFIG.connectionTimeoutMs
+    );
+  }
+
   async transaction<T>(
     work: (tx: TransactionContext) => Promise<T>,
     _options?: TransactionOptions
@@ -532,8 +545,15 @@ export class SqliteAdapter extends DrizzleAdapter {
       return enqueueIn(parent, () => this.runSavepoint(work, parent));
     }
     const run = async (): Promise<Committed<T>> => this.runTransaction(work);
-    const next = this.transactionQueue.then(run, run);
-    this.transactionQueue = next.catch(() => undefined);
+    const previous = this.transactionQueue;
+    // The one connection is this queue's to hand out, so its wait is the
+    // wait `pool.connectionTimeoutMs` bounds on the other dialects: past it,
+    // the transaction fails as busy without having begun.
+    const next = waitForTurn(previous, this.transactionWaitMs()).then(run);
+    // The queue moves on once the transaction before this one AND this one
+    // are done. One that gave up waiting never ran, and the next must still
+    // wait for the one it gave up on, or it would begin inside it.
+    this.transactionQueue = previous.then(() => next).catch(() => undefined);
     const { result, effects } = await next;
     // After the queue has moved on rather than inside it: an effect that opens
     // a transaction of its own would otherwise wait behind the one running it.
@@ -1383,6 +1403,27 @@ function undone(scope: TransactionScope, writesBefore: number): boolean {
     if (at.rolledBack) return true;
   }
   return false;
+}
+
+/**
+ * Settles once `turn` does, or rejects with the pool-wait timeout error once
+ * `boundMs` passes first. A bound of 0 waits without limit, as pg-pool reads a
+ * `connectionTimeoutMillis` of 0.
+ */
+function waitForTurn(turn: Promise<unknown>, boundMs: number): Promise<void> {
+  if (boundMs <= 0) return turn.then(() => undefined);
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(poolWaitTimeoutError(boundMs)),
+      boundMs
+    );
+    // A pending wait never keeps the process alive on its own.
+    timer.unref();
+    void turn.then(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
 }
 
 /** Chain `run` onto a scope's queue, keeping the queue itself unrejected. */
