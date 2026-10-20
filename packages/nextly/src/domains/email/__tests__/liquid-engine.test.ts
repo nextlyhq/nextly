@@ -17,6 +17,7 @@ import {
   parseLiquid,
   renderLiquid,
   TrustedHtml,
+  writesOutput,
 } from "../services/liquid-engine";
 import { oldEngineReason } from "../services/liquid-compat";
 import { renderTemplate } from "../services/render-template";
@@ -304,6 +305,37 @@ describe("a layout's body", () => {
   });
 });
 
+describe("where a layout's body marker is written", () => {
+  const MARKER = "{{content}}";
+
+  it("finds the marker at the top level and in a block that renders in place", () => {
+    expect(writesOutput("<div>{{content}}</div>", MARKER)).toBe(true);
+    expect(
+      writesOutput("{% if a %}x{% else %}{{content}}{% endif %}", MARKER)
+    ).toBe(true);
+    expect(
+      writesOutput("{% case a %}{% when 1 %}{{content}}{% endcase %}", MARKER)
+    ).toBe(true);
+  });
+
+  it("refuses the marker where nothing writes it", () => {
+    expect(
+      writesOutput("{% assign x = '{{content}}' %}<p>layout</p>", MARKER)
+    ).toBe(false);
+    expect(writesOutput("{% raw %}{{content}}{% endraw %}", MARKER)).toBe(
+      false
+    );
+    expect(
+      writesOutput("{% comment %}{{content}}{% endcomment %}", MARKER)
+    ).toBe(false);
+    expect(
+      writesOutput("{% capture c %}{{content}}{% endcapture %}", MARKER)
+    ).toBe(false);
+    // An output that filters the marker isn't the marker the splice replaces.
+    expect(writesOutput("{{content | upcase}}", MARKER)).toBe(false);
+  });
+});
+
 describe("what the old engine read differently", () => {
   it("flags a path through a property only the prototype has", () => {
     // The old engine read inherited properties; Liquid reads own ones only.
@@ -311,6 +343,15 @@ describe("what the old engine read differently", () => {
     expect(oldEngineReason("<p>{{order.toString}}</p>")).not.toBeNull();
     // The control: an ordinary path reads the same.
     expect(oldEngineReason("<p>{{user.name}}</p>")).toBeNull();
+  });
+
+  it("flags a root the data object only inherits, and nothing else at the root", () => {
+    expect(oldEngineReason("<p>{{constructor}}</p>")).not.toBeNull();
+    expect(oldEngineReason("<p>{{toString}}</p>")).not.toBeNull();
+    // The data is a plain object: a string's or a list's own names are
+    // ordinary variables there.
+    expect(oldEngineReason("<p>{{link}}</p>")).toBeNull();
+    expect(oldEngineReason("<p>{{length}}</p>")).toBeNull();
   });
 });
 

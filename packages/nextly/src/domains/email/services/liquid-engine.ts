@@ -23,7 +23,14 @@
  * with line breaks removed, for a subject or a header).
  */
 
-import { Drop, Liquid, type Context, type Template } from "liquidjs";
+import {
+  CaptureTag as CaptureBlock,
+  Drop,
+  Liquid,
+  Output,
+  type Context,
+  type Template,
+} from "liquidjs";
 
 import { NextlyError } from "../../../errors";
 
@@ -321,6 +328,38 @@ export function parseLiquid(
   } catch (error) {
     return { problem: toLiquidProblem(error) };
   }
+}
+
+/** The templates a block tag renders in place: its branches, body and else. */
+function blockChildren(node: Template): Template[] {
+  // A capture stores what it renders instead of writing it.
+  if (node instanceof CaptureBlock) return [];
+  const block = node as {
+    templates?: Template[];
+    elseTemplates?: Template[];
+    branches?: Array<{ templates?: Template[] }>;
+  };
+  return [
+    ...(block.templates ?? []),
+    ...(block.elseTemplates ?? []),
+    ...(block.branches ?? []).flatMap(branch => branch.templates ?? []),
+  ];
+}
+
+/**
+ * Whether `output` (an output tag such as `{{content}}`) is written where
+ * Liquid writes output: at the top level or in a block that renders in place,
+ * not inside `raw`, `comment` or `capture`, nor quoted in a tag's argument.
+ */
+export function writesOutput(source: string, output: string): boolean {
+  const parsed = parseLiquid(source);
+  if ("problem" in parsed) return false;
+  const pending = [...parsed.template];
+  for (let node = pending.pop(); node; node = pending.pop()) {
+    if (node instanceof Output && node.token.getText() === output) return true;
+    pending.push(...blockChildren(node));
+  }
+  return false;
 }
 
 /**

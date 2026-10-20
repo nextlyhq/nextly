@@ -44,8 +44,12 @@ const LIQUID_WORDS = new Set([
   "blank",
 ]);
 const LIQUID_PROPERTIES = new Set(["size", "first", "last"]);
+/** What the data object itself inherits; the root of every path reads it. */
+const ROOT_PROTOTYPE_KEYS = new Set(
+  Object.getOwnPropertyNames(Object.prototype)
+);
 const PROTOTYPE_KEYS = new Set([
-  ...Object.getOwnPropertyNames(Object.prototype),
+  ...ROOT_PROTOTYPE_KEYS,
   ...Object.getOwnPropertyNames(Array.prototype),
   ...Object.getOwnPropertyNames(String.prototype),
 ]);
@@ -53,15 +57,13 @@ const OLD_TOKEN = /{{\s*([\w.]+)\s*}}/g;
 
 function readsTheSame(path: string): boolean {
   if (!VARIABLE_PATH.test(path)) return false;
-  const segments = path.split(".");
-  if (LIQUID_WORDS.has(segments[0])) return false;
+  const [root, ...rest] = path.split(".");
   // A property only an object's prototype has (`constructor`, `toString`):
   // the old engine read it, and Liquid reads own properties only.
-  return !segments
-    .slice(1)
-    .some(
-      segment => LIQUID_PROPERTIES.has(segment) || PROTOTYPE_KEYS.has(segment)
-    );
+  if (LIQUID_WORDS.has(root) || ROOT_PROTOTYPE_KEYS.has(root)) return false;
+  return !rest.some(
+    segment => LIQUID_PROPERTIES.has(segment) || PROTOTYPE_KEYS.has(segment)
+  );
 }
 
 /** Why a field would render differently as Liquid, or null when it would not. */

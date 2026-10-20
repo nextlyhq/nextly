@@ -510,6 +510,138 @@ for (const dialect of getConfiguredTestDialects()) {
       ).toBe(interpolateTemplate(UNREADABLE, DATA));
     });
 
+    it("keeps a template on the old engine when a confirmation overtakes a save of the old engine's syntax", async () => {
+      const t = await boot(dialect);
+      const id = await storeAsBefore(t, dialect, "literal-if", LITERAL_IF);
+      await templates(t).ensureBuiltInTemplates();
+      const service = templates(t) as unknown as {
+        checkLiquidOnSave(...args: unknown[]): Promise<unknown>;
+        meta: { delete(key: string): Promise<void> };
+      };
+      const original = service.checkLiquidOnSave.bind(service);
+      const spy = vi
+        .spyOn(service, "checkLiquidOnSave")
+        .mockImplementationOnce(async (...args: unknown[]) => {
+          const afterSave = await original(...args);
+          await service.meta.delete(`email.templates.liquid.kept.${id}`);
+          return afterSave;
+        });
+      // Liquid parses it, and reads its tag as a condition the old engine
+      // sent as text.
+      const restored = "<p>Now: {% if vip %}VIP{% endif %} {{name}}</p>";
+      await t.nextly.emailTemplates.update({
+        id,
+        data: { htmlContent: restored },
+      });
+      spy.mockRestore();
+      expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
+      expect(
+        (await t.nextly.emailTemplates.preview({ id, data: DATA })).html
+      ).toBe(interpolateTemplate(restored, DATA));
+    });
+
+    it("refuses an override whose text Liquid can't read", async () => {
+      const t = await boot(dialect);
+      await templates(t).ensureBuiltInTemplates();
+      await seedPluginTemplates(t, [
+        {
+          name: "Plain",
+          slug: "plain-plugin",
+          subject: "Hi",
+          htmlContent: PLAIN,
+        },
+      ]);
+      const row = await t.nextly.emailTemplates.findBySlug({
+        slug: "plain-plugin",
+      });
+      await expect(
+        templates(t).overrideTemplate(row!.id, {
+          version: { htmlContent: UNREADABLE },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      // The control: an override Liquid reads is written.
+      const overridden = await templates(t).overrideTemplate(row!.id, {
+        version: { htmlContent: FILTER },
+      });
+      expect(overridden.htmlContent).toBe(FILTER);
+    });
+
+    it("keeps the owner's version Reset writes on the old engine when Liquid can't read it", async () => {
+      const t = await boot(dialect);
+      await templates(t).ensureBuiltInTemplates();
+      const shipping = (htmlContent: string) =>
+        seedPluginTemplates(t, [
+          { name: "Promo", slug: "promo", subject: "Hi", htmlContent },
+        ]);
+      await shipping(PLAIN);
+      const row = await t.nextly.emailTemplates.findBySlug({ slug: "promo" });
+      // The site overrides it, then the plugin ships text for the old engine.
+      await t.nextly.emailTemplates.update({
+        id: row!.id,
+        data: { htmlContent: FILTER },
+      });
+      await shipping(UNREADABLE);
+      await templates(t).resetTemplate(row!.id);
+      expect((await templates(t).oldEngineStatus(row!.id)).kept).toBe(true);
+      const preview = await templates(t).previewTemplate(row!.id, DATA);
+      expect(preview.html).toContain(interpolateTemplate(UNREADABLE, DATA));
+    });
+
+    it("takes back the old-engine mark when the owner's version doesn't land or fails", async () => {
+      const t = await boot(dialect);
+      await templates(t).ensureBuiltInTemplates();
+      const shipping = (htmlContent: string) =>
+        seedPluginTemplates(t, [
+          {
+            name: "Promo",
+            slug: "promo",
+            subject: "Hi",
+            htmlContent,
+            useLayout: false,
+          },
+        ]);
+      await shipping(PLAIN);
+      const row = await t.nextly.emailTemplates.findBySlug({ slug: "promo" });
+      const id = row!.id;
+      const service = templates(t) as unknown as {
+        keepIfWrittenForOldEngine(...args: unknown[]): Promise<unknown>;
+        db: { update: () => unknown };
+      };
+      const original = service.keepIfWrittenForOldEngine.bind(service);
+      const between = (act: () => Promise<unknown> | void) =>
+        vi
+          .spyOn(service, "keepIfWrittenForOldEngine")
+          .mockImplementationOnce(async (...args: unknown[]) => {
+            const engine = await original(...args);
+            await act();
+            return engine;
+          });
+
+      // The write fails: the mark recorded for it goes too.
+      let failing: { mockRestore(): void } | undefined;
+      const failed = between(() => {
+        failing = vi.spyOn(service.db, "update").mockImplementationOnce(() => {
+          throw new Error("connection reset");
+        });
+      });
+      await expect(shipping(UNREADABLE)).rejects.toThrow("connection reset");
+      failed.mockRestore();
+      failing?.mockRestore();
+      expect((await templates(t).oldEngineStatus(id)).kept).toBe(false);
+
+      // The site saves in between, so the owner's version doesn't land: the
+      // site's Liquid override renders as Liquid.
+      const raced = between(() =>
+        t.nextly.emailTemplates.update({ id, data: { htmlContent: FILTER } })
+      );
+      await shipping(UNREADABLE);
+      raced.mockRestore();
+      expect((await templates(t).oldEngineStatus(id)).kept).toBe(false);
+      expect(
+        (await t.nextly.emailTemplates.preview({ id, data: DATA })).html
+      ).toBe("<p>Hi PRIYA &lt;3</p>");
+    });
+
     it("refuses a layout whose body marker sits where Liquid writes nothing", async () => {
       const t = await boot(dialect);
       await templates(t).ensureBuiltInTemplates();
@@ -521,6 +653,17 @@ for (const dialect of getConfiguredTestDialects()) {
             subject: "",
             kind: "layout",
             htmlContent: "<div>{% raw %}{{content}}{% endraw %}</div>",
+          },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      await expect(
+        t.nextly.emailTemplates.create({
+          data: {
+            name: "Quoted body",
+            slug: "quoted-body",
+            subject: "",
+            kind: "layout",
+            htmlContent: "{% assign x = '{{content}}' %}<div>layout</div>",
           },
         })
       ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
