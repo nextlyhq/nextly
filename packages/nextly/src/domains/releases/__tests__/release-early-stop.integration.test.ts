@@ -55,7 +55,14 @@ afterEach(async () => {
 });
 
 const PAST = new Date("2020-01-01T00:00:00Z");
-type Slug = "pages" | "memos" | "articles" | "posts" | "notes" | "letters";
+type Slug =
+  | "pages"
+  | "memos"
+  | "articles"
+  | "posts"
+  | "notes"
+  | "letters"
+  | "dossiers";
 
 /** Run after each write to a post, for a case that acts inside one. */
 let afterPostChange: (() => Promise<void>) | undefined;
@@ -68,6 +75,7 @@ const OPEN = {
   update: () => true,
   publish: () => true,
   unpublish: () => true,
+  delete: () => true,
 };
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
@@ -115,6 +123,22 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           publish: ({ roles }) => roles.includes(publisherSlug),
         },
         fields: [text({ name: "title" })],
+      }),
+      // Kept as drafts, with a field only the editor-in-chief may write.
+      defineCollection({
+        slug: "dossiers",
+        status: true,
+        versions: { drafts: true },
+        access: OPEN,
+        fields: [
+          text({ name: "title" }),
+          text({
+            name: "guarded",
+            access: {
+              update: ({ req }) => req.user?.email === "chief@example.com",
+            },
+          }),
+        ],
       }),
       // Its status is given a field rule in a case: see `guardLetterStatus`.
       defineCollection({
@@ -607,6 +631,58 @@ describe.each(getConfiguredTestDialects())(
       expect(await stateOf(t, running.releaseId)).toBe("published");
       expect(await stateOf(t, other.releaseId)).toBe("blocked");
       expect(await stoppedNotices(t, other)).toBe(1);
+    });
+
+    it("stops it when a bulk update leaves a pending change its author may not write", async () => {
+      // A field rule, since a required field cannot be emptied by any write:
+      // validation refuses it. The takedown would fold the pending change in.
+      const t = await boot(dialect);
+      const dossier = await entry(t, "dossiers", "published");
+      const arranged = await dueRelease(t, [
+        {
+          scopeKind: "collection",
+          scopeSlug: "dossiers",
+          entryId: dossier,
+          action: "unpublish",
+        },
+      ]);
+      expect(await visibleIds(t, "dossiers")).not.toContain(dossier);
+
+      const written = await handlerOf(t)
+        .getEntryService()
+        .updateEntries({ collectionName: "dossiers", overrideAccess: true }, [
+          { id: dossier, data: { guarded: "secret" } },
+        ]);
+      expect(written.successful).toBe(1);
+
+      expect(await visibleIds(t, "dossiers")).toContain(dossier);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
+    });
+
+    it("stops it when a bulk delete removes one of its documents", async () => {
+      const t = await boot(dialect);
+      const kept = await entry(t, "articles", "draft");
+      const gone = await entry(t, "articles", "draft");
+      const arranged = await dueRelease(
+        t,
+        [kept, gone].map(entryId => ({
+          scopeKind: "collection" as const,
+          scopeSlug: "articles",
+          entryId,
+          action: "publish" as const,
+        }))
+      );
+      expect(await visibleIds(t, "articles")).toContain(kept);
+
+      const deleted = await handlerOf(t)
+        .getEntryService()
+        .deleteEntries({ collectionName: "articles" }, [gone]);
+      expect(deleted.successful).toBe(1);
+
+      expect(await visibleIds(t, "articles")).not.toContain(kept);
+      expect(await stateOf(t, arranged.releaseId)).toBe("blocked");
+      expect(await stoppedNotices(t, arranged)).toBe(1);
     });
 
     it("stops it when one of its documents is deleted, so the others are not shown going live", async () => {

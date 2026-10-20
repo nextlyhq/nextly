@@ -39,6 +39,29 @@ function named(where: Condition | undefined, column: string): string[] | null {
   return null;
 }
 
+/** One member, of the release named, about the entry named. */
+function member(releaseId: string, entryId?: string) {
+  return {
+    id: `m-${entryId ?? releaseId}`,
+    releaseId,
+    entryId,
+    createdBy: "author",
+    createdAt: new Date("2020-01-01T00:00:00Z"),
+  };
+}
+
+/**
+ * The member rows a lookup asks for: by entry for the member index, giving
+ * each entry a release of its own, or by release.
+ */
+function membersAsked(where: Condition | undefined): unknown[] {
+  const entryIds = named(where, "entryId");
+  if (entryIds !== null) {
+    return entryIds.map(entryId => member(`r-${entryId}`, entryId));
+  }
+  return (named(where, "releaseId") ?? []).map(id => member(id));
+}
+
 /** A database holding `count` scheduled releases of one member each. */
 function scheduledReleases(count: number) {
   const ids = Array.from({ length: count }, (_, i) => `r${i}`);
@@ -50,20 +73,12 @@ function scheduledReleases(count: number) {
     for (const list of inLists(options?.where)) {
       widest = Math.max(widest, list.length);
     }
-    if (table === "nextly_releases") {
-      const asked = named(options?.where, "id");
-      return (asked ?? ids).map(id => ({
-        id,
-        state: "scheduled",
-        scheduledAt: new Date("2099-01-01T00:00:00Z"),
-        revision: 1,
-      }));
-    }
-    const releaseIds = named(options?.where, "releaseId") ?? [];
-    return releaseIds.map(releaseId => ({
-      id: `m-${releaseId}`,
-      releaseId,
-      createdBy: "author",
+    if (table !== "nextly_releases") return membersAsked(options?.where);
+    return (named(options?.where, "id") ?? ids).map(id => ({
+      id,
+      state: "scheduled",
+      scheduledAt: new Date("2099-01-01T00:00:00Z"),
+      revision: 1,
     }));
   };
   return {
@@ -83,6 +98,25 @@ describe("re-checking every scheduled release", () => {
 
     expect(found).toHaveLength(count);
     expect(found.every(({ members }) => members.length === 1)).toBe(true);
+    expect(widest()).toBeLessThan(SQLITE_MAX_PARAMETERS);
+  });
+});
+
+describe("re-checking the releases holding many documents of one scope", () => {
+  it("finds every holding release in runs a statement can bind", async () => {
+    const count = SQLITE_MAX_PARAMETERS * 2 + 3;
+    const { db, widest } = scheduledReleases(0);
+    const documents = Array.from({ length: count }, (_, i) => ({
+      scopeKind: "collection" as const,
+      scopeSlug: "articles",
+      entryId: `e${i}`,
+    }));
+
+    const found = await new ReleasesRepository(db).scheduledMembersFor({
+      documents,
+    });
+
+    expect(found).toHaveLength(count);
     expect(widest()).toBeLessThan(SQLITE_MAX_PARAMETERS);
   });
 });

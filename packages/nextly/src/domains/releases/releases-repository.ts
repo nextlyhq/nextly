@@ -584,16 +584,17 @@ function idBatches(ids: readonly string[]): string[][] {
 
 /**
  * The members naming any of these documents, or any document of these
- * scopes, as one condition over the member index's leading columns: one
- * branch per scope, each narrowed to its documents when they are named.
- * `null` when nothing is named.
+ * scopes, as conditions over the member index's leading columns: one per
+ * scope, or, where documents are named, one per run of at most
+ * {@link IDS_PER_LOOKUP} of that scope's documents, so no one statement binds
+ * more than a dialect allows. Empty when nothing is named.
  */
-function memberIndexCondition(
+function memberIndexConditions(
   named: readonly (
     | ReleaseRecheckDocument
     | Pick<ReleaseRecheckDocument, "scopeKind" | "scopeSlug">
   )[]
-): ReleasesWhere | null {
+): ReleasesWhere[] {
   const byScope = new Map<
     string,
     { scopeKind: string; scopeSlug: string; entryIds: Set<string> | null }
@@ -610,24 +611,16 @@ function memberIndexCondition(
     else scope.entryIds?.add(item.entryId);
     byScope.set(key, scope);
   }
-  if (byScope.size === 0) return null;
-  return {
-    or: [...byScope.values()].map(scope => ({
-      and: [
-        { column: "scopeKind", op: "=" as const, value: scope.scopeKind },
-        { column: "scopeSlug", op: "=" as const, value: scope.scopeSlug },
-        ...(scope.entryIds === null
-          ? []
-          : [
-              {
-                column: "entryId",
-                op: "IN" as const,
-                value: [...scope.entryIds],
-              },
-            ]),
-      ],
-    })),
-  };
+  return [...byScope.values()].flatMap(scope => {
+    const inScope = [
+      { column: "scopeKind", op: "=" as const, value: scope.scopeKind },
+      { column: "scopeSlug", op: "=" as const, value: scope.scopeSlug },
+    ];
+    if (scope.entryIds === null) return [{ and: inScope }];
+    return idBatches([...scope.entryIds]).map(ids => ({
+      and: [...inScope, { column: "entryId", op: "IN" as const, value: ids }],
+    }));
+  });
 }
 
 export function documentRefKey(ref: DocumentRef): string {
@@ -1780,14 +1773,21 @@ export class ReleasesRepository {
       { column: "id", direction: "asc" as const },
     ];
     if ("documents" in target || "scopes" in target) {
-      const where = memberIndexCondition(
+      const members: ReleaseMemberRow[] = [];
+      for (const where of memberIndexConditions(
         "documents" in target ? target.documents : target.scopes
+      )) {
+        members.push(
+          ...(await this.db.select<ReleaseMemberRow>(MEMBERS, { where }))
+        );
+      }
+      // Each run is read on its own, so the order members were added in is
+      // restored across them.
+      return members.sort(
+        (a, b) =>
+          a.createdAt.getTime() - b.createdAt.getTime() ||
+          (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
       );
-      if (where === null) return [];
-      return this.db.select<ReleaseMemberRow>(MEMBERS, {
-        where,
-        orderBy: inOrder,
-      });
     }
     if ("authors" in target && target.authors.length === 0) return [];
     const scheduled = await this.db.select<{ id: string }>(RELEASES, {
