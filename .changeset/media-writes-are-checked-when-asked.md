@@ -37,4 +37,4 @@ A Direct API `media` write (`upload`, `update`, `delete`, `bulkDelete`, `folders
 
 Passing a `RequestContext` to a `ctx.services.media` write is deprecated. It is still accepted and read as `ServiceOpts`: its `user` is now checked as that user, and its `role` and `permissions` are ignored, because a person's roles are read from their account.
 
-On every plugin service, `{ as: "system", user }` stays trusted and now keeps the user, so the write is attributed to them: a folder records them as its creator, and collection hooks are handed them.
+On every plugin service, `{ as: "system", user }` stays trusted and now keeps the user, so the write is attributed to them: a folder records them as its creator, and collection hooks are handed them. The user is for attribution only: no role lookup runs for it, so hooks on such a call see the user with no roles.
