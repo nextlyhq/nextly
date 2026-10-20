@@ -392,10 +392,10 @@ function ContentsHeading({
   return (
     <>
       <div className="mb-3 flex items-baseline justify-between gap-3">
-        <h2 id="release-contents" className="text-base font-medium">
+        <h2 id="release-contents" className="shrink-0 text-base font-medium">
           What is in it
         </h2>
-        <p className="text-sm text-muted-foreground">{summary}</p>
+        <p className="text-right text-sm text-muted-foreground">{summary}</p>
       </div>
       {hiddenLine ? (
         <p className="mb-3 text-sm text-muted-foreground">{hiddenLine}</p>
@@ -476,7 +476,10 @@ function contentsView(members: ReturnType<typeof useReleaseMembers>): {
   return {
     rows,
     hiddenLine,
-    summary: contentsHeadline(members.isPending, rows, allHidden),
+    summary:
+      hiddenLine !== null && rows.length > 0
+        ? visibleContentsHeadline(rows)
+        : contentsHeadline(members.isPending, rows, allHidden),
     nothingAdded: answeredEmpty(members, rows) && hiddenLine === null,
     error: members.isError
       ? "The contents of this release could not be loaded."
@@ -496,6 +499,15 @@ function contentsHeadline(
   if (pending) return "Loading…";
   if (allHidden) return "Nothing in it you can view.";
   return contentsSummary(rows);
+}
+
+/**
+ * The headline when some documents are hidden: what the visible ones do,
+ * said as about those alone, so it never reads as the whole release.
+ */
+function visibleContentsHeadline(rows: ReleaseMember[]): string {
+  const summary = contentsSummary(rows);
+  return `Of those you can view, ${summary.charAt(0).toLowerCase()}${summary.slice(1)}`;
 }
 
 /** Whether the members read answered, and answered with nothing to name. */

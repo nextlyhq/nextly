@@ -99,7 +99,8 @@ describe("a release holding documents its reader cannot view", () => {
     );
     render(<ReleaseDetail id="r1" />);
     expect(text()).toMatch(/2 documents you can't view · secrets/);
-    expect(text()).toMatch(/1 document go live/);
+    // The headline is about what the reader can see, not the whole release.
+    expect(text()).toMatch(/Of those you can view, 1 document go live/);
   });
 
   it("does not read as empty when every document is one they cannot view", () => {

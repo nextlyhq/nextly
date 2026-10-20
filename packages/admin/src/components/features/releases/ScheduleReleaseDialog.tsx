@@ -85,11 +85,6 @@ function WouldStopThis({
           ? "One document would stop this release."
           : `${total} documents would stop this release.`}
       </p>
-      {hidden > 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {describeHiddenNeedFix(hidden)}.
-        </p>
-      ) : null}
       <ul className="flex list-disc flex-col gap-0.5 pl-5">
         {blocking.map(blocker => (
           <li key={blocker.memberId} className="text-sm text-muted-foreground">
@@ -102,6 +97,11 @@ function WouldStopThis({
           </li>
         ))}
       </ul>
+      {hidden > 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {describeHiddenNeedFix(hidden)}.
+        </p>
+      ) : null}
     </div>
   );
 }
