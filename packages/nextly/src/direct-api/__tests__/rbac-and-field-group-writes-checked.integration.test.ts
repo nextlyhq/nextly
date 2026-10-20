@@ -166,7 +166,9 @@ describe.each(getConfiguredTestDialects())(
           ])
         );
       }
-    });
+      // A boot, the permission seed and a dozen accounts, each with a hashed
+      // password: more than the default hook budget on a loaded machine.
+    }, 120_000);
 
     afterAll(async () => {
       resetSessionStandingForTests();
