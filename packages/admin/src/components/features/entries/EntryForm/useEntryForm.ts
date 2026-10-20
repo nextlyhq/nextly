@@ -387,25 +387,41 @@ function entryIdentity(
 }
 
 /**
- * Whether an arriving entry resets the form: not at all when its identity is
- * unchanged (a save's own optimistic copy or rollback), keeping unsaved edits
- * when it is this author's own save coming back (a new version of the same
- * entry, in the same place, while the save is in flight or matching the
- * version it stored), and fully otherwise.
+ * How far an arriving entry resets the form. A different entry, language, read
+ * or working-draft overlay starts it again; so does a new version, unless it is
+ * this author's own save coming back (while the save is in flight, or matching
+ * the version it stored). The same identity again — a save's own optimistic
+ * copy or rollback, or newer content a working-draft save left the version of
+ * unchanged — and this author's own echo both keep what is unsaved.
  */
 function resetDecision(
   last: EntryIdentity | undefined,
   next: EntryIdentity,
   ownSave: { inFlight: boolean; storedVersion?: string }
-): "none" | "keep-unsaved" | "full" {
+): "keep-unsaved" | "full" {
   if (last === undefined) return "full";
-  const samePlace = last.id === next.id && last.place === next.place;
-  if (samePlace && last.version === next.version) return "none";
+  if (last.id !== next.id || last.place !== next.place) return "full";
+  if (last.version === next.version) return "keep-unsaved";
   const ownEcho =
     ownSave.inFlight ||
     (next.version !== null && next.version === ownSave.storedVersion);
-  return samePlace && ownEcho ? "keep-unsaved" : "full";
+  return ownEcho ? "keep-unsaved" : "full";
 }
+
+/**
+ * A reset that keeps what is unsaved: the fields the author changed keep their
+ * values and every other field takes the arriving one, and the form keeps the
+ * errors it shows, what was touched, and that it was submitted, so a failed
+ * save's field errors and re-validation survive the rollback that follows it.
+ */
+const KEEP_UNSAVED = {
+  keepDirtyValues: true,
+  keepDirty: true,
+  keepErrors: true,
+  keepTouched: true,
+  keepIsSubmitted: true,
+  keepSubmitCount: true,
+} as const;
 
 export function useEntryForm({
   collection,
@@ -457,30 +473,27 @@ export function useEntryForm({
     mode: "onSubmit",
   });
 
-  // Reset form only when the actual entry changes (different ID or new version).
-  // Reason: defaultValues and form.reset are intentionally excluded — React Query
-  // refetches produce new object references even for identical data, and including
-  // the full object would reset the form mid-edit, discarding unsaved changes.
-  // Reset the form when the user opens a different entry. defaultValues is
-  // useMemo'd on (fields, entry), so it only changes when entry's identity
-  // changes — keeps this effect from firing on every keystroke. `form` is
+  // Reset the form to the entry when the entry changes. defaultValues is
+  // useMemo'd on (fields, entry), and the query cache's structural sharing
+  // hands back the same object for a refetch of identical data, so this runs
+  // for changed content rather than on every keystroke or refetch. `form` is
   // a stable RHF ref.
   //
-  // The stored row this author's own save puts in the cache arrives here as a
-  // new entry, and resetting to it blindly would wipe whatever they typed
-  // while the save was in flight; the save has already made it the form's
-  // starting point, so that echo keeps unsaved edits. Recognised while the
-  // save is in flight, and afterwards by the version it stored, because it can
-  // arrive on either side of the save's own reset. Any other arrival — a
-  // restored version, a colleague's change, a different entry — resets the
-  // form to it, as Restore promises when it warns unsaved work is discarded.
-  //
-  // "Arrives" is a change of the entry's identity, never of its object: its
-  // id, its stored version, the language and the read it was loaded for, and
-  // whether a working draft is overlaid. A save rewrites the cache twice
-  // without changing any of those — its optimistic copy before the request,
-  // and the stored entry put back (as a new object) when the request fails —
-  // and resetting to either wiped unsaved work.
+  // How far is `resetDecision`'s, on the entry's identity: its id, its stored
+  // version, the language and the read it was loaded for, and whether a
+  // working draft is overlaid. A save rewrites the cache without changing any
+  // of those — its optimistic copy before the request, and the stored entry
+  // put back (as a new object) when the request fails — and a full reset to
+  // either wiped unsaved work and the errors the failure had just set. Every
+  // save of a published entry's working draft also keeps the published row's
+  // `updatedAt`, so a colleague's newer draft has the same identity and is told
+  // apart only by its values: the untouched fields show it. The stored row
+  // this author's own save puts in the cache arrives as a new version, and
+  // keeps whatever they typed while the save was in flight; it is recognised
+  // while the save is in flight, and afterwards by the version it stored,
+  // because it can arrive on either side of the save's own reset. Any other
+  // new version — a restore, a colleague's save — starts the form again from
+  // it, as Restore promises when it warns unsaved work is discarded.
   const resetKey = useRef<EntryIdentity | undefined>(undefined);
   const ownSave = useRef<{ inFlight: boolean; storedVersion?: string }>({
     inFlight: false,
@@ -489,9 +502,11 @@ export function useEntryForm({
     if (!entry || mode !== "edit") return;
     const next = entryIdentity(entry, locale, readDraft);
     const decision = resetDecision(resetKey.current, next, ownSave.current);
-    if (decision === "none") return;
-    form.reset(defaultValues, { keepDirtyValues: decision === "keep-unsaved" });
     resetKey.current = next;
+    form.reset(
+      defaultValues,
+      decision === "keep-unsaved" ? KEEP_UNSAVED : undefined
+    );
   }, [entry, mode, defaultValues, form, locale, readDraft]);
 
   // Mutations - pass setError to enable server error mapping to form fields
