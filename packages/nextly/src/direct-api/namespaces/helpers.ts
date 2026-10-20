@@ -20,6 +20,7 @@ import {
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
+import type { RouteGrant } from "../../domains/auth/system-write-policy";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertRunnableAsPrincipal } from "../../plugins/principals/run-as";
@@ -223,15 +224,28 @@ function suppliedByCall(args: DirectAPIConfig): DirectAPIConfig {
 /**
  * The caller as the REST routes see one: a person signed in, or an API key
  * judged by its own grants rather than its owner's.
+ *
+ * A key carries its whole scope, as REST's authenticated caller does: its
+ * permissions, the grant rows behind them and its OWN role slugs, never its
+ * owner's, since a rule may decide on a role. The inverse of
+ * `apiKeyScopeFrom`, so the scope a call names is the scope it is judged by.
  */
 function asRouteCaller(userId: string, access: AccessOptions): AuthContext {
   const scope = access.authenticatedScope;
-  const byKey = scope?.actorType === "apiKey";
+  if (scope?.actorType === "apiKey") {
+    return {
+      userId,
+      authMethod: "api-key",
+      permissions: [...scope.permissions],
+      ...(scope.grants ? { grants: scope.grants } : {}),
+      roles: [...(scope.roles ?? [])],
+    };
+  }
   return {
     userId,
-    permissions: byKey ? [...scope.permissions] : [],
+    authMethod: "session",
+    permissions: [],
     roles: access.user?.roles ?? [],
-    authMethod: byKey ? "api-key" : "session",
   };
 }
 
@@ -266,10 +280,8 @@ export function checkedCaller(
   return asRouteCaller(userId, access);
 }
 
-/** What a REST route asks of its caller: one permission, or any of several. */
-export type RouteGrant =
-  | { action: string; resource: string }
-  | { anyOf: Array<{ action: string; resource: string }> };
+// What a write asks, declared with the policy that says which write asks what.
+export type { RouteGrant };
 
 /**
  * Whether `caller` holds `grant`, asked of the decision the REST route asks,
@@ -283,7 +295,7 @@ export async function authorizeChecked(
 ): Promise<void> {
   const decision =
     "anyOf" in grant
-      ? await authorizeCallerForAny(caller, grant.anyOf)
+      ? await authorizeCallerForAny(caller, [...grant.anyOf])
       : await authorizeCaller(caller, grant.action, grant.resource);
   if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
 }

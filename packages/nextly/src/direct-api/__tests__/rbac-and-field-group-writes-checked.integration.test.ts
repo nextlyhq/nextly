@@ -48,6 +48,8 @@ describe.each(getConfiguredTestDialects())(
     let roleKeeperId: string;
     let permissionKeeperId: string;
     let settingsKeeperId: string;
+    /** People holding one operation's own grant and nothing broader. */
+    const onlyHolds = new Map<string, string>();
     // Seeded permission ids by slug, and a role to hand out read-only grants.
     const seeded = new Map<string, string>();
     let readUsersRoleId: string;
@@ -112,16 +114,26 @@ describe.each(getConfiguredTestDialects())(
       await seeder.seedSystemPermissions();
       await seeder.seedAllCollectionPermissions();
       await loadPermissions();
-      // The permission resource's own grants are not seeded and are hidden
-      // from the permission API; the REST route still accepts them, so one is
-      // made here, through the service, to prove the decision is the same.
-      const made = await trusted.rbacPermissionService.ensurePermission(
-        "manage",
-        "permissions",
-        "Manage permissions",
-        "manage-permissions"
-      );
-      seeded.set("manage-permissions", made.id);
+      // The permission resource's own grants, and the settings grants for
+      // one action each, are not seeded, and most are hidden from the
+      // permission API; the REST routes still accept them, so they are made
+      // here, through the service, to prove each branch of the decision.
+      for (const [action, resource] of [
+        ["manage", "permissions"],
+        ["create", "permissions"],
+        ["delete", "permissions"],
+        ["create", "settings"],
+        ["update", "settings"],
+        ["delete", "settings"],
+      ]) {
+        const made = await trusted.rbacPermissionService.ensurePermission(
+          action,
+          resource,
+          `${action} ${resource}`,
+          `${action}-${resource}`
+        );
+        seeded.set(`${action}-${resource}`, made.id);
+      }
 
       // The install's first account holds super-admin.
       superAdminId = await account("owner@example.com");
@@ -140,6 +152,20 @@ describe.each(getConfiguredTestDialects())(
       settingsKeeperId = await account("settings-keeper@example.com", [
         await role(`settings-keepers-${tag}`, ["manage-settings"]),
       ]);
+      for (const slug of [
+        "create-permissions",
+        "delete-permissions",
+        "create-settings",
+        "update-settings",
+        "delete-settings",
+      ]) {
+        onlyHolds.set(
+          slug,
+          await account(`only-${slug}@example.com`, [
+            await role(`only-${slug}-${tag}`, [slug]),
+          ])
+        );
+      }
     });
 
     afterAll(async () => {
@@ -261,6 +287,64 @@ describe.each(getConfiguredTestDialects())(
         await expect(
           as.permissions.delete({ id: made.item.id })
         ).resolves.toMatchObject({ item: { id: made.item.id } });
+      });
+    });
+
+    describe("an operation's own grant, without manage", () => {
+      it("lets create-permissions create a permission, and only delete-permissions delete it", async () => {
+        const made = await checkedAs(
+          onlyHolds.get("create-permissions")!
+        ).permissions.create({
+          data: {
+            name: "label posts",
+            slug: `label-${POSTS}`,
+            action: "label",
+            resource: POSTS,
+          },
+        });
+        await expect(
+          checkedAs(onlyHolds.get("create-permissions")!).permissions.delete({
+            id: made.item.id,
+          })
+        ).rejects.toMatchObject(FORBIDDEN);
+        await expect(
+          checkedAs(onlyHolds.get("delete-permissions")!).permissions.delete({
+            id: made.item.id,
+          })
+        ).resolves.toMatchObject({ item: { id: made.item.id } });
+      });
+
+      it("lets each settings grant do its own field-group write and no other", async () => {
+        const slug = `fg_${tag}_by_grant`;
+        const creator = checkedAs(onlyHolds.get("create-settings")!);
+        await creator.fieldGroups.create({
+          slug,
+          label: "Own",
+          fields: FIELDS,
+        });
+        await expect(
+          creator.fieldGroups.update({ slug, data: { label: "Not mine" } })
+        ).rejects.toMatchObject(FORBIDDEN);
+
+        await checkedAs(onlyHolds.get("update-settings")!).fieldGroups.update({
+          slug,
+          data: { label: "Updated" },
+        });
+        expect((await trusted.fieldGroups.findBySlug({ slug }))?.label).toBe(
+          "Updated"
+        );
+        await expect(
+          checkedAs(onlyHolds.get("update-settings")!).fieldGroups.delete({
+            slug,
+          })
+        ).rejects.toMatchObject(FORBIDDEN);
+
+        await checkedAs(onlyHolds.get("delete-settings")!).fieldGroups.delete({
+          slug,
+        });
+        expect(
+          await trusted.fieldGroups.findBySlug({ slug, disableErrors: true })
+        ).toBeNull();
       });
     });
 

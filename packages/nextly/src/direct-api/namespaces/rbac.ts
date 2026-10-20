@@ -22,6 +22,7 @@ import {
   apiKeyViewer,
   type ApiKeyMeta,
 } from "../../domains/auth/services/api-key-service";
+import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
   CheckAccessArgs,
@@ -56,37 +57,7 @@ import {
   checkWrite,
   mapPermission,
   mapRole,
-  type RouteGrant,
 } from "./helpers";
-
-/**
- * What each role write asks of a checked caller: the permission the REST
- * route asks (`requirePermission(req, action, "roles")`).
- */
-const ROLE_WRITE = {
-  create: { action: "create", resource: "roles" },
-  update: { action: "update", resource: "roles" },
-  delete: { action: "delete", resource: "roles" },
-} as const satisfies Record<string, RouteGrant>;
-
-/**
- * What each permission write asks of a checked caller: the REST route's own
- * action on `permissions`, or `manage-permissions`, either one.
- */
-const PERMISSION_WRITE = {
-  create: {
-    anyOf: [
-      { action: "create", resource: "permissions" },
-      { action: "manage", resource: "permissions" },
-    ],
-  },
-  delete: {
-    anyOf: [
-      { action: "delete", resource: "permissions" },
-      { action: "manage", resource: "permissions" },
-    ],
-  },
-} as const satisfies Record<string, RouteGrant>;
 
 /**
  * `nextly.roles.*` namespace — role CRUD and permission assignment.
@@ -157,7 +128,11 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
 
     async create(args: CreateRoleArgs): Promise<MutationResult<Role>> {
       // Checked as the REST route checks it, before anything is written.
-      await checkWrite(ctx.defaultConfig, args, ROLE_WRITE.create);
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.create
+      );
       // Pass through caller-provided permissionIds and childRoleIds.
       // Previously these were hardcoded to empty arrays, which made
       // every create call fail against the service's validation
@@ -182,7 +157,11 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async update(args: UpdateRoleArgs): Promise<MutationResult<Role>> {
-      await checkWrite(ctx.defaultConfig, args, ROLE_WRITE.update);
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.update
+      );
       // PR 4: updateRole returns void; getRoleById returns the role
       // directly. Both throw on failure.
       await ctx.rbacRoleService.updateRole(args.id, {
@@ -201,7 +180,11 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     async delete(
       args: DeleteRoleArgs
     ): Promise<MutationResult<{ id: string }>> {
-      await checkWrite(ctx.defaultConfig, args, ROLE_WRITE.delete);
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.delete
+      );
       // PR 4: deleteRole returns void; throws on failure.
       await ctx.rbacRoleService.deleteRole(args.id);
       return {
@@ -236,8 +219,11 @@ export function createRolesNamespace(ctx: NextlyContext): RolesNamespace {
     },
 
     async setPermissions(args: SetRolePermissionsArgs): Promise<Permission[]> {
-      // Changing what a role grants is updating the role, as over REST.
-      await checkWrite(ctx.defaultConfig, args, ROLE_WRITE.update);
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.roles.setPermissions
+      );
       const updatedPerms =
         await ctx.rbacRolePermissionService.setRolePermissions(
           args.roleId,
@@ -336,7 +322,11 @@ export function createPermissionsNamespace(
     async create(
       args: CreatePermissionArgs
     ): Promise<MutationResult<Permission>> {
-      await checkWrite(ctx.defaultConfig, args, PERMISSION_WRITE.create);
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.permissions.create
+      );
       const { name, slug, action, resource, description } = args.data;
 
       // PR 4: ensurePermission returns `{ id, created }` directly and
@@ -362,7 +352,11 @@ export function createPermissionsNamespace(
     async delete(
       args: DeletePermissionArgs
     ): Promise<MutationResult<{ id: string }>> {
-      await checkWrite(ctx.defaultConfig, args, PERMISSION_WRITE.delete);
+      await checkWrite(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.permissions.delete
+      );
       // PR 4: deletePermissionById returns void; throws on failure.
       await ctx.rbacPermissionService.deletePermissionById(args.id);
       // envelope so callers can surface a server-authored toast.
