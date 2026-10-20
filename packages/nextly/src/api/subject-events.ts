@@ -279,11 +279,7 @@ async function authorizeSubject(
   }
   if (caller.overrideAccess) return { life: "current", ended };
   const visibleParts = await authorizeLiveDocument(subject, query, caller);
-  return {
-    life: "current",
-    ended,
-    ...(visibleParts === null ? {} : { visibleParts }),
-  };
+  return { life: "current", ended, visibleParts };
 }
 
 /**
@@ -292,14 +288,13 @@ async function authorizeSubject(
  * it first: the Direct API, a plugin, and the read by subject.
  *
  * Returns the parts the caller may be shown: the shared part and each
- * language they may read the document in, or null when the install has no
- * languages and the document's read covers every event.
+ * language they may read the document in.
  */
 async function authorizeLiveDocument(
   subject: Exclude<ContentEventSubject, { kind: "release" }>,
   query: ContentEventQuery,
   caller: SubjectEventsCaller
-): Promise<readonly string[] | null> {
+): Promise<readonly string[]> {
   const { user } = caller;
   if (user === undefined) throw refused(subject, "anonymous");
   if (!(await canReadEntity(subject.slug, readerOf(caller)))) {
@@ -328,7 +323,7 @@ async function authorizeLiveDocument(
     caller.authenticatedScope,
     hookInputs
   );
-  return readable === null ? null : [...readable, SHARED_PART];
+  return [...readable, SHARED_PART];
 }
 
 /**

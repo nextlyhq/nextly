@@ -19,6 +19,7 @@ import { z } from "zod";
 
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { authorizationGroups } from "../auth/entity-read-access";
 import type { FieldConfig } from "../collections/fields/types";
 import { getService } from "../di";
 import { container } from "../di/container";
@@ -224,7 +225,7 @@ export async function historyListLanguages(
     user,
     authenticatedScope
   );
-  return readable === null ? {} : { locales: [...readable] };
+  return { locales: [...readable] };
 }
 
 /**
@@ -258,7 +259,7 @@ export async function assertHistoryLocalesReadable(
     hookInputs,
     named
   );
-  if (allowed !== null && named.some(locale => !allowed.has(locale))) {
+  if (named.some(locale => !allowed.has(locale))) {
     // Not found, as the document half answers, so a refused language does
     // not confirm that the document has history in it.
     throw NextlyError.notFound({
@@ -274,15 +275,18 @@ export async function assertHistoryLocalesReadable(
 }
 
 /**
- * The languages of a document the caller may read its history in, or `null`
- * when the install configures none, so a read has no language to answer for
- * and the document's own read covers every entry.
+ * The languages of a document the caller may read its history in.
  *
  * Asked of the document's read in each language, because a read rule or hook
  * may answer differently per language: it is handed that language's values.
  * A language no longer configured is never readable here. A read in it would
  * resolve to the default language and answer for that instead, which is not
- * an answer about the entries written in it.
+ * an answer about the entries written in it. That includes every language
+ * once an install configures none: history recorded in a language before
+ * localization was removed stays, and nothing can be asked about it.
+ *
+ * Asked in bounded groups: each question is a full document read, and an
+ * install may configure any number of languages.
  *
  * `among` narrows the question to the languages a read names, so a read of
  * one language asks once rather than once per configured language.
@@ -298,26 +302,31 @@ export async function readableHistoryLocales(
   authenticatedScope: AuthenticatedScope | undefined,
   hookInputs: DocumentReadHookInputs = {},
   among?: readonly string[]
-): Promise<ReadonlySet<string> | null> {
-  const configured = configuredLocales();
-  if (configured === null) return null;
+): Promise<ReadonlySet<string>> {
+  const configured = configuredLocales() ?? new Set<string>();
   const asked = (among ?? [...configured]).filter(locale =>
     configured.has(locale)
   );
-  const verdicts = await Promise.all(
-    asked.map(locale =>
-      canReadLiveDocument(
-        scopeKind,
-        slug,
-        entryId,
-        user,
-        authenticatedScope,
-        hookInputs,
-        locale
+  const readable = new Set<string>();
+  for (const group of authorizationGroups(asked)) {
+    const verdicts = await Promise.all(
+      group.map(locale =>
+        canReadLiveDocument(
+          scopeKind,
+          slug,
+          entryId,
+          user,
+          authenticatedScope,
+          hookInputs,
+          locale
+        )
       )
-    )
-  );
-  return new Set(asked.filter((_, index) => verdicts[index]));
+    );
+    group.forEach((locale, index) => {
+      if (verdicts[index]) readable.add(locale);
+    });
+  }
+  return readable;
 }
 
 /**

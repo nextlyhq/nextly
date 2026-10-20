@@ -52,6 +52,7 @@ import type { AuthUserId } from "../../../types/auth";
 import { ensureCoreContentEventKinds } from "../../content-events/core-kinds";
 import { recordContentEvent } from "../../content-events/record";
 import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
+import { VersionsRepository } from "../versions-repository";
 
 let current: TestNextly | undefined;
 let services: PluginContext["services"] | undefined;
@@ -74,10 +75,21 @@ afterEach(async () => {
  * values. A typed refusal, as a hook refuses a read; any other throw is the
  * read failing.
  */
-const closedRegion = ({ data, user }: { data?: unknown; user?: unknown }) => {
+const closedRegion = ({
+  data,
+  user,
+  req,
+}: {
+  data?: unknown;
+  user?: unknown;
+  req?: { headers?: Record<string, string> };
+}) => {
   if (
     user !== undefined &&
-    (data as { region?: string } | undefined)?.region === "closed"
+    (data as { region?: string } | undefined)?.region === "closed" &&
+    // A pass the request carries opens it, as a hook trusting a verified
+    // header does.
+    req?.headers?.["x-region-pass"] !== "yes"
   ) {
     throw NextlyError.forbidden({ logContext: { reason: "region-closed" } });
   }
@@ -219,12 +231,13 @@ async function keyHolding(t: TestNextly, slugs: string[]): Promise<string> {
 async function restGet(
   key: string,
   segments: string[],
-  query: Record<string, string> = {}
+  query: Record<string, string> = {},
+  headers: Record<string, string> = {}
 ): Promise<Response> {
   const search = new URLSearchParams(query).toString();
   const request = new Request(
     `http://localhost/api/${segments.join("/")}${search ? `?${search}` : ""}`,
-    { headers: { authorization: `Bearer ${key}` } }
+    { headers: { ...headers, authorization: `Bearer ${key}` } }
   );
   return createDynamicHandlers().GET(request, {
     params: Promise.resolve({ params: segments }),
@@ -555,39 +568,56 @@ describe.each(getConfiguredTestDialects())(
         id
       );
       // The published version routes, called as an app's route file does.
-      const routeRequest = (path: string) =>
+      const routeRequest = (
+        path: string,
+        headers: Record<string, string> = {}
+      ) =>
         new Request(`http://localhost/api/versions/${path}`, {
-          headers: { authorization: `Bearer ${key}` },
+          headers: { ...headers, authorization: `Bearer ${key}` },
         });
       const document = { kind: "collection", slug: "regional", id };
-      const standalone = (locale: "en" | "es") => {
+      const standalone = (
+        locale: "en" | "es",
+        headers: Record<string, string>
+      ) => {
         const [from, to] = byLanguage.get(locale) ?? [];
         return [
           listRoute(
-            routeRequest(`collection/regional/${id}?locale=${locale}`),
+            routeRequest(`collection/regional/${id}?locale=${locale}`, headers),
+            { params: Promise.resolve(document) }
+          ),
+          detailRoute(
+            routeRequest(`collection/regional/${id}/${from}`, headers),
             {
-              params: Promise.resolve(document),
+              params: Promise.resolve({ ...document, versionNo: String(from) }),
             }
           ),
-          detailRoute(routeRequest(`collection/regional/${id}/${from}`), {
-            params: Promise.resolve({ ...document, versionNo: String(from) }),
-          }),
           diffRoute(
             routeRequest(
-              `collection/regional/${id}/diff?from=${from}&to=${to}`
+              `collection/regional/${id}/diff?from=${from}&to=${to}`,
+              headers
             ),
             { params: Promise.resolve(document) }
           ),
         ];
       };
+      // REST and the published routes, the request carrying these headers.
+      const restWays = async (
+        locale: "en" | "es",
+        headers: Record<string, string> = {}
+      ) => [
+        await okOrNot(restGet(key, entry, { locale }, headers)),
+        await okOrNot(
+          restGet(key, [...entry, "events"], { part: locale }, headers)
+        ),
+        await okOrNot(
+          restGet(key, [...entry, "versions"], { locale }, headers)
+        ),
+        ...(await Promise.all(standalone(locale, headers).map(okOrNot))),
+      ];
 
       const waysIn = async (locale: "en" | "es") => ({
-        rest: [
-          await okOrNot(restGet(key, entry, { locale })),
-          await okOrNot(restGet(key, [...entry, "events"], { part: locale })),
-          await okOrNot(restGet(key, [...entry, "versions"], { locale })),
-          ...(await Promise.all(standalone(locale).map(okOrNot))),
-        ],
+        rest: await restWays(locale),
         directApi: [
           await outcome(
             t.nextly.findByID({
@@ -637,6 +667,13 @@ describe.each(getConfiguredTestDialects())(
         ).toEqual([expected, expected, expected]);
       }
 
+      // The request behind a history read reaches the hooks of every
+      // language it asks about, as it reaches the document read beside it:
+      // a pass that opens Spanish to the document read opens its history.
+      expect(await restWays("es", { "x-region-pass": "yes" })).toEqual(
+        Array(6).fill("readable")
+      );
+
       // The published list route, naming no language, lists none it refuses.
       const listed = await listRoute(
         routeRequest(`collection/regional/${id}`),
@@ -648,6 +685,95 @@ describe.each(getConfiguredTestDialects())(
       };
       expect(items.map(item => item.locale)).toContain("en");
       expect(items.map(item => item.locale)).not.toContain("es");
+    }, 120_000);
+
+    it("withholds history recorded in a language once the install configures none", async () => {
+      // An install without localization, holding history from when it had it.
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "plain",
+            versions: true,
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const t = current;
+      await seedPermissionsAndRolePresets();
+      founder = await seedLiveAuthor(t);
+      const reader = await personHolding(t, ["read-plain"]);
+      const created = await t.nextly.create({
+        collection: "plain",
+        data: { title: "one" },
+      });
+      const id = (created.item as { id: string }).id;
+      await t.nextly.update({
+        collection: "plain",
+        id,
+        data: { title: "two" },
+      });
+      const subject = { kind: "collection" as const, slug: "plain", id };
+      const repo = new VersionsRepository(
+        t.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      );
+      await repo.insertVersion({
+        ref: { scopeKind: "collection", scopeSlug: "plain", entryId: id },
+        versionNo: 3,
+        status: "draft",
+        isAutosave: false,
+        snapshot: { title: "dos" },
+        locale: "es",
+      });
+      ensureCoreContentEventKinds();
+      await t.adapter.transaction(tx =>
+        recordContentEvent(tx, {
+          subject,
+          kind: "saved",
+          actor: { kind: "system" },
+          note: "in Spanish, before",
+          versionNo: 3,
+          parts: { locales: ["es"] },
+        })
+      );
+      const document = {
+        scopeKind: "collection" as const,
+        slug: "plain",
+        entryId: id,
+        user: { id: reader },
+      };
+
+      // Trusted code still reads all of it: the rows are there.
+      expect(
+        (await versionsByLanguage(t, "collection", "plain", id)).get("es")
+      ).toEqual([3]);
+      expect(
+        (await t.nextly.contentEvents.list({ subject })).items.map(e => e.note)
+      ).toContain("in Spanish, before");
+
+      // A reader gets the document's history in no language, and none of it
+      // in a language nothing can be asked about.
+      const versions = await listVersionsForDocument(document);
+      expect(versions.items.map(v => v.locale)).toEqual([null, null]);
+      const events = await t.nextly.contentEvents.list({
+        subject,
+        ...asPerson(reader),
+      });
+      expect(events.items.map(e => e.kind)).toEqual(["saved", "created"]);
+      expect(events.items.flatMap(e => e.parts)).not.toContain("es");
+      expect([
+        await outcome(listVersionsForDocument({ ...document, locale: "es" })),
+        await outcome(getVersionForDocument({ ...document, versionNo: 3 })),
+        await outcome(
+          t.nextly.contentEvents.list({
+            subject,
+            parts: ["es"],
+            ...asPerson(reader),
+          })
+        ),
+      ]).toEqual(["refused", "refused", "refused"]);
     }, 120_000);
 
     it("judges a history read by the document the read loaded, not by the id its output carries", async () => {
