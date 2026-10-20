@@ -4,10 +4,11 @@
  * A request can ask about the same caller many times: a collection gate, a
  * route gate, a rule's context, and the field rules on every row of a list.
  * Each asked the database again, so a list of N rows with field rules cost a
- * role and permission lookup per row. Within one request the answer cannot
- * change unless the request itself changes a role, so each lookup is made once
- * and its result reused, and any role or permission write in the request
- * forgets everything kept so far.
+ * role and permission lookup per row. Within one request the answer changes
+ * only when the request itself changes a role or a role assignment expires, so
+ * each lookup is made once and its result reused; any role or permission write
+ * in the request forgets everything kept so far, and what is kept about a user
+ * is forgotten when a role assignment it came from expires.
  *
  * Only lookups on the pool are kept. A lookup handed a transaction reads that
  * transaction's own uncommitted rows, which may differ from the pool's and
@@ -18,7 +19,16 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 
-const lookups = new AsyncLocalStorage<Map<string, Promise<unknown>>>();
+/**
+ * What a request has looked up about one user, and the moment it stops
+ * holding: the soonest expiry of a role assignment any of it came from.
+ */
+type KeptForUser = {
+  until: number | undefined;
+  answers: Map<string, Promise<unknown>>;
+};
+
+const lookups = new AsyncLocalStorage<Map<string, KeptForUser>>();
 
 /**
  * Runs `operation` with a memo for the request. A memo already open is kept,
@@ -30,24 +40,54 @@ export function runWithAccessMemo<T>(operation: () => T): T {
 }
 
 /**
- * The result of `load` under `key`, looked up once per request. A lookup that
- * fails is not kept, so the next ask tries again rather than repeating the
- * failure for the rest of the request.
+ * The answer to `question` about `userId`, looked up once per request. A
+ * lookup that fails is not kept, so the next ask tries again rather than
+ * repeating the failure for the rest of the request.
  */
 export function rememberForRequest<T>(
-  key: string,
+  userId: string,
+  question: string,
   load: () => Promise<T>
 ): Promise<T> {
   const memo = lookups.getStore();
   if (!memo) return load();
-  const known = memo.get(key) as Promise<T> | undefined;
+  const { answers } = keptFor(memo, userId);
+  const known = answers.get(question) as Promise<T> | undefined;
   if (known) return known;
   const made = load();
-  memo.set(key, made);
+  answers.set(question, made);
   made.catch(() => {
-    if (memo.get(key) === made) memo.delete(key);
+    if (answers.get(question) === made) answers.delete(question);
   });
   return made;
+}
+
+/**
+ * Records that what the request knows about `userId` stops holding at
+ * `moment` (epoch milliseconds), when a role assignment it came from expires.
+ * Every answer about the user is forgotten then, so none outlives the role,
+ * however long the request runs. Called wherever an answer is read: a role
+ * walk, and each cache that serves one.
+ */
+export function answersHoldUntil(
+  userId: string,
+  moment: number | undefined
+): void {
+  const memo = lookups.getStore();
+  if (!memo || moment === undefined) return;
+  const kept = keptFor(memo, userId);
+  kept.until = kept.until === undefined ? moment : Math.min(kept.until, moment);
+}
+
+/** What the request still holds about `userId`; nothing once it has lapsed. */
+function keptFor(memo: Map<string, KeptForUser>, userId: string): KeptForUser {
+  const kept = memo.get(userId);
+  if (kept && (kept.until === undefined || Date.now() < kept.until)) {
+    return kept;
+  }
+  const fresh: KeptForUser = { until: undefined, answers: new Map() };
+  memo.set(userId, fresh);
+  return fresh;
 }
 
 /**

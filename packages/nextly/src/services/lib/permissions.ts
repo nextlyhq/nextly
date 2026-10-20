@@ -20,6 +20,7 @@ import { and, eq, inArray, ne } from "drizzle-orm";
 // (e.g. first dispatcher-touched module in the run). Relative paths
 // are deterministic.
 import {
+  answersHoldUntil,
   forgetRequestAccess,
   rememberForRequest,
 } from "../../auth/access/request-memo";
@@ -250,6 +251,32 @@ class PermissionChecker {
     // Defaults to the pooled connection when omitted.
     executor?: unknown
   ): Promise<boolean> {
+    try {
+      return await this.answerPermission(userId, action, resource, executor);
+    } catch {
+      getAuthLogger()?.log?.("error", {
+        category: "auth",
+        op: "error",
+        userId,
+        action,
+        resource,
+      });
+      return false; // fail-closed
+    }
+  }
+
+  /**
+   * The decision behind {@link hasPermission}, which throws on a failed read
+   * rather than answering `false`. A denial that only reflects a failure must
+   * not be kept as the answer, by the request's memo or by any cache here.
+   */
+  async answerPermission(
+    userId: string,
+    action: string,
+    resource: string,
+    // Optional transaction-bound executor; see `hasPermission`.
+    executor?: unknown
+  ): Promise<boolean> {
     if (!userId || !action || !resource) {
       getAuthLogger()?.log?.("debug", {
         category: "auth",
@@ -293,7 +320,7 @@ class PermissionChecker {
     // pooled query, so making it from inside the caller's transaction is the
     // same re-entry the epoch refresh above avoids.
     if (!executor) {
-      const remembered = this.servedFromMemory(key);
+      const remembered = this.servedFromMemory(key, userId);
       if (typeof remembered === "boolean") return remembered;
 
       const stored = await this.servedFromSharedTier(
@@ -304,88 +331,98 @@ class PermissionChecker {
       if (typeof stored === "boolean") return stored;
     }
 
-    // Tier 3: Fresh computation (~10ms)
-    try {
-      // With the moment the answer stops holding, so no tier below serves it
-      // past the expiry of a role it was computed from.
-      const { roleIds, validUntil } = await this.resolveRoles(userId, executor);
+    // Tier 3: Fresh computation (~10ms).
+    return this.freshAnswer(
+      key,
+      { userId, action, resource },
+      executor,
+      resolvedUnder
+    );
+  }
 
-      if (roleIds.size === 0) {
-        // Cache tiers are populated only for pooled (committed-view) checks; an
-        // executor-backed result must not leak into them (see the top-of-method
-        // skip). The DB write is also a pooled query the transaction would block on.
-        // And not at all if these rows were invalidated while the read ran.
-        if (!executor && resolvedUnderCurrentRevision(resolvedUnder)) {
-          this.memo.set(key, false);
-          // A user with no roles is denied, and that denial is stored on the
-          // same terms as an answer computed from roles: a first role granted
-          // while the write is in flight would otherwise be outlived by a
-          // stored `false`. A denial surviving its cause is as wrong as a
-          // grant surviving its own.
-          if (this.cacheService) {
-            storeSharedDecision(this.cacheService, {
-              userId,
-              action,
-              resource,
-              allowed: false,
-              roleIds: [],
-              resolvedUnder,
-              validUntil,
-            });
-          }
+  /**
+   * Tier 3: the answer computed from the user's roles, filed in the cache
+   * tiers when it may be. A failed read throws to the caller, so nothing here
+   * keeps a denial that only reflects the failure.
+   */
+  private async freshAnswer(
+    key: string,
+    check: { userId: string; action: string; resource: string },
+    executor: unknown,
+    resolvedUnder: ReturnType<typeof currentEpoch>
+  ): Promise<boolean> {
+    const { userId, action, resource } = check;
+    // With the moment the answer stops holding, so no tier below serves it
+    // past the expiry of a role it was computed from.
+    const { roleIds, validUntil } = await this.resolveRoles(userId, executor);
+
+    if (roleIds.size === 0) {
+      // Cache tiers are populated only for pooled (committed-view) checks; an
+      // executor-backed result must not leak into them (see the skip at the
+      // top of `answerPermission`). The DB write is also a pooled query the
+      // transaction would block on. And not at all if these rows were
+      // invalidated while the read ran.
+      if (!executor && resolvedUnderCurrentRevision(resolvedUnder)) {
+        this.memo.set(key, false);
+        // A user with no roles is denied, and that denial is stored on the
+        // same terms as an answer computed from roles: a first role granted
+        // while the write is in flight would otherwise be outlived by a
+        // stored `false`. A denial surviving its cause is as wrong as a
+        // grant surviving its own.
+        if (this.cacheService) {
+          storeSharedDecision(this.cacheService, {
+            userId,
+            action,
+            resource,
+            allowed: false,
+            roleIds: [],
+            resolvedUnder,
+            validUntil,
+          });
         }
-        return false;
       }
-      const allowed = await this.roleSetHasPermission(
-        Array.from(roleIds),
-        action,
-        resource,
-        executor
-      );
+      return false;
+    }
+    const allowed = await this.roleSetHasPermission(
+      Array.from(roleIds),
+      action,
+      resource,
+      executor
+    );
 
-      // Populate the cache tiers only for pooled checks. An executor-backed
-      // result reflects the caller's uncommitted transaction and must not be
-      // promoted into the process-wide caches (see the top-of-method skip).
-      const cacheable =
-        !executor && resolvedUnderCurrentRevision(resolvedUnder);
-      if (cacheable) {
-        this.memo.set(key, allowed);
-        setCacheEntry(key, allowed, userId, Array.from(roleIds), validUntil);
-      }
+    // Populate the cache tiers only for pooled checks. An executor-backed
+    // result reflects the caller's uncommitted transaction and must not be
+    // promoted into the process-wide caches (see the skip at the top of
+    // `answerPermission`).
+    const cacheable = !executor && resolvedUnderCurrentRevision(resolvedUnder);
+    if (cacheable) {
+      this.memo.set(key, allowed);
+      setCacheEntry(key, allowed, userId, Array.from(roleIds), validUntil);
+    }
 
-      // Async write to DB cache (don't block response). Skipped under a
-      // transaction executor for the same pooled-query reason as the read above.
-      //
-      // Checked again AFTER the upsert, not only before it. This write is not
-      // awaited, so an invalidation can tombstone the table while it is still
-      // in flight and the upsert then lands behind it with a fresh expiry —
-      // into the tier that is shared between instances and lives for a day, so
-      // it would outlast every other copy here. Tombstoning this user's rows
-      // when that happens is the write-then-verify half: either the
-      // invalidation caught the row, or this does.
-      if (this.cacheService && cacheable) {
-        storeSharedDecision(this.cacheService, {
-          userId,
-          action,
-          resource,
-          allowed,
-          roleIds: Array.from(roleIds),
-          resolvedUnder,
-          validUntil,
-        });
-      }
-
-      return allowed;
-    } catch {
-      getAuthLogger()?.log?.("error", {
-        category: "auth",
-        op: "error",
+    // Async write to DB cache (don't block response). Skipped under a
+    // transaction executor for the same pooled-query reason as the read above.
+    //
+    // Checked again AFTER the upsert, not only before it. This write is not
+    // awaited, so an invalidation can tombstone the table while it is still
+    // in flight and the upsert then lands behind it with a fresh expiry —
+    // into the tier that is shared between instances and lives for a day, so
+    // it would outlast every other copy here. Tombstoning this user's rows
+    // when that happens is the write-then-verify half: either the
+    // invalidation caught the row, or this does.
+    if (this.cacheService && cacheable) {
+      storeSharedDecision(this.cacheService, {
         userId,
         action,
         resource,
+        allowed,
+        roleIds: Array.from(roleIds),
+        resolvedUnder,
+        validUntil,
       });
-      return false; // fail-closed
     }
+
+    return allowed;
   }
 
   /**
@@ -395,7 +432,7 @@ class PermissionChecker {
    * cached on the same terms as a grant, so the two have to stay tellable
    * apart all the way back to the caller.
    */
-  private servedFromMemory(key: string): boolean | undefined {
+  private servedFromMemory(key: string, userId: string): boolean | undefined {
     const memoed = this.memo.get(key);
     if (typeof memoed === "boolean") return memoed;
 
@@ -403,6 +440,9 @@ class PermissionChecker {
     if (!hit) return undefined;
 
     if (servable(hit)) {
+      // The entry ends at the expiry of a role it came from, and so does the
+      // request's copy of it.
+      answersHoldUntil(userId, hit.expiresAt);
       this.memo.set(key, hit.value);
       // refresh LRU by deleting+setting
       cache.delete(key);
@@ -452,6 +492,7 @@ class PermissionChecker {
       // does: the row may end early, at the expiry of a role it came from.
       this.memo.set(key, stored.allowed);
       setCacheEntry(key, stored.allowed, userId, [], stored.expiresAt);
+      answersHoldUntil(userId, stored.expiresAt);
       return stored.allowed;
     } catch (error) {
       // Log but don't fail - fall through to fresh computation
@@ -515,9 +556,12 @@ class PermissionChecker {
     if (executor !== undefined || this.ownDatabase) {
       return this.walkRoles(userId, executor);
     }
-    return rememberForRequest(`roles\u0000${userId}`, () =>
-      this.walkRoles(userId)
-    );
+    return rememberForRequest(userId, "roles", async () => {
+      const resolved = await this.walkRoles(userId);
+      // Nothing the request keeps about this user outlives these roles.
+      answersHoldUntil(userId, resolved.validUntil);
+      return resolved;
+    });
   }
 
   private async walkRoles(
@@ -608,45 +652,39 @@ class PermissionChecker {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { roles, rolePermissions, permissions } = this.t as any;
 
-    // Super Admin bypass: any role with slug 'super-admin' grants all permissions
-    try {
-      const superAdmin = await rbacQuery(executor)
-        .select({ id: roles.id })
-        .from(roles)
-        .where(and(inArray(roles.id, roleIds), eq(roles.slug, "super-admin")))
-        .limit(1);
-      if (superAdmin.length > 0) return true;
+    // Super Admin bypass: any role with slug 'super-admin' grants all permissions.
+    // A failed read throws: the caller fails closed without keeping the denial.
+    const superAdmin = await rbacQuery(executor)
+      .select({ id: roles.id })
+      .from(roles)
+      .where(and(inArray(roles.id, roleIds), eq(roles.slug, "super-admin")))
+      .limit(1);
+    if (superAdmin.length > 0) return true;
 
-      // Step 1: resolve permission id by action+resource
-      const perm = await rbacQuery(executor)
-        .select({ id: permissions.id })
-        .from(permissions)
-        .where(
-          and(
-            eq(permissions.action, action),
-            eq(permissions.resource, resource)
-          )
+    // Step 1: resolve permission id by action+resource
+    const perm = await rbacQuery(executor)
+      .select({ id: permissions.id })
+      .from(permissions)
+      .where(
+        and(eq(permissions.action, action), eq(permissions.resource, resource))
+      )
+      .limit(1);
+    const permId = (perm[0]?.id ?? null) as string | null;
+    if (!permId) return false;
+
+    // Step 2: check existence of mapping for any of the roles
+    const rows = await rbacQuery(executor)
+      .select({ id: rolePermissions.id })
+      .from(rolePermissions)
+      .where(
+        and(
+          inArray(rolePermissions.roleId, roleIds),
+          eq(rolePermissions.permissionId, permId)
         )
-        .limit(1);
-      const permId = (perm[0]?.id ?? null) as string | null;
-      if (!permId) return false;
+      )
+      .limit(1);
 
-      // Step 2: check existence of mapping for any of the roles
-      const rows = await rbacQuery(executor)
-        .select({ id: rolePermissions.id })
-        .from(rolePermissions)
-        .where(
-          and(
-            inArray(rolePermissions.roleId, roleIds),
-            eq(rolePermissions.permissionId, permId)
-          )
-        )
-        .limit(1);
-
-      return rows.length > 0;
-    } catch {
-      return false;
-    }
+    return rows.length > 0;
   }
 }
 
@@ -745,11 +783,15 @@ export async function hasPermission(
 ): Promise<boolean> {
   try {
     const checker = new PermissionChecker(dialect);
-    const ask = () => checker.hasPermission(userId, action, resource, executor);
     // Asked once per request for each user, action and resource, on the pool.
+    // The throwing answer is what is kept, and a failure fails closed here, so
+    // a denial caused by a failed read is not the answer for the request.
+    const ask = () =>
+      checker.answerPermission(userId, action, resource, executor);
     if (executor !== undefined || dialect !== undefined) return await ask();
     return await rememberForRequest(
-      `permission\u0000${userId}\u0000${action}\u0000${resource}`,
+      userId,
+      `permission\u0000${action}\u0000${resource}`,
       ask
     );
   } catch {
@@ -829,7 +871,7 @@ export async function listEffectivePermissions(
     if (executor !== undefined) {
       return await loadEffectivePermissions(userId, executor);
     }
-    return await rememberForRequest(`permissions\u0000${userId}`, () =>
+    return await rememberForRequest(userId, "permissions", () =>
       loadEffectivePermissions(userId)
     );
   } catch (error) {
@@ -1291,7 +1333,7 @@ export async function isSuperAdmin(
   // answers `false` as before.
   if (executor === undefined) {
     try {
-      return await rememberForRequest(`super-admin\u0000${userId}`, () =>
+      return await rememberForRequest(userId, "super-admin", () =>
         superAdminOnPool(userId)
       );
     } catch (error) {
@@ -1320,7 +1362,12 @@ async function superAdminOnPool(userId: string): Promise<boolean> {
   // demotion performed on another instance has to reach this one.
   const resolvedUnder = await refreshEpoch();
   const cached = superAdminCache.get(userId);
-  if (cached && servable(cached)) return cached.value;
+  if (cached && servable(cached)) {
+    // The entry ends at the expiry of the role that gave it; so does the
+    // request's copy.
+    answersHoldUntil(userId, cached.expiresAt);
+    return cached.value;
+  }
   return decideSuperAdmin(userId, undefined, resolvedUnder);
 }
 
@@ -1610,9 +1657,7 @@ export async function listRoleSlugsForUserStrict(
   if (!userId) return [];
   // Looked up once per request on the pool; see `listEffectivePermissions`.
   if (executor !== undefined) return loadRoleSlugs(userId, executor);
-  return rememberForRequest(`role-slugs\u0000${userId}`, () =>
-    loadRoleSlugs(userId)
-  );
+  return rememberForRequest(userId, "role-slugs", () => loadRoleSlugs(userId));
 }
 
 /** The lookup behind {@link listRoleSlugsForUserStrict}; throws on failure. */
