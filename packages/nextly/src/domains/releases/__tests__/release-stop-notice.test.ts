@@ -114,3 +114,18 @@ describe("stopping a release before the notices table is migrated", () => {
     expect(JSON.stringify(warn.mock.calls[0][0])).toContain("nextly migrate");
   });
 });
+
+describe("the stopped notice's text", () => {
+  // A release is stopped with every due release it shares a document with, so
+  // its owner may have nothing of their own to fix. The text must say so
+  // rather than send every owner looking for a broken document of theirs.
+  it("names a shared release as a possible cause, not only the owner's own documents", () => {
+    const text = RELEASE_STOPPED_NOTICE.render(
+      { title: "Spring launch", scheduledAt: null },
+      { subjectGone: false }
+    );
+    expect(text.title).toBe("“Spring launch” stopped");
+    expect(text.body).toContain("shares documents with a release that has one");
+    expect(text.body).toContain("one of its documents has a problem");
+  });
+});

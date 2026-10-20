@@ -40,11 +40,14 @@ export const RELEASE_STOPPED_NOTICE =
     key: "releases.stopped",
     subjectType: "release",
     data: stoppedData,
+    // The cause is not recorded, and a release is also stopped when it shares
+    // documents with a due release that has a problem, so the text names both
+    // causes rather than telling every owner to look for a fault of their own.
     render: (data, { subjectGone }) => ({
       title: `“${data.title}” stopped`,
       body: subjectGone
         ? "The release has since been deleted."
-        : "A problem with one of its documents stopped it. Open it to see which, fix it, and schedule it again.",
+        : "It stopped because one of its documents has a problem, or because it shares documents with a release that has one. Open it to see what needs attention, then schedule it again.",
     }),
     // The releases that still exist, each with its page in the admin. One read
     // for a page of notices.
