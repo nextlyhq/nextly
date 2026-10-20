@@ -54,11 +54,33 @@ function skeletonItemsFor(definition: DashboardWidget): unknown {
   return definition.query?.limit ?? null;
 }
 
+/**
+ * How many columns a list or table card selects, which is how its skeleton is laid out at each
+ * tier. Undefined for any other card, whose skeleton has no rows to lay out.
+ */
+function skeletonFieldsFor(definition: DashboardWidget): number | undefined {
+  if (definition.archetype !== "list" && definition.archetype !== "table")
+    return undefined;
+  return definition.query?.select?.length ?? 0;
+}
+
+/**
+ * Whether a freshness line will come for this card: it asked for data, and its answer was not a
+ * refusal, which never gets a time. The card holds the line's place until then.
+ */
+function awaitsFreshnessFor(
+  definition: DashboardWidget,
+  slot: WidgetSlot | undefined
+): boolean {
+  return definition.query !== undefined && slot?.ok !== false;
+}
+
 function skeletonFor(archetype: string): SkeletonShape {
   switch (archetype) {
     case "metric":
-    case "stats":
       return "figure";
+    case "stats":
+      return "stats";
     case "timeseries":
       return "chart";
     case "bars":
@@ -220,6 +242,9 @@ export function WidgetRenderer({
     cardId: placement?.id ?? definition.id,
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
+    skeletonFields: skeletonFieldsFor(definition),
+    awaitsFreshness: awaitsFreshnessFor(definition, slot),
+    skeletonCells: definition.cells?.map(cell => cell.label),
     answerTier,
   };
 

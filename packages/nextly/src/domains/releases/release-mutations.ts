@@ -43,16 +43,37 @@
  * decision onto a call — the sweep is the write path's business, and lives
  * beside the write that has to be atomic with it.
  *
+ * ## Why the member is marked inside the write
+ *
+ * The drain needs to know afterwards whether a member's write landed: a pass
+ * the host ends part-way leaves the next pass to plan the same documents, and
+ * a write that rejected may still have committed. So the write carries a
+ * receipt (`runWithWriteReceipt`) that the content write path performs in its
+ * own transaction, once it has stored the live row: the member is marked with
+ * the release revision when the stored status is the one the action names.
+ * It commits exactly when the write does. A refused write rolls back and
+ * leaves no mark, and a write whose hook changed the status leaves none, so
+ * nothing needs to read the document back, where a read hook could rewrite
+ * what it reports.
+ *
  * @module domains/releases/release-mutations
  */
 
-import type { UserContext } from "../collections/services/collection-types";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
+import {
+  runWithWriteReceipt,
+  type WrittenState,
+} from "../../shared/lib/write-receipt";
 import { EVERY_LOCALE } from "../i18n/locale-selector";
 import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
 
-import type { ReleaseMutations } from "./apply-due-releases";
-import type { DocumentRef } from "./releases-repository";
+import type { ReleaseMutations, ReleaseWrite } from "./apply-due-releases";
+import {
+  forgetMemberApplied,
+  recordMemberApplied,
+} from "./releases-repository";
 
 /**
  * The status an unpublish lands on.
@@ -69,8 +90,7 @@ export function createReleaseMutations(deps: {
   contentApi: JobContentSource;
 }): ReleaseMutations {
   const write = async (
-    ref: DocumentRef,
-    user: UserContext,
+    { ref, user, receipt }: ReleaseWrite,
     status: string
   ): Promise<void> => {
     const content = createJobContentApi(user, deps.contentApi);
@@ -78,74 +98,59 @@ export function createReleaseMutations(deps: {
     // note. `undefined` would mean "the default language" and leave the rest live.
     const locale = ref.locale ?? EVERY_LOCALE;
 
-    if (ref.scopeKind === "single") {
-      await content.updateSingle({
-        slug: ref.scopeSlug as never,
-        data: { status },
-        locale,
+    // Marks the member only when the write stored the status this action
+    // names; a hook that changed it means the action did not happen. Any
+    // write to this document while the receipt is pinned reaches here,
+    // including one a hook makes after the action's own write committed, so a
+    // write that leaves another status takes the mark back: the document no
+    // longer carries the action, whatever an earlier write recorded.
+    const record = async (
+      tx: TransactionContext,
+      written: WrittenState
+    ): Promise<void> => {
+      if (written.status !== status) {
+        await forgetMemberApplied(tx, receipt.memberId);
+        return;
+      }
+      await recordMemberApplied(tx, {
+        id: receipt.memberId,
+        revision: receipt.revision,
+        ref,
       });
-      return;
-    }
+    };
 
-    await content.update({
-      collection: ref.scopeSlug as never,
-      id: ref.entryId,
-      data: { status },
-      locale,
-    });
-  };
+    await runWithWriteReceipt(
+      {
+        target: {
+          // The write below goes to a Single or else to a collection entry.
+          scopeKind: ref.scopeKind === "single" ? "single" : "collection",
+          scopeSlug: ref.scopeSlug,
+          entryId: ref.entryId,
+        },
+        record,
+      },
+      async () => {
+        if (ref.scopeKind === "single") {
+          await content.updateSingle({
+            slug: ref.scopeSlug as never,
+            data: { status },
+            locale,
+          });
+          return;
+        }
 
-  /** The stored lifecycle of whatever a document read returned. */
-  const statusOf = (doc: unknown): string | undefined => {
-    if (doc === null || typeof doc !== "object") return undefined;
-    const status = (doc as Record<string, unknown>).status;
-    return typeof status === "string" ? status : undefined;
-  };
-
-  const currentStatus = async (
-    ref: DocumentRef
-  ): Promise<string | undefined> => {
-    // TRUSTED, and deliberately not through the bound client. This read is not
-    // the member's action — it asks the database whether a write committed, so
-    // that a post-commit hook failure is not replayed forever. Running it as the
-    // author would deny it whenever that person may publish this scope but has
-    // no independent READ permission on it, and the verification would then
-    // report every committed write as failed for exactly the roles most likely
-    // to own a scheduled publish.
-    const content = deps.contentApi;
-    const locale = ref.locale ?? undefined;
-
-    if (ref.scopeKind === "single") {
-      const doc = await content.findSingle({
-        slug: ref.scopeSlug as never,
-        locale,
-        overrideAccess: true,
-        // The stored lifecycle, not what a published read would admit: a due
-        // release is applied AT READ TIME, so a bounded read would report the
-        // document as published whether or not this write landed.
-        status: "all",
-      } as never);
-      return statusOf(doc);
-    }
-
-    const doc = await content.findByID({
-      collection: ref.scopeSlug as never,
-      id: ref.entryId,
-      locale,
-      overrideAccess: true,
-      status: "all",
-    } as never);
-    return statusOf(doc);
+        await content.update({
+          collection: ref.scopeSlug as never,
+          id: ref.entryId,
+          data: { status },
+          locale,
+        });
+      }
+    );
   };
 
   return {
-    publish: ({ ref, user }) => write(ref, user, "published"),
-    unpublish: ({ ref, user }) => write(ref, user, WITHDRAWN_STATUS),
-    applied: async ({ ref, effect }) => {
-      const status = await currentStatus(ref);
-      return effect === "publish"
-        ? status === "published"
-        : status === WITHDRAWN_STATUS;
-    },
+    publish: input => write(input, "published"),
+    unpublish: input => write(input, WITHDRAWN_STATUS),
   };
 }

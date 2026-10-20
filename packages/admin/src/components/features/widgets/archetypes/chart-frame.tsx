@@ -63,6 +63,8 @@ export interface ChartRow {
    * now says what it is instead of relying on a colour.
    */
   announce?: string;
+  /** The count is a lower bound: drawn "N+" and heard "N or more", in the chart and its table. */
+  floor?: boolean;
 }
 
 export interface ChartFrameProps {
@@ -189,7 +191,7 @@ export function ChartFrame({
                     )}
                   </th>
                   <td className="py-1 text-right tabular-nums text-foreground">
-                    <CardFigure value={row.count} />
+                    <CardFigure value={row.count} floor={row.floor} />
                   </td>
                 </tr>
               ))}
