@@ -1,4 +1,5 @@
 // --- Transaction hooks registry ---
+import { maskEmailsWhenActive } from "../../observability/mask-emails";
 import type { TransactionHooks } from "../../types/database";
 
 export type DbLogLevel = "debug" | "info" | "warn" | "error" | "silent";
@@ -77,7 +78,9 @@ class DefaultDbLogger implements DbLogger {
   log(level: DbLogLevel, event: DbLogEventBase): void {
     if (!isEnabled(level)) return;
     const timeIso = new Date().toISOString();
-    const payload = { time: timeIso, level, ...event };
+    // Masked before it is written: a query error quotes the values it was
+    // given, an address among them.
+    const payload = maskEmailsWhenActive({ time: timeIso, level, ...event });
 
     if (level === "error") console.error("[db]", JSON.stringify(payload));
     else if (level === "warn") console.warn("[db]", JSON.stringify(payload));
@@ -185,7 +188,9 @@ export interface AuthLogger {
 class DefaultAuthLogger implements AuthLogger {
   log(level: AuthLogLevel, event: AuthLogEvent): void {
     const timeIso = new Date().toISOString();
-    const payload = { time: timeIso, level, ...event };
+    // Masked before it is written: an auth failure's message can name the
+    // address that was signing in.
+    const payload = maskEmailsWhenActive({ time: timeIso, level, ...event });
     if (level === "error") console.error("[auth]", JSON.stringify(payload));
     else if (level === "warn") console.warn("[auth]", JSON.stringify(payload));
     else console.log("[auth]", JSON.stringify(payload));

@@ -43,18 +43,37 @@
  * decision onto a call — the sweep is the write path's business, and lives
  * beside the write that has to be atomic with it.
  *
+ * ## Why the member is marked inside the write
+ *
+ * The drain needs to know afterwards whether a member's write landed: a pass
+ * the host ends part-way leaves the next pass to plan the same documents, and
+ * a write that rejected may still have committed. So the write carries a
+ * receipt (`runWithWriteReceipt`) that the content write path performs in its
+ * own transaction, once it has stored the live row: the member is marked with
+ * the release revision when the stored status is the one the action names.
+ * It commits exactly when the write does. A refused write rolls back and
+ * leaves no mark, and a write whose hook changed the status leaves none, so
+ * nothing needs to read the document back, where a read hook could rewrite
+ * what it reports.
+ *
  * @module domains/releases/release-mutations
  */
 
-import type { UserContext } from "../collections/services/collection-types";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
+import {
+  runWithWriteReceipt,
+  type WrittenState,
+} from "../../shared/lib/write-receipt";
 import { EVERY_LOCALE } from "../i18n/locale-selector";
 import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
-import type { VersionsRepository } from "../versions/versions-repository";
 
-import type { ReleaseMutations } from "./apply-due-releases";
-import type { ReleaseCheckReads } from "./readiness/check-sources";
-import type { DocumentRef } from "./releases-repository";
+import type { ReleaseMutations, ReleaseWrite } from "./apply-due-releases";
+import {
+  forgetMemberApplied,
+  recordMemberApplied,
+} from "./releases-repository";
 
 /**
  * The status an unpublish lands on.
@@ -66,46 +85,12 @@ import type { DocumentRef } from "./releases-repository";
  */
 const WITHDRAWN_STATUS = "draft";
 
-/**
- * A document's lifecycle as stored: the main row's own status and each stored
- * translation's, keyed by locale (empty where it keeps no translations).
- */
-export interface ReleaseStoredLifecycle {
-  status: string | null;
-  languages: ReadonlyMap<string, string | null>;
-}
-
-/**
- * What tells whether a release action already stands, answered as its write
- * would answer it.
- */
-export interface ReleaseSettlementReads {
-  /**
-   * The document's lifecycle read from storage, where no read hook can
-   * rewrite it; `null` where it cannot be read, which never counts as
-   * standing.
-   */
-  storedLifecycle(ref: DocumentRef): Promise<ReleaseStoredLifecycle | null>;
-  /** The access gate the action's write meets, for its author. */
-  mayPerform: ReleaseCheckReads["mayPerform"];
-}
-
 export function createReleaseMutations(deps: {
   /** The Direct API. Injected for the reason the applier's own deps are. */
   contentApi: JobContentSource;
-  /** Where a document's pending working drafts are read. */
-  drafts: Pick<VersionsRepository, "listWorkingDraftLocales">;
-  /**
-   * The stored lifecycle and the write's access gate. Without them nothing is
-   * reported settled, since the document read reports only the default
-   * language, through its read hooks, and judges no author; `applied` then
-   * reads the document back as it always has.
-   */
-  settlement?: ReleaseSettlementReads;
 }): ReleaseMutations {
   const write = async (
-    ref: DocumentRef,
-    user: UserContext,
+    { ref, user, receipt }: ReleaseWrite,
     status: string
   ): Promise<void> => {
     const content = createJobContentApi(user, deps.contentApi);
@@ -113,125 +98,59 @@ export function createReleaseMutations(deps: {
     // note. `undefined` would mean "the default language" and leave the rest live.
     const locale = ref.locale ?? EVERY_LOCALE;
 
-    if (ref.scopeKind === "single") {
-      await content.updateSingle({
-        slug: ref.scopeSlug as never,
-        data: { status },
-        locale,
+    // Marks the member only when the write stored the status this action
+    // names; a hook that changed it means the action did not happen. Any
+    // write to this document while the receipt is pinned reaches here,
+    // including one a hook makes after the action's own write committed, so a
+    // write that leaves another status takes the mark back: the document no
+    // longer carries the action, whatever an earlier write recorded.
+    const record = async (
+      tx: TransactionContext,
+      written: WrittenState
+    ): Promise<void> => {
+      if (written.status !== status) {
+        await forgetMemberApplied(tx, receipt.memberId);
+        return;
+      }
+      await recordMemberApplied(tx, {
+        id: receipt.memberId,
+        revision: receipt.revision,
+        ref,
       });
-      return;
-    }
+    };
 
-    await content.update({
-      collection: ref.scopeSlug as never,
-      id: ref.entryId,
-      data: { status },
-      locale,
-    });
-  };
+    await runWithWriteReceipt(
+      {
+        target: {
+          // The write below goes to a Single or else to a collection entry.
+          scopeKind: ref.scopeKind === "single" ? "single" : "collection",
+          scopeSlug: ref.scopeSlug,
+          entryId: ref.entryId,
+        },
+        record,
+      },
+      async () => {
+        if (ref.scopeKind === "single") {
+          await content.updateSingle({
+            slug: ref.scopeSlug as never,
+            data: { status },
+            locale,
+          });
+          return;
+        }
 
-  /** The stored lifecycle of whatever a document read returned. */
-  const statusOf = (doc: unknown): string | undefined => {
-    if (doc === null || typeof doc !== "object") return undefined;
-    const status = (doc as Record<string, unknown>).status;
-    return typeof status === "string" ? status : undefined;
-  };
-
-  const currentStatus = async (
-    ref: DocumentRef
-  ): Promise<string | undefined> => {
-    // TRUSTED, and deliberately not through the bound client. This read is not
-    // the member's action — it asks the database whether a write committed, so
-    // that a post-commit hook failure is not replayed forever. Running it as the
-    // author would deny it whenever that person may publish this scope but has
-    // no independent READ permission on it, and the verification would then
-    // report every committed write as failed for exactly the roles most likely
-    // to own a scheduled publish.
-    //
-    // Only where no settlement reads are given: this read runs the scope's
-    // read hooks and reports the default language alone, which those reads
-    // do not.
-    const content = deps.contentApi;
-    const locale = ref.locale ?? undefined;
-
-    if (ref.scopeKind === "single") {
-      const doc = await content.findSingle({
-        slug: ref.scopeSlug as never,
-        locale,
-        overrideAccess: true,
-        // The stored lifecycle, not what a published read would admit: a due
-        // release is applied AT READ TIME, so a bounded read would report the
-        // document as published whether or not this write landed.
-        status: "all",
-      } as never);
-      return statusOf(doc);
-    }
-
-    const doc = await content.findByID({
-      collection: ref.scopeSlug as never,
-      id: ref.entryId,
-      locale,
-      overrideAccess: true,
-      status: "all",
-    } as never);
-    return statusOf(doc);
-  };
-
-  /** Whether a stored lifecycle is the one an action leaves behind. */
-  const reached = (
-    status: string | undefined,
-    effect: "publish" | "unpublish"
-  ): boolean =>
-    effect === "publish" ? status === "published" : status === WITHDRAWN_STATUS;
-
-  const mutations: ReleaseMutations = {
-    publish: ({ ref, user }) => write(ref, user, "published"),
-    unpublish: ({ ref, user }) => write(ref, user, WITHDRAWN_STATUS),
-    applied: async ({ ref, effect }) =>
-      reached(await currentStatus(ref), effect),
-  };
-  const settlement = deps.settlement;
-  if (settlement === undefined) return mutations;
-
-  /**
-   * Whether the action stands as its write would leave it, for this author:
-   * the author passes the gate the write meets, and the stored main row and
-   * every stored translation already have the status the action leaves. The
-   * gate first, as the write asks it first: a document already live does not
-   * excuse an author who may no longer publish it.
-   */
-  const stands = async (
-    ref: DocumentRef,
-    effect: "publish" | "unpublish",
-    user: UserContext
-  ): Promise<boolean> => {
-    if (!(await settlement.mayPerform(user, ref, effect))) return false;
-    const stored = await settlement.storedLifecycle(ref);
-    if (stored === null) return false;
-    if (!reached(stored.status ?? undefined, effect)) return false;
-    for (const status of stored.languages.values()) {
-      if (!reached(status ?? undefined, effect)) return false;
-    }
-    return true;
+        await content.update({
+          collection: ref.scopeSlug as never,
+          id: ref.entryId,
+          data: { status },
+          locale,
+        });
+      }
+    );
   };
 
   return {
-    ...mutations,
-    // The same question after a write: a refused write leaves a document
-    // that was already live standing, and that is no proof the author's
-    // action was performed.
-    applied: ({ ref, effect, user }) => stands(ref, effect, user),
-    settled: async ({ ref, effect, user }) => {
-      if (!(await stands(ref, effect, user))) return false;
-      // A held working draft, in any language, is content the write would
-      // still promote, so the action is not a no-op while one exists. Every
-      // language, because a member names the whole document.
-      const held = await deps.drafts.listWorkingDraftLocales({
-        scopeKind: ref.scopeKind,
-        scopeSlug: ref.scopeSlug,
-        entryId: ref.entryId,
-      });
-      return held.length === 0;
-    },
+    publish: input => write(input, "published"),
+    unpublish: input => write(input, WITHDRAWN_STATUS),
   };
 }

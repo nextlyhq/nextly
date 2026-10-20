@@ -23,6 +23,14 @@ function adminLocale(): string {
   return getGlobalDateTimeConfig().locale ?? "en-US";
 }
 
+/**
+ * The locale a card's text is ordered in: the one its numbers are written in, so a chart that
+ * breaks a tie by label sorts as the same setup reads.
+ */
+export function cardLocale(): string {
+  return adminLocale();
+}
+
 /** A count, total or chart value, as drawn and as heard. */
 export function cardNumber(
   value: number,

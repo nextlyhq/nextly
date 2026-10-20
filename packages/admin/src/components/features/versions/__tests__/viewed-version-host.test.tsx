@@ -52,12 +52,17 @@ import {
 } from "../viewed-version-host";
 import type { FieldConfig } from "nextly/config";
 
+// The first version: nothing to compare it with, so it reads whole, through
+// the one form these contracts are about.
 const viewing: ViewedVersion = {
   versionNo: 4,
   snapshot: { title: "as it was", mode: "read" },
   locale: null,
   isLoading: false,
   error: null,
+  scope: { kind: "collection", slug: "posts", entryId: "e1" },
+  comparedWith: { kind: "first" },
+  about: null,
 };
 
 const historyValue = {
@@ -76,6 +81,7 @@ function renderBody(overrides?: {
       <ViewedVersionBody
         fields={overrides?.fields ?? [{ name: "title", type: "text" }]}
         values={overrides?.values ?? { title: "as it was", mode: "read" }}
+        actionsDisabled={false}
       >
         <input aria-label="Live field" />
       </ViewedVersionBody>
@@ -110,6 +116,7 @@ describe("ViewedVersionBody — the snapshot's inputs and inherited context", ()
           <ViewedVersionBody
             fields={[{ name: "title", type: "text" }]}
             values={{ title: "as it was" }}
+            actionsDisabled={false}
           >
             <input aria-label="Live field" />
           </ViewedVersionBody>
@@ -146,6 +153,7 @@ describe("ViewedVersionBody — the snapshot's inputs and inherited context", ()
           <ViewedVersionBody
             fields={[{ name: "title", type: "text" }]}
             values={{ title: "as it was" }}
+            actionsDisabled={false}
           >
             <input aria-label="Live field" />
           </ViewedVersionBody>
@@ -170,6 +178,9 @@ describe("historicalToolbarValue — null versus undefined overrides", () => {
     locale: null,
     isLoading: false,
     error: null,
+    scope: { kind: "collection", slug: "posts", entryId: "e1" },
+    comparedWith: { kind: "first" },
+    about: null,
   };
 
   it("returns the version's value while a version is on screen", () => {
