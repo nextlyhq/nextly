@@ -34,6 +34,7 @@ import { stringNarrowingLimit } from "../classifier/type-widening";
 import {
   isPreResolutionOp,
   isReferenceListConversion,
+  type ChangeColumnTypeOp,
   type Operation,
 } from "../diff/types";
 // F11 PR 3: SQL-template generation moved to the shared sql-templates/
@@ -97,16 +98,7 @@ export async function executePreResolutionOps(
   }
 
   for (const op of ordered) {
-    if (isMysqlStringNarrowing(op, dialect)) {
-      await runInStrictMysqlSession(
-        txOrDb,
-        generateSQL(withLiveNullability(op), dialect)
-      );
-      continue;
-    }
-    for (const statement of statementsForOp(op, dialect)) {
-      await runRaw(txOrDb, statement, dialect);
-    }
+    await runOrderedOp(txOrDb, op, dialect);
   }
 
   // A rename moves the column; it does not change what the column IS. When the two sides differ, the
@@ -125,15 +117,43 @@ export async function executePreResolutionOps(
   for (const op of ordered) {
     if (op.type !== "rename_column") continue;
     for (const conversion of conversionForRename(op, dialect)) {
-      if (isMysqlStringNarrowing(conversion, dialect)) {
-        await runInStrictMysqlSession(txOrDb, generateSQL(conversion, dialect));
-      } else {
-        await runRaw(txOrDb, generateSQL(conversion, dialect), dialect);
-      }
+      await runConversion(txOrDb, conversion, dialect);
     }
   }
 
   return ordered.length;
+}
+
+/** One ordered op's statements; a MySQL string narrowing runs strict (`runInStrictMysqlSession`). */
+async function runOrderedOp(
+  txOrDb: unknown,
+  op: Operation,
+  dialect: SupportedDialect
+): Promise<void> {
+  if (isMysqlStringNarrowing(op, dialect)) {
+    await runInStrictMysqlSession(
+      txOrDb,
+      generateSQL(withLiveNullability(op), dialect)
+    );
+    return;
+  }
+  for (const statement of statementsForOp(op, dialect)) {
+    await runRaw(txOrDb, statement, dialect);
+  }
+}
+
+/** A rename's type change; a MySQL string narrowing runs strict, as its own narrowings do. */
+async function runConversion(
+  txOrDb: unknown,
+  conversion: Operation,
+  dialect: SupportedDialect
+): Promise<void> {
+  const statement = generateSQL(conversion, dialect);
+  if (isMysqlStringNarrowing(conversion, dialect)) {
+    await runInStrictMysqlSession(txOrDb, statement);
+  } else {
+    await runRaw(txOrDb, statement, dialect);
+  }
 }
 
 /**
@@ -356,6 +376,34 @@ async function assertNarrowingsFit(
   dialect: SupportedDialect
 ): Promise<void> {
   if (dialect !== "mysql") return;
+  for (const check of narrowingsToCount(ordered, dialect)) {
+    const longer = await countLongerThan(
+      txOrDb,
+      dialect,
+      check.tableName,
+      check.columnName,
+      check.limit
+    );
+    if (longer > 0) throw narrowingRefusal({ ...check, longer });
+  }
+}
+
+interface NarrowingCheck {
+  tableName: string;
+  columnName: string;
+  fromType: string;
+  toType: string;
+  limit: number;
+}
+
+/**
+ * Every MySQL string narrowing `ordered` makes, named as the table and column are before any rename
+ * runs: an op's own, and the type change of each rename.
+ */
+function narrowingsToCount(
+  ordered: readonly Operation[],
+  dialect: SupportedDialect
+): NarrowingCheck[] {
   const tableBeforeRename = new Map<string, string>();
   for (const op of ordered) {
     if (op.type === "rename_table")
@@ -363,45 +411,42 @@ async function assertNarrowingsFit(
   }
   const liveTable = (name: string) => tableBeforeRename.get(name) ?? name;
 
-  const checks: Array<{ op: Operation; table: string; column: string }> = [];
+  const checks: NarrowingCheck[] = [];
   for (const op of ordered) {
-    if (
-      isMysqlStringNarrowing(op, dialect) &&
-      op.type === "change_column_type"
-    ) {
-      checks.push({
-        op,
-        table: liveTable(op.tableName),
-        column: op.columnName,
-      });
+    if (op.type === "change_column_type") {
+      checks.push(
+        ...narrowingCheck(op, liveTable(op.tableName), op.columnName, dialect)
+      );
     } else if (op.type === "rename_column") {
       for (const conversion of conversionForRename(op, dialect)) {
-        if (isMysqlStringNarrowing(conversion, dialect)) {
-          checks.push({
-            op: conversion,
-            table: liveTable(op.tableName),
-            column: op.fromColumn,
-          });
-        }
+        if (conversion.type !== "change_column_type") continue;
+        checks.push(
+          ...narrowingCheck(
+            conversion,
+            liveTable(op.tableName),
+            op.fromColumn,
+            dialect
+          )
+        );
       }
     }
   }
-  for (const { op, table, column } of checks) {
-    if (op.type !== "change_column_type") continue;
-    const limit = stringNarrowingLimit(op.fromType, op.toType, dialect);
-    if (limit === null) continue;
-    const longer = await countLongerThan(txOrDb, dialect, table, column, limit);
-    if (longer > 0) {
-      throw narrowingRefusal({
-        tableName: table,
-        columnName: column,
-        fromType: op.fromType,
-        toType: op.toType,
-        limit,
-        longer,
-      });
-    }
-  }
+  return checks;
+}
+
+/** The check for one type change, when it is a MySQL string narrowing; none otherwise. */
+function narrowingCheck(
+  op: ChangeColumnTypeOp,
+  tableName: string,
+  columnName: string,
+  dialect: SupportedDialect
+): NarrowingCheck[] {
+  if (!isMysqlStringNarrowing(op, dialect)) return [];
+  const limit = stringNarrowingLimit(op.fromType, op.toType, dialect);
+  if (limit === null) return [];
+  return [
+    { tableName, columnName, fromType: op.fromType, toType: op.toType, limit },
+  ];
 }
 
 /**
