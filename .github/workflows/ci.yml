@@ -1675,10 +1675,12 @@ jobs:
   # serving its admin, its API and the setup page's assets, as it does under
   # Turbopack. Run apart from `Browser tests` (which boots under Turbopack)
   # and, like the dev-reload check, scoped to what can change the answer:
-  # the playground, every workspace package's source and manifest, the
-  # lockfile, and the check itself. Every package rather than a list of the
-  # ones it loads: some reach it only through another (blocks-engine through
-  # the page builder), and a list misses those.
+  # the playground, everything under packages/, the lockfile, and the check
+  # itself. Every package rather than a list of the ones it loads, since some
+  # reach it only through another (blocks-engine through the page builder);
+  # and every file rather than the source, since the job builds each package
+  # and the playground runs the build (a tsup or postcss config, a build
+  # script).
   playground-webpack:
     name: The playground runs under webpack (${{ matrix.dialect }})
     needs: [ci]
@@ -1705,7 +1707,7 @@ jobs:
         id: decide
         env:
           SCOPE_TITLE: Playground under webpack scope
-          INERT_PATHS: '^(?!(apps/playground/.*|packages/[^/]+/(src/.*|package\.json)|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|scripts/playground-bundler-boot\.mjs|\.github/workflows/ci\.yml)$)'
+          INERT_PATHS: '^(?!(apps/playground/.*|packages/.*|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|scripts/playground-bundler-boot\.mjs|\.github/workflows/ci\.yml)$)'
         run: node scripts/change-scope.mjs
 
       # A database for the leg that needs one, on the port the URL below names.

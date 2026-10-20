@@ -112,9 +112,10 @@ const nextConfig: NextConfig = {
     "esbuild",
     "bundle-require",
     "nodemailer",
-    // It loads jsdom, which Next keeps external too, but at a version of its
-    // own; bundled, its jsdom would resolve differently from this app's and
-    // be bundled with it. External, Node loads both from its own folder.
+    // isomorphic-dompurify, which nextly and the page builder load for SVG
+    // uploads, brings its own jsdom, at another version than this app's.
+    // Bundled, its jsdom would be bundled with it; external, Node loads it
+    // and its jsdom from its own folder.
     "isomorphic-dompurify",
     // DB adapters are dynamically imported by nextly at
     // runtime, so they MUST be external in both dev and prod (see the

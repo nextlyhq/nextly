@@ -18,7 +18,8 @@
  * first error printed on failure.
  */
 import { spawn } from "node:child_process";
-import { mkdtempSync, openSync, readFileSync } from "node:fs";
+import { mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -128,13 +129,53 @@ function startServer(values, { base, log, databaseUrl }) {
   // The usual shell codes for the two, 128 plus the signal's number.
   process.on("SIGINT", () => process.exit(130));
   process.on("SIGTERM", () => process.exit(143));
+  return server;
 }
 
-/** setup-status's first answer, whatever its status, or the last failure. */
-async function firstAnswer(base) {
+/**
+ * Exits 2 unless `port` is free: a server already there would answer for the
+ * one this starts, which would then fail to listen and go unnoticed.
+ */
+async function requireFreePort(port) {
+  const free = await new Promise(resolve => {
+    const probe = createServer();
+    probe.once("error", () => resolve(false));
+    probe.listen(Number(port), () => probe.close(() => resolve(true)));
+  });
+  if (free) return;
+  console.error(`Port ${port} is in use: another server would answer there.`);
+  process.exit(2);
+}
+
+/**
+ * Removes the run's scratch folder as this process exits, unless the run
+ * failed: a failure keeps its log and database to read.
+ */
+function removeOnExit(scratch) {
+  process.on("exit", code => {
+    if (code !== 1) rmSync(scratch, { recursive: true, force: true });
+  });
+}
+
+/** How the server ended, or `null` while it runs. */
+function ended(server) {
+  if (server.exitCode !== null) return `exited with ${server.exitCode}`;
+  return server.signalCode === null
+    ? null
+    : `was ended by ${server.signalCode}`;
+}
+
+/**
+ * setup-status's first answer, whatever its status, or the last failure;
+ * no answer at all once the server has ended, since anything still answering
+ * on its port is another process.
+ */
+async function firstAnswer(base, server) {
   const deadline = Date.now() + BOOT_MS;
   let setup;
   do {
+    const gone = ended(server);
+    if (gone) return { status: `no answer (next dev ${gone})` };
     setup = await status(base, "/admin/api/auth/setup-status");
     if (typeof setup.status === "number") return setup;
     await new Promise(r => setTimeout(r, 3000));
@@ -170,13 +211,18 @@ async function servingProblems(base, setup) {
 
 async function main() {
   const values = options();
+  await requireFreePort(values.port);
   const scratch = mkdtempSync(join(tmpdir(), "playground-boot-"));
+  removeOnExit(scratch);
   const log = values.log ?? join(scratch, "next-dev.log");
   const databaseUrl =
     values["database-url"] ?? `file:${join(scratch, "playground.db")}`;
   const base = `http://localhost:${values.port}`;
-  startServer(values, { base, log, databaseUrl });
-  const problems = await servingProblems(base, await firstAnswer(base));
+  const server = startServer(values, { base, log, databaseUrl });
+  const problems = await servingProblems(base, await firstAnswer(base, server));
+  // Answers that outlived the server came from another process.
+  const gone = ended(server);
+  if (gone) problems.push(`next dev ${gone} during the check`);
   report(`${values.bundler} on ${values.dialect}`, problems, log);
 }
 
