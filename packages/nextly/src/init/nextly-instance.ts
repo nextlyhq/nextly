@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
+import type { ContentEventsNamespace } from "../direct-api/namespaces/content-events";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
 import type { NoticesNamespace } from "../direct-api/namespaces/notices";
@@ -952,6 +953,22 @@ export interface Nextly {
    * ```
    */
   releases: ReleasesNamespace;
+
+  /**
+   * A subject's content events — a document's or a release's — newest first,
+   * page by page, refused exactly where REST would refuse the caller.
+   *
+   * @example
+   * ```typescript
+   * const { items, meta } = await nextly.contentEvents.list({
+   *   subject: { kind: "collection", slug: "posts", id: post.id },
+   *   kinds: ["published"],
+   * });
+   * ```
+   *
+   * @experimental
+   */
+  contentEvents: ContentEventsNamespace;
 
   /**
    * A person's own notices — read, count and mark read, for the person named.
