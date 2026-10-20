@@ -54,7 +54,7 @@ const COMMON = "password";
 /** ASCII, 80 bytes: inside the character bounds, past the 72-byte reach. */
 const OVER_REACH = "a".repeat(80);
 
-describe("the R-5 password rule runs in every flow that sets a staff password", () => {
+describe("the staff password rule runs in every flow that sets a staff password", () => {
   let testDb: TestDb;
   let service: AuthService;
 

@@ -743,7 +743,6 @@ export interface AuthConfig {
   revealRegistrationConflict?: boolean;
 
   /**
-  /**
    * Whether strangers may create an account through the registration route.
    *
    * Default: `false`. While it is off, a registration is refused before any

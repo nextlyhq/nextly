@@ -205,7 +205,7 @@ describe("runCreateAdmin", () => {
     );
   });
 
-  it("refuses a weak password before connecting", async () => {
+  it("refuses a weak password, once the connect has published the configured minimum", async () => {
     const ctx = context();
     const run = io({ env: { [ADMIN_PASSWORD_ENV]: "short" } });
     const code = await runCreateAdmin(
@@ -213,9 +213,12 @@ describe("runCreateAdmin", () => {
       ctx,
       run
     );
+    // The connect loads the install's config, which publishes the minimum
+    // the rule judges against — so a weak password is refused after it, not
+    // before.
+    expect(run.connect).toHaveBeenCalled();
     expect(code).toBe(1);
     expect(ctx.logger.error).toHaveBeenCalledWith("That password is too weak:");
-    expect(run.connect).not.toHaveBeenCalled();
   });
 
   it("names the variable when no password can be had, and connects to nothing", async () => {

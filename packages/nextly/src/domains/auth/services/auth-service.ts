@@ -202,11 +202,11 @@ export class AuthService extends BaseService {
   }
 
   /**
-   * Judges a password by the R-5 rule and maps a refusal to the flow's
-   * public `VALIDATION_ERROR` at `path`, naming the field but never the
-   * value (§13.8). Every flow here hashes with bcrypt, so the reach the
-   * rule judges is bcrypt's own — which is what an unnamed check already
-   * defaults to.
+   * Judges a password by the staff password rule and maps a refusal to the
+   * flow's public `VALIDATION_ERROR` at `path`, naming the field but never
+   * the value. Every flow here hashes with bcrypt, so the reach the rule
+   * judges is bcrypt's own — which is what an unnamed check already defaults
+   * to.
    */
   private assertPasswordMeetsPolicy(password: string, path: string): void {
     const passwordStrength = validatePasswordStrength(password);
@@ -219,7 +219,9 @@ export class AuthService extends BaseService {
         })),
       });
     }
+  }
 
+  /**
    * Issue a reset or verification token for the account holding `email`
    * (and, when given, with id `userId`), replacing any earlier token of that
    * kind it holds. Returns the account, or undefined when none holds the
