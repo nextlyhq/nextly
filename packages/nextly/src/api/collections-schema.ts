@@ -172,11 +172,13 @@ export const GET = withErrorHandler(async (request: Request) => {
     ? parseInt(searchParams.get("offset")!, 10)
     : 0;
 
+  // Every matching collection, in the registry's stable order: the page is
+  // cut only after the list is narrowed to what the caller may see, so every
+  // page but the last is full and `total` counts the whole visible list. A
+  // page cut first, then filtered, comes back short and its total stops at it.
   const result = await registry.listCollections({
     source: source || undefined,
     search,
-    limit,
-    offset,
   });
 
   // Filter to the collections the caller may read. The authorization
@@ -216,22 +218,35 @@ export const GET = withErrorHandler(async (request: Request) => {
   // D63 seam: let plugins transform the admin nav collection list.
   const navItems = await applyAdminNavFilter(filteredCollections, auth.userId);
 
-  // Translate offset-based pagination to the canonical page/limit meta. The
-  // total reflects the post-permission-filter count so non-admins see a
-  // total consistent with what they can paginate through.
-  const safeLimit = Math.max(1, limit);
-  const page = Math.floor(offset / safeLimit) + 1;
-  const total = navItems.length;
-  const totalPages = Math.ceil(total / safeLimit);
-  return respondList(navItems, {
-    total,
-    page,
-    limit: safeLimit,
-    totalPages,
-    hasNext: page < totalPages,
-    hasPrev: page > 1,
-  });
+  const { items, meta } = pageOf(navItems, limit, offset);
+  return respondList(items, meta);
 });
+
+/**
+ * One page of the list the caller is shown, and the canonical page/limit meta
+ * for it: `total` is everything the caller can page through.
+ *
+ * A limit or offset that is not a number takes its default: the page is cut
+ * here, and a `NaN` limit would return an empty one.
+ */
+function pageOf<T>(all: T[], limit: number, offset: number) {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, limit) : 50;
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
+  const page = Math.floor(safeOffset / safeLimit) + 1;
+  const total = all.length;
+  const totalPages = Math.ceil(total / safeLimit);
+  return {
+    items: all.slice(safeOffset, safeOffset + safeLimit),
+    meta: {
+      total,
+      page,
+      limit: safeLimit,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    },
+  };
+}
 
 /**
  * POST handler for creating a new UI collection.
