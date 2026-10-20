@@ -350,12 +350,12 @@ describe("a release's row", () => {
     expect(mocks.usersRead).not.toHaveBeenCalled();
   });
 
-  it("labels an owner who is gone as version history does", () => {
+  it("labels an owner who is gone as unavailable", () => {
     mocks.listPage.mockReturnValue(
       page([release({ createdBy: "u-gone", owner: null })])
     );
     render(<ReleaseList />);
-    expect(table().getByText("Author unavailable")).toBeTruthy();
+    expect(table().getByText("Owner unavailable")).toBeTruthy();
     expect(mocks.usersRead).not.toHaveBeenCalled();
   });
 });

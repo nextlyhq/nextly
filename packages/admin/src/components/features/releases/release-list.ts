@@ -6,7 +6,6 @@
  *
  * @module components/features/releases/release-list
  */
-import { versionAuthorLabel } from "@admin/components/features/versions/version-author";
 import type {
   Release,
   ReleaseListTab,
@@ -240,10 +239,11 @@ export type ReleaseOwnerView =
  * Who owns a release: whoever created it.
  *
  * "You" for the reader's own, from the session they already hold. Anyone
- * else by the name the list sent with the release, which is the name version
- * history would give them. Someone the list could not name is labelled
- * exactly as history labels an author it cannot name: "Author unavailable"
- * when an owner was recorded, "Author not recorded" when none was.
+ * else by the name the list sent with the release, found by the same lookup
+ * version history names people by. Someone it could not name is said in this
+ * column's own words, as history says it in its own: "Owner unavailable" when
+ * an owner was recorded but cannot be named now (deleted, or a failed
+ * lookup), "Owner not recorded" when none was.
  */
 export function releaseOwnerView({
   createdBy,
@@ -262,6 +262,6 @@ export function releaseOwnerView({
   }
   return {
     kind: "unnamed",
-    label: versionAuthorLabel({ author: owner ?? null, createdBy }),
+    label: createdBy ? "Owner unavailable" : "Owner not recorded",
   };
 }

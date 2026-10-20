@@ -165,11 +165,11 @@ describe("releaseOwnerView", () => {
     ).toEqual({ kind: "known", label: "Aqib", name: "Aqib" });
   });
 
-  it("labels an owner who cannot be named exactly as version history does", () => {
+  it("labels an owner who cannot be named as an owner, in its own words", () => {
     // Recorded but gone (deleted or erased), or nameless: unavailable.
     expect(releaseOwnerView({ createdBy: "u-gone", owner: null, me })).toEqual({
       kind: "unnamed",
-      label: "Author unavailable",
+      label: "Owner unavailable",
     });
     expect(
       releaseOwnerView({
@@ -177,11 +177,11 @@ describe("releaseOwnerView", () => {
         owner: { id: "u-a", name: null },
         me,
       })
-    ).toEqual({ kind: "unnamed", label: "Author unavailable" });
+    ).toEqual({ kind: "unnamed", label: "Owner unavailable" });
     // Nothing recorded at all.
     expect(releaseOwnerView({ createdBy: null, owner: null, me })).toEqual({
       kind: "unnamed",
-      label: "Author not recorded",
+      label: "Owner not recorded",
     });
   });
 });
