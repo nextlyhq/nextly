@@ -237,12 +237,93 @@ await nextly.email.send({
 
 Both calls return `{ success: boolean; messageId?: string }`.
 
+### Sending to several people
+
+`to` takes one address or a list, on the Direct API, a plugin's `ctx.services.email`
+and both REST send routes. Every address receives the email:
+
+```typescript
+await nextly.email.sendWithTemplate({
+  template: "order-alert",
+  to: ["orders@example.com", "owner@example.com"],
+  replyTo: "support@example.com",
+});
+```
+
+- Through SMTP, Resend or SendLayer, the list goes out as one message, with every
+  `to` address on it. Each provider takes a limited number of `to` addresses in one
+  message: 100 for SMTP (the number RFC 5321 requires every server to accept), 50
+  for Resend and 10 for SendLayer. A longer list is refused before anything is
+  sent, with an error naming the limit; no recipient is dropped. Whatever the
+  provider, one send has at most 100 `to` addresses.
+- Through a provider that takes one `to` per message, which is any provider plugin
+  that does not declare otherwise (see [Writing a provider](#writing-a-provider)),
+  each address gets a message of its own. `cc` and `bcc` go with the first message
+  only, so a copied address receives the email once, and an address that is also
+  a `to` gets only its own message. Every message is sent before any
+  `email.afterSend` action runs. The send succeeds only when every message did.
+- Every recipient, copied ones included, has a record in the delivery log.
+- A send with no `to` address, or one that is not an email address, is refused
+  before anything is sent. So is a send that names a `person` and has more than one
+  `to` address: a person is one recipient, so copy anyone else with `cc` or `bcc`.
+
+The `to` list is `@experimental` until the send contract is complete.
+
+### From and Reply-To
+
+`from` and `replyTo` set the message's sender and Reply-To on every way of sending.
+The send's own value wins, then the template's, then the provider's default
+sender. `replyTo` is `@experimental`.
+
+The REST send routes answer `Email sent.` when the provider accepted the message,
+and `Email could not be sent.` when it did not, beside the `success` and
+`messageId` fields they have always returned.
+
+### Changing a send before it goes out
+
+An `email.beforeSend` filter receives the whole envelope: `to`, `recipients`,
+`from`, `replyTo`, `subject`, `html`, `text`, `cc` and `bcc`. `to` is a single
+string when the send has one recipient, as it always was, and a list when it has
+several. `recipients` lists every address, `to`, `cc` and `bcc`, each with its
+line (`{ address, kind }`). Change recipients through `to`, `cc` and `bcc`:
+`recipients` is rebuilt from them after every filter, so the next filter reads the
+recipients as they now stand, and a change made only to `recipients` is replaced.
+What the filter returns is what is sent, and it is checked again first: a filter
+that leaves no valid `to`, adds more `to` addresses than the provider takes, or
+changes the recipient of a send that names a person, has the send refused.
+
+An `email.afterSend` action runs once for each message handed to the provider, with
+the message's `to`, its `recipients` (blind copies included), the outcome and the
+message id. An action that forwards its argument elsewhere sends every address of
+the message with it, blind copies too, so forward only what you need.
+
+`recipients`, `replyTo`, and `to` as a list are `@experimental`.
+
 ### Email to a person a plugin signs in
 
 A plugin emailing one of its own [signed-in people](/docs/plugins/signed-in-people#email-a-person)
 passes `person` to `ctx.services.email.send` or `sendWithTemplate`. The delivery
 record then names the person, so the plugin's report that they were deleted erases
 it, and leaves alone the records of anyone else at the same address.
+
+### Email to a staff user
+
+A send can name a staff user the same way, as `{ kind: "staff", id }`, on
+`nextly.email.send`, `nextly.email.sendWithTemplate` and a plugin's
+`ctx.services.email`. The delivery record then names that user by kind and id
+beside the address it went to. A send naming a staff user who does not exist is
+refused before anything is sent. `person` is `@experimental`.
+
+```typescript
+await nextly.email.sendWithTemplate({
+  to: user.email,
+  template: "account-notice",
+  person: { kind: "staff", id: user.id },
+});
+```
+
+Core's own emails to a staff user name them this way: the welcome email, the
+password reset and the email verification.
 
 ### Auth flow auto-sends
 
@@ -323,6 +404,36 @@ The container is dev-only and gated behind a Compose profile, so it does **not**
 | `SMTP_USER`         | SMTP      | Authentication username (empty for Mailpit). |
 | `SMTP_PASS`         | SMTP      | Authentication password (empty for Mailpit). |
 | `SMTP_FROM`         | Any       | Default sender address.                      |
+
+## Writing a provider
+
+A plugin adds a provider through `contributes.emailProviders`, with
+`defineEmailProvider`. Its `createAdapter` returns an adapter whose `send` receives
+one message: `to`, `from`, `subject`, `html`, and optionally `text`, `replyTo`,
+`cc`, `bcc` and `attachments`.
+
+An adapter receives one `to` address per message unless it declares more. When
+its provider addresses one message to several people, declare how many `to`
+addresses it takes:
+
+```typescript
+createAdapter: config => ({
+  maxToPerMessage: 50,
+  async send(options) {
+    // `toList` is present only when the message has more than one `to`.
+    const to = options.toList ?? [options.to];
+    // ...send `to`, `options.cc` and `options.bcc` to the provider...
+  },
+}),
+```
+
+- Nextly refuses a send with more `to` addresses than `maxToPerMessage` before
+  calling the adapter, so the adapter never has to drop or split recipients.
+- A message to one person reaches the adapter exactly as it always has, with `to`
+  alone, so an adapter written before `maxToPerMessage` keeps working unchanged:
+  Nextly sends it one message per `to` address.
+
+`maxToPerMessage` and `toList` are `@experimental`.
 
 ## Next steps
 

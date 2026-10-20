@@ -27,6 +27,11 @@ import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
 import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
+import {
+  applyOwnerUpdateSchema,
+  overrideTemplateSchema,
+  undoOwnerUpdateSchema,
+} from "../../domains/email/template-ownership-requests";
 import type { EmailProviderService } from "../../services/email/email-provider-service";
 import type { EmailTemplateService } from "../../services/email/email-template-service";
 import { readAuthenticatedActor } from "../helpers/authenticated-actor";
@@ -243,6 +248,65 @@ const EMAIL_TEMPLATE_METHODS: Record<
       return respondData(preview);
     },
   },
+  overrideTemplate: {
+    execute: async (svc, p, body) => {
+      const { version } = parseBody(overrideTemplateSchema, body ?? {});
+      const template = await svc.templateService.overrideTemplate(
+        p.templateId,
+        { version },
+        readAuthenticatedActor(p)
+      );
+      return respondMutation("Email template overridden.", template);
+    },
+  },
+  resetTemplate: {
+    execute: async (svc, p) => {
+      const template = await svc.templateService.resetTemplate(
+        p.templateId,
+        readAuthenticatedActor(p)
+      );
+      return respondMutation(
+        "Email template reset to its owner's version.",
+        template
+      );
+    },
+  },
+  compareTemplate: {
+    // A non-CRUD read: the three versions and the offered changes.
+    execute: async (svc, p) => {
+      const comparison = await svc.templateService.compareTemplate(
+        p.templateId
+      );
+      return respondData(comparison);
+    },
+  },
+  applyOwnerUpdate: {
+    execute: async (svc, p, body) => {
+      const { choices, review } = parseBody(applyOwnerUpdateSchema, body);
+      const { template, undo } = await svc.templateService.applyOwnerUpdate(
+        p.templateId,
+        choices,
+        review,
+        readAuthenticatedActor(p)
+      );
+      // A non-CRUD write with a result beside the item: Undo needs it.
+      return respondAction("Owner's update applied.", {
+        item: template,
+        undo,
+      });
+    },
+  },
+  undoOwnerUpdate: {
+    execute: async (svc, p, body) => {
+      const { undo } = parseBody(undoOwnerUpdateSchema, body);
+      const template = await svc.templateService.undoOwnerUpdate(
+        p.templateId,
+        undo,
+        readAuthenticatedActor(p)
+      );
+      return respondMutation("Owner's update undone.", template);
+    },
+  },
   previewTemplate: {
     // previewTemplate is a non-CRUD read returning a `{subject, html}`
     // pair (no document identity, no mutation, no pagination), which
@@ -259,6 +323,19 @@ const EMAIL_TEMPLATE_METHODS: Record<
     },
   },
 };
+
+/** Parse a request body, turning a schema refusal into the validation envelope. */
+function parseBody<S extends z.ZodTypeAny>(
+  schema: S,
+  body: unknown
+): z.infer<S> {
+  try {
+    return schema.parse(body);
+  } catch (err) {
+    if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+    throw err;
+  }
+}
 
 // ============================================================
 // Dispatch entrypoints

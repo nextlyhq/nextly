@@ -87,6 +87,10 @@ describe("EmailService.sendWithTemplate — cc/bcc forwarding", () => {
 
     const templateService = {
       getTemplateBySlug: vi.fn().mockResolvedValue(templateRecord),
+      // The send path asks which version to render; the stored row comes first.
+      resolveForSend: vi
+        .fn()
+        .mockResolvedValue({ template: templateRecord, preferCode: false }),
       getLayout: vi.fn(),
     } as unknown as EmailTemplateService;
 
@@ -124,6 +128,9 @@ describe("EmailService.sendWithTemplate — cc/bcc forwarding", () => {
     // DB lookup returns null so sendWithTemplate falls through to code-first.
     const templateService = {
       getTemplateBySlug: vi.fn().mockResolvedValue(null),
+      resolveForSend: vi
+        .fn()
+        .mockResolvedValue({ template: null, preferCode: true }),
       getLayout: vi.fn(),
     } as unknown as EmailTemplateService;
 

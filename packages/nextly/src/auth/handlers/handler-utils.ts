@@ -85,6 +85,58 @@ export function buildCookieHeaders(
 }
 
 /**
+ * The first `limit` bytes of a request's body, or `null` past them, or once
+ * `signal` aborts the read (for a body arriving too slowly).
+ */
+export async function boundedBody(
+  request: Request,
+  limit: number,
+  signal?: AbortSignal
+): Promise<Uint8Array | null> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) return null;
+  // A clone, so the request's own body is left for whoever reads it next.
+  const stream = request.clone().body;
+  if (!stream) return new Uint8Array();
+  const reader = stream.getReader();
+  // Cancelling ends a read in progress; the loop then sees the abort.
+  const abort = () => {
+    reader.cancel().catch(() => undefined);
+  };
+  if (signal?.aborted) return null;
+  signal?.addEventListener("abort", abort, { once: true });
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    if (signal?.aborted) return null;
+    const { done, value } = await reader.read().catch(() => ({
+      done: true as const,
+      value: undefined,
+    }));
+    if (signal?.aborted) return null;
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      // A declared length can be absent or wrong; stop reading here either
+      // way. Not awaited: cancelling one branch of a cloned body settles only
+      // once the other branch is cancelled too, and the handler is about to
+      // read that one to its end.
+      reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  signal?.removeEventListener("abort", abort);
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/**
  * Safely parse a JSON request body. Returns null if parsing fails.
  */
 export async function parseJsonBody(

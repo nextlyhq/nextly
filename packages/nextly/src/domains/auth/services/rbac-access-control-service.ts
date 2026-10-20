@@ -47,6 +47,7 @@ import {
   listEffectivePermissions,
   listRoleSlugsForUser,
 } from "../../../services/lib/permissions";
+import { consoleLogger } from "../../../shared/types";
 
 import type {
   AccessControlContext,
@@ -175,9 +176,9 @@ export class RBACAccessControlService {
           return await operationAccess(ctx);
         } catch (error) {
           // Code access function threw — fail-secure
-          console.error(
-            `[rbac] Code access function for ${operation}:${resource} threw:`,
-            error
+          consoleLogger.error(
+            `[rbac] Code access function for ${operation}:${resource} threw`,
+            { error: error }
           );
           return false;
         }
@@ -292,9 +293,9 @@ export class RBACAccessControlService {
     } catch (error) {
       // Fail-secure, exactly as the authenticated path does. A rule that threw
       // did not allow anything.
-      console.error(
-        `[rbac] Code access function for ${operation}:${resource} threw:`,
-        error
+      consoleLogger.error(
+        `[rbac] Code access function for ${operation}:${resource} threw`,
+        { error: error }
       );
       return false;
     }

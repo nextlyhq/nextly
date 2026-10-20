@@ -22,12 +22,20 @@ import {
   readMediaRouteTemplates,
 } from "./generators/media-routes";
 import { reportGeneratedFiles } from "./generators/report";
-import { installDependencies } from "./installers/dependencies";
+import {
+  installDependencies,
+  nextlyPackagesToInstall,
+} from "./installers/dependencies";
 import {
   resolveTemplateSource,
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
+import {
+  nextlySource,
+  nextlyVersionConflictMessage,
+  nextlyVersionConflicts,
+} from "./lib/nextly-release";
 import { packageVersion } from "./lib/package-version";
 import {
   templateHasApproaches,
@@ -115,6 +123,14 @@ export async function createNextly(
   options: CreateNextlyOptions = {}
 ): Promise<void> {
   const { defaults = false, skipInstall = false, useYalc = false } = options;
+  // Where the project's Nextly packages come from, decided once: this CLI's
+  // own release unless a source was asked for (see NextlySource).
+  const source = nextlySource({
+    cliVersion: packageVersion(),
+    useYalc,
+    localTemplatePath: options.localTemplatePath,
+    branch: options.branch,
+  });
   // installInCwd may flip to true at the interactive prompt when the user
   // answers with "." or "./", so it has to be mutable.
   let installInCwd = options.installInCwd ?? false;
@@ -436,10 +452,10 @@ export async function createNextly(
       // Resolve template source (download from GitHub or use local path).
       // Bundled templates (blank, plugin) copy the version shipped inside the
       // CLI, which matches the packages this release installs. Content
-      // templates (blog) resolve via GitHub or a local path, and so does any
-      // template given an explicit source: --local-template, a non-main
-      // --branch, or --use-yalc, so local-dev runs pair yalc-linked packages
-      // with the live template rather than the bundled copy.
+      // templates (blog) are downloaded at this release's tag, and any
+      // template given an explicit source (--local-template, --branch or
+      // --use-yalc) resolves from it, so local-dev runs pair yalc-linked
+      // packages with the live template rather than the bundled copy.
       const useBundledTemplate = shouldUseBundledTemplate(projectType, {
         localTemplatePath: options.localTemplatePath,
         useYalc,
@@ -450,6 +466,7 @@ export async function createNextly(
         templateSource = await resolveTemplateSource(projectType, {
           localTemplatePath: options.localTemplatePath,
           branch: options.branch,
+          source,
         });
         s.stop("Template ready");
         s.start("Scaffolding project...");
@@ -478,10 +495,7 @@ export async function createNextly(
         // this, the "ignore" path would still throw on the subdirectory
         // case where the target was non-empty.
         allowExistingTarget,
-        // The bundled template was released with this CLI, so a plugin made
-        // from it installs the packages released with it too.
-        releaseVersion: packageVersion(),
-        pinToRelease: useBundledTemplate,
+        nextlySource: source,
       });
 
       if (!installInCwd) cwd = targetDir;
@@ -547,6 +561,35 @@ export async function createNextly(
     }
   }
 
+  // --- An existing app's Nextly version ---
+
+  // Before anything is written or installed: an app that already has a Nextly
+  // package at another version would end with a mixed set, which the
+  // lockstep does not allow, and changing a version it chose is not this
+  // CLI's to do. So it stops with the app exactly as it was.
+  if (!isFreshProject && source.kind === "release") {
+    const conflicts = await nextlyVersionConflicts(
+      cwd,
+      source.cliVersion,
+      nextlyPackagesToInstall(database)
+    );
+    if (conflicts.length > 0) {
+      telemetry.capture("scaffold_failed", {
+        stage: "detect",
+        error_code: "unknown",
+        duration_ms: Date.now() - overallStartedAt,
+      });
+      p.cancel(
+        nextlyVersionConflictMessage(
+          conflicts,
+          source.cliVersion,
+          projectInfo.packageManager
+        )
+      );
+      process.exit(1);
+    }
+  }
+
   // --- Read what the existing-app path writes ---
 
   // Every template the existing-app path writes from is read now, before the
@@ -578,7 +621,7 @@ export async function createNextly(
         cwd,
         projectInfo,
         database,
-        useYalc,
+        source,
         isFreshProject,
         projectType
       );

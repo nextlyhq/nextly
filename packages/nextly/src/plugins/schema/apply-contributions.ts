@@ -61,9 +61,24 @@ interface PluginEntry<T> {
 }
 
 /**
- * Merge one entity kind: code entities first (owner `code`), then each plugin's
- * contributions in resolved order. Throws on any slug already owned by a
- * different source once a plugin is involved.
+ * The app's own config as the owner of a slug. A symbol rather than a name: a
+ * plugin may be named anything, so a name set aside for the app is one a
+ * plugin can take, and that plugin's entities would then be read as the app's.
+ */
+const APP: unique symbol = Symbol("app");
+
+/** Who claims a slug: the app, or the name a plugin or registry goes by. */
+type SlugOwner = typeof APP | string;
+
+/** How an owner is named in a collision error. */
+function ownerLabel(owner: SlugOwner): string {
+  return owner === APP ? "code" : owner;
+}
+
+/**
+ * Merge one entity kind: code entities first (owned by {@link APP}), then each
+ * plugin's contributions in resolved order. Throws on any slug already owned
+ * by a different source once a plugin is involved.
  */
 function mergeKind<T extends Slugged>(
   kind: EntityKind,
@@ -71,18 +86,21 @@ function mergeKind<T extends Slugged>(
   pluginEntries: ReadonlyArray<PluginEntry<T>>
 ): T[] {
   const merged: T[] = [...codeEntities];
-  const owners = new Map<string, string>();
+  const owners = new Map<string, SlugOwner>();
   for (const entity of codeEntities) {
     // First code owner wins; pre-existing code-vs-code duplicates are not our
     // concern here (G2) — keep today's behavior.
-    if (!owners.has(entity.slug)) owners.set(entity.slug, "code");
+    if (!owners.has(entity.slug)) owners.set(entity.slug, APP);
   }
 
   for (const { owner, entities } of pluginEntries) {
     for (const entity of entities ?? []) {
       const existing = owners.get(entity.slug);
       if (existing !== undefined) {
-        throw slugCollisionError(kind, entity.slug, [existing, owner]);
+        throw slugCollisionError(kind, entity.slug, [
+          ownerLabel(existing),
+          owner,
+        ]);
       }
       owners.set(entity.slug, owner);
       merged.push(entity);
@@ -473,41 +491,42 @@ function renamePluginContributes(plugin: PluginDefinition): RenamedContributes {
 }
 
 /** One entity's claim on the slug namespace. */
-interface SlugClaim {
+interface SlugClaim<Owner extends SlugOwner = SlugOwner> {
   slug: string;
   kind: EntityKind;
-  /** `code` for the config's own entities, else the contributing plugin. */
-  owner: string;
+  /** {@link APP} for the config's own entities, else who contributed it. */
+  owner: Owner;
 }
 
 /** One kind's entities as claims on the namespace, from one owner. */
-function claimsOfKind(
+function claimsOfKind<Owner extends SlugOwner>(
   kind: EntityKind,
-  owner: string,
+  owner: Owner,
   entities: readonly Slugged[] | undefined
-): SlugClaim[] {
+): SlugClaim<Owner>[] {
   return (entities ?? []).map(entity => ({ slug: entity.slug, kind, owner }));
 }
 
-/**
- * Every claim on the slug namespace, in the order a collision reads naturally:
- * the config's own entities first, then each plugin's in resolved order --
- * the order {@link mergeKind} reports one kind in.
- */
-function slugClaims(
-  config: NextlyServiceConfig,
-  renamed: ReadonlyArray<{ owner: string; contributes: RenamedContributes }>
+/** The config's own entities as claims, each owned by {@link APP}. */
+function appClaims(
+  config: Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups">
 ): SlugClaim[] {
   return [
-    ...claimsOfKind("collection", "code", config.collections),
-    ...claimsOfKind("single", "code", config.singles),
-    ...claimsOfKind("component", "code", config.fieldGroups),
-    ...renamed.flatMap(({ owner, contributes }) => [
-      ...claimsOfKind("collection", owner, contributes.collections),
-      ...claimsOfKind("single", owner, contributes.singles),
-      ...claimsOfKind("component", owner, contributes.fieldGroups),
-    ]),
+    ...claimsOfKind("collection", APP, config.collections),
+    ...claimsOfKind("single", APP, config.singles),
+    ...claimsOfKind("component", APP, config.fieldGroups),
   ];
+}
+
+/** Each plugin's renamed contributions as claims, in resolved order. */
+function pluginClaims(
+  renamed: ReadonlyArray<{ owner: string; contributes: RenamedContributes }>
+): SlugClaim<string>[] {
+  return renamed.flatMap(({ owner, contributes }) => [
+    ...claimsOfKind("collection", owner, contributes.collections),
+    ...claimsOfKind("single", owner, contributes.singles),
+    ...claimsOfKind("component", owner, contributes.fieldGroups),
+  ]);
 }
 
 /**
@@ -537,10 +556,10 @@ function assertOneKindPerSlug(claims: readonly SlugClaim[]): void {
     }
     // One kind twice is `mergeKind`'s to report; code twice is `defineConfig`'s.
     if (earlier.kind === claim.kind) continue;
-    if (earlier.owner === "code" && claim.owner === "code") continue;
+    if (earlier.owner === APP && claim.owner === APP) continue;
     throw slugCollisionError(claim.kind, claim.slug, [
-      `${earlier.owner} (${earlier.kind})`,
-      `${claim.owner} (${claim.kind})`,
+      `${ownerLabel(earlier.owner)} (${earlier.kind})`,
+      `${ownerLabel(claim.owner)} (${claim.kind})`,
     ]);
   }
 }
@@ -579,9 +598,7 @@ export function assertRegisteredKeepTheirKind(
   registered: RegisteredEntitiesByKind
 ): void {
   assertOneKindPerSlug([
-    ...claimsOfKind("collection", "code", config.collections),
-    ...claimsOfKind("single", "code", config.singles),
-    ...claimsOfKind("component", "code", config.fieldGroups),
+    ...appClaims(config),
     ...claimsOfKind("collection", "registered", registered.collections),
     ...claimsOfKind("single", "registered", registered.singles),
     ...claimsOfKind("component", "registered", registered.components),
@@ -607,16 +624,16 @@ function mergeRenamed(
     owner: p.name,
     contributes: renamePluginContributes(p),
   }));
-  const claims = slugClaims(config, renamed);
-  assertOneKindPerSlug(claims);
+  const contributed = pluginClaims(renamed);
+  // The config's own entities first, then each plugin's in resolved order:
+  // the order a collision reads naturally, and the one `mergeKind` reports
+  // one kind in.
+  assertOneKindPerSlug([...appClaims(config), ...contributed]);
   return {
-    // A plugin's slug is unique across kinds once the claims pass, so the
-    // slug alone names its owner.
-    owners: new Map(
-      claims
-        .filter(claim => claim.owner !== "code")
-        .map(claim => [claim.slug, claim.owner])
-    ),
+    // From the plugins' claims alone, so an app entity is never given an
+    // owner whatever a plugin is named. A plugin's slug is unique across
+    // kinds once the claims pass, so the slug alone names its owner.
+    owners: new Map(contributed.map(claim => [claim.slug, claim.owner])),
     collections: mergeKind(
       "collection",
       config.collections ?? [],

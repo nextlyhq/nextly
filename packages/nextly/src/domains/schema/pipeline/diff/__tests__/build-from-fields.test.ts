@@ -721,10 +721,14 @@ describe("buildDesiredTableFromComponentFields - the discriminator column", () =
 describe.each(["postgresql", "mysql", "sqlite"] as const)(
   "buildDesiredTableFromComponentFields - many-to-many on %s",
   dialect => {
-    // A component has no junction table, so its many-to-many keeps the ids on its own row. The
-    // desired table must carry that column with the same shape a plain single relationship gets,
-    // which is the shape the component DDL and the runtime table already emit for it.
-    const relation = { type: "relationship", options: { target: "tags" } };
+    // A component has no junction table, so its many-to-many keeps the ids on its own row as a list.
+    // The desired table must carry that column with the JSON list shape a hasMany relationship gets,
+    // which is the shape the component DDL and the runtime table emit for it.
+    const relation = {
+      type: "relationship",
+      hasMany: true,
+      options: { target: "tags" },
+    };
     const manyToMany = {
       ...relation,
       options: { target: "tags", relationType: "manyToMany" },
@@ -744,7 +748,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       expect(columnNamed(table.columns, "tags")).toBeDefined();
     });
 
-    it("gives it the same column a plain single relationship gets", () => {
+    it("gives it the same column a hasMany relationship gets", () => {
       const withManyToMany = buildDesiredTableFromComponentFields(
         "comp_hero",
         [{ name: "tags", ...manyToMany }] as never,
@@ -813,7 +817,7 @@ describe("buildDesiredTableFromComponentFields - many-to-many index", () => {
 
 describe("buildDesiredTableFromComponentFields - many-to-many column type on PostgreSQL", () => {
   // The desired column must name the same type the creating SQL and the runtime table write.
-  it("is text, the type the component creation routes write", () => {
+  it("is jsonb, the type the component creation routes write", () => {
     const table = buildDesiredTableFromComponentFields(
       "comp_hero",
       [
@@ -826,6 +830,57 @@ describe("buildDesiredTableFromComponentFields - many-to-many column type on Pos
       "postgresql",
       { builtBy: "codeFirst" }
     );
-    expect(table.columns.find(c => c.name === "tags")?.type).toBe("text");
+    expect(table.columns.find(c => c.name === "tags")?.type).toBe("jsonb");
+  });
+});
+
+describe("buildDesiredTableFromComponentFields - which columns hold a reference list", () => {
+  // The flag marks a type change into the column as a reference-list conversion, which reads each
+  // stored value as a list. A single polymorphic reference is one JSON object, not a list, so an
+  // older column holding one keeps the ordinary conversion.
+  const hint = (field: Record<string, unknown>): boolean | undefined =>
+    buildDesiredTableFromComponentFields(
+      "comp_hero",
+      [{ name: "ref", ...field }] as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    ).columns.find(c => c.name === "ref")?.holdsReferenceList;
+
+  it("marks a many-to-many and a hasMany relationship", () => {
+    expect(
+      hint({
+        type: "relationship",
+        options: { target: "tags", relationType: "manyToMany" },
+      })
+    ).toBe(true);
+    expect(
+      hint({ type: "relationship", relationTo: "tags", hasMany: true })
+    ).toBe(true);
+  });
+
+  it("does not mark a column on SQLite, which converts no type into it", () => {
+    // SQLite keeps the list as text and has no form of the conversion, so a type change into the
+    // column there (an integer field becoming a many-to-many) stays with SQLite's own route.
+    expect(
+      buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [
+          {
+            name: "ref",
+            type: "relationship",
+            options: { target: "tags", relationType: "manyToMany" },
+          },
+        ] as never,
+        "sqlite",
+        { builtBy: "codeFirst" }
+      ).columns.find(c => c.name === "ref")?.holdsReferenceList
+    ).toBeUndefined();
+  });
+
+  it("does not mark a single polymorphic or a single relationship", () => {
+    expect(
+      hint({ type: "relationship", relationTo: ["tags", "posts"] })
+    ).toBeUndefined();
+    expect(hint({ type: "relationship", relationTo: "tags" })).toBeUndefined();
   });
 });

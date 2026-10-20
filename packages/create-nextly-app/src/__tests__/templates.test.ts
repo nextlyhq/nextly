@@ -47,7 +47,6 @@ describe("shouldUseBundledTemplate", () => {
     "uses the bundled '%s' template by default",
     name => {
       expect(shouldUseBundledTemplate(name, {})).toBe(true);
-      expect(shouldUseBundledTemplate(name, { branch: "main" })).toBe(true);
     }
   );
 
@@ -60,7 +59,10 @@ describe("shouldUseBundledTemplate", () => {
   it.each([
     ["--local-template", { localTemplatePath: "/tmp/templates" }],
     ["--use-yalc", { useYalc: true }],
-    ["a non-main --branch", { branch: "release" }],
+    ["a --branch", { branch: "release" }],
+    // With no default any more, `--branch main` is a source asked for too:
+    // it takes the template on main, not this release's.
+    ["--branch main", { branch: "main" }],
   ])("resolves live when %s is given", (_label, options) => {
     expect(shouldUseBundledTemplate("blank", options)).toBe(false);
     expect(shouldUseBundledTemplate("plugin", options)).toBe(false);

@@ -203,6 +203,27 @@ describe("a plugin transforming another plugin's collection", () => {
     expect(ran).toBe(false);
   });
 
+  it("is refused without the owner in dependsOn when the owner is named `code`", () => {
+    // A plugin's name is any string; the app's entities are not told apart
+    // from a plugin's by one.
+    const refused = refusalOf(() =>
+      fold([
+        plugin("code", { collections: [ordersCollection()] }),
+        changing(
+          "reviews",
+          entity => ({
+            ...entity,
+            fields: replacing(fieldsOf(entity), "total", () => undefined),
+          }),
+          {}
+        ),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_DEPENDENCY_MISSING");
+    expect(refused?.message).toContain('"code"');
+  });
+
   it("needs no dependency to transform the app's own collection", () => {
     // The control: the app cannot be declared as a dependency, and a plugin
     // reshaping the app's collections is what transforms are for.
@@ -702,6 +723,155 @@ describe("what a transform of another plugin's entity may not change, besides it
     );
 
     expect(refused?.code).toBe("TRANSFORM_TABLE_CHANGED");
+  });
+});
+
+describe("an owner's table settings a transform restates in an equivalent form", () => {
+  it("accept an explicit status: false where the owner left it unset", () => {
+    const orders = ordersOf([
+      shop(),
+      changing("reviews", entity => ({ ...entity, status: false })),
+    ]);
+
+    expect(orders.status).toBe(false);
+  });
+
+  it("accept an explicit localized: false where the owner left it unset", () => {
+    const orders = ordersOf([
+      shop(),
+      changing("reviews", entity => ({ ...entity, localized: false })),
+    ]);
+
+    expect(orders.localized).toBe(false);
+  });
+
+  it("accept a dbName naming the collection's default table", () => {
+    // `orders` is stored in `dc_orders` while `dbName` is unset.
+    const orders = ordersOf([
+      shop(),
+      changing("reviews", entity => ({ ...entity, dbName: "dc_orders" })),
+    ]);
+
+    expect(orders.dbName).toBe("dc_orders");
+  });
+
+  it("accept dropping a dbName that names the default table", () => {
+    const orders = ordersOf([
+      plugin("shop", {
+        collections: [ordersCollection({ dbName: "dc_orders" })],
+      }),
+      changing("reviews", ({ dbName: _dropped, ...entity }) => entity),
+    ]);
+
+    expect(orders.dbName).toBeUndefined();
+  });
+
+  it("leave a Single with a blank slug to the validation that refuses it", () => {
+    // A blank slug names no default table, so there is none to resolve: the
+    // comparison must not throw where the slug's own validation would.
+    const blank = {
+      slug: " ",
+      fields: [{ name: "currency", type: "text" }],
+    } as unknown as SingleConfig;
+
+    expect(() =>
+      fold([
+        plugin("shop", { singles: [blank] }),
+        plugin("reviews", {
+          dependsOn: ["shop"],
+          transforms: [{ target: " ", transform: entity => entity }],
+        }),
+      ])
+    ).not.toThrow();
+  });
+
+  it("still refuse another spelling of the default table, which not every reader resolves", () => {
+    // The schema pipeline resolves each of these to the default table, but
+    // `i18n:restore` reads a `dbName` as written, and would look for
+    // `orders_locales` rather than `dc_orders_locales`.
+    const collection = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({ ...entity, dbName: "orders" })),
+      ])
+    );
+    const single = refusalOf(() =>
+      fold([
+        plugin("shop", {
+          singles: [
+            {
+              slug: "store-settings",
+              fields: [{ name: "currency", type: "text" }],
+            } as unknown as SingleConfig,
+          ],
+        }),
+        plugin("reviews", {
+          dependsOn: ["shop"],
+          transforms: [
+            {
+              target: "store-settings",
+              transform: entity => ({ ...entity, dbName: "store_settings" }),
+            },
+          ],
+        }),
+      ])
+    );
+
+    expect(collection?.code).toBe("TRANSFORM_TABLE_CHANGED");
+    expect(single?.code).toBe("TRANSFORM_TABLE_CHANGED");
+  });
+
+  it("accept a dbName that resolves to a Single's default table", () => {
+    const settings = {
+      slug: "store-settings",
+      fields: [{ name: "currency", type: "text" }],
+    } as unknown as SingleConfig;
+    const result = fold([
+      plugin("shop", { singles: [settings] }),
+      plugin("reviews", {
+        dependsOn: ["shop"],
+        transforms: [
+          {
+            target: "store-settings",
+            transform: entity => ({
+              ...entity,
+              dbName: "single_store_settings",
+            }),
+          },
+        ],
+      }),
+    ]);
+
+    expect(result.singles?.[0]).toMatchObject({
+      dbName: "single_store_settings",
+    });
+  });
+
+  it("still refuse turning on a status column the owner left unset", () => {
+    // The control: comparing as the pipeline reads them must not accept a
+    // setting the pipeline reads differently.
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({ ...entity, status: true })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_TABLE_CHANGED");
+    expect(refused?.message).toContain('"status"');
+  });
+
+  it("still refuse a dbName that resolves to another table", () => {
+    // `orders_v2` resolves to `dc_orders_v2`, not `dc_orders`.
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({ ...entity, dbName: "orders_v2" })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_TABLE_CHANGED");
+    expect(refused?.message).toContain('"dbName"');
   });
 });
 

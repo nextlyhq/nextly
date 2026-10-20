@@ -495,7 +495,8 @@ export class AuthService extends BaseService {
             normalizedEmail,
             { name: user.name, email: user.email },
             rawToken,
-            { path: options?.redirectPath }
+            // Names the staff user on the delivery records.
+            { path: options?.redirectPath, staffUserId: String(user.id) }
           );
           delivered = result.success;
           if (!delivered) {
@@ -739,7 +740,7 @@ export class AuthService extends BaseService {
 
       return await this.deliverVerificationEmail(
         email,
-        { name: user.name, email: user.email },
+        { id: String(user.id), name: user.name, email: user.email },
         rawToken,
         options?.redirectPath
       );
@@ -781,7 +782,7 @@ export class AuthService extends BaseService {
    */
   private async deliverVerificationEmail(
     email: string,
-    recipient: { name: string | null; email: string },
+    recipient: { id: string; name: string | null; email: string },
     rawToken: string,
     redirectPath: string | undefined
   ): Promise<{ token?: string }> {
@@ -800,9 +801,10 @@ export class AuthService extends BaseService {
       // the only evidence that nothing reached the user.
       const result = await this.emailService.sendEmailVerificationEmail(
         email,
-        recipient,
+        { name: recipient.name, email: recipient.email },
         rawToken,
-        { path: redirectPath }
+        // Names the staff user on the delivery records.
+        { path: redirectPath, staffUserId: recipient.id }
       );
       delivered = result.success;
       if (!delivered) {
@@ -1067,6 +1069,7 @@ export class AuthService extends BaseService {
           this.dialect,
           {
             userId: invite.userId,
+            adapter: this.adapter,
             set: {
               ...passwordColumns(passwordHash),
               // Receiving the invite at this address is what proves it.
@@ -1198,6 +1201,7 @@ export class AuthService extends BaseService {
             set: passwordColumns(passwordHash),
             unlessDeactivated: true,
             when: eq(this.tables.users.mustChangePassword, true),
+            adapter: this.adapter,
           }
         );
         if (claimed !== 1) return;
@@ -1347,7 +1351,7 @@ export class AuthService extends BaseService {
         .delete(this.tables.userInviteTokens)
         .where(lt(this.tables.userInviteTokens.expires, now));
     } catch (error) {
-      console.error("Failed to cleanup expired tokens:", error);
+      this.logger.error("Failed to cleanup expired tokens", { error: error });
     }
   }
 }

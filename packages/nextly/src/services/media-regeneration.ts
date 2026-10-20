@@ -190,7 +190,7 @@ export class MediaRegenerationService extends BaseService {
         // For alpha, we skip actual regeneration if we can't access the original.
         // The regeneration will work for local storage where files are on disk.
         // For cloud storage, this will be implemented in beta with a download method.
-        console.log(
+        this.logger.info(
           `[Regeneration] Image ${img.id} needs regeneration (${img.filename})`
         );
 

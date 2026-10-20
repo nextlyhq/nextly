@@ -17,6 +17,7 @@
 import type { UserContext } from "../../collections/services/collection-types";
 import type { WidgetQuerySpec } from "../query";
 import type { WidgetOp } from "../sources";
+import type { WidgetWidth } from "../widths";
 
 import type {
   CoreDisplay,
@@ -31,10 +32,18 @@ import type {
   WidgetFilter,
   WidgetSettings,
 } from "./setting-builders";
-import type { Transportable, TransportableValue } from "./transportable";
+import type { TransportableFields, TransportableValue } from "./transportable";
 
-/** The five widths a card may take on the dashboard. */
-export type WidgetWidth = "1/4" | "1/3" | "1/2" | "2/3" | "full";
+/**
+ * The five widths a card may take on the dashboard: core's own
+ * (`quarter` … `full`), the words a stored placement and the admin use.
+ *
+ * 🔴 Core's type, re-exported rather than restated. A declaration once spelt
+ * them `"1/4"` … `"full"`, a second vocabulary beside the arrangement's, so a
+ * declared set had to be translated on its way to the layout, and a width
+ * core adds or renames would have reached one spelling and not the other.
+ */
+export type { WidgetWidth };
 
 /**
  * Reads a data function may make, already bound to the person asking.
@@ -98,9 +107,42 @@ export type ContentQuery = WidgetQuerySpec extends infer Spec
  * object is read after them, like a data function is. The answer's type
  * follows from the `op` the function returns.
  */
-export interface WidgetQuerySource<Values, Op extends WidgetOp> {
-  query: (input: { settings: Values }) => ContentQuery & { op: Op };
+export interface WidgetQuerySource<
+  Values,
+  Op extends WidgetOp,
+  Requires = unknown,
+> {
+  query: (input: { settings: Values }) => ContentQuery & { op: Op } & Requires;
 }
+
+/**
+ * The core displays that draw rows: those whose query answers a list.
+ *
+ * Derived from the display-to-op table (`DisplayOp`), so a display core adds
+ * that draws rows is one without a second edit here.
+ */
+type RowDisplay = {
+  [D in CoreDisplay]: DisplayOp<D> extends "list" ? D : never;
+}[CoreDisplay];
+
+/**
+ * What a query must hold beyond its op, for the display that draws it.
+ *
+ * 🔴 A row display needs at least one selected field. Its rows are drawn from
+ * the fields `select` names, in that order, and a list or table whose query
+ * selects nothing is refused when it is drawn: there is no field to show in
+ * a row. Required here, that is a compile error in the declaration rather
+ * than an error card on every load.
+ *
+ * Required, not typed non-empty: the query function's answer is read while
+ * its op is still being inferred, and an array literal there widens to
+ * `string[]`, so a `[string, ...string[]]` refused `select: ["title"]` too.
+ * An EMPTY selection is refused at startup instead, by
+ * `displaySelectProblem`, before any card is drawn.
+ */
+type QueryRequires<Display> = Display extends RowDisplay
+  ? { select: string[] }
+  : unknown;
 
 /** Carries a declaration's data type without a runtime property. */
 declare const widgetData: unique symbol;
@@ -154,8 +196,12 @@ export interface WidgetDeclarationInput<
   settings?: S;
   data:
     | WidgetDataFunction<SettingValues<S>, FunctionAnswer<Display, Data>>
-    | WidgetQuerySource<SettingValues<S>, OpFor<Display, Op>>;
-  display: Display & OneDisplay<Display>;
+    | WidgetQuerySource<
+        SettingValues<S>,
+        OpFor<Display, Op>,
+        QueryRequires<Display>
+      >;
+  display: Display & OneDisplay<Display> & LiteralPath<Display>;
   /**
    * When the card has nothing to show, and what the frame says then.
    *
@@ -241,6 +287,29 @@ type OneDisplay<Display> =
         "display must be exactly one display, not a choice of several": Display;
       }
     : unknown;
+
+/**
+ * Refuses a component display whose path is not a literal.
+ *
+ * 🔴 The component map (`WidgetComponentMap`) is keyed by each declared path,
+ * so a component written for another widget, or a path with no component, is
+ * refused there. A path that names no one string turns that check off: a map
+ * keyed by `string`, or by a pattern such as `@acme/${string}#Card`, is an
+ * index signature that even an empty map satisfies. A display read from a
+ * variable typed `ComponentDisplay` has such a path, and so does one built
+ * from a template. So the path must be literal: one whose record an empty
+ * object does not satisfy, which `string` and every open pattern do. The
+ * error names the fault in words, as `OneDisplay`'s does.
+ */
+type LiteralPath<Display> = Display extends {
+  component: infer Path extends string;
+}
+  ? Record<never, never> extends Record<Path, true>
+    ? {
+        "a component display's path must be written as a literal string": Display;
+      }
+    : unknown
+  : unknown;
 
 /**
  * What a data function must answer: its display's shape AND its own inferred
@@ -343,8 +412,9 @@ export type WidgetDeclaration<
  *
  * - `S extends DependentSettings<S>` checks that every dependent setting names
  *   one of the widget's own Collection settings.
- * - `Data extends Transportable<Data>` keeps a data function's answer to what
- *   JSON carries unchanged, and reports the property that is not.
+ * - `Data extends TransportableFields<Data>` keeps a data function's answer to
+ *   what JSON carries unchanged, its keys included, and reports the property
+ *   that is not.
  * - The display is inferred before the data function is read, so a core
  *   display's shape is the type its data function must answer.
  */
@@ -353,7 +423,7 @@ export function defineWidget<
   const Widths extends readonly WidgetWidth[],
   const Display extends WidgetDisplay,
   S extends WidgetSettings & DependentSettings<S> = Record<never, never>,
-  Data extends { [K in keyof Data]: Transportable<Data[K]> } = never,
+  Data extends TransportableFields<Data> = never,
   Op extends WidgetOp = never,
   const Example = never,
 >(

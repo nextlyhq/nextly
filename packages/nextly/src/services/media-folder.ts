@@ -58,6 +58,7 @@ import {
   type MediaFilesRecord,
 } from "../domains/media/stored-files";
 import type { ServiceErrorCode } from "../errors/error-codes";
+import { consoleLogger } from "../shared/types";
 
 import { BaseService } from "./base-service";
 import type { Logger } from "./shared";
@@ -183,9 +184,9 @@ function removalFrom(
       try {
         await cleanup(records, kept);
       } catch (error) {
-        console.warn(
-          "[MediaFolderService] Could not remove the files of the deleted items:",
-          errorForLog(error)
+        consoleLogger.warn(
+          "[MediaFolderService] Could not remove the files of the deleted items",
+          { error: errorForLog(error) }
         );
       }
     };
@@ -202,14 +203,14 @@ function removalFrom(
     try {
       const { failed } = await cleanup.bulkDelete(filePaths, "media");
       for (const { filePath, error } of failed) {
-        console.warn(
+        consoleLogger.warn(
           `[MediaFolderService] Could not remove ${storedPathForLog(filePath)}: ${errorForLog(new Error(error))}`
         );
       }
     } catch (error) {
-      console.warn(
-        "[MediaFolderService] Could not remove the files of the deleted items:",
-        errorForLog(error)
+      consoleLogger.warn(
+        "[MediaFolderService] Could not remove the files of the deleted items",
+        { error: errorForLog(error) }
       );
     }
   };
@@ -311,7 +312,9 @@ export class MediaFolderService extends BaseService {
         data: folderData as unknown as MediaFolder,
       };
     } catch (error) {
-      console.error("[MediaFolderService] Create folder error:", error);
+      this.logger.error("[MediaFolderService] Create folder error", {
+        error: error,
+      });
       return {
         success: false,
         statusCode: 500,
@@ -352,7 +355,9 @@ export class MediaFolderService extends BaseService {
         data: folder,
       };
     } catch (error) {
-      console.error("[MediaFolderService] Get folder error:", error);
+      this.logger.error("[MediaFolderService] Get folder error", {
+        error: error,
+      });
       return {
         success: false,
         statusCode: 500,
@@ -397,7 +402,9 @@ export class MediaFolderService extends BaseService {
         data: folders,
       };
     } catch (error) {
-      console.error("[MediaFolderService] List root folders error:", error);
+      this.logger.error("[MediaFolderService] List root folders error", {
+        error: error,
+      });
       return {
         success: false,
         statusCode: 500,
@@ -437,7 +444,9 @@ export class MediaFolderService extends BaseService {
         data: folders,
       };
     } catch (error) {
-      console.error("[MediaFolderService] List subfolders error:", error);
+      this.logger.error("[MediaFolderService] List subfolders error", {
+        error: error,
+      });
       return {
         success: false,
         statusCode: 500,
@@ -519,7 +528,9 @@ export class MediaFolderService extends BaseService {
         },
       };
     } catch (error) {
-      console.error("[MediaFolderService] Get folder contents error:", error);
+      this.logger.error("[MediaFolderService] Get folder contents error", {
+        error: error,
+      });
       return {
         success: false,
         statusCode: 500,
@@ -621,7 +632,9 @@ export class MediaFolderService extends BaseService {
         } as unknown as MediaFolder,
       };
     } catch (error) {
-      console.error("[MediaFolderService] Update folder error:", error);
+      this.logger.error("[MediaFolderService] Update folder error", {
+        error: error,
+      });
       return {
         success: false,
         statusCode: 500,
@@ -803,10 +816,9 @@ export class MediaFolderService extends BaseService {
         deletedFolders: deletedFoldersCount,
       };
     } catch (error) {
-      console.error(
-        "[MediaFolderService] Delete folder error:",
-        errorForLog(error)
-      );
+      this.logger.error("[MediaFolderService] Delete folder error", {
+        error: errorForLog(error),
+      });
       return {
         success: false,
         statusCode: 500,
@@ -933,7 +945,9 @@ export class MediaFolderService extends BaseService {
           : "Media moved to root successfully",
       };
     } catch (error) {
-      console.error("[MediaFolderService] Move media error:", error);
+      this.logger.error("[MediaFolderService] Move media error", {
+        error: error,
+      });
       return {
         success: false,
         statusCode: 500,
