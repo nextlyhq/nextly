@@ -17,6 +17,7 @@
  */
 import { respondData } from "../../api/response-shapes";
 import type { PluginContext } from "../../plugins/plugin-context";
+import { consoleLogger } from "../../shared/types";
 import {
   clearAccessTokenCookie,
   readAccessTokenCookie,
@@ -183,7 +184,7 @@ export async function handleSession(
       devAutoLoginWarned.add(`prod:${key}`);
       // The configured email stays out: a production log is no place for an
       // address, and the warning is actionable without it.
-      console.warn(
+      consoleLogger.warn(
         `[nextly] devAutoLogin ignored: NODE_ENV=production. ` +
           `Set this only for development.`
       );
@@ -246,7 +247,7 @@ async function attemptDevAutoLogin(
   if (!user || !user.isActive) {
     if (!devAutoLoginWarned.has(`miss:${email}`)) {
       devAutoLoginWarned.add(`miss:${email}`);
-      console.warn(
+      consoleLogger.warn(
         `[nextly] devAutoLogin: user "${email}" not found. ` +
           `Auto-login skipped. Either register the user or update ` +
           `admin.devAutoLogin.email in your nextly.config.ts.`
@@ -259,7 +260,7 @@ async function attemptDevAutoLogin(
   // dedup'd so it doesn't spam every session check.
   if (!devAutoLoginWarned.has(`active:${email}`)) {
     devAutoLoginWarned.add(`active:${email}`);
-    console.warn(
+    consoleLogger.warn(
       `[nextly] devAutoLogin enabled for ${email}. ` +
         `DO NOT use this in production deployments.`
     );

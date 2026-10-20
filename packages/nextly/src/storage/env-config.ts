@@ -16,6 +16,8 @@
  * ```
  */
 
+import { consoleLogger } from "../shared/types";
+
 import type { StoragePlugin } from "./types";
 
 // Try to load dotenv for config file execution context
@@ -70,14 +72,14 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
     try {
       const pkg = "@nextlyhq/storage-vercel-blob";
       const { vercelBlobStorage } = await import(/* webpackIgnore: true */ pkg);
-      console.log(
+      consoleLogger.info(
         "[Nextly] Storage: Vercel Blob (auto-detected from BLOB_READ_WRITE_TOKEN)"
       );
       return [
         vercelBlobStorage({ token: blobToken, collections: { media: true } }),
       ];
     } catch {
-      console.warn(
+      consoleLogger.warn(
         "[Nextly] BLOB_READ_WRITE_TOKEN set but @nextlyhq/storage-vercel-blob not installed. Run: pnpm add @nextlyhq/storage-vercel-blob"
       );
     }
@@ -95,14 +97,16 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
       if (!region) missing.push("S3_REGION");
       if (!accessKeyId) missing.push("AWS_ACCESS_KEY_ID");
       if (!secretAccessKey) missing.push("AWS_SECRET_ACCESS_KEY");
-      console.warn(
+      consoleLogger.warn(
         `[Nextly] S3_BUCKET set but missing: ${missing.join(", ")}. Falling back to local storage.`
       );
     } else {
       try {
         const pkg = "@nextlyhq/storage-s3";
         const { s3Storage } = await import(/* webpackIgnore: true */ pkg);
-        console.log("[Nextly] Storage: S3 (auto-detected from S3_BUCKET)");
+        consoleLogger.info(
+          "[Nextly] Storage: S3 (auto-detected from S3_BUCKET)"
+        );
         return [
           s3Storage({
             bucket: s3Bucket,
@@ -118,7 +122,7 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
           }),
         ];
       } catch {
-        console.warn(
+        consoleLogger.warn(
           "[Nextly] S3_BUCKET set but @nextlyhq/storage-s3 not installed. Run: pnpm add @nextlyhq/storage-s3"
         );
       }
@@ -133,7 +137,7 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
       const { uploadthingStorage } = await import(
         /* webpackIgnore: true */ pkg
       );
-      console.log(
+      consoleLogger.info(
         "[Nextly] Storage: Uploadthing (auto-detected from UPLOADTHING_TOKEN)"
       );
       return [
@@ -143,7 +147,7 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
         }),
       ];
     } catch {
-      console.warn(
+      consoleLogger.warn(
         "[Nextly] UPLOADTHING_TOKEN set but @nextlyhq/storage-uploadthing not installed. Run: pnpm add @nextlyhq/storage-uploadthing"
       );
     }
@@ -153,7 +157,7 @@ export async function getStorageFromEnv(): Promise<StoragePlugin[]> {
   // No cloud storage env vars detected — use local filesystem.
   // This enables zero-config development: just run `pnpm dev` and uploads work.
   const { localStorage } = await import("./adapters/local-plugin");
-  console.log(
+  consoleLogger.info(
     "[Nextly] Storage: Local disk (no cloud env vars detected, using ./public/uploads)"
   );
   return [localStorage({ collections: { media: true } })];

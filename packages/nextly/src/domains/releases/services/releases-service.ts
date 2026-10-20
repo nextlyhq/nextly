@@ -77,6 +77,10 @@ import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import {
+  componentsToStop,
+  planReleaseMaterialisation,
+} from "../plan-release-materialisation";
+import {
   releaseCheckSources,
   type ReleaseCheckReads,
   type ReleaseCheckSource,
@@ -106,6 +110,7 @@ import {
 } from "../release-calendar";
 import { isDueAt } from "../release-due";
 import { releaseMemberKey } from "../release-member-key";
+import type { ReleaseRecheckTarget } from "../release-recheck";
 import {
   RELEASE_ATTENTION_REASONS,
   RELEASE_TABS,
@@ -118,6 +123,7 @@ import {
 } from "../release-targets";
 import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
+  BlockRequest,
   DocumentRef,
   NewRelease,
   ReleaseListOrder,
@@ -1994,10 +2000,7 @@ export class ReleasesService {
     members: readonly ReleaseMemberRow[],
     refusal: { message: string; reason: string }
   ): Promise<void> {
-    const hardSources = registeredReleaseCheckSources().filter(
-      source => source.severity === "hard"
-    );
-    const { hard } = await this.checkMembers(release, members, hardSources);
+    const hard = await this.hardProblems(release, members);
     if (hard.length === 0) return;
     throw NextlyError.conflict({
       message: refusal.message,
@@ -2009,6 +2012,115 @@ export class ReleasesService {
         state: release.state,
       },
     });
+  }
+
+  /** These members' hard problems: the hard sources' findings alone. */
+  private async hardProblems(
+    release: ReleaseRow,
+    members: readonly ReleaseMemberRow[]
+  ): Promise<ReadinessFinding[]> {
+    const hardSources = registeredReleaseCheckSources().filter(
+      source => source.severity === "hard"
+    );
+    return (await this.checkMembers(release, members, hardSources)).hard;
+  }
+
+  /**
+   * Stop each still-scheduled release holding what an event names, as soon
+   * as one of those documents has a hard problem, and answer the ids stopped.
+   *
+   * The early stop. Scheduled includes a release whose instant has passed and
+   * which no drain has run yet, since that one is already in effect for
+   * readers. Only the members the event is about are checked, by the hard
+   * sources, as scheduling checks them; a soft problem never stops a release.
+   *
+   * Stopped through the drain's own transition (`blockReleases`), so the
+   * owner is told once for the stop, and fenced on the revision and instant
+   * the check judged: a release changed since, rescheduled or with a member
+   * removed, is left for its own change's checks rather than stopped on a
+   * verdict about a release that no longer exists. Asked again, a release
+   * already stopped is no longer scheduled and is not named, so a repeated
+   * event stops and tells nothing twice.
+   *
+   * A system act, not a caller's: it answers to no actor, and each document
+   * is still judged as its own author, as the run would judge it. Runs after
+   * the event's own write has committed and opens one transaction per
+   * release it stops, never inside another.
+   *
+   * @experimental
+   */
+  async stopOnHardProblems(target: ReleaseRecheckTarget): Promise<string[]> {
+    const now = new Date();
+    const failing: Array<BlockRequest & { revision: number }> = [];
+    const affected = await this.deps.repository.scheduledMembersFor(target);
+    for (const { release, members } of affected) {
+      if (release.scheduledAt === null) continue;
+      if ((await this.hardProblems(release, members)).length === 0) continue;
+      failing.push({
+        id: release.id,
+        scheduledAt: release.scheduledAt,
+        revision: release.revision,
+      });
+    }
+    const stopped: string[] = [];
+    // One not yet due changes nothing a reader sees, and stops alone: when
+    // its instant comes, the drain plans whatever is still scheduled.
+    for (const entry of failing.filter(f => !isDueAt(f.scheduledAt, now))) {
+      stopped.push(...(await this.deps.repository.blockReleases([entry])));
+    }
+    const due = failing.filter(f => isDueAt(f.scheduledAt, now));
+    if (due.length > 0)
+      stopped.push(...(await this.stopDueComponents(due, now)));
+    return stopped;
+  }
+
+  /**
+   * Stop these due releases with every release they share a component with,
+   * one component per `blockReleases` call: the components the drain would
+   * settle them in, from the drain's own plan of what is due now, so the two
+   * paths cannot come to stop different sets.
+   *
+   * Each failing release is fenced on the revision its check judged; the
+   * rest of its component on the revision read for the plan. A release that
+   * moved since misses its fence, and its component is left whole.
+   */
+  private async stopDueComponents(
+    failing: readonly (BlockRequest & { revision: number })[],
+    now: Date
+  ): Promise<string[]> {
+    const repository = this.deps.repository;
+    const dueReleases = await repository.findDueReleases(now);
+    const plan = planReleaseMaterialisation({
+      releases: dueReleases.flatMap(row =>
+        row.scheduledAt === null
+          ? []
+          : [
+              {
+                id: row.id,
+                scheduledAt: row.scheduledAt,
+                revision: row.revision,
+              },
+            ]
+      ),
+      members: await repository.listMembersOf(dueReleases.map(row => row.id)),
+      now,
+    });
+    const checked = new Map(failing.map(entry => [entry.id, entry]));
+    const read = new Map(dueReleases.map(row => [row.id, row]));
+    const stopped: string[] = [];
+    for (const entries of componentsToStop(
+      plan,
+      new Set(checked.keys()),
+      id => {
+        const row = checked.get(id) ?? read.get(id);
+        return row?.scheduledAt
+          ? { id, scheduledAt: row.scheduledAt, revision: row.revision }
+          : undefined;
+      }
+    )) {
+      stopped.push(...(await repository.blockReleases(entries)));
+    }
+    return stopped;
   }
 
   /**

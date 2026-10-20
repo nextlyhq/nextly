@@ -22,10 +22,12 @@ import type { RBACAccessControlService } from "../../domains/auth/services/rbac-
 import { releaseLinkReads } from "../../domains/collections/release-links";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
+import { registerNoticeKind } from "../../domains/notices/notice-kinds";
 import { registerReleaseCheckSource } from "../../domains/releases/readiness/check-sources";
 import { registerCoreReleaseCheckSources } from "../../domains/releases/readiness/core-sources";
 import { unpublishedLinksSource } from "../../domains/releases/readiness/unpublished-links";
 import { recordReleaseActivity } from "../../domains/releases/release-activity";
+import { RELEASE_STOPPED_NOTICE } from "../../domains/releases/release-stopped-notice";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
@@ -68,6 +70,10 @@ export function registerReleaseServices({
       membersOf: releaseId => linkMembers.listMembers(releaseId),
     })
   );
+  // The notice a stopped release's owner is given, which the one transition
+  // into `blocked` records: registered with the feature, so no boot can stop
+  // a release without being able to tell its owner.
+  registerNoticeKind(RELEASE_STOPPED_NOTICE);
 
   container.registerSingleton<ReleasesService>(
     "releasesService",

@@ -11,11 +11,10 @@ import type {
 import { NextlyError } from "../../../errors/nextly-error";
 import { permissionName, permissionSlug } from "../../../schemas/_zod/rbac";
 import { BaseService } from "../../../services/base-service";
-import {
-  invalidatePermissionCache,
-  writingPermissions,
-} from "../../../services/lib/permissions";
+import { writingPermissions } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
+
+import { afterRoleGrantsChanged } from "./role-grants-changed";
 
 /**
  * The transaction methods this service calls.
@@ -161,7 +160,7 @@ export class RolePermissionService extends BaseService {
       permissionId = newPermId;
     }
 
-    await invalidatePermissionCache({ roleId });
+    await afterRoleGrantsChanged(roleId);
   }
 
   /**
@@ -245,7 +244,7 @@ export class RolePermissionService extends BaseService {
         )
       );
 
-    await invalidatePermissionCache({ roleId });
+    await afterRoleGrantsChanged(roleId);
   }
 
   /**
@@ -354,7 +353,7 @@ export class RolePermissionService extends BaseService {
       }
     });
 
-    await invalidatePermissionCache({ roleId });
+    await afterRoleGrantsChanged(roleId);
 
     return this.listRolePermissions(roleId);
   }
