@@ -260,17 +260,17 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(["permissions", "roles"]);
     });
 
-    it("counts for a key administrator only the keys they could list", async () => {
-      // 🔴 The API-key list shows a caller who is not a super-admin their OWN
-      // keys only, so the count follows it: the super-admin owns two keys
-      // here and this caller one, and an installation-wide count would
-      // disclose the two it cannot see.
-      const own = await stats(await sessionHeaders(keyAdmin));
-      expect(carried(own)).toEqual(["apiKeys"]);
-      expect(own.apiKeys).toBe(1);
-      // The control: the super-admin, whose list is every key, counts them all.
+    it("counts for a key administrator every key they could list", async () => {
+      // The API-key list shows anyone who may read keys every key, whoever
+      // made it, so the count follows it: a caller who is not a super-admin
+      // counts what the super-admin counts, not only the one key they made.
+      const reader = await stats(await sessionHeaders(keyAdmin));
+      expect(carried(reader)).toEqual(["apiKeys"]);
       const all = await stats(await sessionHeaders(admin));
-      expect(Number(all.apiKeys)).toBeGreaterThan(1);
+      expect(reader.apiKeys).toBe(all.apiKeys);
+      // The control: there are keys here besides the reader's own one, so a
+      // count of the reader's keys alone would not satisfy the line above.
+      expect(Number(reader.apiKeys)).toBeGreaterThan(1);
     });
 
     it("answers a refused caller the same whether or not the rows exist", async () => {
