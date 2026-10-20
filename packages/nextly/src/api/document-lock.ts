@@ -21,12 +21,9 @@
  * @module api/document-lock
  */
 
+import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import {
-  callerHoldsPermission,
-  canReadEntity,
-  readAccessCaller,
-} from "../auth/entity-read-access";
-import {
+  authorizeCaller,
   isErrorResponse,
   requireAuthentication,
   type AuthContext,
@@ -103,6 +100,13 @@ function readRef(source: {
  * renewing need UPDATE, because a lock is a statement that you are editing, and
  * someone who cannot edit is not.
  *
+ * That UPDATE is asked exactly as the REST update of the document asks it
+ * (`authorizeCaller`, the route gate's decision): an API key must hold the
+ * grant AND pass the collection's or Single's own `update` rule. A key judged
+ * on its grant alone could claim, and take over, a document whose rule refuses
+ * it every edit. The document gate below is then told the route ran, which is
+ * true, because the same question has just been asked.
+ *
  * 🔴 UPDATE means THIS document, not documents of this kind. `update-<slug>` is
  * the coarse route permission and says only the latter, so a document the caller
  * cannot actually load — a draft they may not see, a row that is gone — is
@@ -120,7 +124,7 @@ function readRef(source: {
  * left. What a release actually rests on is the claim token, which names the one
  * acquisition being given up and fences the DELETE itself.
  *
- * Both helpers are entity-generic and read the collection and single maps
+ * Both gates are entity-generic and read the collection and single maps
  * alike, so a Single needs no branch here, and both delegate to the canonical
  * machinery rather than reproducing the API-key and super-admin rules that
  * `canReadEntity` documents at length.
@@ -135,7 +139,7 @@ async function authorize(
   const allowed =
     intent === "read"
       ? await canReadEntity(ref.slug, caller)
-      : await callerHoldsPermission(`update-${ref.slug}`, caller);
+      : !isErrorResponse(await authorizeCaller(auth, "update", ref.slug));
 
   if (!allowed) {
     // The same refusal either way. Distinguishing "no such document" from "not

@@ -10,6 +10,8 @@ const service = {
 };
 const auth = { userId: "u1", userName: "Ada", userEmail: "ada@example.com" };
 const requireAuthentication = vi.fn();
+// The route gate's update decision, the one a REST update of the document asks.
+const authorizeCaller = vi.fn();
 
 vi.mock("../../init", () => ({
   getCachedNextly: vi.fn().mockResolvedValue({}),
@@ -17,6 +19,7 @@ vi.mock("../../init", () => ({
 vi.mock("../../di/container", () => ({ container: { get: () => service } }));
 vi.mock("../../auth/middleware", () => ({
   requireAuthentication: (req: Request) => requireAuthentication(req),
+  authorizeCaller: (...args: unknown[]) => authorizeCaller(...args) as unknown,
   // The real predicate, not a stand-in. It keys on `statusCode`, and a mock
   // recognising a `Response` instead sends the fixture down the wrong branch:
   // `toNextlyAuthError` sees no status, produces a 500, and a loose `>= 400`
@@ -27,13 +30,10 @@ vi.mock("../../auth/middleware", () => ({
 
 // Every operation is authorized against the document it names.
 const canReadEntity = vi.fn();
-const callerHoldsPermission = vi.fn();
 vi.mock("../../auth/entity-read-access", () => ({
   readAccessCaller: (caller: { user: unknown }) => caller.user,
   canReadEntity: (slug: string, caller: unknown) =>
     canReadEntity(slug, caller) as unknown,
-  callerHoldsPermission: (slug: string, caller: unknown) =>
-    callerHoldsPermission(slug, caller) as unknown,
 }));
 // The stored per-document update rules, which the coarse permission above does
 // not run. Spied rather than executed: what this file establishes is that the
@@ -68,7 +68,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   requireAuthentication.mockResolvedValue(auth);
   canReadEntity.mockResolvedValue(true);
-  callerHoldsPermission.mockResolvedValue(true);
+  authorizeCaller.mockImplementation((caller: unknown) =>
+    Promise.resolve(caller)
+  );
   assertDocumentUpdatable.mockResolvedValue(undefined);
 });
 
@@ -247,7 +249,7 @@ describe("document lock route", () => {
     // A lock is a statement that you are editing. Someone who may read a
     // document but not change it is not editing it, and must not be able to
     // displace a colleague with `takeover`.
-    callerHoldsPermission.mockResolvedValue(false);
+    authorizeCaller.mockResolvedValue({ statusCode: 403 });
 
     for (const call of [
       () => acquireLock(post({ ...ref, takeover: true })),
@@ -268,10 +270,7 @@ describe("document lock route", () => {
 
     await acquireLock(post({ ...ref, slug: "invoices" }));
 
-    expect(callerHoldsPermission).toHaveBeenCalledWith(
-      "update-invoices",
-      expect.anything()
-    );
+    expect(authorizeCaller).toHaveBeenCalledWith(auth, "update", "invoices");
   });
 
   it("keeps a lock read out of every cache", async () => {
