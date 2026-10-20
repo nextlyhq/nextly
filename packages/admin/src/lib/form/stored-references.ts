@@ -313,10 +313,19 @@ const repeaterAmongStored: AmongCheck = (field, populated, stored) => {
   );
 };
 
-/** A field group instance: its own fields, and the same type in both reads. */
+/**
+ * A field group instance: present in both reads or in neither, the same
+ * instance (its id) of the same type, and its own fields compared the same
+ * way. Two reads straddling an edit made in the same second share a timestamp
+ * stored to the second, but not an instance that was added, removed or
+ * replaced between them.
+ */
 const instanceAmongStored: AmongCheck = (field, populated, stored) => {
-  if (!isRecord(populated) || !isRecord(stored)) return true;
+  if (!isRecord(populated) || !isRecord(stored)) {
+    return !isRecord(populated) && !isRecord(stored);
+  }
   return (
+    populated.id === stored.id &&
     readFieldGroupType(populated) === readFieldGroupType(stored) &&
     populatedAmongStored(instanceFields(field, populated), populated, stored)
   );

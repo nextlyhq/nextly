@@ -548,6 +548,31 @@ describe("inside field groups", () => {
     });
   });
 
+  it("takes a field group present in only one read, or rows with other ids, for another version", () => {
+    // Two reads straddling an edit made in the same second share a timestamp
+    // stored to the second; the instances themselves still tell them apart.
+    expect(
+      populatedAmongStored(fields, { card: cardRow([], null) }, { card: null })
+    ).toBe(false);
+    expect(
+      populatedAmongStored(fields, { card: null }, { card: cardRow([], null) })
+    ).toBe(false);
+    expect(
+      populatedAmongStored(
+        fields,
+        { cards: [{ id: "row-2", ...cardRow([], null) }] },
+        { cards: [{ id: "row-1", ...cardRow([], null) }] }
+      )
+    ).toBe(false);
+    expect(
+      populatedAmongStored(
+        fields,
+        { card: null, cards: [{ id: "row-1", ...cardRow([], null) }] },
+        { card: null, cards: [{ id: "row-1", ...cardRow(["hidden"], null) }] }
+      )
+    ).toBe(true);
+  });
+
   it("tells two versions apart by the links inside field groups too", () => {
     expect(
       populatedAmongStored(
