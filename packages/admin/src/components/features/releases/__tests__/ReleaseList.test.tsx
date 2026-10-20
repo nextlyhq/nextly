@@ -550,6 +550,50 @@ describe("readiness while the page stays open", () => {
   });
 });
 
+describe("the open tab and its count", () => {
+  it("reads the page again when the open tab's own count changes", () => {
+    mocks.searchParams = { tab: "attention" };
+    mocks.tabCounts.mockReturnValue(
+      counts({ upcoming: 3, attention: 0, drafts: 2, done: 12 })
+    );
+    mocks.listPage.mockReturnValue({ ...page([]), refetch: mocks.refetchList });
+    const { rerender } = render(<ReleaseList />);
+    expect(
+      screen.getByRole("heading", { name: "Nothing needs attention" })
+    ).toBeTruthy();
+    expect(mocks.refetchList).not.toHaveBeenCalled();
+
+    // A release turned overdue: the counts poll first and see it.
+    mocks.tabCounts.mockReturnValue(
+      counts({ upcoming: 2, attention: 1, drafts: 2, done: 12 })
+    );
+    rerender(<ReleaseList />);
+    expect(mocks.refetchList).toHaveBeenCalledTimes(1);
+
+    // The page's own read then lists it.
+    mocks.listPage.mockReturnValue({
+      ...page([release({ title: "Late one" })]),
+      refetch: mocks.refetchList,
+    });
+    rerender(<ReleaseList />);
+    expect(table().getByText("Late one")).toBeTruthy();
+  });
+
+  it("does not read the page again for another tab's count, or an unchanged one", () => {
+    mocks.listPage.mockReturnValue({
+      ...page([release()]),
+      refetch: mocks.refetchList,
+    });
+    const { rerender } = render(<ReleaseList />);
+    mocks.tabCounts.mockReturnValue(
+      counts({ upcoming: 3, attention: 5, drafts: 2, done: 13 })
+    );
+    rerender(<ReleaseList />);
+    rerender(<ReleaseList />);
+    expect(mocks.refetchList).not.toHaveBeenCalled();
+  });
+});
+
 describe("paging when a tab shrinks", () => {
   it("moves back to the last page when the only row on a later page goes", async () => {
     const user = userEvent.setup();

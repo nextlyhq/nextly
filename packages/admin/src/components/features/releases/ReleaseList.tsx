@@ -20,7 +20,7 @@
  * @module components/features/releases/ReleaseList
  */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   CalendarClock,
@@ -696,12 +696,37 @@ function anyReleaseMayExist(
 }
 
 /**
+ * Read the open page again whenever its own tab's count changes.
+ *
+ * The counts are re-read every minute and the page more slowly when nothing
+ * on it is about to run, so a release can move into the open tab (an
+ * Upcoming release turning overdue) and be counted beside a page that still
+ * says the tab is empty. Following the count, rather than adding a timer of
+ * its own, keeps the two telling the same story. A switch of tab is not a
+ * change of count: the new tab's page is read anyway.
+ */
+function useRefreshOnOwnCount(
+  tab: ReleaseListTab,
+  count: number | undefined,
+  refetch: () => unknown
+): void {
+  const seen = useRef({ tab, count });
+  useEffect(() => {
+    const before = seen.current;
+    seen.current = { tab, count };
+    if (before.tab !== tab || before.count === undefined) return;
+    if (count !== undefined && count !== before.count) void refetch();
+  }, [tab, count, refetch]);
+}
+
+/**
  * What one tab of the list reads, and what follows from it: the page and its
  * total, the counts, whether any release exists, and a failure to show.
  */
 function useReleaseListData(q: ReturnType<typeof useReleaseListQuestion>) {
   const counts = useReleaseTabCounts({ search: q.search, kind: q.kind });
   const list = useReleaseListPage(listParamsFor(q));
+  useRefreshOnOwnCount(q.tab, counts.counts[q.tab], list.refetch);
   useClampedPage(q, list.isPlaceholderData ? undefined : list.data?.meta.total);
   const readiness = usePageReadiness(q.tab, {
     rows: list.data?.items,
