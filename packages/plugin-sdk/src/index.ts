@@ -806,7 +806,7 @@ export { sanitizeAdminPath, DEFAULT_ADMIN_PATH } from "nextly";
 export { collectDeclarations } from "nextly";
 
 /**
- * @experimental `markHtml` — mark HTML a plugin's own code built so an email
+ * @experimental `markHtml` â€” mark HTML a plugin's own code built so an email
  *   template writes it unescaped.
  *
  * A template escapes every value it writes; the mark is what turns that off.

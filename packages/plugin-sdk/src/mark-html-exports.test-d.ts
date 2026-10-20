@@ -25,10 +25,17 @@ assertType<Exact<typeof markHtml, typeof rootMarkHtml>>(true);
 assertType<Exact<TrustedHtml, RootTrustedHtml>>(true);
 assertType<Exact<EmailTemplateData, RootTemplateData>>(true);
 
-// A mark is template data; a plain object shaped like one is not a mark.
+// A mark is template data.
 declare const marked: TrustedHtml;
 const _data: EmailTemplateData = { body: marked, name: "Dana" };
 void _data;
-// @ts-expect-error only `markHtml` makes a TrustedHtml
-const _forged: TrustedHtml = { html: "<b>x</b>" };
-void _forged;
+
+/**
+ * Every public member of a mark, without its private field. A mapped type
+ * keeps only the public keys, so this is the closest copy code could write:
+ * if `TrustedHtml` lost its brand, it would be assignable and this would fail.
+ */
+type Lookalike = { [K in keyof TrustedHtml]: TrustedHtml[K] };
+assertType<Exact<[Lookalike] extends [TrustedHtml] ? true : false, false>>(
+  true
+);
