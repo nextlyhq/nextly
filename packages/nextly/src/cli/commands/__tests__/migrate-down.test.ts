@@ -805,6 +805,24 @@ describe("migrateDownCore and the tables a DOWN creates", () => {
     });
     expect(executed).toEqual([]);
   });
+  it("refuses a later target looking up a name an earlier target vacated", async () => {
+    // The newer module's DOWN, run first, drops `t`. The name may then reach
+    // an index `t` shadowed on the search path, which the lookup made before
+    // the rollback never saw, so the older module's ALTER of it is refused.
+    const { deps, executed } = plugin(
+      {
+        "plugin:auth/001_init": 'ALTER TABLE "t" SET TABLESPACE fast;',
+        "plugin:auth/002_more": 'DROP TABLE "t";',
+      },
+      async () => new Set()
+    );
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: { name: "t", source: "plugin:auth/001_init" },
+    });
+    expect(executed).toEqual([]);
+  });
+
   it("follows the descendants through a rename an earlier target makes", async () => {
     // The newer module's DOWN, run first, renames `t`; the older one alters
     // it under the name it then has, which reaches `app_child` all the same.

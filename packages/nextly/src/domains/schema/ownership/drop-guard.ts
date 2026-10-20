@@ -920,8 +920,20 @@ class DropReader {
      * The tables that exist before the list runs, among those it creates.
      * Undefined when that is not known, and then no creation is credited.
      */
-    private readonly liveTables: ReadonlySet<string> | undefined
-  ) {}
+    private readonly liveTables: ReadonlySet<string> | undefined,
+    /**
+     * Names an earlier list of the same run vacated (`LiveTables.vacated`),
+     * vacated before this list's first statement.
+     */
+    vacatedBefore: Iterable<string> = []
+  ) {
+    for (const name of vacatedBefore) this.vacated.set(name, 0);
+  }
+
+  /** The relation names this list leaves vacated, earlier lists' included. */
+  get stillVacated(): ReadonlySet<string> {
+    return new Set(this.vacated.keys());
+  }
 
   read(statement: string): void {
     this.nextStatement();
@@ -2080,17 +2092,17 @@ class StatementWalk {
   /**
    * Whether the ALTER TABLE whose clauses start at `at` acts on the table it
    * names alone, whatever its descendants: PostgreSQL's table rename, its
-   * `SET SCHEMA`, and `ATTACH` or `DETACH PARTITION`, none of which takes
-   * `ONLY` or reaches an inheriting table. Every other form alters the
-   * descendants too unless `ONLY` is written, and is read so.
+   * `SET SCHEMA`, and `DETACH PARTITION`, which takes no `ONLY` and changes
+   * the partition it names (judged as such) and no other. Every other form
+   * reaches the descendants too unless `ONLY` is written, and is read so —
+   * `ATTACH PARTITION` among them: it changes the default partition's
+   * constraint, and clones indexes, constraints and triggers into the
+   * partition tree.
    */
   private actsOnTableAlone(at: number): boolean {
     if (this.isSetSchemaAt(at)) return true;
     if (this.word(at) === "RENAME" && this.word(at + 1) === "TO") return true;
-    return (
-      (this.word(at) === "ATTACH" || this.word(at) === "DETACH") &&
-      this.word(at + 1) === "PARTITION"
-    );
+    return this.word(at) === "DETACH" && this.word(at + 1) === "PARTITION";
   }
 
   /**
@@ -3326,9 +3338,10 @@ export function tablesLeftInPlace(
  */
 function readAsIfNoTableExisted(
   statements: readonly string[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  vacatedBefore?: Iterable<string>
 ): DropReader | undefined {
-  const reader = new DropReader(dialect, new Set());
+  const reader = new DropReader(dialect, new Set(), vacatedBefore);
   try {
     readWith(statements, reader, new Map());
   } catch (error) {
@@ -3555,7 +3568,7 @@ function readStatements(
   statements: readonly string[],
   dialect: SupportedDialect,
   liveColumns: LiveColumns | undefined,
-  liveTables: ReadonlySet<string> | undefined,
+  liveTables: LiveTables | undefined,
   liveElements?: LiveElements
 ): Reading {
   // A block keeps its table only where the table's live indexes and
@@ -3566,9 +3579,10 @@ function readStatements(
       block => liveElements?.has(block.table) ?? false
     )
   );
+  const vacated = liveTables?.vacated ?? [];
   const reading = readWith(
     statements,
-    new DropReader(dialect, liveTables),
+    new DropReader(dialect, liveTables, vacated),
     kept
   );
   // A list that may change which table an unqualified name reaches is read
@@ -3579,7 +3593,11 @@ function readStatements(
   // credit, not just what follows the change, because a creation before it
   // is dropped by a name that afterwards may reach another table.
   return reading.resolutionMayChange
-    ? readWith(statements, new DropReader(dialect, undefined), new Map())
+    ? readWith(
+        statements,
+        new DropReader(dialect, undefined, vacated),
+        new Map()
+      )
     : reading;
 }
 
@@ -4360,6 +4378,13 @@ export type LiveTables = ReadonlySet<string> & {
    * it, at any depth, lower-cased. Absent where it was not read.
    */
   readonly descendants?: ReadonlyMap<string, readonly string[]>;
+  /**
+   * Relation names an earlier statement list of the same run dropped,
+   * renamed or moved away and did not fill again (`liveTablesAfter`). The
+   * live lookups were made before that list ran, so a later list looking one
+   * of these up is refused, as a later statement of the same list is.
+   */
+  readonly vacated?: ReadonlySet<string>;
 };
 
 /**
@@ -4375,7 +4400,7 @@ export function liveTablesAfter(
   statements: readonly string[],
   dialect: SupportedDialect
 ): LiveTables {
-  const reading = readAsIfNoTableExisted(statements, dialect);
+  const reading = readAsIfNoTableExisted(statements, dialect, tables.vacated);
   const descendants = new Map(tables.descendants ?? []);
   for (const [current, original] of reading?.renames ?? []) {
     const below = descendants.get(original);
@@ -4383,6 +4408,9 @@ export function liveTablesAfter(
   }
   return Object.assign(new Set([...tables, ...(reading?.creating ?? [])]), {
     descendants,
+    // A list that cannot be read keeps what was vacated before it; the guard
+    // refuses it on its own.
+    vacated: reading?.stillVacated ?? tables.vacated,
   });
 }
 
@@ -5101,6 +5129,7 @@ export function assertNoForeignDrops(args: {
   )) {
     refuseUnlessHeld(holders.table(table), { ...args, table, parent, act });
   }
+  refuseDescendantElements(read, holders, args);
   refuseLookupsAfterVacating(read, args);
   for (const { table, column } of read.columns) {
     refuseUnlessHeld(holders.column(table, column), {
@@ -5184,26 +5213,60 @@ function readOrRefuse(args: {
  * Refuses a clause the reader cannot read on a table another owner has a
  * column, index, foreign key or check on (`DropReader.unreadOnElements`),
  * whoever holds the table: the clause may change those elements, and which
- * it changes cannot be read. Judged by every element row recorded on the
- * table.
+ * it changes cannot be read.
  */
 function refuseUnreadOnElements(
   read: Reading,
   holders: OwnershipView,
-  args: {
-    stream: MigrationStream;
-    source: string;
-    elementOwners: readonly OwnerRecord[];
-    liveIndexTables?: ReadonlyMap<string, string>;
-    dialect: SupportedDialect;
-  }
+  args: ElementJudging
+): void {
+  refuseElementsOn(new Set(read.unreadOnElements), holders, args);
+}
+
+/**
+ * Refuses an ALTER without `ONLY` that reaches a descendant another owner
+ * has a column, index, foreign key or check on, whoever holds the
+ * descendant: a column a child shares with its parent is merged with the
+ * parent's, so a change to the parent's (a rename, a type) changes the
+ * child's too, and which of the child's elements a clause reaches is not
+ * read. A TRUNCATE or DROP reaching it is judged by the table alone, as one
+ * naming it is.
+ */
+function refuseDescendantElements(
+  read: Reading,
+  holders: OwnershipView,
+  args: ElementJudging & { liveTables?: LiveTables }
+): void {
+  const altered = descendantsReached(read, args.liveTables)
+    .filter(({ act }) => act === DESCENDANT_ACTS.alter)
+    .map(({ table }) => table);
+  refuseElementsOn(new Set(altered), holders, args);
+}
+
+/** What judging the element rows on a table needs. */
+interface ElementJudging {
+  stream: MigrationStream;
+  source: string;
+  elementOwners: readonly OwnerRecord[];
+  liveIndexTables?: ReadonlyMap<string, string>;
+  dialect: SupportedDialect;
+}
+
+/**
+ * Refuses a change to each of `tables` when another owner has a column,
+ * index, foreign key or check recorded on it that the change may reach.
+ */
+function refuseElementsOn(
+  tables: ReadonlySet<string>,
+  holders: OwnershipView,
+  args: ElementJudging
 ): void {
   // The rows' names are compared as the reader's are, cut to what the
   // dialect stores (`storedNameKey`): the reading and `OwnershipView` both
   // key every name that way, so a long name compared lower-cased alone
   // would match no row and the element would go unjudged.
   const fold = (name: string) => storedNameKey(name, args.dialect);
-  for (const table of new Set(read.unreadOnElements)) {
+  for (const table of tables) {
     for (const row of args.elementOwners) {
       if (fold(row.tableName) !== table) continue;
       if (row.elementName == null) continue;
@@ -5226,8 +5289,9 @@ function refuseUnreadOnElements(
 }
 
 /**
- * Throws the refusal of a clause the guard cannot read, on a table holding
- * a column or element (`refuseUnreadOnElements`) the stream does not hold.
+ * Throws the refusal of a change the guard cannot follow to each element it
+ * reaches, on a table holding a column or element the stream does not hold
+ * (`refuseElementsOn`).
  */
 function refuseUnreadOn(
   claim: Claim,
@@ -5242,7 +5306,7 @@ function refuseUnreadOn(
   if (claim.kind === "own") return;
   throw new NextlyError({
     code: "DROP_OF_FOREIGN_TABLE",
-    publicMessage: `A migration alters ${args.table} in a form the schema guard cannot read, and ${takenThing(args)} on that table belongs to a different owner. It has been refused, and nothing was applied. Rewrite the statement as plain ALTER TABLE clauses.`,
+    publicMessage: `A migration alters ${args.table} in a way the schema guard cannot follow to each column, index and constraint it changes, and ${takenThing(args)} on that table belongs to a different owner. It has been refused, and nothing was applied. Rewrite it as plain ALTER TABLE clauses on the table it names, with ONLY where other tables inherit from it.`,
     logContext: {
       ...knownNames({
         table: args.table,

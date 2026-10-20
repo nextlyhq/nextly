@@ -132,6 +132,18 @@ describe("a PostgreSQL statement that reaches another owner's descendant table",
     ).toMatchObject({ table: "fx__child", parent: "app_parent" });
   });
 
+  it("refuses attaching a partition where another owner's partition may be the default", () => {
+    // Attaching changes the default partition's constraint, and may clone
+    // indexes, constraints and triggers into the partitions it reaches.
+    expect(
+      refusal(() =>
+        guard([
+          "ALTER TABLE app_parent ATTACH PARTITION app_base FOR VALUES IN (1)",
+        ])
+      )
+    ).toMatchObject({ table: "fx__child", parent: "app_parent" });
+  });
+
   it("refuses detaching the plugin's partition from the app's table", () => {
     expect(
       refusal(() =>
@@ -168,18 +180,57 @@ describe("a PostgreSQL statement that reaches another owner's descendant table",
   });
 });
 
+describe("another owner's element on a descendant the stream holds", () => {
+  it("refuses an ALTER that reaches a plugin's column on the app's child", () => {
+    // Both tables are the app's, but the plugin added `x` to the child. A
+    // rename of the parent's `x` renames the child's merged `x` too.
+    expect(
+      refusal(() =>
+        assertNoForeignDrops({
+          statements: ["ALTER TABLE app_parent RENAME COLUMN x TO y"],
+          stream: "app",
+          owners,
+          elementOwners: [
+            ...owners.values(),
+            record({
+              tableName: "app_child",
+              elementKind: "column",
+              elementName: "x",
+            }),
+          ],
+          dialect: "postgresql",
+          source: "0011_under_test",
+          liveTables: APP_CHILD,
+        })
+      )
+    ).toMatchObject({
+      table: "app_child",
+      column: "x",
+      belongsTo: "plugin:fx",
+    });
+  });
+});
+
 describe("what still reaches only what the stream holds", () => {
   it.each<string>([
     "ALTER TABLE ONLY app_parent ALTER COLUMN name SET DEFAULT 'x'",
     "ALTER TABLE IF EXISTS ONLY app_parent DROP CONSTRAINT app_chk",
     "TRUNCATE ONLY app_parent",
-    // Renaming or moving the table, and attaching a partition, act on the
-    // table named alone; PostgreSQL takes no ONLY on them.
+    // Renaming or moving the table acts on the table named alone;
+    // PostgreSQL takes no ONLY on them.
     "ALTER TABLE app_parent RENAME TO app_base2",
     "ALTER TABLE app_parent SET SCHEMA archive",
-    "ALTER TABLE app_parent ATTACH PARTITION app_child FOR VALUES IN (1)",
   ])("allows %s", sql => {
     expect(() => guard([sql])).not.toThrow();
+  });
+
+  it("allows attaching a partition to a parent whose partitions the stream holds", () => {
+    expect(() =>
+      guard(
+        ["ALTER TABLE app_parent ATTACH PARTITION app_base FOR VALUES IN (1)"],
+        APP_CHILD
+      )
+    ).not.toThrow();
   });
 
   it("allows altering a parent whose descendants the stream holds", () => {
