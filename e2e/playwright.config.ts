@@ -144,6 +144,11 @@ export default defineConfig({
       // harnesses are deliberately different: the shell's slots are inert
       // markers, and this one mounts the real canvas so a pointer can drive it.
       NEXTLY_E2E_CANVAS_HARNESS: "1",
+      // A session REST budget for the suite's one signed-in session, which
+      // loads pages far faster than a person can: at the default 500 reads a
+      // minute it is refused mid-run. Only the session budget is raised; see
+      // the playground's nextly.config.ts.
+      NEXTLY_E2E_SESSION_BUDGET: "1",
       // The running app never rewrites generated files. The fixtures above add
       // components the committed component map was not generated with, and
       // `next dev` would otherwise write the map again, leaving the checkout

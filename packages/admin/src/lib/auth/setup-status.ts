@@ -14,37 +14,60 @@
  */
 import { publicApi } from "../api/publicApi";
 
-let setupStatusCache: boolean | null = null;
+/** What setup-status answers, as the admin reads it. */
+interface SetupStatus {
+  isSetup: boolean;
+  /** Whether setup needs its setup token: in production, until it is done. */
+  requiresSetupToken: boolean;
+}
 
 /**
- * Fetch the setup status, populating the module cache on first call.
- * Subsequent calls within the same page lifecycle return the cached
- * value without re-hitting the network.
- *
- * On any failure (5xx, 429, network error, invalid response shape) the
- * cache is fail-safed to `true` ("setup complete"). The alternative --
- * synthesising `false` -- would drag authenticated users into the setup
- * wizard on a transient hiccup, which is destructive. Staying on the
- * dashboard or login screen is recoverable on the next request.
+ * The answer every reader shares: one request per page lifecycle, however
+ * many ask and however soon, so the route guards and the setup form can never
+ * read setup-status differently.
  */
-export async function checkSetupStatus(): Promise<boolean> {
-  if (setupStatusCache !== null) return setupStatusCache;
+let setupStatusCache: Promise<SetupStatus> | null = null;
+
+/**
+ * On any failure (5xx, 429, network error, invalid response shape) setup is
+ * fail-safed to "complete". The alternative -- synthesising `false` -- would
+ * drag authenticated users into the setup wizard on a transient hiccup, which
+ * is destructive. Staying on the dashboard or login screen is recoverable on
+ * the next request. The token is fail-safed to "needed": the form then shows
+ * a field the server may ignore, rather than hiding one it requires.
+ */
+async function fetchSetupStatus(): Promise<SetupStatus> {
   try {
-    const result = await publicApi.get<{ isSetup: boolean } | undefined>(
-      "/auth/setup-status"
-    );
+    const result = await publicApi.get<
+      { isSetup?: unknown; requiresSetupToken?: unknown } | undefined
+    >("/auth/setup-status");
     // Require a strict boolean; any other shape (empty body, non-JSON,
     // schema drift) takes the same fail-safe default as the catch branch
     // below. Inlined rather than throwing into the catch -- the admin
     // package doesn't carry a NextlyError dependency, and a bare throw
     // would just be local control flow with no payload.
-    setupStatusCache =
-      typeof result?.isSetup === "boolean" ? result.isSetup : true;
-    return setupStatusCache;
+    return {
+      isSetup: typeof result?.isSetup === "boolean" ? result.isSetup : true,
+      requiresSetupToken: result?.requiresSetupToken !== false,
+    };
   } catch {
-    setupStatusCache = true;
-    return setupStatusCache;
+    return { isSetup: true, requiresSetupToken: true };
   }
+}
+
+function readSetupStatus(): Promise<SetupStatus> {
+  setupStatusCache ??= fetchSetupStatus();
+  return setupStatusCache;
+}
+
+/** Whether initial setup has been completed. */
+export async function checkSetupStatus(): Promise<boolean> {
+  return (await readSetupStatus()).isSetup;
+}
+
+/** Whether the setup form must ask for the setup token. */
+export async function checkSetupTokenRequired(): Promise<boolean> {
+  return (await readSetupStatus()).requiresSetupToken;
 }
 
 /**

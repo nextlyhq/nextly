@@ -1053,9 +1053,9 @@ export class CollectionSyncService extends BaseService {
       writeFileSync(outputPath, typesFile.code, "utf-8");
       this.logger.debug(`Generated types: ${outputPath}`);
 
-      // The same settling `generate:types` does, after the new file exists,
-      // so a sync in an app with the old default's file leaves one
-      // declaration of the generated types, not two that clash.
+      // The same notices `generate:types` gives, after the new file exists,
+      // so a sync in an app with the old default's file says what to do
+      // about it rather than leaving two declarations to clash unnoticed.
       for (const notice of retireOldDefaultTypesFile(opts.cwd, outputFile)) {
         this.logger.warn(notice);
       }

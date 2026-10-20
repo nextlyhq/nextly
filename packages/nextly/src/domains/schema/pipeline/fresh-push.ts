@@ -44,6 +44,7 @@ import {
 } from "../../../database/drizzle-kit-lazy";
 import { isMissingColumnError } from "../../../database/missing-column";
 import { NextlyError } from "../../../errors/nextly-error";
+import { consoleLogger } from "../../../shared/types";
 import { pluginMigratedTableSet } from "../ownership/drop-guard";
 import { activePostgresSchema } from "../services/postgres-schema";
 
@@ -176,13 +177,13 @@ async function applyPushResult(
     // Nextly-authored diagnostics (the resolver-crash fallback) are already
     // interpreted — only genuinely-unknown kit hints deserve the warning.
     if (h.hint.startsWith("[nextly]")) continue;
-    console.warn(
+    consoleLogger.warn(
       `[Nextly schema] fresh-push received a drizzle-kit hint it does not ` +
         `interpret: ${h.hint}${h.statement ? ` [${h.statement}]` : ""}`
     );
   }
   for (const statement of offenders) {
-    console.warn(
+    consoleLogger.warn(
       `[Nextly schema] fresh-push blocked a destructive statement emitted ` +
         `by drizzle-kit (core reconciles must never destroy data; route ` +
         `intentional drops through migrations): ${statement}`

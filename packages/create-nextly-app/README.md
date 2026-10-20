@@ -35,6 +35,12 @@ The CLI walks you through:
 4. Database (`sqlite`, `postgresql`, or `mysql`)
 5. Database connection string (skipped for SQLite)
 
+### Which release a project gets
+
+A project gets the release of Nextly its CLI belongs to: `create-nextly-app@<version>` declares `nextly` and every `@nextlyhq/*` package at exactly `<version>`, so the templates, the agent guide and the skills it writes match what is installed. To start on another release, run that release's CLI; to upgrade later, move every Nextly package to the new version together.
+
+Adding Nextly to an app that already has a Nextly package at another version, or declared as a range, stops before changing anything and says what to set. With `--branch` or `--local-template`, the packages come from the `alpha` tag, the active release line, and `--use-yalc` links local builds.
+
 After scaffolding, `pnpm dev` runs the project. Visit [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to create the first admin user.
 
 ## Templates
@@ -61,7 +67,7 @@ Next.js app, it still creates the plugin in its own directory.
 
 By default the plugin is copied from the template bundled in the CLI, and its
 Nextly packages are pinned to that CLI's release, so its files and its
-packages come from the same release. A `--branch` other than `main`,
+packages come from the same release. Any `--branch`, `main` included,
 `--local-template` or `--use-yalc` uses the live template instead.
 
 ## Schema approaches
@@ -97,7 +103,7 @@ pnpm create nextly-app@alpha my-app -y
 | `--template <name>` | `-t`  | Project template: `blank`, `blog`, `plugin`                  | Interactive prompt |
 | `--approach <type>` | `-a`  | Schema approach: `code-first`, `visual`                      | Interactive prompt |
 | `--database <db>`   | `-d`  | Database: `sqlite`, `postgresql`, `mysql`                    | Interactive prompt |
-| `--branch <branch>` | `-b`  | Git branch for template download                             | `main`             |
+| `--branch <branch>` | `-b`  | Git branch to take the template from                         | This release       |
 | `--version`         | `-V`  | Print the CLI version                                        |                    |
 | `--help`            | `-h`  | Show help text                                               |                    |
 

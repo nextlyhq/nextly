@@ -23,9 +23,14 @@ import {
 
 import { Plus } from "@admin/components/icons";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
+import {
+  RESTRICTED_REFERENCE,
+  isRestrictedReference,
+} from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 
 import type { EntryData } from "../../EntryForm/useEntryForm";
+import { RestrictedReference } from "../RestrictedReference";
 
 import { RelationshipCard, type RelatedItem } from "./RelationshipCard";
 import {
@@ -143,7 +148,10 @@ function polymorphicEntryToItem(entry: {
 }): RelatedItem {
   const { relationTo, value } = entry;
   if (typeof value === "string") {
-    return { id: value, relationTo };
+    // A placeholder stays one once it is read as an item.
+    return isRestrictedReference(entry)
+      ? { id: value, relationTo, [RESTRICTED_REFERENCE]: true }
+      : { id: value, relationTo };
   }
   return { ...value, relationTo };
 }
@@ -224,7 +232,11 @@ function valueToSelectedItems(
  * Gets IDs of all selected items for exclusion from search.
  */
 function getSelectedIds(selectedItems: RelatedItem[]): string[] {
-  return selectedItems.map(item => item.id);
+  // A link the editor cannot see never appears in a search, and its id may be
+  // another collection's readable row, which must stay selectable.
+  return selectedItems
+    .filter(item => !isRestrictedReference(item))
+    .map(item => item.id);
 }
 
 // ============================================================
@@ -299,6 +311,9 @@ export function RelationshipInput<
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   // Track which item is being edited (null when no edit modal is open)
   const [editingItem, setEditingItem] = useState<RelatedItem | null>(null);
+  // Which row is being edited. An id names more than one row when a field
+  // holds the same id from two collections, or a link twice.
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
 
   const hasMany = field.hasMany ?? false;
 
@@ -341,8 +356,10 @@ export function RelationshipInput<
         // Check if already selected. Read the same way removal and quick-edit
         // read it, or a value whose target was populated compares an object
         // against an id, matches nothing, and the guard admits a duplicate.
+        // A link the editor cannot see is left out: its id can belong to
+        // another collection's row, which is not a duplicate of it.
         const isAlreadySelected = currentValues.some(
-          v => referenceIdOf(v) === item.id
+          v => !isRestrictedReference(v) && referenceIdOf(v) === item.id
         );
 
         if (!isAlreadySelected) {
@@ -383,14 +400,18 @@ export function RelationshipInput<
   );
 
   /**
-   * Handles removal of a selected relationship.
+   * Handles removal of a selected relationship, by its position.
+   *
+   * By position rather than by id: a field naming several collections can
+   * hold the same id from two of them, and a link can be stored twice, so an
+   * id names more than the one row that was clicked. The displayed items are
+   * the value's entries in order, so a position names exactly one.
    */
   const handleRemove = useCallback(
-    (itemId: string) => {
+    (index: number) => {
       if (hasMany) {
         const currentValues = Array.isArray(value) ? (value as unknown[]) : [];
-        const filtered = currentValues.filter(v => referenceIdOf(v) !== itemId);
-        onChange(filtered);
+        onChange(currentValues.filter((_, at) => at !== index));
       } else {
         onChange(null);
       }
@@ -473,10 +494,9 @@ export function RelationshipInput<
 
       if (hasMany) {
         const currentValues = Array.isArray(value) ? [...value] : [];
-        const updatedValues = currentValues.map(v => {
-          // Match by ID (handle both string and object values)
-          const itemId = referenceIdOf(v);
-          if (itemId === editingItem.id) {
+        const updatedValues = currentValues.map((v, at) => {
+          // The row that was edited, by its position.
+          if (at === editingIndex) {
             if (isPolymorphicField) {
               return {
                 relationTo: editingItem.relationTo,
@@ -505,7 +525,7 @@ export function RelationshipInput<
       // Clear editing state
       setEditingItem(null);
     },
-    [editingItem, hasMany, value, onChange, isPolymorphicField]
+    [editingItem, editingIndex, hasMany, value, onChange, isPolymorphicField]
   );
 
   const isDisabled = disabled || readOnly;
@@ -520,7 +540,20 @@ export function RelationshipInput<
       {/* Selected items */}
       {selectedItems.length > 0 && (
         <div className="space-y-2">
-          {selectedItems.map(item => {
+          {selectedItems.map((item, index) => {
+            // A link the editor cannot see: kept, removable, never opened.
+            if (isRestrictedReference(item)) {
+              return (
+                <RestrictedReference
+                  // A link can be stored twice, so its position keeps the key
+                  // unique.
+                  key={`${index}:${item.relationTo ?? ""}:${item.id}`}
+                  id={item.id}
+                  onRemove={() => handleRemove(index)}
+                  disabled={isDisabled}
+                />
+              );
+            }
             // The `users` core collection lives on its own admin pages
             // (`/admin/users/edit/[id]`) — opening RelationshipQuickEdit
             // for a user would hit `/admin/api/collections/users` (404,
@@ -537,13 +570,16 @@ export function RelationshipInput<
                     id: String(item.id),
                   });
                 }
-              : () => setEditingItem(item);
+              : () => {
+                  setEditingItem(item);
+                  setEditingIndex(index);
+                };
 
             return (
               <RelationshipCard
                 key={item.id}
                 item={item}
-                onRemove={() => handleRemove(item.id)}
+                onRemove={() => handleRemove(index)}
                 onEdit={allowEdit && !isDisabled ? handleEdit : undefined}
                 disabled={isDisabled}
                 collectionSlug={

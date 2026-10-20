@@ -35,6 +35,7 @@ import {
 import { buildNotificationEvent } from "../../../runtime/notifications/build-event";
 import type { MigrationScope } from "../../../runtime/notifications/types";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
+import { consoleLogger } from "../../../shared/types";
 import { FieldGroupSchemaService } from "../../field-groups/services/field-group-schema-service";
 import { resolveRegistryNameFromCatalog } from "../../field-groups/storage/resolve-storage-names";
 import { getActiveExtensionSchema } from "../extension/build-extension-schema";
@@ -355,7 +356,7 @@ function preCleanupFailure(err: unknown): Error {
 function logApplyRoute(useFastPath: boolean, ops: Operation[]): void {
   if (process.env.DEBUG_SCHEMA !== "1") return;
   if (useFastPath) {
-    console.debug(
+    consoleLogger.debug(
       `[nextly] schema apply: fast-path DDL emitter (${ops.length} op(s))`
     );
     return;
@@ -363,7 +364,7 @@ function logApplyRoute(useFastPath: boolean, ops: Operation[]): void {
   const nonAdditive = ops
     .filter(o => o.type !== "add_column" && o.type !== "add_table")
     .map(o => o.type);
-  console.debug(
+  consoleLogger.debug(
     `[nextly] schema apply: drizzle-kit fallback (${ops.length} op(s); ` +
       `non-additive: ${nonAdditive.length === 0 ? "<none>" : nonAdditive.join(",")})`
   );
@@ -588,7 +589,7 @@ export function logSkippedLockedOps(skipped: Operation[]): void {
   const tables = [
     ...new Set(skipped.map(op => operationTargetTable(op) ?? "<unknown>")),
   ];
-  console.debug(
+  consoleLogger.debug(
     `[nextly] schema apply: skipped ${skipped.length} op(s) on code-first ` +
       `table(s) not owned by this UI save: ${tables.join(", ")}`
   );
@@ -596,7 +597,7 @@ export function logSkippedLockedOps(skipped: Operation[]): void {
 
 function logSkippedLockedStatements(skipped: string[]): void {
   if (skipped.length === 0 || process.env.DEBUG_SCHEMA !== "1") return;
-  console.debug(
+  consoleLogger.debug(
     `[nextly] schema apply: dropped ${skipped.length} emitted statement(s) ` +
       `targeting code-first table(s) not owned by this UI save: ` +
       skipped.join("; ")
@@ -707,7 +708,7 @@ export class PushSchemaPipeline {
     };
     const cachedSnapshot = getCachedSnapshot();
     if (cachedSnapshot !== undefined && dequal(cacheKey, cachedSnapshot)) {
-      console.log(
+      consoleLogger.info(
         "[Nextly schema] No changes detected since last apply; skipping push (dequal cache hit)."
       );
       return {
@@ -1268,7 +1269,7 @@ export class PushSchemaPipeline {
                   desiredTableNames
                 ),
               process.env.DEBUG_SCHEMA === "1"
-                ? { debug: (msg: string) => console.debug(msg) }
+                ? { debug: (msg: string) => consoleLogger.debug(msg) }
                 : undefined
             );
           } catch (err) {
@@ -1307,7 +1308,7 @@ export class PushSchemaPipeline {
           );
           emittedStatements = keptUniques.kept;
           if (keptUniques.strippedCount > 0) {
-            console.debug(
+            consoleLogger.debug(
               `[Nextly schema] Kept ${keptUniques.strippedCount} live unique ` +
                 `constraint(s) drizzle-kit emitted a drop for (only a ` +
                 `drop_index operation removes one).`
@@ -1316,14 +1317,14 @@ export class PushSchemaPipeline {
           if (stripped.strippedCount > 0) {
             // Once per apply, not per statement: enough to see the guard
             // acted without turning a routine emission into log noise.
-            console.debug(
+            consoleLogger.debug(
               `[Nextly schema] Kept ${stripped.strippedCount} tracked index(es) ` +
                 `drizzle-kit emitted a DROP INDEX for (they are declared in the ` +
                 `desired schema; only a drop_index operation removes one).`
             );
           }
           if (keptConstraints.strippedCount > 0) {
-            console.debug(
+            consoleLogger.debug(
               `[Nextly schema] Kept ${keptConstraints.strippedCount} declared ` +
                 `check or foreign-key element(s) drizzle-kit emitted a drop for ` +
                 `(only a drop_check or drop_foreign_key operation removes one).`

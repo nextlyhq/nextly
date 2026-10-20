@@ -30,17 +30,23 @@ import {
   apiKeyPermissionsFor,
   type ApiKeyOperation,
 } from "../domains/auth/api-key-policy";
-import type { ApiKeyService } from "../domains/auth/services/api-key-service";
+import type {
+  ApiKeyMeta,
+  ApiKeyService,
+} from "../domains/auth/services/api-key-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import {
+  ApiKeyTokenTypeSchema,
   CreateApiKeySchema,
   UpdateApiKeySchema,
 } from "../schemas/_zod/api-keys";
+import { permissionSlug } from "../schemas/_zod/rbac";
 import { isSuperAdmin } from "../services/lib/permissions";
 
 import { readJsonBody } from "./read-json-body";
 import {
+  privateToSession,
   respondAction,
   respondDoc,
   respondList,
@@ -74,6 +80,38 @@ function denySessionOnly(action: "create" | "update" | "delete"): never {
 }
 
 /**
+ * The signed-in person allowed to create keys. Creating a key and asking
+ * what one would do are guarded alike, so a caller refused one is refused the
+ * other: a key asking is refused as session-only.
+ */
+async function requireKeyCreator(req: Request) {
+  const authResult = await requireApiKeyPermission(req, "create");
+  if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+  if (authResult.authMethod !== "session") denySessionOnly("create");
+  return authResult;
+}
+
+/**
+ * A key's metadata as `caller` may see it.
+ *
+ * A key's owner is a person, so an API key is told who it is only when its
+ * own scope may read users, as it must before any other user data reaches it;
+ * otherwise `owner` is null. A super-admin's key with a role that reads keys
+ * but not people lists every key, and learns from it no one's name or
+ * address. A signed-in person sees the owner: a super-admin reads users, and
+ * anyone else sees only their own keys.
+ */
+function asSeenBy(
+  caller: { authMethod: string; permissions: string[] },
+  key: ApiKeyMeta
+): ApiKeyMeta {
+  const readsUsers =
+    caller.authMethod !== "api-key" ||
+    caller.permissions.includes(permissionSlug("read", "users"));
+  return readsUsers ? key : { ...key, owner: null };
+}
+
+/**
  * List API keys for the authenticated user.
  *
  * Super-admins see all keys across all users (`allUsers: true`).
@@ -86,14 +124,16 @@ function denySessionOnly(action: "create" | "update" | "delete"): never {
  * meta is a single-page synthetic envelope so the wire format matches
  * `respondList` for every list endpoint.
  */
-export const listApiKeys = withErrorHandler(
-  async (req: Request): Promise<Response> => {
+export const listApiKeys = privateToSession(
+  withErrorHandler(async (req: Request): Promise<Response> => {
     const authResult = await requireApiKeyPermission(req, "read");
     if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
     const service = await getApiKeyService();
     const allUsers = await isSuperAdmin(authResult.userId);
-    const keys = await service.listApiKeys(authResult.userId, { allUsers });
+    const keys = (
+      await service.listApiKeys(authResult.userId, { allUsers })
+    ).map(key => asSeenBy(authResult, key));
 
     // Synthetic single-page meta keeps the canonical list shape even though
     // the underlying service does not paginate.
@@ -105,7 +145,7 @@ export const listApiKeys = withErrorHandler(
       hasNext: false,
       hasPrev: false,
     });
-  }
+  })
 );
 
 /**
@@ -120,26 +160,28 @@ export const listApiKeys = withErrorHandler(
  * Response: bare `ApiKeyMeta` document body via `respondDoc`.
  */
 export function getApiKeyById(req: Request, id: string): Promise<Response> {
-  return withErrorHandler(async (request: Request) => {
-    const authResult = await requireApiKeyPermission(request, "read");
-    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
+  return privateToSession(
+    withErrorHandler(async (request: Request) => {
+      const authResult = await requireApiKeyPermission(request, "read");
+      if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
 
-    const service = await getApiKeyService();
-    const allUsers = await isSuperAdmin(authResult.userId);
-    const key = await service.getApiKeyById(id, authResult.userId, {
-      allUsers,
-    });
-
-    if (!key) {
-      // Per §13.7 the public message stays "Not found." regardless of
-      // whether the row was missing or merely owned by another user.
-      throw NextlyError.notFound({
-        logContext: { entity: "api-key", id, callerId: authResult.userId },
+      const service = await getApiKeyService();
+      const allUsers = await isSuperAdmin(authResult.userId);
+      const key = await service.getApiKeyById(id, authResult.userId, {
+        allUsers,
       });
-    }
 
-    return respondDoc(key);
-  })(req);
+      if (!key) {
+        // Per §13.7 the public message stays "Not found." regardless of
+        // whether the row was missing or merely owned by another user.
+        throw NextlyError.notFound({
+          logContext: { entity: "api-key", id, callerId: authResult.userId },
+        });
+      }
+
+      return respondDoc(asSeenBy(authResult, key));
+    })
+  )(req);
 }
 
 /**
@@ -154,12 +196,77 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
  * Response: `{ message, item: { doc: ApiKeyMeta, key: string } }` via
  * `respondMutation`. `key` is the one-time raw secret; status 201.
  */
+/**
+ * The query a key summary is asked with: the type and role the form has
+ * chosen. Only their shapes are checked here; whether the two belong together,
+ * and whether the role is within its creator's, is the service's question, so
+ * a summary is refused exactly as creating that key would be.
+ */
+const ApiKeyAbilitiesQuerySchema = z.object({
+  tokenType: ApiKeyTokenTypeSchema,
+  roleId: z.string().min(1).optional(),
+});
+
+/**
+ * What a key the caller creates now, of this type and role, would be able to
+ * do: the summary the key form shows before creation.
+ *
+ * `GET /api/api-keys/abilities?tokenType=…&roleId=…`
+ *
+ * Answered by the resolution a key's own requests use, so the summary is the
+ * permissions the key gets. An access rule written in code for a collection
+ * or Single can still refuse a request they allow, and may depend on the
+ * entry, so it is not judged here.
+ *
+ * Session-only and behind the permission to create keys, as
+ * creation is: a summary is that creation's preview, and a key asking it
+ * about another key is refused.
+ *
+ * Response: `{ items: { slug, action, resource }[], meta }`.
+ * Private to the session that asked, refusals included, since it describes
+ * that person's own grants.
+ *
+ * @experimental The key form's summary; its shape may change while that
+ * screen does.
+ */
+export const getApiKeyAbilities = privateToSession(
+  withErrorHandler(async (req: Request): Promise<Response> => {
+    const authResult = await requireKeyCreator(req);
+
+    const params = new URL(req.url).searchParams;
+    let query: z.infer<typeof ApiKeyAbilitiesQuerySchema>;
+    try {
+      query = ApiKeyAbilitiesQuerySchema.parse({
+        tokenType: params.get("tokenType") ?? undefined,
+        roleId: params.get("roleId") ?? undefined,
+      });
+    } catch (err) {
+      if (err instanceof z.ZodError) throw nextlyValidationFromZod(err);
+      throw err;
+    }
+
+    const service = await getApiKeyService();
+    const grants = await service.previewApiKeyGrants(authResult.userId, query);
+    const items = grants.map(({ slug, action, resource }) => ({
+      slug,
+      action,
+      resource,
+    }));
+
+    return respondList(items, {
+      total: items.length,
+      page: 1,
+      limit: items.length,
+      totalPages: 1,
+      hasNext: false,
+      hasPrev: false,
+    });
+  })
+);
+
 export const createApiKey = withErrorHandler(
   async (req: Request): Promise<Response> => {
-    const authResult = await requireApiKeyPermission(req, "create");
-    if (isErrorResponse(authResult)) throw toNextlyAuthError(authResult);
-
-    if (authResult.authMethod !== "session") denySessionOnly("create");
+    const authResult = await requireKeyCreator(req);
 
     const body = await readJsonBody(req);
 

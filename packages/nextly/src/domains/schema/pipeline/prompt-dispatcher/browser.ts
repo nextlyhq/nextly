@@ -12,6 +12,7 @@
 // channels, and a future F10 SSE-based browser channel can swap this
 // implementation out without touching the pipeline.
 
+import { consoleLogger } from "../../../../shared/types";
 import { toSnakeCase } from "../../services/field-column-descriptor";
 import type {
   ClassifierEvent,
@@ -167,7 +168,7 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
         unacknowledgedDrops.length > 3
           ? `, +${unacknowledgedDrops.length - 3} more`
           : "";
-      console.warn(
+      consoleLogger.warn(
         `[BrowserPromptDispatcher] refusing apply: ${unacknowledgedDrops.length} ` +
           `destructive column drop(s) were not acknowledged: ${sample}${more}. ` +
           `Attach a confirm_drop resolution for each column to authorize the drop.`
@@ -182,7 +183,7 @@ export class BrowserPromptDispatcher implements PromptDispatcher {
         unresolvedCandidates.length > 3
           ? `, +${unresolvedCandidates.length - 3} more`
           : "";
-      console.warn(
+      consoleLogger.warn(
         `[BrowserPromptDispatcher] refusing apply: ${unresolvedCandidates.length} ` +
           `rename candidate(s) had no resolution and would drop a column as ` +
           `drop_and_add: ${sample}${more}. This usually means a sibling table ` +

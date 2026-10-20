@@ -12,9 +12,9 @@ import { fileURLToPath } from "node:url";
  * handed) and fails for a bare `console.*` call, which writes whatever it is given. So source
  * writes through a logger, and the console is reached only from the writers below.
  *
- * Enforced with ESLint's own `no-console` rather than a bespoke rule: the exceptions are whole
- * files, which `files` and `ignores` express, and AGENTS.md rules out a per-line
- * `eslint-disable`.
+ * Enforced with ESLint's own `no-console`, with `no-restricted-globals` beside it for `console`
+ * passed as a value, rather than a bespoke rule: the exceptions are whole files, which `files`
+ * and `ignores` express, and AGENTS.md rules out a per-line `eslint-disable`.
  */
 
 /**
@@ -65,7 +65,20 @@ export function consoleConfig(prefix = "") {
         ...CONSOLE_ALLOWLIST_PATHS.map(entry => `${prefix}${entry}`),
         ...tests,
       ],
-      rules: { "no-console": "error" },
+      rules: {
+        "no-console": "error",
+        // `no-console` sees `console.log(...)` but not `console` itself handed
+        // over as a logger (`new Service(adapter, console)`), which writes
+        // just as directly. Same files, same exemptions.
+        "no-restricted-globals": [
+          "error",
+          {
+            name: "console",
+            message:
+              "Write through a masked logger (a service's logger or consoleLogger), not the console.",
+          },
+        ],
+      },
     },
   ];
 }
