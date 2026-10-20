@@ -56,19 +56,6 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const HOST_OWNED_RULES = ["document-title"];
 
 /**
- * One known defect outside the dashboard, set aside by rule AND place.
- *
- * The sidebar's icon rail shows an icon only on each link, with the name in a
- * tooltip, so axe reports `link-name` on every one of them, on every admin
- * screen. It is a real defect in the admin's shared chrome, filed to be fixed
- * there; when that lands, this goes. Until then the scan drops exactly those
- * results: `link-name` nodes inside the rail. Every other rule still runs on
- * the rail, and `link-name` still fails anywhere else, so a new problem in
- * either place is not hidden the way excluding the element would hide it.
- */
-const KNOWN_DEFECT = { rule: "link-name", within: "aside nav" } as const;
-
-/**
  * Answer the sample-content probe with `status`, as the route would for this
  * person. Resolves `release` lets a test hold the answer, to look at the page
  * while the offer is still unanswered. Returns the probes seen, so a test can
@@ -164,27 +151,11 @@ async function expectNoAxeViolations(page: Page): Promise<void> {
     results.passes.length,
     "axe reported no passing rules, so it scanned nothing"
   ).toBeGreaterThan(10);
-  const findings = [];
-  for (const v of results.violations) {
-    const targets: string[] = [];
-    for (const node of v.nodes) {
-      const selector = node.target.map(String).join(" ");
-      if (v.id === KNOWN_DEFECT.rule) {
-        // Asked of the page itself: a selector alone cannot say where its
-        // element sits.
-        const inRail = await page.evaluate(
-          ([sel, within]) =>
-            document.querySelector(sel)?.closest(within) != null,
-          [selector, KNOWN_DEFECT.within] as const
-        );
-        if (inRail) continue;
-      }
-      targets.push(selector);
-    }
-    if (targets.length > 0) {
-      findings.push({ id: v.id, impact: v.impact ?? "unknown", targets });
-    }
-  }
+  const findings = results.violations.map(v => ({
+    id: v.id,
+    impact: v.impact ?? "unknown",
+    targets: v.nodes.map(node => node.target.map(String).join(" ")),
+  }));
   expect(
     findings,
     `axe reported ${findings.length} violation(s):\n${JSON.stringify(findings, null, 2)}`

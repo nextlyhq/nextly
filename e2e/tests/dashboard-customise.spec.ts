@@ -31,14 +31,6 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
  */
 const HOST_OWNED_RULES = ["document-title"];
 
-/**
- * One known defect outside the dashboard, set aside by rule AND place, as in
- * `dashboard-heading.spec.ts`: `link-name` on the sidebar rail's icon-only
- * links. Every other rule still runs on the rail, and `link-name` still fails
- * anywhere else.
- */
-const KNOWN_DEFECT = { rule: "link-name", within: "aside nav" } as const;
-
 /** Back to the default dashboard, through the guarded reset a reader uses. */
 async function resetToDefault(page: Page): Promise<void> {
   const read = await page.request.get("/admin/api/dashboard/layout");
@@ -105,25 +97,11 @@ async function expectNoAxeViolations(page: Page): Promise<void> {
     results.passes.length,
     "axe reported no passing rules, so it scanned nothing"
   ).toBeGreaterThan(10);
-  const findings = [];
-  for (const v of results.violations) {
-    const targets: string[] = [];
-    for (const node of v.nodes) {
-      const selector = node.target.map(String).join(" ");
-      if (v.id === KNOWN_DEFECT.rule) {
-        const inRail = await page.evaluate(
-          ([sel, within]) =>
-            document.querySelector(sel)?.closest(within) != null,
-          [selector, KNOWN_DEFECT.within] as const
-        );
-        if (inRail) continue;
-      }
-      targets.push(selector);
-    }
-    if (targets.length > 0) {
-      findings.push({ id: v.id, impact: v.impact ?? "unknown", targets });
-    }
-  }
+  const findings = results.violations.map(v => ({
+    id: v.id,
+    impact: v.impact ?? "unknown",
+    targets: v.nodes.map(node => node.target.map(String).join(" ")),
+  }));
   expect(
     findings,
     `axe reported ${findings.length} violation(s):\n${JSON.stringify(findings, null, 2)}`
