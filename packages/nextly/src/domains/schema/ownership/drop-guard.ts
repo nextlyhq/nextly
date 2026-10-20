@@ -535,6 +535,21 @@ const RELATION_KIND_WORDS: ReadonlyMap<string, { next?: string }> = new Map([
   ["FOREIGN", { next: "TABLE" }],
 ]);
 
+/** The kinds of object PostgreSQL names with two words, by the first. */
+const TWO_WORD_KINDS = new Set(["MATERIALIZED", "FOREIGN"]);
+
+/**
+ * PostgreSQL relation kinds other than tables and indexes that an ALTER can
+ * rename or move to another schema (`readRelationMove`), by the first word.
+ */
+const MOVABLE_RELATION_KINDS = new Set([
+  "VIEW",
+  "MATERIALIZED",
+  "SEQUENCE",
+  "FOREIGN",
+  "TYPE",
+]);
+
 /** What may stand between `CREATE OR REPLACE` and `INDEX` in MariaDB. */
 const INDEX_KIND_WORDS = new Set(["UNIQUE", "FULLTEXT", "SPATIAL", "VECTOR"]);
 
@@ -938,8 +953,16 @@ class DropReader {
    * A relation name that a statement drops, renames or moves away: a later
    * lookup of it may reach a relation it shadowed (`lookupsAfterVacating`).
    */
-  private vacate(name: string): void {
+  vacate(name: string): void {
     this.vacated.set(name, this.statementIndex);
+  }
+
+  /**
+   * Each table this list renamed, by the name it ends the list under, with
+   * the name it had before the list.
+   */
+  get renames(): ReadonlyMap<string, string> {
+    return this.renamedFrom;
   }
 
   /** A name a CREATE or a rename fills again: it reaches what the list put there. */
@@ -1398,6 +1421,7 @@ class StatementWalk {
       this.readAlterForeignTable(at);
       this.readRelationColumnRename(at);
       this.readTypeCascade(at);
+      this.readRelationMove(at);
     } else if (word === "CREATE") {
       this.readCreateTable(at);
       this.readReplacedIndex(at);
@@ -1644,6 +1668,7 @@ class StatementWalk {
     const listAt = this.dropTableListAt(at);
     if (listAt === undefined) {
       this.assertNoDependentsDropped(at);
+      if (!this.inAlterTable) this.vacateDroppedNames(at);
       return at + 1;
     }
     return this.dropTail(this.readDropTargets(listAt));
@@ -1680,6 +1705,66 @@ class StatementWalk {
         ? "CASCADE on an ALTER TABLE drop also drops whatever depends on the column or constraint, such as another table's foreign key or a view, which may be another owner's; drop those dependents explicitly, then drop without CASCADE"
         : "CASCADE on a DROP of anything but a table also drops whatever depends on the object, which may be another owner's columns or tables; drop those dependents explicitly, then drop the object without CASCADE"
     );
+  }
+
+  /**
+   * The names a PostgreSQL DROP of something other than a table or an index
+   * drops, from the DROP at `at`, each vacated (`DropReader.vacate`): a
+   * view, materialized view, sequence, foreign table or type shares the
+   * relation namespace with indexes, so one may have shadowed an index of
+   * its name on the search path, which a later lookup then reaches.
+   */
+  private vacateDroppedNames(at: number): void {
+    if (!this.reader.isPostgres) return;
+    const kindAt = TWO_WORD_KINDS.has(this.word(at + 1) ?? "")
+      ? at + 2
+      : at + 1;
+    let k = this.skipIfExists(kindAt + 1);
+    for (;;) {
+      const name = this.qualifiedName(k);
+      if (name === undefined) return;
+      this.reader.vacate(name.name);
+      if (this.punct(name.next) !== ",") return;
+      k = name.next + 1;
+    }
+  }
+
+  /**
+   * PostgreSQL's `ALTER VIEW|MATERIALIZED VIEW|SEQUENCE|FOREIGN TABLE|TYPE`
+   * that renames the relation or moves it to another schema: its name is
+   * vacated (`DropReader.vacate`), as a dropped one is.
+   */
+  private readRelationMove(at: number): void {
+    const relation = this.movableRelationAt(at);
+    if (relation !== undefined && this.movesAwayFrom(relation.next)) {
+      this.reader.vacate(relation.name);
+    }
+  }
+
+  /**
+   * The relation a PostgreSQL ALTER at `at` of a kind `MOVABLE_RELATION_KINDS`
+   * lists names, past `IF EXISTS` and `ONLY`; undefined for any other ALTER.
+   */
+  private movableRelationAt(
+    at: number
+  ): (TableRef & { next: number }) | undefined {
+    if (!this.reader.isPostgres) return undefined;
+    const word = this.word(at + 1) ?? "";
+    if (!MOVABLE_RELATION_KINDS.has(word)) return undefined;
+    const kindAt = TWO_WORD_KINDS.has(word) ? at + 2 : at + 1;
+    return this.qualifiedName(this.pastOnly(this.skipIfExists(kindAt + 1)));
+  }
+
+  /**
+   * Whether the statement renames its relation (`RENAME TO`) or moves it to
+   * another schema (`SET SCHEMA`), from `at` on.
+   */
+  private movesAwayFrom(at: number): boolean {
+    for (let k = at; !this.atStatementEnd(k); k += 1) {
+      if (this.word(k) === "RENAME" && this.word(k + 1) === "TO") return true;
+      if (this.isSetSchemaAt(k)) return true;
+    }
+    return false;
   }
 
   /** Where the statement holding the token at `at` ends. */
@@ -4278,16 +4363,26 @@ export type LiveTables = ReadonlySet<string> & {
 };
 
 /**
- * `tables` with `created` added, keeping the descendants it carries: a later
- * statement list run after one that creates tables is judged against the
- * same inheritance tree, which a list creating tables cannot shrink.
+ * The live tables as a later statement list finds them once `statements`
+ * have run: the tables they create added, and the descendants kept and
+ * carried through the tables they rename, so a later list naming a table by
+ * its new name is judged against the descendants it had. A list creating or
+ * renaming tables cannot shrink the inheritance tree; a list that cannot be
+ * read adds nothing, and the guard refuses it on its own.
  */
-export function withTablesCreated(
+export function liveTablesAfter(
   tables: LiveTables,
-  created: readonly string[]
+  statements: readonly string[],
+  dialect: SupportedDialect
 ): LiveTables {
-  return Object.assign(new Set([...tables, ...created]), {
-    descendants: tables.descendants,
+  const reading = readAsIfNoTableExisted(statements, dialect);
+  const descendants = new Map(tables.descendants ?? []);
+  for (const [current, original] of reading?.renames ?? []) {
+    const below = descendants.get(original);
+    if (below !== undefined) descendants.set(current, below);
+  }
+  return Object.assign(new Set([...tables, ...(reading?.creating ?? [])]), {
+    descendants,
   });
 }
 
@@ -4321,9 +4416,15 @@ export async function readLiveTables(
       ...(reading?.relationRenames ?? []),
     ])
   );
+  // The tables a statement reaches the descendants of, and those a list
+  // renames, whose descendants a later list reaches under the new name
+  // (`liveTablesAfter`).
   const reached = [
     ...new Set(
-      readings.flatMap(reading => reading?.reaching.map(r => r.table) ?? [])
+      readings.flatMap(reading => [
+        ...(reading?.reaching.map(r => r.table) ?? []),
+        ...(reading?.renamed ?? []),
+      ])
     ),
   ];
   const descendants =

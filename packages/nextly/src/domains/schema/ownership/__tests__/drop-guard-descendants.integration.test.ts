@@ -131,6 +131,21 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it.runIf(isPostgres)(
+      "reads the descendants of a table a list only renames",
+      async () => {
+        // A later list may reach them under the new name (`liveTablesAfter`).
+        const live = await readLiveTables(
+          handle.adapter.getDrizzle(),
+          dialect,
+          [[`ALTER TABLE ${PARENT} RENAME TO dd_base`]]
+        );
+        expect([...(live.descendants?.get(PARENT) ?? [])].sort()).toEqual(
+          [CHILD, GRANDCHILD].sort()
+        );
+      }
+    );
+
+    it.runIf(isPostgres)(
       "alters the plugin's child when the app alters its own table",
       async () => {
         // The control for the refusals below: PostgreSQL itself carries the

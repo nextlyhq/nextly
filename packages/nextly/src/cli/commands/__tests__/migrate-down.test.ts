@@ -805,4 +805,27 @@ describe("migrateDownCore and the tables a DOWN creates", () => {
     });
     expect(executed).toEqual([]);
   });
+  it("follows the descendants through a rename an earlier target makes", async () => {
+    // The newer module's DOWN, run first, renames `t`; the older one alters
+    // it under the name it then has, which reaches `app_child` all the same.
+    const live = Object.assign(new Set<string>(), {
+      descendants: new Map([["t", ["app_child"]]]),
+    });
+    const { deps, executed } = plugin(
+      {
+        "plugin:auth/001_init": 'ALTER TABLE "t_old" ADD COLUMN "x" int;',
+        "plugin:auth/002_more": 'ALTER TABLE "t" RENAME TO "t_old";',
+      },
+      async () => live
+    );
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: {
+        table: "app_child",
+        parent: "t_old",
+        source: "plugin:auth/001_init",
+      },
+    });
+    expect(executed).toEqual([]);
+  });
 });

@@ -195,6 +195,30 @@ describe("a name looked up after the list vacated it", () => {
     }
   );
 
+  it.each<string>([
+    "DROP VIEW shadowed",
+    "DROP MATERIALIZED VIEW IF EXISTS shadowed",
+    "DROP SEQUENCE shadowed",
+    "DROP FOREIGN TABLE shadowed",
+    "DROP TYPE shadowed",
+    "ALTER VIEW shadowed RENAME TO other",
+    "ALTER MATERIALIZED VIEW shadowed SET SCHEMA archive",
+    "ALTER SEQUENCE shadowed RENAME TO other",
+  ])(
+    "refuses an ALTER TABLE of a name another relation kind vacated: %s",
+    vacating => {
+      // Any PostgreSQL relation can shadow an index of the same name on the
+      // search path, and ALTER TABLE reaches an index once it is gone.
+      expect(() =>
+        guard(
+          [vacating, "ALTER TABLE shadowed SET TABLESPACE fast"],
+          "postgresql",
+          new Map()
+        )
+      ).toThrow(NextlyError);
+    }
+  );
+
   it("refuses a second DROP INDEX of a name the first one vacated", () => {
     expect(() =>
       guard(
