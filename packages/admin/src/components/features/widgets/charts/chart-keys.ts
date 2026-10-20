@@ -39,6 +39,37 @@ export function firstPosition(shape: ChartShape): ChartPosition | undefined {
     : undefined;
 }
 
+/**
+ * Whether `at` names a point `shape` still has. A chart can change shape without remounting -- a
+ * card moving to a smaller tier draws fewer bars, an answer can bring fewer series -- so a
+ * position saved under the old shape may name a point that is gone.
+ */
+export function inShape(at: ChartPosition, shape: ChartShape): boolean {
+  if (shape.kind === "bars") return at.series === 0 && at.index < shape.bars;
+  return at.series < shape.series && at.index < shape.points;
+}
+
+/**
+ * `at` moved onto the nearest point `shape` has: the last bar, interval or series where it ran
+ * past the end, or `undefined` for a chart with nothing in it. Nearest rather than the start, so
+ * a reader who was at the end is still at the end.
+ */
+export function clampPosition(
+  at: ChartPosition,
+  shape: ChartShape
+): ChartPosition | undefined {
+  if (shape.kind === "bars") {
+    return shape.bars > 0
+      ? { series: 0, index: clamp(at.index, shape.bars - 1) }
+      : undefined;
+  }
+  if (shape.points === 0 || shape.series === 0) return undefined;
+  return {
+    series: clamp(at.series, shape.series - 1),
+    index: clamp(at.index, shape.points - 1),
+  };
+}
+
 /** The step a key takes along a run of `length` from `index`, or `undefined`. */
 function along(
   index: number,

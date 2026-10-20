@@ -9,7 +9,13 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { firstPosition, moveInChart, type ChartShape } from "../chart-keys";
+import {
+  clampPosition,
+  firstPosition,
+  inShape,
+  moveInChart,
+  type ChartShape,
+} from "../chart-keys";
 
 const ONE_SERIES: ChartShape = { kind: "points", series: 1, points: 8 };
 const THREE_SERIES: ChartShape = { kind: "points", series: 3, points: 8 };
@@ -127,6 +133,45 @@ describe("any other key", () => {
         kind: "bars",
         bars: 0,
       })
+    ).toBeUndefined();
+  });
+});
+
+describe("a position under a shape that changed", () => {
+  const bars = (n: number): ChartShape => ({ kind: "bars", bars: n });
+  const points = (series: number, n: number): ChartShape => ({
+    kind: "points",
+    series,
+    points: n,
+  });
+
+  it("says whether the shape still has the point", () => {
+    expect(inShape({ series: 0, index: 2 }, bars(3))).toBe(true);
+    expect(inShape({ series: 0, index: 3 }, bars(3))).toBe(false);
+    expect(inShape({ series: 1, index: 0 }, points(2, 4))).toBe(true);
+    expect(inShape({ series: 1, index: 0 }, points(1, 4))).toBe(false);
+    expect(inShape({ series: 0, index: 4 }, points(1, 4))).toBe(false);
+  });
+
+  it("moves a point past the end onto the last one left, and keeps one still there", () => {
+    expect(clampPosition({ series: 0, index: 7 }, bars(3))).toEqual({
+      series: 0,
+      index: 2,
+    });
+    expect(clampPosition({ series: 1, index: 9 }, points(1, 4))).toEqual({
+      series: 0,
+      index: 3,
+    });
+    expect(clampPosition({ series: 1, index: 1 }, points(2, 4))).toEqual({
+      series: 1,
+      index: 1,
+    });
+  });
+
+  it("has nowhere to put it in an empty chart", () => {
+    expect(clampPosition({ series: 0, index: 0 }, bars(0))).toBeUndefined();
+    expect(
+      clampPosition({ series: 0, index: 0 }, points(2, 0))
     ).toBeUndefined();
   });
 });

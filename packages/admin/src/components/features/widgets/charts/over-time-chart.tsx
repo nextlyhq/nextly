@@ -247,10 +247,19 @@ function valueAt(line: OverTimeSeries, key: string | undefined): string {
   return point ? cardNumber(point.value).label : "no value";
 }
 
+/**
+ * Where the interval at `index` of `size` is drawn across the box, in its user units. The ONE
+ * horizontal scale: the lines are plotted by it and the pointer's targets, the rule and the
+ * tooltip are placed by it, so they cannot drift onto different intervals.
+ */
+function xAt(index: number, size: number): number {
+  const step = size > 1 ? (BOX.width - BOX.padding * 2) / (size - 1) : 0;
+  return BOX.padding + step * index;
+}
+
 /** How far across the box the interval at `index` of `size` is drawn, as a percentage. */
 function acrossOf(index: number, size: number): number {
-  const step = size > 1 ? (BOX.width - BOX.padding * 2) / (size - 1) : 0;
-  return ((BOX.padding + step * index) / BOX.width) * 100;
+  return (xAt(index, size) / BOX.width) * 100;
 }
 
 /**
@@ -346,11 +355,12 @@ function IntervalInView({
           name: mark.name,
           value: mark.value,
         }))}
-        // Below the lines, on the interval's own side, so it never runs off the card's edge.
+        // Below the lines, on the interval's own side, and no wider than the room on that side,
+        // so a long series name wraps rather than running off the card's edge.
         style={
           across <= 50
-            ? { top: "100%", left }
-            : { top: "100%", right: `${100 - across}%` }
+            ? { top: "100%", left, maxWidth: `${100 - across}%` }
+            : { top: "100%", right: `${100 - across}%`, maxWidth: `${across}%` }
         }
       />
     </>
@@ -409,9 +419,8 @@ function placed(
     highest
   );
   const size = domain.labels.length;
-  const step = size > 1 ? (BOX.width - BOX.padding * 2) / (size - 1) : 0;
   return points.map((point, position) => ({
-    x: BOX.padding + step * (domain.index.get(point.key) ?? position),
+    x: xAt(domain.index.get(point.key) ?? position, size),
     y: heights[position]?.y ?? BOX.height - BOX.padding,
   }));
 }

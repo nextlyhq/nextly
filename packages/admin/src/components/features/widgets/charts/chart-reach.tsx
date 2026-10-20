@@ -17,6 +17,7 @@
 
 import {
   useCallback,
+  useEffect,
   useState,
   type CSSProperties,
   type FocusEvent,
@@ -29,7 +30,9 @@ import { cn } from "@admin/lib/utils";
 
 import { chartColour, type ChartSlot } from "./chart-colour";
 import {
+  clampPosition,
   firstPosition,
+  inShape,
   moveInChart,
   type ChartPosition,
   type ChartShape,
@@ -72,12 +75,23 @@ export function useChartReach(shape: ChartShape): ChartReach {
   // Escape hides the tooltip until the reader moves or hovers again.
   const [dismissed, setDismissed] = useState(false);
 
-  const at = position ?? firstPosition(shape);
+  // Read against the chart's shape as it is now, which can shrink under a saved position: the
+  // keyboard's point moves to the nearest one left, and a hovered mark that is gone is forgotten
+  // rather than moved onto a mark the pointer is not over.
+  const at =
+    (position === undefined ? undefined : clampPosition(position, shape)) ??
+    firstPosition(shape);
+  const hoverGone = hovered !== undefined && !inShape(hovered, shape);
+  const hoveredNow = hoverGone ? undefined : hovered;
+  // And forgotten for good: were the chart to grow back, the pointer is no longer over that mark.
+  useEffect(() => {
+    if (hoverGone) setHovered(undefined);
+  }, [hoverGone]);
   const keyed = focused ? at : undefined;
-  const shown = dismissed ? undefined : (hovered ?? keyed);
+  const shown = dismissed ? undefined : (hoveredNow ?? keyed);
 
   // A tooltip the pointer opened, which `ChartReachArea` lets Escape dismiss wherever focus is.
-  const pointerTip = hovered !== undefined && !dismissed;
+  const pointerTip = hoveredNow !== undefined && !dismissed;
 
   const hover = useCallback((next: ChartPosition) => {
     setHovered(current => (samePoint(current, next) ? current : next));
@@ -172,6 +186,9 @@ function EscapeDismisses({ dismiss }: { dismiss: () => void }) {
         key: "Escape",
         action: dismiss,
         description: "Dismiss the chart's tooltip",
+        // Wherever focus is, a text field included: the admin's default keeps a shortcut out of
+        // a field, but Escape here only hides a tooltip, and a reader typing must be able to.
+        whenTyping: true,
       },
     ],
     { name: "chart-tooltip" }
@@ -209,13 +226,15 @@ export function ChartTooltip({
       aria-hidden="true"
       data-testid="chart-tooltip"
       className={cn(
-        "absolute z-10 flex min-w-max flex-col gap-0.5 rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-sm",
+        // As wide as its text, but never wider than the chart it sits in: a group's name or a
+        // series' name is a stored value of any length, and wraps here as it does in the chart.
+        "absolute z-10 flex w-max max-w-full flex-col gap-0.5 break-words rounded-md border border-border bg-popover px-2 py-1 text-xs text-popover-foreground shadow-sm",
         className
       )}
       // design-lint-ok: placed beside the mark it describes.
       style={style}
     >
-      <span className="font-medium">{title}</span>
+      <span className="min-w-0 font-medium">{title}</span>
       {lines.map(line => (
         <span key={line.key} className="flex items-center gap-1.5">
           <span
@@ -225,7 +244,7 @@ export function ChartTooltip({
             style={{ backgroundColor: chartColour(line.slot) }}
           />
           {line.name ? (
-            <span className="text-muted-foreground">{line.name}</span>
+            <span className="min-w-0 text-muted-foreground">{line.name}</span>
           ) : null}
           <span className="font-medium tabular-nums">{line.value}</span>
         </span>

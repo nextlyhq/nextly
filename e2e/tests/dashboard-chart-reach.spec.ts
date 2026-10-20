@@ -141,11 +141,24 @@ test("a hovered bar's tooltip stays while the pointer moves onto it, and goes wh
   const tip = tooltipIn(page, BREAKDOWN);
   await expect(tip).toBeVisible();
 
-  // Onto the tooltip itself: it is still shown, so it can be read and reached.
+  // Onto the tooltip itself: it is still shown, so it can be read and reached. The pointer must
+  // be ON the tooltip, not on a bar or a gap behind it, or a tooltip the pointer passes through
+  // would pass too: the chart keeps its tooltip until the pointer leaves the whole chart.
   const box = await tip.boundingBox();
   if (!box) throw new Error("the tooltip has no box");
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  await page.mouse.move(x, y);
   await expect(tip).toBeVisible();
+  const hit = await page.evaluate(
+    ([px, py]) =>
+      document
+        .elementFromPoint(px, py)
+        ?.closest('[data-testid="chart-tooltip"]') != null,
+    [x, y] as const
+  );
+  expect(hit, "the pointer is on the tooltip itself").toBe(true);
+  await expect.poll(() => tip.evaluate(el => el.matches(":hover"))).toBe(true);
 
   // Escape dismisses it without moving the pointer or focus.
   await page.keyboard.press("Escape");

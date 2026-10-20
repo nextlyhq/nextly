@@ -9,6 +9,7 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { CardTierContext } from "../../frame/tier";
@@ -21,24 +22,32 @@ function group(value: string, count: number, label: string): GroupsChartGroup {
   return { key: `v${value}`, value, label, count };
 }
 
-function drawGroups(tier: SizeTier = "medium") {
-  return render(
+const STATUSES = [
+  group("published", 128, "Published"),
+  group("draft", 57, "Draft"),
+  group("archived", 3, "Archived"),
+];
+
+/** A chart of groups, with `beside` drawn next to it (a field to type in, say). */
+function groupsTree(groups: GroupsChartGroup[] = STATUSES, beside?: ReactNode) {
+  return (
     // The admin shell's shortcut owner, on the document as there, so Escape reaches a hovered
     // chart's binding with focus anywhere.
     <ShortcutProvider>
-      <CardTierContext.Provider value={tier}>
+      <CardTierContext.Provider value="medium">
+        {beside}
         <GroupsChart
           title="Entries by status"
           labelHeading="Status"
-          groups={[
-            group("published", 128, "Published"),
-            group("draft", 57, "Draft"),
-            group("archived", 3, "Archived"),
-          ]}
+          groups={groups}
         />
       </CardTierContext.Provider>
     </ShortcutProvider>
   );
+}
+
+function drawGroups() {
+  return render(groupsTree());
 }
 
 const days = (n: number) =>
@@ -232,5 +241,67 @@ describe("the tooltip", () => {
     expect(tip).toHaveClass("bg-popover");
     const swatch = within(tip).getByTestId("chart-tooltip-swatch");
     expect(swatch.style.backgroundColor).toBe("var(--nx-chart-3)");
+  });
+});
+
+describe("a chart whose shape shrinks under it", () => {
+  it("keeps the keyboard on the nearest point left, not on one that is gone", async () => {
+    const { rerender } = render(groupsTree());
+    const user = userEvent.setup();
+    await user.tab();
+    await user.keyboard("{End}");
+    expect(live()).toHaveTextContent("Archived: 3.");
+    // A smaller tier draws fewer bars; the reader who was at the end is still at the end.
+    rerender(groupsTree(STATUSES.slice(0, 2)));
+    expect(live()).toHaveTextContent("Draft: 57.");
+    expect(tooltip()).toHaveTextContent(/Draft/);
+  });
+
+  it("forgets a hovered mark that is gone rather than showing another", async () => {
+    const { rerender } = render(groupsTree());
+    const user = userEvent.setup();
+    await user.hover(screen.getAllByTestId("chart-group")[2] as HTMLElement);
+    expect(tooltip()).toHaveTextContent(/Archived/);
+    rerender(groupsTree(STATUSES.slice(0, 2)));
+    expect(tooltip()).toBeNull();
+    // Forgotten, not hidden: drawn with three bars again, the third shows no tooltip, since the
+    // pointer is no longer over it.
+    rerender(groupsTree());
+    expect(tooltip()).toBeNull();
+  });
+});
+
+describe("Escape for a hovered tooltip", () => {
+  it("dismisses it while focus is in a text field", async () => {
+    render(groupsTree(STATUSES, <input aria-label="Search" />));
+    const user = userEvent.setup();
+    await user.click(screen.getByLabelText("Search"));
+    await user.hover(screen.getAllByTestId("chart-group")[0] as HTMLElement);
+    expect(tooltip()).not.toBeNull();
+    expect(document.activeElement).toBe(screen.getByLabelText("Search"));
+    await user.keyboard("{Escape}");
+    expect(tooltip()).toBeNull();
+  });
+});
+
+describe("the tooltip's width", () => {
+  it("is held to the chart's width, and wraps a long name", async () => {
+    drawGroups();
+    await userEvent.setup().tab();
+    expect(tooltip()).toHaveClass("w-max", "max-w-full", "break-words");
+  });
+
+  it("over time, is held to the room on its own side of the interval", async () => {
+    drawOverTime([line("Posts", [2, 9, 4])]);
+    // Focus starts at the latest interval, on the right, so the tooltip is anchored by its right.
+    await userEvent.setup().tab();
+    const style = (tooltip() as HTMLElement).style;
+    expect(style.left).toBe("");
+    // Its right offset and its widest reach together span the plot exactly: it cannot pass the
+    // left edge however long the name.
+    expect(parseFloat(style.right) + parseFloat(style.maxWidth)).toBeCloseTo(
+      100,
+      6
+    );
   });
 });
