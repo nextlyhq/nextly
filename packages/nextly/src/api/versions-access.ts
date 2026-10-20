@@ -309,7 +309,22 @@ async function canReadLiveDocument(
     // that narrow reads by them.
     ...hookInputs,
   });
-  return interpretReadResult(result.success, result.statusCode);
+  if (!interpretReadResult(result.success, result.statusCode)) return false;
+  // The read must be of the document asked about. A `beforeOperation` hook may
+  // rewrite the id a read resolves, and a read that passed on another document
+  // would authorize this one's history by that document's rules.
+  return readIdOf(result.data) === entryId;
+}
+
+/** The id of the entry a read returned, as text, or undefined without one. */
+function readIdOf(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null || !("id" in data)) {
+    return undefined;
+  }
+  const { id } = data;
+  return typeof id === "string" || typeof id === "number"
+    ? String(id)
+    : undefined;
 }
 
 /**

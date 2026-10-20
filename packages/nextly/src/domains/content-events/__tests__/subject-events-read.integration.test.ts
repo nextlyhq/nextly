@@ -33,6 +33,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { listVersionsForDocument } from "../../../dispatcher/handlers/versions-methods";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import type { AuthUserId } from "../../../types/auth";
@@ -51,6 +52,8 @@ let ruleAllows: string | undefined;
  * between that read's authorization and its events.
  */
 let relive: { id: string; t: TestNextly } | undefined;
+/** A read of `from` that a "redirecting" hook sends to `to` instead. */
+let redirect: { from: string; to: string } | undefined;
 
 afterEach(async () => {
   await current?.destroy();
@@ -59,6 +62,7 @@ afterEach(async () => {
   founder = undefined;
   ruleAllows = undefined;
   relive = undefined;
+  redirect = undefined;
 });
 
 interface Page {
@@ -144,6 +148,34 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
                   collection: "relived",
                   data: { id, title: "second" },
                 });
+              }
+              return data;
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
+      // A row no person may read, refused by a hook that needs the row, and a
+      // hook that sends a read of one id to another document.
+      defineCollection({
+        slug: "redirecting",
+        versions: true,
+        hooks: {
+          beforeOperation: [
+            ({ operation, args }) => {
+              const id = (args as { id?: unknown } | undefined)?.id;
+              return operation === "read" &&
+                redirect !== undefined &&
+                id === redirect.from
+                ? { ...args, id: redirect.to }
+                : args;
+            },
+          ],
+          afterRead: [
+            ({ data, user }) => {
+              const doc = data as { title?: string } | undefined;
+              if (doc?.title === "secret" && user !== undefined) {
+                throw new Error("No person may read the secret.");
               }
               return data;
             },
@@ -263,10 +295,19 @@ async function postWithFourEvents(t: TestNextly, id?: string): Promise<string> {
   return postId;
 }
 
-/** A document in this collection, with its "created" event. */
-async function documentIn(t: TestNextly, collection: string): Promise<string> {
-  const created = await t.nextly.create({ collection, data: { title: "x" } });
+/** A document in this collection with this title, and its "created" event. */
+async function documentTitled(
+  t: TestNextly,
+  collection: string,
+  title: string
+): Promise<string> {
+  const created = await t.nextly.create({ collection, data: { title } });
   return (created.item as { id: string }).id;
+}
+
+/** A document in this collection, with its "created" event. */
+function documentIn(t: TestNextly, collection: string): Promise<string> {
+  return documentTitled(t, collection, "x");
 }
 
 const asPerson = (userId: string) => ({
@@ -679,6 +720,57 @@ describe.each(getConfiguredTestDialects())(
       await expect(
         t.nextly.findByID({ collection: "relived", id, ...asPerson(reader) })
       ).rejects.toBeDefined();
+    }, 120_000);
+
+    it("refuses a document's events and history when a hook sends its read to another document", async () => {
+      const t = await boot(dialect);
+      const reader = await personHolding(t, ["read-redirecting"]);
+      const secret = await documentTitled(t, "redirecting", "secret");
+      const decoy = await documentTitled(t, "redirecting", "decoy");
+      const subject = {
+        kind: "collection" as const,
+        slug: "redirecting",
+        id: secret,
+      };
+      const outcome = (read: Promise<unknown>) =>
+        read.then(
+          () => "readable",
+          () => "refused"
+        );
+      const readBoth = async () => ({
+        events: await outcome(
+          t.nextly.contentEvents.list({ subject, ...asPerson(reader) })
+        ),
+        history: await outcome(
+          listVersionsForDocument({
+            scopeKind: "collection",
+            slug: "redirecting",
+            entryId: secret,
+            user: { id: reader },
+          })
+        ),
+      });
+
+      // The decoy is readable and the secret is not.
+      expect(
+        await outcome(
+          t.nextly.findByID({
+            collection: "redirecting",
+            id: decoy,
+            ...asPerson(reader),
+          })
+        )
+      ).toBe("readable");
+      expect(await readBoth()).toEqual({
+        events: "refused",
+        history: "refused",
+      });
+      // A hook sending the secret's read to the decoy authorizes neither.
+      redirect = { from: secret, to: decoy };
+      expect(await readBoth()).toEqual({
+        events: "refused",
+        history: "refused",
+      });
     }, 120_000);
 
     it("shows one life of a document id at a time", async () => {
