@@ -47,6 +47,18 @@ export interface ApiKeyMeta {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+  /** The key's owner, or null once their account no longer exists. */
+  owner: ApiKeyOwner | null;
+}
+
+/**
+ * The person who created a key. A read-only or full-access key follows this
+ * person's permissions as they change.
+ */
+export interface ApiKeyOwner {
+  id: string;
+  name: string | null;
+  email: string;
 }
 
 export interface CreateApiKeyPayload {
@@ -74,6 +86,20 @@ export interface ApiKeyListResponse {
   meta: ApiKeyListMeta;
 }
 
+/** One permission a key would hold, as the server resolves it. */
+export interface ApiKeyAbility {
+  slug: string;
+  action: string;
+  resource: string;
+}
+
+/** The type and role a key summary is asked for. */
+export interface ApiKeyAbilitiesQuery {
+  tokenType: ApiKeyTokenType;
+  /** Only for a role-based key. */
+  roleId?: string;
+}
+
 /** Returned by createApiKey. `key` is the one-time raw secret — shown once, never retrievable again. */
 export interface CreateApiKeyResult {
   doc: ApiKeyMeta;
@@ -96,6 +122,28 @@ export async function fetchApiKeys(): Promise<ApiKeyListResponse> {
     data: result.items,
     meta: { total: result.meta.total },
   };
+}
+
+/**
+ * What a key the signed-in person creates now, of this type and role, would
+ * be able to do: the server's answer, from the same resolution the key's own
+ * requests use, so the form never guesses it from the viewer's permissions.
+ *
+ * Refused as creating that key would be (a role above its creator, say).
+ *
+ * @experimental Follows the key form's summary while that screen settles.
+ */
+export async function fetchApiKeyAbilities(
+  query: ApiKeyAbilitiesQuery
+): Promise<ApiKeyAbility[]> {
+  const params = new URLSearchParams({ tokenType: query.tokenType });
+  if (query.roleId) params.set("roleId", query.roleId);
+  const result = await fetcher<ListResponse<ApiKeyAbility>>(
+    `/api-keys/abilities?${params.toString()}`,
+    {},
+    true
+  );
+  return result.items;
 }
 
 /**

@@ -37,6 +37,7 @@ import {
   createApiKey,
   updateApiKey,
   revokeApiKey,
+  getApiKeyAbilities,
 } from "./api/api-keys";
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
 import { handleContentEventsRequest } from "./api/content-events";
@@ -373,6 +374,8 @@ async function handleApiKeyRequest(
       return listApiKeys(req);
     case "getApiKeyById":
       return getApiKeyById(req, id);
+    case "getApiKeyAbilities":
+      return getApiKeyAbilities(req);
     case "createApiKey":
       return createApiKey(req);
     case "updateApiKey":

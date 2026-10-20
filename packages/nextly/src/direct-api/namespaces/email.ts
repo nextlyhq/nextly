@@ -68,13 +68,15 @@ export interface EmailNamespace {
 export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
   return {
     async send(args: SendEmailArgs): Promise<SendEmailResult> {
-      const to = Array.isArray(args.to) ? args.to[0] : args.to;
-
       const result = await ctx.emailSendService.send({
-        to,
+        // Every recipient, as given: the service delivers to each one and
+        // refuses a list it cannot deliver whole.
+        to: args.to,
         subject: args.subject,
         html: args.html,
         plainText: args.text,
+        from: args.from,
+        replyTo: args.replyTo,
         // Forward cc/bcc so the Direct API matches the REST route and service.
         cc: args.cc,
         bcc: args.bcc,
@@ -90,15 +92,19 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
     async sendWithTemplate(
       args: SendTemplateEmailArgs
     ): Promise<SendEmailResult> {
-      const to = Array.isArray(args.to) ? args.to[0] : args.to;
-
       const sendOptions: {
         providerId?: string;
+        from?: string;
+        replyTo?: string;
         cc?: string[];
         bcc?: string[];
         attachments?: typeof args.attachments;
       } = {};
       if (args.providerId) sendOptions.providerId = args.providerId;
+      // The send's own From and Reply-To win over the template's, which win
+      // over the provider's default (the service applies that order).
+      if (args.from) sendOptions.from = args.from;
+      if (args.replyTo) sendOptions.replyTo = args.replyTo;
       // Only set cc/bcc when non-empty so an empty array doesn't make
       // sendOptions truthy and override the "no options" undefined below.
       if (args.cc?.length) sendOptions.cc = args.cc;
@@ -107,7 +113,8 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
 
       const result = await ctx.emailSendService.sendWithTemplate(
         args.template,
-        to,
+        // Every recipient, as given (see `send`).
+        args.to,
         args.variables ?? {},
         Object.keys(sendOptions).length > 0 ? sendOptions : undefined
       );
