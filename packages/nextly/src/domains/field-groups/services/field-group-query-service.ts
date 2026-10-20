@@ -40,6 +40,8 @@ import {
   DEFAULT_COMPONENT_DEPTH,
   POPULATE_INTERNAL_COLUMNS,
   toSnakeCase,
+  asComponentReferenceList,
+  asRowBackedRelationFields,
   shouldTreatAsJson,
   type ComponentRow,
 } from "./field-group-utils";
@@ -1160,6 +1162,9 @@ export class FieldGroupQueryService extends BaseService {
       } else {
         result[fieldName] = value ?? null;
       }
+      if (field) {
+        result[fieldName] = asComponentReferenceList(field, result[fieldName]);
+      }
     }
 
     // Password fields are write-only; strip stored hashes (including any
@@ -1206,8 +1211,13 @@ export class FieldGroupQueryService extends BaseService {
 
     try {
       // FieldConfig[] and FieldDefinition[] are structurally compatible
-      // for the purposes of relationship expansion.
-      const fields = componentFields as unknown as Parameters<
+      // for the purposes of relationship expansion. A many-to-many is handed
+      // over as the row-backed list it is on a component, so its related
+      // entries are found from the ids on the row rather than a junction table
+      // a component does not have.
+      const fields = asRowBackedRelationFields(
+        componentFields
+      ) as unknown as Parameters<
         typeof this.relationshipService.expandRelationships
       >[2];
 

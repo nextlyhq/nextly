@@ -12,6 +12,7 @@
  *
  * @module domains/users/services/password-write
  */
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 
@@ -102,6 +103,13 @@ export async function updateUserEndingSessions(
     set: UserUpdateData | PasswordRemoval;
     unlessDeactivated?: boolean;
     when?: SQL;
+    /**
+     * The adapter `tx` was opened on. Only it can say whether this write has
+     * committed, and services registered again while it is open bring an
+     * adapter the session cache may never have read through. Required, so a
+     * caller cannot leave the cache unable to tell.
+     */
+    adapter: DrizzleAdapter;
   }
 ): Promise<number> {
   const { users, refreshTokens } = tables;
@@ -132,6 +140,6 @@ export async function updateUserEndingSessions(
   // answers that read but keeps nothing for the account until this flow's
   // transaction has finished, so the first request after the commit reads
   // the new row.
-  forgetSessionStanding(args.userId);
+  forgetSessionStanding(args.userId, args.adapter);
   return changed;
 }

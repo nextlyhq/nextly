@@ -34,6 +34,8 @@ import { getCachedNextly } from "../../init";
 import { env } from "../../lib/env";
 import type { GeneralSettingsService } from "../../services/general-settings/general-settings-service";
 
+import type { PreviewLinkChecks, VerifiedPreviewLink } from "./preview-route";
+
 /**
  * The key preview tokens are signed with.
  *
@@ -67,6 +69,33 @@ async function settingsService(): Promise<GeneralSettingsService> {
 export async function defaultGeneration(): Promise<number> {
   return (await settingsService()).getPreviewTokenGeneration();
 }
+
+/**
+ * What a link's record says, from the recorded-links store.
+ *
+ * A recorded link is asked of its row: opening counts it, and both refuse it
+ * once revoked or ended. A link made before links were recorded has no row,
+ * and is asked only whether a revoke-all of its document has ended it.
+ *
+ * The store is imported inside the call for the reason this module exists:
+ * the route stays importable without the service container.
+ */
+export const defaultLinkChecks: PreviewLinkChecks = {
+  opened: async (link: VerifiedPreviewLink) => {
+    await getCachedNextly();
+    const records = await import("../../auth/preview/preview-link-records");
+    return link.linkId === undefined
+      ? records.olderLinkStanding(link.scope)
+      : records.openRecordedLink(link.linkId, link.scope, new Date());
+  },
+  live: async (link: VerifiedPreviewLink) => {
+    await getCachedNextly();
+    const records = await import("../../auth/preview/preview-link-records");
+    return link.linkId === undefined
+      ? records.olderLinkStanding(link.scope)
+      : records.recordedLinkLive(link.linkId, link.scope, new Date());
+  },
+};
 
 /**
  * Next's draft mode.

@@ -12,7 +12,18 @@ import {
   readPreviewScope,
   type PreviewRouteConfig,
   type PreviewScopeReaderConfig,
+  type VerifiedPreviewLink,
 } from "../preview-route";
+
+// The link's own record. What it decides is covered by the integration suite
+// against real rows; here it allows, so these cases stay about the token.
+vi.mock("../preview-route-defaults", async importOriginal => ({
+  ...(await importOriginal<typeof import("../preview-route-defaults")>()),
+  defaultLinkChecks: {
+    opened: () => Promise.resolve(true),
+    live: () => Promise.resolve(true),
+  },
+}));
 
 const TEST_SECRET = "preview-route-test-secret-at-least-32-chars!!";
 const GENERATION = 1;
@@ -447,5 +458,113 @@ describe("what a preview session may read", () => {
     });
 
     expect(scope).toBeNull();
+  });
+});
+
+describe("the link's own record", () => {
+  async function recordedToken(): Promise<{ token: string; linkId: string }> {
+    const { token, linkId } = await signPreviewToken(SCOPE, TEST_SECRET, {
+      generation: GENERATION,
+      minter: "user-1",
+      recorded: true,
+    });
+    return { token, linkId };
+  }
+
+  function checks(answer: boolean) {
+    return {
+      opened: vi.fn((_link: VerifiedPreviewLink) => Promise.resolve(answer)),
+      live: vi.fn((_link: VerifiedPreviewLink) => Promise.resolve(answer)),
+    };
+  }
+
+  it("refuses a link its record refuses, the same as any other failure", async () => {
+    const { token } = await recordedToken();
+    const links = checks(false);
+    const { route, enable } = routeFor({ links });
+
+    const response = await route.GET(request(token));
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get("set-cookie")).toBeNull();
+    expect(enable).not.toHaveBeenCalled();
+    // Refused at the first ask, before anything is counted.
+    expect(links.live).toHaveBeenCalledTimes(1);
+    expect(links.opened).not.toHaveBeenCalled();
+  });
+
+  it("asks the record about a recorded link by its id, and an older one without", async () => {
+    const { token, linkId } = await recordedToken();
+    const { token: older } = await signPreviewToken(SCOPE, TEST_SECRET, {
+      generation: GENERATION,
+      minter: "user-1",
+    });
+    const links = checks(true);
+    const { route } = routeFor({ links });
+
+    expect((await route.GET(request(token))).status).toBe(307);
+    expect((await route.GET(request(older))).status).toBe(307);
+
+    const [first, second] = links.opened.mock.calls.map(call => call[0]);
+    expect(first.linkId).toBe(linkId);
+    expect(first.scope).toEqual(SCOPE);
+    expect(first.issuedAt).toBeInstanceOf(Date);
+    expect(second.linkId).toBeUndefined();
+    expect(second.issuedAt).toBeInstanceOf(Date);
+  });
+
+  it("refuses a revoked link before resolving where it would have gone", async () => {
+    // Resolving the target is a trusted read of the draft, and it may run the
+    // application's preview callback and read hooks: a revoked link must not
+    // keep setting that work off.
+    const { token } = await recordedToken();
+    const links = checks(false);
+    const redirectTo = vi.fn(() => "/pages/entry-1");
+    const { route } = routeFor({ links, redirectTo });
+
+    expect((await route.GET(request(token))).status).toBe(404);
+    expect(redirectTo).not.toHaveBeenCalled();
+    expect(links.opened).not.toHaveBeenCalled();
+  });
+
+  it("does not count an opening that is refused for another reason", async () => {
+    const { token } = await recordedToken();
+    const links = checks(true);
+    const { route } = routeFor({ links, redirectTo: () => null });
+
+    expect((await route.GET(request(token))).status).toBe(404);
+    expect(links.opened).not.toHaveBeenCalled();
+  });
+
+  it("ends a session already in flight once its record refuses it", async () => {
+    const { token } = await recordedToken();
+    const cookies = () => ({
+      get: (name: string) =>
+        name === PREVIEW_SCOPE_COOKIE
+          ? { value: encodeURIComponent(token) }
+          : undefined,
+    });
+    const allowed = checks(true);
+    const refused = checks(false);
+
+    expect(
+      await readPreviewScope({
+        secret: TEST_SECRET,
+        generation: GENERATION,
+        cookies,
+        links: allowed,
+      })
+    ).toEqual(SCOPE);
+    expect(
+      await readPreviewScope({
+        secret: TEST_SECRET,
+        generation: GENERATION,
+        cookies,
+        links: refused,
+      })
+    ).toBeNull();
+    // Rendering is not opening: only `live` is asked.
+    expect(allowed.opened).not.toHaveBeenCalled();
+    expect(allowed.live).toHaveBeenCalledTimes(1);
   });
 });
