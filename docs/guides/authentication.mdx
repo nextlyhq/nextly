@@ -165,16 +165,17 @@ against each other, so a link issued or followed while the account is moving
 or being deleted either completes first and is then revoked, or is refused.
 
 An installation upgrading to this release adds the column with
-`nextly migrate`, as for any new core column. The same run ties each link
-already sent to the account it was issued for, so it keeps working, when that
-account was created and last changed before the link was sent. A link whose
-account was created or changed afterwards, or in the same second, may have
-been sent to someone else, so it is removed, and its owner requests a new one.
-So is a reset link whose sending time cannot be read reliably: one given a
-lifetime other than the default, or stamped by a database whose clock or time
-zone differs from the application's. Expired links, and links to an address no
-account holds, are removed too. Until that run, a link from before the upgrade
-is refused.
+`nextly migrate`, as for any new core column. The same run removes every
+password reset link already sent, so anyone part-way through a reset requests
+a new link: a reset link may have been given any lifetime, and its stored
+times cannot show reliably when it was sent. It ties each email verification
+link already sent to the account it was issued for, so it keeps working, when
+that account was created and last changed before the link was sent. A
+verification link whose account was created or changed afterwards, or in the
+same second, may have been sent to someone else, so it is removed, and its
+owner requests a new one. Expired links, and links to an address no account
+holds, are removed too. Until that run, a link from before the upgrade is
+refused.
 
 These guarantees hold once every server runs this release. During a rolling
 deploy, a server still on the previous release keeps the previous behaviour:

@@ -316,9 +316,7 @@ describe.each(getConfiguredTestDialects())(
         ].map(row => row.userId);
       }
 
-      expect(await boundTo(keeps.reset)).toEqual(["keeps"]);
       expect(await boundTo(keeps.verification)).toEqual(["keeps"]);
-      expect(await boundTo(moves.reset)).toEqual(["moves"]);
       expect(await boundTo(moves.verification)).toEqual(["moves"]);
       for (const removed of [
         reassigned,
@@ -327,16 +325,28 @@ describe.each(getConfiguredTestDialects())(
         expired,
         sameInstant,
       ]) {
-        expect(await boundTo(removed.reset)).toEqual([]);
         expect(await boundTo(removed.verification)).toEqual([]);
       }
-      // A reset link whose issue time is not known is removed; a verification
+      // Every reset link is removed, however long its account held the
+      // address: no reading of one bounds when it was issued. A verification
       // link always lasts a day, so its expiry says when it was issued, and it
       // is bound whatever its created_at says.
-      expect(await boundTo(longLived.reset)).toEqual([]);
-      expect(await boundTo(otherZone.reset)).toEqual([]);
+      for (const removed of [
+        keeps,
+        moves,
+        reassigned,
+        changed,
+        orphan,
+        expired,
+        sameInstant,
+        longLived,
+        otherZone,
+        mixedCase,
+      ]) {
+        expect(await boundTo(removed.reset)).toEqual([]);
+      }
       expect(await boundTo(otherZone.verification)).toEqual(["other-zone"]);
-      expect(await boundTo(mixedCase.reset)).toEqual(
+      expect(await boundTo(mixedCase.verification)).toEqual(
         dialect === "mysql" ? ["mixed-case"] : []
       );
 
@@ -362,11 +372,14 @@ describe.each(getConfiguredTestDialects())(
         return row;
       }
 
-      // A bound link works through the real services.
-      await auth.resetPasswordWithToken(keeps.reset, "Str0ngPassw0rd!");
+      // A bound link works through the real services; a reset link from
+      // before the upgrade is refused, and a new one has to be requested.
+      await expect(
+        auth.resetPasswordWithToken(keeps.reset, "Str0ngPassw0rd!")
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
       await auth.verifyEmail(keeps.verification);
       const kept = await user("keeps");
-      expect(kept.passwordHash).not.toBe(OLD_HASH);
+      expect(kept.passwordHash).toBe(OLD_HASH);
       expect(kept.emailVerified).not.toBeNull();
 
       // After the upgrade the account moves and its address is reassigned:
@@ -438,7 +451,7 @@ describe.each(getConfiguredTestDialects())(
           raw.set(id, value);
           const hash = createHash("sha256").update(value).digest("hex");
           await t.adapter.executeQuery(
-            "INSERT INTO password_reset_tokens (identifier, token_hash, expires, created_at) " +
+            "INSERT INTO email_verification_tokens (identifier, token_hash, expires, created_at) " +
               `VALUES ('${email}', '${hash}', ${at(dialect, new Date(issuedAt.getTime() + 24 * HOUR))}, ${at(dialect, issuedAt)})`
           );
         }
@@ -456,8 +469,8 @@ describe.each(getConfiguredTestDialects())(
             .digest("hex");
           const rows = await db
             .select()
-            .from(tables.passwordResetTokens)
-            .where(eq(tables.passwordResetTokens.tokenHash, hash));
+            .from(tables.emailVerificationTokens)
+            .where(eq(tables.emailVerificationTokens.tokenHash, hash));
           expect(rows.map(row => row.userId)).toEqual([id]);
         }
       },

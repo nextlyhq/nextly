@@ -75,7 +75,6 @@ export interface BindingAccount {
 export interface UnboundToken {
   identifier: string;
   expires: Date;
-  createdAt: Date;
 }
 
 /**
@@ -153,14 +152,6 @@ export async function lockAccount(
 }
 
 /**
- * How far apart the application's and the database's clocks may be for a
- * reset link's two timestamps to count as agreeing. Time zone offsets come in
- * steps of at least fifteen minutes, so agreement within this rules out a
- * database stamping in another zone.
- */
-export const CLOCK_AGREEMENT_MS = 5 * 60 * 1000;
-
-/**
  * A time no later than the token was issued, on the clock that stamps the
  * account's `created_at` and `updated_at`, or null when none can be
  * established.
@@ -169,23 +160,20 @@ export const CLOCK_AGREEMENT_MS = 5 * 60 * 1000;
  * `AUTH_TOKEN_LIFETIME_MS`, so it was issued exactly that long before it
  * expires.
  *
- * A reset link may have been given another lifetime by its caller, so its
- * expiry alone does not say when it was issued. Its `created_at` does, but the
- * database stamps it, and nothing pins the database's clock or time zone to
- * the application's. So the two readings are used only when they agree: the
- * link had the default lifetime and the clocks are close. The earlier of the
- * two, less the agreement margin, is then no later than the issue. When they
- * disagree the issue time is not known, and the answer is null.
+ * A reset link has no such time. Its caller may have given it another
+ * lifetime, so its expiry does not say when it was issued, and its
+ * `created_at` is stamped by the database, whose clock and time zone nothing
+ * pins to the application's. The two can agree by chance, a lifetime longer
+ * than a day offsetting a database clock that is ahead, and then any estimate
+ * drawn from them is later than the issue. So the answer is null, and every
+ * reset link from before links recorded their account is removed.
  */
 export function issuedNoLaterThan(
   kind: AuthTokenKind,
   token: UnboundToken
 ): Date | null {
-  const byLifetime = token.expires.getTime() - AUTH_TOKEN_LIFETIME_MS;
-  if (kind === "email-verification") return new Date(byLifetime);
-  const byDatabase = token.createdAt.getTime();
-  if (Math.abs(byLifetime - byDatabase) > CLOCK_AGREEMENT_MS) return null;
-  return new Date(Math.min(byLifetime, byDatabase) - CLOCK_AGREEMENT_MS);
+  if (kind === "password-reset") return null;
+  return new Date(token.expires.getTime() - AUTH_TOKEN_LIFETIME_MS);
 }
 
 /**
@@ -324,7 +312,6 @@ export async function bindIssuedTokens(
         id: table.id,
         identifier: table.identifier,
         expires: table.expires,
-        createdAt: table.createdAt,
       })
       .from(table)
       .where(isNull(table.userId));
@@ -345,7 +332,6 @@ export async function bindIssuedTokens(
         id: Number(row.id),
         identifier: String(row.identifier),
         expires: asDate(row.expires),
-        createdAt: asDate(row.createdAt),
         holder: holders.get(String(row.identifier)) ?? null,
       })),
       now
