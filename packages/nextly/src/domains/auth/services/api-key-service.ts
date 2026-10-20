@@ -43,6 +43,7 @@ import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { accountIsActive } from "../../../auth/session/session-standing";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
+import { permissionSlug } from "../../../schemas/_zod/rbac";
 import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
 import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
 import { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
@@ -247,6 +248,29 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
     return false;
   }
   return expiresAt.getTime() < Date.now();
+}
+
+/**
+ * A key's metadata as `caller` may see it.
+ *
+ * A key's owner is a person, so an API key is told who it is only when its
+ * own scope may read users, as it must before any other user data reaches it;
+ * otherwise `owner` is null. A super-admin's key with a role that reads keys
+ * but not people lists every key, and learns from it no one's name or
+ * address. A signed-in person sees the owner: a super-admin reads users, and
+ * anyone else sees only their own keys.
+ *
+ * Here, beside the metadata it narrows, so the REST routes and the Direct API
+ * answer one caller the same way.
+ */
+export function apiKeyAsSeenBy(
+  caller: { authMethod: string; permissions: readonly string[] },
+  key: ApiKeyMeta
+): ApiKeyMeta {
+  const readsUsers =
+    caller.authMethod !== "api-key" ||
+    caller.permissions.includes(permissionSlug("read", "users"));
+  return readsUsers ? key : { ...key, owner: null };
 }
 
 /**

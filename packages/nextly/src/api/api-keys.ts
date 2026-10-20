@@ -30,9 +30,9 @@ import {
   apiKeyPermissionsFor,
   type ApiKeyOperation,
 } from "../domains/auth/api-key-policy";
-import type {
-  ApiKeyMeta,
-  ApiKeyService,
+import {
+  apiKeyAsSeenBy,
+  type ApiKeyService,
 } from "../domains/auth/services/api-key-service";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
@@ -41,7 +41,6 @@ import {
   CreateApiKeySchema,
   UpdateApiKeySchema,
 } from "../schemas/_zod/api-keys";
-import { permissionSlug } from "../schemas/_zod/rbac";
 import { isSuperAdmin } from "../services/lib/permissions";
 
 import { readJsonBody } from "./read-json-body";
@@ -92,26 +91,6 @@ async function requireKeyCreator(req: Request) {
 }
 
 /**
- * A key's metadata as `caller` may see it.
- *
- * A key's owner is a person, so an API key is told who it is only when its
- * own scope may read users, as it must before any other user data reaches it;
- * otherwise `owner` is null. A super-admin's key with a role that reads keys
- * but not people lists every key, and learns from it no one's name or
- * address. A signed-in person sees the owner: a super-admin reads users, and
- * anyone else sees only their own keys.
- */
-function asSeenBy(
-  caller: { authMethod: string; permissions: string[] },
-  key: ApiKeyMeta
-): ApiKeyMeta {
-  const readsUsers =
-    caller.authMethod !== "api-key" ||
-    caller.permissions.includes(permissionSlug("read", "users"));
-  return readsUsers ? key : { ...key, owner: null };
-}
-
-/**
  * List API keys for the authenticated user.
  *
  * Super-admins see all keys across all users (`allUsers: true`).
@@ -133,7 +112,7 @@ export const listApiKeys = privateToSession(
     const allUsers = await isSuperAdmin(authResult.userId);
     const keys = (
       await service.listApiKeys(authResult.userId, { allUsers })
-    ).map(key => asSeenBy(authResult, key));
+    ).map(key => apiKeyAsSeenBy(authResult, key));
 
     // Synthetic single-page meta keeps the canonical list shape even though
     // the underlying service does not paginate.
@@ -179,7 +158,7 @@ export function getApiKeyById(req: Request, id: string): Promise<Response> {
         });
       }
 
-      return respondDoc(asSeenBy(authResult, key));
+      return respondDoc(apiKeyAsSeenBy(authResult, key));
     })
   )(req);
 }
