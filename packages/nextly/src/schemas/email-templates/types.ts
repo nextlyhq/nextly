@@ -134,12 +134,28 @@ export interface EmailTemplateInsert {
 
   /**
    * Per-template From override (e.g. `Support <help@example.com>`).
-   * When null/omitted, the provider / config From is used.
+   * When null/omitted, the provider / config From is used. The display name
+   * may use the send's variables (`{{shopName}} <shop@example.com>`); the
+   * address may not.
    */
   fromOverride?: string | null;
 
-  /** Per-template Reply-To address. When null/omitted, no Reply-To is set. */
+  /**
+   * Per-template Reply-To address. When null/omitted, no Reply-To is set. May
+   * use the send's variables (`{{customerEmail}}`); a send whose rendered
+   * Reply-To is not an address fails, as retrying cannot fix it.
+   */
   replyTo?: string | null;
+
+  /**
+   * Fixed addresses copied on every send, after the send's own copies, with
+   * no address twice. Never variables, and refused on a template its owner
+   * marks as carrying a secret.
+   */
+  cc?: string[] | null;
+
+  /** Fixed addresses blind-copied on every send, on the same rules as `cc`. */
+  bcc?: string[] | null;
 
   /**
    * Available template variables with descriptions.
@@ -268,6 +284,12 @@ export interface EmailTemplateRecord extends EmailTemplateInsert {
   /** Per-template Reply-To (required on record, nullable). */
   replyTo: string | null;
 
+  /** Fixed copies (required on record, nullable). */
+  cc: string[] | null;
+
+  /** Fixed blind copies (required on record, nullable). */
+  bcc: string[] | null;
+
   /** Available template variables (required on record, nullable). */
   variables: EmailTemplateVariable[] | null;
 
@@ -294,6 +316,13 @@ export interface EmailTemplateRecord extends EmailTemplateInsert {
 
   /** Who owns the template. */
   owner: EmailTemplateOwner;
+
+  /**
+   * Whether the template's owner marks it as carrying a secret, such as a
+   * reset or verification link. Declared by the owner and never editable:
+   * such a template takes no `cc` or `bcc`, and any stored on it are not sent.
+   */
+  carriesSecret: boolean;
 
   /**
    * Whether the site has overridden an owned template. Always false for a

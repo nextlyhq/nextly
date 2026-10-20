@@ -212,10 +212,20 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
     preheader?: string;
     /** Layout row that wraps this template at its {{content}} marker. */
     layoutId?: string;
-    /** Override the provider's From address for this template. */
+    /**
+     * Override the provider's From address for this template. Its display
+     * name may use the send's variables; its address may not.
+     */
     fromOverride?: string;
-    /** Reply-To address for this template. */
+    /** Reply-To address for this template; may use the send's variables. */
     replyTo?: string;
+    /**
+     * @experimental Fixed addresses copied on every send, after the send's
+     * own. Refused on a template that carries a secret.
+     */
+    cc?: string[];
+    /** @experimental Fixed addresses blind-copied on every send, as `cc`. */
+    bcc?: string[];
     /** Whether to wrap this template in its layout when sending. */
     useLayout?: boolean;
     /** Specific provider ID to use for this template */
@@ -243,9 +253,16 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
 export interface UpdateEmailTemplateArgs extends DirectAPIConfig {
   /** Template ID (required) */
   id: string;
-  /** Partial template data; `description: null` clears the description. */
-  data: Partial<Omit<CreateEmailTemplateArgs["data"], "description">> & {
+  /**
+   * Partial template data; `description: null` clears the description, and
+   * `cc: null` or `bcc: null` clears the copies.
+   */
+  data: Partial<
+    Omit<CreateEmailTemplateArgs["data"], "description" | "cc" | "bcc">
+  > & {
     description?: string | null;
+    cc?: string[] | null;
+    bcc?: string[] | null;
   };
 }
 

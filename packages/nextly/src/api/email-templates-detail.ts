@@ -36,6 +36,28 @@ import { nextlyValidationFromZod } from "./zod-to-nextly-error";
  */
 const descriptionSchema = z.object({ description: z.string().nullable() });
 
+/**
+ * A template's copies on update: a list of addresses, or null to clear them.
+ * The service checks each address, and refuses copies on a template that
+ * carries a secret.
+ */
+const copiesSchema = z.object({
+  cc: z.array(z.string()).nullable().optional(),
+  bcc: z.array(z.string()).nullable().optional(),
+});
+
+/** The copies an update body gives, parsed; an absent one is left out. */
+function copiesFrom(body: Record<string, unknown>): Record<string, unknown> {
+  if (body.cc === undefined && body.bcc === undefined) return {};
+  const parsed = copiesSchema.safeParse({ cc: body.cc, bcc: body.bcc });
+  if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  const { cc, bcc } = parsed.data;
+  return {
+    ...(cc !== undefined ? { cc } : {}),
+    ...(bcc !== undefined ? { bcc } : {}),
+  };
+}
+
 interface RouteContext {
   params: Promise<{ id: string }>;
 }
@@ -80,12 +102,13 @@ export const GET = withErrorHandler(
  *
  * Request Body (all fields optional):
  * - name, subject, htmlContent, plainTextContent, variables, useLayout,
- *   isActive, providerId, description (a string, or null to clear it).
+ *   isActive, providerId, description (a string, or null to clear it), cc
+ *   and bcc (lists of addresses, or null to clear them).
  *
  * Response Codes:
  * - 200 OK: Template updated successfully
- * - 400 Bad Request: Invalid JSON body, or a description that is neither
- *   a string nor null
+ * - 400 Bad Request: Invalid JSON body, a description that is neither
+ *   a string nor null, or copies that are not a list of addresses
  * - 401 Unauthorized: Authentication required
  * - 404 Not Found: Template with ID does not exist
  * - 500 Internal Server Error: Update failed
@@ -125,6 +148,8 @@ export const PATCH = withErrorHandler(
       if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
       updateData.description = parsed.data.description;
     }
+    // Copies are new to this handler too, and parsed the same way.
+    Object.assign(updateData, copiesFrom(body));
 
     const service = await getEmailTemplateService();
     const template = await service.updateTemplate(
