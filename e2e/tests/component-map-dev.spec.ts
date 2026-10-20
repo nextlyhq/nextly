@@ -10,6 +10,8 @@ import {
   treeKillCommand,
 } from "../../scripts/pnpm-invocation.mjs";
 
+import { cleanUpNextWrites, stop } from "../support/playground-dev-server";
+
 import { E2E_NEXTLY_SECRET } from "./support/preview-links";
 
 /**
@@ -45,6 +47,8 @@ const DB_FILE = "./data/e2e-component-map.db";
 
 let server: ChildProcess | undefined;
 let output = "";
+/** Removes the agent files `next dev` writes into the app root, if it wrote them. */
+let cleanNextWrites: (() => void) | undefined;
 
 /** Waits for the server to answer its health route, or fails with its log. */
 async function waitForHealth(url: string, timeoutMs: number): Promise<void> {
@@ -70,6 +74,7 @@ function removeOwnFiles(): void {
 test.beforeAll(async () => {
   test.setTimeout(300_000);
   removeOwnFiles();
+  cleanNextWrites = cleanUpNextWrites();
   const env = {
     ...process.env,
     PORT: String(REFUSING_PORT),
@@ -100,6 +105,9 @@ test.beforeAll(async () => {
     env,
     stdio: ["ignore", "pipe", "pipe"],
     shell: starting.shell,
+    // Its own process group on POSIX, so `stop` reaches the server `next dev`
+    // runs in a child of its own; Windows is stopped by a tree kill instead.
+    detached: process.platform !== "win32",
   });
   for (const stream of [server.stdout, server.stderr]) {
     stream?.on("data", chunk => {
@@ -111,15 +119,20 @@ test.beforeAll(async () => {
   await waitForHealth(REFUSING_URL, 240_000);
 });
 
-test.afterAll(() => {
+test.afterAll(async () => {
+  // Stopped and waited for before anything is removed, so nothing is still
+  // writing into its build directory or database, or holding the port, when
+  // the files go.
   if (server?.pid !== undefined) {
     // On Windows the handle is the shell the wrapper asked for, so killing it
-    // alone would leave `next dev` holding the port; the tree kill reaches it.
+    // alone would leave `next dev` holding the port; the tree kill reaches it,
+    // and returns once the tree is gone.
     const treeKill = treeKillCommand(server.pid, process.platform);
-    if (treeKill === null) server.kill("SIGTERM");
+    if (treeKill === null) await stop(server);
     else spawnSync(treeKill.command, treeKill.args, { stdio: "ignore" });
   }
   removeOwnFiles();
+  cleanNextWrites?.();
 });
 
 test.describe("a development server missing a widget's component, with regeneration off", () => {
