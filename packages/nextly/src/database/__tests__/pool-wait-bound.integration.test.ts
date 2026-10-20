@@ -217,6 +217,10 @@ for (const dialect of DIALECTS) {
               `INSERT INTO ${table} (id, label) VALUES (2, 'waiting')`
             )
           );
+          // Gone from the pool's queue while the holder still has the
+          // connection: a pool that stays saturated must not keep every
+          // request that already failed.
+          expect(adapter.getPoolStats()?.waiting).toBe(0);
           holder.release();
           await holder.done;
 

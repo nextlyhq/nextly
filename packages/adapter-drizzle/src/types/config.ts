@@ -81,11 +81,12 @@ export interface PoolConfig {
    * Time (ms) a request waits for a connection before it fails as
    * "database busy" (code `NEXTLY_POOL_WAIT_TIMEOUT` from the adapter,
    * `DATABASE_BUSY` from Nextly), the same on every dialect. On PostgreSQL
-   * and MySQL it is the wait for a pooled connection, and the time a new one
-   * gets to open; on SQLite, the wait for the one connection behind the
-   * transactions ahead. `0` waits without limit.
+   * and MySQL it is the wait for a connection already in the pool; it is also
+   * the time a new one gets to open, and one that cannot open in time is a
+   * connection error rather than busy. On SQLite, the wait for the one
+   * connection behind the transactions ahead. `0` waits without limit.
    *
-   * @default 15000
+   * @default 15000 (a PostgreSQL provider may set its own: Neon's is 20000)
    */
   connectionTimeoutMs?: number;
 

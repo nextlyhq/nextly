@@ -114,7 +114,7 @@ const adapter = createSqliteAdapter({
 });
 ```
 
-A request can wait in two places on SQLite, and each has its own setting. The adapter has one connection, so a transaction waits for the ones ahead of it to finish, for at most `pool.connectionTimeoutMs`, the same setting that bounds the wait for a pooled connection on PostgreSQL and MySQL. A write also waits while another process holds the database file, for at most `busyTimeout`. Either wait running out answers the request as `DATABASE_BUSY` (503, `Retry-After: 5`): nothing was written, and it is safe to retry.
+A request can wait in two places on SQLite, and each has its own setting. The adapter has one connection, so a transaction waits for the ones ahead of it to finish, for at most `pool.connectionTimeoutMs`, the same setting that bounds the wait for a pooled connection on PostgreSQL and MySQL. A write also waits while another process holds the database file, for at most `busyTimeout`. Either wait running out answers the request as `DATABASE_BUSY` (503, `Retry-After: 5`), and the transaction or write that waited does not run.
 
 ## WAL mode
 

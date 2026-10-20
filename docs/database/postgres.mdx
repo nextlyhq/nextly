@@ -140,7 +140,7 @@ The adapter uses `pg.Pool`. Resolution order: **user config > provider defaults 
 | `pool.min` | `0` | Minimum connections. Stays at 0 to avoid eager creation while a serverless DB (Neon) is waking. |
 | `pool.max` | `5` | Maximum connections. Conservative to stay under cloud limits. Next.js can spawn up to ~7 build workers; multiply your `pool.max` by that to sanity-check against your provider's connection cap. |
 | `pool.idleTimeoutMs` | `30000` | Close idle connections after 30 s. |
-| `pool.connectionTimeoutMs` | `15000` | Wait at most 15 s for a free connection from the pool. Past it the request fails as `DATABASE_BUSY` (503, `Retry-After: 5`), which is safe to retry. `0` waits without limit. |
+| `pool.connectionTimeoutMs` | `15000` | Wait at most 15 s for a free connection from the pool. Past it the request fails as `DATABASE_BUSY` (503, `Retry-After: 5`). `0` waits without limit. Provider defaults come first: Neon's is `20000`. |
 | `pool.maxLifetimeMs` | (driver default) | Recycle connections older than this. |
 
 ```typescript

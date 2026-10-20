@@ -18,9 +18,29 @@ interface FakeConnection {
   release: ReturnType<typeof vi.fn>;
 }
 
+/** The part of mysql2's queue (a Denque) that the pool and the bound use. */
+class FakeQueue {
+  items: Callback[] = [];
+  get length(): number {
+    return this.items.length;
+  }
+  push(callback: Callback): void {
+    this.items.push(callback);
+  }
+  shift(): Callback | undefined {
+    return this.items.shift();
+  }
+  peekAt(index: number): Callback | undefined {
+    return this.items[index];
+  }
+  removeOne(index: number): Callback | undefined {
+    return this.items.splice(index, 1)[0];
+  }
+}
+
 /** A pool of one connection that queues every request while it is out. */
 class FakePool extends EventEmitter {
-  queue: Callback[] = [];
+  _connectionQueue = new FakeQueue();
   free: FakeConnection[] = [{ release: vi.fn() }];
 
   getConnection(callback: Callback): void {
@@ -30,12 +50,24 @@ class FakePool extends EventEmitter {
       return;
     }
     this.emit("enqueue");
-    this.queue.push(callback);
+    this._connectionQueue.push(this.queued(callback));
+  }
+
+  /** What mysql2 queues for a request: its callback. */
+  protected queued(callback: Callback): Callback {
+    return callback;
   }
 
   /** Hands the next queued request a connection, as a release would. */
   serveNext(connection: FakeConnection): void {
-    this.queue.shift()?.(null, connection);
+    this._connectionQueue.shift()?.(null, connection);
+  }
+}
+
+/** mysql2 with diagnostics tracing on, which queues a wrapper of the callback. */
+class TracingPool extends FakePool {
+  protected override queued(callback: Callback): Callback {
+    return (err, connection) => callback(err, connection);
   }
 }
 
@@ -68,14 +100,37 @@ describe("a request waiting in mysql2's queue for a connection", () => {
     ];
     expect(error.code).toBe(POOL_WAIT_TIMEOUT_CODE);
     expect(connection).toBeUndefined();
+    // It left the queue rather than waiting there for a connection it will
+    // never use.
+    expect(pool._connectionQueue.length).toBe(0);
   });
 
-  it("releases a connection that arrives after it gave up, and answers only once", () => {
+  it("hands a released connection to the request still waiting, past one that gave up", () => {
     const pool = bounded(new FakePool(), 1000);
+    pool.free = [];
+    const first = vi.fn();
+    const second = vi.fn();
+    pool.getConnection(first);
+    vi.advanceTimersByTime(500);
+    pool.getConnection(second);
+    vi.advanceTimersByTime(500);
+    expect(first).toHaveBeenCalledTimes(1);
+
+    const connection: FakeConnection = { release: vi.fn() };
+    pool.serveNext(connection);
+
+    expect(second).toHaveBeenCalledWith(null, connection);
+    expect(connection.release).not.toHaveBeenCalled();
+  });
+
+  it("releases a connection that arrives after it gave up when it could not leave the queue, and answers only once", () => {
+    const pool = bounded(new TracingPool(), 1000);
     pool.free = [];
     const callback = vi.fn();
     pool.getConnection(callback);
     vi.advanceTimersByTime(1000);
+    // The queue holds a wrapper the bound cannot recognise, so it stays.
+    expect(pool._connectionQueue.length).toBe(1);
 
     const late: FakeConnection = { release: vi.fn() };
     pool.serveNext(late);

@@ -38,3 +38,12 @@ export function retryAfterSeconds(error: NextlyError): number | undefined {
   }
   return undefined;
 }
+
+/**
+ * The Retry-After header for an error: none when it carries no retry hint.
+ * Spread into a response's headers by every builder that answers one.
+ */
+export function retryAfterHeader(error: NextlyError): Record<string, string> {
+  const seconds = retryAfterSeconds(error);
+  return seconds === undefined ? {} : { "retry-after": String(seconds) };
+}

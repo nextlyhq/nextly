@@ -175,7 +175,7 @@ When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retr
 | `429` | `RATE_LIMITED` | Per-IP or per-key rate limit. `Retry-After` is set. |
 | `500` | `INTERNAL_ERROR`, `DATABASE_ERROR` | Server-side failure. |
 | `503` | `SERVICE_UNAVAILABLE` | Health probe / dependency outage. |
-| `503` | `DATABASE_BUSY` | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. Nothing was written. Retryable; `Retry-After` is set. |
+| `503` | `DATABASE_BUSY` | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. The statement or transaction that waited did not run; anything the request committed before it stays committed. `Retry-After` is set. |
 
 ## Endpoint inventory
 

@@ -129,7 +129,7 @@ import {
   type WidgetAudience,
 } from "./domains/widgets/visibility";
 import { NextlyError } from "./errors/nextly-error";
-import { retryAfterSeconds } from "./errors/retry-after";
+import { retryAfterHeader } from "./errors/retry-after";
 import {
   currentFlattenedErrors,
   logFlattenedErrors,
@@ -1732,10 +1732,7 @@ async function handleServiceRequest(
       errorHeaders["X-Nextly-Schema-Version"] = String(schemaVersion);
     }
     // Any error carrying a retry hint: RATE_LIMITED, DATABASE_BUSY.
-    const retryAfter = retryAfterSeconds(nextlyErr);
-    if (retryAfter !== undefined) {
-      errorHeaders["retry-after"] = String(retryAfter);
-    }
+    Object.assign(errorHeaders, retryAfterHeader(nextlyErr));
     // A REFUSAL from a session-private read must not be cacheable either. The
     // success path already carries these headers, but a shared cache holding
     // the 404 this produces would replay it to a caller the gate WOULD have

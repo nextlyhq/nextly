@@ -18,7 +18,8 @@ export type DbErrorKind =
   | "deadlock"
   | "serialization-failure"
   // A request waited its bound for a connection and was given none, or for a
-  // SQLite database file another process holds. Retryable: nothing ran.
+  // SQLite database file another process holds. The statement or transaction
+  // that waited never ran; work committed before it stays committed.
   | "busy"
   | "timeout"
   | "connection-lost"

@@ -33,6 +33,32 @@ export interface QueueingPool {
   getConnection(callback: GetConnectionCallback): void;
   once(event: "enqueue", listener: () => void): unknown;
   removeListener(event: "enqueue", listener: () => void): unknown;
+  /** mysql2's queue of waiting requests (a Denque). */
+  _connectionQueue?: {
+    length: number;
+    peekAt(index: number): unknown;
+    removeOne(index: number): unknown;
+  };
+}
+
+/**
+ * Takes a request that gave up out of the pool's queue, so a pool that stays
+ * saturated does not collect every request that has already failed, and a
+ * released connection goes to one still waiting. Returns whether it was
+ * there: with diagnostics tracing on, mysql2 queues a wrapper of the
+ * callback rather than the callback itself, and then it stays queued until a
+ * connection reaches it.
+ */
+function leaveQueue(pool: QueueingPool, waiting: GetConnectionCallback) {
+  const queue = pool._connectionQueue;
+  if (!queue) return false;
+  for (let at = 0; at < queue.length; at++) {
+    if (queue.peekAt(at) === waiting) {
+      queue.removeOne(at);
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -45,9 +71,9 @@ export interface QueueingPool {
  * statements, its transactions, and the Drizzle handle core services query
  * through.
  *
- * mysql2 keeps a timed-out request in its queue, so the connection it is
- * eventually handed is released straight back rather than held by a request
- * that has already failed.
+ * A request that gives up leaves the queue. Where mysql2 cannot be asked to
+ * drop it, the connection it is eventually handed is released straight back
+ * rather than held by a request that has already failed.
  */
 export function boundPoolWait<P extends QueueingPool>(
   pool: P,
@@ -64,7 +90,7 @@ export function boundPoolWait<P extends QueueingPool>(
     let queued = false;
     const onEnqueue = () => (queued = true);
     pool.once("enqueue", onEnqueue);
-    getConnection((err, connection) => {
+    const waiting: GetConnectionCallback = (err, connection) => {
       if (answered) {
         connection?.release();
         return;
@@ -72,11 +98,13 @@ export function boundPoolWait<P extends QueueingPool>(
       answered = true;
       clearTimeout(wait.timer);
       callback(err, connection);
-    });
+    };
+    getConnection(waiting);
     pool.removeListener("enqueue", onEnqueue);
     if (!queued || answered) return;
     wait.timer = setTimeout(() => {
       answered = true;
+      leaveQueue(pool, waiting);
       callback(poolWaitTimeoutError(boundMs));
     }, boundMs);
   };

@@ -4,6 +4,7 @@ import {
   type AuditLogWriter,
 } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
+import { retryAfterHeader } from "../../errors/retry-after";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import {
@@ -47,6 +48,7 @@ export function buildAuthErrorResponse(
       headers: {
         "content-type": "application/problem+json",
         "x-request-id": requestId,
+        ...retryAfterHeader(err),
       },
     }
   );

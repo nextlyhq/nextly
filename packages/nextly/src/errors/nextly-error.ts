@@ -57,7 +57,7 @@ const DB_ERROR_MAPPING = {
     statusCode: 409,
     publicMessage: "The operation could not be completed. Please retry.",
   },
-  // Nothing ran, so the request is safe to send again; the retry hint says
+  // The statement or transaction that waited never ran; the retry hint says
   // when, and becomes Retry-After on REST.
   busy: {
     code: "DATABASE_BUSY",
@@ -451,7 +451,8 @@ export class NextlyError extends Error {
 
   /**
    * A request that waited `pool.connectionTimeoutMs` for a database
-   * connection and was given none. Retryable: nothing ran. The same error
+   * connection and was given none. The statement or transaction that waited
+   * never ran; work committed before it stays committed. The same error
    * `fromDatabaseError` gives a busy DbError, from the same table row.
    */
   static databaseBusy(opts?: {

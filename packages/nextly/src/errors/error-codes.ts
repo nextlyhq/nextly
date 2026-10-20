@@ -45,8 +45,9 @@ export const NEXTLY_ERROR_STATUS = {
   DATABASE_ERROR: 500,
   // A request waited `pool.connectionTimeoutMs` for a database connection and
   // was given none, or found a SQLite file held past `busyTimeout`. 503, not
-  // 500 or 409: nothing ran, nothing is wrong with the request, and retrying
-  // shortly is the remedy, which `retryAfterSeconds` and Retry-After say.
+  // 500 or 409: the statement or transaction that waited never ran, nothing is
+  // wrong with the request, and retrying shortly is the remedy, which
+  // `retryAfterSeconds` and Retry-After say.
   DATABASE_BUSY: 503,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
