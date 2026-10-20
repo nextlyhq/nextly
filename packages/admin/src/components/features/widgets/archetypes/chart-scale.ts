@@ -65,7 +65,12 @@ export interface ChartBox {
  */
 export function linePoints(
   counts: readonly number[],
-  box: ChartBox
+  box: ChartBox,
+  /**
+   * The value at the top of the box. The series' own largest when absent; a chart of several
+   * series passes the largest of all, so their lines are drawn on one scale and compared.
+   */
+  top?: number
 ): Array<{ x: number; y: number }> {
   const usable = counts.map(count =>
     Number.isFinite(count) && count > 0 ? count : 0
@@ -74,7 +79,7 @@ export function linePoints(
 
   const innerWidth = Math.max(0, box.width - box.padding * 2);
   const innerHeight = Math.max(0, box.height - box.padding * 2);
-  const largest = Math.max(0, ...usable);
+  const largest = Math.max(0, top ?? 0, ...usable);
   const bottom = box.padding + innerHeight;
 
   // A single point has no span to divide, and one interval is a legitimate

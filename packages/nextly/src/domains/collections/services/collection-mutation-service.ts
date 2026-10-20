@@ -111,6 +111,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import {
   isWriteIntegrityFailure,
   markWriteIntegrityFailure,
@@ -9174,6 +9175,23 @@ export class CollectionMutationService extends BaseService {
                 mainStatusRecorded ||
                 localizedStatusRecorded ||
                 sweptRecorded;
+
+              // A receipt a caller pinned for this document is kept here, in
+              // the write's own transaction, so it commits exactly when the
+              // write does. Only a write to the live row: a held working draft
+              // left the live document as it was. `mainTo` is the status this
+              // transaction stored, read back from the row, not a hook's view.
+              if (!storeAsWorkingDraft) {
+                await recordWriteReceipt(
+                  tx,
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  { status: typeof mainTo === "string" ? mainTo : undefined }
+                );
+              }
 
               // Capture the pre-write slug inside the transaction so the
               // post-commit intent can bust the old slug tag after a rename.

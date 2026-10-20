@@ -399,6 +399,28 @@ describe("nextly media orphans", () => {
     expect([...bucket.files.keys()].sort()).toEqual([...outside].sort());
   });
 
+  // Vercel Blob writes a prefix's trailing slash once: `media/` stores
+  // `media/thumb_...`.
+  it("finds a thumbnail on Vercel Blob under a prefix written with its slash", async () => {
+    const bucket = new Bucket("vercel-blob");
+    const path =
+      "https://abc.public.blob.vercel-storage.com/media/thumb_x-1a2b.png";
+    bucket.put({ path, lastModified: TWO_HOURS_AGO });
+
+    await mediaOrphans({
+      storage: bucket,
+      prefix: "media/",
+      exclusive: true,
+      referenced: async () => refs(),
+      referencedNow: async () => new Set(),
+      apply: true,
+      say: () => {},
+      now: NOW,
+    });
+
+    expect(bucket.files.size).toBe(0);
+  });
+
   // A storage of another kind may keep keys as written too; only local disk
   // is known to read every spelling as one.
   it("leaves keys spelled otherwise on a storage of a kind it does not know", async () => {
@@ -802,6 +824,36 @@ describe("referencedStoredPaths", () => {
 
     expect(unlocated).toEqual([elsewhere]);
     expect(paths.size).toBe(501 * 3 - 1);
+  });
+
+  // The check before each batch of removals: an item that comes to have a
+  // thumbnail no path can match, by a URL under any name, may refer to any
+  // listed file, so nothing more is removed.
+  it("answers nothing while any item has a thumbnail that cannot be located", async () => {
+    const { referencedNowIn } = await import("../media");
+    const db = await mediaTable();
+    await db.db
+      .update(db.schema.media)
+      .set({ thumbnailUrl: "https://cdn.example.com/renamed/abc123" })
+      .where(eq(db.schema.media.id, "media-3"));
+
+    const now = await referencedNowIn(db.adapter as never)([
+      "2026/10/0b7f-thumb_left.png",
+    ]);
+
+    expect(now).toBeNull();
+  });
+
+  it("names the listed files the media table refers to", async () => {
+    const { referencedNowIn } = await import("../media");
+    const db = await mediaTable();
+
+    const now = await referencedNowIn(db.adapter as never)([
+      "2026/10/b4-thumb_p.png",
+      "2026/10/0b7f-thumb_left.png",
+    ]);
+
+    expect(now ? [...now] : now).toEqual(["2026/10/b4-thumb_p.png"]);
   });
 
   // A page read by offset after an item on an earlier page went would start
