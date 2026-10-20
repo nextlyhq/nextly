@@ -2142,6 +2142,17 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "list",
     method: "releaseCalendar",
   },
+  // The readiness of a page of releases at once, named by `?ids=`. Before the
+  // route that reads one release by id, like the calendar, for the same
+  // reason.
+  {
+    id: "readiness",
+    subresource: null,
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "listReleasesReadiness",
+  },
   {
     id: true,
     subresource: null,

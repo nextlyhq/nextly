@@ -222,6 +222,11 @@ const ApiKeyAbilitiesQuerySchema = z.object({
  * creation is: a summary is that creation's preview, and a key asking it
  * about another key is refused.
  *
+ * Its two 403s carry different codes, as creation's do: `FORBIDDEN` for a
+ * caller who may not create keys (that is asked first), and
+ * `API_KEY_ROLE_ABOVE_CREATOR` for a role that allows more than its creator,
+ * so the form can say which.
+ *
  * Response: `{ items: { slug, action, resource }[], meta }`.
  * Private to the session that asked, refusals included, since it describes
  * that person's own grants.

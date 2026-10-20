@@ -1,3 +1,4 @@
+import { EXACT_VERSION } from "../lib/exact-version";
 import type { PackageManager } from "../types";
 
 /**
@@ -26,4 +27,23 @@ export function detectPmFromUserAgent(
   if (userAgent.startsWith("bun/")) return "bun";
   if (userAgent.startsWith("npm/")) return "npm";
   return null;
+}
+
+/**
+ * The `packageManager` value the launching command's user agent names,
+ * `<name>@<version>`, for pnpm and Yarn when the version is exact: Corepack
+ * runs that version, and with no field falls back to its own default (Yarn
+ * 1.22.22 under Yarn 4.9.2). npm and Bun, and a user agent naming no exact
+ * version, give null, so nothing is recorded for them.
+ */
+export function packageManagerFromUserAgent(
+  userAgent: string | undefined | null
+): string | null {
+  const manager = detectPmFromUserAgent(userAgent);
+  if (manager !== "pnpm" && manager !== "yarn") return null;
+  // "yarn/4.9.2 npm/? node/v24.21.0 darwin arm64" -> "4.9.2"
+  const version = (userAgent ?? "").split(" ")[0]?.slice(manager.length + 1);
+  return version && EXACT_VERSION.test(version)
+    ? `${manager}@${version}`
+    : null;
 }
