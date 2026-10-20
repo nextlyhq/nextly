@@ -416,6 +416,104 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    describe("a card's settings on a dashboard nobody arranged", () => {
+      // A setting changed outside customise mode is a single-card write: the
+      // row stays unarranged, so the reader keeps following the default.
+      const withConfig = (
+        placements: Placement[],
+        config: Record<string, unknown>
+      ) =>
+        placements.map(p =>
+          p.widgetId === "test/first" ? { ...p, config } : p
+        );
+
+      it("keeps the setting, still following the default", async () => {
+        const seen = await read(editor);
+        const res = await save(
+          editor,
+          seen,
+          withConfig(seen.placements, { limit: 7 }),
+          { arranged: false }
+        );
+        expect(res.status).toBe(200);
+
+        const after = await read(editor);
+        const first = after.placements.find(p => p.widgetId === "test/first");
+        expect(first?.config).toEqual({ limit: 7 });
+        // Still a row that follows the default, not a snapshot.
+        expect((await rawRow(editor)).row?.layout as string).toContain(
+          '"unarranged":true'
+        );
+      });
+
+      it("reads a row that holds only a removal exactly as before", async () => {
+        const seen = await read(editor);
+        const removedOne = seen.placements.map(p =>
+          p.widgetId === "test/first" ? { ...p, removed: true } : p
+        );
+        expect(
+          (await save(editor, seen, removedOne, { arranged: false })).status
+        ).toBe(200);
+
+        const after = await read(editor);
+        expect(
+          ours(after.placements).map(p => [p.widgetId, p.removed, p.config])
+        ).toEqual([
+          ["test/first", true, undefined],
+          ["test/last", false, undefined],
+        ]);
+      });
+
+      it("is the person's own: another person holding the same widget sees no setting", async () => {
+        const seen = await read(editor);
+        expect(
+          (
+            await save(
+              editor,
+              seen,
+              withConfig(seen.placements, { limit: 7 }),
+              {
+                arranged: false,
+              }
+            )
+          ).status
+        ).toBe(200);
+
+        const theirs = await read(admin);
+        const first = theirs.placements.find(p => p.widgetId === "test/first");
+        expect(first).toBeDefined();
+        expect(first?.config).toBeUndefined();
+      });
+
+      it("carries over when the person later arranges their dashboard", async () => {
+        const seen = await read(editor);
+        expect(
+          (
+            await save(
+              editor,
+              seen,
+              withConfig(seen.placements, { limit: 7 }),
+              {
+                arranged: false,
+              }
+            )
+          ).status
+        ).toBe(200);
+
+        // The admin arranges from what it was handed, which now holds the
+        // setting, so a first arranged save keeps it.
+        const handed = await read(editor);
+        const arranged = [...ours(handed.placements)].reverse();
+        expect((await save(editor, handed, arranged)).status).toBe(200);
+
+        const after = await read(editor);
+        expect(
+          after.placements.find(p => p.widgetId === "test/first")?.config
+        ).toEqual({ limit: 7 });
+        expect(after.source).toBe("own");
+      });
+    });
+
     it("after a saved reset, brings later changes to the default to the reader", async () => {
       // The reset removes the row rather than storing today's default, so the
       // reader follows the default again: a widget declared afterwards
