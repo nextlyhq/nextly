@@ -30,3 +30,5 @@
 ---
 
 The admin's preview control now opens a share popover. Choose how long a link works (1 hour, 1 day, 3 days or 7 days), then create and copy it in one step. The popover lists the page's live links, with who made each, when it ends and how many times it was opened, and lets you revoke any one of them, or all of them after a confirmation. Links made before this version show as one row that can only be revoked together. On a phone, the popover opens from the document's menu.
+
+A preview shows related items and uploads as the person who shared it would see them, as it already did for the draft's own fields.
