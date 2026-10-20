@@ -5,9 +5,8 @@
  *
  * Each one lays out what `release-list` and `release-time` say, so the wording
  * rules stay in functions a test can hold and these stay about arrangement.
- * The documents cell is handed what the list read for the whole page; the
- * owner cell asks for the owner's name, which the list does not carry, and is
- * answered from the users cache for every row that owner has.
+ * The documents and owner cells are handed what the list read for the whole
+ * page; no cell asks for anything of its own.
  *
  * The shared table draws these cells twice: in its table, and in a card per
  * row on a narrow screen, where each value sits right-aligned beside its
@@ -37,8 +36,6 @@ import {
   Progress,
   Skeleton,
 } from "@admin/components/ui";
-import { useUser } from "@admin/hooks/queries/useUsers";
-import { useCan } from "@admin/hooks/useCan";
 import { useDashboardUser } from "@admin/hooks/useDashboardUser";
 import { cn } from "@admin/lib/utils";
 import type {
@@ -48,9 +45,7 @@ import type {
 } from "@admin/types/releases";
 
 import {
-  ownerIdToLookUp,
   releaseOwnerView,
-  type ReleaseOwnerView,
   describeDocuments,
   describeNeedFix,
   describeReadiness,
@@ -277,37 +272,16 @@ function initialsOf(name: string): string {
   return letters.join("") || "?";
 }
 
-/** Who owns a release, from the reader's own account and the users list. */
-function useReleaseOwner(ownerId: string | null): ReleaseOwnerView {
-  const { user: me } = useDashboardUser();
-  const canReadUsers = useCan("read-users");
-  const lookup = useUser(
-    ownerIdToLookUp({ ownerId, meId: me?.id, canReadUsers })
-  );
-  return releaseOwnerView({
-    ownerId,
-    me,
-    canReadUsers,
-    lookup: { pending: lookup.isPending, user: lookup.data },
-  });
-}
-
 const OWNER_ROW = "flex items-center justify-end gap-2 @md/table:justify-start";
 
 export function ReleaseOwnerCell({ release }: { release: Release }) {
-  const owner = useReleaseOwner(release.createdBy);
-
-  if (owner.kind === "unrecorded") {
-    return <span className="text-sm text-muted-foreground">Not recorded</span>;
-  }
-  if (owner.kind === "loading") {
-    return (
-      <span className={OWNER_ROW}>
-        <Skeleton className="size-7 rounded-full" />
-        <Skeleton className="h-3.5 w-16" />
-      </span>
-    );
-  }
+  // The session the admin already holds: no request of its own.
+  const { user: me } = useDashboardUser();
+  const owner = releaseOwnerView({
+    createdBy: release.createdBy,
+    owner: release.owner,
+    me,
+  });
   const known = owner.kind === "known";
   return (
     <span className={OWNER_ROW} title={known ? owner.name : undefined}>
@@ -323,7 +297,7 @@ export function ReleaseOwnerCell({ release }: { release: Release }) {
           known ? "text-foreground" : "text-muted-foreground"
         )}
       >
-        {known ? owner.label : "Another user"}
+        {owner.label}
       </span>
     </span>
   );

@@ -248,7 +248,8 @@ leave the page and the total one apart for that one response. The next request r
         "addMember": true,
         "removeMember": true
       },
-      "memberCounts": { "total": 6, "goLive": 5, "comeDown": 1 }
+      "memberCounts": { "total": 6, "goLive": 5, "comeDown": 1 },
+      "owner": { "id": "…", "name": "Ada Lovelace" }
     }
   ],
   "meta": {
@@ -269,6 +270,8 @@ Each release on the REST list carries `memberCounts` (experimental): how many do
 how many it puts live (`goLive`) and how many it takes down (`comeDown`). They are read for the
 whole page at once. From the Direct API, ask `nextly.releases.memberCounts({ releaseIds })`, which
 answers every id with its counts, zeros for a release holding none.
+
+Each release on the REST list also carries `owner` (experimental): whoever created it, as an id and a name and nothing else, read for the whole page at once. It names people as version history names a version's author, so anyone who may read the release sees it. An owner who can no longer be named, because the account was deleted, is `null` while `createdBy` still holds the id.
 
 ### From the Direct API
 

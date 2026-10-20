@@ -6,6 +6,7 @@
  *
  * @module components/features/releases/release-list
  */
+import { versionAuthorLabel } from "@admin/components/features/versions/version-author";
 import type {
   Release,
   ReleaseListTab,
@@ -232,65 +233,35 @@ export function describeNeedFix(count: number): string {
 
 /** Who owns a release, as the owner cell draws them. */
 export type ReleaseOwnerView =
-  | { kind: "unrecorded" }
-  | { kind: "loading" }
   | { kind: "known"; label: string; name: string; image?: string }
-  | { kind: "unnamed" };
-
-interface OwnerPerson {
-  id: string;
-  name: string;
-}
-
-/**
- * The owner id worth asking the users list about, if any: not the reader's
- * own, which they already know, and only for a reader who may read users.
- */
-export function ownerIdToLookUp({
-  ownerId,
-  meId,
-  canReadUsers,
-}: {
-  ownerId: string | null;
-  meId: string | undefined;
-  canReadUsers: boolean;
-}): string | undefined {
-  if (ownerId === null || ownerId === meId || !canReadUsers) return undefined;
-  return ownerId;
-}
+  | { kind: "unnamed"; label: string };
 
 /**
  * Who owns a release: whoever created it.
  *
- * Named from the users list where the reader may read it, and as "You" for
- * their own. Someone who may not read users is told only that it is another
- * person's: the release carries an id, and an id is not a name.
+ * "You" for the reader's own, from the session they already hold. Anyone
+ * else by the name the list sent with the release, which is the name version
+ * history would give them. Someone the list could not name is labelled
+ * exactly as history labels an author it cannot name: "Author unavailable"
+ * when an owner was recorded, "Author not recorded" when none was.
  */
 export function releaseOwnerView({
-  ownerId,
+  createdBy,
+  owner,
   me,
-  canReadUsers,
-  lookup,
 }: {
-  ownerId: string | null;
-  me: (OwnerPerson & { avatar?: string }) | null;
-  canReadUsers: boolean;
-  lookup: { pending: boolean; user?: OwnerPerson & { image?: string } };
+  createdBy: string | null;
+  owner: { id: string; name: string | null } | null | undefined;
+  me: { id: string; name: string; avatar?: string } | null;
 }): ReleaseOwnerView {
-  if (ownerId === null) return { kind: "unrecorded" };
-  if (me && ownerId === me.id) {
+  if (me && createdBy !== null && createdBy === me.id) {
     return { kind: "known", label: "You", name: me.name, image: me.avatar };
   }
-  if (!canReadUsers) return { kind: "unnamed" };
-  if (lookup.pending) return { kind: "loading" };
-  return lookup.user ? namedOwner(lookup.user) : { kind: "unnamed" };
-}
-
-function namedOwner(user: OwnerPerson & { image?: string }): ReleaseOwnerView {
+  if (owner?.name) {
+    return { kind: "known", label: owner.name, name: owner.name };
+  }
   return {
-    kind: "known",
-    label: user.name,
-    name: user.name,
-    image: user.image,
+    kind: "unnamed",
+    label: versionAuthorLabel({ author: owner ?? null, createdBy }),
   };
 }

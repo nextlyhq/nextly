@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   tabCounts: vi.fn(),
   readiness: vi.fn(),
   refetchCounts: vi.fn(),
+  usersRead: vi.fn(),
   refetchList: vi.fn(),
   navigateTo: vi.fn(),
   setSearchParams: vi.fn(),
@@ -44,11 +45,11 @@ vi.mock("@admin/hooks/queries/useReleases", () => ({
   usePublishReleaseNow: () => idleMutation,
   useDeleteRelease: () => idleMutation,
 }));
-vi.mock("@admin/hooks/queries/useUsers", () => ({
-  useUser: (id: string | undefined) => ({
-    isPending: false,
-    data: id === "u-aqib" ? { id, name: "Aqib Qureshi" } : undefined,
-  }),
+// Every users read the admin can make, watched: the table must make none.
+vi.mock("@admin/services/userApi", () => ({
+  getUserById: mocks.usersRead,
+  fetchUsers: mocks.usersRead,
+  userApi: { getUserById: mocks.usersRead, fetchUsers: mocks.usersRead },
 }));
 vi.mock("@admin/hooks/useDashboardUser", () => ({
   useDashboardUser: () => ({
@@ -325,20 +326,35 @@ describe("a release's row", () => {
     expect(mocks.readiness).toHaveBeenLastCalledWith([]);
   });
 
-  it("names another person's release from the users list", () => {
-    mocks.listPage.mockReturnValue(page([release({ createdBy: "u-aqib" })]));
+  it("names other people's releases from the list itself, with no users request", () => {
+    mocks.listPage.mockReturnValue(
+      page([
+        release({
+          id: "a",
+          createdBy: "u-aqib",
+          owner: { id: "u-aqib", name: "Aqib Qureshi" },
+        }),
+        release({
+          id: "b",
+          title: "Old one",
+          createdBy: "u-sara",
+          owner: { id: "u-sara", name: "Sara Malik" },
+        }),
+      ])
+    );
     render(<ReleaseList />);
     expect(table().getByText("Aqib Qureshi")).toBeTruthy();
+    expect(table().getByText("Sara Malik")).toBeTruthy();
+    expect(mocks.usersRead).not.toHaveBeenCalled();
   });
 
-  it("says only 'another user' to a reader who may not read users", () => {
-    mocks.can.mockImplementation(
-      (permission: string) => permission !== "read-users"
+  it("labels an owner who is gone as version history does", () => {
+    mocks.listPage.mockReturnValue(
+      page([release({ createdBy: "u-gone", owner: null })])
     );
-    mocks.listPage.mockReturnValue(page([release({ createdBy: "u-aqib" })]));
     render(<ReleaseList />);
-    expect(table().getByText("Another user")).toBeTruthy();
-    expect(table().queryByText("Aqib Qureshi")).toBeNull();
+    expect(table().getByText("Author unavailable")).toBeTruthy();
+    expect(mocks.usersRead).not.toHaveBeenCalled();
   });
 });
 

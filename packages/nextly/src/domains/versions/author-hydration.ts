@@ -38,29 +38,43 @@ export type VersionMetaWithAuthor = VersionMeta & {
 export async function attachVersionAuthors(
   rows: VersionMeta[]
 ): Promise<VersionMetaWithAuthor[]> {
-  const ids = [
-    ...new Set(
-      rows
-        .map(row => row.createdBy)
-        .filter((id): id is string => typeof id === "string" && id.length > 0)
-    ),
-  ];
-
-  const byId = new Map<string, VersionAuthor>();
-
-  if (ids.length > 0) {
-    try {
-      const users = getService("userService");
-      for (const user of await users.listUsersByIds(ids)) {
-        byId.set(user.id, { id: user.id, name: user.name });
-      }
-    } catch {
-      // Leave the map empty: rows render unattributed rather than failing.
-    }
-  }
+  const byId = await displayNamesById(rows.map(row => row.createdBy));
 
   return rows.map(row => ({
     ...row,
     author: row.createdBy ? (byId.get(row.createdBy) ?? null) : null,
   }));
+}
+
+/**
+ * The display names of these people, in one query: an id and a name, and
+ * nothing else.
+ *
+ * The one rule for naming a person on a read that has already been granted,
+ * used by version history and by the release list's owners, so the two can
+ * never name someone differently. Someone who cannot be named (deleted, with
+ * whatever their account left erased, or a lookup that failed) is simply
+ * absent: the caller shows them as unavailable rather than guessing.
+ */
+export async function displayNamesById(
+  candidates: readonly (string | null | undefined)[]
+): Promise<Map<string, VersionAuthor>> {
+  const ids = [
+    ...new Set(
+      candidates.filter(
+        (id): id is string => typeof id === "string" && id.length > 0
+      )
+    ),
+  ];
+  const byId = new Map<string, VersionAuthor>();
+  if (ids.length === 0) return byId;
+  try {
+    const users = getService("userService");
+    for (const user of await users.listUsersByIds(ids)) {
+      byId.set(user.id, { id: user.id, name: user.name });
+    }
+  } catch {
+    // Leave the map empty: rows render unattributed rather than failing.
+  }
+  return byId;
 }

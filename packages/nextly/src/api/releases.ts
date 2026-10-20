@@ -53,6 +53,10 @@ import {
   type ReleaseAuthority,
   type ReleaseDayFilter,
 } from "../domains/releases/services/releases-service";
+import {
+  displayNamesById,
+  type VersionAuthor,
+} from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
@@ -611,6 +615,29 @@ async function withMemberCounts<Row extends { id: string }>(
 }
 
 /**
+ * Each listed release with its owner, named by the one rule version history
+ * names people by, for the whole page in one read: an id and a name, never an
+ * email, image or role. An owner who cannot be named (deleted, erased, or a
+ * failed lookup) is `null`, and the release keeps `createdBy`, so a client can
+ * tell "not recorded" from "unavailable" as history does.
+ *
+ * Shown to anyone who may read the release, as a version's author is shown to
+ * anyone who may read the document: naming who made a thing the reader can
+ * already see discloses no more than the thing itself.
+ *
+ * @experimental
+ */
+async function withOwners<Row extends { createdBy: string | null }>(
+  rows: Row[]
+): Promise<Array<Row & { owner: VersionAuthor | null }>> {
+  const names = await displayNamesById(rows.map(row => row.createdBy));
+  return rows.map(row => ({
+    ...row,
+    owner: row.createdBy ? (names.get(row.createdBy) ?? null) : null,
+  }));
+}
+
+/**
  * What a Publish now answer says, by the state the run left the release in.
  *
  * One sentence per state, in a record keyed by every state, so a state added
@@ -751,7 +778,7 @@ const RELEASE_OPERATIONS: Record<
     // query matches, not the rows this page holds.
     return respondList(
       containing === undefined
-        ? await withMemberCounts(items, caller, releases)
+        ? await withOwners(await withMemberCounts(items, caller, releases))
         : items,
       found.meta
     );

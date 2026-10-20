@@ -10,13 +10,13 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requireAnyPermission, isErrorResponse, getCachedNextly } = vi.hoisted(
-  () => ({
+const { requireAnyPermission, isErrorResponse, getCachedNextly, names } =
+  vi.hoisted(() => ({
     requireAnyPermission: vi.fn(),
     isErrorResponse: vi.fn(() => false),
     getCachedNextly: vi.fn(),
-  })
-);
+    names: vi.fn(),
+  }));
 
 vi.mock("../../auth/middleware", () => ({
   requireAnyPermission,
@@ -26,6 +26,9 @@ vi.mock("../../auth/middleware/to-nextly-error", () => ({
   toNextlyAuthError: (e: unknown) => e,
 }));
 vi.mock("../../init", () => ({ getCachedNextly }));
+vi.mock("../../domains/versions/author-hydration", () => ({
+  displayNamesById: names,
+}));
 
 const { handleReleaseRequest } = await import("../releases");
 
@@ -42,7 +45,12 @@ function namespace() {
   return {
     releases: {
       find: vi.fn(async (_query: Record<string, unknown>) => ({
-        items: [{ id: "r1" }, { id: "r2" }],
+        items: [
+          { id: "r1", createdBy: "u-ada" },
+          { id: "r2", createdBy: "u-gone" },
+          { id: "r3", createdBy: "u-ada" },
+          { id: "r4", createdBy: null },
+        ],
         meta: PAGE_META,
       })),
       capabilities: vi.fn(
@@ -74,6 +82,9 @@ function namespace() {
 let api: ReturnType<typeof namespace>;
 
 beforeEach(() => {
+  names.mockResolvedValue(
+    new Map([["u-ada", { id: "u-ada", name: "Ada Lovelace" }]])
+  );
   api = namespace();
   getCachedNextly.mockResolvedValue(api);
   requireAnyPermission.mockResolvedValue({ userId: "u1" });
@@ -100,13 +111,35 @@ describe("the release list's member counts", () => {
     expect(api.releases.memberCounts).toHaveBeenCalledTimes(1);
     expect(api.releases.memberCounts).toHaveBeenCalledWith(
       expect.objectContaining({
-        releaseIds: ["r1", "r2"],
+        releaseIds: ["r1", "r2", "r3", "r4"],
         overrideAccess: false,
       })
     );
     expect(body.items.map(item => [item.id, item.memberCounts])).toEqual([
       ["r1", { total: 1, goLive: 1, comeDown: 0 }],
       ["r2", { total: 2, goLive: 2, comeDown: 0 }],
+      ["r3", { total: 3, goLive: 3, comeDown: 0 }],
+      ["r4", { total: 4, goLive: 4, comeDown: 0 }],
+    ]);
+  });
+
+  it("names each release's owner from one read of the page's owners", async () => {
+    const res = await call("listReleases", "?tab=upcoming");
+    const body = (await res.json()) as {
+      items: { id: string; owner: unknown }[];
+    };
+    // One read for the page; the shared lookup reads each distinct id once.
+    expect(names).toHaveBeenCalledTimes(1);
+    const asked = (names.mock.calls[0]?.[0] ?? []) as (string | null)[];
+    expect(new Set(asked.filter(Boolean))).toEqual(
+      new Set(["u-ada", "u-gone"])
+    );
+    expect(body.items.map(item => [item.id, item.owner])).toEqual([
+      ["r1", { id: "u-ada", name: "Ada Lovelace" }],
+      // Gone (deleted or erased): kept as unnamed, as version history does.
+      ["r2", null],
+      ["r3", { id: "u-ada", name: "Ada Lovelace" }],
+      ["r4", null],
     ]);
   });
 

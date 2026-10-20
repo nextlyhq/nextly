@@ -102,6 +102,12 @@ export interface Release {
    * to say "unknown" rather than read an absent count as none.
    */
   memberCounts?: ReleaseMemberCounts;
+  /**
+   * Who owns it, by name only, as the release list names it. `null` for an
+   * owner who cannot be named (deleted, or a lookup that failed), while
+   * `createdBy` still says one was recorded. Absent off the list.
+   */
+  owner?: { id: string; name: string | null } | null;
   publishedAt: string | null;
   createdBy: string | null;
   createdAt: string;

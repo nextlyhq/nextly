@@ -28,7 +28,9 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import { releaseMemberKey } from "../release-member-key";
 import { ReleasesRepository } from "../releases-repository";
 
-import { seedPlainAuthor } from "./helpers/live-author";
+import { displayNamesById } from "../../versions/author-hydration";
+
+import { seedLiveAuthor, seedPlainAuthor } from "./helpers/live-author";
 
 let current: TestNextly | undefined;
 
@@ -284,6 +286,34 @@ describe.each(getConfiguredTestDialects())(
           comeDown: 0,
         },
       });
+    });
+
+    it("names a page's owners from one read, by name only, and names nobody who is gone", async () => {
+      const t = await boot(dialect);
+      const named = await seedLiveAuthor(t);
+      const erased = await seedLiveAuthor(t);
+      const removed = await seedLiveAuthor(t);
+      // Erased: deleted through the user service, which erases what the
+      // account left. Removed: its row gone by any other route. Release
+      // ownership keeps the id either way, and neither may be named.
+      await t.nextly.users.delete({ id: erased });
+      await (
+        t.adapter as unknown as {
+          delete: (table: string, where: unknown) => Promise<unknown>;
+        }
+      ).delete("users", { and: [{ column: "id", op: "=", value: removed }] });
+
+      const names = await displayNamesById([named, erased, removed, named]);
+      expect([...names.values()]).toEqual([
+        { id: named, name: expect.any(String) },
+      ]);
+      // A name and nothing else: no email, image or roles reach a display.
+      expect(Object.keys(names.get(named) ?? {}).sort()).toEqual([
+        "id",
+        "name",
+      ]);
+      expect(names.has(erased)).toBe(false);
+      expect(names.has(removed)).toBe(false);
     });
   }
 );

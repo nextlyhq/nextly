@@ -11,7 +11,6 @@ import {
   describeMemberActions,
   describeNeedFix,
   describeReadiness,
-  ownerIdToLookUp,
   releaseOwnerView,
   releaseRowStatus,
   releaseWhenInstant,
@@ -149,53 +148,40 @@ describe("summariseReadiness", () => {
 
 describe("releaseOwnerView", () => {
   const me = { id: "u-me", name: "Mobeen Abdullah" };
-  const idle = { pending: false };
 
-  it("calls the reader's own release theirs, without asking the users list", () => {
+  it("calls the reader's own release theirs, from the session", () => {
     expect(
-      releaseOwnerView({
-        ownerId: "u-me",
-        me,
-        canReadUsers: true,
-        lookup: idle,
-      })
-    ).toEqual({ kind: "known", label: "You", name: me.name, image: undefined });
-    expect(
-      ownerIdToLookUp({ ownerId: "u-me", meId: "u-me", canReadUsers: true })
-    ).toBeUndefined();
+      releaseOwnerView({ createdBy: "u-me", owner: null, me })
+    ).toMatchObject({ kind: "known", label: "You" });
   });
 
-  it("names another owner only for a reader who may read users", () => {
-    const lookup = { pending: false, user: { id: "u-a", name: "Aqib" } };
-    expect(
-      releaseOwnerView({ ownerId: "u-a", me, canReadUsers: true, lookup })
-    ).toMatchObject({ kind: "known", label: "Aqib" });
-    expect(
-      releaseOwnerView({ ownerId: "u-a", me, canReadUsers: false, lookup })
-    ).toEqual({ kind: "unnamed" });
-    expect(
-      ownerIdToLookUp({ ownerId: "u-a", meId: "u-me", canReadUsers: false })
-    ).toBeUndefined();
-    expect(
-      ownerIdToLookUp({ ownerId: "u-a", meId: "u-me", canReadUsers: true })
-    ).toBe("u-a");
-  });
-
-  it("waits for the lookup, and says nothing it cannot back", () => {
+  it("names another owner by the name the list sent", () => {
     expect(
       releaseOwnerView({
-        ownerId: "u-a",
+        createdBy: "u-a",
+        owner: { id: "u-a", name: "Aqib" },
         me,
-        canReadUsers: true,
-        lookup: { pending: true },
       })
-    ).toEqual({ kind: "loading" });
-    // A deleted user, or one the lookup could not find, is not named.
+    ).toEqual({ kind: "known", label: "Aqib", name: "Aqib" });
+  });
+
+  it("labels an owner who cannot be named exactly as version history does", () => {
+    // Recorded but gone (deleted or erased), or nameless: unavailable.
+    expect(releaseOwnerView({ createdBy: "u-gone", owner: null, me })).toEqual({
+      kind: "unnamed",
+      label: "Author unavailable",
+    });
     expect(
-      releaseOwnerView({ ownerId: "u-a", me, canReadUsers: true, lookup: idle })
-    ).toEqual({ kind: "unnamed" });
-    expect(
-      releaseOwnerView({ ownerId: null, me, canReadUsers: true, lookup: idle })
-    ).toEqual({ kind: "unrecorded" });
+      releaseOwnerView({
+        createdBy: "u-a",
+        owner: { id: "u-a", name: null },
+        me,
+      })
+    ).toEqual({ kind: "unnamed", label: "Author unavailable" });
+    // Nothing recorded at all.
+    expect(releaseOwnerView({ createdBy: null, owner: null, me })).toEqual({
+      kind: "unnamed",
+      label: "Author not recorded",
+    });
   });
 });
