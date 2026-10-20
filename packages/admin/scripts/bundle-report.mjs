@@ -299,6 +299,30 @@ function categoryOf(rel, firstScreenSet, reachableSet, otherEntrySet) {
 }
 
 /**
+ * The provenance the BUILD stamped into the dist, when it holds one: the
+ * commit the build ran on and when it ran. A report without it can only
+ * warn on time order; with it, a dist from a different commit than the one
+ * the report labels is a fact, not a guess.
+ */
+function readBuildInfo(distDir) {
+  const file = join(distDir, ".build-info.json");
+  if (!existsSync(file)) return undefined;
+  try {
+    const info = JSON.parse(readFileSync(file, "utf8"));
+    if (info && typeof info.commit === "string") {
+      return {
+        commit: info.commit,
+        builtAt:
+          typeof info.builtAt === "string" ? info.builtAt : undefined,
+      };
+    }
+  } catch {
+    // A stamp that does not parse is no stamp.
+  }
+  return undefined;
+}
+
+/**
  * The newest mtime among the measured files: when the bytes the dist holds
  * were built. A report's commit means nothing without it — a dist built
  * before the last commit would otherwise wear that commit's label.
@@ -449,6 +473,7 @@ export function measureBundle({
     date,
     commit,
     builtAt: builtAtOf(files),
+    buildInfo: readBuildInfo(distDir),
     distDir,
     entryChunk,
     chunks,
@@ -674,10 +699,21 @@ if (invokedAsScript()) {
     // unnoticed — in the text, in the JSON, and on stderr where automation
     // looks.
     const builtMs = Date.parse(result.builtAt);
-    const stale =
+    const timeStale =
       Number.isFinite(builtMs) && builtMs < commitTimeMs(result.commit);
-    result.stale = stale;
-    if (stale) {
+    // The build's own stamp is the stronger half: a dist from a different
+    // commit is mismatched even when its build time is newer than the
+    // labelled commit — an older checkout keeps a gitignored dist.
+    const provenanceMismatch =
+      result.buildInfo !== undefined &&
+      result.buildInfo.commit !== "unversioned" &&
+      result.buildInfo.commit !== result.commit;
+    result.stale = timeStale || provenanceMismatch;
+    if (provenanceMismatch) {
+      console.error(
+        `bundle-report warning: the dist was built from commit ${(result.buildInfo.commit || "").slice(0, 12)}, not the ${result.commit.slice(0, 12)} this report labels. Rebuild for a fresh attribution.`
+      );
+    } else if (timeStale) {
       console.error(
         `bundle-report warning: the dist was built at ${result.builtAt}, before commit ${result.commit.slice(0, 12)} — the report's commit labels older bytes. Rebuild for a fresh attribution.`
       );

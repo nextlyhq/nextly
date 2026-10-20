@@ -456,15 +456,18 @@ describe("bundle-report", () => {
         );
         expect(firstScreenFiles).toContain("index.mjs");
 
-        // Invariant 2b: the declared entrypoints the build emits for other
-        // consumers sit in other-entry, and at least one orphan is exposed —
-        // the assertions a wrong classification would fail.
+        // Invariant 2b: the classification is right, not merely reconciled —
+        // known answers, the assertions a wrong classification fails. A
+        // bundler change that hides lazy imports would drain route-later to
+        // zero and orphan every page; these hold it to the truth.
         const otherEntryFiles = report.categories.otherEntry.chunks.map(
           c => c.rel
         );
         expect(otherEntryFiles).toContain("lib/plugins/component-registry.mjs");
         expect(otherEntryFiles).toContain("lib/plugins/plugin-components.mjs");
         expect(report.totals.unreachable.count).toBeGreaterThan(0);
+        expect(report.totals.routeLater.count).toBeGreaterThan(0);
+        expect(report.routes.length).toBeGreaterThan(0);
 
         // Invariant 3: CLI files must not be in browser categories
         expect(firstScreenFiles).not.toContain("cli.cjs");

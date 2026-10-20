@@ -29,7 +29,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsup && node scripts/build-css.mjs",
+    "build": "tsup && node scripts/build-css.mjs && node scripts/stamp-dist.mjs",
     "build:css": "node scripts/build-css.mjs",
     "build:css:watch": "node scripts/build-css-watch.mjs",
     "dev": "node scripts/dev.mjs",
