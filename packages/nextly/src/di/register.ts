@@ -39,6 +39,7 @@ import {
   edgeProxyWarning,
   unkeyedStrategyWarnings,
 } from "../auth/handlers/proxy-posture";
+import { resetPasswordPolicy } from "../auth/password/policy";
 import { issueSetupTokenAtBoot } from "../auth/setup-token/setup-gate";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
@@ -244,7 +245,10 @@ import { consoleLogger } from "../services/shared";
 import type { Logger } from "../services/shared";
 import type { UserExtSchemaService } from "../services/users/user-ext-schema-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
-import type { UserService } from "../services/users/user-service";
+import type {
+  PasswordHasher,
+  UserService,
+} from "../services/users/user-service";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
 import { assertPluginFieldDeclarations } from "../shared/lib/assert-plugin-field-declarations";
 import { replaceFieldFunctions } from "../shared/lib/field-level-registry";
@@ -323,11 +327,13 @@ export interface NextlyServiceConfig {
   /** Optional hook registry. When absent, hooks are disabled. */
   hookRegistry?: HookRegistry;
 
-  /** Optional password hasher for user authentication. */
-  passwordHasher?: {
-    hash(password: string): Promise<string>;
-    verify(password: string, hash: string): Promise<boolean>;
-  };
+  /**
+   * Optional password hasher for user authentication. The full digester
+   * contract: an app supplying its own must declare its reach (`reach` or
+   * `validate`) — the boot refuses one that does not, since a digester's
+   * reach decides what passwords the policy may accept for it.
+   */
+  passwordHasher?: PasswordHasher;
 
   /** Optional base path for collection file operations. */
   basePath?: string;
@@ -2692,15 +2698,15 @@ async function initializeSchemaRegistry(
         adapter,
         extensionSchema,
         logger: {
-          debug: msg => console.debug(msg),
-          info: msg => console.log(msg),
-          warn: msg => console.warn(msg),
-          error: msg => console.error(msg),
+          debug: msg => consoleLogger.debug(msg),
+          info: msg => consoleLogger.info(msg),
+          warn: msg => consoleLogger.warn(msg),
+          error: msg => consoleLogger.error(msg),
         },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
+      consoleLogger.warn(
         `[registerServices] First-run setup helper crashed: ${msg}. Continuing.`
       );
     }
@@ -2829,7 +2835,7 @@ async function initializeSchemaRegistry(
         // unknown table, which says what actually happened. The same policy
         // `loadDynamicTables` already applies to a row it cannot turn into a
         // schema.
-        console.warn(
+        consoleLogger.warn(
           `[Nextly schema] Could not read the discriminator column of ` +
             `'${tableName}'; leaving it unregistered rather than addressing ` +
             `it by a name that was not verified. Field-group reads and writes ` +
@@ -4617,7 +4623,7 @@ export async function destroyRegisteredPlugins(): Promise<void> {
       await plugin.destroy(context);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
+      consoleLogger.error(`Plugin "${plugin.name}" destroy failed: ${message}`);
     }
   }
   if (globalForReg.__nextly_pluginServiceContainer === services) {
@@ -4663,7 +4669,7 @@ async function releaseServices(opts: {
       await adapter.disconnect();
     }
   } catch (error) {
-    console.error("Error during service shutdown:", error);
+    consoleLogger.error("Error during service shutdown", { error: error });
   } finally {
     container.clear();
     // The recording policy is a process-global registry, so it must be cleared
@@ -4679,6 +4685,10 @@ async function releaseServices(opts: {
     // Collection db options are process-global too; a later registration must
     // start from its own config's, not inherit this one's `allowIdOnCreate`.
     publishCollectionDbOptions([]);
+    // The password policy's configured minimum is process-global too; the next
+    // registration sets its own, and until then the default stands rather than
+    // this instance's.
+    resetPasswordPolicy();
     // Hooks live in a registry that outlives the container. Registration runs
     // from config on every init, so leaving it populated means a second
     // instance in the same process appends a fresh copy of every handler and
@@ -4735,6 +4745,9 @@ export function clearServices(): void {
   publishRetentionPolicies(undefined);
   // Cleared for the same reason as in `releaseServices`.
   publishCollectionDbOptions([]);
+  // Cleared for the same reason as in `releaseServices`: the configured
+  // minimum belongs to this registration, and the next one sets its own.
+  resetPasswordPolicy();
   // Cleared with the container for the same reason: re-initializing would
   // otherwise register every configured hook a second time.
   clearActiveHookRegistry();

@@ -64,6 +64,9 @@ export {
 export {
   type AccessControlContext,
   type AccessControlFunction,
+  type AccessRuleContext,
+  type AccessRuleOperation,
+  type AccessRuleTarget,
   type SingleAccessControl,
   type MinimalUser,
 } from "../../domains/auth/services/access-control-types";

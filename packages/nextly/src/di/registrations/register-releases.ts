@@ -21,8 +21,10 @@ import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
+import { registerNoticeKind } from "../../domains/notices/notice-kinds";
 import { registerCoreReleaseCheckSources } from "../../domains/releases/readiness/core-sources";
 import { recordReleaseActivity } from "../../domains/releases/release-activity";
+import { RELEASE_STOPPED_NOTICE } from "../../domains/releases/release-stopped-notice";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
@@ -48,6 +50,10 @@ export function registerReleaseServices({
   // Core's checks, which every release's readiness, scheduling and Publish now
   // ask. Registered with the feature, so a boot that has releases has them.
   registerCoreReleaseCheckSources();
+  // The notice a stopped release's owner is given, which the one transition
+  // into `blocked` records: registered with the feature, so no boot can stop
+  // a release without being able to tell its owner.
+  registerNoticeKind(RELEASE_STOPPED_NOTICE);
 
   container.registerSingleton<ReleasesService>(
     "releasesService",

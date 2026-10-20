@@ -46,13 +46,33 @@ async function copyToClipboard(text: string): Promise<boolean> {
  * carries an expiry, so a value cached in the page would be handed out after it
  * had stopped working.
  */
-export function usePreviewLink(target: UsePreviewLinkOptions) {
+export function usePreviewLink(
+  target: UsePreviewLinkOptions,
+  options: {
+    /**
+     * Called once a link exists, whether or not the copy succeeded: the list of
+     * a document's live links has one more row either way.
+     */
+    onCreated?: () => void;
+  } = {}
+) {
   return useMutation({
-    mutationFn: async (): Promise<{ url: string; copied: boolean }> => {
+    mutationFn: async (
+      /**
+       * How long this link works, chosen per link. Absent takes the target's
+       * own, or the server's sharing default.
+       */
+      lifetime: { ttlSeconds: number } | void
+    ): Promise<{ url: string; copied: boolean; expiresAt: string }> => {
       // Passed through as the union it arrived as. Destructuring and rebuilding
       // it here would be a second place that decides which fields a mint
       // request carries, and the two would drift the moment one gains a field.
-      const link = await previewLinkApi.mint(target);
+      const link = await previewLinkApi.mint(
+        lifetime ? { ...target, ...lifetime } : target
+      );
+      // As soon as the link exists, before anything below can still fail: a
+      // link with no address to copy is recorded all the same.
+      options.onCreated?.();
 
       // The server answers `null` only when it can find the site's address
       // NOWHERE — neither the Site URL setting nor the application's own
@@ -76,7 +96,11 @@ export function usePreviewLink(target: UsePreviewLinkOptions) {
         );
       }
 
-      return { url: link.url, copied: await copyToClipboard(link.url) };
+      return {
+        url: link.url,
+        copied: await copyToClipboard(link.url),
+        expiresAt: link.expiresAt,
+      };
     },
     onSuccess: ({ url, copied }) => {
       if (copied) {

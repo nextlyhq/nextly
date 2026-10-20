@@ -114,6 +114,7 @@ import { getProductionNotifier } from "../runtime/notifications/index";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 import type { VersionsConfig } from "../schemas/versions/types";
 import { FieldGroupSchemaService } from "../services/field-groups/field-group-schema-service";
+import { consoleLogger } from "../shared/types";
 import type { SingleHooks } from "../singles/config/types";
 
 import { planFieldGroupReload } from "./field-group-reload-plan";
@@ -1135,7 +1136,7 @@ async function ensureLocalizedCompanionsForReload(
             },
             error => {
               restoreFailed.push(entity.slug!);
-              console.error(
+              consoleLogger.error(
                 `[nextly] Could not restore "${entity.slug}" from its translations table after ` +
                   `localization was turned off. Its content is still in ` +
                   `${resolveTableName(entity)}_locales: ` +
@@ -1204,7 +1205,7 @@ async function ensureLocalizedCompanionsForReload(
         },
         error => {
           if (phase === "beforeApply") preservationFailed.push(entity.slug!);
-          console.warn(
+          consoleLogger.warn(
             `[nextly] Could not prepare the translations table for "${entity.slug}". ` +
               `Writes in a non-default locale will be refused until it exists: ` +
               `${error instanceof Error ? error.message : String(error)}`
@@ -1244,7 +1245,7 @@ async function ensureLocalizedCompanionsForReload(
           versionScope: versionScopeForEntityKind(kind),
         },
         error => {
-          console.warn(
+          consoleLogger.warn(
             `[nextly] Could not update the translations table for "${entity.slug}". ` +
               `Newly translatable fields may fail to save until it is in step: ` +
               `${error instanceof Error ? error.message : String(error)}`
@@ -1622,7 +1623,7 @@ async function applyReloadHolding(
     const { describeConfigReloadFailure } = await import(
       "./config-reload-failure"
     );
-    console.warn(describeConfigReloadFailure(err));
+    consoleLogger.warn(describeConfigReloadFailure(err));
     // The fix may be saved to a file the last good load never imported, such
     // as a collection file this edit added with an error in it. Watch the files
     // the broken config reaches as well, found without running it.
@@ -2967,7 +2968,7 @@ async function applyReloadHolding(
         .replace(/^TTY required for schema confirmation\.\s*/i, "")
         .replace(/\s*Run from an interactive terminal,.*$/i, "")
         .trim();
-      console.warn(
+      consoleLogger.warn(
         `\n[Nextly] Schema change needs your confirmation:\n` +
           `  ${detail}\n\n` +
           `Renames + drops auto-apply only when you confirm them.\n` +

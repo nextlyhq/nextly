@@ -20,7 +20,6 @@ import {
   holdsPermission,
   keyActor,
   principalActor,
-  rulePermissions,
   storedPermissions,
   systemActor,
   userActor,
@@ -282,7 +281,6 @@ describe("an actor's permissions", () => {
   it("keep each permission's stored slug as its row stores it", () => {
     expect(storedPermissions(manager)).toEqual(["manage-api-keys"]);
     expect(holdsPermission(manager, "update", "api-keys")).toBe(true);
-    expect(rulePermissions(manager)).toEqual(["api-keys:update"]);
   });
 });
 
@@ -450,13 +448,15 @@ describe("what a rule is handed", () => {
     });
     const ctx = await contextFor(editor, "delete", "pages");
     expect(ctx.operation).toBe("delete");
+    expect(ctx.target).toEqual({ kind: "collection", slug: "pages" });
     expect(ctx.collection).toBe("pages");
   });
 
-  it("is the rule-facing permission spelling, never the stored one", async () => {
+  it("is the role screen's permission spelling, with the earlier one after it for one release", async () => {
     const ctx = await contextFor(callers["user-with"]);
-    expect(ctx.permissions).toContain("posts:read");
-    expect(ctx.permissions).not.toContain("read-posts");
+    const stored = ACTIONS.map(action => `${action}-posts`);
+    const earlier = ACTIONS.map(action => `posts:${action}`);
+    expect([...ctx.permissions]).toEqual([...stored, ...earlier]);
   });
 
   it("names a key's maker as the user, with the key's own roles", async () => {

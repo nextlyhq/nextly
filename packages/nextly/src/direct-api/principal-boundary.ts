@@ -13,6 +13,7 @@
  *
  * @module direct-api/principal-boundary
  */
+import { runWithAccessMemo } from "../auth/access/request-memo";
 import { runAsPrincipal } from "../auth/principal-scope";
 import { NextlyError } from "../errors/nextly-error";
 
@@ -59,6 +60,11 @@ function refusal(operation: string): NextlyError {
  * operation, as a person-capable method naming none does: a hook's call
  * would otherwise inherit the person, and the services it reaches would
  * judge it as them, through an operation that cannot be made as one.
+ *
+ * Each call runs with one memo of access lookups, as `runAsCaller` opens for
+ * the collection and Single operations, so a namespace call that asks several
+ * permissions of one caller looks the caller up once. A call made inside a
+ * request shares that request's memo.
  */
 function refusingPrincipal(
   method: (...args: unknown[]) => unknown,
@@ -68,7 +74,9 @@ function refusingPrincipal(
   return (...args: unknown[]) =>
     namesPrincipal(args)
       ? Promise.reject(refusal(operation))
-      : runAsPrincipal(null, () => method.apply(self, args));
+      : runAsPrincipal(null, () =>
+          runWithAccessMemo(() => method.apply(self, args))
+        );
 }
 
 /**

@@ -30,14 +30,14 @@ describe("accessWithDefaults", () => {
   it("admits update and delete only with the matching permission", () => {
     const access = accessWithDefaults(undefined);
     expect(
-      call(access.update, holding(["form-submissions:update"], "update"))
+      call(access.update, holding(["update-form-submissions"], "update"))
     ).toBe(true);
     expect(
-      call(access.delete, holding(["form-submissions:delete"], "delete"))
+      call(access.delete, holding(["delete-form-submissions"], "delete"))
     ).toBe(true);
     // Role names are no longer read: an `admin` without the permission is refused.
     expect(
-      call(access.update, holding(["form-submissions:read"], "update"))
+      call(access.update, holding(["read-form-submissions"], "update"))
     ).toBe(false);
     expect(call(access.delete, holding([], "delete"))).toBe(false);
   });
@@ -53,11 +53,11 @@ describe("accessWithDefaults", () => {
     expect(
       call(
         access.update,
-        holding(["contact-forms:update"], "update", "contact-forms")
+        holding(["update-contact-forms"], "update", "contact-forms")
       )
     ).toBe(true);
     expect(
-      call(access.update, holding(["forms:update"], "update", "contact-forms"))
+      call(access.update, holding(["update-forms"], "update", "contact-forms"))
     ).toBe(false);
   });
 
@@ -70,7 +70,7 @@ describe("accessWithDefaults", () => {
 
   it("defaults the axis a caller does not name to the permission", () => {
     const access = accessWithDefaults(undefined, { create: true });
-    expect(call(access.read, holding(["form-submissions:read"], "read"))).toBe(
+    expect(call(access.read, holding(["read-form-submissions"], "read"))).toBe(
       true
     );
     expect(call(access.read, holding([], "read"))).toBe(false);

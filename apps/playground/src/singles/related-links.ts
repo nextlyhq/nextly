@@ -3,12 +3,15 @@
  * `NEXTLY_E2E_STYLE_FIXTURE=1`.
  *
  * It exists for the browser test of a related item the editor cannot read: a
- * Single holding a relationship and an upload, so the test can show both kept
- * as placeholders on a Single as well as on an entry. No playground Single has
+ * Single holding a relationship and an upload, at the top level and inside the
+ * field groups of `related-link-groups`, so the test can show them kept as
+ * placeholders on a Single as well as on an entry. No playground Single has
  * either field, and adding them to one would change what it is for in every
  * development run.
  */
 import { defineSingle, relationship, text, upload } from "nextly/config";
+
+import { relatedLinkGroupFields } from "../field-groups/related-link-groups";
 
 export const RelatedLinks = defineSingle({
   slug: "related-links",
@@ -22,5 +25,6 @@ export const RelatedLinks = defineSingle({
       hasMany: true,
     }),
     upload({ name: "logo", label: "Logo", relationTo: "media" }),
+    ...relatedLinkGroupFields(),
   ],
 });

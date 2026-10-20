@@ -14,6 +14,7 @@ import type { SanitizedNextlyConfig } from "../collections/config/define-config"
 import type { NextlyServiceConfig } from "../di/register";
 import { pluginConsentFromConfig } from "../plugins/plugin-consent";
 import { assertNoLegacyFieldGroupKey } from "../shared/legacy-field-group-key";
+import { consoleLogger } from "../shared/types";
 import { getImageProcessor } from "../storage/image-processor";
 
 /**
@@ -91,7 +92,7 @@ export function buildServiceConfig(
     if (!serviceConfig.storagePlugins && nextlyConfig?.storage) {
       serviceConfig.storagePlugins = nextlyConfig.storage;
       if (nextlyConfig.storage.length > 0) {
-        console.log(
+        consoleLogger.info(
           `[Nextly] Using ${nextlyConfig.storage.length} storage plugin(s) from config`
         );
       }
@@ -101,7 +102,7 @@ export function buildServiceConfig(
     if (!serviceConfig.collections && nextlyConfig?.collections) {
       serviceConfig.collections = nextlyConfig.collections;
       if (nextlyConfig.collections.length > 0) {
-        console.log(
+        consoleLogger.info(
           `[Nextly] Using ${nextlyConfig.collections.length} collection(s) from config`
         );
       }
@@ -115,7 +116,7 @@ export function buildServiceConfig(
     if (!serviceConfig.singles && nextlyConfig?.singles) {
       serviceConfig.singles = nextlyConfig.singles;
       if (nextlyConfig.singles.length > 0) {
-        console.log(
+        consoleLogger.info(
           `[Nextly] Using ${nextlyConfig.singles.length} single(s) from config`
         );
       }
@@ -125,7 +126,7 @@ export function buildServiceConfig(
     if (!serviceConfig.fieldGroups && nextlyConfig?.fieldGroups) {
       serviceConfig.fieldGroups = nextlyConfig.fieldGroups;
       if (nextlyConfig.fieldGroups.length > 0) {
-        console.log(
+        consoleLogger.info(
           `[Nextly] Using ${nextlyConfig.fieldGroups.length} field group(s) from config`
         );
       }
@@ -149,7 +150,7 @@ export function buildServiceConfig(
     if (!serviceConfig.plugins && nextlyConfig?.plugins) {
       serviceConfig.plugins = nextlyConfig.plugins;
       if (nextlyConfig.plugins.length > 0) {
-        console.log(
+        consoleLogger.info(
           `[Nextly] Using ${nextlyConfig.plugins.length} plugin(s) from config`
         );
       }

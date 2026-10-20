@@ -150,6 +150,7 @@ describe("registerReleaseServices document authority", () => {
           // ignored, this is the answer that would come back.
           checkAccess: async () => true,
           getRegisteredAccess: () => undefined,
+          getRegisteredTarget: () => undefined,
         }),
       },
     }));
@@ -243,6 +244,7 @@ describe("registerReleaseServices lifecycle grants", () => {
           checkAccess: async ({ operation }: { operation: string }) =>
             opts.ownerAllows ? opts.ownerAllows(operation) : true,
           getRegisteredAccess: () => undefined,
+          getRegisteredTarget: () => undefined,
         }),
       },
     }));

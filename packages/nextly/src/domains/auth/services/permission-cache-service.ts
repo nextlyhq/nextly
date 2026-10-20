@@ -45,6 +45,20 @@ export function cacheRowId(
 }
 
 /**
+ * The expiry a retired row is given: the start of the previous whole second.
+ *
+ * A row is served while its expiry is later than now, so a retired row must
+ * end before any read that follows. `new Date()` does not do that everywhere:
+ * MySQL stores this column to the second and rounds, so a retirement made in
+ * the second half of a second was stored as the NEXT second and the row went
+ * on being served until then. A moment already past at whole-second precision
+ * ends it on every dialect.
+ */
+function retiredAt(): Date {
+  return new Date(Math.floor(Date.now() / 1000) * 1000 - 1000);
+}
+
+/**
  * PermissionCacheService manages database-backed permission caching.
  *
  * This service implements Tier 2 caching (database-backed) as part of
@@ -186,7 +200,15 @@ export class PermissionCacheService extends BaseService {
         return null;
       }
 
-      const cached = result[0] as { hasPermission: boolean; expiresAt: Date };
+      // MySQL reads the flag back as `1` or `0`; the other dialects as a
+      // boolean. Only an exact grant is a grant, so `1` is read as one and
+      // nothing else is.
+      const cached = result[0] as {
+        hasPermission: boolean | number;
+        expiresAt: Date;
+      };
+      const allowed =
+        cached.hasPermission === true || cached.hasPermission === 1;
 
       if (process.env.DEBUG_CACHE === "1") {
         this.logger.info("[cache][dbg] getCachedPermission HIT", {
@@ -199,7 +221,7 @@ export class PermissionCacheService extends BaseService {
       }
 
       return {
-        allowed: cached.hasPermission,
+        allowed,
         expiresAt: new Date(cached.expiresAt).getTime(),
       };
     } catch (error) {
@@ -254,27 +276,33 @@ export class PermissionCacheService extends BaseService {
         cacheExpiry(Date.now(), this.cacheTtlMs, validUntil)
       );
 
-      await this.db
+      // The replacement is the row's own values rather than `EXCLUDED.*`,
+      // which only PostgreSQL and SQLite spell that way. MySQL's builder has
+      // no ON CONFLICT at all; its ON DUPLICATE KEY UPDATE fires on the
+      // primary key, the only unique key this table has.
+      const replacement = {
+        hasPermission,
+        roleIds: this.serializeRoleIdsForDb(roleIds),
+        expiresAt,
+        createdAt: new Date(),
+      };
+      const insert = this.db
         .insert(userPermissionCache)
-        .values({
-          id: cacheKey,
-          userId,
-          action,
-          resource,
-          hasPermission,
-          roleIds: this.serializeRoleIdsForDb(roleIds),
-          expiresAt,
-          createdAt: new Date(),
-        })
-        .onConflictDoUpdate({
+        .values({ id: cacheKey, userId, action, resource, ...replacement });
+      if (this.dialect === "mysql") {
+        await (
+          insert as unknown as {
+            onDuplicateKeyUpdate: (config: {
+              set: typeof replacement;
+            }) => Promise<unknown>;
+          }
+        ).onDuplicateKeyUpdate({ set: replacement });
+      } else {
+        await insert.onConflictDoUpdate({
           target: userPermissionCache.id,
-          set: {
-            hasPermission: sql`EXCLUDED.has_permission`,
-            roleIds: sql`EXCLUDED.role_ids`,
-            expiresAt: sql`EXCLUDED.expires_at`,
-            createdAt: sql`EXCLUDED.created_at`,
-          },
+          set: replacement,
         });
+      }
 
       if (process.env.DEBUG_CACHE === "1") {
         this.logger.info("[cache][dbg] setCachedPermission", {
@@ -343,7 +371,7 @@ export class PermissionCacheService extends BaseService {
     const { userPermissionCache } = this.tables;
     const result = await this.db
       .update(userPermissionCache)
-      .set({ expiresAt: new Date() });
+      .set({ expiresAt: retiredAt() });
     return affectedRowCount(result, this.dialect);
   }
 
@@ -359,7 +387,7 @@ export class PermissionCacheService extends BaseService {
     // Write-through invalidation: mark as expired (tombstone) instead of deleting
     const result = await this.db
       .update(userPermissionCache)
-      .set({ expiresAt: new Date() })
+      .set({ expiresAt: retiredAt() })
       .where(eq(userPermissionCache.userId, userId));
 
     const invalidatedCount = affectedRowCount(result, this.dialect);
@@ -432,7 +460,7 @@ export class PermissionCacheService extends BaseService {
 
       const result = await this.db
         .update(userPermissionCache)
-        .set({ expiresAt: new Date() })
+        .set({ expiresAt: retiredAt() })
         .where(containsRoleClause);
 
       const invalidatedCount = affectedRowCount(result, this.dialect);

@@ -141,7 +141,7 @@ function arrangedRows(
     // A placement whose declaration this admin cannot resolve is SKIPPED rather
     // than drawn as an empty cell: a plugin's client bundle can be absent, and
     // a titled card with nothing under it reads as a product bug. A removed
-    // card is not drawn either; the add picker lists it to put back.
+    // card is not drawn either; the add panel lists it to put back.
     if (!widget || placement.removed) continue;
     const allowed = factsFor(placement.widgetId)?.allowedWidths;
     rows.push({

@@ -20,6 +20,7 @@ import {
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   refuseRemovingLastSuperAdmin,
   type LastSuperAdminTx,
@@ -300,13 +301,17 @@ export class UserRoleService extends BaseService {
   }
 
   /**
-   * Evict what is cached from a user's roles: their permissions, and those of
-   * their read-only and full-access API keys, which resolve from the creator's
-   * role set.
+   * What follows a committed change to a user's roles. Evict what is cached
+   * from them: their permissions, and those of their read-only and
+   * full-access API keys, which resolve from the creator's role set. Then
+   * check the scheduled releases holding documents this user added, judged
+   * on the roles they now hold, so one whose author may no longer publish or
+   * unpublish a document stops now rather than at its instant.
    */
   async invalidateRoleCaches(userId: string): Promise<void> {
     await invalidatePermissionCache({ userId });
     await this.invalidateApiKeyCachesForUser(userId);
+    await stopReleasesHolding({ authors: [userId] });
   }
 
   /**
