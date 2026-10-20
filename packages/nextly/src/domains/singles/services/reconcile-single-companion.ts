@@ -121,7 +121,6 @@ export async function reconcileSingleCompanion(
       newFields,
       builtBy: "collection",
       companionExists,
-      renaming: args.renamed !== undefined,
     })),
   });
 

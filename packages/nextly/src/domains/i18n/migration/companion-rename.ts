@@ -10,13 +10,17 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { RenameCandidate } from "../../schema/pipeline/pushschema-pipeline-interfaces";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 
 import { ddlType } from "./ddl-types";
-import { storageDiffers } from "./field-leaves-translation-rules";
+import {
+  refusalsForTranslatedFieldRenameUnanswered,
+  storageDiffers,
+} from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike, FieldRename } from "./reconcile-companion";
 
@@ -29,28 +33,42 @@ export interface CompanionRenameResolution {
 }
 
 /**
- * The rename the dialog's answers make on `tableName`'s companion, by field name: the one this
- * server offers for the change (`offeredCompanionRename`), when an answer names exactly that
- * candidate as a rename. Undefined otherwise. An answer the server did not offer, stale or made
- * up, is dropped as the main table's are (`BrowserPromptDispatcher`): it could otherwise attach
- * one field's translations to another field, or rename onto a column that is already there.
+ * The schema dialog's decision on the companion rename this server offers for the change
+ * (`offeredCompanionRename`), taken before the change alters anything: the rename, by field name,
+ * when the one answer naming the offered pair chooses it; `null` when that answer chooses to drop
+ * the old field and add the new one; `undefined` when no rename is offered, whatever was sent,
+ * since an answer the server did not offer is dropped as the main table's are
+ * (`BrowserPromptDispatcher`).
+ *
+ * @throws NextlyError `VALIDATION_ERROR` when a rename is offered and no single answer names it
+ *   (`TRANSLATED_FIELD_RENAME_UNANSWERED`): reading that as a drop would delete every language's
+ *   value without the admin choosing it
  */
-export async function companionRenameFromResolutions(
+export async function resolveCompanionRename(
   resolutions: readonly CompanionRenameResolution[] | undefined,
   at: OfferedCompanionRenameArgs
-): Promise<FieldRename | undefined> {
-  const answers = (resolutions ?? []).filter(
-    r => r.tableName === `${at.tableName}_locales` && r.choice === "rename"
-  );
-  if (answers.length === 0) return undefined;
+): Promise<FieldRename | null | undefined> {
   const offered = await offeredCompanionRename(at);
   if (!offered) return undefined;
   const { candidate, rename } = offered;
-  const matches = answers.some(
+  const answers = (resolutions ?? []).filter(
     r =>
-      r.fromColumn === candidate.fromColumn && r.toColumn === candidate.toColumn
+      r.tableName === candidate.tableName &&
+      r.fromColumn === candidate.fromColumn &&
+      r.toColumn === candidate.toColumn
   );
-  return matches ? rename : undefined;
+  if (answers.length === 1) {
+    return answers[0].choice === "rename" ? rename : null;
+  }
+  throw NextlyError.validation({
+    errors: refusalsForTranslatedFieldRenameUnanswered({ renamed: rename.to }),
+    logContext: {
+      table: candidate.tableName,
+      from: candidate.fromColumn,
+      to: candidate.toColumn,
+      answers: answers.length,
+    },
+  });
 }
 
 /** What {@link offeredCompanionRename} decides from: the change, and the entity around it. */
@@ -97,7 +115,7 @@ export async function offeredCompanionRename(
  * The rename the schema dialog offers for a translated field, on its companion: the field the
  * main table's rule (`detectFieldRename`) finds renamed, when it was translated before the change
  * and the entity stays translated. Offered in the dialog's own rename shape, so the admin's answer comes back as a
- * resolution naming the companion (`companionRenameFromResolutions`). Undefined when the rename is
+ * resolution naming the companion (`resolveCompanionRename`). Undefined when the rename is
  * not a translated field's, so the main table's own candidate stands alone, or when the field's
  * storage changes too.
  */

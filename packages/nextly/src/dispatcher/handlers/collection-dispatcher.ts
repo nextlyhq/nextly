@@ -33,7 +33,7 @@ import {
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
-import { companionRenameFromResolutions } from "../../domains/i18n/migration/companion-rename";
+import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
@@ -859,11 +859,25 @@ const COLLECTIONS_METHODS: Record<
         },
       });
 
+      // The dialog's answer on a translated field's rename, refused when it does not say,
+      // before anything changes.
+      const companionRename = await resolveCompanionRename(renameResolutions, {
+        tableName,
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        dialect,
+        builtBy: "collection",
+      });
+
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await archiveFieldsLeavingTranslation({
         // This builder made the table, which decides the column bounds compared.
         builtBy: "collection",
+        // The rename the admin chose, or that none was, rather than one guessed from the fields.
+        renamed: companionRename ?? null,
         tableName,
         defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
         adapter,
@@ -908,18 +922,7 @@ const COLLECTIONS_METHODS: Record<
             companionExists && wasLocalized && isLocalized
               ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
               : undefined;
-          const renamed = await companionRenameFromResolutions(
-            renameResolutions,
-            {
-              tableName,
-              oldFields,
-              newFields,
-              wasLocalized,
-              isLocalized,
-              dialect,
-              builtBy: "collection",
-            }
-          );
+          const renamed = companionRename ?? undefined;
           const plan = buildCompanionTransitionStatements({
             // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
             builtBy: "collection" as const,
@@ -951,7 +954,6 @@ const COLLECTIONS_METHODS: Record<
               newFields,
               builtBy: "collection",
               companionExists,
-              renaming: renamed !== undefined,
             })),
           });
           // A disable archives non-default translations, so ensure the archive

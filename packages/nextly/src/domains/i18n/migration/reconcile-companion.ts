@@ -41,6 +41,12 @@ export interface ReconcileCompanionArgs {
   /** Collection slug (used for the companion spec / index names). */
   slug: string;
   /**
+   * Every column this database's companion has, when the caller read it. A field leaving
+   * translation whose column is no longer there was moved by an earlier apply that stopped before
+   * the registry recorded it, so there is nothing to copy or drop. Unknown when left out.
+   */
+  liveCompanionColumns?: readonly string[];
+  /**
    * Which kind of entity `slug` names, recorded with the archive rows this change writes. Needed
    * only with `sharedAfter`, the one case that archives here; refused without it there.
    */
@@ -356,11 +362,17 @@ function companionColumnDrops(
   const { dialect, builtBy } = args;
   const kept = new Set(args.newLocalized.map(f => f.name));
   const sharedAfter = new Set(args.sharedAfter ?? []);
+  const live =
+    args.liveCompanionColumns === undefined
+      ? undefined
+      : new Set(args.liveCompanionColumns);
   return args.oldLocalized
     .filter(f => !kept.has(f.name))
     .flatMap(f => {
       const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
       if (!col) return [];
+      // Already gone: an earlier apply dropped the column, or moved its values and dropped it.
+      if (live?.has(col.name) === false) return [];
       return [
         ...(sharedAfter.has(f.name)
           ? keepLeavingFieldValues(args, companionTable, f.name, col.name)
@@ -843,6 +855,8 @@ export function buildCompanionTransitionStatements(
           sharedAfterArchived: archiveFirst,
           joinedBefore: args.joinedBefore,
           presentOnCompanion: args.presentOnCompanion,
+          // As the companion will be once this change's own RENAME has run.
+          liveCompanionColumns: rename?.live ?? args.liveCompanionColumns,
         }),
       ],
       needsArchive: sharedAfter.length > 0,
@@ -859,9 +873,14 @@ export function buildCompanionTransitionStatements(
  * when there is no such rename, or when the field's storage changes too, which a rename cannot
  * carry since it keeps the type.
  */
-function companionColumnRename(
-  args: CompanionTransitionArgs
-): { statements: string[]; oldFields: CompanionFieldLike[] } | undefined {
+function companionColumnRename(args: CompanionTransitionArgs):
+  | {
+      statements: string[];
+      oldFields: CompanionFieldLike[];
+      /** The companion's live columns once the RENAME has run, when they are known. */
+      live?: string[];
+    }
+  | undefined {
   const { renamed, dialect, builtBy } = args;
   if (!renamed) return undefined;
   const from = args.oldFields.find(f => f.name === renamed.from);
@@ -872,28 +891,53 @@ function companionColumnRename(
   if (!fromColumn || !toColumn || storageDiffers(fromColumn, toColumn)) {
     return undefined;
   }
+  const statements = companionRenameStatements(
+    args,
+    fromColumn.name,
+    toColumn.name,
+    { leaves: !isFieldLocalized(to, args.isLocalized) }
+  );
   return {
-    statements: companionRenameStatements(args, fromColumn.name, toColumn.name),
+    statements,
     oldFields: args.oldFields.map(f =>
       f === from ? { ...f, name: to.name } : f
     ),
+    live: liveAfterRename(args.liveCompanionColumns, statements, {
+      from: fromColumn.name,
+      to: toColumn.name,
+    }),
   };
+}
+
+/** The companion's live columns once `statements`, a RENAME or nothing, have run. */
+function liveAfterRename(
+  live: readonly string[] | undefined,
+  statements: readonly string[],
+  columns: { from: string; to: string }
+): string[] | undefined {
+  if (live === undefined || statements.length === 0) return live?.slice();
+  return [...live.filter(c => c !== columns.from), columns.to];
 }
 
 /**
  * The companion's RENAME of `from` to `to`: none when the column keeps its name, and none when a
  * companion has the new column and not the old one, which an earlier apply renamed and then
- * stopped before the registry recorded it; renaming again would fail on the missing column. Both
- * present, or neither, is not that state, so the RENAME stays and fails loudly rather than leave
- * the translations in a column no field owns.
+ * stopped before the registry recorded it; renaming again would fail on the missing column. None
+ * either when the field leaves translation and neither column is left: an earlier apply finished
+ * moving its values and stopped before the registry recorded it. Any other state keeps the
+ * RENAME, which fails loudly rather than leave the translations in a column no field owns.
  */
 function companionRenameStatements(
   args: CompanionTransitionArgs,
   from: string,
-  to: string
+  to: string,
+  { leaves }: { leaves: boolean }
 ): string[] {
+  const known = args.liveCompanionColumns !== undefined;
   const live = new Set(args.liveCompanionColumns ?? []);
-  if (from === to || (live.has(to) && !live.has(from))) return [];
+  const renamedBefore = live.has(to) && !live.has(from);
+  const movedBefore = leaves && known && !live.has(to) && !live.has(from);
+  if (from === to || renamedBefore || movedBefore) return [];
   const { dialect } = args;
   return [
     `ALTER TABLE ${q(`${args.tableName}_locales`, dialect)} RENAME COLUMN ${q(from, dialect)} TO ${q(to, dialect)}`,

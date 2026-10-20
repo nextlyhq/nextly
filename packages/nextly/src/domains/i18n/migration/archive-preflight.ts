@@ -32,6 +32,7 @@ import {
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
   buildLeavingFieldsArchiveStatements,
+  type FieldRename,
   fieldsLeavingTranslation,
 } from "./reconcile-companion";
 import type { I18nTransitionKind } from "./transition-state";
@@ -115,19 +116,22 @@ export async function archiveFieldsLeavingTranslation(args: {
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
   isLocalized: boolean;
+  /**
+   * The rename the schema dialog's answer decided (`resolveCompanionRename`): a field renamed,
+   * or `null` when the admin chose to drop and add. Left out by a save with no dialog, which
+   * decides by the main table's rule (`detectFieldRename`) instead.
+   */
+  renamed?: FieldRename | null;
 }): Promise<void> {
   if (!args.wasLocalized) return;
   if (!args.isLocalized) {
     await refuseRenameAsTranslationEnds(args);
     return;
   }
-  const mayRenameTranslated = oneTranslatedFieldReplaced(args);
   // A translated field renamed in this change is judged under its new name, as the companion
   // transition will move it: renamed and made shared, it leaves translation, and its archive,
   // its refusals and its settings are asked for here, before the main table changes.
-  const rename = mayRenameTranslated
-    ? await translatedFieldRename(args, args.adapter.getCapabilities().dialect)
-    : undefined;
+  const rename = await renameInChange(args);
   const oldFields = rename
     ? args.oldFields.map(f =>
         f === rename.from ? { ...f, name: rename.to.name } : f
@@ -136,7 +140,7 @@ export async function archiveFieldsLeavingTranslation(args: {
   const leaving = new Set(fieldsLeavingTranslation(oldFields, args.newFields));
   const joining = fieldsJoiningTranslation(oldFields, args.newFields);
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
-  if (leaving.size === 0 && joining.length === 0 && !mayRenameTranslated) {
+  if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;
   }
   const dialect = args.adapter.getCapabilities().dialect;
@@ -169,6 +173,14 @@ export async function archiveFieldsLeavingTranslation(args: {
   }
   if (leaving.size === 0) return;
 
+  // Where a renamed field's values are now: in the column it had, until an earlier apply renamed
+  // it; and nowhere on the companion once an earlier apply finished moving them and stopped before
+  // the registry recorded it, so its archive rows are already written.
+  const source = await renamedSource(
+    args.adapter,
+    args.tableName,
+    renamedColumn(rename, args.builtBy, dialect)
+  );
   await writeArchiveFirst(
     args.adapter,
     args.entity,
@@ -179,15 +191,11 @@ export async function archiveFieldsLeavingTranslation(args: {
       dialect,
       builtBy: args.builtBy,
       defaultLocale: args.defaultLocale,
-      oldFields,
+      oldFields: source.moved
+        ? oldFields.filter(f => f.name !== rename?.to.name)
+        : oldFields,
       newFields: args.newFields,
-      // A renamed field's values are in the column it had, unless an earlier apply already
-      // renamed it: the rename runs after this.
-      renamedFrom: await renamedColumnAsItIs(
-        args.adapter,
-        args.tableName,
-        renamedColumn(rename, args.builtBy, dialect)
-      ),
+      renamedFrom: source.renamedFrom,
     })
   );
 }
@@ -217,22 +225,43 @@ async function refuseRenameAsTranslationEnds(
 }
 
 /**
- * The renamed column's source as this database has it: the old column while it is there, none
- * once an earlier apply renamed it and stopped before the registry recorded the change, so the
- * archive reads the values from the column they are in now.
+ * The renamed field's values as this database has them (`renamed` maps its new column to its old
+ * one): read from the old column while it is there; from the new one once an earlier apply renamed
+ * it; and `moved` when neither is left, because an earlier apply copied them out, archived them and
+ * dropped the column, then stopped before the registry recorded the change.
  */
-async function renamedColumnAsItIs(
+async function renamedSource(
   adapter: DrizzleAdapter,
   tableName: string,
   renamed: ReadonlyMap<string, string> | undefined
-): Promise<ReadonlyMap<string, string> | undefined> {
-  if (!renamed) return undefined;
+): Promise<{ renamedFrom?: ReadonlyMap<string, string>; moved: boolean }> {
+  if (!renamed) return { moved: false };
   const live = new Set(await companionColumnNames(adapter, tableName));
-  // Renamed already: the new column is there and the old one is gone.
-  const kept = [...renamed].filter(
-    ([to, from]) => !(live.has(to) && !live.has(from))
-  );
-  return kept.length > 0 ? new Map(kept) : undefined;
+  const [[to, from]] = [...renamed];
+  if (live.has(from)) return { renamedFrom: renamed, moved: false };
+  return { moved: !live.has(to) };
+}
+
+/**
+ * The rename in this change: the one the dialog's answer decided, when the caller has one, else
+ * the one the main table's rule finds for a translated field replaced by a new one.
+ */
+async function renameInChange(args: {
+  adapter: DrizzleAdapter;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+  renamed?: FieldRename | null;
+}): Promise<TranslatedFieldRename | undefined> {
+  const decided = args.renamed;
+  if (decided === null) return undefined;
+  if (decided !== undefined) {
+    const from = args.oldFields.find(f => f.name === decided.from);
+    const to = args.newFields.find(f => f.name === decided.to);
+    return from && to ? { from, to } : undefined;
+  }
+  return oneTranslatedFieldReplaced(args)
+    ? translatedFieldRename(args, args.adapter.getCapabilities().dialect)
+    : undefined;
 }
 
 /**

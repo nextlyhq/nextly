@@ -778,8 +778,10 @@ async function liveColumnsOf(
  *   alone.
  * - `presentOnCompanion`: the companion columns the new fields' translated fields already have. An
  *   apply that moved a value and stopped before the registry recorded it left its column in place.
- * - `liveCompanionColumns`: every companion column, when the change renames a field, so a rename
- *   an earlier apply already made is not made again.
+ * - `liveCompanionColumns`: every companion column, so a rename, a move or a drop an earlier apply
+ *   already made is not made again.
+ *
+ * The companion's columns are read once and serve the last two.
  */
 export async function liveCompanionShape(
   adapter: CompanionIntrospectAdapter,
@@ -789,7 +791,6 @@ export async function liveCompanionShape(
     newFields: readonly CompanionFieldLike[];
     builtBy: ColumnOrigin;
     companionExists: boolean;
-    renaming: boolean;
   }
 ): Promise<{
   existingMainColumns: string[];
@@ -797,21 +798,22 @@ export async function liveCompanionShape(
   liveCompanionColumns?: string[];
 }> {
   const { tableName, companionExists } = args;
+  const live = companionExists
+    ? await companionColumnNames(adapter, tableName)
+    : undefined;
   return {
     existingMainColumns: (
       await localizedColumnsOnMain(adapter, tableName, args.oldFields)
     ).map(c => c.name),
-    presentOnCompanion: companionExists
-      ? await translatedColumnsOnCompanion(adapter, {
-          tableName,
-          fields: args.newFields,
-          builtBy: args.builtBy,
-        })
-      : undefined,
-    liveCompanionColumns:
-      companionExists && args.renaming
-        ? await companionColumnNames(adapter, tableName)
-        : undefined,
+    presentOnCompanion:
+      live === undefined
+        ? undefined
+        : await translatedColumnsOnCompanion(
+            adapter,
+            { tableName, fields: args.newFields, builtBy: args.builtBy },
+            live
+          ),
+    liveCompanionColumns: live,
   };
 }
 
@@ -827,9 +829,13 @@ export async function translatedColumnsOnCompanion(
     tableName: string;
     fields: readonly CompanionFieldLike[];
     builtBy: ColumnOrigin;
-  }
+  },
+  /** The companion's columns, when the caller already read them. */
+  columns?: readonly string[]
 ): Promise<string[]> {
-  const present = new Set(await companionColumnNames(adapter, args.tableName));
+  const present = new Set(
+    columns ?? (await companionColumnNames(adapter, args.tableName))
+  );
   const { fieldToLocalizedColumnSpec } = await import(
     "../migration/field-to-column-spec"
   );

@@ -769,6 +769,18 @@ describeEachDialect("a translated field that is renamed", dialect => {
       },
     },
     {
+      path: "a Single's schema is saved",
+      table: "single_hero",
+      seed: seedSingle,
+      change: async () => {
+        await dispatchSingles(
+          "updateSingleSchema",
+          { slug: "hero" },
+          { localized: false, fields: renamedShared() }
+        );
+      },
+    },
+    {
       path: "a Single's schema dialog applies it",
       table: "single_hero",
       seed: seedSingle,
@@ -883,4 +895,297 @@ describeEachDialect("a translated field that is renamed", dialect => {
       expect(String(archived?.value)).toContain("Hola");
     }
   );
+
+  // An apply that finished moving a renamed field's values (copied to main, archived, column
+  // dropped) and stopped before the registry recorded it leaves a companion with neither column.
+  // Saving again finishes the change rather than reading or renaming a column that is gone. The
+  // schema dialogs only: the settings saves apply the change and its record whole or not at all.
+  it.each([
+    {
+      path: "a field group's schema dialog applies it",
+      table: "comp_banner",
+      seed: seedFieldGroup,
+      change: async () => {
+        await dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields: renamedShared(),
+            confirmed: true,
+            localized: true,
+            renameResolutions: renamedOnCompanion("comp_banner"),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
+          }
+        );
+      },
+    },
+    {
+      path: "the collection's schema dialog applies it",
+      table: "dc_posts",
+      seed: seedCollection,
+      change: async () => {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields: renamedShared(),
+            confirmed: true,
+            localized: true,
+            renameResolutions: renamedOnCompanion("dc_posts"),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "posts"
+            ),
+          }
+        );
+      },
+    },
+  ])(
+    "finishes a rename to shared an earlier apply completed before the registry recorded it, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+      // The state the earlier apply left: the value on main, the companion column gone.
+      await query(
+        `ALTER TABLE ${quote(dialect, table)} ADD COLUMN ${quote(dialect, "title2")} ${dialect === "mysql" ? "VARCHAR(255)" : "TEXT"}`
+      );
+      await query(
+        `UPDATE ${quote(dialect, table)} SET ${quote(dialect, "title2")} = 'Hello' WHERE ${quote(dialect, "id")} = '${id}'`
+      );
+      await query(
+        `ALTER TABLE ${quote(dialect, `${table}_locales`)} DROP COLUMN ${quote(dialect, "heading")}`
+      );
+
+      await change();
+
+      expect(await mainValue(table, "title2", id)).toBe("Hello");
+      const companion = await columnsOf(`${table}_locales`);
+      expect(companion).not.toContain("title2");
+      expect(companion).not.toContain("heading");
+    }
+  );
+
+  type Answer = "rename" | "drop_and_add" | "missing" | "mismatched";
+
+  /** What the schema dialog sends for `heading` becoming `title2` on `table`'s companion. */
+  function answered(table: string, answer: Answer) {
+    const [offered] = renamedOnCompanion(table);
+    if (answer === "missing") return [];
+    if (answer === "drop_and_add")
+      return [{ ...offered, choice: "drop_and_add" as const }];
+    if (answer === "mismatched") return [{ ...offered, toColumn: "title3" }];
+    return [offered];
+  }
+
+  /** Each way a translated field's rename is saved, with the dialog's answer where it has one. */
+  const SAVES: {
+    path: string;
+    table: string;
+    seed: () => Promise<string>;
+    answers: (Answer | "none")[];
+    save: (fields: unknown[], answer: Answer | "none") => Promise<unknown>;
+  }[] = [
+    {
+      path: "the collection's settings",
+      table: "dc_posts",
+      seed: seedCollection,
+      answers: ["none"],
+      save: async fields => {
+        const saved = await handler().updateCollection(
+          { collectionName: "posts" },
+          { fields }
+        );
+        if (!saved.success) throw new Error(JSON.stringify(saved));
+      },
+    },
+    {
+      path: "the collection's schema dialog",
+      table: "dc_posts",
+      seed: seedCollection,
+      answers: ["rename", "drop_and_add", "missing", "mismatched"],
+      save: async (fields, answer) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: answered("dc_posts", answer as Answer),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "posts"
+            ),
+          }
+        ),
+    },
+    {
+      path: "a Single's settings",
+      table: "single_hero",
+      seed: seedSingle,
+      answers: ["none"],
+      save: async fields =>
+        dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+    },
+    {
+      path: "a Single's schema dialog",
+      table: "single_hero",
+      seed: seedSingle,
+      answers: ["rename", "drop_and_add", "missing", "mismatched"],
+      save: async (fields, answer) =>
+        dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "hero" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: answered("single_hero", answer as Answer),
+            schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
+          }
+        ),
+    },
+    {
+      path: "a field group's schema dialog",
+      table: "comp_banner",
+      seed: seedFieldGroup,
+      answers: ["rename", "drop_and_add", "missing", "mismatched"],
+      save: async (fields, answer) =>
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: answered("comp_banner", answer as Answer),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
+          }
+        ),
+    },
+  ];
+
+  const MATRIX = SAVES.flatMap(save =>
+    save.answers.flatMap(answer =>
+      (["fresh", "part-applied"] as const).flatMap(state =>
+        (["stays translated", "made shared"] as const).map(target => ({
+          ...save,
+          answer,
+          state,
+          target,
+        }))
+      )
+    )
+  );
+
+  // Every way a translated field's rename is saved, crossed with each answer the schema dialog can
+  // send, a fresh database or one an earlier apply left renamed, and the field staying translated or
+  // becoming shared. Either the change is refused, naming the field in words an admin can act on,
+  // with every language where it was; or every language survives under the new name. Only an
+  // explicit choice to drop the old field and add the new one may delete them, and an answer that
+  // is missing or names another pair is refused.
+  it.each(MATRIX)(
+    "keeps every language or refuses, when $path is saved with answer $answer, $state, $target",
+    async ({ table, seed, save, answer, state, target }) => {
+      const id = await seed();
+      if (state === "part-applied") {
+        await query(
+          `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "heading")} TO ${quote(dialect, "title2")}`
+        );
+      }
+
+      const refusal = await save(
+        target === "stays translated" ? RENAMED : renamedShared(),
+        answer
+      ).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      if (answer === "missing" || answer === "mismatched") {
+        expect(refusal, "an unanswered rename is refused").toBeDefined();
+      }
+      if (refusal !== undefined) {
+        await expectRefusedInPlace(refusal, table, id, state);
+      } else if (answer !== "drop_and_add") {
+        await expectKeptUnderNewName(table, id, target);
+      }
+    }
+  );
+
+  /**
+   * A refusal an admin can act on, naming the field and the save that works, with every language
+   * where it was: under the old name, or the new one an earlier apply gave it.
+   */
+  async function expectRefusedInPlace(
+    refusal: unknown,
+    table: string,
+    id: string,
+    state: "fresh" | "part-applied"
+  ): Promise<void> {
+    const text = reported(refusal);
+    expect(text).toMatch(/fields\.(title2|heading)/);
+    expect(text).toMatch(/save/i);
+    const column = state === "fresh" ? "heading" : "title2";
+    expect(await companionValues(table, column, id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  }
+
+  /**
+   * Every language under the new name: still translated, on the companion; made shared, English on
+   * main and Spanish archived under the new name.
+   */
+  async function expectKeptUnderNewName(
+    table: string,
+    id: string,
+    target: "stays translated" | "made shared"
+  ): Promise<void> {
+    if (target === "stays translated") {
+      expect(await companionValues(table, "title2", id)).toEqual({
+        en: "Hello",
+        es: "Hola",
+      });
+      return;
+    }
+    expect(await mainValue(table, "title2", id)).toBe("Hello");
+    const [archived] = await query<{ value: unknown }>(
+      `SELECT ${quote(dialect, "value")} AS value FROM ${quote(dialect, "nextly_i18n_archive")} ` +
+        `WHERE ${quote(dialect, "field")} = 'title2' AND ${quote(dialect, "locale")} = 'es'`
+    );
+    expect(String(archived?.value)).toContain("Hola");
+  }
+
+  // The admin chose to drop the old field and add the new one: nothing of the old field's other
+  // languages is archived under the new name, where a later restore would attach them to a field
+  // that was added, not renamed.
+  it("archives nothing under the new name when the dialog's answer is to drop and add", async () => {
+    await seedCollection();
+
+    await dispatchCollections(
+      {} as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: renamedShared(),
+        confirmed: true,
+        localized: true,
+        renameResolutions: answered("dc_posts", "drop_and_add"),
+        schemaVersion: await schemaVersionOf("dynamic_collections", "posts"),
+      }
+    );
+
+    const rows = await query<{ n: number | string }>(
+      `SELECT COUNT(*) AS n FROM ${quote(dialect, "nextly_i18n_archive")} WHERE ${quote(dialect, "field")} = 'title2'`
+    ).catch(() => [{ n: 0 }]);
+    expect(Number(rows[0]?.n ?? 0)).toBe(0);
+  });
 });

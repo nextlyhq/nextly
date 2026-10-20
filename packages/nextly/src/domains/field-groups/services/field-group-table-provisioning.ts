@@ -198,7 +198,6 @@ export async function reconcileComponentCompanion(args: {
       newFields,
       builtBy: "fieldGroup",
       companionExists,
-      renaming: args.renamed !== undefined,
     })),
   });
 

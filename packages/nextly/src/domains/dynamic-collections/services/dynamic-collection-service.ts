@@ -1160,12 +1160,11 @@ export class DynamicCollectionService extends BaseService {
         args,
         localizedOldNames
       ),
-      // The companion as this database has it, so a rename an earlier run already made is not
-      // made again; the file still renames, since it is planned from history alone.
-      liveCompanionColumns:
-        args.renamed && companionExists
-          ? await companionColumnNames(this.adapter, args.tableName)
-          : undefined,
+      // The companion as this database has it, so a rename, a move or a drop an earlier run
+      // already made is not made again; the file is planned from history alone.
+      liveCompanionColumns: companionExists
+        ? await companionColumnNames(this.adapter, args.tableName)
+        : undefined,
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
