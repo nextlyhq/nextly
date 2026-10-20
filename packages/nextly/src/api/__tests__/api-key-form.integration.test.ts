@@ -49,8 +49,22 @@ interface Direct {
     create(a: { data: Record<string, unknown> }): Promise<{
       item: { id: string };
     }>;
+    setPermissions(a: {
+      roleId: string;
+      permissionIds: string[];
+    }): Promise<unknown>;
   };
 }
+
+/** A refusal as the error envelope carries it. */
+interface Refusal {
+  status: number;
+  code: string;
+  message: string;
+}
+
+/** The sentence every refusal for want of permission reads, whatever its code. */
+const CANONICAL_FORBIDDEN = "You don't have permission to perform this action.";
 
 interface Grant {
   slug: string;
@@ -128,6 +142,32 @@ describe.each(getConfiguredTestDialects())(
         }),
         { params: Promise.resolve({ params: path }) }
       );
+    }
+
+    function post(
+      path: string[],
+      headers: Record<string, string>,
+      body: unknown
+    ) {
+      return createDynamicHandlers().POST(
+        new Request(`http://localhost/api/${path.join("/")}`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        { params: Promise.resolve({ params: path }) }
+      );
+    }
+
+    async function refusal(res: Response): Promise<Refusal> {
+      const body = (await res.json()) as {
+        error: { code: string; message: string };
+      };
+      return {
+        status: res.status,
+        code: body.error.code,
+        message: body.error.message,
+      };
     }
 
     /** The summary the form asks for, as sorted slugs. */
@@ -262,17 +302,36 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
-      it("refuses a role above its creator, as creating the key would", async () => {
+      it("refuses a role above its creator with a code of its own, as creating the key would", async () => {
         const headers = await session(editorId, [editorRoleId]);
+        // The code says which refusal this is, so the form can tell it from
+        // a person who may not create keys at all; the sentence stays the one
+        // every refusal for want of permission reads, naming no permission.
+        const aboveCreator: Refusal = {
+          status: 403,
+          code: "API_KEY_ROLE_ABOVE_CREATOR",
+          message: CANONICAL_FORBIDDEN,
+        };
 
         expect(
-          (
-            await abilities(
+          await refusal(
+            await get(
+              ["api-keys", "abilities"],
               headers,
               `?tokenType=role-based&roleId=${widerRoleId}`
             )
-          ).status
-        ).toBe(403);
+          )
+        ).toEqual(aboveCreator);
+        expect(
+          await refusal(
+            await post(["api-keys"], headers, {
+              name: "too wide",
+              tokenType: "role-based",
+              roleId: widerRoleId,
+              expiresIn: "unlimited",
+            })
+          )
+        ).toEqual(aboveCreator);
         await expect(
           keys.createApiKey(editorId, {
             name: "too wide",
@@ -280,7 +339,57 @@ describe.each(getConfiguredTestDialects())(
             roleId: widerRoleId,
             expiresIn: "unlimited",
           })
-        ).rejects.toMatchObject({ statusCode: 403 });
+        ).rejects.toMatchObject({
+          statusCode: 403,
+          code: "API_KEY_ROLE_ABOVE_CREATOR",
+        });
+      });
+
+      it("refuses a person who loses the permission to create keys while the form is open, as plainly FORBIDDEN", async () => {
+        const makersRoleId = await role("key-makers", [
+          `read-${POSTS}`,
+          "create-api-keys",
+        ]);
+        const makerId = await account("maker@example.com", [makersRoleId]);
+        const headers = await session(makerId, [makersRoleId]);
+        expect((await abilities(headers, "?tokenType=read-only")).status).toBe(
+          200
+        );
+
+        // Taken away while the form is open: the same session asks again.
+        const seeded = await direct.permissions.find({ limit: 1000 });
+        await direct.roles.setPermissions({
+          roleId: makersRoleId,
+          permissionIds: seeded.items
+            .filter(p => p.slug === `read-${POSTS}`)
+            .map(p => p.id),
+        });
+
+        const lost: Refusal = {
+          status: 403,
+          code: "FORBIDDEN",
+          message: CANONICAL_FORBIDDEN,
+        };
+        expect(
+          await refusal(
+            await get(
+              ["api-keys", "abilities"],
+              headers,
+              "?tokenType=read-only"
+            )
+          )
+        ).toEqual(lost);
+        // Asked about a role above them too, they are told they may not
+        // create keys: that is checked first, so the ceiling never answers.
+        expect(
+          await refusal(
+            await get(
+              ["api-keys", "abilities"],
+              headers,
+              `?tokenType=role-based&roleId=${widerRoleId}`
+            )
+          )
+        ).toEqual(lost);
       });
 
       it("refuses a role-based summary without a role, and a role for another type", async () => {

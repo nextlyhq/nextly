@@ -42,6 +42,7 @@ import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { accountIsActive } from "../../../auth/session/session-standing";
 import { toDbError } from "../../../database/errors";
+import { genericPublicMessage } from "../../../errors/error-codes";
 import { NextlyError } from "../../../errors/nextly-error";
 import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
 import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
@@ -467,7 +468,7 @@ export class ApiKeyService extends BaseService {
    * @returns Object containing the key metadata and the raw key string
    *
    * @throws NextlyError(VALIDATION_ERROR) if roleId is missing/extraneous for the token type
-   * @throws NextlyError(FORBIDDEN) if the role's permissions exceed the creator's
+   * @throws NextlyError(API_KEY_ROLE_ABOVE_CREATOR) if the role's permissions exceed the creator's
    * @throws NextlyError via fromDatabaseError on DB constraint violations
    */
   async createApiKey(
@@ -1382,10 +1383,14 @@ export class ApiKeyService extends BaseService {
       const slug = `${row.resource}:${row.action}`;
       if (!creatorPerms.has(slug)) {
         // §13.8: forbidden messages must not reveal *which* permission was
-        // missing — that would leak the policy. Generic "You don't have
-        // permission..." comes from the factory; the offending slug and
-        // creator/role context move to logContext for operators.
-        throw NextlyError.forbidden({
+        // missing — that would leak the policy. The sentence is FORBIDDEN's
+        // own; the offending slug and creator/role context move to
+        // logContext for operators. The code is this refusal's own, so the
+        // key form can tell "choose a smaller role" from "you may not create
+        // keys", which is plain FORBIDDEN.
+        throw new NextlyError({
+          code: "API_KEY_ROLE_ABOVE_CREATOR",
+          publicMessage: genericPublicMessage("FORBIDDEN"),
           logContext: {
             reason: "permission-ceiling-exceeded",
             exceededPermission: slug,

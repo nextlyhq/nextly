@@ -166,6 +166,7 @@ For rate-limited responses (`code: "RATE_LIMITED"`, status 429) the runtime also
 | `401` | `AUTH_REQUIRED`, `AUTH_INVALID_CREDENTIALS` | Missing or bad credentials. |
 | `403` | `FORBIDDEN` | Authenticated but lacks permission. |
 | `403` | `EMAIL_NOT_VERIFIED` | Login with the correct password for an address not yet verified. |
+| `403` | `API_KEY_ROLE_ABOVE_CREATOR` | Creating an API key (or its summary) with a role that allows more than you can. |
 | `404` | `NOT_FOUND` | Resource does not exist. |
 | `409` | `CONFLICT`, `DUPLICATE` | Concurrent edit, duplicate email, etc. |
 | `413` | `PAYLOAD_TOO_LARGE` | Upload bigger than configured cap. |
