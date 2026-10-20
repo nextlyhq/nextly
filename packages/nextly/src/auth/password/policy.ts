@@ -1,18 +1,53 @@
 /**
  * Staff password policy and digester reach contract.
  *
- * Implements requirement R-5 of the staff-only access spec:
- * - Length: at least 8 characters (code points) by default, which can be raised to 15.
+ * - Length: at least 8 characters (code points) by default, which can be
+ *   raised to 15 (never lower — the configured minimum is checked at boot).
  * - Upper bound: at most 128 characters (resource safety).
- * - Common passwords: checks against the 3,000 common passwords list (NFC-normalized, case-insensitive).
- * - No character class requirements (lowercase, uppercase, digit, symbol are NOT required).
- * - Digester reach: default bcrypt digester has a 72-byte limit (UTF-8 byte length). Passwords past reach are refused.
- * - Custom digesters must declare their reach contract (reach or validate) or the system refuses to start.
+ * - Common passwords: checked against the 3,000 common passwords list
+ *   (NFC-normalized, case-insensitive).
+ * - No character class requirements (lowercase, uppercase, digit, symbol are
+ *   NOT required).
+ * - Digester reach: the default bcrypt digester has a 72-byte limit (UTF-8
+ *   byte length); passwords past reach are refused rather than truncated.
+ * - Custom digesters must declare their reach contract (`reach` or
+ *   `validate`) or the system refuses to start.
+ *
+ * This module is a LEAF: it imports nothing that reaches the server graph,
+ * because the admin client's password mirror and its parity test read files
+ * from here, and their type program must not drag the server in.
  */
 
-import type { PasswordHasher } from "../../domains/users/services/user-service";
 import { NextlyError } from "../../errors/nextly-error";
 import { COMMON_PASSWORDS } from "../../plugins/security/common-passwords";
+
+/**
+ * Password hasher interface for authentication.
+ *
+ * When an app supplies its own digester, it must declare its reach contract:
+ * either a finite byte count (`reach: number`), `"unbounded"`
+ * (`reach: "unbounded"`), or custom validation (`validate`).
+ */
+export interface PasswordHasher {
+  hash(password: string): Promise<string>;
+  verify(password: string, hash: string): Promise<boolean>;
+  /**
+   * Reach contract: what the digester reads whole.
+   * - A finite byte count (e.g. 72, 100): refuses passwords exceeding this
+   *   byte count in UTF-8.
+   * - "unbounded": the digester has no byte-length truncation limit (the 128
+   *   character resource cap applies).
+   */
+  reach?: number | "unbounded";
+  /**
+   * Optional custom validation function for this digester.
+   */
+  validate?: (
+    password: string
+  ) => boolean | void | string | { ok: boolean; message?: string };
+  /** Optional name for the digester in error messages. */
+  name?: string;
+}
 
 export const DEFAULT_MIN_PASSWORD_LENGTH = 8;
 /** The highest minimum an app may configure (NIST SP 800-63B-4: raise 8 to 15). */
@@ -212,8 +247,6 @@ export interface PasswordPolicyOptions {
   minLength?: number;
   hasher?: DigesterReach;
 }
-
-export type { PasswordHasher };
 
 /**
  * Checks all password policy rules against a password:

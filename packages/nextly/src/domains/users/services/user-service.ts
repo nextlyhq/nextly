@@ -45,6 +45,7 @@
 import {
   assertPasswordHasherContract,
   validatePasswordStrength,
+  type PasswordHasher,
 } from "../../../auth/password";
 import { actorForWrite } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
@@ -134,31 +135,11 @@ export interface ListUsersQueryOptions {
 }
 
 /**
- * Password hasher interface for authentication.
- *
- * Implements requirement R-5 of staff-only-access:
- * When an app supplies its own digester, it must declare its reach contract:
- * either a finite byte count (`reach: number`), `"unbounded"` (`reach: "unbounded"`),
- * or custom validation (`validate: (password: string) => ...`).
+ * The digester contract lives in the policy module — the leaf the password
+ * checks read — and is re-exported here for the import paths this service's
+ * consumers already hold.
  */
-export interface PasswordHasher {
-  hash(password: string): Promise<string>;
-  verify(password: string, hash: string): Promise<boolean>;
-  /**
-   * Reach contract: what the digester reads whole.
-   * - A finite byte count (e.g. 72, 100): refuses passwords exceeding this byte count in UTF-8.
-   * - "unbounded": the digester has no byte-length truncation limit (the 128 character resource cap applies).
-   */
-  reach?: number | "unbounded";
-  /**
-   * Optional custom validation function for this digester.
-   */
-  validate?: (
-    password: string
-  ) => boolean | void | string | { ok: boolean; message?: string };
-  /** Optional name for the digester in error messages. */
-  name?: string;
-}
+export type { PasswordHasher } from "../../../auth/password/policy";
 
 // ============================================================
 // UserService
