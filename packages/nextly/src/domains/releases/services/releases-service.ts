@@ -77,6 +77,7 @@ import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import {
+  releaseCheckSources,
   type ReleaseCheckReads,
   type ReleaseCheckSource,
 } from "../readiness/check-sources";
@@ -89,6 +90,13 @@ import {
   type ReadinessFinding,
   type ReleaseReadiness,
 } from "../readiness/evaluate-readiness";
+import {
+  linkTargetOf,
+  narrowLinkFindings,
+  UNPUBLISHED_LINKS_SOURCE_KEY,
+  unpublishedLinksReport,
+  type UnpublishedLinksReport,
+} from "../readiness/unpublished-links";
 import type { ReleaseActivityEntry } from "../release-activity";
 import {
   RELEASE_CALENDAR_RELEASES_PER_DAY,
@@ -274,6 +282,43 @@ export interface ReleasesServiceDeps {
    * wants.
    */
   recordActivity?: (entry: ReleaseActivityEntry) => Promise<void>;
+  /**
+   * Which of these documents the actor may read, answered as their `id`s.
+   *
+   * The same visibility question a release's members are put through for a
+   * reader, asked here of the documents a member LINKS to, so a link finding
+   * never names a target its reader could not open. Wired to the one
+   * implementation of it (`services/lib/document-visibility`), batched and
+   * failing closed: a document whose readability cannot be decided counts as
+   * unreadable. Optional: a service built without it tells an untrusted
+   * reader about no linked document at all, only how many there are.
+   *
+   * @experimental
+   */
+  readableDocuments?: (
+    documents: readonly (DocumentRef & { id: string })[],
+    actor: ReleaseActor
+  ) => Promise<ReadonlySet<string>>;
+}
+
+/**
+ * A member as an add answers it: the stored member, and the documents it
+ * links to that will not be live at its release's moment, so a client can
+ * offer to add them too.
+ *
+ * @experimental
+ */
+export type AddedReleaseMember = ReleaseMemberRow & {
+  /** @experimental */
+  unpublishedLinks: UnpublishedLinksReport;
+};
+
+/**
+ * The report for a member with nothing to report: a new one each time, since
+ * it is handed to the caller, who may change it.
+ */
+function noUnpublishedLinks(): UnpublishedLinksReport {
+  return { links: [], hiddenCount: 0 };
 }
 
 /**
@@ -1734,6 +1779,8 @@ export class ReleasesService {
       members,
       registeredReleaseCheckSources()
     );
+    // A linked document the reader may not read is counted, not named.
+    [found.soft] = await this.narrowLinksFor([found.soft], actor);
     return { releaseId: release.id, ...found };
   }
 
@@ -1828,9 +1875,76 @@ export class ReleasesService {
         membersByRelease.get(id) ?? [],
         registeredReleaseCheckSources()
       );
+      // As the single read narrows it.
+      [found.soft] = await this.narrowLinksFor([found.soft], actor);
       entries.push({ releaseId: id, ...found, checked: true });
     }
     return entries;
+  }
+
+  /**
+   * Each of these lists of soft findings as `actor` may be told them: a link
+   * whose target the actor may not read is counted, not named
+   * ({@link narrowLinkFindings}). One readability question for every list,
+   * and none for a trusted actor, who may read everything.
+   */
+  private async narrowLinksFor(
+    lists: readonly ReadinessFinding[][],
+    actor: ReleaseActor
+  ): Promise<ReadinessFinding[][]> {
+    if (actor.overrideAccess === true) return [...lists];
+    // Each linked document asked about once, its document key as its id.
+    const refs = new Map<string, DocumentRef & { id: string }>();
+    for (const finding of lists.flat()) {
+      const target = linkTargetOf(finding);
+      if (target === null) continue;
+      const ref: DocumentRef = {
+        scopeKind: "collection",
+        scopeSlug: target.collection,
+        entryId: target.entryId,
+        locale: null,
+      };
+      refs.set(documentRefKey(ref), { ...ref, id: documentRefKey(ref) });
+    }
+    if (refs.size === 0) return [...lists];
+    const readable =
+      this.deps.readableDocuments === undefined
+        ? new Set<string>()
+        : await this.deps.readableDocuments([...refs.values()], actor);
+    return lists.map(findings =>
+      narrowLinkFindings(findings, target =>
+        readable.has(
+          documentRefKey({
+            scopeKind: "collection",
+            scopeSlug: target.collection,
+            entryId: target.entryId,
+            locale: null,
+          })
+        )
+      )
+    );
+  }
+
+  /**
+   * The documents `member` links to that will not be live at `release`'s
+   * moment, as `actor` may be told them: the link check's findings for that
+   * one member, narrowed as a readiness read narrows them. Nothing for a
+   * document coming down, or where the check is not registered.
+   */
+  private async unpublishedLinksOf(
+    release: ReleaseRow,
+    member: ReleaseMemberRow,
+    actor: ReleaseActor
+  ): Promise<UnpublishedLinksReport> {
+    const sources = releaseCheckSources().filter(
+      source => source.key === UNPUBLISHED_LINKS_SOURCE_KEY
+    );
+    if (sources.length === 0 || member.action !== "publish") {
+      return noUnpublishedLinks();
+    }
+    const { soft } = await this.checkMembers(release, [member], sources);
+    const [narrowed] = await this.narrowLinksFor([soft], actor);
+    return unpublishedLinksReport(narrowed);
   }
 
   /**
@@ -1933,12 +2047,19 @@ export class ReleasesService {
    * Two authorities, for the reason in the module docblock: `create` to assemble
    * the release, and the document's own `publish`/`unpublish` so that scheduling
    * cannot become a way to perform a write the caller could not perform now.
+   *
+   * Answers the stored member with `unpublishedLinks`: for a document going
+   * live, what it links to that will not be live at the release's moment,
+   * naming only documents the caller may read and counting the rest. Empty
+   * for a document coming down.
+   *
+   * @experimental The `unpublishedLinks` field.
    */
   async addMember(
     releaseId: string,
     input: AddMemberInput,
     actor: ReleaseActor
-  ): Promise<ReleaseMemberRow> {
+  ): Promise<AddedReleaseMember> {
     await this.authorize(actor, "create");
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
     requireRunnableMember(input, actor);
@@ -1993,12 +2114,7 @@ export class ReleasesService {
       actor
     );
     await this.requireLiveAuthor(actor.userId);
-    // A document joining a release already committed to an instant is checked
-    // first, as scheduling checked the rest: otherwise one with a hard problem
-    // joins and stops the release at its instant. Refused, the release stays
-    // scheduled as it was. A release judged still assembling is not checked
-    // here, and the fence below keeps this add off one scheduled since.
-    await this.assertCommittedChangeReady(release, {
+    const unwritten: ReleaseMemberRow = {
       id: UNWRITTEN_MEMBER_ID,
       releaseId,
       scopeKind: input.scopeKind,
@@ -2010,7 +2126,21 @@ export class ReleasesService {
       singleSlot: null,
       createdBy: actor.userId,
       createdAt: new Date(),
-    });
+    };
+    // A document joining a release already committed to an instant is checked
+    // first, as scheduling checked the rest: otherwise one with a hard problem
+    // joins and stops the release at its instant. Refused, the release stays
+    // scheduled as it was. A release judged still assembling is not checked
+    // here, and the fence below keeps this add off one scheduled since.
+    await this.assertCommittedChangeReady(release, unwritten);
+    // What the document links to that will not be live at the moment, so the
+    // answer can offer those too. Worked out before the write, so a read that
+    // fails refuses the add with nothing written rather than failing an add
+    // that has already landed.
+    const unpublishedLinks =
+      release === undefined
+        ? noUnpublishedLinks()
+        : await this.unpublishedLinksOf(release, unwritten, actor);
 
     try {
       // FENCED on the judgement: the member and a bump of the release's
@@ -2019,7 +2149,7 @@ export class ReleasesService {
       // write makes it refuse rather than add to a committed launch without
       // the publish gate, and a schedule judged before it misses on the
       // revision instead. Refused as a CONFLICT, with nothing written.
-      return await this.deps.repository.addMember(
+      const added = await this.deps.repository.addMember(
         {
           ...input,
           entryId,
@@ -2035,6 +2165,7 @@ export class ReleasesService {
         // holds, and adds racing for the last place are judged one by one.
         held => memberLimitRefusal(releaseId, held)
       );
+      return { ...added, unpublishedLinks };
     } catch (error) {
       // The `memberKey` unique index is what stops one document being scheduled
       // twice in one release; its refusal rolls the revision bump back with

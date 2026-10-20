@@ -19,9 +19,12 @@ import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
 import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import { releaseLinkReads } from "../../domains/collections/release-links";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
+import { registerReleaseCheckSource } from "../../domains/releases/readiness/check-sources";
 import { registerCoreReleaseCheckSources } from "../../domains/releases/readiness/core-sources";
+import { unpublishedLinksSource } from "../../domains/releases/readiness/unpublished-links";
 import { recordReleaseActivity } from "../../domains/releases/release-activity";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
@@ -32,6 +35,10 @@ import {
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
+import {
+  resolveDocumentVisibilityScope,
+  visibleDocuments,
+} from "../../services/lib/document-visibility";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
@@ -48,6 +55,19 @@ export function registerReleaseServices({
   // Core's checks, which every release's readiness, scheduling and Publish now
   // ask. Registered with the feature, so a boot that has releases has them.
   registerCoreReleaseCheckSources();
+  // The note that a document going live links to documents that will not be
+  // live then. Soft, so scheduling, Publish now and the drain never ask it;
+  // registered here because its reads are the content's, which this wiring
+  // holds.
+  const linkMembers = new ReleasesRepository(adapter);
+  registerReleaseCheckSource(
+    unpublishedLinksSource({
+      reads: releaseLinkReads(adapter, slug =>
+        singleRowExists(adapter, slug, logger)
+      ),
+      membersOf: releaseId => linkMembers.listMembers(releaseId),
+    })
+  );
 
   container.registerSingleton<ReleasesService>(
     "releasesService",
@@ -167,6 +187,34 @@ export function registerReleaseServices({
         // seam, which resolves the log from the container per call, so this
         // depends on no registration order.
         recordActivity: recordReleaseActivity,
+
+        // Which linked documents a reader may be told about: the one
+        // visibility question every content-keyed surface asks, batched and
+        // failing closed. A caller with nobody to read as may read none.
+        readableDocuments: async (refs, actor) => {
+          if (actor.userId === null) return new Set<string>();
+          const scope = await resolveDocumentVisibilityScope();
+          const readable = await visibleDocuments(
+            refs,
+            ref => ({
+              kind: ref.scopeKind === "single" ? "single" : "collection",
+              slug: ref.scopeSlug,
+              entryId: ref.entryId,
+              locale: ref.locale,
+            }),
+            {
+              user: {
+                id: actor.userId,
+                ...(actor.userRoles ? { roles: actor.userRoles } : {}),
+              },
+              ...(actor.authenticatedScope
+                ? { authenticatedScope: actor.authenticatedScope }
+                : {}),
+            },
+            scope
+          );
+          return new Set(readable.map(document => document.id));
+        },
 
         // The document's OWN authority, asked with the same operation the
         // ordinary write path uses. Adding a document to a release is a deferred

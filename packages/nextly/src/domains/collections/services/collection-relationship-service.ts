@@ -1189,6 +1189,34 @@ function relatedRowSnapshotKey(
 }
 
 /**
+ * The documents a relationship field's stored value points at, each as the
+ * collection it is read from and its id, in the order the value holds them.
+ *
+ * The same reading expansion makes of the value — a bare id against the
+ * field's own target, a `{ relationTo, value }` pair against the collection it
+ * names when the field declares it, a list for a field holding several — so a
+ * caller asking what a document links to gets the documents a read would
+ * populate, and no others. Empty for a field with no target, and for a value
+ * that names none.
+ *
+ * @experimental
+ */
+export function relationshipTargetsOf(
+  field: FieldDefinition,
+  value: unknown
+): Array<{ collection: string; id: string }> {
+  const target = getTargetCollection(field);
+  if (!target) return [];
+  const allowed = declaredTargets(field);
+  const refs = isHasManyRelationship(field)
+    ? normalizeToRelationshipRefs(value, target, allowed)
+    : [readRelationshipRef(value, target, allowed)].filter(
+        (ref): ref is RelationshipRef => ref !== null
+      );
+  return refs.map(ref => ({ collection: ref.collection, id: ref.id }));
+}
+
+/**
  * Identifies a related row by collection AND id, because an id is only unique
  * within its own collection. A field naming several targets can hold the same
  * id for two of them, and a lookup keyed on the id alone would hand back

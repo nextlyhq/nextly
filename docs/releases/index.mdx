@@ -493,9 +493,11 @@ A document **coming down** is judged only on its status and on a pending change 
 
 **Soft problems** are notes and stop nothing:
 
-| Code               | The document…                                                                                                                                                                                |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `IN_OTHER_RELEASE` | is also in another scheduled release, named by `detail.releaseId`. `detail.winningReleaseId` is the one whose action stands once both have run, or `null` while this release has no time set |
+| Code                       | The document…                                                                                                                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IN_OTHER_RELEASE`         | is also in another scheduled release, named by `detail.releaseId`. `detail.winningReleaseId` is the one whose action stands once both have run, or `null` while this release has no time set |
+| `UNPUBLISHED_LINK`         | is going live and links to a document that will not be live at the release's moment (see [Linked documents](#linked-documents-that-will-not-be-live))                                        |
+| `UNPUBLISHED_LINKS_HIDDEN` | is going live and links to documents that will not be live, which you may not read: `detail.count` says how many, and nothing else about them is given                                       |
 
 Ask for them with:
 
@@ -579,10 +581,87 @@ scheduled release the new action is checked as that person, and a switch that wo
 problem, such as an author who may publish the document but not unpublish it, is refused with the
 same `409` and the release is left as it was.
 
+### Linked documents that will not be live
+
+> **Needs the release after 0.0.2-alpha.68.** Experimental, like the rest of readiness.
+
+A document going live may link to other documents through its relationship fields: an author,
+a category, related posts. When one of those will not be live at the release's moment, the
+document goes live linking to something a visitor cannot open. Readiness notes each such link
+as a soft problem, `UNPUBLISHED_LINK`, which never stops scheduling, Publish now or the run.
+
+"Live at the moment" accounts for every other scheduled release, as the run will:
+
+- a linked draft that another release publishes at or before the moment is not reported;
+- a linked document that is live now but that another release takes down before the moment is
+  reported, with `detail.cause` set to `"comes-down"`;
+- a linked draft that nothing publishes by then is reported with `detail.cause` set to `"draft"`;
+- a linked document in the same release, going live with it, is not reported.
+
+The moment is the release's scheduled time while it is still ahead. For a draft, a stopped
+release or one past its time, it is now: the links are judged as if the release ran now.
+
+`detail` names the linked document (`scopeKind`, `scopeSlug`, `entryId`) and every field of
+the document going live that links to it (`fields`, such as `["author"]` or `["meta.editor"]`).
+
+What counts as a link:
+
+- **Relationship fields**, one level deep: the document's own fields, including those inside
+  groups and repeaters, but not the links of the documents it links to. A document's links are
+  read from what will go live: its pending change where it has one, otherwise what is stored.
+- Only links into a collection with Draft/Published. A document in a collection without it is
+  live as soon as it exists.
+- **Uploads are never reported.** An upload points at the media library, which has no draft
+  state, so its file is live as soon as it is uploaded.
+- **Links inside rich text are not checked yet.**
+
+A document **coming down** gets no such note: what it links to stops mattering once it is not
+live itself.
+
+**You are only told about documents you may read.** A linked document you may not read is
+never named, by id or otherwise. Each document's hidden links are counted together in one
+`UNPUBLISHED_LINKS_HIDDEN` problem, whose `detail.count` says how many there are. A trusted
+Direct API call (`overrideAccess`, the default) may read everything, so it is told about every
+link.
+
+#### Offering the links when a document is added
+
+Adding a document to a release answers with the same links, so a client can offer to add them
+in the same step. The member comes back as before, with `unpublishedLinks` beside its fields
+(experimental): over REST in the response's `item`, and from the Direct API on the returned
+member.
+
+```json
+{
+  "message": "Added to release.",
+  "item": {
+    "id": "…",
+    "scopeSlug": "posts",
+    "entryId": "…",
+    "action": "publish",
+    "unpublishedLinks": {
+      "links": [
+        {
+          "scopeKind": "collection",
+          "scopeSlug": "authors",
+          "entryId": "…",
+          "fields": ["author"],
+          "cause": "draft"
+        }
+      ],
+      "hiddenCount": 0
+    }
+  }
+}
+```
+
+`links` holds the documents you may read; `hiddenCount` counts the rest. Both are empty for a
+document added to come down. Adding the linked documents is an ordinary add of each, going live.
+
 ### What is not checked yet
 
 The checks run core's rules only. Other features will be able to add their own, such as
-approvals, later. Unpublished linked documents are not yet reported.
+approvals, later. Links inside rich text are not checked yet.
 
 ## One release covers every language
 
