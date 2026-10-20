@@ -38,7 +38,8 @@ const idleMutation = {
 vi.mock("@admin/hooks/queries/useReleases", () => ({
   useReleaseListPage: (...args: unknown[]) => mocks.listPage(...args),
   useReleaseTabCounts: (...args: unknown[]) => mocks.tabCounts(...args),
-  useReleasesReadiness: (ids: readonly string[]) => mocks.readiness(ids),
+  useReleasesReadiness: (ids: readonly string[], listReadAt: number) =>
+    mocks.readiness(ids, listReadAt),
   useReleaseBlockers: () => ({ data: { items: [] }, isFetching: false }),
   useScheduleRelease: () => idleMutation,
   useCancelRelease: () => idleMutation,
@@ -104,8 +105,9 @@ function release(over: Record<string, unknown> = {}) {
   };
 }
 
-function page(items: unknown[], total = items.length) {
+function page(items: unknown[], total = items.length, readAt = 1) {
   return {
+    dataUpdatedAt: readAt,
     data: { items, meta: { total, hasNext: false } },
     isPending: false,
     isError: false,
@@ -323,7 +325,7 @@ describe("a release's row", () => {
     );
     render(<ReleaseList />);
     expect(table().getByText(/5 went live, 1 came down/)).toBeTruthy();
-    expect(mocks.readiness).toHaveBeenLastCalledWith([]);
+    expect(mocks.readiness).toHaveBeenLastCalledWith([], expect.any(Number));
   });
 
   it("names other people's releases from the list itself, with no users request", () => {
@@ -521,6 +523,30 @@ describe("a read that failed", () => {
     expect(
       screen.queryByRole("heading", { name: "Nothing is scheduled" })
     ).toBeNull();
+  });
+});
+
+describe("readiness while the page stays open", () => {
+  it("asks again when the list polls, and shows a release that stopped being ready", () => {
+    mocks.readiness.mockImplementation(
+      readinessAnswering(releaseId => ({
+        releaseId,
+        checked: true,
+        hard: [],
+        soft: [],
+      }))
+    );
+    mocks.listPage.mockReturnValue(page([release()], 1, 1000));
+    const { rerender } = render(<ReleaseList />);
+    expect(table().getByText("All 6 ready")).toBeTruthy();
+
+    // The list polls and comes back with the same release; meanwhile one of
+    // its documents lost a required field.
+    mocks.readiness.mockImplementation(readinessAnswering(ONE_DOCUMENT_TO_FIX));
+    mocks.listPage.mockReturnValue(page([release()], 1, 2000));
+    rerender(<ReleaseList />);
+    expect(mocks.readiness).toHaveBeenLastCalledWith(["r1"], 2000);
+    expect(table().getByText("1 needs a fix")).toBeTruthy();
   });
 });
 

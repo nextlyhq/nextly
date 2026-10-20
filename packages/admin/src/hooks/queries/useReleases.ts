@@ -60,8 +60,8 @@ export const releaseKeys = {
   detail: (id: string) => ["releases", "detail", id] as const,
   members: (id: string) => ["releases", "members", id] as const,
   blockers: (id: string) => ["releases", "blockers", id] as const,
-  readiness: (ids: readonly string[]) =>
-    ["releases", "readiness", [...ids]] as const,
+  readiness: (ids: readonly string[], listReadAt: number) =>
+    ["release-page-readiness", [...ids], listReadAt] as const,
 };
 
 export function useReleases(params: ReleaseListParams = {}, enabled = true) {
@@ -181,18 +181,31 @@ export function useReleaseTabCounts(filters: {
 /**
  * What the checks say about each release on a page, in one request.
  *
- * Keyed by the ids asked about, so a new page or tab asks again and the same
- * page does not. Kept for half a minute and not polled: each answer is worked
- * out over every document of every release named. Its own key rather than the
- * blockers', because the schedule dialog's preflight must never be answered
- * from a cache, and this may be.
+ * Asked again every time the list it describes is read again: `listReadAt` is
+ * that list's own read time, so the list's poll, or the refresh after an
+ * action, is what refreshes this too. A document can become invalid while the
+ * page stays open, and a release must not go on reading "Ready" after it
+ * stopped being so. No timer of its own: it follows the list's.
+ *
+ * Keyed outside the `releases` root for the same reason: invalidating that
+ * root re-reads the list, which moves `listReadAt`, which asks this once.
+ * Inside the root it would be asked twice. The previous answer stays on
+ * screen while the next one loads, so the column does not flicker on a poll.
+ * Its own key rather than the blockers', because the schedule dialog's
+ * preflight must never be answered from a cache, and this may be.
  */
-export function useReleasesReadiness(releaseIds: readonly string[]) {
+export function useReleasesReadiness(
+  releaseIds: readonly string[],
+  listReadAt: number
+) {
   return useQuery({
-    queryKey: releaseKeys.readiness(releaseIds),
+    queryKey: releaseKeys.readiness(releaseIds, listReadAt),
     queryFn: () => fetchReleasesReadiness(releaseIds),
     enabled: releaseIds.length > 0,
-    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+    // Each list read makes a new key; one only the last read uses need not
+    // be kept long.
+    gcTime: 60_000,
   });
 }
 

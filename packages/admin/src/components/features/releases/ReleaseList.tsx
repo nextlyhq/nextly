@@ -627,8 +627,15 @@ function useClampedPage(
  */
 function usePageReadiness(
   tab: ReleaseListTab,
-  rows: readonly Release[] | undefined
+  list: {
+    rows: readonly Release[] | undefined;
+    readAt: number;
+    placeholder: boolean;
+  }
 ): (releaseId: string) => ReleaseRowReadiness {
+  // Not asked for a placeholder page: those rows are the last read's, and the
+  // read that replaces them asks for its own.
+  const rows = list.placeholder ? undefined : list.rows;
   const ids = useMemo(
     () =>
       tab === "done"
@@ -638,7 +645,8 @@ function usePageReadiness(
             .map(row => row.id),
     [tab, rows]
   );
-  const read = useReleasesReadiness(ids);
+  // Asked again whenever the list is read again (its poll, or a refresh).
+  const read = useReleasesReadiness(ids, list.readAt);
   return useMemo(() => {
     if (read.isError) return () => ({ status: "failed" });
     if (read.data === undefined) return () => ({ status: "pending" });
@@ -695,7 +703,11 @@ function useReleaseListData(q: ReturnType<typeof useReleaseListQuestion>) {
   const counts = useReleaseTabCounts({ search: q.search, kind: q.kind });
   const list = useReleaseListPage(listParamsFor(q));
   useClampedPage(q, list.isPlaceholderData ? undefined : list.data?.meta.total);
-  const readiness = usePageReadiness(q.tab, list.data?.items);
+  const readiness = usePageReadiness(q.tab, {
+    rows: list.data?.items,
+    readAt: list.dataUpdatedAt,
+    placeholder: list.isPlaceholderData,
+  });
   const total = list.data?.meta.total ?? 0;
   // A failed read is shown as a failure, with a retry, and never as an empty
   // tab: "Nothing needs attention" read from a request that failed tells an
