@@ -23,7 +23,6 @@
  * @module components/features/widgets/WidgetGrid
  */
 
-import { DndContext, closestCenter } from "@dnd-kit/core";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import { useMemo, useRef, type ComponentProps, type ReactNode } from "react";
 
@@ -39,6 +38,8 @@ import { registerCoreWidgetComponents } from "./core-components";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
 import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
+import { CardDragContext } from "./edit/drag/CardDragContext";
+import { useCardDrag } from "./edit/drag/useCardDrag";
 import { RemovalNotice } from "./edit/RemovalNotice";
 import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
 import { useCardRemoval } from "./edit/useCardRemoval";
@@ -51,7 +52,7 @@ import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
 import { predictedTier } from "./frame/tier";
 import { resolveDashboardWidgets } from "./resolve-widgets";
-import { drawnWidth } from "./sizes";
+import { bandForWidth, drawnWidth } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -159,11 +160,18 @@ function askedWith(
 const NO_CARDS: [] = [];
 
 /**
- * The element the dashboard's width is measured from, and the one batch of the cards' queries,
- * each sized for the tier it will be drawn at. The width is measured before the first paint, and
- * no card is asked before it is known, so every first query is sized for its card's tier.
+ * The element the dashboard's width is measured from, the one batch of the cards' queries, and
+ * dragging the cards.
+ *
+ * Each query is sized for the tier it will be drawn at. The width is measured before the first
+ * paint, and no card is asked before it is known, so every first query is sized for its card's
+ * tier. Dragging is decided from the same width's band: on wherever more than one column is
+ * drawn.
  */
-function useCardsAtDashboardWidth(visible: ArrangedWidget[]) {
+function useCardsAtDashboardWidth(
+  visible: ArrangedWidget[],
+  carry: Pick<Parameters<typeof useCardDrag>[0], "gridRef" | "say" | "drop">
+) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
   const cards = useMemo(
@@ -173,7 +181,13 @@ function useCardsAtDashboardWidth(visible: ArrangedWidget[]) {
         : askedWith(visible, dashboardWidth),
     [visible, dashboardWidth]
   );
-  return { dashboardRef, ...useWidgetBatch(cards) };
+  const band =
+    dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
+  return {
+    dashboardRef,
+    drag: useCardDrag({ rows: visible, band, ...carry }),
+    ...useWidgetBatch(cards),
+  };
 }
 
 /** Why a single-card write is unavailable while the stored layout is unreadable. */
@@ -198,7 +212,11 @@ function cardActions(
   return {
     move: arrangement.moveCard,
     setWidth: arrangement.setCardWidth,
-    remove: removal.remove,
+    // A removal is the next change, so the card ringed for the last one is no longer news.
+    remove: placementId => {
+      arrangement.ring.highlight(null);
+      removal.remove(placementId);
+    },
     ...(removal.dismiss ? { dismiss: removal.dismiss } : {}),
     saveSettings: editor.setConfig,
   };
@@ -299,13 +317,14 @@ export function WidgetGrid() {
     [declared]
   );
 
-  // The add panel, open or not, and the one card it last placed, which the grid rings.
+  // The add panel, open or not; the card it places is ringed by the arrangement's `ring`.
   const addPanel = useAddPanelState(editor.isEditing);
-  const { ring } = addPanel;
+  const { ring } = arrangement;
 
-  // The dashboard's own width, and the cards asked at it.
+  // The dashboard's own width, the cards asked at it, and dragging them by their handles.
   const {
     dashboardRef,
+    drag,
     slots,
     cellSlots,
     fetchingPlacementIds,
@@ -316,7 +335,11 @@ export function WidgetGrid() {
     failed,
     settling,
     retry,
-  } = useCardsAtDashboardWidth(visible);
+  } = useCardsAtDashboardWidth(visible, {
+    gridRef: focus.gridRef,
+    say: announce.drag,
+    drop: arrangement.dropCard,
+  });
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
   const { announcement } = gridAnnouncer;
@@ -401,14 +424,7 @@ export function WidgetGrid() {
             focus={focus}
           />
 
-          <DndContext
-            sensors={arrangement.sensors}
-            // `closestCenter`: the cards are one list laid out as a grid, so the
-            // nearest card centre is the card the pointer is aiming at.
-            collisionDetection={closestCenter}
-            onDragEnd={arrangement.handleDragEnd}
-            accessibility={{ announcements: arrangement.announcements }}
-          >
+          <CardDragContext drag={drag}>
             <ArrangedGrid
               rows={visible}
               placements={editor.placements}
@@ -429,9 +445,10 @@ export function WidgetGrid() {
               focus={focus}
               gridRef={focus.gridRef}
               highlightedId={ring.highlightedId}
+              drag={drag}
               on={cardActions(arrangement, removal, editor)}
             />
-          </DndContext>
+          </CardDragContext>
 
           <DashboardAddPanel
             open={addPanel.open}
