@@ -23,8 +23,8 @@ import { findWorkspaceRoot } from "../utils/workspace";
  *   package.json, so a member's field would override the workspace's choice,
  *   or make one for it.
  *
- * The file keeps its own indentation and final newline, so an app's
- * package.json changes by this one line.
+ * The field is inserted into the file's text rather than the file rewritten,
+ * so an app's package.json changes by this one line, whatever its formatting.
  */
 export async function recordLaunchingPackageManager(
   cwd: string,
@@ -49,13 +49,24 @@ export async function recordLaunchingPackageManager(
   if (devEngines?.packageManager !== undefined) return null;
   if (await findWorkspaceRoot(cwd)) return null;
 
-  const indent = /^([ \t]+)"/m.exec(text)?.[1] ?? "  ";
-  const ending = text.endsWith("\n") ? "\n" : "";
-  await fs.writeFile(
-    file,
-    JSON.stringify({ ...manifest, packageManager: value }, null, indent) +
-      ending,
-    "utf-8"
-  );
+  await fs.writeFile(file, withPackageManager(text, value), "utf-8");
   return value;
+}
+
+/**
+ * `text`, a package.json with no `packageManager`, with that field added as
+ * the object's last member: one new line, in the file's own indentation and
+ * line endings, and a comma after the member before it. Nothing else moves,
+ * so an inline array, CRLF endings or trailing blank lines stay as written.
+ */
+function withPackageManager(text: string, value: string): string {
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const indent = /^([ \t]+)"/m.exec(text)?.[1] ?? "  ";
+  const close = text.lastIndexOf("}");
+  const before = text.slice(0, close).replace(/\s*$/, "");
+  const comma = before.endsWith("{") ? "" : ",";
+  return (
+    `${before}${comma}${eol}${indent}"packageManager": ${JSON.stringify(value)}` +
+    `${eol}${text.slice(close)}`
+  );
 }

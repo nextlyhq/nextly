@@ -172,6 +172,23 @@ describe("an existing app", () => {
     expect(notes.join("\n")).toContain("yarn@4.9.2");
   });
 
+  // The app's own formatting is kept: Windows line endings, an inline array,
+  // a trailing blank line. Only the one line is added.
+  it("gets exactly one line added, its formatting otherwise untouched", async () => {
+    const app = await existingApp({});
+    const before =
+      '{\r\n    "name": "app",\r\n    "files": ["dist", "src"],\r\n    "dependencies": { "next": "16.0.0" }\r\n}\r\n\r\n';
+    await writeFile(path.join(app.dir, "package.json"), before);
+
+    await addNextly(app.dir, "yarn", UA.yarn4);
+
+    await expect(
+      readFile(path.join(app.dir, "package.json"), "utf8")
+    ).resolves.toBe(
+      '{\r\n    "name": "app",\r\n    "files": ["dist", "src"],\r\n    "dependencies": { "next": "16.0.0" },\r\n    "packageManager": "yarn@4.9.2"\r\n}\r\n\r\n'
+    );
+  });
+
   it("that sets packageManager keeps it", async () => {
     const manifest = {
       name: "app",

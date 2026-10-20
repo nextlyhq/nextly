@@ -29,8 +29,5 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A project runs on the version of pnpm or Yarn that made it.
-
-- A new project records `"packageManager": "<name>@<version>"` from the command that launched `create-nextly-app`, before its first install, so Corepack runs the version you chose rather than its own default. `yarn dlx create-nextly-app` on Yarn 4.9.2 used to install with Yarn 1.22.22.
-- Adding Nextly to an existing app records the same, and says so, only when the app chooses no package manager yet and the one installing is the one that launched the CLI. An app that sets `packageManager` or `devEngines.packageManager`, a member of a workspace, and an app reached through another package manager are left as they are.
-- npm, Bun, and a launcher that names no exact version record nothing.
+A new project records the pnpm or Yarn version that created it as `packageManager`, so Corepack installs with that version instead of its own default.
+Adding Nextly to an existing app records it too, but only when the app chooses no package manager yet and isn't part of a workspace.
