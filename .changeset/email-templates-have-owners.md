@@ -60,7 +60,10 @@ template's provider, From, Reply-To and attachments apply.
 Nothing an existing site sends changes on upgrade. A stored core or plugin
 template that differs from its owner's version is kept as an override. A site
 that configures `email.templates` keeps sending the stored template it sends
-today, as its override, until it is reset. Templates of a plugin that is no
+today, as its override, until it is reset. One exception: a site that sends its
+`email.templates` version because it deactivated the stored template now sends
+it with that stored template's provider, From, Reply-To and attachments, where
+it had set them. Templates of a plugin that is no
 longer installed are kept and can be deleted. Core's templates and an installed
 plugin's can no longer be deleted (the delete used to be undone at the next
 boot); reset them instead. A template's name and whether a layout wraps it are
