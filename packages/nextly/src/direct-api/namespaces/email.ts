@@ -17,6 +17,7 @@ import type {
   EmailTemplateComparison,
   OwnerUpdateUndo,
 } from "../../domains/email/services/email-template-service";
+import type { EmailSendOutcome } from "../../domains/email/services/send-failures";
 import { NextlyError } from "../../errors/nextly-error";
 import type { EmailProviderRecord } from "../../schemas/email-providers/types";
 import type { EmailTemplateRecord } from "../../schemas/email-templates/types";
@@ -66,6 +67,22 @@ import {
 } from "./helpers";
 
 /**
+ * The Direct API's result for a send: the service's outcome, with `error`
+ * filled from the failure's reason, as the result type has always declared.
+ * Fields with nothing to say are left out.
+ */
+function directResult(result: EmailSendOutcome): SendEmailResult {
+  return {
+    success: result.success,
+    messageId: result.messageId,
+    ...(result.failure
+      ? { error: result.failure.reason, failure: result.failure }
+      : {}),
+    ...(result.refused ? { refused: result.refused } : {}),
+  };
+}
+
+/**
  * `nextly.email.*` namespace — send raw or template-based emails.
  */
 export interface EmailNamespace {
@@ -95,10 +112,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         attachments: args.attachments,
         person: args.person,
       });
-      return {
-        success: result.success,
-        messageId: result.messageId,
-      };
+      return directResult(result);
     },
 
     async sendWithTemplate(
@@ -134,10 +148,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         args.variables ?? {},
         Object.keys(sendOptions).length > 0 ? sendOptions : undefined
       );
-      return {
-        success: result.success,
-        messageId: result.messageId,
-      };
+      return directResult(result);
     },
   };
 }

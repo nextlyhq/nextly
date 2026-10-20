@@ -39,7 +39,7 @@ export type FocusTarget =
   | { kind: "dismiss"; placementId: string }
   /** The Undo button on the removal notice. */
   | { kind: "undo" }
-  /** The add-a-card picker. */
+  /** The bar's Add widget button. */
   | { kind: "add" }
   /** The region that holds the cards. */
   | { kind: "grid" }
@@ -64,8 +64,10 @@ export interface DashboardFocus {
   barRef: Register;
   /** Registers the Customize button. */
   customizeRef: Register;
-  /** The add picker. */
+  /** The bar's Add widget button. */
   addRef: RefObject<HTMLElement | null>;
+  /** Registers the bar's Add widget button as the `add` target. */
+  addWidgetRef: Register;
   /** The region holding the cards. */
   gridRef: RefObject<HTMLElement | null>;
   /** Send focus to `target` as soon as it is on the page. */
@@ -86,6 +88,11 @@ export function useDashboardFocus(): DashboardFocus {
   const callbacks = useRef(new Map<string, Register>());
   const pending = useRef<FocusTarget | null>(null);
   const addRef = useRef<HTMLElement | null>(null);
+  // The bar's Add widget button: where focus goes when no card is nearer, and where it returns
+  // when the add panel closes without having added anything.
+  const addWidgetRef = useCallback<Register>(element => {
+    addRef.current = element;
+  }, []);
   const gridRef = useRef<HTMLElement | null>(null);
   // Bumped by a request so the effect below runs even when the gesture that
   // asked caused no render of its own (a re-read that has already landed).
@@ -141,9 +148,10 @@ export function useDashboardFocus(): DashboardFocus {
       barRef: register("bar"),
       customizeRef: register("customize"),
       addRef,
+      addWidgetRef,
       gridRef,
       request,
     }),
-    [register, request]
+    [register, request, addWidgetRef]
   );
 }

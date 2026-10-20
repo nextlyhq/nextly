@@ -1,11 +1,21 @@
 import bcrypt from "bcryptjs";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   hashPassword,
   isPasswordHash,
   verifyPassword,
   validatePasswordStrength,
+  checkPasswordPolicyRules,
+  checkDigesterReach,
+  assertPasswordHasherContract,
+  setMinPasswordLength,
+  getMinPasswordLength,
+  resetPasswordPolicy,
+  DEFAULT_MIN_PASSWORD_LENGTH,
+  DEFAULT_DIGESTER_REACH_BYTES,
+  MAX_PASSWORD_LENGTH_CHARS,
+  type PasswordHasher,
 } from "../password";
 
 /** A raw password a shape test once stored as given: long, with a colon. */
@@ -276,177 +286,456 @@ describe("password utilities", () => {
     });
   });
 
-  describe("validatePasswordStrength()", () => {
-    describe("valid passwords", () => {
-      it("should accept password meeting all requirements", () => {
-        const validPassword = "ValidP@ss123";
+  describe("validatePasswordStrength() and R-5 password policy", () => {
+    afterEach(() => {
+      resetPasswordPolicy();
+    });
 
-        const result = validatePasswordStrength(validPassword);
-
+    describe("R-5: length and absence of character classes", () => {
+      it("accepts a class-less password of exactly the minimum length (8 chars)", () => {
+        // Class-less: lowercase letters only, no numbers, uppercase, or symbols
+        const minPassword = "xyzwvuts";
+        const result = validatePasswordStrength(minPassword);
         expect(result.ok).toBe(true);
         expect(result.errors).toBeUndefined();
       });
 
-      it("should accept password with minimum length (8 chars)", () => {
-        // Arrange: 8 chars incl. upper, lower, number, and special character
-        const minLengthPassword = "Valid1!a";
-
-        const result = validatePasswordStrength(minLengthPassword);
-
+      it("accepts a password within the bounds (e.g. letters and spaces, no special requirements)", () => {
+        const passphrase = "correct horse battery staple";
+        const result = validatePasswordStrength(passphrase);
         expect(result.ok).toBe(true);
       });
 
-      it("should accept password with special characters", () => {
-        const passwordWithSpecialChars = "P@ssw0rd!#$%^&*()_+-=";
-
-        const result = validatePasswordStrength(passwordWithSpecialChars);
-
-        expect(result.ok).toBe(true);
-      });
-
-      it("should accept very long password (<128 chars)", () => {
-        const longPassword = "ValidP@ss1" + "a".repeat(110); // 120 chars
-
-        const result = validatePasswordStrength(longPassword);
-
-        expect(result.ok).toBe(true);
-      });
-    });
-
-    describe("invalid passwords", () => {
-      it("should reject password shorter than 8 characters", () => {
-        const shortPassword = "Pass1A";
-
-        const result = validatePasswordStrength(shortPassword);
-
+      it("refuses a password below the minimum length", () => {
+        const short = "abcdefg"; // 7 chars
+        const result = validatePasswordStrength(short);
         expect(result.ok).toBe(false);
-        expect(result.errors).toBeDefined();
-        expect(result.errors?.length).toBeGreaterThan(0);
         expect(result.errors?.some(e => e.includes("at least 8"))).toBe(true);
       });
 
-      it("should reject password longer than 128 characters", () => {
-        const tooLongPassword = "ValidP@ss1" + "a".repeat(120); // 130 chars
-
-        const result = validatePasswordStrength(tooLongPassword);
-
+      it("refuses an empty password", () => {
+        const result = validatePasswordStrength("");
         expect(result.ok).toBe(false);
-        expect(result.errors).toBeDefined();
-        expect(result.errors?.some(e => e.includes("less than 128"))).toBe(
-          true
-        );
+        expect(
+          result.errors?.some(e => e.includes("Password is required"))
+        ).toBe(true);
       });
 
-      it("should reject password without lowercase letter", () => {
-        const noLowercase = "PASSWORD123!";
-
-        const result = validatePasswordStrength(noLowercase);
-
+      it("counts characters by code points rather than code units, refusing 4 emojis", () => {
+        // 4 emojis: 4 code points, 8 UTF-16 code units
+        const fourEmoji = "😀😀😀😀";
+        expect(fourEmoji.length).toBe(8); // UTF-16 units
+        const result = validatePasswordStrength(fourEmoji);
         expect(result.ok).toBe(false);
-        expect(result.errors).toBeDefined();
-        expect(result.errors?.some(e => e.includes("lowercase letter"))).toBe(
-          true
-        );
+        expect(result.errors?.some(e => e.includes("at least 8"))).toBe(true);
       });
 
-      it("should reject password without uppercase letter", () => {
-        const noUppercase = "password123!";
-
-        const result = validatePasswordStrength(noUppercase);
-
-        expect(result.ok).toBe(false);
-        expect(result.errors).toBeDefined();
-        expect(result.errors?.some(e => e.includes("uppercase letter"))).toBe(
-          true
-        );
+      it("accepts 8 emojis meeting the minimum code point requirement within reach", () => {
+        // 8 emojis: 8 code points, 32 UTF-8 bytes (well within 72 bytes)
+        const eightEmoji = "😀".repeat(8);
+        const result = validatePasswordStrength(eightEmoji);
+        expect(result.ok).toBe(true);
       });
 
-      it("should reject password without number", () => {
-        const noNumber = "PasswordOnly!";
+      it("does NOT require uppercase, lowercase, numbers, or special symbols", () => {
+        // All digits (not in common passwords)
+        const allDigits = "81726354";
+        expect(validatePasswordStrength(allDigits).ok).toBe(true);
 
-        const result = validatePasswordStrength(noNumber);
+        // All lowercase
+        const allLower = "classlesspass";
+        expect(validatePasswordStrength(allLower).ok).toBe(true);
 
-        expect(result.ok).toBe(false);
-        expect(result.errors).toBeDefined();
-        expect(result.errors?.some(e => e.includes("number"))).toBe(true);
-      });
-
-      it("should reject empty password", () => {
-        const emptyPassword = "";
-
-        const result = validatePasswordStrength(emptyPassword);
-
-        expect(result.ok).toBe(false);
-        expect(result.errors).toBeDefined();
-        expect(result.errors?.length).toBeGreaterThan(0);
-      });
-
-      it("should provide multiple errors for password failing multiple rules", () => {
-        const badPassword = "abc"; // Too short, no uppercase, no number
-
-        const result = validatePasswordStrength(badPassword);
-
-        expect(result.ok).toBe(false);
-        expect(result.errors).toBeDefined();
-        expect(result.errors?.length).toBeGreaterThanOrEqual(2);
+        // All uppercase
+        const allUpper = "CLASSLESSPASS";
+        expect(validatePasswordStrength(allUpper).ok).toBe(true);
       });
     });
 
-    describe("edge cases", () => {
-      it("should handle password with only required character types", () => {
-        // Arrange: exactly 8 chars — 1 upper, 1 lower, 1 number, 1 special
-        const minimalPassword = "Abcdef1!";
+    describe("R-5: common passwords refusal", () => {
+      it("refuses passwords from across the head of the common passwords list", () => {
+        // Head of COMMON_PASSWORDS
+        const headEntries = [
+          "123456789",
+          "password",
+          "12345678",
+          "password1",
+          "1234567890",
+          "iloveyou",
+          "1q2w3e4r5t",
+          "qwertyuiop",
+        ];
 
-        const result = validatePasswordStrength(minimalPassword);
+        for (const common of headEntries) {
+          const result = validatePasswordStrength(common);
+          expect(result.ok).toBe(false);
+          expect(result.errors?.some(e => e.includes("too common"))).toBe(true);
+        }
+      });
 
+      it("refuses a common password in another case (case-insensitive)", () => {
+        const variations = ["PassWord", "PASSWORD", "ILOVEYOU", "QwErTyUiOp"];
+        for (const variant of variations) {
+          const result = validatePasswordStrength(variant);
+          expect(result.ok).toBe(false);
+          expect(result.errors?.some(e => e.includes("too common"))).toBe(true);
+        }
+      });
+
+      it("an upgraded account whose stored password is on the common list still signs in with it", async () => {
+        // The rule binds when setting a password, never re-judges stored passwords
+        const commonPlain = "password";
+        const hash = await hashPassword(commonPlain);
+        expect(await verifyPassword(commonPlain, hash)).toBe(true);
+
+        // But setting it again is refused
+        const validation = validatePasswordStrength(commonPlain);
+        expect(validation.ok).toBe(false);
+        expect(validation.errors?.some(e => e.includes("too common"))).toBe(
+          true
+        );
+      });
+    });
+
+    describe("R-5: configurable minimum length (raising to 15)", () => {
+      it("with minimum raised to 15, refuses 14 characters and accepts 15", () => {
+        setMinPasswordLength(15);
+        expect(getMinPasswordLength()).toBe(15);
+
+        const fourteen = "unique-pass-14"; // 14 characters
+        expect(fourteen.length).toBe(14);
+        const res14 = validatePasswordStrength(fourteen);
+        expect(res14.ok).toBe(false);
+        expect(res14.errors?.some(e => e.includes("at least 15"))).toBe(true);
+
+        const fifteen = "unique-pass-15c"; // 15 characters
+        expect(fifteen.length).toBe(15);
+        const res15 = validatePasswordStrength(fifteen);
+        expect(res15.ok).toBe(true);
+      });
+
+      it("accepts per-call minLength override in options", () => {
+        const fourteen = "unique-pass-14";
+        const res14 = validatePasswordStrength(fourteen, { minLength: 15 });
+        expect(res14.ok).toBe(false);
+        expect(res14.errors?.some(e => e.includes("at least 15"))).toBe(true);
+
+        const resDefault = validatePasswordStrength(fourteen);
+        expect(resDefault.ok).toBe(true);
+      });
+    });
+
+    describe("R-5: default bcrypt digester reach (72 bytes)", () => {
+      it("accepts a password exactly at 72 UTF-8 bytes", () => {
+        const at72 = "a".repeat(72);
+        expect(Buffer.byteLength(at72, "utf8")).toBe(72);
+        const result = validatePasswordStrength(at72);
         expect(result.ok).toBe(true);
       });
 
-      it("should reject weak all-lowercase password that only meets length (regression for setup bypass)", () => {
-        // Arrange: This is the exact bypass string from the incident.
-        // Ten lowercase 'a' chars passes min(8) but fails every other rule.
-        const bypassPassword = "aaaaaaaaaa";
-
-        const result = validatePasswordStrength(bypassPassword);
-
+      it("refuses a password longer than 72 UTF-8 bytes with a message that says so", () => {
+        const at73 = "a".repeat(73);
+        expect(Buffer.byteLength(at73, "utf8")).toBe(73);
+        const result = validatePasswordStrength(at73);
         expect(result.ok).toBe(false);
-        expect(result.errors).toBeDefined();
-        expect(result.errors?.some(e => e.includes("uppercase letter"))).toBe(
-          true
-        );
-        expect(result.errors?.some(e => e.includes("number"))).toBe(true);
-        expect(result.errors?.some(e => e.includes("special character"))).toBe(
+        expect(result.errors?.some(e => e.includes("72-byte limit"))).toBe(
           true
         );
       });
 
-      it("should reject password without a special character", () => {
-        // Arrange: upper + lower + digit but no symbol
-        const noSpecial = "Password123";
+      it("refuses multibyte input crossing the 72-byte boundary", () => {
+        // 70 ASCII bytes + '€' (3 bytes) = 73 bytes
+        const multi73 = "a".repeat(70) + "€";
+        expect(Buffer.byteLength(multi73, "utf8")).toBe(73);
+        const resEuro = validatePasswordStrength(multi73);
+        expect(resEuro.ok).toBe(false);
+        expect(resEuro.errors?.some(e => e.includes("72-byte limit"))).toBe(
+          true
+        );
 
-        const result = validatePasswordStrength(noSpecial);
+        // 71 ASCII bytes + 'é' (2 bytes) = 73 bytes
+        const multiAccent = "a".repeat(71) + "é";
+        expect(Buffer.byteLength(multiAccent, "utf8")).toBe(73);
+        const resAccent = validatePasswordStrength(multiAccent);
+        expect(resAccent.ok).toBe(false);
+        expect(resAccent.errors?.some(e => e.includes("72-byte limit"))).toBe(
+          true
+        );
 
-        expect(result.ok).toBe(false);
-        expect(result.errors?.some(e => e.includes("special character"))).toBe(
+        // 70 ASCII bytes + 'é' (2 bytes) = 72 bytes -> exactly at limit, accepted
+        const multi72 = "a".repeat(70) + "é";
+        expect(Buffer.byteLength(multi72, "utf8")).toBe(72);
+        expect(validatePasswordStrength(multi72).ok).toBe(true);
+      });
+
+      it("two values identical to reach and differing after it are never both accepted (both refused on write)", () => {
+        const prefix72 = "a".repeat(72);
+        const val1 = prefix72 + "X";
+        const val2 = prefix72 + "Y";
+
+        const res1 = validatePasswordStrength(val1);
+        const res2 = validatePasswordStrength(val2);
+
+        // Neither is accepted
+        expect(res1.ok).toBe(false);
+        expect(res2.ok).toBe(false);
+      });
+
+      it("an upgraded account whose stored password is past 72 bytes still signs in with it", async () => {
+        const longPassword = "A1b2C3d4!".repeat(10); // 90 bytes
+        const hash = await hashPassword(longPassword);
+
+        // verifyPassword verifies past 72 bytes
+        expect(await verifyPassword(longPassword, hash)).toBe(true);
+
+        // But setting it again is refused under default digester
+        const validation = validatePasswordStrength(longPassword);
+        expect(validation.ok).toBe(false);
+        expect(validation.errors?.some(e => e.includes("72-byte limit"))).toBe(
+          true
+        );
+      });
+    });
+
+    describe("R-5: custom PasswordHasher reach contract", () => {
+      it("finite reach fixture: accepts at and below reach, refuses past it", () => {
+        const customHasher: PasswordHasher = {
+          name: "FiniteHasher",
+          reach: 100,
+          hash: async (p: string) => `hash:${p}`,
+          verify: async (p: string, h: string) => h === `hash:${p}`,
+        };
+
+        // 80 bytes: accepted
+        const at80 = "a".repeat(80);
+        expect(
+          validatePasswordStrength(at80, { hasher: customHasher }).ok
+        ).toBe(true);
+
+        // 100 bytes: accepted
+        const at100 = "a".repeat(100);
+        expect(
+          validatePasswordStrength(at100, { hasher: customHasher }).ok
+        ).toBe(true);
+
+        // 101 bytes: refused
+        const at101 = "a".repeat(101);
+        const res101 = validatePasswordStrength(at101, {
+          hasher: customHasher,
+        });
+        expect(res101.ok).toBe(false);
+        expect(res101.errors?.some(e => e.includes("100-byte limit"))).toBe(
           true
         );
       });
 
-      it("should handle password at exactly 128 character limit", () => {
-        const maxLengthPassword = "ValidP@ss1" + "a".repeat(118); // Exactly 128 chars
+      it("unbounded reach fixture: accepted past 72 bytes, accepted at 128 chars, refused past 128 chars", () => {
+        const unboundedHasher: PasswordHasher = {
+          name: "UnboundedHasher",
+          reach: "unbounded",
+          hash: async (p: string) => `unbounded:${p}`,
+          verify: async (p: string, h: string) => h === `unbounded:${p}`,
+        };
 
-        const result = validatePasswordStrength(maxLengthPassword);
+        // 80 bytes: accepted (no 72-byte refusal)
+        const at80 = "a".repeat(80);
+        expect(
+          validatePasswordStrength(at80, { hasher: unboundedHasher }).ok
+        ).toBe(true);
 
-        expect(result.ok).toBe(true);
+        // 120 chars: accepted
+        const at120 = "a".repeat(120);
+        expect(
+          validatePasswordStrength(at120, { hasher: unboundedHasher }).ok
+        ).toBe(true);
+
+        // Exactly 128 chars (input maximum): accepted
+        const at128 = "a".repeat(128);
+        expect(
+          validatePasswordStrength(at128, { hasher: unboundedHasher }).ok
+        ).toBe(true);
+
+        // 129 chars: refused by resource safety cap
+        const at129 = "a".repeat(129);
+        const res129 = validatePasswordStrength(at129, {
+          hasher: unboundedHasher,
+        });
+        expect(res129.ok).toBe(false);
+        expect(res129.errors?.some(e => e.includes("128"))).toBe(true);
       });
 
-      it("should handle whitespace in password", () => {
-        // Arrange: Password with spaces (still valid if meets other requirements)
-        const passwordWithSpaces = "Valid Pass 123";
+      it("astral characters within the 128 character maximum are accepted under unbounded hasher", () => {
+        const unboundedHasher: PasswordHasher = {
+          reach: "unbounded",
+          hash: async () => "",
+          verify: async () => true,
+        };
 
-        const result = validatePasswordStrength(passwordWithSpaces);
+        // 100 emojis = 100 code points (<= 128), but 200 UTF-16 code units (> 128)
+        const hundredEmoji = "😀".repeat(100);
+        expect(hundredEmoji.length).toBe(200); // Code units
+        const res = validatePasswordStrength(hundredEmoji, {
+          hasher: unboundedHasher,
+        });
+        expect(res.ok).toBe(true);
 
-        expect(result.ok).toBe(true);
+        // 129 emojis = 129 code points (> 128) -> refused
+        const excessEmoji = "😀".repeat(129);
+        const resExcess = validatePasswordStrength(excessEmoji, {
+          hasher: unboundedHasher,
+        });
+        expect(resExcess.ok).toBe(false);
+        expect(resExcess.errors?.some(e => e.includes("128"))).toBe(true);
+      });
+
+      it("refuses to start when custom digester lacks reach contract, naming the digester", () => {
+        class Argon2Hasher {
+          async hash() {
+            return "";
+          }
+          async verify() {
+            return true;
+          }
+        }
+
+        const badHasher = new Argon2Hasher();
+        expect(() => assertPasswordHasherContract(badHasher)).toThrowError(
+          /Password digester "Argon2Hasher" must declare its reach contract/
+        );
+
+        // With named object
+        const unnamedBad = {
+          name: "custom-digester",
+          hash: async () => "",
+          verify: async () => true,
+        };
+        expect(() => assertPasswordHasherContract(unnamedBad)).toThrowError(
+          /Password digester "custom-digester" must declare its reach contract/
+        );
+
+        // Serves once reach contract arrives
+        const validContract = {
+          ...unnamedBad,
+          reach: "unbounded" as const,
+        };
+        expect(() => assertPasswordHasherContract(validContract)).not.toThrow();
+      });
+
+      it("supports custom hasher with validate function", () => {
+        const validateHasher: PasswordHasher = {
+          name: "ValidatingHasher",
+          validate: (password: string) => {
+            if (password.includes("forbidden")) {
+              return "Custom validation: forbidden substring detected.";
+            }
+            return true;
+          },
+          hash: async () => "",
+          verify: async () => true,
+        };
+
+        const resForbidden = validatePasswordStrength("forbidden-secret", {
+          hasher: validateHasher,
+        });
+        expect(resForbidden.ok).toBe(false);
+        expect(
+          resForbidden.errors?.some(e => e.includes("forbidden substring"))
+        ).toBe(true);
+
+        const resValid = validatePasswordStrength("allowed-secret-word", {
+          hasher: validateHasher,
+        });
+        expect(resValid.ok).toBe(true);
+      });
+
+      it("refuses a numeric reach that is not a positive whole number of bytes", () => {
+        for (const reach of [Number.NaN, Infinity, -1, 0, 7.5]) {
+          expect(() =>
+            assertPasswordHasherContract({
+              name: "BrokenHasher",
+              reach,
+              hash: async () => "",
+              verify: async () => true,
+            })
+          ).toThrowError(/positive whole number of bytes/);
+        }
+
+        // A bare descriptor naming an invalid reach is refused the same way —
+        // the check runs wherever the contract is consulted, boot included.
+        expect(() =>
+          checkDigesterReach("x".repeat(10), {
+            name: "BrokenDescriptor",
+            reach: Number.NaN,
+          })
+        ).toThrowError(/positive whole number of bytes/);
+
+        expect(() =>
+          assertPasswordHasherContract({
+            name: "WholeHasher",
+            reach: 72,
+            hash: async () => "",
+            verify: async () => true,
+          })
+        ).not.toThrow();
+      });
+
+      it("keeps a thrown validator's message out of the public refusal", () => {
+        const throwingHasher: PasswordHasher = {
+          name: "ThrowingHasher",
+          validate: () => {
+            throw new Error("connection to HSM vault lost at 10.0.0.7");
+          },
+          hash: async () => "",
+          verify: async () => true,
+        };
+
+        const res = validatePasswordStrength("some-secret-password", {
+          hasher: throwingHasher,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.errors).toEqual(["Password exceeds the digester's reach."]);
+        expect(res.errors?.some(e => e.includes("HSM vault"))).toBe(false);
+      });
+
+      it("refuses on an empty validator message instead of reading it as acceptance", () => {
+        // An explicit `false` or `{ ok: false }` verdict with an empty
+        // message is still a refusal: the generic message stands in, and an
+        // empty refusal must never read as "no error".
+        for (const answer of [
+          "",
+          false,
+          { ok: false },
+          { ok: false, message: "" },
+        ]) {
+          const refusingHasher: PasswordHasher = {
+            name: "EmptyMessageHasher",
+            validate: () => answer,
+            hash: async () => "",
+            verify: async () => true,
+          };
+          const res = validatePasswordStrength("some-secret-password", {
+            hasher: refusingHasher,
+          });
+          expect(res.ok).toBe(false);
+          expect(res.errors).toEqual([
+            "Password exceeds the digester's reach.",
+          ]);
+        }
+
+        // `{ ok: false, message: "..." }` with a real message keeps it.
+        const messagedHasher: PasswordHasher = {
+          name: "MessagedHasher",
+          validate: () => ({
+            ok: false,
+            message: "too long for this digester",
+          }),
+          hash: async () => "",
+          verify: async () => true,
+        };
+        const res = validatePasswordStrength("some-secret-password", {
+          hasher: messagedHasher,
+        });
+        expect(res.errors).toEqual(["too long for this digester"]);
       });
     });
   });

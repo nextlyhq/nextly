@@ -22,11 +22,8 @@ import { fileURLToPath } from "node:url";
  * `.js` file here would be linted as typed source. `src/observability/__tests__/console-allowlist.test.ts`
  * reads the same file.
  *
- * - `terminal`: globs that may write to the console for good, each with its reason. They are the
- *   writers the masked loggers end in, and output meant for a person at a terminal.
- * - `pending`: files not yet routed through a logger, each with the number of console calls it
- *   holds. The test pins those numbers, so a call added to a pending file fails, and a file
- *   leaves the list once it is converted. It only shrinks.
+ * Its `terminal` section names the globs that may write to the console, each with its reason:
+ * the writers the masked loggers end in, and output meant for a person at a terminal.
  */
 const CONSOLE_ALLOWLIST = JSON.parse(
   readFileSync(
@@ -38,11 +35,8 @@ const CONSOLE_ALLOWLIST = JSON.parse(
   )
 );
 
-/** The paths `no-console` does not apply to, terminal and pending alike. */
-const CONSOLE_ALLOWLIST_PATHS = [
-  ...Object.keys(CONSOLE_ALLOWLIST.terminal),
-  ...Object.keys(CONSOLE_ALLOWLIST.pending),
-];
+/** The paths `no-console` does not apply to. */
+const CONSOLE_ALLOWLIST_PATHS = Object.keys(CONSOLE_ALLOWLIST.terminal);
 
 /**
  * Build the config block.

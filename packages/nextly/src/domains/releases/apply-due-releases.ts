@@ -65,7 +65,11 @@
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
-import { planReleaseMaterialisation } from "./plan-release-materialisation";
+import { asReleaseRun } from "./early-stop";
+import {
+  componentsToStop,
+  planReleaseMaterialisation,
+} from "./plan-release-materialisation";
 import type { MaterialisationAction } from "./plan-release-materialisation";
 import type {
   DocumentRef,
@@ -297,25 +301,15 @@ async function stopHopelessReleases(
   // independent by construction, so a single wide transaction would hold locks
   // across releases that have nothing to do with each other, and one bad
   // component would roll back every good one beside it.
+  //
+  // A release with no planned instant was not part of this pass's plan, so
+  // there is nothing to fence against, and its WHOLE component is left for the
+  // next pass, which re-plans against a set it can fence completely.
   let blocked = 0;
-  for (const group of plan.overlappingReleases) {
-    if (!group.some(id => permanent.has(id))) continue;
-
-    const entries: { id: string; scheduledAt: Date }[] = [];
-    for (const id of group) {
-      const at = plannedInstants.get(id);
-      // A release with no planned instant was not part of this pass's plan, so
-      // there is nothing to fence against. The WHOLE component is then skipped
-      // rather than the one release: blocking the rest is precisely the split
-      // this pass exists to avoid, and the next pass re-plans against a set it
-      // can fence completely.
-      if (at === undefined) {
-        entries.length = 0;
-        break;
-      }
-      entries.push({ id, scheduledAt: at });
-    }
-
+  for (const entries of componentsToStop(plan, permanent, id => {
+    const at = plannedInstants.get(id);
+    return at === undefined ? undefined : { id, scheduledAt: at };
+  })) {
     blocked += (await deps.repository.blockReleases(entries)).length;
   }
   return blocked;
@@ -617,14 +611,19 @@ async function writeAndConfirm(
     // Called ON the object rather than through an extracted reference: a
     // mutations implementation that is a class method would lose `this` and
     // fail at a point that looks like the write being refused.
+    //
+    // As the release's own run, so the write is not taken for an event that
+    // stops this release between two of its documents (`asReleaseRun`).
     const input: ReleaseWrite = {
       ref: action.ref,
       user,
       receipt: { memberId: action.memberId, revision: action.revision },
     };
-    await (action.effect === "publish"
-      ? deps.mutations.publish(input)
-      : deps.mutations.unpublish(input));
+    await asReleaseRun(action.ref, () =>
+      action.effect === "publish"
+        ? deps.mutations.publish(input)
+        : deps.mutations.unpublish(input)
+    );
   } catch (error) {
     // A rejection is not proof the write did not land. Ask the member's mark,
     // which only a committed write leaves — and if THAT cannot be answered,

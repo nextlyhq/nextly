@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  checkPasswordPolicyRules,
+  type PasswordPolicyOptions,
+} from "../../auth/password/policy";
+
 export const PaginationSchema = z.object({
   page: z.number().int().min(1).default(1),
   limit: z.number().int().min(1).max(100).default(10),
@@ -126,20 +131,26 @@ export const EmailSchema = z
   .email("Invalid email format")
   .transform(v => v.trim().toLowerCase());
 
-// Per-rule validation produces a separate error message for every unmet
-// requirement, so the UI can show users exactly which rules their password
-// fails instead of a single combined message.
-export const PasswordSchema = z
-  .string()
-  .min(8, "Password must be at least 8 characters")
-  .max(128, "Password must be less than 128 characters")
-  .regex(/[a-z]/, "Password must contain at least one lowercase letter")
-  .regex(/[A-Z]/, "Password must contain at least one uppercase letter")
-  .regex(/\d/, "Password must contain at least one number")
-  .regex(
-    /[^A-Za-z0-9]/,
-    "Password must contain at least one special character"
-  );
+/**
+ * Creates a Zod password validation schema conforming to staff-only access R-5:
+ * - Length: at least 8 characters (code points), up to 128 characters.
+ * - Common passwords: check against 3,000 common passwords.
+ * - Digester reach: bounded by 72 UTF-8 bytes for default bcrypt.
+ * - No character classes required.
+ */
+export function createPasswordSchema(options?: PasswordPolicyOptions) {
+  return z.string().superRefine((val, ctx) => {
+    const errors = checkPasswordPolicyRules(val, options);
+    for (const error of errors) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error,
+      });
+    }
+  });
+}
+
+export const PasswordSchema = createPasswordSchema();
 
 export const UrlSchema = z.string().url("Invalid URL format");
 

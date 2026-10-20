@@ -14,7 +14,7 @@ import { PublicRoute } from "../components/guards/PublicRoute";
 import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar";
 import { Toaster } from "../components/ui/toaster";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
-import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSyncProvider";
+import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSync";
 import {
   ThemePaintScript,
   ThemeProvider,
@@ -181,13 +181,9 @@ function AdminAppContent({ nonce }: RootLayoutProps) {
                 endpoint gated by settings permissions, so on the signed-out
                 screens (login, register, forgot password, setup) the query
                 can only fail and retry once while the form waits on nothing
-                it needs. The sync is a null-rendering SIBLING rather than a
-                wrapper, and that shape is load-bearing: the public/private
-                flip re-renders this tree in place — logout and the
-                signed-in redirect are pushState navigations, not full page
-                loads — and a swapped element type around the subtree would
-                remount all of it, Toaster and portal root included,
-                dropping whatever toast was in flight across the flip. */}
+                it needs. It renders nothing and sits beside the subtree
+                rather than around it, for the load-bearing reasons recorded
+                on GeneralSettingsSync itself. */}
           {routeType !== "public" && <GeneralSettingsSync />}
           {content}
         </BrandingProvider>

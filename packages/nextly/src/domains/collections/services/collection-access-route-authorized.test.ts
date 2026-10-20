@@ -24,13 +24,20 @@ import {
 } from "../__tests__/collection-test-helpers";
 
 function buildAccessService() {
+  const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   const rbac = {
     checkAccess: vi.fn().mockResolvedValue(true),
     // Answers `undefined`: no code-defined rule governs the operation.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     // No code-defined access by default: a scoped API key is judged on its
     // permission grant alone unless a test registers a rule.
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    getRegisteredAccess,
+    // Derived from `getRegisteredAccess`, as the service derives it, so a rule a test
+    // registers there reaches every caller that asks for the target.
+    getRegisteredTarget: (slug: string) => {
+      const access: unknown = getRegisteredAccess(slug);
+      return access ? { kind: "collection", slug, access } : undefined;
+    },
   };
   const service = new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
