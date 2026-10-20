@@ -43,6 +43,7 @@ import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { accountIsActive } from "../../../auth/session/session-standing";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors/nextly-error";
+import { permissionSlug } from "../../../schemas/_zod/rbac";
 import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
 import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
 import { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
@@ -73,6 +74,7 @@ import { users as usersSqlite } from "../../../schemas/users/sqlite";
 // per spec §13.8 (no identifiers/values in publicMessage).
 import { BaseService } from "../../../services/base-service";
 import {
+  hasPermission,
   isSuperAdmin,
   listRoleSlugsForUserOrRefuse,
   resolveUserRoles,
@@ -247,6 +249,34 @@ export function isKeyExpired(expiresAt: Date | null): boolean {
     return false;
   }
   return expiresAt.getTime() < Date.now();
+}
+
+/**
+ * How `caller` sees keys: each key's metadata as they may see it.
+ *
+ * Anyone who may read keys sees every key, but a key's owner is a person, so
+ * their name and address show only to a caller who may also read users. A
+ * person always sees themselves on their own keys. An API key is judged by its
+ * own scope: it is told an owner only when that scope may read users, as it
+ * must before any other user data reaches it.
+ *
+ * Asked once per caller, so a list costs one permission check, not one per row.
+ * Here, beside the metadata it narrows, so the REST routes and the Direct API
+ * answer one caller the same way.
+ */
+export async function apiKeyViewer(caller: {
+  userId: string;
+  authMethod: string;
+  permissions: readonly string[];
+}): Promise<(key: ApiKeyMeta) => ApiKeyMeta> {
+  const byKey = caller.authMethod === "api-key";
+  const readsUsers = byKey
+    ? caller.permissions.includes(permissionSlug("read", "users"))
+    : await hasPermission(caller.userId, "read", "users");
+  return key =>
+    readsUsers || (!byKey && key.owner?.id === caller.userId)
+      ? key
+      : { ...key, owner: null };
 }
 
 /**
@@ -633,11 +663,26 @@ export class ApiKeyService extends BaseService {
   }
 
   /**
+   * The key `id`, as `userId` may reach it: their own only, or any owner's
+   * with `allUsers`. One predicate for reading, updating and revoking, so the
+   * row a check found is the row the write changes.
+   */
+  private keyOwnedBy(
+    id: string,
+    userId: string,
+    opts?: { allUsers?: boolean }
+  ) {
+    return opts?.allUsers
+      ? eq(this.apiKeysTable.id, id)
+      : and(eq(this.apiKeysTable.id, id), eq(this.apiKeysTable.userId, userId));
+  }
+
+  /**
    * Get a single API key by ID.
    *
    * @param id - The API key ID
    * @param userId - The requesting user's ID
-   * @param opts.allUsers - When true, skips ownership check (for super-admin callers)
+   * @param opts.allUsers - When true, skips the ownership check
    * @returns Key metadata, or null if not found (or not owned by userId)
    */
   async getApiKeyById(
@@ -645,11 +690,9 @@ export class ApiKeyService extends BaseService {
     userId: string,
     opts?: { allUsers?: boolean }
   ): Promise<ApiKeyMeta | null> {
-    const whereClause = opts?.allUsers
-      ? eq(this.apiKeysTable.id, id)
-      : and(eq(this.apiKeysTable.id, id), eq(this.apiKeysTable.userId, userId));
-
-    const rows = await this.selectMeta().where(whereClause).limit(1);
+    const rows = await this.selectMeta()
+      .where(this.keyOwnedBy(id, userId, opts))
+      .limit(1);
 
     if ((rows as ApiKeyRow[]).length === 0) return null;
     return this.toMeta((rows as ApiKeyRow[])[0]);
@@ -661,11 +704,14 @@ export class ApiKeyService extends BaseService {
    * Token type, role, and duration cannot be changed after creation.
    * To change those fields, revoke the key and create a new one.
    *
-   * Ownership is enforced — only the key's creator can update it.
+   * Only the key's owner can update it, unless `opts.allUsers` says the
+   * caller may change anyone's keys (the holder of the permission to update
+   * keys, or trusted server code).
    *
    * @param id - The API key ID
-   * @param userId - The requesting user's ID (must be the key owner)
+   * @param userId - The requesting user's ID (the key owner, without `allUsers`)
    * @param input - Fields to update (name, description)
+   * @param opts.allUsers - When true, skips the ownership check
    * @returns Updated key metadata
    *
    * @throws NextlyError(NOT_FOUND) if key doesn't exist or is not owned by userId
@@ -673,9 +719,10 @@ export class ApiKeyService extends BaseService {
   async updateApiKey(
     id: string,
     userId: string,
-    input: UpdateApiKeyInput
+    input: UpdateApiKeyInput,
+    opts?: { allUsers?: boolean }
   ): Promise<ApiKeyMeta> {
-    const existing = await this.getApiKeyById(id, userId);
+    const existing = await this.getApiKeyById(id, userId, opts);
     if (!existing) {
       // §13.8: never leak entity identifiers in publicMessage. Generic "Not found."
       // is provided by the factory; the id moves to logContext for operators.
@@ -693,19 +740,14 @@ export class ApiKeyService extends BaseService {
       await this.db
         .update(this.apiKeysTable)
         .set(updateData)
-        .where(
-          and(
-            eq(this.apiKeysTable.id, id),
-            eq(this.apiKeysTable.userId, userId)
-          )
-        );
+        .where(this.keyOwnedBy(id, userId, opts));
     } catch (error) {
       // Normalise raw driver errors so DB error kind (unique violation, etc.)
       // is preserved when mapping to NextlyError.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
-    const updated = await this.getApiKeyById(id, userId);
+    const updated = await this.getApiKeyById(id, userId, opts);
     if (!updated) {
       // Internal invariant: row existed before update but reads back as null.
       throw NextlyError.internal({
@@ -725,15 +767,22 @@ export class ApiKeyService extends BaseService {
    * The row is preserved for audit trail purposes. Revoked keys are
    * rejected at authentication time with a 401 response.
    *
-   * Ownership is enforced — only the key's creator can revoke it.
+   * Only the key's owner can revoke it, unless `opts.allUsers` says the
+   * caller may revoke anyone's keys (the holder of the permission to revoke
+   * keys, or trusted server code).
    *
    * @param id - The API key ID
-   * @param userId - The requesting user's ID (must be the key owner)
+   * @param userId - The requesting user's ID (the key owner, without `allUsers`)
+   * @param opts.allUsers - When true, skips the ownership check
    *
    * @throws NextlyError(NOT_FOUND) if key doesn't exist or is not owned by userId
    */
-  async revokeApiKey(id: string, userId: string): Promise<void> {
-    const existing = await this.getApiKeyById(id, userId);
+  async revokeApiKey(
+    id: string,
+    userId: string,
+    opts?: { allUsers?: boolean }
+  ): Promise<void> {
+    const existing = await this.getApiKeyById(id, userId, opts);
     if (!existing) {
       // Identifier moves to logContext — generic "Not found." in publicMessage.
       throw NextlyError.notFound({ logContext: { keyId: id, userId } });
@@ -748,12 +797,7 @@ export class ApiKeyService extends BaseService {
         this.db
           .update(this.apiKeysTable)
           .set({ isActive: false, updatedAt: now })
-          .where(
-            and(
-              eq(this.apiKeysTable.id, id),
-              eq(this.apiKeysTable.userId, userId)
-            )
-          )
+          .where(this.keyOwnedBy(id, userId, opts))
       );
     } catch (error) {
       // Normalise raw driver errors before mapping so the right NextlyError

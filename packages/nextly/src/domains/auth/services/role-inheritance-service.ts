@@ -8,8 +8,9 @@ import type {
 } from "@nextly/types/rbac-operations";
 
 import { BaseService } from "../../../services/base-service";
-import { invalidatePermissionCache } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
+
+import { afterRoleGrantsChanged } from "./role-grants-changed";
 
 /**
  * Maximum depth for role hierarchy traversal to prevent infinite loops.
@@ -96,7 +97,7 @@ export class RoleInheritanceService extends BaseService {
       }
     }
 
-    await invalidatePermissionCache({ roleId: childRoleId });
+    await afterRoleGrantsChanged(childRoleId);
   }
 
   /**
@@ -118,7 +119,7 @@ export class RoleInheritanceService extends BaseService {
         )
       );
 
-    await invalidatePermissionCache({ roleId: childRoleId });
+    await afterRoleGrantsChanged(childRoleId);
   }
 
   /**

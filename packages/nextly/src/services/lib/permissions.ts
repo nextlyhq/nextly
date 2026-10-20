@@ -481,10 +481,10 @@ class PermissionChecker {
       // instead, which is what a miss would have done anyway.
       //
       // NOT covered by a test, and said here rather than left to look like
-      // coverage: `setCachedPermission` does not take effect under
-      // `createTestNextly` — the table is created and a write followed by a
-      // read returns null — so no test can reach this branch. The predicate
-      // it uses is covered; this call site is not.
+      // coverage: reaching it needs an invalidation to land while this lookup
+      // is in flight, which no test arranges. The predicate it uses is
+      // covered, and so is serving a stored row on every dialect; this call
+      // site's race is not.
       if (stored === null || !resolvedUnderCurrentRevision(resolvedUnder)) {
         return undefined;
       }
@@ -1123,6 +1123,16 @@ function clearInMemoryTiers(): void {
   roleIdToKeys.clear();
   userIdToKeys.clear();
   superAdminCache.clear();
+}
+
+/**
+ * Forget the answers this process holds in memory, and nothing else, for a
+ * test that needs the next check to reach the stored tier as another instance
+ * would. Exported rather than reached through a mock because the state is this
+ * module's own; the stored tier and the epoch are left exactly as they are.
+ */
+export function clearInMemoryPermissionTiersForTests(): void {
+  clearInMemoryTiers();
 }
 
 export async function invalidateAllPermissionCaches(): Promise<void> {

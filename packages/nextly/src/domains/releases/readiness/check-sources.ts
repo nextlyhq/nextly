@@ -34,6 +34,8 @@ import { NextlyError } from "../../../errors";
 import type { ReleaseMemberAction } from "../../../schemas/releases/types";
 import type { ValidationIssue } from "../../../shared/lib/entry-validation";
 import type { UserContext } from "../../collections/services/collection-types";
+import { stopReleasesHolding } from "../early-stop";
+import type { ReleaseRecheckTarget } from "../release-recheck";
 import type {
   DocumentRef,
   ReleaseMemberRow,
@@ -178,11 +180,19 @@ export interface ReleaseCheckSource<Code extends string = string> {
     ctx: ReleaseCheckContext
   ): Promise<readonly ReleaseCheckFinding<Code>[]>;
   /**
-   * Reserved for stopping a scheduled release as soon as a hard problem
-   * appears, rather than at its instant. Declared with the source so a source
-   * cannot add a hard problem that stop would miss. Not read yet.
+   * How this source says that what it judges has changed, so a scheduled
+   * release holding the documents it names is checked again then and
+   * stopped on a hard problem, rather than at its instant: for example, an
+   * approval withdrawn.
+   *
+   * Called once when the source is registered, and handed the function to
+   * call with what changed. Declared with the source, so a source cannot add
+   * a hard problem the early stop would miss: a hard source outside core
+   * must declare one. Core's own sources need none, because core's events
+   * (a draft saved, grants changed, a document deleted, a schema changed)
+   * are wired to the early stop where they happen.
    */
-  stopsEarly?: (member: ReleaseMemberRow) => boolean;
+  signal?: (recheck: (target: ReleaseRecheckTarget) => Promise<void>) => void;
 }
 
 /**
@@ -196,6 +206,12 @@ const SOURCE_KEY = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
 
 /** A code a client switches on: upper snake case. */
 const FINDING_CODE = /^[A-Z][A-Z0-9_]*$/;
+
+/**
+ * The namespace of core's own sources, whose changes core's events report to
+ * the early stop where they happen.
+ */
+const CORE_NAMESPACE = "core.";
 
 /**
  * Declare a source, refusing one whose key, severity or codes are malformed.
@@ -239,6 +255,13 @@ function sourceProblem(source: ReleaseCheckSource<string>): string | null {
   if (bad !== undefined) {
     return `Release check source "${source.key}" has code "${bad}"; codes are upper snake case.`;
   }
+  if (
+    source.severity === "hard" &&
+    !source.key.startsWith(CORE_NAMESPACE) &&
+    source.signal === undefined
+  ) {
+    return `Release check source "${source.key}" is hard and declares no signal: a hard source outside core must say when what it judges changes, so a scheduled release is stopped then.`;
+  }
   return null;
 }
 
@@ -257,6 +280,9 @@ export function registerReleaseCheckSource<Code extends string>(
   source: ReleaseCheckSource<Code>
 ): void {
   sources.set(source.key, defineReleaseCheckSource(source));
+  // Connected as it is registered, so no source is in the checks without its
+  // signal reaching the early stop. A reload hands it the same function again.
+  source.signal?.(stopReleasesHolding);
 }
 
 /** Every registered source, in the order they were first registered. */

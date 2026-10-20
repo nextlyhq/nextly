@@ -27,7 +27,11 @@
  * @module domains/releases/plan-release-materialisation
  */
 
-import type { DocumentRef, DrainMemberRow } from "./releases-repository";
+import type {
+  BlockRequest,
+  DocumentRef,
+  DrainMemberRow,
+} from "./releases-repository";
 import { documentRefKey, memberAppliedFor } from "./releases-repository";
 import { resolveReleaseEffect } from "./resolve-release-effect";
 import type { DueMember } from "./resolve-release-effect";
@@ -217,6 +221,34 @@ function groupBySharedDocument(
     sets.set(root, set);
   }
   return [...sets.values()];
+}
+
+/**
+ * What to stop, one list per component of `plan` holding a release in
+ * `stopping`: every release of that component, each with the fence `fenceOf`
+ * gives it, for one `blockReleases` call apiece.
+ *
+ * The WHOLE component, because a component moves together: stopping one of
+ * releases that share documents leaves the rest the winners on every one of
+ * them, and two releases tied on an instant can each win a different
+ * document, so the one left behind applies the opposite of what the component
+ * would have. A component with a release `fenceOf` cannot fence is left out
+ * whole rather than split, for a later pass to plan again.
+ */
+export function componentsToStop(
+  plan: Pick<MaterialisationPlan, "overlappingReleases">,
+  stopping: ReadonlySet<string>,
+  fenceOf: (releaseId: string) => BlockRequest | undefined
+): BlockRequest[][] {
+  const components: BlockRequest[][] = [];
+  for (const group of plan.overlappingReleases) {
+    if (!group.some(id => stopping.has(id))) continue;
+    const entries = group.map(fenceOf);
+    if (entries.every((entry): entry is BlockRequest => entry !== undefined)) {
+      components.push(entries);
+    }
+  }
+  return components;
 }
 
 function refOf(member: DrainMemberRow): DocumentRef {
