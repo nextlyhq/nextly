@@ -171,6 +171,10 @@ export function useReleaseTabCounts(filters: {
     counts,
     isPending: results.some(result => result.isPending),
     isError: results.some(result => result.isError),
+    /** Ask every tab's count again, as a retry after a failure. */
+    refetch: () => {
+      for (const result of results) void result.refetch();
+    },
   };
 }
 

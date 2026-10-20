@@ -14,7 +14,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../../config";
 import {
@@ -26,12 +26,14 @@ import {
 import { RELEASE_MEMBER_LIMIT } from "../../../schemas/releases/types";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { releaseMemberKey } from "../release-member-key";
+import { ReleasesRepository } from "../releases-repository";
 
 import { seedPlainAuthor } from "./helpers/live-author";
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -246,16 +248,32 @@ describe.each(getConfiguredTestDialects())(
       ).resolves.toEqual([]);
     });
 
-    it("leaves a release over the document limit unchecked, and says so", async () => {
+    it("leaves a release over the document limit unchecked, without loading its documents", async () => {
       const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
       const oversized = (await t.nextly.releases.create({ title: "Old" })).id;
       await insertMembers(t, oversized, RELEASE_MEMBER_LIMIT + 1);
-
-      await expect(
-        t.nextly.releases.readinessOf({ releaseIds: [oversized] })
-      ).resolves.toEqual([
-        { releaseId: oversized, checked: false, reason: "over-member-limit" },
+      const within = await releaseOf(t, author, [
+        { id: await article(t), action: "publish" },
       ]);
+      // Every member row the batch loads goes through this read; the
+      // oversized release's must never be asked for, so the read is bounded
+      // by the limit and not by what a legacy release holds.
+      const loaded = vi.spyOn(
+        ReleasesRepository.prototype,
+        "listMembersInOrderOf"
+      );
+
+      const batch = await t.nextly.releases.readinessOf({
+        releaseIds: [oversized, within],
+      });
+      expect(batch).toEqual([
+        { releaseId: oversized, checked: false, reason: "over-member-limit" },
+        expect.objectContaining({ releaseId: within, checked: true }),
+      ]);
+      const asked = loaded.mock.calls.flatMap(([ids]) => [...ids]);
+      expect(asked).toContain(within);
+      expect(asked).not.toContain(oversized);
       // Its counts are still read in full.
       await expect(
         t.nextly.releases.memberCounts({ releaseIds: [oversized] })

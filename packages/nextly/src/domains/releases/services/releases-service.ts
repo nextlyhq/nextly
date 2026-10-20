@@ -1772,8 +1772,10 @@ export class ReleasesService {
    * The single read's own path: the same authorization, the same sources,
    * the same per-release evaluation over the release's members in the order
    * the single read takes them, so each entry is exactly what reading that
-   * release alone would answer. Only the reads are shared: the releases and
-   * their members come in one query each instead of one per release.
+   * release alone would answer. Only the reads are shared: the releases,
+   * their member counts and their members come in one query each instead of
+   * one per release, and members are read only for releases within the
+   * limit.
    *
    * A release that does not exist is left out, as the single read would have
    * answered not found for it. One holding more documents than the limit is
@@ -1793,8 +1795,17 @@ export class ReleasesService {
     );
     if (ids.length === 0) return [];
     const releases = await this.deps.repository.findReleases({ ids });
+    // Counted before anything is loaded, so a release holding more than the
+    // limit has none of its documents read: the batch is bounded by the
+    // limit, not by what a release made before it happens to hold.
+    const held = await this.deps.repository.memberCountsOf(ids);
+    const checkable = ids.filter(
+      id => (held.get(id) ?? 0) <= RELEASE_MEMBER_LIMIT
+    );
     const membersByRelease = new Map<string, ReleaseMemberRow[]>();
-    for (const member of await this.deps.repository.listMembersInOrderOf(ids)) {
+    for (const member of await this.deps.repository.listMembersInOrderOf(
+      checkable
+    )) {
       const held = membersByRelease.get(member.releaseId) ?? [];
       held.push(member);
       membersByRelease.set(member.releaseId, held);
@@ -1804,8 +1815,7 @@ export class ReleasesService {
     for (const id of ids) {
       const release = byId.get(id);
       if (release === undefined) continue;
-      const members = membersByRelease.get(id) ?? [];
-      if (members.length > RELEASE_MEMBER_LIMIT) {
+      if ((held.get(id) ?? 0) > RELEASE_MEMBER_LIMIT) {
         entries.push({
           releaseId: id,
           checked: false,
@@ -1815,7 +1825,7 @@ export class ReleasesService {
       }
       const found = await this.checkMembers(
         release,
-        members,
+        membersByRelease.get(id) ?? [],
         registeredReleaseCheckSources()
       );
       entries.push({ releaseId: id, ...found, checked: true });

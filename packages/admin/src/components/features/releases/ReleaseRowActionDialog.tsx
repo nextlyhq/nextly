@@ -11,8 +11,15 @@
  * a refusal that appears after the dialog has gone is missed by exactly the
  * person who believes the release was published, cancelled or deleted.
  *
+ * "Nothing changed" is said only for a refusal the server answered. A request
+ * whose answer was lost may have done its work, so the release is read again
+ * and the dialog says what is true now (`release-lost-answer`).
+ *
  * @module components/features/releases/ReleaseRowActionDialog
  */
+
+import { useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 
 import {
   AlertDialog,
@@ -25,13 +32,22 @@ import {
   Button,
 } from "@admin/components/ui";
 import {
+  releaseKeys,
   useCancelRelease,
   useDeleteRelease,
   usePublishReleaseNow,
 } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
-import { releaseErrorMessage } from "./release-error";
+import { isDefiniteRefusal, releaseErrorMessage } from "./release-error";
+import {
+  describeAfterLostAnswer,
+  readReleaseAfterLostAnswer,
+} from "./release-lost-answer";
+
+/** Shown while the release is read again after a lost answer. */
+const CHECKING =
+  "The connection was lost before the server answered. Checking the release…";
 
 export type ReleaseRowAction = "publish" | "cancel" | "delete";
 
@@ -109,8 +125,26 @@ export function ReleaseRowActionDialog({
   const mutation =
     action === "publish" ? publish : action === "cancel" ? cancel : remove;
   const words = wordsFor(action, release);
+  const queryClient = useQueryClient();
+  // What is true now, after a request whose answer never came: null while
+  // there is no such failure, or for a refusal the server did answer.
+  const [afterLoss, setAfterLoss] = useState<string | null>(null);
+
+  const onFailed = async (error: unknown) => {
+    if (isDefiniteRefusal(error)) return;
+    setAfterLoss(CHECKING);
+    const after = await readReleaseAfterLostAnswer(release.id);
+    // Whatever happened is now the list's to show as well.
+    void queryClient.invalidateQueries({ queryKey: releaseKeys.all() });
+    setAfterLoss(describeAfterLostAnswer(action, after));
+  };
+
   const confirm = () => {
-    const done = { onSuccess: () => onOpenChange(false) };
+    setAfterLoss(null);
+    const done = {
+      onSuccess: () => onOpenChange(false),
+      onError: (error: unknown) => void onFailed(error),
+    };
     if (action === "publish") publish.mutate(undefined, done);
     else if (action === "cancel") cancel.mutate(undefined, done);
     else remove.mutate(undefined, done);
@@ -122,7 +156,10 @@ export function ReleaseRowActionDialog({
       onOpenChange={next => {
         // Dismissing clears a failure too, so the next action on this release
         // does not open onto the last one's error.
-        if (!next) mutation.reset();
+        if (!next) {
+          mutation.reset();
+          setAfterLoss(null);
+        }
         onOpenChange(next);
       }}
     >
@@ -133,7 +170,7 @@ export function ReleaseRowActionDialog({
         </AlertDialogHeader>
         {mutation.isError ? (
           <p role="alert" className="text-sm text-destructive">
-            {releaseErrorMessage(mutation.error, words.failed)}
+            {afterLoss ?? releaseErrorMessage(mutation.error, words.failed)}
           </p>
         ) : null}
         <AlertDialogFooter>

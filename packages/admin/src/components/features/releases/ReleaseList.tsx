@@ -20,7 +20,7 @@
  * @module components/features/releases/ReleaseList
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import {
   CalendarClock,
@@ -30,6 +30,7 @@ import {
   Plus,
   Search,
 } from "@admin/components/icons";
+import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
 import type { PaginationProps } from "@admin/components/shared/pagination/types";
 import {
   Button,
@@ -44,11 +45,7 @@ import type {
   NextlyColumn,
   RowAction,
 } from "@admin/components/ui/table/data-table";
-import {
-  ListView,
-  type ListEmpty,
-  type ListSlots,
-} from "@admin/components/ui/table/list-view";
+import { ListView, type ListEmpty } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
@@ -63,6 +60,7 @@ import { cn } from "@admin/lib/utils";
 import {
   RELEASE_LIST_TABS,
   type Release,
+  type ReleaseListParams,
   type ReleaseAttentionReason,
   type ReleaseListTab,
 } from "@admin/types/releases";
@@ -409,25 +407,52 @@ function tabName(tab: ReleaseListTab, count: number | undefined): string {
 }
 
 /** The note above a Needs attention list narrowed to one of its parts. */
-function reasonNotice(
-  reason: ReleaseAttentionReason | undefined
-): ListSlots | undefined {
-  if (!reason) return undefined;
-  return {
-    beforeTable: (
-      <p className="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
-        Showing only {reason} releases.
-        <Button
-          variant="link"
-          size="sm"
-          className="h-auto px-0"
-          onClick={() => setSearchParams({ reason: null })}
-        >
-          Show everything that needs attention
-        </Button>
-      </p>
-    ),
-  };
+function reasonNotice(reason: ReleaseAttentionReason | undefined): ReactNode {
+  if (!reason) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-x-2 text-sm text-muted-foreground">
+      Showing only {reason} releases.
+      <Button
+        variant="link"
+        size="sm"
+        className="h-auto px-0"
+        onClick={() => setSearchParams({ reason: null })}
+      >
+        Show everything that needs attention
+      </Button>
+    </p>
+  );
+}
+
+/**
+ * A read that failed, said as a failure, with a way to try again.
+ *
+ * The admin's own section error state, so it reads like every other failed
+ * section. Which read failed decides the words: a failed list is no list at
+ * all, while failed counts leave the rows true but the tab totals unknown.
+ */
+function ReleaseReadFailure({
+  listFailed,
+  onRetry,
+}: {
+  listFailed: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <SectionErrorFallback
+      title={
+        listFailed
+          ? "Releases could not be loaded"
+          : "Release counts could not be loaded"
+      }
+      description={
+        listFailed
+          ? "This is a failed request, not an empty list. Try again in a moment."
+          : "The number of releases in each tab is unknown, so a tab that looks empty may not be. Try again in a moment."
+      }
+      reset={onRetry}
+    />
+  );
 }
 
 /** The pager under a tab, or none for a tab with nothing in it. */
@@ -572,6 +597,28 @@ function ReleaseRowDialogs({
 }
 
 /**
+ * Keep the page inside the tab it pages through.
+ *
+ * A tab shrinks under the reader: the only release on the last page is
+ * published, cancelled or deleted, here or by the runner between two polls.
+ * The server then answers a page past the end with no rows, and the list would
+ * show its empty state with no pager to get back. So once an answer for this
+ * page (not a placeholder from the last one) says the page is past the end,
+ * the list moves to the last page, or the first when the tab is empty.
+ */
+function useClampedPage(
+  q: { page: number; pageSize: number; setPage: (page: number) => void },
+  total: number | undefined
+): void {
+  const { page, pageSize, setPage } = q;
+  useEffect(() => {
+    if (total === undefined) return;
+    const last = Math.max(0, Math.ceil(total / pageSize) - 1);
+    if (page > last) setPage(last);
+  }, [total, page, pageSize, setPage]);
+}
+
+/**
  * What the checks say about each release on the page, from ONE read.
  *
  * Asked only for the rows that have something to check: a release with no
@@ -610,26 +657,140 @@ export interface ReleaseListProps {
   onCreate?: () => void;
 }
 
-export function ReleaseList({ onCreate }: ReleaseListProps) {
-  const q = useReleaseListQuestion();
-  const counts = useReleaseTabCounts({ search: q.search, kind: q.kind });
-  const list = useReleaseListPage({
+/** The list read one tab's question makes. */
+function listParamsFor(
+  q: ReturnType<typeof useReleaseListQuestion>
+): ReleaseListParams {
+  const params: ReleaseListParams = {
     tab: q.tab,
     page: q.page + 1,
     limit: q.pageSize,
-    ...(q.reason ? { reason: q.reason } : {}),
-    ...(q.search ? { search: q.search } : {}),
-    ...(q.kind ? { kind: q.kind } : {}),
-  });
+  };
+  if (q.reason) params.reason = q.reason;
+  if (q.search) params.search = q.search;
+  if (q.kind) params.kind = q.kind;
+  return params;
+}
 
+/**
+ * Whether any release may exist. "None at all" is said only when every count
+ * answered zero with no search or filter in force and the page holds none
+ * either: a count that has not answered, or failed, is unknown, never zero.
+ */
+function anyReleaseMayExist(
+  q: ReturnType<typeof useReleaseListQuestion>,
+  counts: ReturnType<typeof useReleaseTabCounts>,
+  pageTotal: number
+): boolean {
+  if (q.search || q.hideSingles || pageTotal > 0) return true;
+  if (counts.isPending || counts.isError) return true;
+  return RELEASE_LIST_TABS.some(t => (counts.counts[t] ?? 0) > 0);
+}
+
+/**
+ * What one tab of the list reads, and what follows from it: the page and its
+ * total, the counts, whether any release exists, and a failure to show.
+ */
+function useReleaseListData(q: ReturnType<typeof useReleaseListQuestion>) {
+  const counts = useReleaseTabCounts({ search: q.search, kind: q.kind });
+  const list = useReleaseListPage(listParamsFor(q));
+  useClampedPage(q, list.isPlaceholderData ? undefined : list.data?.meta.total);
   const readiness = usePageReadiness(q.tab, list.data?.items);
+  const total = list.data?.meta.total ?? 0;
+  // A failed read is shown as a failure, with a retry, and never as an empty
+  // tab: "Nothing needs attention" read from a request that failed tells an
+  // editor a stopped release is fine.
+  const failed = list.isError || counts.isError;
+  return {
+    counts,
+    list,
+    readiness,
+    total,
+    rows: list.data?.items ?? [],
+    anyRelease: anyReleaseMayExist(q, counts, total),
+    failure: failed ? (
+      <ReleaseReadFailure
+        listFailed={list.isError}
+        onRetry={() => {
+          void list.refetch();
+          counts.refetch();
+        }}
+      />
+    ) : null,
+  };
+}
+
+/** The list toolbar's search and filter, offered once any release exists. */
+function toolbarFor(
+  q: ReturnType<typeof useReleaseListQuestion>,
+  anyRelease: boolean,
+  searching: boolean
+) {
+  if (!anyRelease) return { search: undefined, inlineFilters: undefined };
+  return {
+    search: {
+      value: q.search,
+      onChange: q.setSearch,
+      placeholder: "Search by title or description",
+      isLoading: searching,
+    },
+    inlineFilters: (
+      <HideSinglesSwitch checked={q.hideSingles} onChange={q.setHideSingles} />
+    ),
+  };
+}
+
+/** The tab strip, its counts, and the fades where tabs run past its edge. */
+function ReleaseTabStrip({
+  tab,
+  counts,
+}: {
+  tab: ReleaseListTab;
+  counts: Record<ReleaseListTab, number | undefined>;
+}) {
+  const strip = useTabStripOverflow(tab);
+  return (
+    <div ref={strip.ref} className="relative">
+      <TabsList
+        scrollable
+        aria-label="Releases by state"
+        className="justify-start"
+      >
+        {RELEASE_LIST_TABS.map(t => (
+          <TabsTrigger key={t} value={t} aria-label={tabName(t, counts[t])}>
+            <TabLabel tab={t} count={counts[t]} />
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      {/* A fade where tabs run past the edge, so a cut-off tab reads as more
+          to scroll to rather than as the end of the strip. Stops a pixel short
+          of the rail, which stays drawn the full width. */}
+      {strip.edges.start ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 bottom-px left-0 w-10 bg-gradient-to-r from-background to-transparent"
+        />
+      ) : null}
+      {strip.edges.end ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 bottom-px right-0 w-10 bg-gradient-to-l from-background to-transparent"
+        />
+      ) : null}
+    </div>
+  );
+}
+
+export function ReleaseList({ onCreate }: ReleaseListProps) {
+  const q = useReleaseListQuestion();
+  const data = useReleaseListData(q);
+  const { counts, list, rows, total, anyRelease, failure } = data;
   const zone = useMemo(() => readerZone(), []);
   const now = useMinuteClock();
   const columns = useMemo(
-    () => releaseColumns(q.tab, zone, now, readiness),
-    [q.tab, zone, now, readiness]
+    () => releaseColumns(q.tab, zone, now, data.readiness),
+    [q.tab, zone, now, data.readiness]
   );
-  const strip = useTabStripOverflow(q.tab);
 
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -638,38 +799,12 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
     setDialogOpen(true);
   };
 
-  // Known only once every count has answered with no search or filter in
-  // force; until then the tabs' own empty states are the honest ones.
-  const anyRelease =
-    Boolean(q.search) ||
-    q.hideSingles ||
-    counts.isPending ||
-    RELEASE_LIST_TABS.some(t => (counts.counts[t] ?? 0) > 0);
-  const total = list.data?.meta.total ?? 0;
-
   const panel = (
     <ListView<Release>
-      search={
-        anyRelease
-          ? {
-              value: q.search,
-              onChange: q.setSearch,
-              placeholder: "Search by title or description",
-              isLoading: list.isFetching && Boolean(q.search),
-            }
-          : undefined
-      }
-      inlineFilters={
-        anyRelease ? (
-          <HideSinglesSwitch
-            checked={q.hideSingles}
-            onChange={q.setHideSingles}
-          />
-        ) : undefined
-      }
+      {...toolbarFor(q, anyRelease, list.isFetching && Boolean(q.search))}
       hasActiveFilters={q.hideSingles || Boolean(q.reason)}
       columns={columns}
-      rows={list.data?.items ?? []}
+      rows={rows}
       getRowId={release => release.id}
       rowHref={release =>
         buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })
@@ -679,7 +814,7 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
       registryKey="releases"
       ariaLabel={`${RELEASE_TAB_LABEL[q.tab]} releases`}
       loading={list.isPending}
-      error={list.isError ? "Releases could not be loaded." : null}
+      error={null}
       empty={emptyStateFor(q.tab, {
         anyRelease,
         drafts: counts.counts.drafts ?? 0,
@@ -691,7 +826,10 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
         reason: q.reason,
         onClear: q.clearFilters,
       })}
-      slots={reasonNotice(q.reason)}
+      slots={{
+        beforeList: failure,
+        beforeTable: reasonNotice(q.reason),
+      }}
       pagination={pagerFor({
         total,
         page: q.page,
@@ -701,6 +839,9 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
       })}
     />
   );
+  // With no rows to keep, a failure stands in the list's place rather than
+  // above an empty state that would contradict it.
+  const body = failure && rows.length === 0 ? failure : panel;
 
   return (
     <>
@@ -708,43 +849,12 @@ export function ReleaseList({ onCreate }: ReleaseListProps) {
         value={q.tab}
         onValueChange={next => isListTab(next) && goToTab(next)}
       >
-        <div ref={strip.ref} className="relative">
-          <TabsList
-            scrollable
-            aria-label="Releases by state"
-            className="justify-start"
-          >
-            {RELEASE_LIST_TABS.map(t => (
-              <TabsTrigger
-                key={t}
-                value={t}
-                aria-label={tabName(t, counts.counts[t])}
-              >
-                <TabLabel tab={t} count={counts.counts[t]} />
-              </TabsTrigger>
-            ))}
-          </TabsList>
-          {/* A fade where tabs run past the edge, so a cut-off tab reads as
-              more to scroll to rather than as the end of the strip. Stops a
-              pixel short of the rail, which stays drawn the full width. */}
-          {strip.edges.start ? (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 bottom-px left-0 w-10 bg-gradient-to-r from-background to-transparent"
-            />
-          ) : null}
-          {strip.edges.end ? (
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 bottom-px right-0 w-10 bg-gradient-to-l from-background to-transparent"
-            />
-          ) : null}
-        </div>
+        <ReleaseTabStrip tab={q.tab} counts={counts.counts} />
         {/* One panel per tab for the tablist's own wiring; only the open
             tab's panel holds the list. */}
         {RELEASE_LIST_TABS.map(t => (
           <TabsContent key={t} value={t} className="mt-6">
-            {t === q.tab ? panel : null}
+            {t === q.tab ? body : null}
           </TabsContent>
         ))}
       </Tabs>

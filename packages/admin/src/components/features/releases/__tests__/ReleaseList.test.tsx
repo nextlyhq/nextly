@@ -12,12 +12,14 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { render, screen, within } from "@admin/__tests__/utils";
+import { render, screen, waitFor, within } from "@admin/__tests__/utils";
 
 const mocks = vi.hoisted(() => ({
   listPage: vi.fn(),
   tabCounts: vi.fn(),
   readiness: vi.fn(),
+  refetchCounts: vi.fn(),
+  refetchList: vi.fn(),
   navigateTo: vi.fn(),
   setSearchParams: vi.fn(),
   searchParams: {} as Record<string, string>,
@@ -101,9 +103,9 @@ function release(over: Record<string, unknown> = {}) {
   };
 }
 
-function page(items: unknown[]) {
+function page(items: unknown[], total = items.length) {
   return {
-    data: { items, meta: { total: items.length, hasNext: false } },
+    data: { items, meta: { total, hasNext: false } },
     isPending: false,
     isError: false,
     isFetching: false,
@@ -442,6 +444,96 @@ describe("the list's empty states", () => {
     // Nothing to search or filter yet.
     expect(screen.queryByRole("searchbox")).toBeNull();
     expect(screen.queryByRole("switch")).toBeNull();
+  });
+});
+
+describe("a read that failed", () => {
+  const failedCounts = () => ({
+    counts: {
+      upcoming: undefined,
+      attention: undefined,
+      drafts: undefined,
+      done: undefined,
+    },
+    isPending: false,
+    isError: true,
+    refetch: mocks.refetchCounts,
+  });
+
+  it("shows the error with a retry on Needs attention, never 'Nothing needs attention'", async () => {
+    const user = userEvent.setup();
+    mocks.searchParams = { tab: "attention" };
+    mocks.tabCounts.mockReturnValue(failedCounts());
+    mocks.listPage.mockReturnValue({ ...page([]), refetch: mocks.refetchList });
+    render(<ReleaseList />);
+    expect(
+      screen.queryByRole("heading", { name: "Nothing needs attention" })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Plan your first release" })
+    ).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Try Again/ }));
+    expect(mocks.refetchCounts).toHaveBeenCalled();
+    expect(mocks.refetchList).toHaveBeenCalled();
+  });
+
+  it("keeps the rows a successful list read returned, with their controls", () => {
+    mocks.searchParams = { tab: "attention" };
+    mocks.tabCounts.mockReturnValue(failedCounts());
+    mocks.listPage.mockReturnValue(page([release({ title: "Late one" })]));
+    render(<ReleaseList />);
+    expect(table().getByText("Late one")).toBeTruthy();
+    expect(
+      screen.getByPlaceholderText("Search by title or description")
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("switch", { name: "Hide single documents" })
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Try Again/ })).toBeTruthy();
+  });
+
+  it("shows the error with a retry when the list read itself failed", () => {
+    mocks.listPage.mockReturnValue({
+      data: undefined,
+      isPending: false,
+      isError: true,
+      isFetching: false,
+      refetch: mocks.refetchList,
+    });
+    render(<ReleaseList />);
+    expect(screen.getByRole("button", { name: /Try Again/ })).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Nothing is scheduled" })
+    ).toBeNull();
+  });
+});
+
+describe("paging when a tab shrinks", () => {
+  it("moves back to the last page when the only row on a later page goes", async () => {
+    const user = userEvent.setup();
+    const rows = Array.from({ length: 25 }, (_, i) =>
+      release({ id: `r${i}`, title: `Release ${i}` })
+    );
+    let total = 26;
+    mocks.listPage.mockImplementation(({ page: number }: { page: number }) =>
+      number === 1 ? page(rows, total) : page([], total)
+    );
+    const { rerender } = render(<ReleaseList />);
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    expect(mocks.listPage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 2 })
+    );
+
+    // The only release on page 2 is published: the next answer (a poll, or
+    // the refresh after the action) has one release fewer and no page 2.
+    total = 25;
+    rerender(<ReleaseList />);
+    await waitFor(() =>
+      expect(mocks.listPage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ page: 1 })
+      )
+    );
+    expect(screen.getByText(/Showing 1.25 of 25/)).toBeTruthy();
   });
 });
 
