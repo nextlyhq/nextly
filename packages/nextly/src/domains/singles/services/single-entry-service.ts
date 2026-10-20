@@ -213,18 +213,6 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
-   * This Single's lifecycle as stored, past every read hook: the main row's
-   * status and each translation's. See the mutation service.
-   *
-   * @experimental
-   */
-  async releaseStoredLifecycle(
-    params: Parameters<SingleMutationService["releaseStoredLifecycle"]>[0]
-  ): ReturnType<SingleMutationService["releaseStoredLifecycle"]> {
-    return this.mutationService.releaseStoredLifecycle(params);
-  }
-
-  /**
    * The languages whose unreleased work a release's document-wide write of
    * this Single would be refused over. See the mutation service.
    *

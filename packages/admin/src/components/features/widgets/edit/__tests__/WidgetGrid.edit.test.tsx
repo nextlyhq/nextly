@@ -1168,7 +1168,7 @@ describe("a stored dashboard the server could not read", () => {
 });
 
 describe("a widget that draws nothing", () => {
-  it("leaves its grid cell with no children, so `empty:hidden` can collapse it", () => {
+  it("leaves its grid cell with no children, so `empty:hidden` can collapse it", async () => {
     // 🔴 The cell hides itself through CSS `:empty`, which counts ELEMENT
     // CHILDREN rather than rendered output.
     registerCoreComponent("core#Nothing", () => null);
@@ -1187,11 +1187,11 @@ describe("a widget that draws nothing", () => {
     layoutResponse = layout([{ id: "p1", widgetId: "core/silent" }]);
     renderGrid();
 
-    const cell = screen.getByTestId("widget-cell-core/silent");
+    const cell = await screen.findByTestId("widget-cell-core/silent");
     expect(cell.childElementCount).toBe(0);
   });
 
-  it("DOES fill its cell when the same widget is framed", () => {
+  it("DOES fill its cell when the same widget is framed", async () => {
     registerCoreComponent("core#Nothing", () => null);
     mockBranding = {
       widgets: [
@@ -1208,7 +1208,7 @@ describe("a widget that draws nothing", () => {
     renderGrid();
 
     expect(
-      screen.getByTestId("widget-cell-core/framed").childElementCount
+      (await screen.findByTestId("widget-cell-core/framed")).childElementCount
     ).toBeGreaterThan(0);
   });
 

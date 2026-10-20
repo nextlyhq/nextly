@@ -93,6 +93,9 @@ describe("handleSession dev-auto-login", () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringMatching(/devAutoLogin ignored: NODE_ENV=production/)
       );
+      // A production log is not a place for an address, the configured
+      // dev account's included.
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("dev@nextly.local");
       // findUserByEmail should NEVER be called in prod, even with config set.
       expect(deps.findUserByEmail).not.toHaveBeenCalled();
     });

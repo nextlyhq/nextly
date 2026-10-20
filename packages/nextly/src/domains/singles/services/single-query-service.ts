@@ -53,7 +53,10 @@ import {
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import { isSuperAdminContext } from "../../../services/access";
-import type { CollectionRelationshipService } from "../../../services/collections/collection-relationship-service";
+import {
+  effectiveRelationshipDepth,
+  type CollectionRelationshipService,
+} from "../../../services/collections/collection-relationship-service";
 import type { RelatedRowReadContext } from "../../../services/collections/related-row-read-context";
 import {
   applyMediaTrustBound,
@@ -788,10 +791,10 @@ export class SingleQueryService extends BaseService {
     // The snapshot stores JSON-backed fields serialized and relations as ids,
     // exactly as the live row does, so the same stages restore both.
     let overlaid = this.deserializeJsonFields(shaped, singleMeta.fields);
-    overlaid = await this.expandUploadFields(
+    overlaid = await this.readUploadFields(
       overlaid,
       singleMeta.fields,
-      expansionAccess(options)
+      options
     );
     // The SAME context the live document's relationships were read under,
     // so a related row is judged identically whether it arrived through the
@@ -878,11 +881,7 @@ export class SingleQueryService extends BaseService {
     }
 
     doc = this.deserializeJsonFields(doc, singleMeta.fields);
-    doc = await this.expandUploadFields(
-      doc,
-      singleMeta.fields,
-      expansionAccess(options)
-    );
+    doc = await this.readUploadFields(doc, singleMeta.fields, options);
     // The language this read resolved to, shared by both expansions below so a
     // related row and a related row inside a component are judged alike.
     const readLocale = resolveLocaleChain(
@@ -2067,6 +2066,25 @@ export class SingleQueryService extends BaseService {
     return deserializeJsonFields(doc, fields, this.logger, value =>
       this.normalizeDbTimestamp(value)
     );
+  }
+
+  /**
+   * A read's upload fields, populated to the depth it asked for.
+   *
+   * At depth 0 a read populates nothing, and a collection's uploads and every
+   * relationship already answer with the ids as stored there. An upload is
+   * given the same way, in stored order, whether or not the caller may read the
+   * media or it still exists, so an editor saving the document back keeps it.
+   */
+  private async readUploadFields(
+    doc: SingleDocument,
+    fields: FieldConfig[],
+    options: GetSingleOptions
+  ): Promise<SingleDocument> {
+    if (effectiveRelationshipDepth(options.depth ?? DEFAULT_READ_DEPTH) === 0) {
+      return doc;
+    }
+    return this.expandUploadFields(doc, fields, expansionAccess(options));
   }
 
   /**

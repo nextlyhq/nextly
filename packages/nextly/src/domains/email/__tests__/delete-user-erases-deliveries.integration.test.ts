@@ -31,9 +31,9 @@ import { SchemaRegistry } from "../../../database/schema-registry";
 import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite";
 import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
 import {
-  roles as rolesSqlite,
-  userRoles as userRolesSqlite,
-} from "../../../schemas/rbac/sqlite";
+  ADMINISTRATOR_TABLES_SQLITE,
+  makeAdministrator,
+} from "../../users/__tests__/administrator-fixture";
 import { users as usersSqlite } from "../../../schemas/users/sqlite";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
@@ -63,8 +63,7 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
-      roles: rolesSqlite,
-      userRoles: userRolesSqlite,
+      ...ADMINISTRATOR_TABLES_SQLITE,
       // The mutation service records user.deleted to the outbox whenever
       // recording is active, and that gate is process-wide.
       nextlyEvents: eventsSqlite,
@@ -116,14 +115,17 @@ describe("deleteUser erases the delivery log (real SQLite)", () => {
     for (const stmt of await ddl()) {
       await adapter.executeQuery(stmt);
     }
-    // A sentinel so createLocalUser never takes its "first user ever" branch,
-    // which needs more of the RBAC wiring than this suite installs.
+    // An administrator already, so no account this suite creates is made the
+    // install's first one: deleting it would then be refused as removing the
+    // last administrator. A user row alone does not settle that; holding the
+    // role does.
     const nowEpoch = Math.floor(Date.now() / 1000);
     await adapter.executeQuery(
       `INSERT INTO users (id, email, name, is_active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       ["sentinel", "sentinel@test.local", "Sentinel", 1, nowEpoch, nowEpoch]
     );
+    await makeAdministrator(adapter, "sentinel");
     const registry = new SchemaRegistry("sqlite");
     registry.registerStaticSchemas(getDialectTables("sqlite"));
     adapter.setTableResolver(registry);

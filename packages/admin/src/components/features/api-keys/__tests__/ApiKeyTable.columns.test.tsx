@@ -16,6 +16,7 @@ import { ApiKeyTable } from "../ApiKeyTable";
 const TOGGLEABLE = [
   "tokenType",
   "keyPrefix",
+  "owner",
   "expiresAt",
   "lastUsedAt",
   "isActive",
@@ -29,6 +30,7 @@ const KEY: ApiKeyMeta = {
   keyPrefix: "nx_live_abcdef",
   tokenType: "read-only",
   role: null,
+  owner: { id: "u-ada", name: "Ada Lovelace", email: "ada@example.com" },
   expiresAt: null,
   lastUsedAt: null,
   isActive: true,
@@ -67,5 +69,21 @@ describe("ApiKeyTable columns", () => {
     expect(within(table).getAllByText("Type").length).toBeGreaterThan(0);
     expect(within(table).queryByText("ID")).toBeNull();
     expect(screen.queryByText("abcdefgh...")).toBeNull();
+  });
+
+  it("names each key's owner, and a deleted one as such", () => {
+    render(
+      <ApiKeyTable
+        data={[KEY, { ...KEY, id: "orphaned-key-1", owner: null }]}
+        onEdit={vi.fn()}
+        onRevoke={vi.fn()}
+        canEdit
+        canRevoke
+      />
+    );
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByText("Owner").length).toBeGreaterThan(0);
+    expect(within(table).getByText("Ada Lovelace")).toBeTruthy();
+    expect(within(table).getByText("Deleted user")).toBeTruthy();
   });
 });

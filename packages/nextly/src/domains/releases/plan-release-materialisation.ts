@@ -27,8 +27,8 @@
  * @module domains/releases/plan-release-materialisation
  */
 
-import type { DocumentRef, ReleaseMemberRow } from "./releases-repository";
-import { documentRefKey } from "./releases-repository";
+import type { DocumentRef, DrainMemberRow } from "./releases-repository";
+import { documentRefKey, memberAppliedFor } from "./releases-repository";
 import { resolveReleaseEffect } from "./resolve-release-effect";
 import type { DueMember } from "./resolve-release-effect";
 
@@ -36,6 +36,8 @@ import type { DueMember } from "./resolve-release-effect";
 export interface DueRelease {
   id: string;
   scheduledAt: Date;
+  /** The release's revision as this pass read it; see `appliedRevision`. */
+  revision: number;
 }
 
 /** One document to change, and who to change it as. */
@@ -63,6 +65,21 @@ export interface MaterialisationAction {
    * means; this module has no business inventing an actor.
    */
   createdBy: string | null;
+  /**
+   * The winning release's revision as this pass read it: what the write marks
+   * its member with, so a later pass can tell it was applied.
+   */
+  revision: number;
+  /**
+   * Whether the winning member's own write already applied it for that
+   * revision, on a pass that ended before its release could be settled.
+   *
+   * Kept in the plan rather than dropped from it, because the action still
+   * belongs to its release: the release settles once every action is applied
+   * or already was, and an action missing from the plan would read as one
+   * never attempted.
+   */
+  applied: boolean;
 }
 
 export interface MaterialisationPlan {
@@ -97,10 +114,11 @@ export interface MaterialisationPlan {
  */
 export function planReleaseMaterialisation(input: {
   releases: DueRelease[];
-  members: ReleaseMemberRow[];
+  members: DrainMemberRow[];
   now: Date;
 }): MaterialisationPlan {
   const scheduledAt = new Map(input.releases.map(r => [r.id, r.scheduledAt]));
+  const revisionOf = new Map(input.releases.map(r => [r.id, r.revision]));
 
   const grouped = new Map<string, { ref: DocumentRef; due: DueMember[] }>();
   for (const member of input.members) {
@@ -120,7 +138,7 @@ export function planReleaseMaterialisation(input: {
     grouped.set(key, bucket);
   }
 
-  const authorOf = new Map(input.members.map(m => [m.id, m.createdBy]));
+  const memberById = new Map(input.members.map(m => [m.id, m]));
   const actions: MaterialisationAction[] = [];
   for (const { ref, due } of grouped.values()) {
     const decision = resolveReleaseEffect({ members: due, now: input.now });
@@ -130,14 +148,24 @@ export function planReleaseMaterialisation(input: {
     // costs nothing and keeps the plan's own invariant local.
     if (decision.memberId === null || decision.releaseId === null) continue;
     const winnerScheduledAt = scheduledAt.get(decision.releaseId);
-    if (winnerScheduledAt === undefined) continue;
+    const revision = revisionOf.get(decision.releaseId);
+    const winner = memberById.get(decision.memberId);
+    if (
+      winnerScheduledAt === undefined ||
+      revision === undefined ||
+      winner === undefined
+    ) {
+      continue;
+    }
     actions.push({
       ref,
       effect: decision.effect,
       memberId: decision.memberId,
       releaseId: decision.releaseId,
       scheduledAt: winnerScheduledAt,
-      createdBy: authorOf.get(decision.memberId) ?? null,
+      createdBy: winner.createdBy,
+      revision,
+      applied: memberAppliedFor(winner, revision),
     });
   }
 
@@ -191,7 +219,7 @@ function groupBySharedDocument(
   return [...sets.values()];
 }
 
-function refOf(member: ReleaseMemberRow): DocumentRef {
+function refOf(member: DrainMemberRow): DocumentRef {
   return {
     scopeKind: member.scopeKind,
     scopeSlug: member.scopeSlug,

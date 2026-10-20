@@ -25,7 +25,10 @@ import {
 import type { ReleaseKind } from "../../../schemas/releases/types";
 import { ReleasesRepository } from "../releases-repository";
 
-import { scheduleAsItStands } from "./helpers/release-writes";
+import {
+  publishAsItStands,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -83,7 +86,7 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual([stopped]);
       const ranAt = new Date("2027-05-04T14:00:00Z");
       const ran = await scheduled(repo, "Ran", ranAt.toISOString());
-      expect(await repo.markReleasePublished(ran, ranAt)).toBe(true);
+      expect(await publishAsItStands(repo, ran, ranAt)).toBe(true);
       const calledOff = await scheduled(
         repo,
         "Called off",
@@ -228,7 +231,7 @@ describe.each(getConfiguredTestDialects())(
       // at 00:30 on the 2nd, and that is when its documents went live.
       const late = await scheduled(repo, "Ran late", "2027-06-01T21:30:00Z");
       expect(
-        await repo.markReleasePublished(late, new Date("2027-06-01T22:30:00Z"))
+        await publishAsItStands(repo, late, new Date("2027-06-01T22:30:00Z"))
       ).toBe(true);
       // Due at the same instant and still waiting: it stays on its due day.
       await scheduled(repo, "Still due", "2027-06-01T21:30:00Z");

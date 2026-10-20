@@ -9,13 +9,35 @@
 import { renderHook } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { docSpy } = vi.hoisted(() => ({ docSpy: vi.fn() }));
+const { docSpy, storedSpy } = vi.hoisted(() => ({
+  docSpy: vi.fn(),
+  storedSpy: vi.fn(),
+}));
 
 vi.mock("../useSingles", () => ({
   useSingleDocument: (...args: unknown[]) => {
     docSpy(...args);
     return { data: undefined, isLoading: false, error: null };
   },
+  singleDocumentKeys: {
+    detail: (slug: string) => ["single-documents", "detail", slug],
+  },
+}));
+
+vi.mock("../useStoredReferences", () => ({
+  useStoredSingleDocument: (...args: unknown[]) => {
+    storedSpy(...args);
+    return { data: undefined, isLoading: false, error: null };
+  },
+  useWithStoredReferences: ({
+    populated,
+  }: {
+    populated: { data: unknown; isLoading: boolean; error: unknown };
+  }) => ({
+    document: populated.data,
+    isLoading: populated.isLoading,
+    error: populated.error,
+  }),
 }));
 
 import { useSingleEditorDocument } from "../useSingleEditorDocument";
@@ -24,6 +46,9 @@ import { useSingleEditorDocument } from "../useSingleEditorDocument";
 const editRead = () => docSpy.mock.calls[0]?.[1] as Record<string, unknown>;
 /** The options the SOURCE read was issued with (the second call). */
 const sourceRead = () => docSpy.mock.calls[1]?.[1] as Record<string, unknown>;
+/** The options the STORED-links read was issued with. */
+const storedRead = () =>
+  storedSpy.mock.calls[0]?.[1] as Record<string, unknown>;
 
 describe("useSingleEditorDocument", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -34,6 +59,7 @@ describe("useSingleEditorDocument", () => {
         slug: "homepage",
         localizationEnabled: false,
         draftsEnabled: true,
+        fields: undefined,
       })
     );
 
@@ -47,6 +73,7 @@ describe("useSingleEditorDocument", () => {
         slug: "homepage",
         localizationEnabled: false,
         draftsEnabled: false,
+        fields: undefined,
       })
     );
 
@@ -63,6 +90,7 @@ describe("useSingleEditorDocument", () => {
         defaultLocale: "en",
         localizationEnabled: true,
         draftsEnabled: false,
+        fields: undefined,
       })
     );
 
@@ -78,6 +106,7 @@ describe("useSingleEditorDocument", () => {
         slug: "homepage",
         localizationEnabled: false,
         draftsEnabled: false,
+        fields: undefined,
       })
     );
 
@@ -92,6 +121,7 @@ describe("useSingleEditorDocument", () => {
         defaultLocale: "en",
         localizationEnabled: true,
         draftsEnabled: false,
+        fields: undefined,
       })
     );
 
@@ -110,6 +140,7 @@ describe("useSingleEditorDocument", () => {
         defaultLocale: "en",
         localizationEnabled: true,
         draftsEnabled: false,
+        fields: undefined,
       })
     );
 
@@ -127,6 +158,7 @@ describe("useSingleEditorDocument", () => {
         defaultLocale: "en",
         localizationEnabled: true,
         draftsEnabled: false,
+        fields: undefined,
         translateFrom: "es",
       })
     );
@@ -137,5 +169,27 @@ describe("useSingleEditorDocument", () => {
     // The source read never falls back, or an untranslated source field
     // resolves to yet another language and is copied in as a translation.
     expect(sourceRead().fallbackLocale).toBe("none");
+  });
+
+  it("reads the stored links in the same language and view as the edit read", () => {
+    // A depth-0 read of another language, or of the live row while the edit
+    // read shows the pending change, would merge links from another document.
+    renderHook(() =>
+      useSingleEditorDocument({
+        slug: "homepage",
+        locale: "es",
+        defaultLocale: "en",
+        localizationEnabled: true,
+        draftsEnabled: true,
+        fields: undefined,
+      })
+    );
+
+    expect(storedSpy.mock.calls[0]?.[0]).toBe("homepage");
+    expect(storedRead()).toEqual({
+      locale: editRead().locale,
+      fallbackLocale: editRead().fallbackLocale,
+      draft: editRead().draft,
+    });
   });
 });

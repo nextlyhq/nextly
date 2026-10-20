@@ -45,10 +45,6 @@ vi.mock("../../utils/adapter", () => ({
   }),
   createCliAdapter: async () => ({
     getCapabilities: () => ({ dialect: "sqlite" }),
-    // The per-file ask before a removal: no other item refers to anything.
-    getDrizzle: () => ({
-      select: () => ({ from: () => ({ where: async () => [] }) }),
-    }),
     setTableResolver: (resolver: { getTable: (name: string) => unknown }) => {
       seen.calls.push("setTableResolver");
       seen.resolver = resolver;
