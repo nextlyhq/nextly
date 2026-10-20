@@ -219,6 +219,56 @@ describe("a name looked up after the list vacated it", () => {
     }
   );
 
+  it("refuses an index lookup once the list may have changed the search path", () => {
+    // Before the list `i` reaches the app's index; after the SET it may reach
+    // another schema's index of that name, which the lookup never saw.
+    expect(() =>
+      guard(
+        [
+          "SET search_path = plugin_schema, public",
+          "ALTER INDEX i SET TABLESPACE fast",
+        ],
+        "postgresql",
+        new Map([["i", "app_notes"]])
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("still allows an ALTER TABLE after the list sets the search path", () => {
+    expect(() =>
+      guard(
+        [
+          "SET search_path = app_schema, public",
+          "ALTER TABLE app_notes ADD COLUMN extra int",
+        ],
+        "postgresql",
+        new Map()
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses an index lookup after a DROP TABLE took the index it found", () => {
+    // Dropping `app_notes` drops its index `shared_i`; the name may then
+    // reach another schema's index the lookup never saw.
+    expect(() =>
+      guard(
+        ["DROP TABLE app_notes", "ALTER INDEX shared_i SET TABLESPACE fast"],
+        "postgresql",
+        new Map([["shared_i", "app_notes"]])
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("allows the same index lookup before the table is dropped", () => {
+    expect(() =>
+      guard(
+        ["ALTER INDEX shared_i SET TABLESPACE fast", "DROP TABLE app_notes"],
+        "postgresql",
+        new Map([["shared_i", "app_notes"]])
+      )
+    ).not.toThrow();
+  });
+
   it("refuses a second DROP INDEX of a name the first one vacated", () => {
     expect(() =>
       guard(

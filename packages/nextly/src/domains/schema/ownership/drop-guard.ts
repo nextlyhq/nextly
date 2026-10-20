@@ -913,6 +913,27 @@ class DropReader {
   private readonly vacated = new Map<string, number>();
   /** Which statement of the list is being read: each `end` starts another. */
   private statementIndex = 0;
+  /**
+   * Tables a statement attached a partition to, with the statement: the
+   * descendants read before the list ran no longer show their whole tree.
+   */
+  private readonly treesChanged = new Map<string, number>();
+  /**
+   * Tables a later statement reaches the descendants of after an earlier one
+   * attached a partition to them (`attachTo`).
+   */
+  readonly reachesAfterTreeChange: string[] = [];
+  /**
+   * Every name looked up in the live database, with the statement doing it
+   * and whether it names an index alone (`DROP INDEX`, `ALTER INDEX`) rather
+   * than an ALTER TABLE target that may be one.
+   */
+  readonly lookups: Array<{ name: string; at: number; index: boolean }> = [];
+  /**
+   * Tables a statement dropped, by every name they are known by, with the
+   * statement: their indexes went with them.
+   */
+  readonly droppedAt = new Map<string, number>();
 
   constructor(
     readonly dialect: SupportedDialect,
@@ -922,12 +943,27 @@ class DropReader {
      */
     private readonly liveTables: ReadonlySet<string> | undefined,
     /**
-     * Names an earlier list of the same run vacated (`LiveTables.vacated`),
-     * vacated before this list's first statement.
+     * What an earlier list of the same run left (`CarriedState`): names it
+     * vacated, trees it attached partitions to and tables it dropped, each
+     * counted as done before this list's first statement.
      */
-    vacatedBefore: Iterable<string> = []
+    carried: CarriedState = {}
   ) {
-    for (const name of vacatedBefore) this.vacated.set(name, 0);
+    for (const name of carried.vacated ?? []) this.vacated.set(name, 0);
+    for (const name of carried.treesChanged ?? []) {
+      this.treesChanged.set(name, 0);
+    }
+    for (const name of carried.dropped ?? []) this.droppedAt.set(name, 0);
+  }
+
+  /** The tables this list, or an earlier one, attached a partition to. */
+  get stillChangedTrees(): ReadonlySet<string> {
+    return new Set(this.treesChanged.keys());
+  }
+
+  /** The tables this list, or an earlier one, dropped. */
+  get droppedTables(): ReadonlySet<string> {
+    return new Set(this.droppedAt.keys());
   }
 
   /** The relation names this list leaves vacated, earlier lists' included. */
@@ -955,10 +991,22 @@ class DropReader {
    */
   reach(table: TableRef, act: DescendantAct): void {
     if (!this.isPostgres) return;
-    this.reaching.push({
-      table: this.renamedFrom.get(table.name) ?? table.name,
-      act,
-    });
+    const original = this.renamedFrom.get(table.name) ?? table.name;
+    const changedAt = this.treesChanged.get(original);
+    if (changedAt !== undefined && changedAt < this.statementIndex) {
+      this.reachesAfterTreeChange.push(original);
+    }
+    this.reaching.push({ table: original, act });
+  }
+
+  /**
+   * Records a partition attached to `table`: a later statement reaching its
+   * descendants reaches one the live reading did not show.
+   */
+  attachTo(table: TableRef): void {
+    if (!this.isPostgres) return;
+    const original = this.renamedFrom.get(table.name) ?? table.name;
+    this.treesChanged.set(original, this.statementIndex);
   }
 
   /**
@@ -987,7 +1035,8 @@ class DropReader {
    * an earlier statement vacated it; one statement's own drop or rename does
    * not count against its own lookup, which PostgreSQL resolves first.
    */
-  private lookUp(name: string): void {
+  private lookUp(name: string, index = true): void {
+    this.lookups.push({ name, at: this.statementIndex, index });
     const at = this.vacated.get(name);
     if (at !== undefined && at < this.statementIndex) {
       this.lookupsAfterVacating.push(name);
@@ -1046,6 +1095,10 @@ class DropReader {
     this.vacate(table.name);
     if (this.takeCreated(table)) return;
     const original = this.renamedFrom.get(table.name);
+    this.droppedAt.set(table.name, this.statementIndex);
+    if (original !== undefined) {
+      this.droppedAt.set(original, this.statementIndex);
+    }
     if (original !== undefined) this.dropped.push(original);
     this.dropped.push(table.name);
   }
@@ -1095,7 +1148,7 @@ class DropReader {
    * about as a possible index's name (`readLiveIndexTables`).
    */
   targetAltered(table: string): void {
-    this.lookUp(table);
+    this.lookUp(table, false);
     this.alterTargets.push(table);
   }
 
@@ -2125,6 +2178,7 @@ class StatementWalk {
       this.refuse("a partition change whose table name cannot be read");
     }
     this.reader.changeTable(table, "change the partitions of");
+    if (change === "ATTACH") this.reader.attachTo(table);
     if (converts) {
       this.recordPartitionTable(at + 2, "attach as a partition");
     } else {
@@ -3339,9 +3393,9 @@ export function tablesLeftInPlace(
 function readAsIfNoTableExisted(
   statements: readonly string[],
   dialect: SupportedDialect,
-  vacatedBefore?: Iterable<string>
+  carried?: CarriedState
 ): DropReader | undefined {
-  const reader = new DropReader(dialect, new Set(), vacatedBefore);
+  const reader = new DropReader(dialect, new Set(), carried);
   try {
     readWith(statements, reader, new Map());
   } catch (error) {
@@ -3579,10 +3633,10 @@ function readStatements(
       block => liveElements?.has(block.table) ?? false
     )
   );
-  const vacated = liveTables?.vacated ?? [];
+  const carried: CarriedState = liveTables ?? {};
   const reading = readWith(
     statements,
-    new DropReader(dialect, liveTables, vacated),
+    new DropReader(dialect, liveTables, carried),
     kept
   );
   // A list that may change which table an unqualified name reaches is read
@@ -3595,7 +3649,7 @@ function readStatements(
   return reading.resolutionMayChange
     ? readWith(
         statements,
-        new DropReader(dialect, undefined, vacated),
+        new DropReader(dialect, undefined, carried),
         new Map()
       )
     : reading;
@@ -3621,6 +3675,9 @@ type Reading = Pick<
   | "relationRenames"
   | "changed"
   | "reaching"
+  | "reachesAfterTreeChange"
+  | "lookups"
+  | "droppedAt"
   | "lookupsAfterVacating"
   | "typesCascaded"
 >;
@@ -4385,7 +4442,20 @@ export type LiveTables = ReadonlySet<string> & {
    * of these up is refused, as a later statement of the same list is.
    */
   readonly vacated?: ReadonlySet<string>;
+  /**
+   * Tables an earlier list of the same run attached a partition to, whose
+   * descendants the reading no longer shows whole (`liveTablesAfter`).
+   */
+  readonly treesChanged?: ReadonlySet<string>;
+  /**
+   * Tables an earlier list of the same run dropped, with every index on
+   * them (`liveTablesAfter`).
+   */
+  readonly dropped?: ReadonlySet<string>;
 };
+
+/** What an earlier list of the same run leaves for a later one to judge by. */
+type CarriedState = Pick<LiveTables, "vacated" | "treesChanged" | "dropped">;
 
 /**
  * The live tables as a later statement list finds them once `statements`
@@ -4400,7 +4470,7 @@ export function liveTablesAfter(
   statements: readonly string[],
   dialect: SupportedDialect
 ): LiveTables {
-  const reading = readAsIfNoTableExisted(statements, dialect, tables.vacated);
+  const reading = readAsIfNoTableExisted(statements, dialect, tables);
   const descendants = new Map(tables.descendants ?? []);
   for (const [current, original] of reading?.renames ?? []) {
     const below = descendants.get(original);
@@ -4411,6 +4481,8 @@ export function liveTablesAfter(
     // A list that cannot be read keeps what was vacated before it; the guard
     // refuses it on its own.
     vacated: reading?.stillVacated ?? tables.vacated,
+    treesChanged: reading?.stillChangedTrees ?? tables.treesChanged,
+    dropped: reading?.droppedTables ?? tables.dropped,
   });
 }
 
@@ -5130,7 +5202,6 @@ export function assertNoForeignDrops(args: {
     refuseUnlessHeld(holders.table(table), { ...args, table, parent, act });
   }
   refuseDescendantElements(read, holders, args);
-  refuseLookupsAfterVacating(read, args);
   for (const { table, column } of read.columns) {
     refuseUnlessHeld(holders.column(table, column), {
       ...args,
@@ -5173,6 +5244,11 @@ export function assertNoForeignDrops(args: {
       act: "strip the keys, column definitions or triggers of",
     });
   }
+  // Judged after what the statements name, so a statement refused for a
+  // column or element it names is refused for that.
+  refuseReachAfterTreeChange(read, args);
+  refuseLookupsAfterVacating(read, args);
+  refuseStaleIndexLookups(read, args);
   refuseTypesCascaded(read, args);
 }
 
@@ -5371,6 +5447,62 @@ function refuseLookupsAfterVacating(
         changedBy: args.stream,
         source: args.source,
       },
+    });
+  }
+}
+
+/**
+ * Refuses a statement reaching the descendants of a table after an earlier
+ * one attached a partition to it (`DropReader.reachesAfterTreeChange`): the
+ * descendants were read before the list ran, so the partition it added, and
+ * whatever another owner has on it, are not among them.
+ */
+function refuseReachAfterTreeChange(
+  read: Reading,
+  args: { stream: MigrationStream; source: string }
+): void {
+  for (const table of read.reachesAfterTreeChange) {
+    throw new NextlyError({
+      code: "DROP_OF_FOREIGN_TABLE",
+      publicMessage: `A migration alters ${table} and the tables below it after an earlier statement attached a partition to it, so which tables it reaches cannot be checked. It has been refused, and nothing was applied. Run the later statement in a migration of its own.`,
+      logContext: { table, changedBy: args.stream, source: args.source },
+    });
+  }
+}
+
+/**
+ * Refuses a lookup of a name made before the list ran that the list has
+ * since made stale. On PostgreSQL, once a statement may change which schema
+ * an unqualified name reaches (`resolutionMayChange`), an index named alone
+ * may reach another than the one found. And once a statement dropped
+ * the table the lookup found an index on, the index went with it, and its
+ * name may reach one it shadowed.
+ */
+function refuseStaleIndexLookups(
+  read: Reading,
+  args: {
+    stream: MigrationStream;
+    source: string;
+    dialect: SupportedDialect;
+    liveIndexTables?: ReadonlyMap<string, string>;
+  }
+): void {
+  for (const { name, at, index } of read.lookups) {
+    const table = args.liveIndexTables?.get(name);
+    const droppedAt =
+      table === undefined ? undefined : read.droppedAt.get(table);
+    // Only an index named alone: an ALTER TABLE after a search-path change
+    // names a table far more often, and refusing every one would refuse
+    // every migration that sets its schema first.
+    const resolutionChanged =
+      index && args.dialect === "postgresql" && read.resolutionMayChange;
+    if (!resolutionChanged && (droppedAt === undefined || droppedAt >= at)) {
+      continue;
+    }
+    throw new NextlyError({
+      code: "DROP_OF_FOREIGN_TABLE",
+      publicMessage: `A migration names ${name} after an earlier statement in it may have changed which index that name reaches, by dropping its table or changing the search path. It has been refused, and nothing was applied. Run the later statement in a migration of its own.`,
+      logContext: { name, changedBy: args.stream, source: args.source },
     });
   }
 }

@@ -144,6 +144,21 @@ describe("a PostgreSQL statement that reaches another owner's descendant table",
     ).toMatchObject({ table: "fx__child", parent: "app_parent" });
   });
 
+  it("refuses reaching a parent's descendants after the list attached a partition to it", () => {
+    // The descendants were read before the list ran, so the partition the
+    // ATTACH added is not among them, and a rename of the parent's column
+    // reaches it too.
+    expect(() =>
+      guard(
+        [
+          "ALTER TABLE app_parent ATTACH PARTITION app_base FOR VALUES IN (1)",
+          "ALTER TABLE app_parent RENAME COLUMN x TO y",
+        ],
+        APP_CHILD
+      )
+    ).toThrow(NextlyError);
+  });
+
   it("refuses detaching the plugin's partition from the app's table", () => {
     expect(
       refusal(() =>

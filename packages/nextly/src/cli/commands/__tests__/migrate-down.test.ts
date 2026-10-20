@@ -823,6 +823,34 @@ describe("migrateDownCore and the tables a DOWN creates", () => {
     expect(executed).toEqual([]);
   });
 
+  it("refuses a later target reaching a tree an earlier target attached to", async () => {
+    // The app's newer file, rolled back first, attaches a partition to its
+    // `parent`; the descendants were read before the rollback, so the older
+    // file's rename of the parent's column cannot be judged for it.
+    const downs: Record<string, string> = {
+      "001_init.sql": 'ALTER TABLE "parent" RENAME COLUMN "x" TO "y";',
+      "002_more.sql":
+        'ALTER TABLE "parent" ATTACH PARTITION "part" FOR VALUES IN (1);',
+    };
+    const { deps, executed } = baseDeps({
+      options: { step: 2, allowDataLoss: true, yes: false, dryRun: false },
+      listFileApplies: async () =>
+        Object.keys(downs).map((filename, at) =>
+          row(filename, "applied", 1000 + at)
+        ),
+      readDownSql: async (filename: string) => down(downs[filename]),
+      readLiveTables: async () =>
+        Object.assign(new Set<string>(), {
+          descendants: new Map<string, string[]>(),
+        }),
+    });
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: { table: "parent", source: "001_init.sql" },
+    });
+    expect(executed).toEqual([]);
+  });
+
   it("follows the descendants through a rename an earlier target makes", async () => {
     // The newer module's DOWN, run first, renames `t`; the older one alters
     // it under the name it then has, which reaches `app_child` all the same.
