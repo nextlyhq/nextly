@@ -201,9 +201,11 @@ export async function findOrphanThumbnails(
   const orphans: string[] = [];
   const unconfirmed: Array<{ path: string; name?: string }> = [];
   let tooRecent = 0;
-  // Only local disk is known to read every spelling of a path as one; any
-  // other storage, a custom one among them, may keep keys as written.
-  const keysAsWritten = adapter.getType() !== "local";
+  // Local disk reads every spelling of a path as one, and Vercel Blob
+  // writes a prefix's trailing slash once (`media/` stores `media/...`);
+  // any other storage, a custom one among them, may keep keys as written.
+  const type = adapter.getType();
+  const keysAsWritten = type !== "local" && type !== "vercel-blob";
   for await (const entry of adapter.list()) {
     if (!isMediaThumbnail(entry, options.prefix, keysAsWritten)) continue;
     if (referenced.has(canonicalStoredPath(entry.path))) continue;

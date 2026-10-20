@@ -80,6 +80,17 @@ export interface DashboardArrangement {
    * and the whole of any outage.
    */
   hasArrangement: boolean;
+  /**
+   * Whether the arrangement is still on its way, with nothing to draw yet.
+   *
+   * 🔴 Distinct from a FAILED read, which draws the declared default and says
+   * so. Until the first read answers, the page cannot know which cards this
+   * person has, so it draws none and asks for no card's data: the declared
+   * set drawn in the meantime was a dashboard they may not have, redrawn when
+   * theirs arrived. A return visit in the same session never waits here,
+   * because the cached arrangement is drawn while it is read again.
+   */
+  awaitingArrangement: boolean;
   sensors: ReturnType<typeof useSortableSensors>;
   handleDragEnd: (event: DragEndEvent) => void;
   /**
@@ -107,7 +118,7 @@ export interface DashboardArrangement {
 }
 
 /**
- * The cards drawn before any arrangement has been read: the declarations, in
+ * The cards drawn when the arrangement could not be read: the declarations, in
  * their declared order, each at the width of its declared size.
  */
 function declaredRows(declared: readonly DashboardWidget[]): ArrangedWidget[] {
@@ -215,14 +226,21 @@ export function useDashboardArrangement(
 
   const editor = useLayoutEditor(layout, isDrawn);
   const hasArrangement = layout.layout !== undefined;
+  const awaitingArrangement = !hasArrangement && !layout.isUnavailable;
 
-  const visible = useMemo(
-    () =>
-      hasArrangement
-        ? arrangedRows(editor.placements, byId, editor.factsFor)
-        : declaredRows(declared),
-    [hasArrangement, declared, editor.placements, editor.factsFor, byId]
-  );
+  const visible = useMemo(() => {
+    if (hasArrangement) {
+      return arrangedRows(editor.placements, byId, editor.factsFor);
+    }
+    return awaitingArrangement ? [] : declaredRows(declared);
+  }, [
+    hasArrangement,
+    awaitingArrangement,
+    declared,
+    editor.placements,
+    editor.factsFor,
+    byId,
+  ]);
 
   const titleOf = useCallback(
     (placementId: string) =>
@@ -324,6 +342,7 @@ export function useDashboardArrangement(
     editor,
     isDrawn,
     hasArrangement,
+    awaitingArrangement,
     sensors,
     announcements,
     handleDragEnd,
