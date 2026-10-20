@@ -3,12 +3,16 @@
 /**
  * bundle-report.mjs — Measure what @nextlyhq/admin ships and what the first screen loads.
  *
- * Requirements (specs/admin-bundle/spec.md R-1):
- * - Names every shipped chunk with its minified and gzipped size.
+ * The contract, stated here because the code is where it lives:
+ * - Names every shipped chunk with its on-disk (minified browser build; raw
+ *   CLI) and gzipped size.
  * - Distinguishes chunks that load before the first screen renders (the static
- *   pre-render graph of index.mjs) from those a route loads later (dynamic imports).
- * - Records the date and git commit it measured.
- * - Accounts for every chunk the build emits and derives classification from import graphs.
+ *   pre-render graph of index.mjs) from those a route loads later (dynamic
+ *   imports), the other entrypoints the package publishes, and chunks nothing
+ *   can load.
+ * - Records the date, the git commit, and the dist's own build time.
+ * - Accounts for every chunk the build emits and derives classification from
+ *   import graphs, so a subtotal that reconciles is a subtotal that measured.
  *
  * Usage:
  *   node scripts/bundle-report.mjs
@@ -238,7 +242,7 @@ function reachableClosure(graph, entryChunk) {
  * entrypoint — however its conditions nest — is then classified correctly
  * without editing a second list.
  */
-const DECLARED_BROWSER_ENTRIES = new Set(
+export const DECLARED_BROWSER_ENTRIES = new Set(
   exportTargets(
     JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8"))
       .exports ?? {}

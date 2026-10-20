@@ -1,5 +1,7 @@
 /**
- * Unit tests for bundle-report.mjs (specs/admin-bundle/spec.md R-1).
+ * Unit tests for bundle-report.mjs: the measurement contract — every emitted
+ * chunk accounted for, classified by the entry's import graph, with refusals
+ * for the dists that cannot be measured honestly.
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -10,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DECLARED_BROWSER_ENTRIES,
   findJsFiles,
   formatKB,
   formatReport,
@@ -348,6 +351,14 @@ describe("bundle-report", () => {
         expect(report.commit).toBeDefined();
         expect(report.date).toBeDefined();
         expect(report.builtAt).toBeDefined();
+
+        // The dist measures the COMPLETE package: every entrypoint the
+        // exports map declares was emitted. A partial dist (an interrupted
+        // build, say) would otherwise pass on whatever fragments it holds.
+        const reportedFiles = new Set(report.chunks.map(c => c.file));
+        for (const entry of DECLARED_BROWSER_ENTRIES) {
+          expect(reportedFiles).toContain(entry);
+        }
 
         // Invariant 1: Total emitted chunks equals first-screen + route-later
         // + other entries + unreachable + cli

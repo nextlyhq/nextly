@@ -1,14 +1,27 @@
 #!/usr/bin/env node
 
 /**
- * ensure-dist.mjs — Build the package when its dist is missing.
+ * ensure-dist.mjs — Build the package when its dist is missing or partial.
  *
  * The bundle-report suite measures the REAL built dist, and the test task's
  * turbo dependencies build only the workspace's dependencies (`^build`), not
  * this package — so on a fresh checkout the dist is absent and the real-dist
- * test would throw before any assertion. This script runs ahead of vitest and
- * builds once when the dist is missing; a present dist is measured as it
- * stands, which is the point of the test.
+ * test would throw before any assertion. Under turbo the package-scoped
+ * `packages/admin/turbo.json` puts this package's own `build` ahead of its
+ * tests in the task graph, so this script is a no-op there; it exists for a
+ * direct `pnpm --filter @nextlyhq/admin test` outside turbo.
+ *
+ * The build is this package's own, never the workspace's: turbo may be
+ * running other packages' tests against `nextly`'s dist concurrently, and a
+ * nested rebuild of a dependency would pull that ground out from under them.
+ * A direct run on a checkout that has NO dependency dists fails admin's build
+ * naming the resolution it missed — run it through turbo instead, which
+ * builds the dependencies first.
+ *
+ * "Present" means complete: every entrypoint the package declares must be in
+ * the dist, not only index.mjs — an interrupted build can leave the entry
+ * without the rest, and a suite that measured that would report over a
+ * package nobody can install.
  */
 
 import { existsSync } from "node:fs";
@@ -16,21 +29,19 @@ import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DIST_ENTRY = join(PACKAGE_ROOT, "dist", "index.mjs");
+import { DECLARED_BROWSER_ENTRIES } from "./bundle-report.mjs";
 
-if (existsSync(DIST_ENTRY)) {
+const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+const missing = [...DECLARED_BROWSER_ENTRIES].filter(
+  rel => !existsSync(join(PACKAGE_ROOT, "dist", rel))
+);
+
+if (missing.length === 0) {
   process.exit(0);
 }
 
 console.error(
-  "[ensure-dist] dist/index.mjs not found — building @nextlyhq/admin (with its workspace dependencies) before the tests that measure it..."
+  `[ensure-dist] dist is missing or partial — no ${missing.join(", ")} — building @nextlyhq/admin before the tests that measure it...`
 );
-// The `pkg...` filter form builds THIS package AND its dependencies: a fresh
-// checkout has no workspace dists, and admin's build resolves subpaths such
-// as `nextly/config` through nextly's dist — a package-local `pnpm build`
-// would fail there before vitest even starts.
-execSync("pnpm --filter @nextlyhq/admin... build", {
-  cwd: PACKAGE_ROOT,
-  stdio: "inherit",
-});
+execSync("pnpm build", { cwd: PACKAGE_ROOT, stdio: "inherit" });
