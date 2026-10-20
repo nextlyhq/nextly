@@ -77,6 +77,7 @@ import type { SingleRegistryService } from "../services/singles/single-registry-
 import { UserAccountService } from "../services/users/user-account-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { consoleLogger } from "../shared/types";
 
 import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-namespace";
 import * as authNs from "./namespaces/auth";
@@ -366,7 +367,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
 
       const emailService = container.has("emailService")
         ? container.get<EmailService>("emailService")
@@ -397,7 +398,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       this._userAccountService = new UserAccountService(adapter, logger);
     }
     return this._userAccountService;
@@ -458,7 +459,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       this._rbacRoleService = new RoleService(adapter, logger);
     }
     return this._rbacRoleService;
@@ -473,7 +474,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       this._rbacPermissionService = new PermissionService(adapter, logger);
     }
     return this._rbacPermissionService;
@@ -488,7 +489,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       this._rbacRolePermissionService = new RolePermissionService(
         adapter,
         logger
