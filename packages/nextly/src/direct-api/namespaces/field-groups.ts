@@ -25,7 +25,32 @@ import type {
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
-import { isNotFoundError, mapFieldGroupRecord, mergeConfig } from "./helpers";
+import {
+  checkWrite,
+  isNotFoundError,
+  mapFieldGroupRecord,
+  mergeConfig,
+  type RouteGrant,
+} from "./helpers";
+
+/**
+ * What each field-group write asks of a checked caller: the REST route's own
+ * action on `settings`, or `manage-settings`, either one.
+ */
+const FIELD_GROUP_WRITE = {
+  create: settingsGrant("create"),
+  update: settingsGrant("update"),
+  delete: settingsGrant("delete"),
+} as const satisfies Record<string, RouteGrant>;
+
+function settingsGrant(action: "create" | "update" | "delete"): RouteGrant {
+  return {
+    anyOf: [
+      { action, resource: "settings" },
+      { action: "manage", resource: "settings" },
+    ],
+  };
+}
 
 /**
  * Field groups namespace API, bound to a Nextly context.
@@ -128,6 +153,9 @@ export function createFieldGroupsNamespace(
     async create(
       args: CreateFieldGroupArgs
     ): Promise<MutationResult<FieldGroupDefinition>> {
+      // Checked as the REST route checks it, before anything else: REST
+      // authorizes before it reads the body.
+      await checkWrite(ctx.defaultConfig, args, FIELD_GROUP_WRITE.create);
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -203,6 +231,7 @@ export function createFieldGroupsNamespace(
     async update(
       args: UpdateFieldGroupArgs
     ): Promise<MutationResult<FieldGroupDefinition>> {
+      await checkWrite(ctx.defaultConfig, args, FIELD_GROUP_WRITE.update);
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
@@ -263,6 +292,7 @@ export function createFieldGroupsNamespace(
     async delete(
       args: DeleteFieldGroupArgs
     ): Promise<MutationResult<{ slug: string }>> {
+      await checkWrite(ctx.defaultConfig, args, FIELD_GROUP_WRITE.delete);
       if (!args.slug) {
         throw new NextlyError({
           code: "INVALID_INPUT",
