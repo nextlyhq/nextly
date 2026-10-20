@@ -204,8 +204,13 @@ export function recipientsOf(envelope: {
     (Array.isArray(value) ? value : [value]).filter(
       (address): address is string => typeof address === "string"
     );
+  // `to` through the same normalization a send is dispatched with, so a
+  // comma-joined `to` appears as each address it names, as it will be sent.
+  const to = toAddressList(
+    Array.isArray(envelope.to) ? envelope.to : [envelope.to]
+  );
   return [
-    ...list(envelope.to).map(address => ({ address, kind: "to" as const })),
+    ...list(to).map(address => ({ address, kind: "to" as const })),
     ...list(envelope.cc).map(address => ({ address, kind: "cc" as const })),
     ...list(envelope.bcc).map(address => ({ address, kind: "bcc" as const })),
   ];

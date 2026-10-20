@@ -1612,6 +1612,33 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
     });
   });
 
+  it("shows a comma-joined to as each address it names, as it will be sent", async () => {
+    const seenBySecond: unknown[] = [];
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: object) => ({ ...payload, to: "a@b.com, c@d.com" })
+    );
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { recipients?: unknown }) => {
+        seenBySecond.push(payload.recipients);
+        return payload;
+      }
+    );
+    const { service, adapterSend } = buildSend();
+
+    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+    expect(seenBySecond).toEqual([
+      [
+        { address: "a@b.com", kind: "to" },
+        { address: "c@d.com", kind: "to" },
+      ],
+    ]);
+    // One message per address: the test adapter takes one `to`.
+    expect(adapterSend).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores a change made only to recipients, which is derived", async () => {
     getFilterRegistry().addFilter(
       FilterSeams.EmailBeforeSend,
