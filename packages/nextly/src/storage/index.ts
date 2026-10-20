@@ -72,6 +72,7 @@ export type {
   // Adapter interface
   IStorageAdapter,
   BulkDeleteResult,
+  StoredFileEntry,
 } from "./types";
 
 // ============================================================

@@ -24,8 +24,8 @@
  * ```
  */
 
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { resolve, dirname, join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { resolve, dirname } from "node:path";
 
 import type { Command } from "commander";
 
@@ -37,10 +37,7 @@ import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
-import {
-  buildImportMapArtifact,
-  COMPONENT_IMPORT_MAP_FILENAME,
-} from "../../plugins/codegen/component-import-map";
+import { writeComponentMapFiles } from "../../plugins/codegen/write-component-map";
 // The option names the field identity would overwrite, refused here because a
 // code-defined user field never passes through the manifest schema.
 import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/types";
@@ -137,38 +134,24 @@ interface GenerationResult {
 // ============================================================================
 
 /**
- * Write the admin component import map (D60) beside the types file when any
- * plugin contributes admin components, or remove a previous one when none
- * does. Importing the generated module from the app self-registers those
- * components, with no manual host imports, and sidesteps the dynamic
- * auto-registration race.
+ * Write the admin component import map (D60) and its strings-only path list
+ * beside the types file. Importing the map from the app self-registers every
+ * plugin admin component, with no manual host imports, and the admin's server
+ * layout reads the list to refuse a widget whose component the map lacks.
  *
- * Removal is how "nothing to register" is expressed. A map left behind is worse
- * than a stale data file: the app IMPORTS it, so it keeps importing a package
- * that is no longer installed and breaks the next build.
+ * Both are written even when nothing contributes a component: the app imports
+ * them, so removing them would break its build. An empty map imports nothing,
+ * so a package that is no longer installed is not imported either.
  *
- * @returns the map's path when one was written
+ * @returns the map's path
  */
 async function settleImportMap(
-  plugins: Parameters<typeof buildImportMapArtifact>[0],
+  plugins: Parameters<typeof writeComponentMapFiles>[0],
   typesOutputPath: string,
   cwd: string
 ): Promise<string | undefined> {
-  const importMap = buildImportMapArtifact(plugins, typesOutputPath);
-  if (importMap === null || importMap === undefined) {
-    await rm(
-      resolve(
-        cwd,
-        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
-      ),
-      { force: true }
-    );
-    return undefined;
-  }
-  const importMapPath = resolve(cwd, importMap.path);
-  await ensureDir(dirname(importMapPath));
-  await writeFile(importMapPath, importMap.code, "utf-8");
-  return importMapPath;
+  const written = await writeComponentMapFiles(plugins, typesOutputPath, cwd);
+  return written.paths[0];
 }
 
 /**
@@ -253,11 +236,14 @@ export async function runGenerateTypes(
   // declares nothing in code, yet still renders plugin admin components — its
   // plugins' pages and settings, and a document view offered on a field type.
   // Without the map a bundled admin cannot resolve them and draws an empty
-  // slot. Beside the types file actually written, which follows the app's
-  // layout.
+  // slot. Beside the CONFIGURED types file, fitted to the app's layout, and
+  // not beside an `--output` override: the admin page imports the map from one
+  // place, and the admin's check rewrites it in development and names it in
+  // production from the config, so a map written elsewhere would be one nothing
+  // reads.
   const writtenImportMapPath = await settleImportMap(
     configResult.config.plugins ?? [],
-    typesFileForLayout,
+    generatedTypesFile(manifestCwd, configResult.config.typescript.outputFile),
     manifestCwd
   );
   if (writtenImportMapPath) {

@@ -16,6 +16,7 @@
  * @module components/features/versions/viewed-version-host
  */
 
+import { ArrowDown, ArrowUp } from "lucide-react";
 import type { FieldConfig } from "nextly/config";
 import { useMemo, useState, type ReactNode } from "react";
 
@@ -27,7 +28,13 @@ import {
   type EntryLocaleContextValue,
 } from "@admin/components/features/entries/EntryLocaleContext";
 import { TranslationFieldProvider } from "@admin/components/features/entries/TranslationMode/TranslationFieldContext";
-import { Alert, AlertDescription, Skeleton } from "@admin/components/ui";
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Skeleton,
+} from "@admin/components/ui";
+import { useVersionDiff } from "@admin/hooks/queries/useVersions";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import {
   computeMainFields,
@@ -41,25 +48,22 @@ import {
   type RestoreAffordance,
   type ViewedVersion,
 } from "./document-history-context";
-import { HistoricalDocumentBanner } from "./HistoricalDocumentBanner";
 import { snapshotToFormValues } from "./snapshot-to-form-values";
-
-/**
- * Whether the chosen version is actually on screen.
- *
- * A read that has not returned leaves `isLoading` false with no error and no
- * snapshot: the query is disabled whenever the scope is not yet addressable,
- * and a paused one reports the same. Deciding from `isLoading` alone would
- * render an empty document as though it were the version, and offer to restore
- * what nobody has seen.
- */
-function versionOnScreen(viewing: ViewedVersion): boolean {
-  return (
-    viewing.error === null &&
-    !viewing.isLoading &&
-    viewing.snapshot !== undefined
-  );
-}
+import {
+  useVersionActions,
+  versionOnScreen,
+  type VersionActions,
+} from "./version-actions";
+import {
+  changeOrder,
+  changesStateOf,
+  diffForPair,
+  versionChangesOf,
+  type ChangesState,
+  type VersionChanges,
+} from "./version-changes";
+import { changeAnchorId, VersionChangesForm } from "./VersionChangesForm";
+import { VersionComparisonBar } from "./VersionComparisonBar";
 
 /**
  * Whether the editor's write affordances are withheld: they act on the LIVE
@@ -98,8 +102,8 @@ export function mayRecordRecovery(
  * The locale context a snapshot renders under, derived from the editor's own.
  *
  * Presentation comes from the VERSION: a snapshot captured in Arabic is read
- * right-to-left even while the editor is in English — which is what the banner
- * above it names. Every seam that ACTS on the live editor is withheld: locale
+ * right-to-left even while the editor is in English, because that is how it
+ * was written. Every seam that ACTS on the live editor is withheld: locale
  * switching, translation mode, the inline source hint, copy-from-language and
  * publish-every-language, because reading a version must not be able to write
  * to the document that is temporarily not on screen.
@@ -170,8 +174,8 @@ export function useViewedVersion(
   const [viewingVersion, setViewingVersion] = useState<ViewedVersion | null>(
     null
   );
-  // Published by the history panel while it is mounted, so the banner can
-  // offer restoring without a second copy of the permission or the mutation.
+  // Published by the history panel while it is mounted, so the version's own
+  // actions can offer restoring without a second copy of the permission or the mutation.
   const [restoreAffordance, setRestoreAffordance] =
     useState<RestoreAffordance | null>(null);
   const documentHistory = useMemo<DocumentHistoryValue>(
@@ -294,39 +298,300 @@ export function versionAwareToolbarSlots(
 }
 
 /**
- * The banner over the version being read, derived from the shared context.
- *
- * Renders nothing while no version is published, so the caller mounts it
- * unconditionally beside its other document notices.
- *
- * @param actionsDisabled - why every write is refused right now, whether by a
- *   colleague's claim or a submit in flight; a caller who may not write the
- *   live document is not offered a write into its past either
+ * A past version's actions on a phone: the moves through its changes, Back to
+ * current and Restore…, in a bar at the bottom, under the thumb. Wider
+ * screens carry the same actions in the title bar and the comparison bar.
  */
-export function ViewedVersionBanner({
+/**
+ * Where the reader is among the changes, in the phone bar's few words. Says
+ * "No changes" only once the comparison has answered; while it is read, or if
+ * it failed, it says so rather than claiming the versions are the same.
+ */
+function phonePositionText(
+  state: ChangesState,
+  changed: number,
+  position: number
+): string {
+  switch (state.kind) {
+    case "reading":
+      return "Reading…";
+    case "failed":
+      return "Not read";
+    case "first":
+      return "First version";
+    case "ready":
+      return changed > 0 ? `${position + 1} of ${changed}` : "No changes";
+  }
+}
+
+function VersionPhoneBar({
+  actions,
+  state,
+  changed,
+  position,
+  onMove,
+}: {
+  actions: VersionActions;
+  state: ChangesState;
+  changed: number;
+  position: number;
+  onMove: (delta: -1 | 1) => void;
+}) {
+  return (
+    <div
+      role="toolbar"
+      aria-label="Version actions"
+      className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-2 border-t border-border bg-background px-3 py-2 sm:hidden"
+    >
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="px-2"
+        aria-label="Previous change"
+        disabled={changed < 2}
+        onClick={() => onMove(-1)}
+      >
+        <ArrowUp className="h-4 w-4" aria-hidden="true" />
+      </Button>
+      <span className="text-sm tabular-nums text-muted-foreground">
+        {phonePositionText(state, changed, position)}
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="px-2"
+        aria-label="Next change"
+        disabled={changed < 2}
+        onClick={() => onMove(1)}
+      >
+        <ArrowDown className="h-4 w-4" aria-hidden="true" />
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="ml-auto"
+        onClick={actions.returnToCurrent}
+      >
+        Back to current
+      </Button>
+      {actions.restore ? (
+        <Button
+          type="button"
+          size="sm"
+          disabled={actions.restoreDisabled}
+          onClick={actions.restore}
+        >
+          Restore…
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** The comparison a version's changes are read from, or null for none. */
+function baselineOf(viewing: ViewedVersion): number | null {
+  return viewing.comparedWith.kind === "version"
+    ? viewing.comparedWith.versionNo
+    : null;
+}
+
+/**
+ * What the version on screen changed against the one it is compared with,
+ * read from the same comparison the comparison page draws.
+ */
+function useViewedChanges(viewing: ViewedVersion) {
+  const from = baselineOf(viewing);
+  const diff = useVersionDiff({
+    scope: viewing.scope,
+    from,
+    to: viewing.versionNo,
+    enabled: from !== null,
+  });
+  // Keyed on the pair: a diff kept on screen from the previous pair while
+  // the next loads must not mark this version's fields.
+  const data = diffForPair(diff.data, from, viewing.versionNo);
+  const changes = useMemo(() => (data ? versionChangesOf(data) : null), [data]);
+  const state = changesStateOf({
+    comparedWith: viewing.comparedWith,
+    failed: diff.isError,
+    retry: () => void diff.refetch(),
+    changes,
+  });
+  return { changes, state };
+}
+
+/**
+ * Where the reader is among a version's changes, and the move to the
+ * previous or next one. A move brings the change into view and focuses it,
+ * so a keyboard or screen reader user lands on it as well as seeing it.
+ */
+function useChangeNavigation(order: readonly string[]) {
+  const [position, setPosition] = useState(0);
+  const at = Math.min(position, Math.max(order.length - 1, 0));
+  const move = (delta: -1 | 1) => {
+    if (order.length === 0) return;
+    const next = (at + delta + order.length) % order.length;
+    setPosition(next);
+    const target = document.getElementById(changeAnchorId(order[next]));
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    target?.focus({ preventScroll: true });
+  };
+  return { position: at, current: order[at] ?? null, move };
+}
+
+/** The top-level names a form lays out, in its order. */
+function layoutNames(fields: readonly FieldConfig[]): string[] {
+  return fields.flatMap(field =>
+    "name" in field && typeof field.name === "string" ? [field.name] : []
+  );
+}
+
+/**
+ * The version's fields: its changes marked where they are known, the whole
+ * version where they are not yet (or where it is the first), a skeleton while
+ * it is read, and a plain refusal if it could not be.
+ */
+function VersionContent({
+  viewing,
+  fields,
+  values,
+  changes,
+  order,
+  current,
+}: {
+  viewing: ViewedVersion;
+  fields: FieldConfig[];
+  values: Record<string, unknown>;
+  changes: VersionChanges | null;
+  order: readonly string[];
+  current: string | null;
+}) {
+  const outerLocale = useEntryLocale();
+  const { getLocale, defaultLocale } = useLocalization();
+  const [showUnchanged, setShowUnchanged] = useState(false);
+  if (viewing.error) {
+    // A failed read must not render as an empty document: that is a
+    // different and wrong claim about the version.
+    return (
+      <Alert variant="destructive">
+        <AlertDescription>This version could not be loaded.</AlertDescription>
+      </Alert>
+    );
+  }
+  if (!versionOnScreen(viewing)) {
+    return (
+      <div className="flex flex-col gap-4" aria-busy="true">
+        <span className="sr-only" role="status">
+          Loading version {viewing.versionNo}
+        </span>
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} className="flex flex-col gap-1">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-9 w-full" />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  // A snapshot captured in another language is presented in that language,
+  // while every seam that acts on the live editor is withheld from it.
+  const snapshotLocale =
+    viewing.locale !== null
+      ? snapshotLocaleContext(
+          outerLocale,
+          viewing.locale,
+          defaultLocale,
+          getLocale
+        )
+      : outerLocale;
+  return (
+    <EntryLocaleProvider value={snapshotLocale}>
+      {/* No translation-field context: history is opened from inside
+          translation mode without the mode exiting, and an inherited source
+          would put a "use source" affordance on every historical field —
+          writing into the version this area claims is frozen. Empty is the
+          context's own answer for "offers nothing". */}
+      <TranslationFieldProvider value={{}}>
+        {changes ? (
+          <VersionChangesForm
+            fields={fields}
+            values={values}
+            changes={changes}
+            order={order}
+            current={current}
+            showUnchanged={showUnchanged}
+            onToggleUnchanged={() => setShowUnchanged(v => !v)}
+          />
+        ) : (
+          // Nothing to mark yet (the first version, or while what changed is
+          // read): the version reads whole.
+          <ReadOnlyDocumentForm fields={fields} values={values} mode="edit" />
+        )}
+      </TranslationFieldProvider>
+    </EntryLocaleProvider>
+  );
+}
+
+/**
+ * One version on screen: its comparison bar, its fields, and on a phone its
+ * actions at the bottom. Keyed by the version, so choosing another starts at
+ * its first change with its unchanged fields folded.
+ */
+function ViewedVersionFrame({
+  viewing,
+  fields,
+  values,
   actionsDisabled,
 }: {
+  viewing: ViewedVersion;
+  fields: FieldConfig[];
+  values: Record<string, unknown>;
   actionsDisabled: boolean;
 }) {
-  const { viewing, setViewing, restore } = useDocumentHistory();
-  if (!viewing) return null;
+  const { restore } = useDocumentHistory();
+  const actions = useVersionActions(actionsDisabled);
+  const { changes, state } = useViewedChanges(viewing);
+  const layout = useMemo(() => layoutNames(fields), [fields]);
+  const order = useMemo(
+    () => (changes ? changeOrder(changes, layout) : []),
+    [changes, layout]
+  );
+  const { position, current, move } = useChangeNavigation(order);
   return (
-    <HistoricalDocumentBanner
-      versionNo={viewing.versionNo}
-      locale={viewing.locale}
-      // Routed through the panel when one is mounted, so its selection clears
-      // with the shared state. The direct fallback keeps the banner working
-      // without a panel.
-      onReturnToCurrent={restore?.returnToCurrent ?? (() => setViewing(null))}
-      // Offered only when the panel says this caller may write.
-      onRestore={
-        restore?.canRestore && !actionsDisabled ? restore.request : undefined
-      }
-      // And only once the version is actually on screen: restoring from a
-      // skeleton, or from a failed read, is a decision made without having
-      // seen what is being chosen.
-      restoreDisabled={!versionOnScreen(viewing)}
-    />
+    // Room under the last field for the phone's bottom bar.
+    <div className="@4xl/content:p-8 pt-6 pb-20 sm:pb-0">
+      <VersionComparisonBar
+        versionNo={viewing.versionNo}
+        about={viewing.about}
+        comparedWith={viewing.comparedWith}
+        changes={state}
+        position={position}
+        onMove={move}
+        onBackToHistory={restore?.backToHistory}
+        onOpenComparison={restore?.compare}
+        onCompareCurrent={restore?.compareCurrent}
+      />
+      <VersionContent
+        viewing={viewing}
+        fields={fields}
+        values={values}
+        changes={changes}
+        order={order}
+        current={current}
+      />
+      {actions ? (
+        <VersionPhoneBar
+          actions={actions}
+          state={state}
+          changed={order.length}
+          position={position}
+          onMove={move}
+        />
+      ) : null}
+    </div>
   );
 }
 
@@ -342,38 +607,31 @@ export function ViewedVersionBanner({
  * while rich-field components (a text editor's undo history, its selection)
  * survive the round trip back to the live document.
  *
+ * The version is framed by one comparison bar, and each field it changed is
+ * marked; unchanged fields fold away until asked for.
+ *
  * @param fields - the RENDERED layout for the version, from the host's
  *   `historicalFields` — a subset of what the version stored
  * @param values - the version's full value map, from the host's
  *   `historicalValues`; the form is built from this so condition controllers
  *   the rendered layout omits still hold the values the version stored
+ * @param actionsDisabled - why every write is refused right now (see
+ *   `useVersionActions`)
  * @param children - the live document's body, hidden while a version is being
  *   read and rendered normally otherwise
  */
 export function ViewedVersionBody({
   fields,
   values,
+  actionsDisabled,
   children,
 }: {
   fields: FieldConfig[];
   values?: Record<string, unknown>;
+  actionsDisabled: boolean;
   children?: ReactNode;
 }) {
   const { viewing } = useDocumentHistory();
-  const outerLocale = useEntryLocale();
-  const { getLocale, defaultLocale } = useLocalization();
-  // A snapshot captured in another language is presented in that language —
-  // the banner above it names the locale, so the fields must agree — while
-  // every seam that acts on the live editor is withheld from the snapshot.
-  const snapshotLocale =
-    viewing && viewing.locale !== null
-      ? snapshotLocaleContext(
-          outerLocale,
-          viewing.locale,
-          defaultLocale,
-          getLocale
-        )
-      : outerLocale;
   return (
     <>
       {/* The live field tree keeps ONE stable parent in both branches, and
@@ -382,7 +640,7 @@ export function ViewedVersionBody({
           and remounts it — destroying exactly the rich field state (an
           editor's undo history, its selection) that hiding exists to
           preserve. Hidden removes the tree from the accessibility tree and
-          from every pointer, so the read-only claim on the banner holds. */}
+          from every pointer, so the read-only claim holds. */}
       <div
         aria-hidden={viewing ? true : undefined}
         className={cn(viewing && "hidden")}
@@ -390,44 +648,13 @@ export function ViewedVersionBody({
         {children}
       </div>
       {viewing ? (
-        <div className="@4xl/content:p-8 pt-6">
-          {viewing.error ? (
-            // A failed read must not render as an empty document: that is a
-            // different and wrong claim about the version.
-            <Alert variant="destructive">
-              <AlertDescription>
-                This version could not be loaded.
-              </AlertDescription>
-            </Alert>
-          ) : !versionOnScreen(viewing) ? (
-            <div className="flex flex-col gap-4" aria-busy="true">
-              <span className="sr-only" role="status">
-                Loading version {viewing.versionNo}
-              </span>
-              {[0, 1, 2, 3].map(i => (
-                <div key={i} className="flex flex-col gap-1">
-                  <Skeleton className="h-3 w-24" />
-                  <Skeleton className="h-9 w-full" />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <EntryLocaleProvider value={snapshotLocale}>
-              {/* No translation-field context: history is opened from inside
-                  translation mode without the mode exiting, and an inherited
-                  source would put a "use source" affordance on every historical
-                  field — writing into the version this area claims is frozen.
-                  Empty is the context's own answer for "offers nothing". */}
-              <TranslationFieldProvider value={{}}>
-                <ReadOnlyDocumentForm
-                  fields={fields}
-                  values={values ?? {}}
-                  mode="edit"
-                />
-              </TranslationFieldProvider>
-            </EntryLocaleProvider>
-          )}
-        </div>
+        <ViewedVersionFrame
+          key={viewing.versionNo}
+          viewing={viewing}
+          fields={fields}
+          values={values ?? {}}
+          actionsDisabled={actionsDisabled}
+        />
       ) : null}
     </>
   );

@@ -236,6 +236,39 @@ export class UserQueryService extends BaseService {
    * Build the select columns object for custom fields from user_ext.
    * Maps each custom field to its Drizzle column reference.
    */
+  /**
+   * One user's custom fields, read in a separate query: the runtime-generated
+   * table is used only as a JOIN target against the static users table, which
+   * keeps column resolution reliable. A failure is logged through the service
+   * logger, which masks it, and leaves the user without custom fields rather
+   * than failing the read.
+   */
+  private async readCustomFields(
+    userId: string,
+    userExtTable: DrizzleRuntimeTable,
+    failure: string
+  ): Promise<Record<string, unknown>> {
+    const { users } = this.tables;
+    try {
+      // Required by Drizzle ORM — runtime-generated tables need untyped
+      // db access. Await of DrizzleChain resolves to row list directly.
+      const extRows = await (this.db as unknown as DrizzleChain)
+        .select({
+          extUserId: users.id,
+          ...this.buildCustomFieldSelect(userExtTable),
+        })
+        .from(users)
+        .leftJoin(userExtTable, eq(users.id, userExtTable.user_id))
+        .where(eq(users.id, userId))
+        .limit(1);
+      return extRows.length > 0 ? this.extractCustomFields(extRows[0]) : {};
+    } catch (error) {
+      // A failed query's error quotes the values it was given.
+      this.logger.error(failure, { error });
+      return {};
+    }
+  }
+
   private buildCustomFieldSelect(
     userExtTable: DrizzleRuntimeTable
   ): Record<string, unknown> {
@@ -409,9 +442,13 @@ export class UserQueryService extends BaseService {
             .filter(Boolean);
         }
       } catch (extSearchErr) {
-        console.error(
-          "[UserQueryService] Failed to search user_ext fields:",
-          extSearchErr
+        // Through the service logger, which is masked: a failed query's error
+        // quotes the values it was given, an address among them.
+        this.logger.error(
+          "[UserQueryService] Failed to search user_ext fields",
+          {
+            error: extSearchErr,
+          }
         );
       }
     }
@@ -627,9 +664,11 @@ export class UserQueryService extends BaseService {
       } catch (extErr) {
         // Log the error so it's visible in server logs; do not permanently
         // disable ext lookups for a transient failure.
-        console.error(
-          "[UserQueryService] Failed to fetch user_ext fields:",
-          extErr
+        this.logger.error(
+          "[UserQueryService] Failed to fetch user_ext fields",
+          {
+            error: extErr,
+          }
         );
       }
     }
@@ -704,7 +743,6 @@ export class UserQueryService extends BaseService {
     userExtTable: DrizzleRuntimeTable | null
   ): Promise<GetUserResponse> {
     const { users } = this.tables;
-    const hasExt = !!userExtTable;
 
     // Build select columns — custom fields are intentionally excluded here;
     // they are fetched via a dedicated inner query below, avoiding Drizzle ORM
@@ -762,32 +800,15 @@ export class UserQueryService extends BaseService {
       updatedAt: row.updatedAt ?? undefined,
     };
 
-    // Fetch custom fields in a separate query using the same JOIN pattern as
-    // _listUsersInternal. The runtime-generated table is used only as a JOIN
-    // target against the static users table to ensure reliable column resolution.
-    if (hasExt) {
-      try {
-        // Required by Drizzle ORM — runtime-generated tables need untyped
-        // db access. Await of DrizzleChain resolves to row list directly.
-        const extRows = await (this.db as unknown as DrizzleChain)
-          .select({
-            extUserId: users.id,
-            ...this.buildCustomFieldSelect(userExtTable),
-          })
-          .from(users)
-          .leftJoin(userExtTable, eq(users.id, userExtTable.user_id))
-          .where(eq(users.id, row.id))
-          .limit(1);
-
-        if (extRows.length > 0) {
-          Object.assign(userData, this.extractCustomFields(extRows[0]));
-        }
-      } catch (extErr) {
-        console.error(
-          "[UserQueryService] Failed to fetch user_ext fields for user:",
-          extErr
-        );
-      }
+    if (userExtTable) {
+      Object.assign(
+        userData,
+        await this.readCustomFields(
+          String(row.id),
+          userExtTable,
+          "[UserQueryService] Failed to fetch user_ext fields for user"
+        )
+      );
     }
 
     return userData as MinimalUser;
@@ -864,7 +885,6 @@ export class UserQueryService extends BaseService {
 
     // Resolve user_ext table (null if no custom fields)
     const userExtTable = this.getUserExtTable();
-    const hasExt = !!userExtTable;
 
     // Build select columns — custom fields fetched separately below
     const selectColumns: Record<string, unknown> = {
@@ -903,34 +923,18 @@ export class UserQueryService extends BaseService {
       updatedAt: row.updatedAt ?? undefined,
     };
 
-    // Fetch custom fields in a separate inner query to avoid Drizzle ORM
-    // issues with runtime-generated tables combined with other JOINs.
-    if (hasExt) {
-      try {
-        // Required by Drizzle ORM — runtime-generated tables need untyped
-        // db access. Await of DrizzleChain resolves to row list directly.
-        const extRows = await (this.db as unknown as DrizzleChain)
-          .select({
-            extUserId: users.id,
-            ...this.buildCustomFieldSelect(userExtTable),
-          })
-          .from(users)
-          .leftJoin(userExtTable, eq(users.id, userExtTable.user_id))
-          // The selected row's id, not the lookup spellings: with case twins
-          // on an upgraded database the spellings match both accounts, and
-          // the fields must be the selected account's own.
-          .where(eq(users.id, row.id))
-          .limit(1);
-
-        if (extRows.length > 0) {
-          Object.assign(userData, this.extractCustomFields(extRows[0]));
-        }
-      } catch (extErr) {
-        console.error(
-          "[UserQueryService] Failed to fetch user_ext fields for user by email:",
-          extErr
-        );
-      }
+    // By the selected row's id, not the lookup spellings: with case twins on
+    // an upgraded database the spellings match both accounts, and the fields
+    // must be the selected account's own.
+    if (userExtTable) {
+      Object.assign(
+        userData,
+        await this.readCustomFields(
+          String(row.id),
+          userExtTable,
+          "[UserQueryService] Failed to fetch user_ext fields for user by email"
+        )
+      );
     }
 
     return userData as MinimalUser;

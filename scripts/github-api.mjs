@@ -4,11 +4,16 @@
  * runs cannot drift apart in how they ask.
  */
 
-/** One request; the response is returned as it came, for the caller to judge its status. */
-export function githubRequest(path, { token, fetchImpl = fetch }, method = "GET") {
+/**
+ * One request, with a JSON body when one is given; the response is returned
+ * as it came, for the caller to judge its status.
+ */
+export function githubRequest(path, { token, fetchImpl = fetch }, method = "GET", body = undefined) {
   const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
   if (token) headers.authorization = `Bearer ${token}`;
-  return fetchImpl(`https://api.github.com/${path}`, { method, headers });
+  if (body === undefined) return fetchImpl(`https://api.github.com/${path}`, { method, headers });
+  headers["content-type"] = "application/json";
+  return fetchImpl(`https://api.github.com/${path}`, { method, headers, body: JSON.stringify(body) });
 }
 
 /** A resource's JSON; any status but success throws, for the caller to turn into its safe answer. */

@@ -36,6 +36,7 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
+import { operationsToJudge, planCompanionMoves } from "./moved-to-companion";
 import {
   excludeLockedTableOps,
   logSkippedLockedOps,
@@ -94,6 +95,8 @@ export interface PreviewDesiredSchemaArgs {
   desired: DesiredSchema;
   db: unknown;
   dialect: SupportedDialect;
+  /** As the apply's own (`PushSchemaPipeline.apply`), so the preview asks what the apply will. */
+  defaultLocale?: string;
 }
 
 /**
@@ -152,14 +155,23 @@ export async function previewDesiredSchema(
   // Phase B: rename detection + classification.
   // The rename detector reads typed Operation[] (post Option E) and
   // emits one candidate per drop+add pair on each table.
-  const candidates = renameDetector.detect(operations, dialect);
+  // The same moves the apply plans, so a drop it will not ask about is not asked about here.
+  const { moved } = await planCompanionMoves(
+    desired,
+    operations,
+    args.db,
+    dialect,
+    args.defaultLocale
+  );
+  const judged = operationsToJudge(operations, moved);
+  const candidates = renameDetector.detect(judged, dialect);
 
   // Classifier produces ClassifierEvent[] for interactive cases
   // (NOT-NULL-with-nulls, required-no-default, type changes). Count
   // callbacks are bound to the live DB so RealClassifier can populate
   // event row counts; tests inject stubs that return zero.
   const classificationResult = await classifier.classify({
-    operations,
+    operations: judged,
     countNulls: (table, column) => countNullsHelper(db, dialect, table, column),
     countRows: table => countRowsHelper(db, dialect, table),
     dialect,

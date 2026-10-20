@@ -184,6 +184,7 @@ describe("which field a field-type view edits", () => {
       name: "layout",
       // The declaration itself, so the view reads the field's own options.
       declaration: { name: "layout", type: "blocks" },
+      within: [],
     });
   });
 
@@ -192,11 +193,13 @@ describe("which field a field-type view edits", () => {
       kind: "field",
       name: "hero",
       declaration: twoFields[1],
+      within: [],
     });
     expect(resolveViewField("blocks", twoFields, "body")).toEqual({
       kind: "field",
       name: "body",
       declaration: twoFields[2],
+      within: [],
     });
   });
 
@@ -204,10 +207,61 @@ describe("which field a field-type view edits", () => {
     expect(resolveViewField("blocks", twoFields, undefined)).toEqual({
       kind: "choose",
       candidates: [
-        { name: "hero", label: "Hero", declaration: twoFields[1] },
-        { name: "body", label: "Body", declaration: twoFields[2] },
+        { name: "hero", label: "Hero", declaration: twoFields[1], within: [] },
+        { name: "body", label: "Body", declaration: twoFields[2], within: [] },
       ],
     });
+  });
+
+  it("names the unnamed groups around the field, outermost first", () => {
+    // The form applies a group's gates to everything inside it, so a surface
+    // editing the field on its own has to see them.
+    const inner = {
+      type: "group",
+      fields: [{ name: "aside", type: "blocks" }],
+    };
+    const outer = { type: "group", admin: { readOnly: true }, fields: [inner] };
+    const resolved = resolveViewField("blocks", [outer], undefined);
+    expect(resolved.kind === "field" ? resolved.within : null).toEqual([
+      outer,
+      inner,
+    ]);
+  });
+
+  it("offers only the fields `admits` lets through, and opens the only one", () => {
+    const onlyBody = (candidate: { name: string }) => candidate.name === "body";
+    expect(
+      resolveViewField("blocks", twoFields, undefined, onlyBody)
+    ).toMatchObject({
+      kind: "field",
+      name: "body",
+    });
+    const threeFields = [
+      ...twoFields,
+      { name: "aside", label: "Aside", type: "blocks" },
+    ];
+    const notHero = (candidate: { name: string }) => candidate.name !== "hero";
+    const asked = resolveViewField("blocks", threeFields, undefined, notHero);
+    expect(
+      asked.kind === "choose" ? asked.candidates.map(c => c.name) : asked
+    ).toEqual(["body", "aside"]);
+  });
+
+  it("answers the field the address names even when `admits` refuses it", () => {
+    // The caller says why; opening another field in its place would hide that.
+    const none = () => false;
+    expect(resolveViewField("blocks", twoFields, "hero", none)).toMatchObject({
+      kind: "field",
+      name: "hero",
+    });
+  });
+
+  it("asks among them all when `admits` lets none through", () => {
+    const none = () => false;
+    const asked = resolveViewField("blocks", twoFields, undefined, none);
+    expect(
+      asked.kind === "choose" ? asked.candidates.map(c => c.name) : asked
+    ).toEqual(["hero", "body"]);
   });
 
   it("asks rather than guesses when the address names a field that is not one", () => {

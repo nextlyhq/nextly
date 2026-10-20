@@ -31,8 +31,8 @@
 
 A save that changes nothing records no version, on every path, not only on
 a working draft: an unpublished document, a collection with history and no
-status, a Single, and each language of a translated document, which is
-compared with its own newest version. The comparison is the one a working
+status, a Single, and each language of a translated document. The
+comparison is the one a working
 draft's save already used, so framework fields such as timestamps don't
 count as a change, and now neither do a component's own row timestamps,
 which made an unchanged save of a document with a component look changed

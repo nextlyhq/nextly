@@ -2865,9 +2865,33 @@ async function auditDocs() {
  */
 const BASELINE = join(ROOT, "scripts", "doc-samples-baseline.json");
 
+/**
+ * The baseline with its totals computed from `samplesPerPage`.
+ *
+ * The totals are never stored beside the per-page map. Two branches that each
+ * add samples to a different page merge without a conflict in that map, while
+ * stored totals keep only one branch's numbers, so every pull request after
+ * the merge failed on a gain nobody had made. A total derived on every read
+ * cannot disagree with the pages it sums. A baseline with no per-page map is
+ * returned as it is.
+ */
+export function withDerivedCoverage(baseline) {
+  const perPage = baseline.samplesPerPage;
+  if (perPage === undefined) return baseline;
+  const pages = Object.values(perPage);
+  return {
+    ...baseline,
+    coverage: {
+      pages: pages.length,
+      samples: pages.reduce((sum, page) => sum + (page.samples ?? 0), 0),
+      compiled: pages.reduce((sum, page) => sum + (page.compiled ?? 0), 0),
+    },
+  };
+}
+
 const readBaseline = () => {
   try {
-    return JSON.parse(readFileSync(BASELINE, "utf-8"));
+    return withDerivedCoverage(JSON.parse(readFileSync(BASELINE, "utf-8")));
   } catch {
     return {};
   }
@@ -3241,11 +3265,6 @@ async function main() {
       BASELINE,
       `${JSON.stringify(
         {
-          coverage: {
-            pages: coverage.files.length,
-            samples: coverage.samples,
-            compiled: coverage.compiled,
-          },
           samplesPerPage: coverage.perPage,
           pages: counted,
           findings: fingerprint,

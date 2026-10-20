@@ -10,9 +10,8 @@
  * unsaved-changes guard goes on firing. An autosave that cleared dirty would
  * let someone navigate away believing their work was committed.
  *
- * Distinct from `useAutoSave`, which persists to `localStorage`. That one
- * survives a crashed tab on the same machine and nothing else; this one
- * survives a lost machine, and follows the author to another browser.
+ * Kept on the server rather than in the browser, so a recovery point
+ * survives a lost machine and follows the author to another browser.
  *
  * @module hooks/useDocumentAutosave
  */

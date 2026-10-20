@@ -32,6 +32,7 @@ import {
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -591,6 +592,10 @@ export const COMPONENTS_METHODS: Record<
             // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
             // that kind is invisible to every history query filtered by its own.
             uiTargetKind: "component" as const,
+            // A field becoming translated keeps its value as this language's; the apply moves it
+            // after its prompts and refusals, before it drops the main column.
+            defaultLocale:
+              getConfigFromDI()?.localization?.defaultLocale ?? "en",
           });
 
           if (!result.success) {
@@ -614,6 +619,8 @@ export const COMPONENTS_METHODS: Record<
               wasLocalized:
                 (component as { localized?: boolean }).localized === true,
               adapter,
+              // Added to the companion, with their values, by the apply before its drop.
+              joinedBefore: movedOnto(result, tableName),
             });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

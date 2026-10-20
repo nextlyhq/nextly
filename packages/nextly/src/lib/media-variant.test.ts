@@ -1,254 +1,181 @@
-// Why: media URL absolutization is a contract with every API consumer
-// (mobile apps, SSR, edge workers). The local storage adapter writes
-// relative URLs; cloud adapters write absolute URLs. These tests lock the
-// rules so a future refactor can't silently double-prefix cloud URLs or
-// leak unreachable relative paths to clients. Base-URL resolution itself
-// is covered separately by shared/lib/__tests__/get-base-url.test.ts.
-//
-// The `getBaseUrl` mock below is configured to throw — pass-through code
-// paths (absolute URLs, null/undefined inputs) must never reach it, and
-// any test that needs a base URL passes one explicitly.
-import { describe, expect, it, vi } from "vitest";
+// Why: the local storage adapter writes media URLs on its own base, a path
+// (`/uploads/...`) by default, and cloud adapters write absolute URLs. Reads
+// hand them back as stored, so the app's own pages show them on whatever host
+// and port serve the request. A consumer that must hand a URL to something
+// outside the app asks toPublicMediaUrl, which resolves a relative URL
+// against a public origin it is given or configured with, and never against
+// one it guessed. These tests lock both, with the environment stood in.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./get-base-url", () => ({
-  getBaseUrl: () => {
-    throw new Error(
-      "getBaseUrl() should not be called when an explicit baseUrl is provided or the URL is a pass-through"
-    );
+const mockEnv: { NEXT_PUBLIC_APP_URL?: string; NODE_ENV?: string } = {};
+vi.mock("../shared/lib/env", () => ({
+  get env() {
+    return mockEnv;
   },
 }));
 
-import { absolutizeMediaUrls, toAbsoluteMediaUrl } from "./media-variant";
+import { setNextlyLogger } from "../observability/logger";
 
-describe("toAbsoluteMediaUrl", () => {
-  const baseUrl = "https://cms.example.com";
+import { normalizeMediaUrls, toPublicMediaUrl } from "./media-variant";
 
-  it("prefixes a leading-slash relative URL", () => {
-    expect(toAbsoluteMediaUrl("/uploads/a.jpg", baseUrl)).toBe(
-      "https://cms.example.com/uploads/a.jpg"
-    );
-  });
-
-  it("inserts a slash when the relative URL has none", () => {
-    expect(toAbsoluteMediaUrl("uploads/a.jpg", baseUrl)).toBe(
-      "https://cms.example.com/uploads/a.jpg"
-    );
-  });
-
-  it("passes https URLs through unchanged", () => {
-    const url = "https://cdn.example.com/a.jpg";
-    expect(toAbsoluteMediaUrl(url, baseUrl)).toBe(url);
-  });
-
-  it("passes http URLs through unchanged", () => {
-    const url = "http://cdn.example.com/a.jpg";
-    expect(toAbsoluteMediaUrl(url, baseUrl)).toBe(url);
-  });
-
-  it("passes s3:// URLs through unchanged", () => {
-    const url = "s3://my-bucket/a.jpg";
-    expect(toAbsoluteMediaUrl(url, baseUrl)).toBe(url);
-  });
-
-  it("passes protocol-relative URLs through unchanged", () => {
-    const url = "//cdn.example.com/a.jpg";
-    expect(toAbsoluteMediaUrl(url, baseUrl)).toBe(url);
-  });
-
-  it("passes null through", () => {
-    expect(toAbsoluteMediaUrl(null, baseUrl)).toBeNull();
-  });
-
-  it("passes undefined through", () => {
-    expect(toAbsoluteMediaUrl(undefined, baseUrl)).toBeUndefined();
-  });
-
-  it("passes empty string through", () => {
-    expect(toAbsoluteMediaUrl("", baseUrl)).toBe("");
+const logged = { warn: [] as string[], error: [] as string[] };
+beforeEach(() => {
+  mockEnv.NEXT_PUBLIC_APP_URL = undefined;
+  mockEnv.NODE_ENV = "development";
+  logged.warn.length = 0;
+  logged.error.length = 0;
+  setNextlyLogger({
+    warn: payload => logged.warn.push(JSON.stringify(payload)),
+    error: payload => logged.error.push(JSON.stringify(payload)),
+    info: () => {},
+    debug: () => {},
   });
 });
+afterEach(() => setNextlyLogger(undefined));
 
-describe("absolutizeMediaUrls", () => {
-  const baseUrl = "https://cms.example.com";
-
-  it("absolutizes url and thumbnailUrl on the row", () => {
-    const row = { url: "/uploads/a.jpg", thumbnailUrl: "/uploads/a-thumb.jpg" };
-    expect(absolutizeMediaUrls(row, baseUrl)).toEqual({
-      url: "https://cms.example.com/uploads/a.jpg",
-      thumbnailUrl: "https://cms.example.com/uploads/a-thumb.jpg",
-    });
-  });
-
-  it("absolutizes nested sizes[*].url", () => {
-    const row = {
-      url: "/uploads/a.jpg",
-      sizes: {
-        card: { url: "/uploads/a-card.jpg", width: 400, height: 300 },
-        thumb: { url: "/uploads/a-thumb.jpg", width: 100, height: 100 },
-      },
-    };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    expect(out.sizes?.card.url).toBe(
-      "https://cms.example.com/uploads/a-card.jpg"
-    );
-    expect(out.sizes?.thumb.url).toBe(
-      "https://cms.example.com/uploads/a-thumb.jpg"
-    );
-    // Non-URL variant fields are preserved verbatim.
-    expect(out.sizes?.card.width).toBe(400);
-    expect(out.sizes?.thumb.height).toBe(100);
-  });
-
-  it("leaves absolute variant URLs untouched (mixed cloud + local)", () => {
-    const row = {
-      url: "/uploads/a.jpg",
-      sizes: {
-        local: { url: "/uploads/a-card.jpg" },
-        cloud: { url: "https://cdn.example.com/a-card.jpg" },
-      },
-    };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    expect(out.sizes?.local.url).toBe(
-      "https://cms.example.com/uploads/a-card.jpg"
-    );
-    expect(out.sizes?.cloud.url).toBe("https://cdn.example.com/a-card.jpg");
-  });
-
-  it("preserves sizes: null", () => {
-    const row = { url: "/uploads/a.jpg", sizes: null };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    expect(out.sizes).toBeNull();
-  });
-
-  it("omits sizes when input does not have the key", () => {
-    const row = { url: "/uploads/a.jpg" };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    expect("sizes" in out).toBe(false);
-  });
-
-  it("does not mutate the input row", () => {
+describe("normalizeMediaUrls", () => {
+  it("hands back local URLs as stored, whatever NEXT_PUBLIC_APP_URL holds", () => {
+    mockEnv.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
     const row = {
       url: "/uploads/a.jpg",
       thumbnailUrl: "/uploads/a-thumb.jpg",
-      sizes: { card: { url: "/uploads/a-card.jpg" } },
+      sizes: { card: { url: "/uploads/a-card.jpg", width: 400 } },
     };
-    const snapshot = JSON.parse(JSON.stringify(row));
-    absolutizeMediaUrls(row, baseUrl);
-    expect(row).toEqual(snapshot);
-    expect(row.sizes.card.url).toBe("/uploads/a-card.jpg");
+    expect(normalizeMediaUrls(row)).toEqual(row);
   });
 
-  it("preserves unrelated fields on the row", () => {
-    const row = {
-      id: "abc",
-      url: "/uploads/a.jpg",
-      filename: "a.jpg",
-      altText: "an image",
-    };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    expect(out.id).toBe("abc");
-    expect(out.filename).toBe("a.jpg");
-    expect(out.altText).toBe("an image");
-  });
-});
-
-describe("lazy base-URL resolution", () => {
-  // Why: env validation can throw in test/build contexts. The pass-through
-  // contract for absolute URLs must hold without reaching env.
-  it("toAbsoluteMediaUrl does not resolve baseUrl for absolute URLs", () => {
-    expect(() =>
-      toAbsoluteMediaUrl("https://cdn.example.com/a.jpg")
-    ).not.toThrow();
-  });
-
-  it("toAbsoluteMediaUrl does not resolve baseUrl for null/undefined/empty", () => {
-    expect(() => toAbsoluteMediaUrl(null)).not.toThrow();
-    expect(() => toAbsoluteMediaUrl(undefined)).not.toThrow();
-    expect(() => toAbsoluteMediaUrl("")).not.toThrow();
-  });
-
-  it("absolutizeMediaUrls does not resolve baseUrl when all URLs are absolute", () => {
+  it("hands back cloud URLs as stored", () => {
     const row = {
       url: "https://cdn.example.com/a.jpg",
-      thumbnailUrl: "https://cdn.example.com/a-thumb.jpg",
-      sizes: {
-        card: { url: "https://cdn.example.com/a-card.jpg" },
-      },
+      sizes: { card: { url: "https://cdn.example.com/a-card.jpg" } },
     };
-    expect(() => absolutizeMediaUrls(row)).not.toThrow();
+    expect(normalizeMediaUrls(row)).toEqual(row);
   });
 
-  it("toAbsoluteMediaUrl falls back to the resolver only for relative URLs without explicit base", () => {
-    // With the mock throwing, this proves getBaseUrl() *is* the source of
-    // truth for the implicit case — confirms we didn't accidentally swap in
-    // a silent default.
-    expect(() => toAbsoluteMediaUrl("/uploads/a.jpg")).toThrow(/getBaseUrl/);
-  });
-});
-
-describe("string-encoded sizes (SQLite)", () => {
-  // Why: SQLite stores `media.sizes` as TEXT and the better-sqlite3 driver
-  // returns it unparsed. Without normalisation, populated media in entry
-  // responses leak relative variant URLs even after the top-level url and
-  // thumbnailUrl have been absolutized.
-  const baseUrl = "https://cms.example.com";
-
-  it("parses a JSON-encoded sizes string and absolutizes variant URLs", () => {
-    const row = {
-      url: "/uploads/a.jpg",
-      sizes: JSON.stringify({
-        card: { url: "/uploads/a-card.jpg", width: 400, height: 300 },
-        thumb: { url: "/uploads/a-thumb.jpg" },
-      }),
-    };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    expect(out.sizes).toEqual({
-      card: {
-        url: "https://cms.example.com/uploads/a-card.jpg",
-        width: 400,
-        height: 300,
-      },
-      thumb: { url: "https://cms.example.com/uploads/a-thumb.jpg" },
-    });
-    expect(out.url).toBe("https://cms.example.com/uploads/a.jpg");
-  });
-
-  it("leaves absolute variant URLs in a parsed string-sizes payload untouched", () => {
-    const row = {
-      url: "/uploads/a.jpg",
-      sizes: JSON.stringify({
-        cloud: { url: "https://cdn.example.com/a-card.jpg" },
-        local: { url: "/uploads/a-local.jpg" },
-      }),
-    };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    // sizes is narrowed to `string` by the input type but normalised to
-    // an object at runtime; cast for property access.
-    const sizes = out.sizes as unknown as Record<
-      string,
-      { url: string }
-    > | null;
-    expect(sizes?.cloud.url).toBe("https://cdn.example.com/a-card.jpg");
-    expect(sizes?.local.url).toBe(
-      "https://cms.example.com/uploads/a-local.jpg"
+  it("preserves sizes: null, and omits sizes when the row has none", () => {
+    expect(
+      normalizeMediaUrls({ url: "/uploads/a.jpg", sizes: null }).sizes
+    ).toBeNull();
+    expect("sizes" in normalizeMediaUrls({ url: "/uploads/a.jpg" })).toBe(
+      false
     );
   });
 
-  it("normalises unparseable string sizes to null rather than leaking the raw string", () => {
+  it("does not mutate the input row, and keeps its other fields", () => {
     const row = {
+      id: "abc",
       url: "/uploads/a.jpg",
-      sizes: "not-valid-json",
+      sizes: { card: { url: "/uploads/a-card.jpg" } },
     };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    expect(out.sizes).toBeNull();
+    const snapshot = JSON.parse(JSON.stringify(row));
+    const out = normalizeMediaUrls(row);
+    expect(row).toEqual(snapshot);
+    expect(out.id).toBe("abc");
   });
 
-  it("normalises a JSON-encoded non-object (array) to null", () => {
-    const row = {
-      url: "/uploads/a.jpg",
-      sizes: JSON.stringify(["card", "thumb"]),
-    };
-    const out = absolutizeMediaUrls(row, baseUrl);
-    expect(out.sizes).toBeNull();
+  // SQLite stores `media.sizes` as TEXT, and the driver returns it unparsed.
+  // A local storage `baseUrl` written without its leading slash (`uploads`)
+  // stores `uploads/<key>`, which a page at `/admin/media` would resolve to
+  // `/admin/media/uploads/<key>`. Read as a path from the site's root.
+  it("reads a URL stored without its leading slash from the site's root", () => {
+    const row = normalizeMediaUrls({
+      url: "uploads/2026/10/a.png",
+      thumbnailUrl: "uploads/2026/10/a-thumb.png",
+      sizes: { small: { url: "uploads/2026/10/a-small.webp", width: 4 } },
+    });
+
+    expect(row.url).toBe("/uploads/2026/10/a.png");
+    expect(row.thumbnailUrl).toBe("/uploads/2026/10/a-thumb.png");
+    expect(row.sizes?.small?.url).toBe("/uploads/2026/10/a-small.webp");
+  });
+
+  it.each([
+    "/uploads/2026/10/a.png",
+    "https://cdn.example.com/a.png",
+    "//cdn.example.com/a.png",
+  ])("leaves %s as it is", url => {
+    const row = normalizeMediaUrls({ url, thumbnailUrl: url, sizes: null });
+    expect(row.url).toBe(url);
+    expect(row.thumbnailUrl).toBe(url);
+  });
+
+  describe("string-encoded sizes (SQLite)", () => {
+    it("parses a JSON-encoded sizes string into an object", () => {
+      const sizes = {
+        card: { url: "/uploads/a-card.jpg", width: 400, height: 300 },
+      };
+      const out = normalizeMediaUrls({
+        url: "/uploads/a.jpg",
+        sizes: JSON.stringify(sizes),
+      });
+      expect(out.sizes).toEqual(sizes);
+    });
+
+    it("normalises unparseable or non-object sizes to null", () => {
+      expect(
+        normalizeMediaUrls({ url: "/a.jpg", sizes: "not-json" }).sizes
+      ).toBeNull();
+      expect(
+        normalizeMediaUrls({ url: "/a.jpg", sizes: JSON.stringify(["card"]) })
+          .sizes
+      ).toBeNull();
+    });
+  });
+});
+
+describe("toPublicMediaUrl", () => {
+  it("passes an absolute URL through, without needing an origin", () => {
+    expect(toPublicMediaUrl("https://cdn.example.com/a.jpg")).toBe(
+      "https://cdn.example.com/a.jpg"
+    );
+    expect(toPublicMediaUrl("//cdn.example.com/a.jpg")).toBe(
+      "//cdn.example.com/a.jpg"
+    );
+    expect(logged.warn).toEqual([]);
+  });
+
+  it("passes null, undefined and an empty string through", () => {
+    expect(toPublicMediaUrl(null)).toBeNull();
+    expect(toPublicMediaUrl(undefined)).toBeUndefined();
+    expect(toPublicMediaUrl("")).toBe("");
+  });
+
+  it("resolves a relative URL against the base it is given", () => {
+    expect(
+      toPublicMediaUrl("/uploads/a.jpg", {
+        baseUrl: "https://mail.example.com/",
+      })
+    ).toBe("https://mail.example.com/uploads/a.jpg");
+  });
+
+  it("resolves a relative URL against NEXT_PUBLIC_APP_URL when given none", () => {
+    mockEnv.NEXT_PUBLIC_APP_URL = "https://app.example.com";
+    expect(toPublicMediaUrl("uploads/a.jpg")).toBe(
+      "https://app.example.com/uploads/a.jpg"
+    );
+  });
+
+  it("prefers the base it is given over NEXT_PUBLIC_APP_URL", () => {
+    mockEnv.NEXT_PUBLIC_APP_URL = "https://app.example.com";
+    expect(
+      toPublicMediaUrl("/uploads/a.jpg", {
+        baseUrl: "https://mail.example.com",
+      })
+    ).toBe("https://mail.example.com/uploads/a.jpg");
+  });
+
+  it("in development, with no origin, warns naming both settings and guesses no host", () => {
+    const out = toPublicMediaUrl("/uploads/a.jpg");
+    expect(out).toBe("/uploads/a.jpg");
+    expect(String(out)).not.toMatch(/localhost|https?:/);
+    expect(logged.warn.join("\n")).toMatch(/baseUrl/);
+    expect(logged.warn.join("\n")).toMatch(/NEXT_PUBLIC_APP_URL/);
+  });
+
+  it("in production, with no origin, logs an error naming both settings and leaves the medium out", () => {
+    mockEnv.NODE_ENV = "production";
+    expect(toPublicMediaUrl("/uploads/a.jpg")).toBeNull();
+    expect(logged.error.join("\n")).toMatch(/baseUrl/);
+    expect(logged.error.join("\n")).toMatch(/NEXT_PUBLIC_APP_URL/);
   });
 });

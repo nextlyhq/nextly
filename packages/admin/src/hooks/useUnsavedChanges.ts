@@ -18,6 +18,7 @@
 
 import { useEffect, useCallback, useState, useRef } from "react";
 
+import { HISTORY_ADDRESS_PARAMS } from "@admin/components/features/versions/history-address";
 import {
   drawnDocumentView,
   type DocumentKind,
@@ -134,17 +135,22 @@ function documentOf(
   return JSON.stringify(["single", slug]);
 }
 
-/** The query without `field`, which picks a view's field and nothing else. */
+/**
+ * The query without the keys that move within the document: `field`, which
+ * picks a view's field, and the history panel's own keys, which open history
+ * beside the document and choose a version in it.
+ */
 function queryBesidesField(search: string): string {
   const params = new URLSearchParams(search);
   params.delete("field");
+  for (const key of HISTORY_ADDRESS_PARAMS) params.delete(key);
   return params.toString();
 }
 
 /**
- * Whether a move is between one document's edit address and its own views.
- * The same page answers all of them and keeps the same form mounted, so
- * nothing unsaved is left behind. Any other query change — a language among
+ * Whether a move is between one document's edit address and its own views, or
+ * opens or moves through its history beside it. The same page answers all of
+ * them and keeps the same form mounted, so nothing unsaved is left behind. Any other query change — a language among
  * them — still counts, and so does another document's view.
  */
 function staysOnDocument(

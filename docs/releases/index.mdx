@@ -50,9 +50,10 @@ exist and have drafts.
 
 A release holds at most 200 documents. A release goes out all together, and 200 is the size
 measured to publish within one pass of the job runner on every supported database, so a full
-release on its own never waits for a second pass. The limit is per release: releases due at
-the same moment that share a document are settled together, as one piece, so such a group
-takes as long as all of its documents together. Adding a document to a full release is refused with a
+release on its own never waits for a second pass. The limit is per release: releases that
+share a document and come due in the same pass are settled together, as one piece, so such a
+group takes as long as all of its documents together. That includes releases scheduled for
+different times when the runner reaches them both after their times have passed. Adding a document to a full release is refused with a
 conflict that says no more fit, and the release's `can.addMember` is false.
 
 A release made before this limit and holding more than 200 keeps working: it runs as
@@ -171,14 +172,16 @@ gains or loses anything:
 - every role holding `publish-content-releases` gains `delete-content-releases`, since a
   release nobody wanted was abandoned by cancelling it.
 
-This happens once, when the permissions are created. If you take one away from a role later, a
-restart doesn't give it back.
+This happens once, when the permissions are created. If you take one away from a role you
+created, a restart doesn't give it back. The built-in roles are different: every boot brings
+each one back in line with its preset, so a permission its preset includes returns on the next
+restart. To keep a role without it, give people a role of your own instead.
 
 ## Listing releases
 
 <Callout type="info">
-  Tabs, search and paging are **experimental**: their names and shapes may
-  change before the releases list is finished.
+  Tabs, search, the day filter and paging are **experimental**: their names and
+  shapes may change before the releases list is finished.
 </Callout>
 
 The list is paged on the server, so its total and every page cover every release on the
@@ -225,6 +228,7 @@ without a tab come latest first.
 | `page`                              | The page, from 1                                                           |
 | `limit`                             | Rows per page, 50 by default and at most 200                               |
 | `scheduledAfter`, `scheduledBefore` | A window on the scheduled time, as ISO 8601 instants                       |
+| `day`, `timezone`                   | `2026-03-29` in an IANA zone such as `Europe/Berlin`. Both or neither      |
 
 The answer is the standard list envelope. `meta.total` is the number of releases matching,
 across all pages. The page and the total are read one after the other, as on every paged list. A
@@ -291,16 +295,105 @@ const overdue = await nextly.releases.count({
 read every release, ask for each page in turn, up to `meta.totalPages` (at most 200 per
 page).
 
-`count()` takes the same tab, state, kind, window and search as `find()`, and gives the same
-number as its `meta.total` without reading the releases.
+`count()` takes the same tab, state, kind, window, search and day as `find()`, and gives the
+same number as its `meta.total` without reading the releases.
+
+The day filter returns the releases on that day in that zone, placed as the calendar
+places them (a published release where it went out, any other where it is scheduled), in
+every state, soonest first unless you pass an `order`. It is how a calendar's "+N more" reads a
+day in full:
+
+```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
+const { items, meta } = await nextly.releases.find({
+  day: { date: "2026-03-29", timezone: "Europe/Berlin" },
+});
+```
 
 Filtering by `containing` (one document's releases) still works, and still comes soonest
-first, in the order the releases will apply to that document. `tab`, `search` and `order`
-are refused alongside it.
+first, in the order the releases will apply to that document. `tab`, `search`, `order`
+and `day` are refused alongside it.
 
 A release's documents (`GET /api/releases/:id/members`, `nextly.releases.listMembers()`)
 come back in the order they were added. Asking for the documents, the readiness or the blocking reasons of a release that
 does not exist answers `404`, not an empty list.
+
+## The calendar
+
+<Callout type="info">
+  The calendar read is **experimental**: its name and shape may change before
+  the releases list is finished.
+</Callout>
+
+A calendar read covers a window of days, at most six weeks, in a time zone you name. The
+zone decides which day each release falls on: a release at 23:30 in New York is on the next
+day in London. Days follow the zone's own clock, so a day is 23 hours long when the clocks go
+forward and 25 when they go back.
+
+A release is on the day of the time that says when it happens, whatever its state. A
+published release shows on the day it went out, which for a release the job runner reached
+late, or one published now, can be later than the day it was scheduled for. Every other
+release shows on the day of its scheduled time: a stopped one on the day it was due, and a
+cancelled one that had been scheduled on the day it would have run. A draft has no time and
+is on no day.
+
+Every day of the window comes back, in order, empty days included. Each day has the complete
+count of its releases, by state, and its first three releases in time order. To read the rest
+of a day, filter the list to it with the same date and zone (see the day filter above); its
+first three releases are the three the calendar sent.
+
+Over REST, `GET /api/releases/calendar` takes `from` and `to` (dates such as `2026-03-01`,
+both included), `timezone`, and optionally `kind`. From the Direct API:
+
+```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
+const calendar = await nextly.releases.calendar({
+  from: "2026-03-01",
+  to: "2026-04-11",
+  timezone: "Europe/Berlin",
+});
+```
+
+Both answer the same object, with one entry per day:
+
+```json
+{
+  "timezone": "Europe/Berlin",
+  "from": "2026-03-01",
+  "to": "2026-04-11",
+  "days": [
+    {
+      "date": "2026-03-29",
+      "total": 5,
+      "counts": {
+        "draft": 0,
+        "scheduled": 3,
+        "published": 1,
+        "cancelled": 0,
+        "blocked": 1
+      },
+      "releases": [
+        { "id": "…", "title": "Spring launch", "state": "published" }
+      ]
+    }
+  ]
+}
+```
+
+A window longer than 42 days, one whose `to` is before its `from`, a date that does not exist
+and a zone the server does not know are refused with `400`. Reading the calendar needs the
+same permission as reading the list. It reads every release in the window in one query, so a
+day's counts and the releases it shows always agree.
 
 ## Scheduling stores a time; a job runner applies it
 
@@ -346,6 +439,16 @@ The sweep can also defer work past its deadline while still reporting success. S
 applied on the first pass that actually **reaches and completes** it, which is not always the
 first pass after its due time. With a backlog, or several expensive releases due together,
 expect it a pass or two later. Treat the scheduled time as "not before", not as "at".
+
+A pass the host ends part-way, at a serverless function's time limit for example, keeps
+the documents it already wrote and settles none of their releases. Each document's write
+records, in the same database transaction, that its release member was applied, so the next
+pass writes only the documents still to go and then settles the group: hooks and outbox events
+run once per document. A write the host stops before it commits leaves no record, so the next
+pass writes that one document again. A write that was refused, or whose hook stored a different
+status, records nothing, so the release stays scheduled however the document reads. Changing a
+release in any way, rescheduling, cancelling, renaming it or adding or removing a document,
+voids those records, and the next pass writes every document of that release again.
 
 ## Checks before the moment
 

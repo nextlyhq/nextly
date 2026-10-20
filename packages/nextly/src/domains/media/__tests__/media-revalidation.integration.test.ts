@@ -217,7 +217,14 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     expect(second.folderId).toBe(folder.id);
 
     flush.mockClear();
+    const warn = vi.spyOn(console, "warn");
     await unified.deleteFolder(folder.id, true, ctx);
+    // The search for files another item refers to ran on this dialect: a
+    // statement it cannot run leaves the files, and says so.
+    expect(
+      warn.mock.calls.map(args => args.map(String).join(" ")).join("\n")
+    ).not.toMatch(/could not check whether another item refers/);
+    warn.mockRestore();
 
     // Cleared first, so this cannot be satisfied by the uploads' own flushes.
     const tags = flushedTags(flush);
@@ -237,9 +244,10 @@ describe("the write surfaces that do NOT go through the unified service", () => 
     // any row that arrived after the delete collected its list — and that row
     // is in nobody's invalidation set.
     //
-    // The injected storage is the seam that makes the race deterministic:
-    // `removeStoredFiles` calls it between the collection and the folder
-    // delete, which is exactly the gap a concurrent upload lands in.
+    // The injected file removal is the seam that makes the race
+    // deterministic: the cascade calls it once the collected rows are gone
+    // and before the folder delete, which is exactly the gap a concurrent
+    // upload lands in.
     const { handle, flush } = await bootWithSpy();
     await handle.adapter.insert("users", {
       id: "racer-1",
@@ -264,29 +272,23 @@ describe("the write surfaces that do NOT go through the unified service", () => 
 
     const lateId = "late-arrival-1";
     const folders = new MediaFolderService(handle.adapter, console as never);
-    const racingStorage = {
-      async bulkDelete(): Promise<{
-        successful: string[];
-        failed: Array<{ filePath: string; error: string }>;
-      }> {
-        // The concurrent upload, landing mid-delete.
-        await handle.adapter.insert("media", {
-          id: lateId,
-          filename: "late.pdf",
-          originalFilename: "late.pdf",
-          mimeType: "application/pdf",
-          size: 1,
-          url: "/uploads/late.pdf",
-          folderId: folder.id,
-          uploadedAt: new Date(),
-          updatedAt: new Date(),
-        });
-        return { successful: [], failed: [] };
-      },
+    const racingRemoval = async (): Promise<void> => {
+      // The concurrent upload, landing mid-delete.
+      await handle.adapter.insert("media", {
+        id: lateId,
+        filename: "late.pdf",
+        originalFilename: "late.pdf",
+        mimeType: "application/pdf",
+        size: 1,
+        url: "/uploads/late.pdf",
+        folderId: folder.id,
+        uploadedAt: new Date(),
+        updatedAt: new Date(),
+      });
     };
 
     flush.mockClear();
-    const result = await folders.deleteFolder(folder.id, true, racingStorage);
+    const result = await folders.deleteFolder(folder.id, true, racingRemoval);
     expect(result.success).toBe(true);
 
     // The control, and it is the whole test: the row really did land inside

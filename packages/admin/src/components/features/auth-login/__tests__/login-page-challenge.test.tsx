@@ -10,6 +10,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { parseApiError } from "@admin/lib/api/parseApiError";
+
 import type { ChallengeViewProps } from "../auth-ui-extras";
 import { Login } from "../index";
 
@@ -113,6 +115,52 @@ describe("a resumed challenge on the login page", () => {
     expect(await screen.findByTestId("signin-ended")).toHaveTextContent(
       "That sign-in attempt ended"
     );
+  });
+
+  it("shows the address notice when the answer is refused for its origin", async () => {
+    // A challenge resumed on an address the app does not accept: the answer
+    // meets the origin check, and the challenge view only gets a message.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        origin: "http://127.0.0.1:3000",
+        pathname: "/admin/login",
+        search: "?resume=1",
+        get href() {
+          return "http://127.0.0.1:3000/admin/login?resume=1";
+        },
+        set href(value: string) {
+          navigations.push(value);
+        },
+      },
+    });
+    post.mockRejectedValue(
+      parseApiError(
+        {
+          error: {
+            code: "CSRF_FAILED",
+            message: "Invalid request origin",
+            data: { reason: "origin", appOrigin: "http://localhost:3000" },
+          },
+        },
+        403
+      )
+    );
+
+    render(<Login />);
+    const submit = await screen.findByRole("button", { name: "submit code" });
+    submit.click();
+
+    const notice = await screen.findByRole("alert");
+    expect(notice).toHaveTextContent("http://127.0.0.1:3000");
+    expect(notice).toHaveTextContent("http://localhost:3000");
+    // The query carries the resume marker, so no link is offered: the person
+    // signs in again at the app's address.
+    expect(
+      screen.queryByRole("link", { name: /open this page at/i })
+    ).toBeNull();
+    // Still the challenge, for a retry once the address is right.
+    expect(screen.getByRole("button", { name: "submit code" })).toBeVisible();
   });
 
   it("keeps the challenge when the request fails for another reason", async () => {

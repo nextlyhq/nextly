@@ -24,7 +24,6 @@ import {
   mayRecordRecovery,
   useViewedVersion,
   writeActionsHeld,
-  ViewedVersionBanner,
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
@@ -82,6 +81,7 @@ import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
 import { useDocumentLockSurface } from "./useDocumentLockSurface";
+import { useDocumentPanelCollapsed } from "./useDocumentPanelCollapsed";
 import {
   useEntryForm,
   getCollectionFields,
@@ -90,7 +90,6 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
-import { useRailCollapsed } from "./useRailCollapsed";
 
 // ============================================================================
 // Types
@@ -221,8 +220,7 @@ export interface EntryFormProps {
  * - Dirty state tracking
  * - **Unsaved changes protection** - prompts before navigation when dirty (standalone only)
  * - **Server error mapping** - maps server validation errors to form fields with summary
- * - **Auto-save to localStorage** - debounced saves with visual indicator (standalone only)
- * - **Draft recovery** - offers to recover unsaved changes on page revisit
+ * - **Autosave** - a debounced server-side recovery point, offered back on return (standalone only)
  *
  * @example Standalone create mode
  * ```tsx
@@ -455,7 +453,10 @@ export function EntryForm({
   // Rail collapse state. Toggle lives in EntrySystemHeader; the rail itself
   // reads `railCollapsed` to decide whether to render. Persisted in
   // localStorage so the choice survives reloads.
-  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+  // Out of the way when the author collapsed it, and while history is open,
+  // which takes its place.
+  const { collapsed: railCollapsed, toggle: toggleRail } =
+    useDocumentPanelCollapsed(historyEnabledFrom(collection) !== false);
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.
@@ -1056,17 +1057,6 @@ export function EntryForm({
                                 recovery={recovery}
                                 viewingVersion={viewingVersion}
                               />
-                              {/* The banner over the version being read: above the
-                      fields it describes, below the header that offered the
-                      panel. Renders nothing while the live document is on
-                      screen. A submit in flight withholds restore too — a
-                      restore racing the ordinary save would let completion
-                      order decide which contents survive. */}
-                              <ViewedVersionBanner
-                                actionsDisabled={
-                                  lock.actionsDisabled || isSubmitting
-                                }
-                              />
                               <EntryMetaStrip
                                 slugField={slugField}
                                 hasStatus={hasStatus}
@@ -1139,6 +1129,13 @@ export function EntryForm({
                               <ViewedVersionBody
                                 fields={historicalFields ?? mainFields}
                                 values={historicalValues ?? undefined}
+                                // A submit in flight withholds restore too: a
+                                // restore racing the ordinary save would let
+                                // completion order decide which contents
+                                // survive.
+                                actionsDisabled={
+                                  lock.actionsDisabled || isSubmitting
+                                }
                               >
                                 {mainFields.length > 0 && (
                                   <div className="@4xl/content:p-8 pt-6">

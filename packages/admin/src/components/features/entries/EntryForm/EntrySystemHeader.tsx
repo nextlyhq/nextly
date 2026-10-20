@@ -6,6 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
+import { useHistoryAddress } from "@admin/components/features/versions/history-address";
+import { useVersionActions } from "@admin/components/features/versions/version-actions";
 import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   ChevronLeft,
@@ -342,11 +344,16 @@ export function EntrySystemHeader({
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  // Whether history is open lives in the address, so a reload or a shared link
+  // opens it again and the back button closes it.
   // True while the document area is showing a past version rather than the
   // live document.
   const { viewing: viewingVersion } = useDocumentHistory();
   const isReadingHistory = viewingVersion !== null;
+  // What the version on screen offers in place of the document's own verbs.
+  // A colleague's claim or a submit in flight withholds restoring, as it
+  // withholds every other write.
+  const versionActions = useVersionActions(documentLocked || isSubmitting);
 
   // Both collections and singles authorize a document write as `update-{slug}`.
   // Read here, inside the guard this header renders under, so a deliberate
@@ -370,6 +377,18 @@ export function EntrySystemHeader({
       inputRef.current?.focus();
     }
   }, [mode]);
+
+  // A document only has history once it has been saved, and rendering a
+  // snapshot needs the schema, so both are required to offer it. Read before
+  // anything returns early, and the address opens history only then, so a
+  // link naming it on a document without it opens nothing.
+  const historyOffered =
+    mode === "edit" &&
+    Boolean(entry?.id) &&
+    historyFields !== undefined &&
+    historyEnabled !== false;
+  const { open: historyOpen, setOpen: setHistoryOpen } =
+    useHistoryAddress(historyOffered);
 
   if (!form) {
     return null;
@@ -396,8 +415,6 @@ export function EntrySystemHeader({
       },
       entryLocale.collectionLocalized
     );
-
-  const showEditMenuItems = mode === "edit" && entry?.id;
 
   // - hasStatus + create or hasStatus+edit+draft → Save Draft + Publish
   //   (the user is working on something not yet live).
@@ -598,12 +615,7 @@ export function EntrySystemHeader({
     isReadingHistory ? [] : contributedActions
   );
 
-  // A document only has history once it has been saved, and rendering a
-  // snapshot needs the schema, so both are required to offer it.
-  const showHistory =
-    showEditMenuItems &&
-    historyFields !== undefined &&
-    historyEnabled !== false;
+  const showHistory = historyOffered;
 
   // What the preview control is given, once: the control draws from it on a
   // wide screen, and the menu lists the same choices on a narrow one.
@@ -626,7 +638,7 @@ export function EntrySystemHeader({
       ? [
           {
             id: "history",
-            label: "Version history",
+            label: "History",
             onSelect: () => setHistoryOpen(true),
           },
         ]
@@ -686,66 +698,105 @@ export function EntrySystemHeader({
 
             On a narrow screen History and the preview fold into the document's
             menu and the panel toggle goes (the panel is a page there), so the
-            actions stay one row. The cluster never wraps inside itself: if it
-            cannot sit beside the way back, the row wraps and it takes a line of
-            its own, so the header is at most two rows above the title. */}
-          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            actions stay one row. If the cluster cannot sit beside the way back,
+            the row wraps and it takes a line of its own. It also wraps inside
+            itself, never past the editor's edge: a preview pane can narrow the
+            editor on a wide screen, and a feature's contributed controls, which
+            this cannot size, must never push the header's own off it. */}
+          <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
             {showHistory ? (
               <Button
                 type="button"
-                variant="outline"
+                variant={historyOpen ? "secondary" : "outline"}
                 size="sm"
-                className={cn("px-2", WIDE_ONLY)}
-                aria-label="Version history"
-                title="Version history"
+                className={cn("gap-1.5", WIDE_ONLY)}
+                // Pressed while history is open, so the control says which
+                // state the document is in as well as offering to change it.
+                aria-pressed={historyOpen}
                 onClick={() => setHistoryOpen(true)}
               >
                 <History className="h-4 w-4" aria-hidden="true" />
+                History
               </Button>
             ) : null}
+            {/* What a feature contributes, such as a takeover's mode switch.
+              It stays while a past version is on screen, showing that
+              version's own mode. */}
             {toolbarSlot}
-            {/* Directly left of the submit cluster, which is where an author looks
-              for it: checking how something reads is part of deciding to publish
-              it, not a document-management action like Duplicate or Delete. The
-              `sm` size is the band's, so it lines up with Save beside it rather
-              than standing a few pixels taller.
+            {/* While a past version is on screen, its own actions take the
+              document's place: Back to current, and Restore… where Publish
+              sits. Save and Publish act on the LIVE document, which is not
+              what is being read, so they are replaced rather than greyed; an
+              editor offered "Save" over a past version has been invited to
+              decide about something they cannot see. On a phone these two sit
+              in the bar at the bottom instead, under the thumb. */}
+            {versionActions ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={WIDE_ONLY}
+                  onClick={versionActions.returnToCurrent}
+                >
+                  Back to current
+                </Button>
+                {versionActions.restore ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className={WIDE_ONLY}
+                    disabled={versionActions.restoreDisabled}
+                    onClick={versionActions.restore}
+                  >
+                    Restore…
+                  </Button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {/* Directly left of the submit cluster, which is where an author looks
+                for it: checking how something reads is part of deciding to publish
+                it, not a document-management action like Duplicate or Delete. The
+                `sm` size is the band's, so it lines up with Save beside it rather
+                than standing a few pixels taller.
 
-              `disabled` follows the submit buttons rather than the whole form:
-              minting a link and opening a preview both act on what is already
-              saved, so a submit in flight is a race with them and not merely a
-              busy form. */}
-            {/* ONE control for the preview, not three. The pane toggle used to
-              sit beside this looking like a second preview button, with opening
-              and copying already sharing a menu of their own — three of the
-              header's controls for one idea. */}
-            <div className={cn("contents", WIDE_ONLY)}>
-              <PreviewActions size="sm" {...previewProps} />
-            </div>
-            {/*
-              Every document verb, drawn where the model said each belongs.
+                `disabled` follows the submit buttons rather than the whole form:
+                minting a link and opening a preview both act on what is already
+                saved, so a submit in flight is a race with them and not merely a
+                busy form. */}
+                {/* ONE control for the preview, not three. The pane toggle used to
+                sit beside this looking like a second preview button, with opening
+                and copying already sharing a menu of their own — three of the
+                header's controls for one idea. */}
+                <div className={cn("contents", WIDE_ONLY)}>
+                  <PreviewActions size="sm" {...previewProps} />
+                </div>
+                {/*
+                Every document verb, drawn where the model said each belongs.
 
-              One control leads and the rest are demoted, which the header could
-              not express while each button decided its own placement in JSX: a
-              published document with a pending draft drew Save, Publish and
-              Unpublish at equal weight, and Unpublish sat one slip from Publish.
+                One control leads and the rest are demoted, which the header could
+                not express while each button decided its own placement in JSX: a
+                published document with a pending draft drew Save, Publish and
+                Unpublish at equal weight, and Unpublish sat one slip from Publish.
 
-              No save affordances survive a historical view. They act on the live
-              document, which is not what is being read — an editor offered "Save"
-              over a past version has been invited to decide about something they
-              cannot see. Restoring is offered instead, from the banner over the
-              version itself. The model states that rule once, for every action,
-              rather than each control testing `isReadingHistory` for itself.
-            */}
-            <DocumentActionBar
-              actions={withContributions.actions}
-              bindings={withContributions.bindings}
-              pending={isSubmitting}
-              narrowItems={narrowItems}
-            />
+                While a past version is on screen they give way to its own
+                actions, above.
+              */}
+                <DocumentActionBar
+                  actions={withContributions.actions}
+                  bindings={withContributions.bindings}
+                  pending={isSubmitting}
+                  narrowItems={narrowItems}
+                  narrowPending={isCopyingLink}
+                />
+              </>
+            )}
 
             {/* Rail toggle — far right, separated by a thin divider. Not on a
-              narrow screen, where the panel is a page rather than beside. */}
-            {onToggleRail && (
+              narrow screen, where the panel is a page rather than beside, and
+              not while history is open, which takes the panel's place. */}
+            {onToggleRail && !historyOpen && (
               <>
                 <span
                   className={cn("w-px h-5 bg-border mx-1", WIDE_ONLY)}
@@ -778,7 +829,7 @@ export function EntrySystemHeader({
         <div className="mt-1.5">
           {/* The title is part of the document, so reading a past version
             locks it with everything else. Left editable it would mutate the
-            LIVE document while the banner says the page cannot be edited — and
+            LIVE document while the version on screen cannot be edited — and
             go to autosave as unsaved work nobody typed on purpose. */}
           <EntryTitleInput
             className="text-2xl leading-8 @max-lg/toolbar:text-xl @max-lg/toolbar:leading-[26px]"
@@ -848,8 +899,8 @@ export function EntrySystemHeader({
           non-localized editors keep a single-row header.
 
           While a past version is on screen, switching language or running a
-          language action would act on the live document under a banner saying
-          the page cannot be edited — so both are withheld, and only there. */}
+          language action would act on the live document while the version on
+          screen cannot be edited — so both are withheld, and only there. */}
       {/* Create mode ONLY. A document that does not exist yet has no
           translations to report and no language to switch to, so the one thing
           worth saying is which language this first save will be in.

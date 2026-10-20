@@ -133,6 +133,13 @@ export interface DocumentActionBarProps {
    * the header hides the controls themselves at the same width.
    */
   narrowItems?: readonly NarrowMenuItem[];
+  /**
+   * Work a folded row started that is still running (minting a link to copy).
+   * The menu closes the moment its row is chosen, so the trigger, which stays,
+   * shows the progress on a narrow screen; a wider one shows it on the control
+   * itself.
+   */
+  narrowPending?: boolean;
 }
 
 /** A header control, as a row of the menu on a narrow screen. */
@@ -243,6 +250,7 @@ export function DocumentActionBar({
   pending = false,
   className,
   narrowItems = [],
+  narrowPending = false,
 }: DocumentActionBarProps) {
   const wired = bound(actions, bindings);
   const available = wired.map(entry => entry.action);
@@ -257,7 +265,15 @@ export function DocumentActionBar({
   const hasMenu = wideMenu || narrowItems.length > 0;
 
   return (
-    <div className={cn("flex items-center gap-1.5", className)}>
+    // Wraps within the width it is given rather than past it, as the header's
+    // cluster around it does: a preview pane can narrow the editor on a wide
+    // screen, and the document's own verbs must stay inside it.
+    <div
+      className={cn(
+        "flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5",
+        className
+      )}
+    >
       {/*
         The supporting action comes FIRST in the DOM and reads first left to
         right, so the leading one sits at the end of the cluster where a
@@ -311,6 +327,7 @@ export function DocumentActionBar({
           documentItems={documentItems}
           dangerItems={dangerItems}
           wideMenu={wideMenu}
+          narrowPending={narrowPending}
         />
       ) : null}
     </div>
@@ -326,11 +343,13 @@ function DocumentMenu({
   documentItems,
   dangerItems,
   wideMenu,
+  narrowPending,
 }: {
   narrowItems: readonly NarrowMenuItem[];
   documentItems: Bound[];
   dangerItems: Bound[];
   wideMenu: boolean;
+  narrowPending: boolean;
 }) {
   return (
     <DropdownMenu>
@@ -342,8 +361,20 @@ function DocumentMenu({
           className={cn("px-2", !wideMenu && NARROW_TRIGGER)}
           aria-label="More actions"
           title="More actions"
+          aria-busy={narrowPending || undefined}
         >
-          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+          {/* On a narrow screen, work a folded row started shows here, on
+            the control that stays once the menu has closed. */}
+          {narrowPending ? (
+            <Loader2
+              className="hidden h-4 w-4 animate-spin max-sm:block"
+              aria-hidden="true"
+            />
+          ) : null}
+          <MoreHorizontal
+            className={cn("h-4 w-4", narrowPending && "max-sm:hidden")}
+            aria-hidden="true"
+          />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

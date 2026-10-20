@@ -14,9 +14,13 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
+import { effectiveWidgetLimit, MAX_WIDGET_ROWS } from "nextly/config";
 import { createContext, useContext, type RefObject } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
+import type { WidgetWidth } from "@admin/types/dashboard/widgets";
+
+import { bandForWidth, drawnSpan, GRID_GAP_PX } from "../sizes";
 
 /** Below this rendered width a card is small: a full grouped figure may not fit. */
 const SMALL_BELOW_PX = 340;
@@ -30,12 +34,115 @@ export function tierForWidth(width: number | null): SizeTier | undefined {
   return width >= LARGE_FROM_PX ? "large" : "medium";
 }
 
+/**
+ * The outer width, in pixels, of a card drawn at `width` on a dashboard `dashboardWidth` wide.
+ *
+ * Twelve tracks with a gap between each: a card spanning n of them takes n twelfths of the
+ * dashboard and its share of the gaps, less the gap that follows it. This is the width the card
+ * measures once drawn, so a tier read from it is the tier the card then measures.
+ */
+export function cardOuterWidth(
+  width: WidgetWidth,
+  dashboardWidth: number
+): number {
+  const tracks = drawnSpan(width, bandForWidth(dashboardWidth));
+  return ((dashboardWidth + GRID_GAP_PX) * tracks) / 12 - GRID_GAP_PX;
+}
+
+/**
+ * A card's tier before it is drawn: the tier its predicted outer width reads as.
+ *
+ * What a card's first query is sized by, since the query is asked before the card can measure
+ * itself. Read through {@link tierForWidth}, the rule the measured tier uses, so the two cannot
+ * disagree about a width; `undefined` while the dashboard itself has no width yet.
+ */
+export function predictedTier(
+  width: WidgetWidth,
+  dashboardWidth: number | null | undefined
+): SizeTier | undefined {
+  if (dashboardWidth === null || dashboardWidth === undefined) return undefined;
+  return tierForWidth(cardOuterWidth(width, dashboardWidth));
+}
+
+/** The most rows a small card draws: below 340 px a fourth row is a scroll. */
+export const SMALL_TIER_ROWS = 3;
+
+/**
+ * The rows a card of `tier` draws when its setting asks for `items`.
+ *
+ * One answer for every reader of it: the list and table displays draw this
+ * many, the query asks for one more (to learn whether more exist), and the
+ * loading card holds this many rows' place. A second copy anywhere would hold
+ * a place for rows the display then does not draw, which is the jump the
+ * reservation exists to prevent.
+ *
+ * `items` is read through core's own rule, so a missing or garbage setting
+ * means what it means to the query: five rows, never NaN.
+ */
+export function rowsDrawn(tier: SizeTier, items: unknown): number {
+  return Math.min(
+    effectiveWidgetLimit(items),
+    MAX_WIDGET_ROWS,
+    tier === "small" ? SMALL_TIER_ROWS : Number.POSITIVE_INFINITY
+  );
+}
+
+/**
+ * How a list or table card lays its rows out at `tier`, given how many columns it has.
+ *
+ * - `table`: a heading row and the rows, at the large tier when there are columns to head.
+ * - `list-detail`: a label and a detail line per row, from the medium tier when there is a second
+ *   column to make the detail of.
+ * - `list`: label lines only; a small card has room for nothing more.
+ *
+ * One answer for the rows a card draws and the skeleton that holds their place before they
+ * arrive, so the two lay out alike: a skeleton drawn as a list for a card that then draws a
+ * table would change height the moment the answer lands.
+ */
+export type RowsLayout =
+  | { kind: "list" }
+  | { kind: "list-detail" }
+  | { kind: "table"; columns: number };
+
+export function rowsLayout(tier: SizeTier, columns: number): RowsLayout {
+  if (tier === "large" && columns > 0) return { kind: "table", columns };
+  return tier !== "small" && columns > 1
+    ? { kind: "list-detail" }
+    : { kind: "list" };
+}
+
 /** The tier of the card being drawn; `undefined` outside a card or before it is measured. */
 export const CardTierContext = createContext<SizeTier | undefined>(undefined);
 
 /** The tier of the card this is drawn in. */
 export function useCardTier(): SizeTier | undefined {
   return useContext(CardTierContext);
+}
+
+/**
+ * The tier the answer a card shows was fetched at; `undefined` where it is not known. A card that
+ * grew keeps its smaller answer on screen until a larger one lands, and that answer holds only
+ * the rows its own tier asked for, and the one more that says more exist.
+ */
+export const AnswerTierContext = createContext<SizeTier | undefined>(undefined);
+
+const TIER_ORDER: Readonly<Record<SizeTier, number>> = {
+  small: 0,
+  medium: 1,
+  large: 2,
+};
+
+/**
+ * The tier a card's rows are counted at: the card's own, or the tier its answer was fetched at
+ * when that is smaller. Counted at the card's tier, a smaller answer would draw its extra row as
+ * one more item and lose the sign that more exist.
+ */
+export function useRowsTier(cardTier: SizeTier): SizeTier {
+  const answerTier = useContext(AnswerTierContext);
+  return answerTier !== undefined &&
+    TIER_ORDER[answerTier] < TIER_ORDER[cardTier]
+    ? answerTier
+    : cardTier;
 }
 
 /**

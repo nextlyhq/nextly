@@ -428,12 +428,19 @@ export class CollectionMetadataService extends BaseService {
           );
           if (tableExists) {
             artifacts.metadata.migrationStatus = "applied";
-            await this.registerRuntimeSchema(artifacts.tableName, data.fields, {
-              hasStatus: data.status === true,
-              // i18n: register the main table without translatable columns and register
-              // the companion, so reads/writes route localized fields correctly.
-              localized: data.localized === true,
-            });
+            // The fields as the registry stores them, not as the request spelled them: the
+            // table's columns were named from the stored names, and a restart rebuilds these
+            // tables from them.
+            await this.registerRuntimeSchema(
+              artifacts.tableName,
+              artifacts.metadata.fields,
+              {
+                hasStatus: data.status === true,
+                // i18n: register the main table without translatable columns and register
+                // the companion, so reads/writes route localized fields correctly.
+                localized: data.localized === true,
+              }
+            );
           } else {
             artifacts.metadata.migrationStatus = "failed";
             this.logger.error(
@@ -866,7 +873,9 @@ export class CollectionMetadataService extends BaseService {
                   body.status !== undefined ? body.status === true : wasStatus;
                 await this.registerRuntimeSchema(
                   existingCollection.tableName,
-                  body.fields ??
+                  // As stored, like the create: the save's own list when it changed the fields,
+                  // else the registry's.
+                  updateArtifacts.metadataUpdates.fields ??
                     (existingCollection.fields as FieldDefinition[]),
                   {
                     hasStatus,

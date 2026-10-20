@@ -246,7 +246,7 @@ registerKnownPlugin(packagePrefix, async () => {
 });
 ```
 
-When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you — import it once in the app and your `contributes.admin` components load with no manual wiring.
+When you run `nextly generate:types`, a `plugin-admin-imports.generated.ts` is emitted that calls `registerComponents` for you, with a `plugin-admin-components.generated.ts` listing its paths. The app's admin page imports the first, and its server layout checks the second with `checkAdminComponents` from `nextly/runtime`, so your `contributes.admin` and `contributes.dashboard` components load with no manual wiring. See [Admin UI](/docs/plugins/admin-ui) for how the map stays current.
 
 ## Testing (`/testing`)
 
@@ -679,3 +679,11 @@ plugins uninstall` calls `onUninstall` before its DOWN migrations, with
 `{ keepData }`. Write both so they can run again: an install can be retried
 after a failure part-way through. Work that must happen on every start, rather
 than once per install, belongs in `init`.
+
+Before either command shuts the runtime down, it waits for the event handlers
+the hook set off, including those of the follow-up events they emit, for at
+most 30 seconds. A handler is waited for while the promise it returns is
+pending, so return the promise of work that must finish: work left to a timer,
+or to a promise the handler does not return, is not waited for. When that work
+is still running at the limit, the command stops; an uninstall stops before its
+DOWN migrations, and running it again finishes it.

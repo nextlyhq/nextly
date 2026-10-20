@@ -3,6 +3,7 @@
  * schema to render it with. Offering it otherwise leads to a panel that can
  * only report emptiness or fail.
  */
+import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
 import type { ReactNode } from "react";
 import { FormProvider, useForm } from "react-hook-form";
@@ -56,9 +57,7 @@ describe("EntrySystemHeader version history", () => {
   it("offers history for a saved document", () => {
     renderHeader();
 
-    expect(
-      screen.getByRole("button", { name: "Version history" })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "History" })).toBeInTheDocument();
   });
 
   it("does not offer history for a document that was never saved", () => {
@@ -66,7 +65,7 @@ describe("EntrySystemHeader version history", () => {
     renderHeader({ mode: "create", entry: null });
 
     expect(
-      screen.queryByRole("button", { name: "Version history" })
+      screen.queryByRole("button", { name: "History" })
     ).not.toBeInTheDocument();
   });
 
@@ -74,7 +73,7 @@ describe("EntrySystemHeader version history", () => {
     renderHeader({ historyFields: undefined });
 
     expect(
-      screen.queryByRole("button", { name: "Version history" })
+      screen.queryByRole("button", { name: "History" })
     ).not.toBeInTheDocument();
   });
 
@@ -84,7 +83,7 @@ describe("EntrySystemHeader version history", () => {
     renderHeader({ historyEnabled: false });
 
     expect(
-      screen.queryByRole("button", { name: "Version history" })
+      screen.queryByRole("button", { name: "History" })
     ).not.toBeInTheDocument();
   });
 
@@ -93,9 +92,7 @@ describe("EntrySystemHeader version history", () => {
     // schema payload omits it.
     renderHeader({ historyEnabled: undefined });
 
-    expect(
-      screen.getByRole("button", { name: "Version history" })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "History" })).toBeInTheDocument();
   });
 
   it("addresses a collection entry by its id", () => {
@@ -168,6 +165,7 @@ vi.mock(
 
 import {
   DocumentHistoryContext,
+  type RestoreAffordance,
   type ViewedVersion,
 } from "@admin/components/features/versions/document-history-context";
 import type { ContributedAction } from "@admin/components/features/entries/EntryForm/DocumentActionBar";
@@ -189,14 +187,17 @@ describe("EntrySystemHeader — contributed actions while reading history", () =
     actionBarProps.current = null;
   });
 
-  function renderWithHistory(viewing: ViewedVersion | null) {
+  function renderWithHistory(
+    viewing: ViewedVersion | null,
+    options: { restore?: RestoreAffordance; documentLocked?: boolean } = {}
+  ) {
     return render(
       <WithForm>
         <DocumentHistoryContext.Provider
           value={{
             viewing,
             setViewing: () => {},
-            restore: null,
+            restore: options.restore ?? null,
             setRestore: () => {},
           }}
         >
@@ -207,6 +208,7 @@ describe("EntrySystemHeader — contributed actions while reading history", () =
             entry={{ id: "e1" } as never}
             historyFields={fields}
             contributedActions={contributed}
+            documentLocked={options.documentLocked ?? false}
           />
         </DocumentHistoryContext.Provider>
       </WithForm>
@@ -221,20 +223,78 @@ describe("EntrySystemHeader — contributed actions while reading history", () =
     ).toBe(true);
   });
 
-  it("withholds the page's contributed actions while a version is being read", () => {
-    // They act on the LIVE document, which is not what is on screen. Unlike
-    // the built-ins, a contribution cannot be expected to know about history —
-    // the header is where that knowledge lives.
+  it("draws the version's own actions in place of the document's while a version is being read", () => {
+    // The document's verbs, a feature's contributions among them, act on the
+    // LIVE document, which is not what is on screen. A contribution cannot be
+    // expected to know about history, so the header replaces the whole bar
+    // with the version's own actions rather than greying each control.
     renderWithHistory({
       versionNo: 3,
       snapshot: { title: "as it was" },
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "collection", slug: "posts", entryId: "e1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
 
+    expect(actionBarProps.current).toBeNull();
     expect(
-      actionBarProps.current?.actions.some(a => a.id === "add-to-release")
-    ).toBe(false);
+      screen.getByRole("button", { name: "Back to current" })
+    ).toBeInTheDocument();
+  });
+
+  describe("the version's own actions", () => {
+    const shown: ViewedVersion = {
+      versionNo: 3,
+      snapshot: { title: "as it was" },
+      locale: null,
+      isLoading: false,
+      error: null,
+      scope: { kind: "collection", slug: "posts", entryId: "e1" },
+      comparedWith: { kind: "first" },
+      about: null,
+    };
+    const restore = (): RestoreAffordance => ({
+      canRestore: true,
+      request: vi.fn(),
+      returnToCurrent: vi.fn(),
+    });
+
+    it("offers Back to current and Restore… where Save and Publish sat", async () => {
+      const affordance = restore();
+      renderWithHistory(shown, { restore: affordance });
+
+      await userEvent.click(screen.getByRole("button", { name: "Restore…" }));
+      expect(affordance.request).toHaveBeenCalledTimes(1);
+      await userEvent.click(
+        screen.getByRole("button", { name: "Back to current" })
+      );
+      expect(affordance.returnToCurrent).toHaveBeenCalledTimes(1);
+      expect(
+        screen.queryByRole("button", { name: /save draft|publish/i })
+      ).not.toBeInTheDocument();
+    });
+
+    it("withholds Restore… while a colleague holds the document", () => {
+      renderWithHistory(shown, { restore: restore(), documentLocked: true });
+
+      expect(
+        screen.queryByRole("button", { name: "Restore…" })
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Back to current" })
+      ).toBeInTheDocument();
+    });
+
+    it("holds Restore… until the version is on screen", () => {
+      renderWithHistory(
+        { ...shown, snapshot: undefined },
+        { restore: restore() }
+      );
+
+      expect(screen.getByRole("button", { name: "Restore…" })).toBeDisabled();
+    });
   });
 });

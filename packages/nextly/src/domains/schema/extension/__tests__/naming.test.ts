@@ -134,6 +134,29 @@ describe("assertUsableAppTableName", () => {
       assertUsableAppTableName("billing_invoices", ["users"], ["auth"])
     ).not.toThrow();
   });
+
+  // These names are no longer core tables, so CORE_TABLE_NAMES does not list
+  // them. Refusing them here keeps an app table from taking a name an
+  // operator's existing database may still hold.
+  it("refuses the retired `accounts` table by name", () => {
+    expect(
+      refusal(() => assertUsableAppTableName("accounts", ["users"], []))
+    ).toMatch(/"accounts" is a retired auth table/);
+  });
+
+  it("refuses the retired `sessions` table by name", () => {
+    expect(
+      refusal(() => assertUsableAppTableName("sessions", ["users"], []))
+    ).toMatch(/"sessions" is a retired auth table/);
+  });
+
+  // MySQL with lower_case_table_names resolves `Accounts` to the same table
+  // as `accounts`, so a different casing must be refused too.
+  it("refuses a retired name in another casing", () => {
+    expect(
+      refusal(() => assertUsableAppTableName("Accounts", ["users"], []))
+    ).toMatch(/"Accounts" is a retired auth table/);
+  });
 });
 
 describe("judgeIndex", () => {

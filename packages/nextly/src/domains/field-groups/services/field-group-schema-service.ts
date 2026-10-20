@@ -68,6 +68,7 @@ import type { ExtensionColumn } from "../../schema/extension/types";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
+  usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
@@ -923,6 +924,11 @@ export class FieldGroupSchemaService {
     if (isUploadField(field) || isRelationshipField(field)) {
       if (Array.isArray(field.relationTo) || field.hasMany) {
         return types.json;
+      }
+      // A component's many-to-many keeps its ids on the component row as text on PostgreSQL, the
+      // type the runtime table writes too. A scalar uuid cannot hold a multi-value relation.
+      if (this.dialect === "postgresql" && usesJunctionTable(field)) {
+        return types.text;
       }
       return types.uuid;
     }

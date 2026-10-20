@@ -37,7 +37,6 @@
  */
 
 import type { Table, Column } from "drizzle-orm";
-import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   text as mysqlText,
@@ -79,6 +78,7 @@ import {
   isDataField,
 } from "../../../collections/fields/guards";
 import type { DataFieldConfig } from "../../../collections/fields/types";
+import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../services/shared";
@@ -87,11 +87,17 @@ import type {
   UserUrlFieldConfig,
   UserPhoneFieldConfig,
 } from "../../../users/config/types";
-import { checkUserFieldName } from "../../../users/config/validate-user-config";
+import {
+  checkUserFieldName,
+  userFieldColumnName,
+  userFieldUniqueRejection,
+} from "../../../users/config/validate-user-config";
 import {
   getFieldType,
   isPluginFieldTypeOnSurface,
 } from "../../schema/field-types/field-type-registry";
+import { runRaw } from "../../schema/pipeline/pre-resolution/executor";
+import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 import { sqliteTimestampColumns } from "../../schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -227,6 +233,17 @@ export class UserExtSchemaService {
   /** Cached merged fields from both code and UI sources */
   private mergedFields: UserFieldConfig[] | null = null;
 
+  /**
+   * Fields the last merge left out because another field is stored in their
+   * column. The boot carries on without them; `nextly migrate` refuses, so it
+   * never reports storage ready for a configured field that has none.
+   */
+  private columnCollisions: Array<{
+    field: string;
+    column: string;
+    heldBy: string;
+  }> = [];
+
   constructor(
     dialect?: SupportedDialect,
     fieldDefService?: UserFieldDefinitionService,
@@ -264,6 +281,8 @@ export class UserExtSchemaService {
     // it here keeps it out of the column list, the select and both schemas at
     // once. The row is left alone so the name can be recovered by hand.
     const usable: UserFieldConfig[] = [];
+    const columns = new Map<string, string>();
+    this.columnCollisions = [];
     for (const record of records) {
       const rejection = checkUserFieldName(record.name);
       if (rejection) {
@@ -273,6 +292,21 @@ export class UserExtSchemaService {
         );
         continue;
       }
+      // A code field and an admin field can each pass on their own and still
+      // be stored in one column (`fooBar`, `foo_bar`). The first keeps it;
+      // the other is left out rather than break the table's statements, and is
+      // recorded so a strict run can refuse instead.
+      const column = userFieldColumnName(record.name);
+      const heldBy = columns.get(column);
+      if (heldBy !== undefined) {
+        this.logger?.warn(
+          "[UserExtSchemaService] Ignoring user field stored in a column another field already uses",
+          { name: record.name, column, heldBy }
+        );
+        this.columnCollisions.push({ field: record.name, column, heldBy });
+        continue;
+      }
+      columns.set(column, record.name);
       usable.push(this.convertRecordToFieldConfig(record));
     }
 
@@ -298,34 +332,54 @@ export class UserExtSchemaService {
    * ADD COLUMN for each field. Safe to call multiple times (idempotent).
    *
    * @param db - Drizzle database instance for executing raw SQL
+   * @param options.strict - Throw a statement's failure unless what it creates
+   *   already exists. The boot leaves it off, since nothing there may stop the
+   *   app starting; `nextly migrate` turns it on, so it never reports storage
+   *   ready that it could not create.
    */
-  async ensureUserExtSchema(db: unknown): Promise<void> {
-    // db is a Drizzle database instance — type varies by dialect
-    const drizzleDb = db as { execute(query: unknown): Promise<unknown> };
+  async ensureUserExtSchema(
+    db: unknown,
+    options: { strict?: boolean } = {}
+  ): Promise<void> {
+    const strict = options.strict === true;
+    if (strict && this.columnCollisions.length > 0) {
+      throw NextlyError.validation({
+        errors: this.columnCollisions.map(c => ({
+          path: "users.fields",
+          code: "USER_FIELD_NAME_DUPLICATE",
+          message: `Field '${c.field}' would be stored in the column '${c.column}', which the field '${c.heldBy}' already uses`,
+        })),
+        logContext: { collisions: this.columnCollisions },
+      });
+    }
     const fields = this.getMergedFieldConfigs();
     if (fields.length === 0) return;
 
-    // 1. CREATE TABLE IF NOT EXISTS (with all columns)
-    const createSQL = this.generateMigrationSQL(fields);
-    const createStatements = createSQL.split("\n--> statement-breakpoint\n");
-    for (const stmt of createStatements) {
-      // Strip leading SQL comment lines (e.g. "-- Create user extension table")
-      // so the actual DDL statement is executed
-      const executable = stmt
-        .split("\n")
-        .filter(line => {
-          const t = line.trim();
-          return t && !t.startsWith("--");
-        })
-        .join("\n")
-        .trim();
-      if (!executable) continue;
+    // The generated statements, with leading comment lines (e.g. "-- Create
+    // user extension table") stripped so the DDL itself runs.
+    const statements = this.generateMigrationSQL(fields)
+      .split("\n--> statement-breakpoint\n")
+      .map(stmt =>
+        stmt
+          .split("\n")
+          .filter(line => {
+            const t = line.trim();
+            return t && !t.startsWith("--");
+          })
+          .join("\n")
+          .trim()
+      )
+      .filter(Boolean);
+    // The table first, then any column it lacks, then the indexes and
+    // constraints: on a table that predates a field, the field's index can
+    // only be made once its column has been added.
+    const isCreateTable = (stmt: string) => /^CREATE TABLE/i.test(stmt);
 
-      try {
-        await drizzleDb.execute(sql.raw(executable));
-      } catch {
-        // Table/index/constraint may already exist — safe to ignore
-      }
+    // 1. CREATE TABLE IF NOT EXISTS (with all columns). runRaw picks the
+    //    dialect's call: SQLite's Drizzle database has no .execute(), so
+    //    calling it threw and was taken for "already exists".
+    for (const stmt of statements.filter(isCreateTable)) {
+      await this.runDdl(db, stmt, strict);
     }
 
     // 2. ALTER TABLE ADD COLUMN for each field (handles case where
@@ -345,12 +399,52 @@ export class UserExtSchemaService {
         alterSQL = `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ADD COLUMN ${this.q}${columnName}${this.q} ${columnType}`;
       }
 
-      try {
-        await drizzleDb.execute(sql.raw(alterSQL));
-      } catch {
-        // Column already exists — safe to ignore
-      }
+      await this.runDdl(db, alterSQL, strict);
     }
+
+    // 3. The indexes and constraints, now that every column exists.
+    for (const stmt of statements.filter(s => !isCreateTable(s))) {
+      await this.runDdl(db, stmt, strict);
+    }
+  }
+
+  /**
+   * Run one schema statement. A table, index, constraint or column that
+   * already exists is what a re-run expects, and is ignored. Any other failure
+   * is thrown when `strict`, and ignored otherwise.
+   */
+  private async runDdl(
+    db: unknown,
+    statement: string,
+    strict: boolean
+  ): Promise<void> {
+    try {
+      await runRaw(db, statement, this.dialect);
+    } catch (error) {
+      if (!strict || isIdempotencyError(error)) return;
+      if (this.isOwnForeignKeyRerun(error, statement)) return;
+      throw error;
+    }
+  }
+
+  /**
+   * MySQL has no `ADD CONSTRAINT IF NOT EXISTS`, so re-adding `user_ext`'s
+   * own foreign key on a re-run fails with a duplicate name (error 1826).
+   * That name is this table's alone, so here, and only here, it means the key
+   * is already in place. The shared matcher never takes 1826 as "already
+   * exists": elsewhere the name may be held by an unrelated constraint.
+   */
+  private isOwnForeignKeyRerun(error: unknown, statement: string): boolean {
+    if (this.dialect !== "mysql") return false;
+    if (!statement.includes(`fk_${TABLE_NAME}_user_id`)) return false;
+    const messages = [error, (error as { cause?: unknown })?.cause].map(e =>
+      e instanceof Error ? e.message : ""
+    );
+    return messages.some(m =>
+      m.includes(
+        `Duplicate foreign key constraint name 'fk_${TABLE_NAME}_user_id'`
+      )
+    );
   }
 
   /**
@@ -386,6 +480,10 @@ export class UserExtSchemaService {
       label: record.label,
       required: record.required,
     };
+    // `unique` has no column of its own on the row, so the sync stores it
+    // among the field's other options. Read back here, the table gets the
+    // field's unique index rather than an unconstrained column.
+    if (record.pluginOptions?.unique === true) base.unique = true;
 
     // Map admin options (placeholder → admin.placeholder, description → admin.description)
     const adminOpts: Record<string, unknown> = {};
@@ -578,6 +676,20 @@ export class UserExtSchemaService {
       if (!this.isUserDataField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       if (!("unique" in field && field.unique)) continue;
+      // A column that cannot carry a unique index on every dialect (a
+      // textarea, a JSON column): validation refuses `unique` there now, and
+      // a definition stored before is left without the index rather than stop
+      // the table being made.
+      if (
+        userFieldUniqueRejection(field) ||
+        /json/i.test(this.getColumnType(field) ?? "")
+      ) {
+        this.logger?.warn(
+          "[UserExtSchemaService] Leaving out a unique index its column cannot carry",
+          { name: field.name, type: field.type }
+        );
+        continue;
+      }
 
       const columnName = this.toSnakeCase(field.name);
       const indexName = `uq_${TABLE_NAME}_${columnName}`;
@@ -1069,7 +1181,12 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
         : types.varchar(255);
     }
     if (isTextField(field)) {
-      return field.maxLength ? types.varchar(field.maxLength) : types.text;
+      if (field.maxLength) return types.varchar(field.maxLength);
+      // MySQL cannot index a TEXT column without a key length, so a unique
+      // field's index could never be made. A varchar, as the schema pipeline
+      // gives a MySQL text column, can carry it.
+      if (this.dialect === "mysql" && field.unique) return types.varchar(255);
+      return types.text;
     }
     if (isTextareaField(field)) {
       return types.text;
@@ -1739,9 +1856,6 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   }
 
   private toSnakeCase(name: string): string {
-    return name
-      .replace(/([A-Z])/g, "_$1")
-      .toLowerCase()
-      .replace(/^_/, "");
+    return userFieldColumnName(name);
   }
 }

@@ -144,6 +144,7 @@ import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import { env } from "../lib/env";
+import { maskingServiceLogger } from "../observability/mask-emails";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -269,6 +270,7 @@ import {
   loadBuilderEntities,
   loadDynamicTables,
 } from "./load-dynamic-tables";
+import { forgetRegisteredLocalization } from "./registered-localization";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -818,7 +820,10 @@ async function registerServicesOnce(
   // rather than whichever one happens to be global at the time.
   setActiveHookRegistry(hookRegistry);
 
-  const resolvedLogger = logger ?? consoleLogger;
+  // Masked once here, whatever logger the app supplied: every service is
+  // handed this one, so no line it writes carries a full email address
+  // outside development and test, the app's own logger included.
+  const resolvedLogger = maskingServiceLogger(logger ?? consoleLogger);
   const resolvedBasePath = basePath ?? process.cwd();
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
@@ -2518,7 +2523,8 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     resolvedPlugins,
     pluginConsent
   )) {
-    (config.logger ?? consoleLogger).warn(warning);
+    // Masked as every line the services write is (`resolvedLogger`).
+    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
   }
   const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
@@ -2538,7 +2544,8 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
   for (const warning of breachedPasswordsWarnings(
     setupConfig.security?.breachedPasswords
   )) {
-    (config.logger ?? consoleLogger).warn(warning);
+    // Masked as every line the services write is (`resolvedLogger`).
+    maskingServiceLogger(config.logger ?? consoleLogger).warn(warning);
   }
 
   // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
@@ -4661,6 +4668,8 @@ async function releaseServices(opts: {
     // instance in the same process appends a fresh copy of every handler and
     // runs the dead instance's alongside the new one.
     clearActiveHookRegistry();
+    // The block these services were built from describes them alone.
+    forgetRegisteredLocalization();
     globalForReg.__nextly_isRegistered = false;
   }
 }

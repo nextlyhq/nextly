@@ -17,7 +17,7 @@ There is no OAuth provider integration in the runtime. Authentication is local t
 
 Sessions use a two-token architecture:
 
-- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL. Its signature is verified, and its account is checked to still be allowed to use it, read from the database at most once every five seconds per account (see [When an account may hold a session](#when-an-account-may-hold-a-session)). Sent as the HTTP-only `nextly_session` cookie.
+- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL. Its signature is verified, and its account is checked to still be allowed to use it, read from the database at most once every five seconds per active account (see [When an account may hold a session](#when-an-account-may-hold-a-session)). Sent as the HTTP-only `nextly_session` cookie.
 - **Refresh token** -- opaque random string, 7-day TTL, SHA-256 hashed in the database for revocation support. Sent as the HTTP-only `nextly_refresh` cookie, scoped to `/admin/api/auth` so that both refresh and sign-out receive it.
 
 When the access token expires, the admin UI silently refreshes it using the refresh token. Users only see a re-login prompt once the refresh token itself expires (7 days of inactivity by default). Every refresh consumes the old refresh token and issues a new one. A token whose row is gone is refused and logged as `refresh-token-not-found` (see [Refresh-token rotation](#refresh-token-rotation)).
@@ -130,10 +130,15 @@ sessions end with the old password.
 
 Each token carries a number the account's row also holds, and the change
 raises it, so the check compares the two rather than times. A server reads the
-row at most once every five seconds per account, so the instance that made
-the change refuses at once, and every other instance within the ten seconds.
-If the database cannot be read, the request fails rather than being answered
-as signed in or signed out. An installation upgrading to this release adds the
+row at most once every five seconds per active account, so every instance,
+the one that made the change included, refuses within the ten seconds; the
+instance that made the change usually refuses at once. A token for an account
+that is not active, or no longer exists, reads the row on each request.
+If the database cannot be read, or takes longer than five seconds to answer,
+`getSession`, `requireAuth` and `ctx.auth.currentUser` throw, and the request
+fails rather than being answered as signed in or signed out. The check runs
+wherever a session is read through them; `verifyAccessToken` alone checks
+only the token's signature. An installation upgrading to this release adds the
 column with `nextly migrate`, as for any new core column.
 
 A deactivation also outlasts the account's own links. While an administrator
@@ -308,12 +313,14 @@ A key created by a Super Admin copies the whole permission catalogue rather than
 
 Keys can be time-bound (set an expiry date) and revoked at any time. The full key value is shown to the operator **once** at creation; the database only stores the SHA-256 hash.
 
+A key acts with its creator's authority, so it is refused while its creator is deactivated and works again once they are reactivated. The instance that deactivates the account refuses its keys at once, and every other instance within ten seconds, the same bound as the account's sessions. A key is a credential of its own: an administrator setting the creator's password ends their sessions but not their keys.
+
 ### How verification works
 
 When a request includes a `Bearer` token, the auth middleware:
 
 1. Hashes the key with SHA-256 and looks it up in the `api_keys` table.
-2. Rejects expired or revoked keys.
+2. Rejects expired or revoked keys, and keys whose creator is deactivated.
 3. Enforces per-key rate limiting (default: 1,000 requests/hour, configurable via `apiKeys.rateLimit` in `defineConfig()`).
 4. Resolves the effective permission set based on the token type and creator's roles.
 5. Attaches an `AuthContext` with `authMethod: "api-key"` to the request.
