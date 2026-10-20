@@ -485,3 +485,78 @@ describe("RealClassifier — SQLite numeric type changes", () => {
     expect(result.events.some(e => e.kind === "type_change")).toBe(true);
   });
 });
+
+// A string column narrowed to varchar(N) loses nothing when no stored value is longer than N, so it
+// applies without a prompt; a longer value would be cut short, or refused by a strict server, so the
+// apply stops before any DDL and names the column. A legacy MySQL `text` column on a Single, where
+// the schema declares `varchar(255)`, is the case this exists for.
+describe("RealClassifier — string narrowing", () => {
+  const narrowing: Operation = {
+    type: "change_column_type",
+    tableName: "single_site",
+    columnName: "title",
+    fromType: "text",
+    toType: "varchar(255)",
+  };
+
+  it("plans the narrowing without an event when no value is longer than the bound", async () => {
+    const countLongerThan = vi.fn().mockResolvedValue(0);
+    const result = await new RealClassifier().classify({
+      operations: [narrowing],
+      countNulls: vi.fn().mockResolvedValue(0),
+      countRows: vi.fn().mockResolvedValue(1),
+      countLongerThan,
+      dialect: "mysql",
+    });
+    expect(countLongerThan).toHaveBeenCalledWith("single_site", "title", 255);
+    expect(result.events).toEqual([]);
+    expect(result.level).toBe("safe");
+  });
+
+  it("refuses before any DDL when a value is longer than the bound, naming the column", async () => {
+    const refusal = new RealClassifier().classify({
+      operations: [narrowing],
+      countNulls: vi.fn().mockResolvedValue(0),
+      countRows: vi.fn().mockResolvedValue(5),
+      countLongerThan: vi.fn().mockResolvedValue(3),
+      dialect: "mysql",
+    });
+    await expect(refusal).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            path: "schema.single_site.title",
+            code: "NARROWING_WOULD_TRUNCATE",
+            message: expect.stringMatching(
+              /single_site\.title.*varchar\(255\).*3 row/
+            ),
+          }),
+        ],
+      },
+    });
+  });
+
+  it("keeps the confirmation when the caller cannot count, rather than assuming the data fits", async () => {
+    const result = await new RealClassifier().classify({
+      operations: [narrowing],
+      countNulls: vi.fn().mockResolvedValue(0),
+      countRows: vi.fn().mockResolvedValue(1),
+      dialect: "mysql",
+    });
+    expect(result.events.map(e => e.kind)).toEqual(["type_change"]);
+  });
+
+  it("does not count, and still asks, for a type change that is not a string narrowing", async () => {
+    const countLongerThan = vi.fn().mockResolvedValue(0);
+    const result = await new RealClassifier().classify({
+      operations: [{ ...narrowing, toType: "int" }],
+      countNulls: vi.fn().mockResolvedValue(0),
+      countRows: vi.fn().mockResolvedValue(1),
+      countLongerThan,
+      dialect: "mysql",
+    });
+    expect(countLongerThan).not.toHaveBeenCalled();
+    expect(result.events.map(e => e.kind)).toEqual(["type_change"]);
+  });
+});

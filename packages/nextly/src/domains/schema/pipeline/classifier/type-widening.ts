@@ -144,3 +144,33 @@ export function isWideningChange(
 
   return false;
 }
+
+/**
+ * The length a stored string may have once this type change has run, when the change can only cut
+ * strings short; null for every other change.
+ *
+ * A string column — the text family, `varchar`, `char` — narrowed to `varchar(N)` keeps every value
+ * of N characters or fewer unchanged, so the change is lossless exactly when no stored value is
+ * longer. That is a question about the data, not the types, so the classifier counts the longer
+ * values against this bound rather than asking whether the operator accepts a loss there may not be.
+ *
+ * SQLite never enforces a declared length, so nothing there is ever cut and it has no bound.
+ */
+export function stringNarrowingLimit(
+  fromType: string,
+  toType: string,
+  dialect: SupportedDialect
+): number | null {
+  if (dialect === "sqlite") return null;
+  if (isWideningChange(fromType, toType, dialect)) return null;
+  const to = VARCHAR_RE.exec(toType.toLowerCase().trim());
+  if (!to) return null;
+  const from = fromType.toLowerCase().trim();
+  const fromIsString =
+    MYSQL_TEXT_RANK[from] !== undefined ||
+    from === "varchar" ||
+    VARCHAR_RE.test(from) ||
+    CHAR_RE.test(from) ||
+    from === "bpchar";
+  return fromIsString ? parseInt(to[1], 10) : null;
+}

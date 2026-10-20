@@ -10,6 +10,7 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../../errors";
 import type { Operation } from "../diff/types";
 import type {
   Classifier,
@@ -22,13 +23,18 @@ import {
 } from "../resolution/types";
 
 import { buildPerDialectWarning } from "./type-warnings";
-import { isWideningChange } from "./type-widening";
+import { isWideningChange, stringNarrowingLimit } from "./type-widening";
 
 export class RealClassifier implements Classifier {
   async classify(args: {
     operations: Operation[];
     countNulls: (table: string, column: string) => Promise<number>;
     countRows: (table: string) => Promise<number>;
+    countLongerThan?: (
+      table: string,
+      column: string,
+      length: number
+    ) => Promise<number>;
     dialect: SupportedDialect;
   }): Promise<ClassificationResult> {
     const events: ClassifierEvent[] = [];
@@ -69,6 +75,43 @@ export class RealClassifier implements Classifier {
         // Everything else surfaces a per-dialect warning so silent coercion
         // (MySQL/SQLite) and hard-failure (PG without USING) are loud.
         const widening = isWideningChange(op.fromType, op.toType, args.dialect);
+        // A string narrowed to varchar(N) is judged by its data: lossless when no stored value is
+        // longer than N, so it needs no confirmation; otherwise every way of running it loses or
+        // refuses data (MySQL cuts the value short without strict mode and fails with it), so the
+        // apply stops here, before any DDL, and names what does not fit.
+        const limit = stringNarrowingLimit(
+          op.fromType,
+          op.toType,
+          args.dialect
+        );
+        if (limit !== null && args.countLongerThan !== undefined) {
+          const longer = await args.countLongerThan(
+            op.tableName,
+            op.columnName,
+            limit
+          );
+          if (longer === 0) continue;
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: `schema.${op.tableName}.${op.columnName}`,
+                code: "NARROWING_WOULD_TRUNCATE",
+                message:
+                  `${op.tableName}.${op.columnName} cannot become ${op.toType}: ` +
+                  `${String(longer)} row(s) hold a value longer than ${String(limit)} characters. ` +
+                  `Shorten those values, or give the field a type that holds them (a textarea, ` +
+                  `or a larger maxLength), then apply again.`,
+              },
+            ],
+            logContext: {
+              table: op.tableName,
+              column: op.columnName,
+              fromType: op.fromType,
+              toType: op.toType,
+              longer,
+            },
+          });
+        }
         if (!widening) {
           events.push({
             id: formatEventId("type_change", op.tableName, op.columnName),

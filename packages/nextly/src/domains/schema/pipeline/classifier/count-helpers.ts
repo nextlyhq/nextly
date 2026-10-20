@@ -102,6 +102,37 @@ export async function countNulls(
   return extractCount(result, dialect);
 }
 
+/**
+ * How many rows hold a value in `column` longer than `length` characters: the values a narrowing to
+ * `varchar(length)` would cut short. Counted in characters, as `varchar(N)` bounds them, by each
+ * dialect's character-length function. `length` is an integer the classifier parsed from a type,
+ * never caller input; it is still bound as a parameter.
+ */
+export async function countLongerThan(
+  db: unknown,
+  dialect: SupportedDialect,
+  table: string,
+  column: string,
+  length: number
+): Promise<number> {
+  const tbl = quoteIdent(table, dialect);
+  const col = quoteIdent(column, dialect);
+  const charLength = dialect === "sqlite" ? "length" : "CHAR_LENGTH";
+  const query = sql`${sql.raw(
+    `SELECT COUNT(*) AS count FROM ${tbl} WHERE ${charLength}(${col}) > `
+  )}${length}`;
+  if (dialect === "sqlite") {
+    const dbTyped = db as SqliteAll;
+    const rows = dbTyped.all(query);
+    if (rows.length === 0)
+      throw new Error("SQLite count query returned no rows");
+    return asNumber(rows[0].count);
+  }
+  const dbTyped = db as PgMysqlExecute;
+  const result = await dbTyped.execute(query);
+  return extractCount(result, dialect);
+}
+
 export async function countRows(
   db: unknown,
   dialect: SupportedDialect,

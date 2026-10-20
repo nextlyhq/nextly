@@ -52,6 +52,7 @@ import { activePostgresSchema } from "../services/postgres-schema";
 import { generateRuntimeSchema } from "../services/runtime-schema-generator";
 
 import {
+  countLongerThan as countLongerThanHelper,
   countNulls as countNullsHelper,
   countRows as countRowsHelper,
 } from "./classifier/count-helpers";
@@ -831,6 +832,8 @@ export class PushSchemaPipeline {
         countNulls: (table, column) =>
           countNullsHelper(db, dialect, table, column),
         countRows: table => countRowsHelper(db, dialect, table),
+        countLongerThan: (table, column, length) =>
+          countLongerThanHelper(db, dialect, table, column, length),
         dialect,
       });
 

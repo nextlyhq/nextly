@@ -128,13 +128,17 @@ interface PoolConnection extends Queryable {
  * What a transaction changed on its connection's session, to put back before
  * the connection returns to the pool; null when it changed nothing.
  *
- * MySQL has no transaction-scoped form of `innodb_lock_wait_timeout`: a
- * `SET SESSION` outlives the transaction, and the pooled connection would
- * carry one transaction's timeout into every later query handed it.
- * `lockWaitTimeout` is the session's value from before the change, or null
- * when it could not be read, and then the connection cannot be put back.
+ * MySQL has no transaction-scoped form of `innodb_lock_wait_timeout` or
+ * `sql_mode`: a `SET SESSION` outlives the transaction, and the pooled
+ * connection would carry one transaction's setting into every later query
+ * handed it. Each field present is the session's value from before the
+ * change, or null when it could not be read, and then the connection cannot
+ * be put back.
  */
-type SessionRestore = { lockWaitTimeout: number | null } | null;
+type SessionRestore = {
+  lockWaitTimeout?: number | null;
+  sqlMode?: string | null;
+} | null;
 
 /**
  * Puts back what a transaction changed on its connection's session. False
@@ -145,12 +149,20 @@ async function restoreSession(
   restore: SessionRestore
 ): Promise<boolean> {
   if (restore === null) return true;
-  if (restore.lockWaitTimeout === null) return false;
+  if (restore.lockWaitTimeout === null || restore.sqlMode === null) {
+    return false;
+  }
   try {
-    // An integer read from the server, never caller input.
-    await connection.query(
-      `SET SESSION innodb_lock_wait_timeout = ${restore.lockWaitTimeout}`
-    );
+    if (restore.lockWaitTimeout !== undefined) {
+      // An integer read from the server, never caller input.
+      await connection.query(
+        `SET SESSION innodb_lock_wait_timeout = ${restore.lockWaitTimeout}`
+      );
+    }
+    if (restore.sqlMode !== undefined) {
+      // Read from the server, and bound as a value all the same.
+      await connection.query("SET SESSION sql_mode = ?", [restore.sqlMode]);
+    }
     return true;
   } catch {
     return false;
@@ -861,6 +873,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     // Begin the transaction
     await connection.query("START TRANSACTION");
 
+    let restore: SessionRestore = null;
+
     // Set lock wait timeout if specified
     if (options?.timeoutMs) {
       // Read first, so the session's own value can be put back once the
@@ -874,9 +888,29 @@ export class MySqlAdapter extends DrizzleAdapter {
       await connection.query(
         `SET SESSION innodb_lock_wait_timeout = ${timeoutSeconds}`
       );
-      return { lockWaitTimeout: Number.isInteger(previous) ? previous : null };
+      restore = {
+        lockWaitTimeout: Number.isInteger(previous) ? previous : null,
+      };
     }
-    return null;
+
+    // Strict mode for this transaction: an INSERT, UPDATE or ALTER that would
+    // cut a string to its column's length, or clamp a number to its range,
+    // fails instead of applying with a warning. Added to the session's own
+    // mode, so every other flag it had still holds, and put back afterwards.
+    if (options?.strictSqlMode) {
+      const [rows] = await connection.query<RowDataPacket[]>(
+        "SELECT @@SESSION.sql_mode AS mode"
+      );
+      const previous: unknown = rows[0]?.mode;
+      await connection.query(
+        "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))"
+      );
+      restore = {
+        ...restore,
+        sqlMode: typeof previous === "string" ? previous : null,
+      };
+    }
+    return restore;
   }
 
   /**
