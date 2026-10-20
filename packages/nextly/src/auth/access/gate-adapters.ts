@@ -20,7 +20,12 @@ import {
   type AuthenticatedScope,
 } from "../authenticated-scope";
 
-import { holdsPermission, isSuperAdmin, type Actor } from "./actor";
+import {
+  holdsPermission,
+  isSuperAdmin,
+  type Actor,
+  type UserActor,
+} from "./actor";
 import {
   askRule,
   askRules,
@@ -245,71 +250,112 @@ async function ruleAllows(
   return !("threw" in outcome) && outcome.value === true;
 }
 
+/** How a signed-in user's verdict is asked, by what the target declares. */
+interface UserAsk {
+  readonly q: CollectionQuestion;
+  readonly target: AccessTarget;
+  readonly userId: string;
+  /** The user's whole actor, resolved only where a rule needs its context. */
+  readonly looked: () => Promise<UserActor>;
+}
+
 async function userVerdict(
   q: CollectionQuestion,
   target: AccessTarget,
   user: { id: string }
 ): Promise<GateVerdict> {
+  const ask: UserAsk = {
+    q,
+    target,
+    userId: user.id,
+    looked: () => actorForUser(user.id, { executor: q.executor }),
+  };
   try {
-    if (!q.rules) {
-      const today = await q.permissionWithoutService();
-      return verdictOf(
-        await deviate("no-service", today, () =>
-          decided(
-            actorForUser(user.id, { executor: q.executor }),
-            q.action,
-            target
-          )
-        )
-      );
-    }
-    const looked = () => actorForUser(user.id, { executor: q.executor });
-    if (!declaresRule(target, q.action)) {
-      // With no rule for the action, the decision is the permission alone,
-      // super-admin authority included, so the targeted check answers it
-      // without loading the caller's every role and grant.
-      const holds = await userHoldsPermission(user.id, q.action, q.slug, {
-        executor: q.executor,
-      });
-      if (!isLifecycle(q.action)) return verdictOf(holds);
-      return verdictOf(
-        await deviate("lifecycle-judged-alone", holds, () =>
-          decided(looked(), q.action, target)
-        )
-      );
-    }
+    if (!q.rules) return await withoutServiceVerdict(ask);
+    if (!declaresRule(target, q.action)) return await ruleLessVerdict(ask);
     const plain = plainRule(target, q.action);
-    if (plain !== undefined) {
-      // A plain yes or no reads nothing of the caller, so only super-admin
-      // authority, which passes every rule, is looked up, through its cached
-      // check. A user named by no id holds nothing.
-      if (!user.id) return INSUFFICIENT;
-      const superAdmin = await userIsSuperAdmin(user.id, {
-        executor: q.executor,
-      });
-      if (superAdmin) return ALLOWED;
-      return verdictOf(
-        await deviate("rule-alone-for-people", plain, () =>
-          decided(looked(), q.action, target)
-        )
-      );
-    }
-    // A rule is declared, and is handed the caller's roles and permissions.
-    const actor = await looked();
-    // A super-admin passes without the rule being read, and a user named by
-    // no id holds nothing, so neither asks it.
-    if (isSuperAdmin(actor) || !user.id) {
-      return answerOf(judge(actor, q.action, target, null));
-    }
-    const outcome = await askRule(actor, q.action, target);
-    const today =
-      outcome.declared && !("threw" in outcome) && Boolean(outcome.value);
-    return verdictOf(
-      await deviate("rule-alone-for-people", today, () =>
-        decided(actor, q.action, target)
-      )
-    );
+    if (plain !== undefined) return await plainRuleVerdict(ask, plain);
+    return await ruleVerdict(ask);
   } catch (error) {
     return { allowed: false, refusal: "failed", error };
   }
+}
+
+/** Without the service, today's answer, which reads no rule. */
+async function withoutServiceVerdict({
+  q,
+  target,
+  looked,
+}: UserAsk): Promise<GateVerdict> {
+  const today = await q.permissionWithoutService();
+  return verdictOf(
+    await deviate("no-service", today, () =>
+      decided(looked(), q.action, target)
+    )
+  );
+}
+
+/**
+ * With no rule for the action, the decision is the permission alone,
+ * super-admin authority included, so the targeted check answers it without
+ * loading the caller's every role and grant.
+ */
+async function ruleLessVerdict({
+  q,
+  target,
+  userId,
+  looked,
+}: UserAsk): Promise<GateVerdict> {
+  const holds = await userHoldsPermission(userId, q.action, q.slug, {
+    executor: q.executor,
+  });
+  if (!isLifecycle(q.action)) return verdictOf(holds);
+  return verdictOf(
+    await deviate("lifecycle-judged-alone", holds, () =>
+      decided(looked(), q.action, target)
+    )
+  );
+}
+
+/**
+ * A plain yes or no reads nothing of the caller, so only super-admin
+ * authority, which passes every rule, is looked up, through its cached check.
+ * A user named by no id holds nothing.
+ */
+async function plainRuleVerdict(
+  { q, target, userId, looked }: UserAsk,
+  plain: boolean
+): Promise<GateVerdict> {
+  if (!userId) return INSUFFICIENT;
+  if (await userIsSuperAdmin(userId, { executor: q.executor })) {
+    return ALLOWED;
+  }
+  return verdictOf(
+    await deviate("rule-alone-for-people", plain, () =>
+      decided(looked(), q.action, target)
+    )
+  );
+}
+
+/** A rule function, handed the caller's roles and permissions. */
+async function ruleVerdict({
+  q,
+  target,
+  userId,
+  looked,
+}: UserAsk): Promise<GateVerdict> {
+  const actor = await looked();
+  // A super-admin passes without the rule being read, and a user named by no
+  // id holds nothing, so neither asks it.
+  if (isSuperAdmin(actor) || !userId) {
+    return answerOf(judge(actor, q.action, target, null));
+  }
+  const outcome = await askRule(actor, q.action, target);
+  const today =
+    outcome.declared && !("threw" in outcome) && Boolean(outcome.value);
+  return verdictOf(
+    await deviate("rule-alone-for-people", today, () =>
+      decided(actor, q.action, target)
+    )
+  );
 }
