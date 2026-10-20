@@ -21,7 +21,7 @@ import type { ContentEventRecord } from "../../domains/content-events/repository
 import type { DirectAPIConfig, ListResult } from "../types/shared";
 
 import type { NextlyContext } from "./context";
-import { accessOptions, mergeConfig } from "./helpers";
+import { accessOptions, mergeConfig, runAsCaller } from "./helpers";
 
 /** What `contentEvents.list` takes: a subject, a query, and the caller. */
 export type ContentEventsListArgs = DirectAPIConfig &
@@ -40,11 +40,16 @@ export function createContentEventsNamespace(
   ctx: NextlyContext
 ): ContentEventsNamespace {
   return {
+    // Run as the caller it names, as every collection operation is: a call
+    // naming no person runs as none, so the document's hooks never judge the
+    // person of an operation that set this one going.
     list: async args =>
-      readSubjectEvents(
-        args.subject,
-        queryOf(args),
-        callerOf(mergeConfig(ctx.defaultConfig, args))
+      runAsCaller(ctx.defaultConfig, args, callArgs =>
+        readSubjectEvents(
+          callArgs.subject,
+          queryOf(callArgs),
+          callerOf(mergeConfig(ctx.defaultConfig, callArgs))
+        )
       ),
   };
 }

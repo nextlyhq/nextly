@@ -19,7 +19,9 @@ import {
   readSubjectEvents,
   type SubjectEventsQuery,
 } from "../api/subject-events";
+import { runWithCallerScope } from "../auth/caller-scope";
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
+import { runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
 import {
@@ -474,6 +476,22 @@ async function readEventsForPlugin(
   opts: ServiceOpts = {}
 ): ReturnType<typeof readSubjectEvents> {
   const caller = await resolveServiceOpts(opts);
+  // Pinned as `services.collections` pins its calls: the person the call names,
+  // or none, and the scope it resolved, so the document's hooks judge this
+  // caller rather than whichever frame the plugin was running in.
+  return runAsPrincipal(opts.principal ?? null, () =>
+    runWithCallerScope(caller.authenticatedScope, () =>
+      readEventsAs(subject, query, caller)
+    )
+  );
+}
+
+/** The read itself, as the caller resolved from the plugin's options. */
+function readEventsAs(
+  subject: ContentEventSubject,
+  query: SubjectEventsQuery,
+  caller: Awaited<ReturnType<typeof resolveServiceOpts>>
+): ReturnType<typeof readSubjectEvents> {
   return readSubjectEvents(subject, query, {
     overrideAccess: caller.overrideAccess,
     ...(caller.user === undefined ? {} : { user: caller.user }),

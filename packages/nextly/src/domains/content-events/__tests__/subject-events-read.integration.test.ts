@@ -26,7 +26,9 @@ import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import {
   definePlugin,
   type PluginContext,
+  type PluginDefinition,
 } from "../../../plugins/plugin-context";
+import type { Principal } from "../../../plugins/principals/types";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -39,6 +41,8 @@ import { ServiceContainer } from "../../../services/index";
 import type { AuthUserId } from "../../../types/auth";
 import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
 import { ensureCoreContentEventKinds } from "../core-kinds";
+import { runAsPrincipal } from "../../../auth/principal-scope";
+import { nextly as lazyNextly } from "../../../direct-api/nextly";
 import { recordContentEvent } from "../record";
 
 let current: TestNextly | undefined;
@@ -69,6 +73,26 @@ interface Page {
   items: { id: string; kind: string }[];
   meta: { hasNext: boolean };
 }
+
+/** The insiders plugin's kind of person, which only `insiders` admits. */
+const INSIDER = "insiders:insider";
+
+/** A plugin that contributes the insider kind of person. */
+const insiders = {
+  name: "insiders",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: {
+    principals: [
+      {
+        name: "insider",
+        attributes: {},
+        resolve: async () => null,
+        lookup: async (id: string) => ({ id, attributes: {} }),
+      },
+    ],
+  },
+} as unknown as PluginDefinition;
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   const probe = definePlugin({
@@ -183,6 +207,31 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         },
         fields: [text({ name: "title" })],
       }),
+      // A rule any signed-in person or an insider passes, and a hook that
+      // then admits only the insiders plugin's kind of person: who the hooks
+      // think is reading decides the read.
+      defineCollection({
+        slug: "insiders",
+        access: {
+          read: ({
+            user,
+            principal,
+          }: {
+            user: unknown;
+            principal: Principal | null;
+          }) => Boolean(user) || principal?.kind === INSIDER,
+        },
+        hooks: {
+          beforeOperation: [
+            ({ operation, principal }) => {
+              if (operation === "read" && principal?.kind !== INSIDER) {
+                throw new Error("Only insiders read here.");
+              }
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
       // A document-level rule: a function, which may read the row.
       defineCollection({
         slug: "secrets",
@@ -199,7 +248,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "heading" })],
       }),
     ],
-    plugins: [probe],
+    plugins: [probe, insiders],
   });
   await seedPermissionsAndRolePresets();
   founder = await seedLiveAuthor(current);
@@ -771,6 +820,94 @@ describe.each(getConfiguredTestDialects())(
         events: "refused",
         history: "refused",
       });
+    }, 120_000);
+
+    it("answers every way in as the document's own read does, inside another person's frame", async () => {
+      const t = await boot(dialect);
+      const reader = await personHolding(t, ["read-insiders"]);
+      const key = await keyHolding(t, ["read-insiders"]);
+      const doc = await documentIn(t, "insiders");
+      const subject = {
+        kind: "collection" as const,
+        slug: "insiders",
+        id: doc,
+      };
+      const insider = await t.nextly.principals.byId(INSIDER, "i1");
+      expect(insider).not.toBeNull();
+      const outcome = (read: () => Promise<unknown>) =>
+        runAsPrincipal(insider!, read).then(
+          () => "readable",
+          () => "refused"
+        );
+      const okOrNot = (response: Promise<Response>) =>
+        response.then(r => (r.ok ? "readable" : "refused"));
+      const as = {
+        as: "user" as const,
+        user: { id: reader as AuthUserId, email: `${reader}@example.com` },
+      };
+
+      // Each way in, beside the document read on the same way in, all run
+      // inside an insider's frame that none of these callers is.
+      const pairs = {
+        rest: [
+          await outcome(() =>
+            okOrNot(restGet(key, ["collections", "insiders", "entries", doc]))
+          ),
+          await outcome(() =>
+            okOrNot(
+              restGet(key, [
+                "collections",
+                "insiders",
+                "entries",
+                doc,
+                "events",
+              ])
+            )
+          ),
+        ],
+        directApi: [
+          await outcome(() =>
+            t.nextly.findByID({
+              collection: "insiders",
+              id: doc,
+              ...asPerson(reader),
+            })
+          ),
+          await outcome(() =>
+            t.nextly.contentEvents.list({ subject, ...asPerson(reader) })
+          ),
+        ],
+        lazyFacade: [
+          await outcome(() =>
+            lazyNextly.findByID({
+              collection: "insiders",
+              id: doc,
+              ...asPerson(reader),
+            })
+          ),
+          await outcome(() =>
+            lazyNextly.contentEvents.list({ subject, ...asPerson(reader) })
+          ),
+        ],
+        plugin: [
+          await outcome(() =>
+            services!.collections.findEntryById("insiders", doc, as)
+          ),
+          await outcome(() => services!.versions.listEvents(subject, {}, as)),
+        ],
+      };
+      for (const [way, [documentRead, eventsRead]] of Object.entries(pairs)) {
+        expect(eventsRead, way).toBe(documentRead);
+      }
+      // The Direct API's and the plugin's document reads clear the frame and
+      // judge their own caller, so each refuses: the control that makes their
+      // comparison mean something. REST is reached here in-process, inside
+      // the test's frame, which both of its reads inherit alike.
+      expect([
+        pairs.directApi[0],
+        pairs.lazyFacade[0],
+        pairs.plugin[0],
+      ]).toEqual(["refused", "refused", "refused"]);
     }, 120_000);
 
     it("shows one life of a document id at a time", async () => {
