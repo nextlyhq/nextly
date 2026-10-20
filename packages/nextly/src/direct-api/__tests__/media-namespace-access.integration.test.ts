@@ -28,24 +28,7 @@ import {
 import { pdfDocument } from "../../services/upload-validation/__tests__/format-fixtures";
 import { Nextly } from "../nextly";
 
-/** The part of the Direct API the set-up drives, typed where the shim is not. */
-interface Direct {
-  users: {
-    create(a: { data: Record<string, unknown> }): Promise<{
-      item: { id: string };
-    }>;
-  };
-  permissions: {
-    find(a: { limit: number }): Promise<{
-      items: { id: string; slug: string }[];
-    }>;
-  };
-  roles: {
-    create(a: { data: Record<string, unknown> }): Promise<{
-      item: { id: string };
-    }>;
-  };
-}
+import { account, role, seedPermissions } from "./checked-access-fixtures";
 
 /** Every permission the media write routes name. */
 const MEDIA_WRITES = ["create-media", "update-media", "delete-media"];
@@ -70,34 +53,6 @@ describe.each(getConfiguredTestDialects())(
     let holderId: string;
     let lackerId: string;
     let ownerId: string;
-
-    async function account(email: string, roles: string[] = []) {
-      const created = await (t.nextly as unknown as Direct).users.create({
-        data: {
-          email,
-          password: "Password123!",
-          name: email,
-          isActive: true,
-          ...(roles.length > 0 ? { roles } : {}),
-        },
-      });
-      return created.item.id;
-    }
-
-    /** A role holding exactly the named, seeded permissions. */
-    async function role(slug: string, permissionSlugs: string[]) {
-      const direct = t.nextly as unknown as Direct;
-      const seeded = await direct.permissions.find({ limit: 1000 });
-      const ids = permissionSlugs.map(wanted => {
-        const found = seeded.items.find(p => p.slug === wanted);
-        expect(found, `\`${wanted}\` must be seeded`).toBeDefined();
-        return found!.id;
-      });
-      const created = await direct.roles.create({
-        data: { name: slug, slug, permissionIds: ids },
-      });
-      return created.item.id;
-    }
 
     /** An instance that asks to be checked, as this person. */
     function checkedAs(userId: string): Nextly {
@@ -130,23 +85,16 @@ describe.each(getConfiguredTestDialects())(
         ...(dialect === "sqlite" ? {} : { dialect }),
       });
       trusted = new Nextly();
-      // What a real boot does before serving anything: the harness boots
-      // without it, and the roles below are made of these permissions.
-      const seeder = t.getService("permissionSeedService") as unknown as {
-        seedSystemPermissions: () => Promise<unknown>;
-        seedAllCollectionPermissions: () => Promise<unknown>;
-      };
-      await seeder.seedSystemPermissions();
-      await seeder.seedAllCollectionPermissions();
+      await seedPermissions(t);
 
       // The install's first account holds super-admin, which answers every
       // check; the accounts under test come after it.
-      ownerId = await account("owner@example.com");
-      holderId = await account("holder@example.com", [
-        await role("media-writers", ["read-media", ...MEDIA_WRITES]),
+      ownerId = await account(t, "owner@example.com");
+      holderId = await account(t, "holder@example.com", [
+        await role(t, "media-writers", ["read-media", ...MEDIA_WRITES]),
       ]);
-      lackerId = await account("lacker@example.com", [
-        await role("media-readers", ["read-media"]),
+      lackerId = await account(t, "lacker@example.com", [
+        await role(t, "media-readers", ["read-media"]),
       ]);
     });
 
