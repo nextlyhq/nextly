@@ -469,12 +469,15 @@ function asBuckets(
  *
  * `truncated` is carried through rather than dropped, for the reason `atLeast`
  * is on a count: it says the bucket set is PARTIAL, and a chart that loses it
- * presents the categories it happens to hold as the whole picture.
+ * presents the categories it happens to hold as the whole picture. `atLeast` is
+ * carried for its own reason: it says the counts inside the buckets are floors,
+ * and a chart that loses it draws short counts as whole ones.
  */
 function asGrouped(
   buckets: unknown,
   truncated: unknown,
-  field: unknown
+  field: unknown,
+  atLeast: unknown
 ): WidgetResult | undefined {
   const read = asBuckets(buckets);
   if (!read) return undefined;
@@ -486,6 +489,7 @@ function asGrouped(
     buckets: read,
     ...(truncated === true ? { truncated: true } : {}),
     ...(described !== undefined && { field: described }),
+    ...(atLeast === true ? { atLeast: true } : {}),
   };
 }
 
@@ -588,7 +592,12 @@ function asResult(value: unknown): WidgetResult | undefined {
   }
 
   if (result.op === "groupBy") {
-    return asGrouped(result.buckets, result.truncated, result.field);
+    return asGrouped(
+      result.buckets,
+      result.truncated,
+      result.field,
+      result.atLeast
+    );
   }
 
   if (result.op === "timeseries") {

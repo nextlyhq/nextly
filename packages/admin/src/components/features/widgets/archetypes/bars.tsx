@@ -116,6 +116,9 @@ export const barsBody: ArchetypeBody = (result, definition) => {
       <GroupsChart
         groups={rows}
         truncated={result.truncated === true}
+        // A source that counts only up to a bound says so, and every count is then drawn,
+        // described and tabled as a floor ("N+").
+        floors={result.atLeast === true}
         title={definition.title ?? "Comparison"}
         labelHeading={result.field?.label ?? "Value"}
       />
