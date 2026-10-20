@@ -15,6 +15,7 @@ import type { SchemaEventRow } from "../../../events/schema-events-repository";
 import type { OwnerRecord } from "../../../ownership/owner-registry";
 import type { ReconcileRepo } from "../../drift-reconcile";
 
+import { buildPluginMigration } from "../../../migrate-create/generate-plugin";
 import { migrationChecksum, type PluginMigration } from "../plugin-migration";
 import {
   previewPluginMigrations,
@@ -1096,6 +1097,29 @@ describe("a database already past some of a plugin's modules", () => {
   const set = (migrations: PluginMigration[]) => [
     { pluginName: "@acme/p", pluginVersion: "1.0.0", migrations },
   ];
+  /**
+   * `create` as `migrate:create --plugin` writes it, under `create`'s name:
+   * its statements are exactly what its sides render to, which a module
+   * recorded after an attempt that did not finish must be.
+   */
+  const generatedCreate = (): PluginMigration => {
+    const built = buildPluginMigration({
+      pluginName: "@acme/p",
+      schemaVersion: 1,
+      name: "create",
+      now: new Date(0),
+      tablesByDialect: {
+        postgresql: [tableSpec(T, false)],
+        mysql: [tableSpec(T, false)],
+        sqlite: [tableSpec(T, false)],
+      },
+      existing: [],
+    });
+    if (built === null) throw new Error("no module generated");
+    const { checksum: _built, ...content } = built.module;
+    const named = { ...content, name: create.name };
+    return { ...named, checksum: migrationChecksum(named) };
+  };
 
   it("adopts every module when the database stands at the last one's result", async () => {
     const d = deps();
@@ -1287,7 +1311,7 @@ describe("a database already past some of a plugin's modules", () => {
     // `in_progress`. The module changes only the schema, and the database
     // stands past its result, so the snapshot shows its whole effect: it is
     // recorded, never run again.
-    const { checksum: _sealed, ...content } = create;
+    const { checksum: _sealed, ...content } = generatedCreate();
     const outside = { ...content, transaction: false };
     const unsealed = { ...outside, checksum: migrationChecksum(outside) };
     const d = deps();
@@ -1636,7 +1660,7 @@ describe("a database already past some of a plugin's modules", () => {
   it("adopts a schema-only module in the range that ran outside a transaction and whose last attempt failed", async () => {
     // The database stands past it, and its statements change only the
     // schema, so nothing of it can be missing.
-    const { checksum: _sealed, ...content } = create;
+    const { checksum: _sealed, ...content } = generatedCreate();
     const outside = { ...content, transaction: false };
     const createOutside = {
       ...outside,
@@ -2287,13 +2311,49 @@ describe("a module whose last attempt did not finish, on MySQL", () => {
     { pluginName: "@acme/p", pluginVersion: "1.0.0", migrations: [m] },
   ];
   const KEY = "plugin:@acme/p/001_create";
-  const create = module({
-    name: "001_create",
+  /** `base` with other statements on every dialect, sealed again. */
+  const resealed = (
+    base: PluginMigration,
+    over: { up?: (up: string[]) => string[]; outside?: boolean }
+  ): PluginMigration => {
+    const { checksum: _sealed, ...content } = base;
+    const next = {
+      ...content,
+      ...(over.outside === true ? { transaction: false } : {}),
+      dialects: Object.fromEntries(
+        (["postgresql", "mysql", "sqlite"] as const).map(dialect => [
+          dialect,
+          {
+            up:
+              over.up?.(base.dialects[dialect].up) ?? base.dialects[dialect].up,
+            down: base.dialects[dialect].down,
+          },
+        ])
+      ) as PluginMigration["dialects"],
+    };
+    return { ...next, checksum: migrationChecksum(next) };
+  };
+  // Generated, as `migrate:create --plugin` writes it: its statements are
+  // exactly what its two sides render to. Renamed to a fixed key.
+  const generated = buildPluginMigration({
+    pluginName: "@acme/p",
     schemaVersion: 1,
-    before: [],
-    target: [tableSpec(T, false)],
-    up: ["CREATE TABLE p__things (id text PRIMARY KEY, label text NOT NULL)"],
+    name: "create",
+    now: new Date(0),
+    tablesByDialect: {
+      postgresql: [tableSpec(T, false)],
+      mysql: [tableSpec(T, false)],
+      sqlite: [tableSpec(T, false)],
+    },
+    existing: [],
   });
+  if (generated === null) throw new Error("no module generated");
+  const { checksum: _generated, ...generatedContent } = generated.module;
+  const createContent = { ...generatedContent, name: "001_create" };
+  const create: PluginMigration = {
+    ...createContent,
+    checksum: migrationChecksum(createContent),
+  };
 
   it("records a schema-only module once the database stands at its result", async () => {
     const d = deps({ dialect: "mysql" });
@@ -2308,6 +2368,46 @@ describe("a module whose last attempt did not finish, on MySQL", () => {
     expect(d.executed).toEqual([]);
     expect(d.started).toEqual([KEY]);
     expect(d.owners).toMatchObject([{ tables: [T], adopted: true }]);
+  });
+
+  it("refuses a module whose statements do more than its schema change renders, though the database stands at its result", async () => {
+    // Row-level security is an ALTER TABLE no snapshot records: stopped
+    // after its first statement, the database matches the module's result
+    // while the policy was never enabled.
+    const guarded = resealed(create, {
+      outside: true,
+      up: up => [...up, "ALTER TABLE p__things ENABLE ROW LEVEL SECURITY"],
+    });
+    // The plugin owns its table, as an installed plugin does, so the drop
+    // guard lets the ALTER through and the decision is the attempt's.
+    const d = deps({
+      dialect: "postgresql",
+      owners: new Map([
+        [
+          T,
+          {
+            tableName: T,
+            ownerKind: "plugin" as const,
+            ownerId: "@acme/p",
+            migratedBy: "plugin:@acme/p",
+            ownerVersion: "1.0.0",
+            schemaVersion: 1,
+            state: "active" as const,
+          },
+        ],
+      ]) as never,
+    });
+    d.deps.repo.findFileApplies = stopped(KEY);
+    d.live.set(T, [tableSpec(T, false)]);
+
+    await expect(
+      runPluginMigrations(one(guarded), d.deps)
+    ).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_PARTIALLY_APPLIED",
+      logContext: { source: KEY },
+    });
+    expect(d.executed).toEqual([]);
+    expect(d.started).toEqual([]);
   });
 
   it("refuses a module that also changes rows, though the database stands at its result", async () => {

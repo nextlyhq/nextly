@@ -69,6 +69,7 @@ import {
   mergeContributions,
   narrowToContributions,
 } from "../../migrate-create/app-stream";
+import { upRendersItsSides } from "../../migrate-create/generate-plugin";
 
 import { moduleEffects } from "./module-effects";
 import { assertPluginHistories } from "./plugin-history";
@@ -340,8 +341,9 @@ export interface PluginModulePreview {
  * before it reads the live schema: its checksum (`assertModuleIntact`), its
  * statements (`statementRefusals`, which `assertRunnableStatements` throws
  * from) and an unfinished attempt that may have stopped part-way
- * (`assertNotPartiallyApplied`) — except for a module that changes only the
- * schema, which a run records or refuses by where the live schema stands.
+ * (`assertNotPartiallyApplied`) — except for a module the snapshot proves
+ * (`provenBySnapshot`), which a run records or refuses by where the live
+ * schema stands.
  * What a run decides from the live schema (adoption, drift, the drop guard,
  * that module's attempt) is not previewed.
  */
@@ -449,9 +451,9 @@ async function previewModule(
   // Worded as the refusal to run it again: a pending module the run
   // reaches is run where the database stands at its start, and whichever
   // side the live schema shows, an unfinished attempt is refused. Not for a
-  // module that changes only the schema: a run records it when the database
-  // stands at its result, which only the live schema can tell.
-  if (moduleEffects(migration, context.dialect) === "schema") {
+  // module the snapshot proves (`provenBySnapshot`): a run records it when
+  // the database stands at its result, which only the live schema can tell.
+  if (provenBySnapshot(migration, context.dialect)) {
     return { filename, transaction, recorded: false, refusals };
   }
   await collectRefusal(refusals, () =>
@@ -694,6 +696,28 @@ async function pastModuleRuns(
   throw mixedModuleRefusal(set, migration);
 }
 
+/**
+ * Whether a database standing at a module's result proves the module ran, so
+ * an attempt of it that did not finish may be recorded without running.
+ *
+ * Both must hold: its statements change only the schema (`moduleEffects`),
+ * and they are exactly what its two sides render to (`upRendersItsSides`).
+ * The first alone is not enough: an `ALTER TABLE` reads as schema, yet one
+ * enabling row-level security or setting a table option changes nothing the
+ * snapshot records, and a run stopped before it reaches the result all the
+ * same. A module written or edited by hand fails the second and keeps the
+ * refusal, which is the safe answer.
+ */
+function provenBySnapshot(
+  migration: PluginMigration,
+  dialect: SupportedDialect
+): boolean {
+  return (
+    moduleEffects(migration, dialect) === "schema" &&
+    upRendersItsSides(migration, dialect)
+  );
+}
+
 /** A module as the ledger knows it: its file name and how it runs. */
 function ledgerUnit(
   set: PluginMigrationSet,
@@ -859,7 +883,7 @@ async function furthestMatched(
  * failed attempt (`assertNotPartiallyApplied`) — so such a module later in
  * the run refuses the whole adoption rather than leaving the modules before
  * it recorded. A module that changes only the schema is not refused for its
- * attempt: the database stands past it, and the snapshot is its whole effect.
+ * attempt when the snapshot proves its whole effect (`provenBySnapshot`).
  */
 async function assertAdoptable(
   set: PluginMigrationSet,
@@ -869,7 +893,7 @@ async function assertAdoptable(
   for (const migration of modules) {
     assertModuleIntact(set.pluginName, migration);
     assertTakesNoOwnedTable(set, migration, deps);
-    if (moduleEffects(migration, deps.dialect) === "schema") continue;
+    if (provenBySnapshot(migration, deps.dialect)) continue;
     await assertNotPartiallyApplied(
       ledgerUnit(set, migration),
       deps.dialect,
@@ -1063,11 +1087,9 @@ async function applyModule(
   const reconcile = reconcileFile({
     file: {
       ...ledgerUnit(set, migration),
-      // A module whose statements change only the schema is recorded at its
-      // result even after an attempt that did not finish: the snapshot is
-      // its whole effect. One whose result is its start reads as `data`, so
-      // it is never recorded this way.
-      schemaOnly: moduleEffects(migration, deps.dialect) === "schema",
+      // Recorded at its result even after an attempt that did not finish
+      // when the snapshot is provably its whole effect (`provenBySnapshot`).
+      schemaOnly: provenBySnapshot(migration, deps.dialect),
       // Split by the executor, like an app file; see `moduleSql`.
       sql: moduleSql(migration, deps.dialect, "up"),
       path: `plugin:${set.pluginName}/${migration.name}`,

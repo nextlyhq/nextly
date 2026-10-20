@@ -50,10 +50,12 @@ or it is recorded applied with `nextly migrate:resolve --applied`.
 A plugin migration whose run was stopped after its statements committed — on
 MySQL, which commits schema statements as they run, or one marked to run
 outside a transaction — is now recorded as applied on the next run when its
-statements change only the schema and the database stands at its result.
+statements are exactly the schema change `nextly migrate:create --plugin`
+writes for it and the database stands at its result.
 Before, it was refused until `nextly migrate:resolve --failed-cleanup`. A
-migration that also changes rows, or whose result is its starting point, is
-still refused, with the same advice.
+migration that also changes rows, whose result is its starting point, or
+whose statements were written or edited by hand, is still refused, with the
+same advice.
 
 A drift refusal now names the column, check or foreign key it found different,
 where it used to say only the kind of change.

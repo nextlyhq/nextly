@@ -13,7 +13,7 @@
  *                            — unless its last attempt failed and may have
  *                            stopped part-way: it ran outside a transaction,
  *                            or on MySQL (`assertNotPartiallyApplied`), and
- *                            it is not known to change only the schema
+ *                            the snapshot does not prove its whole effect
  *                            (`schemaOnly`).
  *   - neither              → DRIFT: throw NEXTLY_MIGRATION_DRIFT.
  *
@@ -102,13 +102,13 @@ export interface ReconcileFileArgs {
      */
     transaction?: boolean;
     /**
-     * True for a unit known to change only the schema: a plugin module whose
-     * statements `moduleEffects` reads as schema alone. The snapshot then
-     * shows its whole effect, so a database standing at its target proves it
-     * ran, and it is recorded applied even when its last attempt did not
-     * finish (`assertNotPartiallyApplied` guards against a statement the
-     * snapshot cannot see, and it has none). Absent — an app file, which has
-     * no record of what its statements do — such an attempt is refused.
+     * True for a unit whose whole effect the snapshot shows: a plugin module
+     * whose statements change only the schema and are exactly what its two
+     * sides render to (the runner's `provenBySnapshot`). A database standing
+     * at its target then proves it ran, so it is recorded applied even when
+     * its last attempt did not finish (`assertNotPartiallyApplied` guards
+     * against a statement the snapshot cannot see, and it has none). Absent —
+     * an app file, which has no such proof — such an attempt is refused.
      */
     schemaOnly?: boolean;
   };
