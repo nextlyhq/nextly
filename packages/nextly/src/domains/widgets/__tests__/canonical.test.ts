@@ -105,6 +105,51 @@ describe("the canonical widget set", () => {
     ).toHaveProperty("dismissible", true);
   });
 
+  it("keeps a CONTRIBUTED plugin, description and category the registration did not state", () => {
+    // 🔴 The same rebuild again: dropped here, a registration overriding a plugin's widget moved
+    // it out of that plugin's group in the add panel and lost the words a search finds it by.
+    registerWidget(registered({ id: "dup/one" }));
+    expect(
+      canonicalWidgets([
+        {
+          id: "dup/one",
+          plugin: "@acme/forms",
+          description: "The newest submissions.",
+          category: "Forms",
+        },
+      ])[0]
+    ).toMatchObject({
+      plugin: "@acme/forms",
+      description: "The newest submissions.",
+      category: "Forms",
+    });
+  });
+
+  it("lets a REGISTRATION state its own description and category over a contribution's", () => {
+    // The control: the fallback is a fallback, not a merge that always prefers the plugin.
+    registerWidget(
+      registered({
+        id: "dup/one",
+        description: "Mine.",
+        category: "Ours",
+      })
+    );
+    expect(
+      canonicalWidgets([
+        {
+          id: "dup/one",
+          plugin: "@acme/forms",
+          description: "The newest submissions.",
+          category: "Forms",
+        },
+      ])[0]
+    ).toMatchObject({
+      plugin: "@acme/forms",
+      description: "Mine.",
+      category: "Ours",
+    });
+  });
+
   it("lets a REGISTRATION state dismissible over a contribution's", () => {
     // The control: the fallback must not become a merge that always prefers the
     // contribution. A registration IS the override channel, so where it states

@@ -862,6 +862,32 @@ describe("adding a widget", () => {
     );
   });
 
+  it("forgets the last visit's card: a later visit closed with nothing added goes to Add widget", async () => {
+    // 🔴 The bar opens the panel by setting its state, so a reset kept in the sheet's own open
+    // callback never ran, and the later visit sent focus to the card the earlier one added.
+    mockBranding = branding(["core/a", "core/d"]);
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
+      available: ["core/d"],
+      widgets: { "core/a": facts(), "core/d": facts() },
+    });
+    renderGrid();
+    const user = await beginEditing();
+    await openAddPanel(user);
+    await user.click(screen.getByTestId("add-panel-add-core/d"));
+    await closeAddPanel(user);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(menuButton("Widget core/d"))
+    );
+
+    await openAddPanel(user);
+    await closeAddPanel(user);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Add widget" })
+      )
+    );
+  });
+
   it("closing with nothing added sends focus back to Add widget", async () => {
     renderGrid();
     const user = await beginEditing();

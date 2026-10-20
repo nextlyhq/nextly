@@ -28,6 +28,7 @@ import {
 } from "@nextlyhq/ui";
 import { MAX_PLACEMENTS } from "nextly/config";
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -289,16 +290,24 @@ function Group({
 function usePanelVoice(found: number, query: string) {
   const [spoken, setSpoken] = useState("");
   const count = addPanelCount(found, query);
+  const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Announced once typing pauses, so each keystroke does not interrupt the last.
   useEffect(() => {
     if (query.trim() === "") return undefined;
-    const timer = setTimeout(
+    pending.current = setTimeout(
       () => setSpoken(`${count}.`),
       COUNT_ANNOUNCE_DELAY_MS
     );
-    return () => clearTimeout(timer);
+    return () => clearTimeout(pending.current);
   }, [count, query]);
-  return { count, spoken, say: setSpoken };
+  // A sentence said on purpose (an add, a cleared search) cancels a count still waiting, which
+  // would otherwise land on top of it: after an add the query and its count often stay the
+  // same, so nothing else would clear that timer first.
+  const say = useCallback((sentence: string) => {
+    clearTimeout(pending.current);
+    setSpoken(sentence);
+  }, []);
+  return { count, spoken, say };
 }
 
 export function AddWidgetPanel({
@@ -433,8 +442,8 @@ export function AddWidgetPanel({
               data-testid="add-panel-at-capacity"
             >
               Your dashboard holds the most cards it can ({MAX_PLACEMENTS},
-              counting removed ones). Remove a card first, or put back a removed
-              one.
+              counting removed ones), so no new card can be added. A removed
+              card can still be put back.
             </p>
           ) : null}
         </SheetHeader>

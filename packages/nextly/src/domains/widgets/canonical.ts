@@ -249,6 +249,27 @@ function lifecycleFallback(
   };
 }
 
+/**
+ * The add panel's facts for a colliding id. Its row text falls back as the admin's merge reads
+ * the description: a registration that restates a plugin's widget without words of its own keeps
+ * the plugin's, so a search still finds the row by them. Only the contribution channel names a
+ * plugin, so an override leaves the widget under the plugin its users look for it in.
+ */
+function addPanelFallback(
+  contribution: CanonicalWidget,
+  registration: CanonicalWidget
+): Pick<CanonicalWidget, "description" | "category" | "plugin"> {
+  const description = registration.description ?? contribution.description;
+  const category = registration.category ?? contribution.category;
+  return {
+    ...(description === undefined ? {} : { description }),
+    ...(category === undefined ? {} : { category }),
+    ...(contribution.plugin === undefined
+      ? {}
+      : { plugin: contribution.plugin }),
+  };
+}
+
 function mergeCanonical(
   contribution: CanonicalWidget,
   registration: CanonicalWidget
@@ -274,6 +295,7 @@ function mergeCanonical(
     ...(defaultOrder === undefined ? {} : { defaultOrder }),
     ...(defaultHeight === undefined ? {} : { defaultHeight }),
     ...(dismissible === undefined ? {} : { dismissible }),
+    ...addPanelFallback(contribution, registration),
     ...lifecycleFallback(contribution, registration),
     // Both copies' action gates, because both copies ship: the payload carries
     // each channel's declaration and withholds the actions in each, so every

@@ -10,7 +10,7 @@
  * @module components/features/widgets/edit/DashboardAddPanel
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 import type {
@@ -107,6 +107,11 @@ function CustomizingAddPanel({
 }: DashboardAddPanelProps) {
   // The last card this visit added: where focus goes when the panel closes, in view.
   const lastAdded = useRef<string | null>(null);
+  // Each visit starts with none. Read from `open` itself, since the bar opens the panel
+  // by setting it, not through the sheet's own open callback.
+  useEffect(() => {
+    if (open) lastAdded.current = null;
+  }, [open]);
 
   const rows = useMemo(
     () =>
@@ -163,14 +168,6 @@ function CustomizingAddPanel({
     [editor.placements, restore, highlight, titleOf, isDrawn]
   );
 
-  const onOpen = useCallback(
-    (next: boolean) => {
-      if (next) lastAdded.current = null;
-      onOpenChange(next);
-    },
-    [onOpenChange]
-  );
-
   const onClosed = useCallback(() => {
     const last = lastAdded.current;
     // The last card added, by its menu, which the focus request scrolls into view; with nothing
@@ -183,7 +180,7 @@ function CustomizingAddPanel({
   return (
     <AddWidgetPanel
       open={open}
-      onOpenChange={onOpen}
+      onOpenChange={onOpenChange}
       rows={rows}
       atCapacity={editor.atCapacity}
       onAdd={onAdd}

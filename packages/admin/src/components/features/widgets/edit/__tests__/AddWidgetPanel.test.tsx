@@ -189,9 +189,13 @@ describe("each row's control", () => {
     expect(
       screen.getByRole("button", { name: "Add back Old notes" })
     ).toBeEnabled();
-    expect(screen.getByTestId("add-panel-at-capacity")).toHaveTextContent(
-      `Your dashboard holds the most cards it can (${MAX_PLACEMENTS}, counting removed ones).`
+    const notice = screen.getByTestId("add-panel-at-capacity");
+    expect(notice).toHaveTextContent(
+      `Your dashboard holds the most cards it can (${MAX_PLACEMENTS}, counting removed ones), so no new card can be added. A removed card can still be put back.`
     );
+    // Removing a card frees nothing, since removed cards are counted, so the notice never
+    // sends the reader to do that.
+    expect(notice).not.toHaveTextContent(/Remove a card/);
   });
 });
 
@@ -229,6 +233,25 @@ describe("searching", () => {
 
     act(() => vi.advanceTimersByTime(200));
     expect(live()).toHaveTextContent("1 result for “entr”.");
+  });
+
+  it("never lets a count still waiting on a pause speak over an add made before it", () => {
+    // 🔴 The add keeps the query and its count, so nothing else clears the waiting count, and
+    // it landed half a second later on top of "Added".
+    vi.useFakeTimers();
+    renderPanel();
+    fireEvent.change(
+      screen.getByRole("searchbox", { name: "Search widgets" }),
+      {
+        target: { value: "entr" },
+      }
+    );
+    act(() => vi.advanceTimersByTime(200));
+    fireEvent.click(screen.getByRole("button", { name: "Add Entries" }));
+    expect(live()).toHaveTextContent("Added Entries at position 4 of 4.");
+
+    act(() => vi.advanceTimersByTime(1000));
+    expect(live()).toHaveTextContent("Added Entries at position 4 of 4.");
   });
 
   it("says when nothing matches, and Clear search brings every widget back", async () => {
