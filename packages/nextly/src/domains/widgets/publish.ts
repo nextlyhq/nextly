@@ -64,7 +64,10 @@ export function publishableWidgets(): WidgetDefinition[] {
 export interface PublishedContentSource {
   collection: string;
   label: string;
-  fields: Pick<WidgetSourceField, "name" | "label" | "type" | "choices">[];
+  fields: Pick<
+    WidgetSourceField,
+    "name" | "label" | "type" | "choices" | "groupable"
+  >[];
 }
 
 /**
@@ -79,7 +82,9 @@ export interface PublishedContentSource {
  * read for it, and offering it would be a second, hand-made check.
  *
  * Only fields the source does not mark `offered: false`: a field a read rule
- * could refuse, or a read hook transforms, is never offered as a choice.
+ * could refuse, or a read hook transforms, is never offered as a choice. A
+ * field offered to filter and sort that the read will not group by carries
+ * `groupable: false`, so a Group by setting leaves it out.
  */
 export function publishableContentSources(
   visible: readonly { generated?: boolean; collection?: string }[]
@@ -99,11 +104,13 @@ export function publishableContentSources(
       label: source.label,
       fields: source.fields
         .filter(field => field.offered !== false)
-        .map(({ name, label, type, choices }) => ({
+        .map(({ name, label, type, choices, groupable }) => ({
           name,
           type,
           ...(label === undefined ? {} : { label }),
           ...(choices === undefined ? {} : { choices }),
+          // Carried so a Group by setting offers only keys the read accepts.
+          ...(groupable === undefined ? {} : { groupable }),
         })),
     });
   }

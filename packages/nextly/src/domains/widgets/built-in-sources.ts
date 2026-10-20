@@ -380,7 +380,9 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   const offered = (field: WidgetSourceField): boolean =>
     !seen.has(field.name) ||
     isGroupableFieldName("collection", collection.slug, field.name);
-  const canBucket = (field: WidgetSourceField): boolean =>
+  // Whether the read accepts the field as a group key, which is also what
+  // bucketing a date asks: a date is bucketable exactly when it is groupable.
+  const canGroup = (field: WidgetSourceField): boolean =>
     offered(field) &&
     (!seen.has(field.name) ||
       isGroupKeyDeclaration(declarationOf.get(field.name), field.name));
@@ -390,7 +392,8 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
   const marked = fields.map(field => {
     const refusals = {
       ...(offered(field) ? {} : { offered: false as const }),
-      ...(field.type === "date" && !canBucket(field)
+      ...(canGroup(field) ? {} : { groupable: false as const }),
+      ...(field.type === "date" && !canGroup(field)
         ? { bucketable: false as const }
         : {}),
     };

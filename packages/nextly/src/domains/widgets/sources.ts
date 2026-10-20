@@ -81,6 +81,13 @@ export interface WidgetSourceField {
    */
   offered?: false;
   /**
+   * `false` when a card may not group by this field: it is not offered, or its
+   * declaration rules it out as a group key (a localized field, a structure).
+   * The same answer `bucketable` gives a date, for every field, so a Group by
+   * setting offers only keys the read will accept. Only the refusal is stated.
+   */
+  groupable?: false;
+  /**
    * What a human calls this field, when the source knows.
    *
    * A widget that draws a TABLE needs a column heading, and the only honest

@@ -37,6 +37,9 @@ beforeEach(() => {
         },
         { name: "secret", type: "text" },
         { name: "shout", type: "text" },
+        // Readable, so offered to filter and sort, but its values live per
+        // language, so the read will not group by it.
+        { name: "headline", type: "text", localized: true },
       ],
       timestamps: false,
     },
@@ -66,6 +69,14 @@ describe("the content sources a card's settings may offer", () => {
       label: "State",
       choices: [{ value: "open", label: "Open" }],
     });
+  });
+
+  it("marks a field the read will not group by, and only that one", () => {
+    const [posts] = offeredFor("posts");
+    const byName = new Map(posts?.fields.map(field => [field.name, field]));
+    expect(byName.get("headline")).toMatchObject({ groupable: false });
+    // The control: a plain field carries no mark, so it stays groupable.
+    expect(byName.get("title")).not.toHaveProperty("groupable");
   });
 
   it("never offers a field a read rule could refuse", () => {

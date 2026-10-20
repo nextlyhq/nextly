@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-A dashboard card's settings sheet now draws Collection, Filter, Sort and Group by settings, offering only the collections and fields the reader may read. A stored choice the reader can no longer make opens at its default, with a line saying so. "Reset to defaults" keeps the collection a card was placed for. A widget may mark one setting as quick, and registered widgets may declare the four content settings. New experimental type exports on `nextly/config`: `AnyWidgetSetting`, `ContentSetting` and `PublishedContentSource`.
+A dashboard card's settings sheet now draws Collection, Filter, Sort and Group by settings, offering only the collections and fields the reader may read. A stored choice the reader can no longer make opens at its default, with a line saying so. "Reset to defaults" leaves a card's Collection as it is. A widget may mark one setting as quick. New experimental type exports on `nextly/config`: `AnyWidgetSetting`, `ContentSetting` and `PublishedContentSource`.
