@@ -13,7 +13,11 @@ import {
   resetToDefaults,
   toStoredConfig,
 } from "../WidgetSettingsSheet";
-import type { AnyWidgetSetting, WidgetSetting } from "nextly/config";
+import type {
+  AnyWidgetSetting,
+  PublishedContentSource,
+  WidgetSetting,
+} from "nextly/config";
 
 const limit: WidgetSetting = { name: "limit", type: "number", defaultValue: 5 };
 const title: WidgetSetting = { name: "title", type: "text" };
@@ -199,7 +203,7 @@ describe("what Reset to defaults leaves in the form", () => {
 
   it("leaves a dependent with no choice where its default names a field the collection lacks", () => {
     // Pages keeps no timestamps, so the sort's default names nothing there.
-    const sources = [
+    const sources: PublishedContentSource[] = [
       {
         collection: "posts",
         label: "Posts",
