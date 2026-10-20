@@ -78,6 +78,36 @@ vi.mock("../pre-resolution/executor", async importOriginal => {
   };
 });
 
+/**
+ * Runs once the Single's column has been counted `afterCount.times` times: the classifier counts it
+ * first and the pre-resolution pass again, so a write here on the second count is one neither saw.
+ */
+let afterCount: { times: number; run: () => Promise<void> } | undefined;
+vi.mock("../classifier/count-helpers", async importOriginal => {
+  const original =
+    await importOriginal<typeof import("../classifier/count-helpers")>();
+  let seen = 0;
+  return {
+    ...original,
+    countLongerThan: async (
+      ...args: Parameters<typeof original.countLongerThan>
+    ) => {
+      const n = await original.countLongerThan(...args);
+      if (
+        afterCount &&
+        args[2] === SINGLE_TABLE &&
+        ++seen === afterCount.times
+      ) {
+        const hook = afterCount;
+        afterCount = undefined;
+        seen = 0;
+        await hook.run();
+      }
+      return n;
+    },
+  };
+});
+
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? "";
 const describeMysql = describe.skipIf(!MYSQL_URL);
 
@@ -351,14 +381,10 @@ describeMysql("legacy MySQL TEXT columns on Singles and field groups", () => {
     });
   });
 
-  it("db:sync refuses, rather than cuts, a long value written after the count, on a server that is not in strict mode", async () => {
-    await h.dispose();
-    h = await makeHarness(2);
-    await legacyTables(h, 255);
-
-    // Both pooled connections without strict mode, standing for a server configured that way: two
-    // transactions held open at once take one connection each, and the adapter puts back only a
-    // setting it changed itself, so each keeps the mode set here.
+  /** Both pooled connections without strict mode, standing for a server configured that way. */
+  async function laxPool(): Promise<void> {
+    // Two transactions held open at once take one connection each, and the adapter puts back only
+    // a setting it changed itself, so each keeps the mode set here.
     const drizzleAdapter = h.adapter as unknown as DrizzleAdapter;
     let release!: () => void;
     const held = new Promise<void>(resolve => (release = resolve));
@@ -370,15 +396,37 @@ describeMysql("legacy MySQL TEXT columns on Singles and field groups", () => {
         await held;
       });
     await Promise.all([laxen(), laxen()]);
+  }
 
-    beforePreResolution = async () => {
-      await h.root.query(`UPDATE \`${SINGLE_TABLE}\` SET title = ?`, [
-        "y".repeat(300),
-      ]);
-    };
+  const writeLongTitle = async () => {
+    await h.root.query(`UPDATE \`${SINGLE_TABLE}\` SET title = ?`, [
+      "y".repeat(300),
+    ]);
+  };
+
+  it("db:sync refuses a long value written after the classifier's count, before any DDL, naming it", async () => {
+    await h.dispose();
+    h = await makeHarness(2);
+    await legacyTables(h, 255);
+    await laxPool();
+    beforePreResolution = writeLongTitle;
+
+    await expect(dbSync(h)).rejects.toThrow(
+      /cannot become varchar\(255\): 1 row\(s\) hold a value longer than 255/
+    );
+
+    expect((await readBack(h)).title).toEqual(["text", 300]);
+  });
+
+  it("db:sync refuses, rather than cuts, a long value written after its last count, on a server that is not in strict mode", async () => {
+    await h.dispose();
+    h = await makeHarness(2);
+    await legacyTables(h, 255);
+    await laxPool();
+    afterCount = { times: 2, run: writeLongTitle };
 
     // The driver's error names the statement it refused; MySQL's reason, "Data too long", is its
-    // cause. What separates this from the unguarded apply is that the apply fails at all.
+    // cause. What separates this from an unguarded apply is that the apply fails at all.
     await expect(dbSync(h)).rejects.toThrow(
       /MODIFY COLUMN `title` varchar\(255\)/
     );
