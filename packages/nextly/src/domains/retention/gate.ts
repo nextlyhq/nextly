@@ -43,6 +43,10 @@ export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
 export const ONE_TIME_SECRETS_RETENTION_GATE_KEY =
   "secrets.retention.lastPassAt";
 
+/** Recorded preview links long past their end; its own key, as each pass has. */
+export const PREVIEW_LINKS_RETENTION_GATE_KEY =
+  "preview-links.retention.lastPassAt";
+
 /**
  * The audit trails are gated twice, because two triggers with different jobs
  * offer them.
@@ -257,3 +261,11 @@ export async function claimRetentionPass(
  */
 export const ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY =
   "secrets.retention.lastDrainPassAt";
+
+/**
+ * The scheduled drain's own marker for the preview-links sweep, for the reason
+ * the secrets sweep has one: an install that goes quiet makes no write that
+ * offers the pass, and the drain is the trigger that keeps running.
+ */
+export const PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY =
+  "preview-links.retention.lastDrainPassAt";

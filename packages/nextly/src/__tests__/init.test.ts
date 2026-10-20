@@ -93,6 +93,33 @@ describe("init - Nextly API", () => {
       ).toEqual([]);
     });
 
+    it("carries every namespace the lazy Direct API offers", async () => {
+      // The same derivation for namespaces, which are objects rather than
+      // functions and so pass the method check above unseen: a namespace
+      // added to the Direct API and not forwarded is `undefined` through
+      // `getNextly({ config })` while the lazy object answers.
+      const instance = await getNextly(testOptions());
+      const { nextly: lazy } = await import("../direct-api/nextly");
+
+      const offered = Object.entries(lazy as Record<string, unknown>)
+        .filter(([, value]) => typeof value === "object" && value !== null)
+        .map(([name]) => name);
+
+      expect(offered).toContain("releases");
+
+      const missing = offered
+        // apiKeys: not forwarded to the public instance; outside this change.
+        .filter(name => name !== "apiKeys")
+        .filter(name => {
+          const value = (instance as unknown as Record<string, unknown>)[name];
+          return typeof value !== "object" || value === null;
+        });
+      expect(
+        missing,
+        "namespaces the lazy API offers that getNextly() lacks"
+      ).toEqual([]);
+    });
+
     it("should return the same instance on subsequent calls (singleton)", async () => {
       const nextly1 = await getNextly(testOptions());
       const nextly2 = await getNextly(testOptions());
@@ -203,6 +230,7 @@ describe("init - Nextly API", () => {
       "bulkDelete",
       "changePassword",
       "collections",
+      "contentEvents",
       "count",
       "create",
       "delete",

@@ -23,16 +23,16 @@ describe("PreviewActions", () => {
     render(<PreviewActions isPreviewAvailable onPreview={vi.fn()} />);
 
     expect(screen.getByRole("button", { name: "Preview" })).toBeInTheDocument();
-    expect(screen.queryByText("Copy shareable link")).not.toBeInTheDocument();
+    expect(screen.queryByText("Share preview link…")).not.toBeInTheDocument();
   });
 
   it("is a plain button when only the link is available", () => {
     // A collection with no configured preview URL can still have its drafts
     // shared, so the link is not gated behind preview being set up.
-    render(<PreviewActions isLinkAvailable onCopyLink={vi.fn()} />);
+    render(<PreviewActions isLinkAvailable onShareLink={vi.fn()} />);
 
     expect(
-      screen.getByRole("button", { name: "Copy shareable link" })
+      screen.getByRole("button", { name: "Share preview link…" })
     ).toBeInTheDocument();
   });
 
@@ -43,7 +43,7 @@ describe("PreviewActions", () => {
         isPreviewAvailable
         onPreview={vi.fn()}
         isLinkAvailable
-        onCopyLink={vi.fn()}
+        onShareLink={vi.fn()}
       />
     );
 
@@ -64,13 +64,13 @@ describe("PreviewActions", () => {
     // nothing inside the current one, which leaves an author able to mint a
     // link or open a preview racing the write already in flight.
     const onPreview = vi.fn();
-    const onCopyLink = vi.fn();
+    const onShareLink = vi.fn();
     const user = userEvent.setup();
     const props = {
       isPreviewAvailable: true,
       onPreview,
       isLinkAvailable: true,
-      onCopyLink,
+      onShareLink,
     };
 
     const { rerender } = render(<PreviewActions {...props} />);
@@ -81,25 +81,29 @@ describe("PreviewActions", () => {
 
     rerender(<PreviewActions {...props} disabled />);
 
-    for (const name of ["Preview", "Copy shareable link"]) {
+    for (const name of ["Preview", "Share preview link…"]) {
       const item = screen.getByRole("menuitem", { name });
       expect(item, name).toHaveAttribute("aria-disabled", "true");
       await user.click(item);
     }
 
     expect(onPreview).not.toHaveBeenCalled();
-    expect(onCopyLink).not.toHaveBeenCalled();
+    expect(onShareLink).not.toHaveBeenCalled();
   });
 
   it("does not offer a preview action without a handler for it", () => {
     // `isPreviewAvailable` and a missing handler is a caller bug; showing a
     // control that does nothing is the worse of the two ways to report it.
     render(
-      <PreviewActions isPreviewAvailable isLinkAvailable onCopyLink={vi.fn()} />
+      <PreviewActions
+        isPreviewAvailable
+        isLinkAvailable
+        onShareLink={vi.fn()}
+      />
     );
 
     expect(
-      screen.getByRole("button", { name: "Copy shareable link" })
+      screen.getByRole("button", { name: "Share preview link…" })
     ).toBeInTheDocument();
   });
 });
@@ -117,7 +121,7 @@ describe("where a pane exists, it leads and the rest follow", () => {
     isPreviewAvailable: true,
     onPreview: vi.fn(),
     isLinkAvailable: true,
-    onCopyLink: vi.fn(),
+    onShareLink: vi.fn(),
   };
 
   it("draws ONE unit: the toggle, and a chevron for the rest", () => {
@@ -148,7 +152,7 @@ describe("where a pane exists, it leads and the rest follow", () => {
     expect(open).toHaveAccessibleName("Hide preview");
   });
 
-  it("puts opening and copying behind the chevron, named apart", async () => {
+  it("puts opening and sharing behind the chevron, named apart", async () => {
     const user = userEvent.setup();
     render(<PreviewActions {...withPane} />);
 
@@ -163,7 +167,7 @@ describe("where a pane exists, it leads and the rest follow", () => {
       await screen.findByRole("menuitem", { name: "Open in new tab" })
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("menuitem", { name: "Copy shareable link" })
+      screen.getByRole("menuitem", { name: "Share preview link…" })
     ).toBeInTheDocument();
   });
 
@@ -192,7 +196,7 @@ describe("the control keeps saying who it is, and what it is doing", () => {
         previewLabel="View page"
         onTogglePreviewPane={vi.fn()}
         isLinkAvailable
-        onCopyLink={vi.fn()}
+        onShareLink={vi.fn()}
       />
     );
 
@@ -210,7 +214,7 @@ describe("the control keeps saying who it is, and what it is doing", () => {
         isPreviewAvailable
         onPreview={vi.fn()}
         isLinkAvailable
-        onCopyLink={vi.fn()}
+        onShareLink={vi.fn()}
       />
     );
 
@@ -219,36 +223,30 @@ describe("the control keeps saying who it is, and what it is doing", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows copying on the control that STAYS after the menu closes", () => {
+  it("opens the share popover from its row, and mints nothing itself", async () => {
     /*
-     * Choosing "Copy shareable link" closes the menu, so the item that carried
-     * the spinner is gone the instant it would start spinning. Without this a
-     * slow mint looks like nothing happened.
+     * The row opens the popover the surface owns, where the lifetime is chosen
+     * and the link is made; the progress of making it is shown there, on the
+     * button that makes it. Its spinner is covered with the popover.
      */
-    const { container } = render(
+    const onShareLink = vi.fn();
+    const user = userEvent.setup();
+    render(
       <PreviewActions
         onTogglePreviewPane={vi.fn()}
         isLinkAvailable
-        onCopyLink={vi.fn()}
-        isCopyingLink
+        onShareLink={onShareLink}
       />
     );
 
-    expect(container.querySelector(".animate-spin")).not.toBeNull();
-  });
-
-  it("shows nothing spinning when no link is being minted", () => {
-    // The control: a spinner rendered unconditionally would satisfy the case
-    // above while telling every author something is always in flight.
-    const { container } = render(
-      <PreviewActions
-        onTogglePreviewPane={vi.fn()}
-        isLinkAvailable
-        onCopyLink={vi.fn()}
-      />
+    await user.click(
+      screen.getByRole("button", { name: "Show preview options" })
+    );
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Share preview link…" })
     );
 
-    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(onShareLink).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -261,13 +259,13 @@ describe("previewChoices, folded into the document's menu", () => {
       onTogglePreviewPane: () => undefined,
       previewPaneOpen: false,
       isLinkAvailable: true,
-      onCopyLink: () => undefined,
+      onShareLink: () => undefined,
     });
     const labels = choices.map(choice => choice.label);
     expect(labels).toEqual([
       "Show preview pane",
       "View page",
-      "Copy shareable link",
+      "Share preview link…",
     ]);
     expect(new Set(labels).size).toBe(labels.length);
   });

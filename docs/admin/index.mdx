@@ -7,7 +7,7 @@ Nextly ships with a full-featured admin panel for managing your collections, sin
 
 ## Accessing the admin panel
 
-The first time you visit `/admin` and the database has no users, Nextly redirects you to a setup wizard at `/admin/setup` to create the initial Super Admin account. After that, sign in at `/admin/login`.
+The first time you visit `/admin` and nobody holds the Super Admin role yet, Nextly redirects you to a setup wizard at `/admin/setup` to create that account. In production the wizard also asks for a one-time setup token, or you can create the account with `nextly users:create-admin` instead: see [The first administrator](/docs/guides/authentication#the-first-administrator). After that, sign in at `/admin/login`.
 
 ```
 https://your-app.com/admin

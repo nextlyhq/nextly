@@ -28,6 +28,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { postgresReferenceListExpression } from "../reference-list-conversion";
 
 interface AsyncExecuteHandle {
   execute(query: unknown): Promise<unknown>;
@@ -123,6 +124,39 @@ export async function columnHoldsOnlyJson(
     // missing table is 42P01, a lock timeout 55P03, a dropped connection class 08. Reporting those
     // as bad data would block a legitimate migration and send the operator to look at their rows
     // for a problem that is in their permissions or their cluster.
+    if (isDataException(error)) return false;
+    throw error;
+  }
+}
+
+/**
+ * Whether every stored value in a column reads as a list of references, so a reference-list
+ * conversion of it cannot fail part-way.
+ *
+ * Asked the same way as `columnHoldsOnlyJson`, and for the same reason: on PostgreSQL the reading
+ * itself is the test. The conversion's own expression is forced over every non-null row inside an
+ * aggregate, with no early exit, and a data exception (SQLSTATE class 22) from it is the answer: a
+ * value starting with `{` that is not a well-formed array literal, or one starting with `[` that is
+ * not valid JSON. Any other value reads as a single id and cannot fail.
+ *
+ * MySQL and SQLite always answer yes. MySQL's conversion wraps any value that is not a JSON list in
+ * one, so no stored text can refuse it; SQLite never converts this column at all.
+ */
+export async function columnReadsAsReferenceList(
+  txOrDb: unknown,
+  tableName: string,
+  columnName: string,
+  dialect: SupportedDialect
+): Promise<boolean> {
+  if (dialect !== "postgresql") return true;
+
+  const handle = txOrDb as AsyncExecuteHandle;
+  try {
+    await handle.execute(
+      sql`SELECT count(${sql.raw(postgresReferenceListExpression(columnName))}) FROM ${sql.identifier(tableName)} WHERE ${sql.identifier(columnName)} IS NOT NULL`
+    );
+    return true;
+  } catch (error) {
     if (isDataException(error)) return false;
     throw error;
   }

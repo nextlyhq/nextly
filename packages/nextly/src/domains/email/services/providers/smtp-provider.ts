@@ -130,6 +130,17 @@ function addressOf(entry: unknown): string {
   return "";
 }
 
+/**
+ * The most `to` addresses sent in one SMTP message.
+ *
+ * SMTP itself sets no maximum, and servers set their own. RFC 5321 section
+ * 4.5.3.1.8 requires every server to accept at least 100 recipients for one
+ * message, so 100 is the number any server takes. Declared so a longer list is
+ * refused before the session with the limit named, rather than refused part
+ * way through by whichever server is configured.
+ */
+export const SMTP_MAX_TO = 100;
+
 export function createSmtpProvider(
   config: SmtpProviderConfig
 ): EmailProviderAdapter {
@@ -143,6 +154,7 @@ export function createSmtpProvider(
   assertTransportIsSafe(config);
 
   return {
+    maxToPerMessage: SMTP_MAX_TO,
     async send(options) {
       // Loaded per send rather than held at module scope: this is the optional
       // peer, and a module-level handle would have to resolve at import time,
@@ -155,7 +167,8 @@ export function createSmtpProvider(
       try {
         const info = await transport.sendMail({
           from: options.from,
-          to: options.to,
+          // Every `to` address when there is more than one, else the one.
+          to: options.toList ?? options.to,
           subject: options.subject,
           html: options.html,
           text: options.text,

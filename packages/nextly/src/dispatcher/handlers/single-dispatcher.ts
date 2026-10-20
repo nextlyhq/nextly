@@ -128,6 +128,7 @@ import {
   restoreVersionForDocument,
   markVersionSeenForDocument,
   setVersionLabelForDocument,
+  respondSubjectEvents,
   respondVersionPage,
   userFromParams,
   readComparisonParams,
@@ -235,6 +236,15 @@ export const SINGLE_VERSION_METHODS: Record<
   string,
   MethodHandler<SinglesServices>
 > = {
+  // The Single's content events, behind the same read gate as its history,
+  // for the live document only: its id comes from the live row.
+  listSingleEvents: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      const id = await requireLiveSingleId(slug);
+      return respondSubjectEvents({ kind: "single", slug, id }, p);
+    },
+  },
   listSingleVersions: {
     execute: async (_svc, p) => {
       const slug = String(p.slug ?? "");

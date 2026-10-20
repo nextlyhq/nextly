@@ -35,6 +35,7 @@ import { dynamicSinglesSqlite } from "@nextly/schemas/dynamic-singles/sqlite";
 import type { SingleAdminOptions } from "../../../config";
 import { isReservedResourceSlug } from "../../../schemas/_zod/rbac";
 import { simplePluralize } from "../../../shared/lib/pluralization";
+import { consoleLogger } from "../../../shared/types";
 
 import {
   loadSnapshots,
@@ -395,7 +396,7 @@ export async function registerFromMigrations(
   collectionsRegistered: number;
   singlesRegistered: number;
 }> {
-  const { migrationsDir, adapter, dialect, logger = console } = options;
+  const { migrationsDir, adapter, dialect, logger = consoleLogger } = options;
 
   // Cast adapter to DrizzleAdapter since the options type uses unknown
   const typedAdapter = adapter as DrizzleAdapter;

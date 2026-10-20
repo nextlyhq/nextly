@@ -9,17 +9,17 @@ import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { sessionCookies } from "../cookies/session-cookies";
 import { validatePasswordStrength } from "../credentials/password-strength";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
-import { validateCsrf } from "../csrf/validate";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { SessionRoles } from "../session/session-roles";
+import type { TokenVerdict } from "../setup-token/setup-token";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
 
 import {
   buildAuthErrorResponse,
+  boundedBody,
   buildCookieHeaders,
-  csrfFailure,
+  csrfRefusal,
   jsonResponse,
 } from "./handler-utils";
 import { storeNewRefreshToken } from "./issue-session";
@@ -53,6 +53,17 @@ export interface SetupHandlerDeps {
    * install has an administrator, and setup must still create one.
    */
   hasAdministrator: () => Promise<boolean>;
+  /** The production setup token, and the claim one setup holds at a time. */
+  setupToken: {
+    /** Whether setup needs a token: in production, until an administrator exists. */
+    required: boolean;
+    verify: (presented: unknown) => Promise<TokenVerdict>;
+    /** The same judgement against the stored record read now, uncached. */
+    confirm: (presented: unknown) => Promise<TokenVerdict>;
+    /** Discard the stored token once the administrator exists. */
+    spend: () => Promise<void>;
+    claim: () => Promise<{ release: () => Promise<void> } | null>;
+  };
   /**
    * Create the administrator's account, or answer null when another setup
    * created the administrator first: of setups racing on an empty install,
@@ -92,7 +103,7 @@ function setupCompleteResponse(): Response {
 
 export async function handleSetupStatus(
   request: Request,
-  deps: Pick<SetupHandlerDeps, "hasAdministrator">
+  deps: Pick<SetupHandlerDeps, "hasAdministrator" | "setupToken">
 ): Promise<Response> {
   try {
     const isSetup = await deps.hasAdministrator();
@@ -102,7 +113,13 @@ export async function handleSetupStatus(
     // drive the bootstrap-form redirect guard without reinterpreting the
     // same boolean. The pair also satisfies the section 5.1 "no Boolean-only
     // respondData payload" rule.
-    return respondData({ isSetup, requiresInitialUser: !isSetup });
+    // `requiresSetupToken` tells the admin's setup form to ask for the token,
+    // and where it is found; it says nothing about the token itself.
+    return respondData({
+      isSetup,
+      requiresInitialUser: !isSetup,
+      requiresSetupToken: !isSetup && deps.setupToken.required,
+    });
   } catch (err) {
     // Surface a 503 rather than synthesising a default `isSetup` -- the
     // bootstrap-gate must never claim "no users exist" on incomplete data.
@@ -121,10 +138,251 @@ export async function handleSetupStatus(
   }
 }
 
+/** The refusal for a setup token that does not open setup now. */
+function tokenRequiredResponse(request: Request): Response {
+  return setupTokenError(
+    request,
+    "A valid setup token is required. Find it in the server's output, or set NEXTLY_SETUP_TOKEN."
+  );
+}
+
+/** SETUP_TOKEN_REQUIRED, through the auth routes' error envelope. */
+function setupTokenError(request: Request, publicMessage: string): Response {
+  return buildAuthErrorResponse(
+    new NextlyError({ code: "SETUP_TOKEN_REQUIRED", publicMessage }),
+    readOrGenerateRequestId(request)
+  );
+}
+
+/**
+ * The refusal a token's verdict calls for, or null when setup may go on: a
+ * valid token, or an install whose setup needs none. Wrong, missing and
+ * expired tokens are answered alike.
+ */
+function setupTokenRefusal(
+  verdict: SetupVerdict,
+  request: Request
+): Response | null {
+  if (verdict === "closed") {
+    return setupTokenError(
+      request,
+      "Setup is closed: the setup token configured for this install is too weak. See the server's output."
+    );
+  }
+  return verdict === "invalid" ? tokenRequiredResponse(request) : null;
+}
+
+/** A token's verdict, or that this install's setup needs none. */
+type SetupVerdict = TokenVerdict | "not-required";
+
+/**
+ * The most of a setup body read before the request is counted. A setup body
+ * is a few short fields; one larger than this is refused unread, so a caller
+ * whose budget is spent cannot make setup buffer and parse large bodies.
+ */
+const SETUP_BODY_BYTES = 32 * 1024;
+
+/**
+ * How many setup bodies this process reads at once, and how long one may take
+ * to arrive. Setup reads a body before any limit can apply (its token decides
+ * which limit), so the reads themselves are bounded: past the ceiling a
+ * request is refused unread, and a body still arriving at the deadline is
+ * cancelled. A legitimate setup is one small request.
+ */
+export const SETUP_READS_AT_ONCE = 16;
+export const SETUP_BODY_DEADLINE_MS = 10_000;
+
+/** Setup bodies being read right now, in this process. */
+let setupBodiesBeingRead = 0;
+
+/**
+ * The request as the limiter reads it: carrying the bytes setup already read,
+ * or none when that read was cut short. The limiter then never reads from the
+ * client itself, so the deadline on setup's own read bounds the whole request.
+ */
+function withBodyRead(request: Request, bytes: Uint8Array | null): Request {
+  const headers = new Headers(request.headers);
+  // The declared length was the client's; this body is what was read.
+  headers.delete("content-length");
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body: bytes ? new Uint8Array(bytes) : "",
+  });
+}
+
+/**
+ * The setup request's JSON body (an empty one when it is not an object), and
+ * the error a body that is too large or not JSON fails with once it has been
+ * counted.
+ */
+async function parseSetupBody(request: Request): Promise<{
+  body: Awaited<ReturnType<Request["json"]>>;
+  malformed?: Error;
+  /** The bytes read, or `null` when the read was cut short. */
+  bytes: Uint8Array | null;
+}> {
+  // A body still arriving at the deadline is cancelled, so a client sending
+  // it slowly gives its reading place back rather than holding it.
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(), SETUP_BODY_DEADLINE_MS);
+  try {
+    const bytes = await boundedBody(request, SETUP_BODY_BYTES, deadline.signal);
+    if (bytes === null) {
+      return {
+        bytes: null,
+        body: {},
+        malformed: deadline.signal.aborted
+          ? NextlyError.validation({
+              errors: [
+                {
+                  path: "",
+                  code: "BODY_TIMEOUT",
+                  message: "The request body took too long to arrive.",
+                },
+              ],
+            })
+          : new NextlyError({
+              code: "PAYLOAD_TOO_LARGE",
+              publicMessage: "The request is too large.",
+            }),
+      };
+    }
+    const body: Awaited<ReturnType<Request["json"]>> = JSON.parse(
+      new TextDecoder().decode(bytes)
+    );
+    return {
+      bytes,
+      body: body !== null && typeof body === "object" ? body : {},
+    };
+  } catch (error) {
+    return {
+      bytes: null,
+      body: {},
+      malformed:
+        error instanceof Error
+          ? error
+          : NextlyError.validation({
+              errors: [
+                { path: "", code: "INVALID_JSON", message: "Invalid JSON" },
+              ],
+            }),
+    };
+  } finally {
+    clearTimeout(timer);
+    // Setup reads a clone, and cancelling that clone's reader ends only its
+    // own branch: the client's upload goes on until the request's own body is
+    // cancelled too. Nothing reads that body after this read, whatever its
+    // outcome, so it is cancelled here, and a body cut short at the size
+    // limit or the deadline stops arriving rather than outliving the answer.
+    // Not awaited: a cloned body's cancel settles only once both branches
+    // have ended, which the client decides.
+    request.body?.cancel().catch(() => undefined);
+  }
+}
+
+/**
+ * The request's body and its token's verdict, read before setup does any
+ * work. Where setup needs a token, a request without a valid one is counted
+ * against the auth limit here, so every refusal after it (setup already
+ * complete, a CSRF failure, a weak or wrong token, a bad body) has spent the
+ * budget before the administrator is looked up, while a valid token goes on
+ * whatever the budget holds. A body that is not JSON is counted, then fails
+ * as it always did.
+ */
+async function readSetupRequest(
+  request: Request,
+  setupToken: SetupHandlerDeps["setupToken"],
+  limit: (request: Request) => Promise<Response | null>
+): Promise<
+  | { body: Awaited<ReturnType<Request["json"]>>; verdict: SetupVerdict }
+  | Response
+> {
+  if (setupBodiesBeingRead >= SETUP_READS_AT_ONCE) {
+    return buildAuthErrorResponse(
+      NextlyError.rateLimited({ retryAfterSeconds: 1 }),
+      readOrGenerateRequestId(request)
+    );
+  }
+  setupBodiesBeingRead++;
+  let parsed: Awaited<ReturnType<typeof parseSetupBody>>;
+  try {
+    parsed = await parseSetupBody(request);
+  } finally {
+    setupBodiesBeingRead--;
+  }
+  const { body, malformed, bytes } = parsed;
+  const verdict: SetupVerdict = setupToken.required
+    ? await setupToken.verify(body.setupToken)
+    : "not-required";
+  // A setup that needs no token (outside production) has no token to judge,
+  // so it is not held to the limit: it behaves as it always has.
+  if (verdict === "invalid" || verdict === "closed") {
+    const limited = await limit(withBodyRead(request, bytes));
+    if (limited) return limited;
+  }
+  if (malformed !== undefined) throw malformed;
+  return { body, verdict };
+}
+
+/**
+ * The refusal for a setup body missing a field or carrying a weak password,
+ * or null when the administrator can be created from it.
+ */
+function setupInputRefusal(
+  body: { email?: string; name?: string; password?: string },
+  request: Request
+): Response | null {
+  const { email, name, password } = body;
+  if (!email || !name || !password) {
+    return jsonResponse(400, {
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Email, name, and password are required",
+      },
+    });
+  }
+
+  const strengthResult = validatePasswordStrength(password);
+  if (strengthResult.ok) return null;
+  // The rules a password failed are the only part of this a person can act
+  // on, so they travel on `data.errors` -- the key the canonical envelope
+  // defines and the only one the admin reads. Reasons put on any other key,
+  // `details` included, reach the client and are dropped there in silence.
+  // The mapping is the one `registerUser` applies to this same validator
+  // output, so both paths describe a weak password identically.
+  return buildAuthErrorResponse(
+    NextlyError.validation({
+      errors: strengthResult.errors.map(message => ({
+        path: "password",
+        code: "WEAK_PASSWORD",
+        message,
+      })),
+    }),
+    readOrGenerateRequestId(request)
+  );
+}
+
 export async function handleSetup(
   request: Request,
-  deps: SetupHandlerDeps
+  deps: SetupHandlerDeps,
+  hooks: {
+    /**
+     * Count a setup request against the auth rate limit, answering 429 once
+     * it is spent. Called for every request without a valid setup token,
+     * before setup does any work: a valid token opens setup whatever the
+     * limit holds.
+     */
+    limitWithoutValidToken?: (request: Request) => Promise<Response | null>;
+  } = {}
 ): Promise<Response> {
+  const read = await readSetupRequest(
+    request,
+    deps.setupToken,
+    limited => hooks.limitWithoutValidToken?.(limited) ?? Promise.resolve(null)
+  );
+  if (read instanceof Response) return read;
+  const { body, verdict } = read;
   // Fail closed: an unknown answer must not be treated as "no administrator",
   // otherwise a transient DB failure could allow a second super-admin to be
   // created while the real one is invisible to the query.
@@ -147,56 +405,49 @@ export async function handleSetup(
   }
   if (administratorExists) return setupCompleteResponse();
 
-  const body = await request.json();
-
-  const csrfCookie = readCsrfCookie(request);
-  const csrfToken = readCsrfFromRequest(body, request);
-  const csrfResult = validateCsrf(
+  const csrfRefused = csrfRefusal(
     request,
-    csrfCookie,
-    csrfToken,
-    deps.allowedOrigins
+    body,
+    deps,
+    readOrGenerateRequestId(request)
   );
-  if (!csrfResult.valid) {
-    return jsonResponse(403, {
-      error: csrfFailure(request, csrfResult),
-    });
-  }
+  if (csrfRefused) return csrfRefused;
 
+  const tokenRefused = setupTokenRefusal(verdict, request);
+  if (tokenRefused) return tokenRefused;
+
+  const inputRefused = setupInputRefusal(body, request);
+  if (inputRefused) return inputRefused;
   const { email, name, password } = body;
-  if (!email || !name || !password) {
-    return jsonResponse(400, {
-      error: {
-        code: "VALIDATION_ERROR",
-        message: "Email, name, and password are required",
-      },
-    });
-  }
 
-  const strengthResult = validatePasswordStrength(password);
-  if (!strengthResult.ok) {
-    // The rules a password failed are the only part of this a person can act
-    // on, so they travel on `data.errors` -- the key the canonical envelope
-    // defines and the only one the admin reads. Reasons put on any other key,
-    // `details` included, reach the client and are dropped there in silence.
-    // The mapping is the one `registerUser` applies to this same validator
-    // output, so both paths describe a weak password identically.
-    return buildAuthErrorResponse(
-      NextlyError.validation({
-        errors: strengthResult.errors.map(message => ({
-          path: "password",
-          code: "WEAK_PASSWORD",
-          message,
-        })),
-      }),
-      readOrGenerateRequestId(request)
-    );
+  // One setup at a time: of any number arriving together, exactly one creates
+  // the administrator and the rest are refused as setup having completed. The
+  // gate is asked again under the claim, for a setup that finished just
+  // before this one claimed.
+  const claim = await deps.setupToken.claim();
+  if (!claim) return setupCompleteResponse();
+  let user: { id: string; email: string; name: string };
+  try {
+    if (await deps.hasAdministrator()) return setupCompleteResponse();
+    // The token again, against the stored record as it is now rather than a
+    // cached read: one replaced after this request was judged, because it
+    // leaked, must not open setup.
+    if (
+      verdict !== "not-required" &&
+      (await deps.setupToken.confirm(body.setupToken)) !== "valid"
+    ) {
+      return tokenRequiredResponse(request);
+    }
+    // Create super admin (seeds permissions internally, hashes password internally)
+    const created = await deps.createSuperAdmin({ email, name, password });
+    // Another setup made the administrator while this one was creating it.
+    if (!created) return setupCompleteResponse();
+    user = created;
+    // Spent with the administrator's creation: no token opens setup again.
+    await deps.setupToken.spend();
+  } finally {
+    await claim.release();
   }
-
-  // Create super admin (seeds permissions internally, hashes password internally)
-  const user = await deps.createSuperAdmin({ email, name, password });
-  // Another setup made the administrator while this one was creating it.
-  if (!user) return setupCompleteResponse();
 
   const sessionRoles = await deps.fetchSessionRoles(user.id);
   const { roleIds } = sessionRoles;

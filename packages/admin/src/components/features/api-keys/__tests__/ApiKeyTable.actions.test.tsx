@@ -27,6 +27,7 @@ const KEY: ApiKeyMeta = {
   keyPrefix: "nx_live_abcdef",
   tokenType: "read-only",
   role: null,
+  owner: { id: "u-ada", name: "Ada Lovelace", email: "ada@example.com" },
   expiresAt: null,
   lastUsedAt: null,
   isActive: true,

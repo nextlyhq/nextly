@@ -60,6 +60,10 @@ export interface SingleAccessSubject {
    * may not be asking about.
    */
   locale?: string;
+  /** The request behind the probe, for hooks that narrow reads by it. */
+  request?: Request;
+  /** The context the caller passed, for hooks that narrow reads by it. */
+  context?: Record<string, unknown>;
 }
 
 /**
@@ -96,7 +100,14 @@ function readVerdict(result: {
  */
 export async function singleDocumentReadable(
   slug: string,
-  { user, actor, routeAuthorized, locale }: SingleAccessSubject
+  {
+    user,
+    actor,
+    routeAuthorized,
+    locale,
+    request,
+    context,
+  }: SingleAccessSubject
 ): Promise<boolean> {
   const singles = getService("singleEntryService");
   const result = await singles.get(slug, {
@@ -105,6 +116,10 @@ export async function singleDocumentReadable(
     routeAuthorized,
     ...(actor === undefined ? {} : { authenticatedScope: actor }),
     ...(locale === undefined ? {} : { locale }),
+    // A hook that narrows reads by the request or the caller's context sees
+    // them here as on the caller's own read.
+    ...(request === undefined ? {} : { request }),
+    ...(context === undefined ? {} : { context }),
     status: "all",
     // The DRAFT, because that is the view the token hands out. Authorizing the
     // live document instead leaves a custom rule that allows the published

@@ -298,7 +298,7 @@ export class MediaService extends BaseService {
         },
       };
     } catch (error) {
-      console.error("[MediaService] List media error:", error);
+      this.logger.error("[MediaService] List media error", { error: error });
       return {
         success: false,
         statusCode: 500,
@@ -339,7 +339,7 @@ export class MediaService extends BaseService {
         data: result[0] as Media,
       };
     } catch (error) {
-      console.error("[MediaService] Get media error:", error);
+      this.logger.error("[MediaService] Get media error", { error: error });
       return {
         success: false,
         statusCode: 500,
@@ -434,9 +434,11 @@ export class MediaService extends BaseService {
                 baseDelayMs: 500,
                 shouldRetry: isTransientError,
                 onRetry: (err, attempt) => {
-                  console.warn(
-                    `[MediaService] Thumbnail upload retry ${attempt}:`,
-                    err instanceof Error ? err.message : err
+                  // A storage error can quote a signed URL; errorForLog
+                  // strips its credentials and query before it is logged.
+                  this.logger.warn(
+                    `[MediaService] Thumbnail upload retry ${attempt}`,
+                    { error: errorForLog(err) }
                   );
                 },
               }
@@ -444,7 +446,9 @@ export class MediaService extends BaseService {
             thumbnailUrl = thumbnailResult.url;
           }
         } catch (error) {
-          console.warn("[MediaService] Thumbnail generation failed:", error);
+          this.logger.warn("[MediaService] Thumbnail generation failed", {
+            error: errorForLog(error),
+          });
           // Continue without thumbnail
         }
       }
@@ -465,10 +469,9 @@ export class MediaService extends BaseService {
           baseDelayMs: 1000,
           shouldRetry: isTransientError,
           onRetry: (err, attempt) => {
-            console.warn(
-              `[MediaService] Upload retry ${attempt}:`,
-              err instanceof Error ? err.message : err
-            );
+            this.logger.warn(`[MediaService] Upload retry ${attempt}`, {
+              error: errorForLog(err),
+            });
           },
         }
       );
@@ -513,7 +516,9 @@ export class MediaService extends BaseService {
             }
           }
         } catch (error) {
-          console.warn("[MediaService] Image size generation failed:", error);
+          this.logger.warn("[MediaService] Image size generation failed", {
+            error: errorForLog(error),
+          });
           // Continue without sizes - not a critical failure
         }
       }
@@ -589,7 +594,7 @@ export class MediaService extends BaseService {
         data: mediaRecord as unknown as Media,
       };
     } catch (error) {
-      console.error("[MediaService] Upload media error:", error);
+      this.logger.error("[MediaService] Upload media error", { error: error });
       return {
         success: false,
         statusCode: 500,
@@ -652,7 +657,7 @@ export class MediaService extends BaseService {
 
     const adapter = this.storage.getAdapterForCollection("media");
     if (!adapter.read) {
-      console.log(
+      this.logger.info(
         `[MediaService] Crop point saved for media ${media.id}. ` +
           `Size regeneration requires local storage or adapter with read support.`
       );
@@ -702,15 +707,14 @@ export class MediaService extends BaseService {
         ).url;
       }
 
-      console.log(
+      this.logger.info(
         `[MediaService] Regenerated ${Object.keys(newSizes).length} sizes for media ${media.id}`
       );
       return newSizes;
     } catch (error) {
-      console.warn(
-        "[MediaService] Crop point size regeneration failed:",
-        errorForLog(error)
-      );
+      this.logger.warn("[MediaService] Crop point size regeneration failed", {
+        error: errorForLog(error),
+      });
       // Continue without regeneration - crop point is still saved.
       return null;
     }
@@ -1012,7 +1016,7 @@ export class MediaService extends BaseService {
         data: updatedRow,
       };
     } catch (error) {
-      console.error("[MediaService] Update media error:", error);
+      this.logger.error("[MediaService] Update media error", { error: error });
       return {
         success: false,
         statusCode: 500,
@@ -1153,7 +1157,9 @@ export class MediaService extends BaseService {
         message: "Media deleted successfully",
       };
     } catch (error) {
-      console.error("[MediaService] Delete media error:", errorForLog(error));
+      this.logger.error("[MediaService] Delete media error", {
+        error: errorForLog(error),
+      });
       return {
         success: false,
         statusCode: 500,
