@@ -13,7 +13,7 @@ const editor = () =>
   userActor({
     userId: "u1",
     roles: ["editor"],
-    permissions: [{ action: "read", resource: "posts" }],
+    permissions: [{ slug: "read-posts", action: "read", resource: "posts" }],
     superAdmin: false,
   });
 const ALLOW: Decision = { allowed: true };
@@ -69,6 +69,16 @@ describe("DecisionMemo", () => {
       memo.remember(actor, "read", posts, decide),
       memo.remember(actor, "read", posts, decide),
     ]);
+    expect(decide).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a refusal as it was made, and serves it again", async () => {
+    const memo = new DecisionMemo();
+    const actor = editor();
+    const refusal: Decision = { allowed: false, reason: "no-permission" };
+    const decide = vi.fn(async () => refusal);
+    expect(await memo.remember(actor, "update", posts, decide)).toBe(refusal);
+    expect(await memo.remember(actor, "update", posts, decide)).toBe(refusal);
     expect(decide).toHaveBeenCalledTimes(1);
   });
 

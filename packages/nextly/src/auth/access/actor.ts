@@ -13,29 +13,26 @@
  * so nothing decided for one is ever reused for the other.
  */
 import type { Principal } from "../../plugins/principals/types";
+import type { AccessOperation } from "../../services/access/types";
 import type { AccessControlContext } from "../../shared/types/access";
-
-/** What a caller asks to do to a collection entry or a Single. */
-export type AccessAction =
-  | "create"
-  | "read"
-  | "update"
-  | "delete"
-  | "publish"
-  | "unpublish";
+import type { GrantedPermission } from "../authenticated-scope";
 
 /**
- * One permission, as its row names it.
- *
- * Kept as its parts rather than its slug alone: the slug's stored spelling
- * (`read-posts`) and the spelling a rule is promised (`posts:read`) are both
- * derived from these, and a slug cannot be split back into parts reliably,
- * since a resource may itself contain a hyphen.
+ * What a caller asks to do to a collection entry or a Single: the one list of
+ * access operations, so an operation added there is one the decision names.
  */
-export interface PermissionGrant {
-  readonly action: string;
-  readonly resource: string;
-}
+export type AccessAction = AccessOperation;
+
+/**
+ * One permission, as its row names it: its stored slug, and the action and
+ * resource it grants.
+ *
+ * The slug is kept as stored rather than rebuilt from the two parts, since a
+ * permission's slug may differ from `<action>-<resource>` (`manage-api-keys`
+ * grants `update` on `api-keys`), and a slug cannot be split back into parts
+ * reliably, since a resource may itself contain a hyphen.
+ */
+export type PermissionGrant = GrantedPermission;
 
 /** Trusted server work, which no decision limits (`overrideAccess: true`). */
 export interface SystemActor {
@@ -145,8 +142,8 @@ function freezeAll(
   permissions: readonly PermissionGrant[]
 ): readonly PermissionGrant[] {
   return Object.freeze(
-    permissions.map(({ action, resource }) =>
-      Object.freeze({ action, resource })
+    permissions.map(({ slug, action, resource }) =>
+      Object.freeze({ slug, action, resource })
     )
   );
 }
@@ -169,9 +166,9 @@ export function holdsPermission(
   );
 }
 
-/** The actor's permissions in their stored spelling, `read-posts`. */
+/** The actor's permissions as their rows store them, `read-posts`. */
 export function storedPermissions(actor: Actor): string[] {
-  return grantsOf(actor).map(grant => `${grant.action}-${grant.resource}`);
+  return grantsOf(actor).map(grant => grant.slug);
 }
 
 /** The actor's permissions in the spelling a rule reads, `posts:read`. */
@@ -189,7 +186,10 @@ export function isSuperAdmin(actor: Actor): boolean {
  *
  * A key's rule is handed the user who made the key, as it is today. A
  * visitor and a plugin person are handed no user, and only a plugin person is
- * handed a principal.
+ * handed a principal. A visitor's rule is handed no permissions either: what
+ * the Public role grants decides whether the visitor holds the permission,
+ * but a rule written against an anonymous caller is asked with none, as it
+ * always has been, so the same rule answers the same way.
  */
 export function ruleContext(
   actor: Exclude<Actor, SystemActor>,
@@ -203,7 +203,7 @@ export function ruleContext(
   return {
     user,
     roles,
-    permissions: rulePermissions(actor),
+    permissions: actor.kind === "visitor" ? [] : rulePermissions(actor),
     principal: actor.kind === "principal" ? actor.principal : null,
     operation,
     collection: slug,

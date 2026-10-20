@@ -16,8 +16,11 @@ import type {
 } from "../../shared/types/access";
 
 import {
+  holdsPermission,
   keyActor,
   principalActor,
+  rulePermissions,
+  storedPermissions,
   systemActor,
   userActor,
   visitorActor,
@@ -35,10 +38,15 @@ const ACTIONS: AccessAction[] = [
   "publish",
   "unpublish",
 ];
+const grant = (action: string, resource: string): PermissionGrant => ({
+  slug: `${action}-${resource}`,
+  action,
+  resource,
+});
 const every = (resource: string): PermissionGrant[] =>
-  ACTIONS.map(action => ({ action, resource }));
+  ACTIONS.map(action => grant(action, resource));
 const only = (resource: string, actions: AccessAction[]): PermissionGrant[] =>
-  actions.map(action => ({ action, resource }));
+  actions.map(action => grant(action, resource));
 
 const MEMBER: Principal = {
   type: "principal",
@@ -204,12 +212,71 @@ describe("a visitor", () => {
     expect(await allowed("visitor-public-read", "read", "false")).toBe(false);
   });
 
+  it("asks its rule with no permissions, whatever the Public role holds", async () => {
+    // A rule that reads the permissions refuses the visitor, as it does for an
+    // anonymous caller today, though Public holds the permission it names.
+    const readersOnly: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: {
+        read: ({ permissions }) => permissions.includes("posts:read"),
+      },
+    };
+    expect(
+      await decide(callers["visitor-public-read"], "read", readersOnly)
+    ).toEqual({ allowed: false, reason: "rule-refused" });
+  });
+
   it("never publishes or unpublishes, even holding the permission", async () => {
     for (const action of ["publish", "unpublish"] as const) {
       expect(
         await decide(callers["visitor-public-read"], action, postsWith("true"))
       ).toEqual({ allowed: false, reason: "visitor-cannot-publish" });
     }
+  });
+});
+
+describe("a Single", () => {
+  const settings: AccessTarget = {
+    kind: "single",
+    slug: "settings",
+    access: { read: true, update: () => false },
+  };
+  const editor = userActor({
+    userId: "u7",
+    roles: ["editor"],
+    permissions: only("settings", ["read", "update"]),
+    superAdmin: false,
+  });
+
+  it("is judged by its own permission and its own rules", async () => {
+    expect((await decide(editor, "read", settings)).allowed).toBe(true);
+    expect(await decide(editor, "update", settings)).toEqual({
+      allowed: false,
+      reason: "rule-refused",
+    });
+    expect(await decide(callers["user-without"], "read", settings)).toEqual({
+      allowed: false,
+      reason: "no-permission",
+    });
+  });
+});
+
+describe("an actor's permissions", () => {
+  // A permission whose stored slug is not `<action>-<resource>`.
+  const manager = userActor({
+    userId: "u8",
+    roles: ["manager"],
+    permissions: [
+      { slug: "manage-api-keys", action: "update", resource: "api-keys" },
+    ],
+    superAdmin: false,
+  });
+
+  it("keep each permission's stored slug as its row stores it", () => {
+    expect(storedPermissions(manager)).toEqual(["manage-api-keys"]);
+    expect(holdsPermission(manager, "update", "api-keys")).toBe(true);
+    expect(rulePermissions(manager)).toEqual(["api-keys:update"]);
   });
 });
 
@@ -221,6 +288,7 @@ describe("a plugin's person", () => {
       read: ({ principal }) => principal?.kind === "members:member",
       create: ({ principal }) => principal?.kind === "members:guest",
       publish: () => true,
+      unpublish: () => true,
     },
   };
 
@@ -240,11 +308,13 @@ describe("a plugin's person", () => {
     });
   });
 
-  it("never publishes, whatever the rule says", async () => {
-    expect(await decide(callers.principal, "publish", forMembers)).toEqual({
-      allowed: false,
-      reason: "principal-cannot-publish",
-    });
+  it("never publishes or unpublishes, whatever the rule says", async () => {
+    for (const action of ["publish", "unpublish"] as const) {
+      expect(await decide(callers.principal, action, forMembers)).toEqual({
+        allowed: false,
+        reason: "principal-cannot-publish",
+      });
+    }
   });
 });
 
@@ -344,16 +414,32 @@ describe("trusted server work", () => {
 });
 
 describe("what a rule is handed", () => {
-  async function contextFor(actor: Actor): Promise<AccessControlContext> {
+  async function contextFor(
+    actor: Actor,
+    action: AccessAction = "read",
+    slug = "posts"
+  ): Promise<AccessControlContext> {
     const rule = vi.fn((_ctx: AccessControlContext) => true);
-    await decide(actor, "read", {
+    await decide(actor, action, {
       kind: "collection",
-      slug: "posts",
-      access: { read: rule },
+      slug,
+      access: { [action]: rule },
     });
     expect(rule).toHaveBeenCalledTimes(1);
     return rule.mock.calls[0][0];
   }
+
+  it("is asked about the action and the target being decided", async () => {
+    const editor = userActor({
+      userId: "u6",
+      roles: ["editor"],
+      permissions: every("pages"),
+      superAdmin: false,
+    });
+    const ctx = await contextFor(editor, "delete", "pages");
+    expect(ctx.operation).toBe("delete");
+    expect(ctx.collection).toBe("pages");
+  });
 
   it("is the rule-facing permission spelling, never the stored one", async () => {
     const ctx = await contextFor(callers["user-with"]);
@@ -372,6 +458,9 @@ describe("what a rule is handed", () => {
     const visitor = await contextFor(callers["visitor-public-read"]);
     expect(visitor.user).toBeNull();
     expect(visitor.principal).toBeNull();
+    // What the Public role grants is not handed to the rule, as an anonymous
+    // caller's rule has always been asked with no permissions.
+    expect(visitor.permissions).toEqual([]);
     const person = await contextFor(callers.principal);
     expect(person.user).toBeNull();
     expect(person.principal).toBe(MEMBER);
