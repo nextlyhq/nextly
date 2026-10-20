@@ -121,7 +121,8 @@ function oldDefaultTypesFiles(cwd: string, typesFile: string): string[] {
  * Every file found is left as it is:
  * - the re-export earlier releases wrote compiles, and can be deleted once
  *   imports name the new file;
- * - a file an earlier version generated declares `module "nextly"` a second
+ * - a file an earlier version generated is stale, and, unless it was
+ *   generated without the augmentation, declares `module "nextly"` a second
  *   time, so TypeScript refuses the two once they differ, or under
  *   `skipLibCheck` silently uses whichever it reaches first. Rewriting it was
  *   a one-release bridge; now the developer is told to delete it;
@@ -162,11 +163,16 @@ export function retireOldDefaultTypesFile(
       continue;
     }
 
+    // Only a file generated with the augmentation clashes with the new one:
+    // `generate:types --no-declare` writes none, and such a file is only stale.
+    const clash = content.includes('declare module "nextly"')
+      ? `Both declare module "nextly", so they clash, and TypeScript may ` +
+        `use the old types. `
+      : "";
     notices.push(
       `${oldShown} holds types an earlier version of Nextly generated, and is ` +
-        `no longer updated: generated types now go to ${newShown}. Both ` +
-        `declare module "nextly", so they clash, and TypeScript may use the ` +
-        `old types. Delete ${oldShown} and change imports of payload-types to ` +
+        `no longer updated: generated types now go to ${newShown}. ${clash}` +
+        `Delete ${oldShown} and change imports of payload-types to ` +
         `nextly-types. To keep the old name, set typescript.outputFile in ` +
         `your Nextly config.`
     );

@@ -240,7 +240,7 @@ Controls TypeScript type generation.
 Earlier versions wrote the default file as `payload-types.ts`. If your config doesn't set `outputFile` and that file is still there, the generator writes `nextly-types.ts` and leaves `payload-types.ts` as it is, telling you what to do with it:
 
 - **A one-line re-export of `nextly-types`**, which 0.0.2-alpha.67 and alpha.68 wrote: it still compiles. Change imports of `payload-types` to `nextly-types`, then delete it.
-- **Types an earlier version generated**: it's no longer updated, and it declares `module "nextly"` as `nextly-types.ts` does, so the two clash and TypeScript may use the old types. Delete it and change imports of `payload-types` to `nextly-types`.
+- **Types an earlier version generated**: it's no longer updated. Unless it was generated with `--no-declare`, it declares `module "nextly"` as `nextly-types.ts` does, so the two clash and TypeScript may use the old types. Delete it and change imports of `payload-types` to `nextly-types`.
 
 A `payload-types.ts` that Nextly didn't generate is never changed. To keep the old name, set `outputFile` to it.
 

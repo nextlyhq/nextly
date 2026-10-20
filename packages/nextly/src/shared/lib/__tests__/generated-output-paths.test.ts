@@ -199,6 +199,25 @@ describe("a payload-types.ts left by the old default", () => {
       expect(notices[0]).toMatch(/typescript\.outputFile/);
     });
 
+    // `generate:types --no-declare` writes no augmentation, so such a file
+    // cannot clash with the new one; it is only stale.
+    it("is named stale, not clashing, when it was generated without the module declaration", () => {
+      const withoutDeclare = GENERATED_HEADER.replace(
+        /declare module "nextly" \{[^}]*\}\n/,
+        ""
+      );
+      expect(withoutDeclare).not.toContain("declare module");
+      const root = appWith("src/app", "src/types/generated", withoutDeclare);
+
+      const notices = settle(root);
+
+      expect(oldFile(root)).toBe(withoutDeclare);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatch(/no longer updated/);
+      expect(notices[0]).toMatch(/delete/i);
+      expect(notices[0]).not.toMatch(/clash/);
+    });
+
     it("is recognised as generated from what the current generator writes", () => {
       const generated = new TypeGenerator().generateTypesFile([]).code;
       const root = appWith("src/app", "src/types/generated", generated);
