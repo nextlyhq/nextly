@@ -47,25 +47,36 @@ describe("resolveServiceOpts", () => {
   });
 
   it("as:'system' with a user stays trusted and keeps the user, so the write is attributed", async () => {
-    // The user is who the plugin acts beside, not a caller to be judged: the
-    // call is still trusted, and the user is built as the user branch builds
-    // one, so a hook reading the user's roles sees the same caller either way.
+    // The user is who the plugin acts beside, not a caller to be judged, so
+    // the call stays trusted and asks nothing about them: no role lookup runs,
+    // and one that would fail cannot refuse a trusted call that never needed it.
+    const lookups: string[] = [];
+    const failing = {
+      listRoleSlugs: async (userId: string): Promise<string[]> => {
+        lookups.push(userId);
+        throw new Error("role lookup unavailable");
+      },
+    };
     expect(
-      await resolveServiceOpts({
-        as: "system",
-        user: { id: "editor1", email: "e@e.com", name: "E" },
-      })
+      await resolveServiceOpts(
+        {
+          as: "system",
+          user: { id: "editor1", email: "e@e.com", name: "E" },
+        },
+        failing
+      )
     ).toEqual({
       overrideAccess: true,
       user: {
         id: "editor1",
         email: "e@e.com",
         name: "E",
-        role: "editor",
-        roles: ["editor", "viewer"],
+        role: "",
+        roles: [],
         permissions: [],
       },
     });
+    expect(lookups).toEqual([]);
   });
 
   it("as:'user' with a user → enforce, RequestContext.user shape", async () => {
