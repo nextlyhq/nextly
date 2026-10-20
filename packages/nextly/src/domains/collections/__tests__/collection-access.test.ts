@@ -38,6 +38,7 @@ import {
   callerLookupFails,
   fakeActorForUser,
   fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "./collection-test-helpers";
 
@@ -52,6 +53,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     return {
       actorForUser: fake.fakeActorForUser,
       userHoldsPermission: fake.fakeUserHoldsPermission,
+      userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
   })()),
 }));
@@ -440,6 +442,29 @@ describe("CollectionEntryService — Access Control Contracts", () => {
         "posts",
         { executor: undefined }
       );
+      expect(fakeActorForUser).not.toHaveBeenCalled();
+    });
+
+    it("reads only super-admin authority for a rule that is a plain yes or no", async () => {
+      // `read: true` reads nothing of the caller, so neither its roles nor its
+      // grants are loaded: super-admin authority is the one thing asked, and
+      // the rule answers.
+      const rbac = createMockRbacAccessControlService();
+      rbac.getRegisteredAccess.mockReturnValue({ read: true });
+      const { service, selectData } = buildService({
+        rbacAccessControlService: rbac,
+      });
+      selectData.rows = [];
+
+      const result = await service.listEntries({
+        collectionName: "posts",
+        user: { id: "user-1" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(fakeUserIsSuperAdmin).toHaveBeenCalledWith("user-1", {
+        executor: undefined,
+      });
       expect(fakeActorForUser).not.toHaveBeenCalled();
     });
 

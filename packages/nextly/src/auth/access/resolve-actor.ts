@@ -19,6 +19,7 @@
 import type { Principal } from "../../plugins/principals/types";
 import {
   hasPermission,
+  isSuperAdmin,
   listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
@@ -67,6 +68,19 @@ export function userHoldsPermission(
   options: { executor?: unknown } = {}
 ): Promise<boolean> {
   return hasPermission(userId, action, resource, options.executor);
+}
+
+/**
+ * Whether a signed-in user holds super-admin authority, directly or through
+ * an inherited role: the one thing the decision reads of a user facing a rule
+ * that is a plain yes or no. Asked of the targeted, cached check. A failed
+ * lookup answers no.
+ */
+export function userIsSuperAdmin(
+  userId: string,
+  options: { executor?: unknown } = {}
+): Promise<boolean> {
+  return isSuperAdmin(userId, options.executor);
 }
 
 /**

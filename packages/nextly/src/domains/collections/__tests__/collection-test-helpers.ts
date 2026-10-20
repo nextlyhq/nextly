@@ -341,6 +341,15 @@ export const fakeActorForUser = vi.fn(
 );
 
 /**
+ * Stands in for `userIsSuperAdmin`: nobody these suites sign in as holds
+ * super-admin authority. Mock it beside {@link fakeActorForUser}.
+ */
+export const fakeUserIsSuperAdmin = vi.fn(async (_userId: string) => {
+  if (callerAccess.failure) throw callerAccess.failure;
+  return false;
+});
+
+/**
  * Stands in for `userHoldsPermission`: whether the user holds the action, from
  * the same faked lookup. Mock it beside {@link fakeActorForUser}.
  */

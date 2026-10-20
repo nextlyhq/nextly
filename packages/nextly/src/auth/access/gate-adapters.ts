@@ -27,6 +27,7 @@ import {
   decide,
   declaresRule,
   judge,
+  plainRule,
   type AccessTarget,
   type Decision,
 } from "./decide";
@@ -38,6 +39,7 @@ import {
   actorForUser,
   actorForVisitor,
   userHoldsPermission,
+  userIsSuperAdmin,
 } from "./resolve-actor";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
@@ -272,6 +274,22 @@ async function userVerdict(
       if (!isLifecycle(q.action)) return verdictOf(holds);
       return verdictOf(
         await deviate("lifecycle-judged-alone", holds, () =>
+          decided(looked(), q.action, target)
+        )
+      );
+    }
+    const plain = plainRule(target, q.action);
+    if (plain !== undefined) {
+      // A plain yes or no reads nothing of the caller, so only super-admin
+      // authority, which passes every rule, is looked up, through its cached
+      // check. A user named by no id holds nothing.
+      if (!user.id) return INSUFFICIENT;
+      const superAdmin = await userIsSuperAdmin(user.id, {
+        executor: q.executor,
+      });
+      if (superAdmin) return ALLOWED;
+      return verdictOf(
+        await deviate("rule-alone-for-people", plain, () =>
           decided(looked(), q.action, target)
         )
       );

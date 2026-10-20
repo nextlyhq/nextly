@@ -28,6 +28,7 @@ import {
   createMockAdapter,
   fakeActorForUser,
   fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
   silentLogger,
 } from "../__tests__/collection-test-helpers";
 
@@ -40,6 +41,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     return {
       actorForUser: fake.fakeActorForUser,
       userHoldsPermission: fake.fakeUserHoldsPermission,
+      userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
   })()),
 }));

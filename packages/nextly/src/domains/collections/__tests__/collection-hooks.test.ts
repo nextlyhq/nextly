@@ -35,6 +35,7 @@ import {
   callerMay,
   fakeActorForUser,
   fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
   resetCallerAccess,
 } from "./collection-test-helpers";
 
@@ -49,6 +50,7 @@ vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
     return {
       actorForUser: fake.fakeActorForUser,
       userHoldsPermission: fake.fakeUserHoldsPermission,
+      userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
     };
   })()),
 }));
@@ -144,6 +146,7 @@ describe("CollectionEntryService — Hook Contracts", () => {
     resetCallerAccess();
     fakeActorForUser.mockClear();
     fakeUserHoldsPermission.mockClear();
+    fakeUserIsSuperAdmin.mockClear();
     vi.clearAllMocks();
 
     schema = createMockSchema();

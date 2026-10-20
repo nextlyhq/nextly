@@ -100,6 +100,18 @@ export function declaresRule(
 }
 
 /**
+ * The yes or no a target declares for `action`, when its rule is a plain
+ * boolean, which reads nothing of the caller; `undefined` otherwise.
+ */
+export function plainRule(
+  target: AccessTarget,
+  action: AccessAction
+): boolean | undefined {
+  const rule = ruleFor(target, action);
+  return typeof rule === "boolean" ? rule : undefined;
+}
+
+/**
  * Asks the target's rule for `action` about this actor, once, and returns
  * what it said. A rule that throws, or whose promise rejects, is reported as
  * having thrown.
