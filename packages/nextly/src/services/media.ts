@@ -434,9 +434,11 @@ export class MediaService extends BaseService {
                 baseDelayMs: 500,
                 shouldRetry: isTransientError,
                 onRetry: (err, attempt) => {
+                  // A storage error can quote a signed URL; errorForLog
+                  // strips its credentials and query before it is logged.
                   this.logger.warn(
                     `[MediaService] Thumbnail upload retry ${attempt}`,
-                    { detail: err instanceof Error ? err.message : err }
+                    { error: errorForLog(err) }
                   );
                 },
               }
@@ -445,7 +447,7 @@ export class MediaService extends BaseService {
           }
         } catch (error) {
           this.logger.warn("[MediaService] Thumbnail generation failed", {
-            error: error,
+            error: errorForLog(error),
           });
           // Continue without thumbnail
         }
@@ -468,7 +470,7 @@ export class MediaService extends BaseService {
           shouldRetry: isTransientError,
           onRetry: (err, attempt) => {
             this.logger.warn(`[MediaService] Upload retry ${attempt}`, {
-              detail: err instanceof Error ? err.message : err,
+              error: errorForLog(err),
             });
           },
         }
@@ -515,7 +517,7 @@ export class MediaService extends BaseService {
           }
         } catch (error) {
           this.logger.warn("[MediaService] Image size generation failed", {
-            error: error,
+            error: errorForLog(error),
           });
           // Continue without sizes - not a critical failure
         }
