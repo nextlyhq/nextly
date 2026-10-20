@@ -89,6 +89,13 @@ service none key-made-by-super-admin
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service none key-custom-slugs
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service none key-own-roles
   create:A
   read:A
@@ -181,6 +188,13 @@ service true key-slugs-only
   publish:A
   unpublish:A
 service true key-made-by-super-admin
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service true key-custom-slugs
   create:403 Access denied: insufficient permissions for create on posts
   read:A
   update:403 Access denied: insufficient permissions for update on posts
@@ -285,6 +299,13 @@ service false key-made-by-super-admin
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service false key-custom-slugs
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service false key-own-roles
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -377,6 +398,13 @@ service returns-true key-slugs-only
   publish:A
   unpublish:A
 service returns-true key-made-by-super-admin
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-true key-custom-slugs
   create:403 Access denied: insufficient permissions for create on posts
   read:A
   update:403 Access denied: insufficient permissions for update on posts
@@ -481,6 +509,13 @@ service returns-false key-made-by-super-admin
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-false key-custom-slugs
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service returns-false key-own-roles
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -573,6 +608,13 @@ service returns-null key-slugs-only
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service returns-null key-made-by-super-admin
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-null key-custom-slugs
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
   update:403 Access denied: insufficient permissions for update on posts
@@ -677,6 +719,13 @@ service returns-undefined key-made-by-super-admin
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-undefined key-custom-slugs
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service returns-undefined key-own-roles
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -769,6 +818,13 @@ service returns-truthy key-slugs-only
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service returns-truthy key-made-by-super-admin
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service returns-truthy key-custom-slugs
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
   update:403 Access denied: insufficient permissions for update on posts
@@ -873,6 +929,13 @@ service throws key-made-by-super-admin
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service throws key-custom-slugs
+  create:403 Access denied: insufficient permissions for create on posts
+  read:403 Access denied: insufficient permissions for read on posts
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service throws key-own-roles
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -965,6 +1028,13 @@ service async-true key-slugs-only
   publish:A
   unpublish:A
 service async-true key-made-by-super-admin
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service async-true key-custom-slugs
   create:403 Access denied: insufficient permissions for create on posts
   read:A
   update:403 Access denied: insufficient permissions for update on posts
@@ -1069,6 +1139,13 @@ service role-name key-made-by-super-admin
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service role-name key-custom-slugs
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service role-name key-own-roles
   create:403 Access denied: insufficient permissions for create on posts
   read:403 Access denied: insufficient permissions for read on posts
@@ -1161,6 +1238,13 @@ service permission-spelling key-slugs-only
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service permission-spelling key-made-by-super-admin
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service permission-spelling key-custom-slugs
   create:403 Access denied: insufficient permissions for create on posts
   read:A
   update:403 Access denied: insufficient permissions for update on posts
@@ -1265,6 +1349,13 @@ service signed-in key-made-by-super-admin
   delete:403 Access denied: insufficient permissions for delete on posts
   publish:403 Access denied: insufficient permissions for publish on posts
   unpublish:403 Access denied: insufficient permissions for unpublish on posts
+service signed-in key-custom-slugs
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
 service signed-in key-own-roles
   create:A
   read:A
@@ -1357,6 +1448,13 @@ no-service none key-slugs-only
   publish:A
   unpublish:A
 no-service none key-made-by-super-admin
+  create:403 Access denied: insufficient permissions for create on posts
+  read:A
+  update:403 Access denied: insufficient permissions for update on posts
+  delete:403 Access denied: insufficient permissions for delete on posts
+  publish:403 Access denied: insufficient permissions for publish on posts
+  unpublish:403 Access denied: insufficient permissions for unpublish on posts
+no-service none key-custom-slugs
   create:403 Access denied: insufficient permissions for create on posts
   read:A
   update:403 Access denied: insufficient permissions for update on posts
@@ -1461,6 +1559,13 @@ route-authorized none key-made-by-super-admin
   delete:A
   publish:A
   unpublish:A
+route-authorized none key-custom-slugs
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized none key-own-roles
   create:A
   read:A
@@ -1553,6 +1658,13 @@ route-authorized true key-slugs-only
   publish:A
   unpublish:A
 route-authorized true key-made-by-super-admin
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized true key-custom-slugs
   create:A
   read:A
   update:A
@@ -1657,6 +1769,13 @@ route-authorized false key-made-by-super-admin
   delete:A
   publish:A
   unpublish:A
+route-authorized false key-custom-slugs
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized false key-own-roles
   create:A
   read:A
@@ -1749,6 +1868,13 @@ route-authorized returns-true key-slugs-only
   publish:A
   unpublish:A
 route-authorized returns-true key-made-by-super-admin
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized returns-true key-custom-slugs
   create:A
   read:A
   update:A
@@ -1853,6 +1979,13 @@ route-authorized returns-false key-made-by-super-admin
   delete:A
   publish:A
   unpublish:A
+route-authorized returns-false key-custom-slugs
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized returns-false key-own-roles
   create:A
   read:A
@@ -1945,6 +2078,13 @@ route-authorized returns-null key-slugs-only
   publish:A
   unpublish:A
 route-authorized returns-null key-made-by-super-admin
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized returns-null key-custom-slugs
   create:A
   read:A
   update:A
@@ -2049,6 +2189,13 @@ route-authorized returns-undefined key-made-by-super-admin
   delete:A
   publish:A
   unpublish:A
+route-authorized returns-undefined key-custom-slugs
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized returns-undefined key-own-roles
   create:A
   read:A
@@ -2141,6 +2288,13 @@ route-authorized returns-truthy key-slugs-only
   publish:A
   unpublish:A
 route-authorized returns-truthy key-made-by-super-admin
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized returns-truthy key-custom-slugs
   create:A
   read:A
   update:A
@@ -2245,6 +2399,13 @@ route-authorized throws key-made-by-super-admin
   delete:A
   publish:A
   unpublish:A
+route-authorized throws key-custom-slugs
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized throws key-own-roles
   create:A
   read:A
@@ -2337,6 +2498,13 @@ route-authorized async-true key-slugs-only
   publish:A
   unpublish:A
 route-authorized async-true key-made-by-super-admin
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized async-true key-custom-slugs
   create:A
   read:A
   update:A
@@ -2441,6 +2609,13 @@ route-authorized role-name key-made-by-super-admin
   delete:A
   publish:A
   unpublish:A
+route-authorized role-name key-custom-slugs
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized role-name key-own-roles
   create:A
   read:A
@@ -2539,6 +2714,13 @@ route-authorized permission-spelling key-made-by-super-admin
   delete:A
   publish:A
   unpublish:A
+route-authorized permission-spelling key-custom-slugs
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
 route-authorized permission-spelling key-own-roles
   create:A
   read:A
@@ -2631,6 +2813,13 @@ route-authorized signed-in key-slugs-only
   publish:A
   unpublish:A
 route-authorized signed-in key-made-by-super-admin
+  create:A
+  read:A
+  update:A
+  delete:A
+  publish:A
+  unpublish:A
+route-authorized signed-in key-custom-slugs
   create:A
   read:A
   update:A

@@ -27,6 +27,7 @@ import {
   createMockDb,
   createMockAdapter,
   fakeActorForUser,
+  fakeUserHoldsPermission,
   silentLogger,
 } from "../__tests__/collection-test-helpers";
 
@@ -34,12 +35,18 @@ import {
 // these tests assert.
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
   ...(await importOriginal<object>()),
-  actorForUser: (await import("../__tests__/collection-test-helpers"))
-    .fakeActorForUser,
+  ...(await (async () => {
+    const fake = await import("../__tests__/collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+    };
+  })()),
 }));
 
 beforeEach(() => {
   fakeActorForUser.mockClear();
+  fakeUserHoldsPermission.mockClear();
 });
 
 /** A gate whose collection declares `rule` for every action, or no rule. */
@@ -83,6 +90,7 @@ describe("checkCollectionAccess with no user", () => {
     // What a missing user skips is the permission lookup: there are no
     // permissions to look up for a caller with no identity.
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("applies the collection's inline code rule, which needs no user", async () => {
@@ -110,6 +118,7 @@ describe("checkCollectionAccess with no user", () => {
     expect(result?.success).toBe(false);
     expect(result?.statusCode).toBe(403);
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("falls through to the public default when no inline rule governs the operation", async () => {
@@ -141,6 +150,7 @@ describe("checkCollectionAccess with no user", () => {
     expect(result?.statusCode).toBe(403);
     // Decided without looking any caller up.
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("refuses publish with no user even when the inline rule would admit", async () => {

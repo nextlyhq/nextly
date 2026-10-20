@@ -149,6 +149,20 @@ const CALLERS: Record<string, Caller> = {
     user: { id: "admin" },
     scope: apiKeyScope([grant("read")], ["super-admin"]),
   },
+  // A key whose grants carry slugs of their own: publishing as
+  // `release-posts` and updating as `edit-posts`, not `publish-posts` and
+  // `update-posts`.
+  "key-custom-slugs": {
+    user: { id: "owner" },
+    scope: apiKeyScope(
+      [
+        grant("read"),
+        { slug: "edit-posts", action: "update", resource: SLUG },
+        { slug: "release-posts", action: "publish", resource: SLUG },
+      ],
+      ["editor"]
+    ),
+  },
   "key-own-roles": {
     user: { id: "owner", roles: ["owner-role"] },
     scope: apiKeyScopeFrom({ grants: ALL_GRANTS }),

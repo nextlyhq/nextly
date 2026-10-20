@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { makePrincipal } from "../../plugins/principals/principal";
+import { consoleLogger } from "../../shared/types";
 import type { Principal } from "../../plugins/principals/types";
 import type {
   AccessControlContext,
@@ -562,9 +563,52 @@ describe("the judge seam", () => {
     expect(update).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses to judge a publish whose update rule was not asked", () => {
+    // The update rule may refuse the change; judging without it would allow
+    // a publish it never saw.
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { publish: () => true, update: () => false },
+    };
+    expect(() =>
+      judge(callers["user-with"], "publish", target, {
+        action: { declared: true, value: true },
+      })
+    ).toThrow();
+  });
+
   it("refuses to judge a question whose rules were not asked", () => {
     expect(() =>
       judge(callers["user-with"], "read", postsWith("true"), null)
     ).toThrow();
+  });
+});
+
+describe("a rule that fails", () => {
+  it("is logged once, with what it was asked, and refuses", async () => {
+    const logged = vi
+      .spyOn(consoleLogger, "error")
+      .mockImplementation(() => {});
+    const failure = new Error("the rule failed");
+    try {
+      const outcome = await askRule(callers["user-with"], "read", {
+        kind: "collection",
+        slug: "posts",
+        access: {
+          read: () => {
+            throw failure;
+          },
+        },
+      });
+      expect(outcome).toEqual({ declared: true, threw: true });
+      expect(logged).toHaveBeenCalledTimes(1);
+      expect(logged).toHaveBeenCalledWith(
+        "[rbac] Code access function for read:posts threw",
+        { error: failure }
+      );
+    } finally {
+      logged.mockRestore();
+    }
   });
 });

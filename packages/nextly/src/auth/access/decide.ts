@@ -21,6 +21,7 @@
  * log, never for the response.
  */
 import { NextlyError } from "../../errors/nextly-error";
+import { consoleLogger } from "../../shared/types";
 import type {
   AccessControlFunction,
   CollectionAccessControl,
@@ -90,6 +91,14 @@ function ruleFor(
   return access?.[action];
 }
 
+/** Whether the target declares a rule for `action`. */
+export function declaresRule(
+  target: AccessTarget,
+  action: AccessAction
+): boolean {
+  return ruleFor(target, action) !== undefined;
+}
+
 /**
  * Asks the target's rule for `action` about this actor, once, and returns
  * what it said. A rule that throws, or whose promise rejects, is reported as
@@ -106,7 +115,12 @@ export async function askRule(
   try {
     const value: unknown = await rule(ruleContext(actor, action, target, rule));
     return { declared: true, value };
-  } catch {
+  } catch (error) {
+    // A broken rule refuses, and is logged so it can be found and fixed.
+    consoleLogger.error(
+      `[rbac] Code access function for ${action}:${target.slug} threw`,
+      { error }
+    );
     return { declared: true, threw: true };
   }
 }
@@ -225,7 +239,17 @@ export function judge(
   const refusal = ruleRefusal(outcomes.action);
   if (refusal) return refuse(refusal);
   if (isLifecycle(action)) {
-    const update = outcomes.update ? ruleRefusal(outcomes.update) : null;
+    // A change judged without its update rule could be one that rule refuses.
+    if (!outcomes.update) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "access-update-rule-not-asked",
+          action,
+          target: target.slug,
+        },
+      });
+    }
+    const update = ruleRefusal(outcomes.update);
     // Kept apart, so the log tells a failing update rule from a refusing one.
     if (update === "rule-threw") return refuse("update-rule-threw");
     if (update) return refuse("update-rule-refused");

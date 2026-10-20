@@ -46,6 +46,7 @@ import {
   createSampleEntry,
   callerMay,
   fakeActorForUser,
+  fakeUserHoldsPermission,
   resetCallerAccess,
 } from "./collection-test-helpers";
 
@@ -55,7 +56,13 @@ import {
 // set per test (`callerMay`), and every test starts from one holding all.
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
   ...(await importOriginal<object>()),
-  actorForUser: (await import("./collection-test-helpers")).fakeActorForUser,
+  ...(await (async () => {
+    const fake = await import("./collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+    };
+  })()),
 }));
 
 vi.mock("../../../di/container", () => ({
@@ -253,6 +260,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
   beforeEach(() => {
     resetCallerAccess();
     fakeActorForUser.mockClear();
+    fakeUserHoldsPermission.mockClear();
     vi.clearAllMocks();
 
     schema = createMockSchema();
@@ -289,7 +297,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "New Post" }
       );
 
-      expect(fakeActorForUser).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
@@ -498,7 +506,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         user: { id: "user-1", role: "viewer" },
       });
 
-      expect(fakeActorForUser).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
@@ -596,7 +604,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         { title: "Updated" }
       );
 
-      expect(fakeActorForUser).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access denied", async () => {
@@ -760,7 +768,7 @@ describe("CollectionEntryService — Mutation Contracts", () => {
         user: { id: "user-1", role: "editor" },
       });
 
-      expect(fakeActorForUser).toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).toHaveBeenCalled();
     });
 
     it("should return 403 when access denied", async () => {

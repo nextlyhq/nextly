@@ -22,6 +22,7 @@ import {
   createMockDb,
   createMockAdapter,
   fakeActorForUser,
+  fakeUserHoldsPermission,
   resetCallerAccess,
   silentLogger,
 } from "../__tests__/collection-test-helpers";
@@ -30,13 +31,19 @@ import {
 // since "was the caller looked up" is what several tests here assert.
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
   ...(await importOriginal<object>()),
-  actorForUser: (await import("../__tests__/collection-test-helpers"))
-    .fakeActorForUser,
+  ...(await (async () => {
+    const fake = await import("../__tests__/collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+    };
+  })()),
 }));
 
 beforeEach(() => {
   resetCallerAccess();
   fakeActorForUser.mockClear();
+  fakeUserHoldsPermission.mockClear();
 });
 
 function buildAccessService() {
@@ -89,6 +96,7 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
 
     expect(result).toBeNull();
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("runs the RBAC gate when NOT routeAuthorized (Direct API)", async () => {
@@ -104,7 +112,7 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     });
 
     expect(result?.statusCode).toBe(403);
-    expect(fakeActorForUser).toHaveBeenCalledTimes(1);
+    expect(fakeUserHoldsPermission).toHaveBeenCalledTimes(1);
   });
 
   it("bypasses everything when overrideAccess is true (system write)", async () => {
@@ -121,6 +129,7 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
 
     expect(result).toBeNull();
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("lets a super-admin (by authorized role) bypass the gate", async () => {
@@ -137,6 +146,7 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
 
     expect(result).toBeNull();
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("lets a super-admin identified by the singular `role` bypass the gate", async () => {
@@ -169,6 +179,7 @@ describe("checkCollectionAccess — route-authorized decoupling", () => {
     // not skip the RBAC gate and fall through to the permission-less default.
     expect(result?.statusCode).toBe(403);
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 });
 
@@ -219,6 +230,7 @@ describe("checkCollectionAccess — scoped API key", () => {
     expect(result?.statusCode).toBe(403);
     // The owner is never looked up for a scoped key.
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("does not let a super-admin-owned key bypass its scope for publish", async () => {
@@ -302,6 +314,7 @@ describe("checkCollectionAccess — scoped API key", () => {
 
     expect(result).toBeNull();
     expect(fakeActorForUser).not.toHaveBeenCalled();
+    expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
   });
 
   it("falls through to the owner's RBAC for a session caller (no api-key scope)", async () => {
@@ -320,6 +333,6 @@ describe("checkCollectionAccess — scoped API key", () => {
     });
 
     expect(result?.statusCode).toBe(403);
-    expect(fakeActorForUser).toHaveBeenCalledTimes(1);
+    expect(fakeUserHoldsPermission).toHaveBeenCalledTimes(1);
   });
 });

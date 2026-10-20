@@ -11,6 +11,7 @@
  * and the gate words it.
  */
 import type { Principal } from "../../plugins/principals/types";
+import { permissionSlug } from "../../schemas/_zod/rbac";
 import { isSuperAdminContext } from "../../services/access";
 import type { AccessOperation } from "../../services/access/types";
 import {
@@ -24,6 +25,7 @@ import {
   askRule,
   askRules,
   decide,
+  declaresRule,
   judge,
   type AccessTarget,
   type Decision,
@@ -35,6 +37,7 @@ import {
   actorForScope,
   actorForUser,
   actorForVisitor,
+  userHoldsPermission,
 } from "./resolve-actor";
 
 /** Allowed, or refused with the kind of refusal the gate words. */
@@ -172,9 +175,25 @@ async function keyVerdict(
   scope: AuthenticatedScope,
   user: { id: string; roles?: string[] }
 ): Promise<GateVerdict> {
-  if (!rowsAgree(scope)) {
+  const rows = rowsAgree(scope);
+  const actor = rows
+    ? actorForScope(scope, user)
+    : actorForKey({
+        keyId: "",
+        userId: user.id,
+        grants: scope.grants ?? [],
+        roles: scope.roles ?? user.roles ?? [],
+      });
+  // A key holds an action by its stored slug, `<action>-<target>`. The
+  // decision reads the grant's action and target, which agree with the slug
+  // unless the grant was stored under a slug of its own.
+  const slugHolds = scope.permissions.includes(
+    permissionSlug(q.action, q.slug)
+  );
+  if (!rows || slugHolds !== holdsPermission(actor, q.action, q.slug)) {
     // Judged on the stored slugs, as before: a scope without the rows its
-    // slugs came from, or one whose slugs were narrowed apart from its rows.
+    // slugs came from, one whose slugs were narrowed apart from its rows, or
+    // a grant stored under a slug of its own.
     const today = await apiKeyWriteAllowed(
       scope,
       q.action,
@@ -182,23 +201,14 @@ async function keyVerdict(
       user,
       q.rules
     );
-    const rowsAlone = actorForKey({
-      keyId: "",
-      userId: user.id,
-      grants: scope.grants ?? [],
-      roles: scope.roles ?? user.roles ?? [],
-    });
     return verdictOf(
       await deviate("key-slug-string-match", today === true, () =>
-        decided(rowsAlone, q.action, target)
+        decided(actor, q.action, target)
       )
     );
   }
-  const actor = actorForScope(scope, user);
   if (isLifecycle(q.action)) {
-    const today =
-      holdsPermission(actor, q.action, q.slug) &&
-      (await ruleAllows(actor, q.action, target));
+    const today = slugHolds && (await ruleAllows(actor, q.action, target));
     return verdictOf(
       await deviate("lifecycle-judged-alone", today, () =>
         decided(actor, q.action, target)
@@ -251,31 +261,36 @@ async function userVerdict(
         )
       );
     }
-    const actor = await actorForUser(user.id, { executor: q.executor });
-    // A super-admin passes without a rule being read, and a user named by no
-    // id holds nothing, so neither asks one.
+    const looked = () => actorForUser(user.id, { executor: q.executor });
+    if (!declaresRule(target, q.action)) {
+      // With no rule for the action, the decision is the permission alone,
+      // super-admin authority included, so the targeted check answers it
+      // without loading the caller's every role and grant.
+      const holds = await userHoldsPermission(user.id, q.action, q.slug, {
+        executor: q.executor,
+      });
+      if (!isLifecycle(q.action)) return verdictOf(holds);
+      return verdictOf(
+        await deviate("lifecycle-judged-alone", holds, () =>
+          decided(looked(), q.action, target)
+        )
+      );
+    }
+    // A rule is declared, and is handed the caller's roles and permissions.
+    const actor = await looked();
+    // A super-admin passes without the rule being read, and a user named by
+    // no id holds nothing, so neither asks it.
     if (isSuperAdmin(actor) || !user.id) {
       return answerOf(judge(actor, q.action, target, null));
     }
     const outcome = await askRule(actor, q.action, target);
-    if (outcome.declared) {
-      const today = !("threw" in outcome) && Boolean(outcome.value);
-      return verdictOf(
-        await deviate("rule-alone-for-people", today, () =>
-          decided(actor, q.action, target)
-        )
-      );
-    }
-    if (isLifecycle(q.action)) {
-      return verdictOf(
-        await deviate(
-          "lifecycle-judged-alone",
-          holdsPermission(actor, q.action, q.slug),
-          () => decided(actor, q.action, target)
-        )
-      );
-    }
-    return answerOf(judge(actor, q.action, target, { action: outcome }));
+    const today =
+      outcome.declared && !("threw" in outcome) && Boolean(outcome.value);
+    return verdictOf(
+      await deviate("rule-alone-for-people", today, () =>
+        decided(actor, q.action, target)
+      )
+    );
   } catch (error) {
     return { allowed: false, refusal: "failed", error };
   }

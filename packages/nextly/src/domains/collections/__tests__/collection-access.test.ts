@@ -37,6 +37,7 @@ import {
   callerMayNot,
   callerLookupFails,
   fakeActorForUser,
+  fakeUserHoldsPermission,
   resetCallerAccess,
 } from "./collection-test-helpers";
 
@@ -46,12 +47,19 @@ import {
 // set per test (`callerMay`), and every test starts from one holding all.
 vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
   ...(await importOriginal<object>()),
-  actorForUser: (await import("./collection-test-helpers")).fakeActorForUser,
+  ...(await (async () => {
+    const fake = await import("./collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+    };
+  })()),
 }));
 
 beforeEach(() => {
   resetCallerAccess();
   fakeActorForUser.mockClear();
+  fakeUserHoldsPermission.mockClear();
 });
 
 // `get` THROWS for an unregistered name, exactly as the real container does
@@ -405,9 +413,34 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
-      expect(fakeActorForUser).toHaveBeenCalledWith("user-1", {
-        executor: undefined,
+      expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+        "user-1",
+        "read",
+        "posts",
+        { executor: undefined }
+      );
+    });
+
+    it("reads a rule-less action through the permission check, not the caller's whole access", async () => {
+      // With no rule for the read, the decision is the permission alone: the
+      // targeted, cached check answers it, and the caller's every role and
+      // grant is not loaded for it.
+      const { service, selectData } = buildService({});
+      selectData.rows = [];
+
+      const result = await service.listEntries({
+        collectionName: "posts",
+        user: { id: "user-1" },
       });
+
+      expect(result.success).toBe(true);
+      expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+        "user-1",
+        "read",
+        "posts",
+        { executor: undefined }
+      );
+      expect(fakeActorForUser).not.toHaveBeenCalled();
     });
 
     it("allows a signed-in user who holds the action", async () => {
@@ -455,6 +488,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       // the caller, and skipping it left a collection's own `access` inert for
       // exactly the caller it describes.
       expect(fakeActorForUser).not.toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
       expect(rbac.getRegisteredAccess).toHaveBeenCalledWith("posts");
       expect(result.success).toBe(true);
     });

@@ -340,6 +340,20 @@ export const fakeActorForUser = vi.fn(
   }
 );
 
+/**
+ * Stands in for `userHoldsPermission`: whether the user holds the action, from
+ * the same faked lookup. Mock it beside {@link fakeActorForUser}.
+ */
+export const fakeUserHoldsPermission = vi.fn(
+  async (_userId: string, action: string, resource: string) => {
+    if (callerAccess.failure) throw callerAccess.failure;
+    return (
+      SUITE_COLLECTIONS.includes(resource) &&
+      callerAccess.actions.has(action as AccessOperation)
+    );
+  }
+);
+
 export function createMockRbacAccessControlService(): MockRecord {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {

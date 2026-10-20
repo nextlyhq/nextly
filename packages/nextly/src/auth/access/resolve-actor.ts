@@ -18,13 +18,11 @@
  */
 import type { Principal } from "../../plugins/principals/types";
 import {
+  hasPermission,
   listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
-import {
-  scopeGrants,
-  type AuthenticatedScope,
-} from "../authenticated-scope";
+import { scopeGrants, type AuthenticatedScope } from "../authenticated-scope";
 
 import {
   keyActor,
@@ -53,6 +51,22 @@ export async function actorForUser(
     listEffectiveGrants(userId, options.executor),
   ]);
   return userActor({ userId, roles, permissions });
+}
+
+/**
+ * Whether a signed-in user holds the permission to `action` on `resource`,
+ * super-admin authority included: what the decision reads of a user where the
+ * target declares no rule for the action. Asked of the targeted permission
+ * check and its caches, rather than by resolving the user's every role and
+ * grant, which only a rule's context needs. A failed lookup answers no.
+ */
+export function userHoldsPermission(
+  userId: string,
+  action: string,
+  resource: string,
+  options: { executor?: unknown } = {}
+): Promise<boolean> {
+  return hasPermission(userId, action, resource, options.executor);
 }
 
 /**
