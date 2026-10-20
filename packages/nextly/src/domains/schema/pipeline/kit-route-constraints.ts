@@ -79,9 +79,14 @@ export function kitRouteConstraintStatements(
     dialect === "mysql" ? foreignKeysBlockingTypeChanges(ops, liveTables) : [];
   before.push(...suspended.map(lift => lift.drop));
   after.push(...suspended.map(lift => lift.restore));
+  const afterStatements = after.map(op => generateSQL(op, dialect));
   return {
     before: before.map(op => generateSQL(op, dialect)),
-    after: after.map(op => generateSQL(op, dialect)),
-    liftRestores: suspended.map(lift => generateSQL(lift.restore, dialect)),
+    after: afterStatements,
+    // The lifted keys' restores are the last of `after`, so they are read from it rather than
+    // rendered a second time: a failed apply adds back exactly what a successful one would.
+    liftRestores: afterStatements.slice(
+      afterStatements.length - suspended.length
+    ),
   };
 }
