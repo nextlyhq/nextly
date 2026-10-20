@@ -42,7 +42,7 @@ import {
 
 /** A collection whose drafts autosave. */
 const NOTES = "plugin_history_notes";
-/** A collection with drafts but no autosave. */
+/** A collection with drafts but autosave turned off: drafts alone turn it on. */
 const PLAIN = "plugin_history_plain";
 
 /** The plugin history writes, with the trailing `ServiceOpts` each takes. */
@@ -183,7 +183,7 @@ describe.each(getConfiguredTestDialects())(
           defineCollection({
             slug: PLAIN,
             status: true,
-            versions: { drafts: true },
+            versions: { drafts: { autosave: false } },
             fields: [text({ name: "title" })],
           }),
         ],
@@ -256,7 +256,7 @@ describe.each(getConfiguredTestDialects())(
           { kinds: ["named"] }
         );
         expect(items.map(e => [e.actorKind, e.actorId])).toEqual([
-          ["user", editorId],
+          ["person", editorId],
         ]);
       });
 
