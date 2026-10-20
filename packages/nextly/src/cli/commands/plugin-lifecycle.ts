@@ -161,6 +161,13 @@ export interface PluginLifecycleDeps {
     tables: readonly string[]
   ) => Promise<ReadonlyMap<string, string | null>>;
   /**
+   * Every table in the database (the adapter's `listTables`). Read either
+   * side of `onUninstall` on SQLite, whose identity, a root page, can be
+   * given to another table: there a table that appeared under a new name is
+   * what tells a renamed original from nothing changed.
+   */
+  listTables: () => Promise<readonly string[]>;
+  /**
    * Every plugin's recorded lifecycle state (`readPluginLifecycle`): what
    * install reads its dependencies' installs from, and an uninstall run
    * again reads how it was begun from.
@@ -560,13 +567,11 @@ async function executeUninstall(
   );
 
   // The tables the DOWNs were judged against, as they stand before the hook:
-  // what `assertHookLeftTables` compares them with once it has run. Read
-  // before the first change, so a database that cannot answer changes
-  // nothing.
-  const judged =
-    plan.finalState === "uninstalled"
-      ? await deps.tableIdentities(plan.tablesDropped)
-      : new Map<string, string | null>();
+  // what `assertHookLeftTables` compares them with once it has run. Read,
+  // and refused when unreadable, before the first change, so a database that
+  // cannot answer changes nothing.
+  const judged = await readTablesAsTheyStand(plan, deps);
+  assertIdentitiesReadable(plugin, plan, judged);
 
   // Before the first change, the hook included: an uninstall that stops part
   // way leaves this as the plugin's state, which the boot refuses and a run
@@ -687,24 +692,97 @@ function assertDownsDropTables(
 async function assertHookLeftTables(
   plugin: LifecyclePlugin,
   plan: UninstallPlan,
-  judged: ReadonlyMap<string, string | null>,
-  deps: Pick<PluginLifecycleDeps, "tableIdentities">
+  judged: TablesAsTheyStand | undefined,
+  deps: Pick<PluginLifecycleDeps, "tableIdentities" | "listTables" | "dialect">
 ): Promise<void> {
-  if (plan.finalState !== "uninstalled") return;
-  const now = await deps.tableIdentities(plan.tablesDropped);
+  if (judged === undefined) return;
+  const now = await readTablesAsTheyStand(plan, deps);
   const changed = plan.tablesDropped.filter(table => {
-    const before = judged.get(table) ?? null;
-    return before === null || now.get(table) !== before;
+    const before = judged.identities.get(table) ?? null;
+    return before === null || now?.identities.get(table) !== before;
   });
-  if (changed.length === 0) return;
-  const one = changed.length === 1;
+  if (changed.length > 0) {
+    const one = changed.length === 1;
+    throw new NextlyError({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      publicMessage: `${plugin.name}'s onUninstall dropped, renamed or replaced ${changed.join(", ")}, which its DOWN migrations were to drop, so none of them was run. Put the original ${one ? "table" : "tables"} back under ${one ? "its name" : "their names"}, in place of any table created there, then run the uninstall again.`,
+      logContext: {
+        plugin: plugin.name,
+        reason: "tables-changed-by-hook",
+        tables: changed,
+      },
+    });
+  }
+  // On SQLite an identity can be given to the replacement (a root page the
+  // original moved off in a VACUUM), so the identities alone can read as
+  // unchanged. A table renamed away, though, survives only under a name that
+  // was not there before the hook.
+  const before = judged.everyTable;
+  const created =
+    before === undefined
+      ? []
+      : [...(now?.everyTable ?? [])].filter(table => !before.has(table));
+  if (created.length === 0) return;
   throw new NextlyError({
     code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
-    publicMessage: `${plugin.name}'s onUninstall dropped, renamed or replaced ${changed.join(", ")}, which its DOWN migrations were to drop, so none of them was run. Put the original ${one ? "table" : "tables"} back under ${one ? "its name" : "their names"}, in place of any table created there, then run the uninstall again.`,
+    publicMessage: `${plugin.name}'s onUninstall created ${created.join(", ")}. On SQLite a table renamed away cannot be told from one created anew, so none of its DOWN migrations was run, as they could drop a replacement of ${plan.tablesDropped.join(", ")}. Drop or rename back what the hook created, then run the uninstall again.`,
     logContext: {
       plugin: plugin.name,
       reason: "tables-changed-by-hook",
-      tables: changed,
+      tables: plan.tablesDropped,
+      created,
+    },
+  });
+}
+
+/**
+ * The tables a full uninstall drops, as they stand: each one's identity, and
+ * on SQLite every table's name (`listTables`). Undefined for an uninstall
+ * that keeps its tables, which drops nothing a hook could put another table
+ * in place of.
+ */
+interface TablesAsTheyStand {
+  identities: ReadonlyMap<string, string | null>;
+  everyTable: ReadonlySet<string> | undefined;
+}
+
+async function readTablesAsTheyStand(
+  plan: UninstallPlan,
+  deps: Pick<PluginLifecycleDeps, "tableIdentities" | "listTables" | "dialect">
+): Promise<TablesAsTheyStand | undefined> {
+  if (plan.finalState !== "uninstalled") return undefined;
+  return {
+    identities: await deps.tableIdentities(plan.tablesDropped),
+    everyTable:
+      deps.dialect === "sqlite" ? new Set(await deps.listTables()) : undefined,
+  };
+}
+
+/**
+ * Refuse, before the hook and before the plugin is recorded uninstalling, a
+ * full uninstall one of whose tables the database reports no identity for:
+ * nothing could then show it was the table the DOWNs were judged against
+ * once the hook has run, so the uninstall could not succeed. Refused later,
+ * the hook had run and the state was recorded, and every run again would
+ * do both and fail the same way.
+ */
+function assertIdentitiesReadable(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  judged: TablesAsTheyStand | undefined
+): void {
+  if (judged === undefined) return;
+  const unreadable = plan.tablesDropped.filter(
+    table => (judged.identities.get(table) ?? null) === null
+  );
+  if (unreadable.length === 0) return;
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `The database reports no identity for ${unreadable.join(", ")}, so whether ${plugin.name}'s onUninstall leaves ${unreadable.length === 1 ? "it" : "them"} in place could not be checked. Nothing was changed. Use --keep-data to leave its tables in place.`,
+    logContext: {
+      plugin: plugin.name,
+      reason: "table-identity-unreadable",
+      tables: unreadable,
     },
   });
 }

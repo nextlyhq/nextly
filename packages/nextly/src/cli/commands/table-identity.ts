@@ -16,11 +16,14 @@
  *   cannot be told apart. The exact identifier, InnoDB's `TABLE_ID`, needs
  *   the PROCESS privilege and changes on `TRUNCATE`.
  * - SQLite: the table's root page (`sqlite_master.rootpage`), kept through a
- *   rename, an added column and deleted rows. `VACUUM` renumbers it, and a
- *   table dropped and created again may be given the page it freed.
+ *   rename, an added column and deleted rows. A page can be given again: a
+ *   table dropped and created again may get the page it freed, and one
+ *   created after a `VACUUM` may get the page a renamed table moved off. So
+ *   on SQLite a caller also needs to know whether a table appeared under a
+ *   new name, which is where a renamed original would be (`listTables`).
  *
- * Every gap is either a table read as another one, which a caller refuses
- * on, or a replacement where nothing of the original survives.
+ * Every other gap is either a table read as another one, which a caller
+ * refuses on, or a replacement where nothing of the original survives.
  *
  * @module cli/commands/table-identity
  */

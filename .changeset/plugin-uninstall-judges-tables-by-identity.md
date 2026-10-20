@@ -36,8 +36,10 @@ the name was checked, so the approved drop took the replacement, and the
 original table and its rows survived under the other name while the plugin
 was recorded uninstalled. Each table is now identified by what the database
 keeps for it (its oid on PostgreSQL, its creation time on MySQL, its root page
-on SQLite), read before and after the hook. Nothing has run when the refusal
-comes, and every module is still recorded as applied.
+on SQLite), read before and after the hook. On SQLite, where a root page can
+be given to a new table, a hook that creates a table is refused too. Nothing
+has run when the refusal comes, and every module is still recorded as
+applied.
 
 A disabled plugin's transform that moves a field into another group or tab
 keeps that field's access rule even when the collection has an index with the

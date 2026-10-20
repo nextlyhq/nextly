@@ -74,14 +74,17 @@ function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
       new Map(
         [...(await given.liveTables(tables))].map(table => [table, table])
       ),
+    // The same tables before and after any hook: a test whose hook creates
+    // one says so.
+    listTables: async () => ["fx__notes", "users"],
     ...given,
   };
 }
 
 function depsWithout(
   over: Partial<PluginLifecycleDeps>
-): Omit<PluginLifecycleDeps, "tableIdentities"> &
-  Partial<Pick<PluginLifecycleDeps, "tableIdentities">> {
+): Omit<PluginLifecycleDeps, "tableIdentities" | "listTables"> &
+  Partial<Pick<PluginLifecycleDeps, "tableIdentities" | "listTables">> {
   return {
     adapter: {} as never,
     // The owner registry reads through this. `read()` awaits the builder
@@ -600,13 +603,17 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     expect(runDown).not.toHaveBeenCalled();
   });
 
-  it("refuses when a table's identity cannot be read, running no DOWN", async () => {
+  it("refuses before the hook and the record when a table's identity cannot be read", async () => {
     // An identity the database does not report cannot show the table is the
-    // one the DOWNs were judged against, so it counts as changed.
-    const { run, runDown } = await uninstallWith(
+    // one the DOWNs were judged against, so the uninstall cannot succeed.
+    // Refused before anything changes: run past here, the hook ran and the
+    // plugin was recorded uninstalling, and every run again did the same.
+    const recordLifecycle = vi.fn(async () => {});
+    const { run, runDown, runLifecycleHook } = await uninstallWith(
       [["DROP TABLE IF EXISTS fx__notes"], []],
       ownsNotes,
       {
+        recordLifecycle,
         tableIdentities: vi.fn(
           async (tables: readonly string[]) =>
             new Map(tables.map(table => [table, null]))
@@ -615,9 +622,69 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     );
     await expect(run).rejects.toMatchObject({
       code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
-      logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
+      logContext: {
+        reason: "table-identity-unreadable",
+        tables: ["fx__notes"],
+      },
+    });
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A SQLite database in which onUninstall renames fx__notes away, runs
+   * VACUUM and creates a new fx__notes: the root page the original moved off
+   * is given to the replacement, so its identity reads the same. Only the
+   * name the original now goes by is new.
+   */
+  function rootPageReusedByHook() {
+    let hookRan = false;
+    return {
+      dialect: "sqlite" as const,
+      runLifecycleHook: vi.fn(async () => {
+        hookRan = true;
+      }),
+      tableIdentities: vi.fn(
+        async (tables: readonly string[]) =>
+          new Map(tables.map(table => [table, "4"]))
+      ),
+      listTables: vi.fn(async () =>
+        hookRan
+          ? ["fx__notes", "fx__notes_moved", "users"]
+          : ["fx__notes", "users"]
+      ),
+    };
+  }
+
+  it("refuses on SQLite once onUninstall has left a table under a new name", async () => {
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      rootPageReusedByHook()
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: {
+        reason: "tables-changed-by-hook",
+        tables: ["fx__notes"],
+        created: ["fx__notes_moved"],
+      },
     });
     expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("runs the DOWNs on SQLite when onUninstall adds no table (control)", async () => {
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        dialect: "sqlite",
+        listTables: vi.fn(async () => ["fx__notes", "users"]),
+      }
+    );
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
   });
 
   it("runs the DOWNs when onUninstall leaves each table as it was (control)", async () => {

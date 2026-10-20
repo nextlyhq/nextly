@@ -524,6 +524,10 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   ): Promise<ReadonlyMap<string, string | null>> =>
     readTableIdentities(drizzleAdapter, dialect, tables);
 
+  /** Every table in the database, as the adapter lists them. */
+  const listTables = (): Promise<readonly string[]> =>
+    drizzleAdapter.listTables();
+
   /**
    * Run one plugin's own `onInstall` / `onUninstall` against a real context.
    *
@@ -730,6 +734,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     readAppliedModules,
     liveTables,
     tableIdentities,
+    listTables,
     runLifecycleHook,
     migrationsDir: config.db?.migrationsDir,
     logger: context.logger,
