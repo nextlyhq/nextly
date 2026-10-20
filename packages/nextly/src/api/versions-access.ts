@@ -757,16 +757,20 @@ export async function tryResolveCurrentFields(
   slug: string
 ): Promise<FieldConfig[] | null> {
   try {
+    // An entity that is not there is a lookup that found nothing, not one
+    // with no fields: answered as `null`, so a caller that must fail closed
+    // does, rather than treating a missing schema as nothing to look for.
     if (scopeKind === "single") {
       const registry = getService("singleRegistryService");
       const record = await registry.getSingleBySlug(slug);
-      return record?.fields ?? [];
+      return record ? (record.fields ?? []) : null;
     }
     const collections = getService("collectionService");
     // Metadata lookup only; the context carries no user because the access
     // decision was already made above and this is just a field-shape read.
     const collection = await collections.getCollection(slug, {});
-    return ((collection as { fields?: unknown[] } | null)?.fields ??
+    if (!collection) return null;
+    return ((collection as { fields?: unknown[] }).fields ??
       []) as FieldConfig[];
   } catch {
     return null;

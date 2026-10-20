@@ -27,7 +27,9 @@ import {
   stripAutosavePasswords,
 } from "../api/versions-access";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
+import { runWithCallerScope } from "../auth/caller-scope";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
+import { runAsPrincipal } from "../auth/principal-scope";
 import type { RequestActor } from "../auth/request-actor";
 import {
   authorizeChecked,
@@ -36,10 +38,11 @@ import {
 } from "../direct-api/namespaces/helpers";
 import type { DirectAPIConfig } from "../direct-api/types";
 import type { UserContext } from "../domains/singles/types";
-import type {
-  AutosaveWriteResult,
-  VersionRef,
-  VersionRow,
+import {
+  serializeVersionSnapshot,
+  type AutosaveWriteResult,
+  type VersionRef,
+  type VersionRow,
 } from "../domains/versions/versions-repository";
 import type { VersionsService } from "../domains/versions/versions-service";
 import { NextlyError } from "../errors/nextly-error";
@@ -97,11 +100,95 @@ export interface PluginVersionWrites {
   ): Promise<AutosaveWriteResult>;
 }
 
+/** A plugin's options, as every plugin service resolves them. */
+type ResolvedOpts = Awaited<ReturnType<typeof resolveServiceOpts>>;
+
+/**
+ * Run one write as the call names it: in a frame of its own, with the person
+ * it names (or none) and the scope it resolved, as `services.collections` runs
+ * its calls. Without the fresh frame, a write the plugin makes from inside an
+ * operation run as one of its own people would be judged as that person
+ * rather than as the caller it names.
+ */
+async function asCalled<T>(
+  opts: ServiceOpts | undefined,
+  run: (resolved: ResolvedOpts) => Promise<T>
+): Promise<T> {
+  const named = opts ?? {};
+  const resolved = await resolveServiceOpts(named);
+  return runAsPrincipal(named.principal ?? null, () =>
+    runWithCallerScope(resolved.authenticatedScope, () => run(resolved))
+  );
+}
+
+/**
+ * The snapshot as the store will keep it, copied so it can be stripped
+ * without changing the plugin's object. Read back from the store's own
+ * serialization, so it takes what the store takes: a function is left out, a
+ * `toJSON` is honoured, and what cannot be written is refused as it always was.
+ */
+function storedCopy(snapshot: unknown): unknown {
+  return JSON.parse(serializeVersionSnapshot(snapshot)) as unknown;
+}
+
 /** The person a checked history write is made as. */
 interface HistoryWriter {
   user: UserContext;
   authenticatedScope?: AuthenticatedScope;
   actor: RequestActor;
+}
+
+/**
+ * The history handler's own gates, in its order: the entity read permission
+ * (refused as not found), the document readable (not found), the document
+ * updatable (forbidden), and for an autosave the entity's autosave setting.
+ */
+async function assertHandlerGates(
+  ref: VersionRef & { scopeKind: "collection" | "single" },
+  user: UserContext,
+  resolved: ResolvedOpts,
+  write: "label" | "discard" | "autosave",
+  logContext: Record<string, unknown>
+): Promise<void> {
+  const authenticatedScope = resolved.authenticatedScope;
+  if (
+    !(await canReadEntity(
+      ref.scopeSlug,
+      readAccessCaller({ user, authenticatedScope })
+    ))
+  ) {
+    throw NextlyError.notFound({
+      logContext: { ...logContext, reason: "history-write-read-denied" },
+    });
+  }
+  // With what the plugin handed its hooks, so a read hook that narrows by the
+  // request or the context answers as it would for the caller's own read.
+  await assertVersionDocumentReadable(
+    ref.scopeKind,
+    ref.scopeSlug,
+    ref.entryId,
+    user,
+    authenticatedScope,
+    {
+      ...(resolved.request === undefined ? {} : { request: resolved.request }),
+      ...(resolved.context === undefined ? {} : { context: resolved.context }),
+    }
+  );
+  await assertDocumentUpdatable(
+    ref.scopeKind,
+    ref.scopeSlug,
+    ref.entryId,
+    user,
+    authenticatedScope
+  );
+  if (write === "autosave") {
+    const policy = await resolveVersionsPolicy(ref.scopeKind, ref.scopeSlug);
+    if (!policy?.drafts?.autosave?.enabled) {
+      throw NextlyError.forbidden({
+        logContext: { ...logContext, reason: "autosave-not-enabled" },
+      });
+    }
+  }
 }
 
 /**
@@ -116,11 +203,9 @@ interface HistoryWriter {
  */
 async function checkedWriter(
   ref: VersionRef,
-  opts: ServiceOpts | undefined,
+  resolved: ResolvedOpts,
   write: "label" | "discard" | "autosave"
 ): Promise<HistoryWriter | null> {
-  if (opts === undefined) return null;
-  const resolved = await resolveServiceOpts(opts);
   const config: DirectAPIConfig = {
     overrideAccess: resolved.overrideAccess,
     user: resolved.user,
@@ -152,39 +237,15 @@ async function checkedWriter(
 
   // The handler's half, in the handler's order.
   const user = resolved.user as unknown as UserContext;
+  // Page history was refused above, so the kind is a collection or a Single.
+  await assertHandlerGates(
+    { ...ref, scopeKind: ref.scopeKind },
+    user,
+    resolved,
+    write,
+    logContext
+  );
   const authenticatedScope = resolved.authenticatedScope;
-  if (
-    !(await canReadEntity(
-      ref.scopeSlug,
-      readAccessCaller({ user, authenticatedScope })
-    ))
-  ) {
-    throw NextlyError.notFound({
-      logContext: { ...logContext, reason: "history-write-read-denied" },
-    });
-  }
-  await assertVersionDocumentReadable(
-    ref.scopeKind,
-    ref.scopeSlug,
-    ref.entryId,
-    user,
-    authenticatedScope
-  );
-  await assertDocumentUpdatable(
-    ref.scopeKind,
-    ref.scopeSlug,
-    ref.entryId,
-    user,
-    authenticatedScope
-  );
-  if (write === "autosave") {
-    const policy = await resolveVersionsPolicy(ref.scopeKind, ref.scopeSlug);
-    if (!policy?.drafts?.autosave?.enabled) {
-      throw NextlyError.forbidden({
-        logContext: { ...logContext, reason: "autosave-not-enabled" },
-      });
-    }
-  }
 
   return {
     user,
@@ -223,39 +284,52 @@ export function pluginVersionWrites(
   service: () => VersionsService
 ): PluginVersionWrites {
   return {
-    async setLabel(ref, versionNo, label, by, opts) {
-      const writer = await checkedWriter(ref, opts, "label");
-      if (!writer) return service().setLabel(ref, versionNo, label, by);
-      if (by && !namesWriter(by.actor, writer)) refuseOtherAuthor(ref, "label");
-      return service().setLabel(ref, versionNo, label, {
-        actor: writer.actor,
-        personName: by?.personName ?? writer.user.name ?? null,
+    setLabel(ref, versionNo, label, by, opts) {
+      return asCalled(opts, async resolved => {
+        const writer = await checkedWriter(ref, resolved, "label");
+        if (!writer) return service().setLabel(ref, versionNo, label, by);
+        if (by && !namesWriter(by.actor, writer)) {
+          refuseOtherAuthor(ref, "label");
+        }
+        // The namer is the writer, by the name the writer is known by: never
+        // a name the plugin passes, which could be anyone's. A key whose own
+        // id is not known here is named by no one, as an event naming its
+        // owner would put a person against a change they did not make.
+        const namer =
+          writer.actor.id === undefined
+            ? undefined
+            : { actor: writer.actor, personName: writer.user.name ?? null };
+        return service().setLabel(ref, versionNo, label, namer);
       });
     },
 
-    async deleteWorkingDraft(ref, locale, opts) {
-      await checkedWriter(ref, opts, "discard");
-      return service().deleteWorkingDraft(ref, locale);
+    deleteWorkingDraft(ref, locale, opts) {
+      return asCalled(opts, async resolved => {
+        await checkedWriter(ref, resolved, "discard");
+        return service().deleteWorkingDraft(ref, locale);
+      });
     },
 
-    async autosave(input, opts) {
-      const writer = await checkedWriter(input.ref, opts, "autosave");
-      const named = input.createdBy ?? null;
-      if (writer && named !== null && named !== writer.user.id) {
-        refuseOtherAuthor(input.ref, "autosave");
-      }
-      // Stored as REST stores one, without password values, whoever the call
-      // is made as. A copy is stripped: the snapshot is the plugin's object.
-      const snapshot: unknown = structuredClone(input.snapshot);
-      await stripAutosavePasswords(
-        input.ref.scopeKind,
-        input.ref.scopeSlug,
-        snapshot
-      );
-      return service().autosave({
-        ...input,
-        snapshot,
-        ...(writer ? { createdBy: writer.user.id } : {}),
+    autosave(input, opts) {
+      return asCalled(opts, async resolved => {
+        const writer = await checkedWriter(input.ref, resolved, "autosave");
+        const named = input.createdBy ?? null;
+        if (writer && named !== null && named !== writer.user.id) {
+          refuseOtherAuthor(input.ref, "autosave");
+        }
+        // Stored as REST stores one, without password values, whoever the
+        // call is made as.
+        const snapshot = storedCopy(input.snapshot);
+        await stripAutosavePasswords(
+          input.ref.scopeKind,
+          input.ref.scopeSlug,
+          snapshot
+        );
+        return service().autosave({
+          ...input,
+          snapshot,
+          ...(writer ? { createdBy: writer.user.id } : {}),
+        });
       });
     },
   };
