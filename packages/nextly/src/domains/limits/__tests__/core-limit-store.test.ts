@@ -214,3 +214,19 @@ describe("coreLimitStore with a window the settings accept but a store would ref
     }
   );
 });
+
+describe("coreLimitStore with a window longer than a year", () => {
+  it("counts an attempt for the whole window the settings name", async () => {
+    // The settings accept any positive window, and the earlier stores used it
+    // as given: an eighteen-month window still counts after twelve.
+    const day = 24 * 60 * 60 * 1000;
+    const window = 548 * day;
+    const { store, advance } = clocked();
+    const limiter = new RateLimiter(coreLimitStore(store, SECRET));
+
+    await limiter.check("k", 3, window);
+    advance(400 * day);
+
+    expect(await limiter.peek("k", window)).toBe(1);
+  });
+});

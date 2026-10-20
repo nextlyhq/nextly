@@ -33,13 +33,18 @@ import type { LimitStore, StoredLimit } from "./limit-store";
 /** How many buckets a window is counted in. */
 const BUCKETS = 32;
 
-/** The longest window counted, so an entry's expiry stays a safe integer. */
-const LONGEST_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
+/**
+ * The longest window counted: half the safe integers, so an entry's expiry,
+ * a clock reading plus a window, stays a safe integer. Far past any window a
+ * setting means, so a finite window is honoured as given.
+ */
+const LONGEST_WINDOW_MS = Math.floor(Number.MAX_SAFE_INTEGER / 2);
 
 /**
- * A window as whole milliseconds, at least one and at most a year. The
- * settings accept any positive number, and a store refuses an expiry that is
- * fractional or past the safe integers, which would fail the request.
+ * A window as whole milliseconds, at least one and at most
+ * {@link LONGEST_WINDOW_MS}. The settings accept any positive number, and a
+ * store refuses an expiry that is fractional or past the safe integers, which
+ * would fail the request.
  */
 function wholeWindow(windowMs: number): number {
   if (!Number.isFinite(windowMs)) return LONGEST_WINDOW_MS;
