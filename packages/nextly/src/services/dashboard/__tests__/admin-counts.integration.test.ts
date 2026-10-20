@@ -14,6 +14,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
@@ -25,6 +26,9 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
+import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
+import { apiKeys as apiKeysSqlite } from "../../../schemas/api-keys/sqlite";
 import { ServiceContainer } from "../../index";
 
 // Each case makes real requests through the whole handler. Set
@@ -130,8 +134,32 @@ describe.each(getConfiguredTestDialects())(
             roleId?: string;
             expiresIn: string;
           }
-        ) => Promise<{ key: string }>;
+        ) => Promise<{ key: string; meta: { id: string } }>;
+        revokeApiKey: (id: string, userId: string) => Promise<void>;
       };
+
+    /**
+     * Lapses a key a day ago by its row, since no request makes a key that is already expired.
+     * The api_keys table of the dialect under test, as the key service picks it.
+     */
+    async function expire(keyId: string): Promise<void> {
+      const table = {
+        postgresql: apiKeysPg,
+        mysql: apiKeysMysql,
+        sqlite: apiKeysSqlite,
+      }[dialect] as typeof apiKeysPg;
+      const db = handle.adapter.getDrizzle() as unknown as {
+        update: (t: unknown) => {
+          set: (values: unknown) => {
+            where: (cond: unknown) => Promise<unknown>;
+          };
+        };
+      };
+      await db
+        .update(table)
+        .set({ expiresAt: new Date(Date.now() - 24 * 60 * 60 * 1000) })
+        .where(eq(table.id, keyId));
+    }
 
     async function account(email: string): Promise<string> {
       const created = await nextly().users.create({
@@ -186,6 +214,33 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(res.status).toBe(200);
       return (await res.json()) as StatsBody;
+    }
+
+    /**
+     * The keys the API-key list shows this caller: how many in all, and how many of them the
+     * summary counts, the active and unexpired ones. Read from the list endpoint itself, so the
+     * count is held to the list rather than to a number written here. The list takes no filter,
+     * so the active-and-unexpired cut is made here, and the case below seeds a revoked and an
+     * expired key so the cut is seen to remove something.
+     */
+    async function listedKeys(
+      headers: Record<string, string>
+    ): Promise<{ all: number; countable: number }> {
+      const res = await createDynamicHandlers().GET(
+        new Request("http://localhost/api/api-keys", { headers }),
+        { params: Promise.resolve({ params: ["api-keys"] }) }
+      );
+      expect(res.status).toBe(200);
+      const { items } = (await res.json()) as {
+        items: { isActive: boolean; expiresAt: string | null }[];
+      };
+      const now = Date.now();
+      const countable = items.filter(
+        key =>
+          key.isActive &&
+          (key.expiresAt === null || Date.parse(key.expiresAt) > now)
+      ).length;
+      return { all: items.length, countable };
     }
 
     beforeAll(async () => {
@@ -260,17 +315,40 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(["permissions", "roles"]);
     });
 
-    it("counts for a key administrator only the keys they could list", async () => {
-      // 🔴 The API-key list shows a caller who is not a super-admin their OWN
-      // keys only, so the count follows it: the super-admin owns two keys
-      // here and this caller one, and an installation-wide count would
-      // disclose the two it cannot see.
-      const own = await stats(await sessionHeaders(keyAdmin));
+    it("counts for a key administrator every key their list shows", async () => {
+      // 🔴 The API-key list shows anyone who may read keys every key, whoever owns it, and
+      // the count follows the list. The plausible slip is a count narrowed to the caller's
+      // own keys: one here, where the list shows the super-admin's key as well.
+      // A revoked key and an expired one, both the super-admin's: listed, never counted.
+      const revoked = await apiKeys().createApiKey(admin.id, {
+        name: "revoked",
+        tokenType: "role-based",
+        roleId: await role("revoked-role", ["read-users"]),
+        expiresIn: "unlimited",
+      });
+      await apiKeys().revokeApiKey(revoked.meta.id, admin.id);
+      const lapsed = await apiKeys().createApiKey(admin.id, {
+        name: "lapsed",
+        tokenType: "role-based",
+        roleId: await role("lapsed-role", ["read-users"]),
+        expiresIn: "7d",
+      });
+      await expire(lapsed.meta.id);
+
+      const headers = await sessionHeaders(keyAdmin);
+      const own = await stats(headers);
       expect(carried(own)).toEqual(["apiKeys"]);
-      expect(own.apiKeys).toBe(1);
-      // The control: the super-admin, whose list is every key, counts them all.
-      const all = await stats(await sessionHeaders(admin));
-      expect(Number(all.apiKeys)).toBeGreaterThan(1);
+      const listed = await listedKeys(headers);
+      // The controls: the cut removes exactly the revoked and the expired key, and what is
+      // left still reaches a key this caller does not own, so a count of their own keys alone
+      // would differ from it.
+      expect(listed.all).toBe(listed.countable + 2);
+      expect(listed.countable).toBeGreaterThan(1);
+      expect(own.apiKeys).toBe(listed.countable);
+      // And the super-admin, whose list is the same keys, counts the same.
+      expect((await stats(await sessionHeaders(admin))).apiKeys).toBe(
+        listed.countable
+      );
     });
 
     it("answers a refused caller the same whether or not the rows exist", async () => {
