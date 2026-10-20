@@ -20,6 +20,10 @@ import {
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
+import {
+  roleChangeCallerFor,
+  runAsRoleChangeCaller,
+} from "../../domains/auth/services/super-admin-grant";
 import type { RouteGrant } from "../../domains/auth/system-write-policy";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
@@ -313,6 +317,24 @@ export async function checkWrite(
   const caller = checkedCaller(defaultConfig, args);
   if (caller) await authorizeChecked(caller, grant);
   return caller;
+}
+
+/**
+ * A write that may change who holds which role, run as REST runs it: checked
+ * first, when the call asks to be, and then as its caller for the rule on
+ * granting super-admin, which only a super-admin person passes and an API key
+ * never does. A trusted call runs as trusted server code, which that rule
+ * allows.
+ */
+export async function checkedRoleChange<T>(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig,
+  grant: RouteGrant,
+  write: () => Promise<T>
+): Promise<T> {
+  const caller = await checkWrite(defaultConfig, args, grant);
+  if (!caller) return write();
+  return runAsRoleChangeCaller(roleChangeCallerFor(caller), write);
 }
 
 /**

@@ -8,10 +8,7 @@
  * @packageDocumentation
  */
 
-import {
-  roleChangeCallerFor,
-  runAsRoleChangeCaller,
-} from "../../domains/auth/services/super-admin-grant";
+import { SYSTEM_WRITE_POLICY } from "../../domains/auth/system-write-policy";
 import { NextlyError } from "../../errors/nextly-error";
 import type { User } from "../../services/users/user-service";
 import type {
@@ -21,19 +18,17 @@ import type {
   FindUserByIDArgs,
   FindUsersArgs,
   ListResult,
-  DirectAPIConfig,
   MutationResult,
   UpdateUserArgs,
 } from "../types/index";
 
 import type { NextlyContext } from "./context";
 import {
-  checkWrite,
+  checkedRoleChange,
   createRequestContext,
   isNotFoundError,
   mergeConfig,
   toListResult,
-  type RouteGrant,
 } from "./helpers";
 
 /**
@@ -49,33 +44,6 @@ export interface UsersNamespace {
   create(args: CreateUserArgs): Promise<MutationResult<User>>;
   update(args: UpdateUserArgs): Promise<MutationResult<User>>;
   delete(args: DeleteUserArgs): Promise<MutationResult<{ id: string }>>;
-}
-
-/**
- * What each user write asks of a checked caller: the permission the REST
- * route asks (`requirePermission(req, action, "users")`).
- */
-const USER_WRITE = {
-  create: { action: "create", resource: "users" },
-  update: { action: "update", resource: "users" },
-  delete: { action: "delete", resource: "users" },
-} as const satisfies Record<string, RouteGrant>;
-
-/**
- * Run a user write as REST runs it: checked first, when the call asks to be,
- * and then as its caller for the rule on granting super-admin, which only a
- * super-admin person passes and an API key never does. A trusted call runs as
- * trusted server code, which that rule allows.
- */
-async function userWrite<T>(
-  ctx: NextlyContext,
-  args: DirectAPIConfig,
-  grant: RouteGrant,
-  write: () => Promise<T>
-): Promise<T> {
-  const caller = await checkWrite(ctx.defaultConfig, args, grant);
-  if (!caller) return write();
-  return runAsRoleChangeCaller(roleChangeCallerFor(caller), write);
 }
 
 /**
@@ -139,19 +107,23 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
     async create(args: CreateUserArgs): Promise<MutationResult<User>> {
       const data = args.data ?? {};
       const { name, image, roles, isActive, ...customFields } = data;
-      const user = await userWrite(ctx, args, USER_WRITE.create, () =>
-        ctx.userService.create(
-          {
-            email: args.email,
-            name: (name as string) ?? "",
-            password: args.password,
-            image: image as string | undefined,
-            roles: roles as string[] | undefined,
-            isActive: isActive as boolean | undefined,
-            ...customFields,
-          },
-          createRequestContext(args)
-        )
+      const user = await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.users.create,
+        () =>
+          ctx.userService.create(
+            {
+              email: args.email,
+              name: (name as string) ?? "",
+              password: args.password,
+              image: image as string | undefined,
+              roles: roles as string[] | undefined,
+              isActive: isActive as boolean | undefined,
+              ...customFields,
+            },
+            createRequestContext(args)
+          )
       );
       // matching the wire API. Hardcoded noun ("User") since this is the
       // users-specific namespace.
@@ -174,19 +146,23 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       const { email, name, image, emailVerified, isActive, ...customFields } =
         data;
       const id = args.id;
-      const user = await userWrite(ctx, args, USER_WRITE.update, () =>
-        ctx.userService.update(
-          id,
-          {
-            email: email as string | undefined,
-            name: name as string | undefined,
-            image: image as string | undefined,
-            emailVerified: emailVerified as Date | null | undefined,
-            isActive: isActive as boolean | undefined,
-            ...customFields,
-          },
-          createRequestContext(args)
-        )
+      const user = await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.users.update,
+        () =>
+          ctx.userService.update(
+            id,
+            {
+              email: email as string | undefined,
+              name: name as string | undefined,
+              image: image as string | undefined,
+              emailVerified: emailVerified as Date | null | undefined,
+              isActive: isActive as boolean | undefined,
+              ...customFields,
+            },
+            createRequestContext(args)
+          )
       );
       return {
         message: "User updated.",
@@ -206,8 +182,11 @@ export function createUsersNamespace(ctx: NextlyContext): UsersNamespace {
       }
 
       const id = args.id;
-      await userWrite(ctx, args, USER_WRITE.delete, () =>
-        ctx.userService.delete(id, createRequestContext(args))
+      await checkedRoleChange(
+        ctx.defaultConfig,
+        args,
+        SYSTEM_WRITE_POLICY.users.delete,
+        () => ctx.userService.delete(id, createRequestContext(args))
       );
       // For deletes the `item` is just the deleted id so callers can still
       // chain on something concrete (matches the wire API's `{ id }` shape
