@@ -30,6 +30,17 @@ export const draftPreviewSchema = z.object({
     useLayout: z.boolean(),
     kind: z.enum(["template", "layout", "partial"]),
     layoutId: z.string().nullable().default(null),
+    /**
+     * The saved template these fields are a draft of, if any. Without
+     * `legacy`, its engine decides the preview's: one kept on the old engine
+     * previews as it sends.
+     */
+    id: z.string().optional(),
+    /**
+     * Preview with the old `{{variable}}` engine (true) or Liquid (false),
+     * whatever the saved template uses.
+     */
+    legacy: z.boolean().optional(),
   }),
   data: z.record(z.string(), z.unknown()),
 });

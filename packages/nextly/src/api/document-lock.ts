@@ -27,6 +27,7 @@ import {
   readAccessCaller,
 } from "../auth/entity-read-access";
 import {
+  authorizeCaller,
   isErrorResponse,
   requireAuthentication,
   type AuthContext,
@@ -103,6 +104,13 @@ function readRef(source: {
  * renewing need UPDATE, because a lock is a statement that you are editing, and
  * someone who cannot edit is not.
  *
+ * A claim's UPDATE is asked exactly as the REST update of the document asks
+ * it (`authorizeCaller`, the route gate's decision): an API key must hold the
+ * grant AND pass the collection's or Single's own `update` rule. A key judged
+ * on its grant alone could claim, and take over, a document whose rule refuses
+ * it every edit. The document gate below is then told the route ran, which is
+ * true, because the same question has just been asked.
+ *
  * 🔴 UPDATE means THIS document, not documents of this kind. `update-<slug>` is
  * the coarse route permission and says only the latter, so a document the caller
  * cannot actually load — a draft they may not see, a row that is gone — is
@@ -112,15 +120,15 @@ function readRef(source: {
  * row. The gate the version routes already use runs here, for the reason its
  * own docblock gives.
  *
- * A release stops at the coarse permission, because it is the opposite
- * statement: that this editor has STOPPED editing. The document gate reads the
- * row, so the holder's own save can flip its answer mid-claim, and asking it on
- * the way out would refuse the departing editor's own DELETE and strand the
- * claim until its lease lapsed, leaving colleagues a holder who has already
- * left. What a release actually rests on is the claim token, which names the one
+ * A release stops at the grant alone, because it is the opposite statement:
+ * that this editor has STOPPED editing. The document gate reads the row, so
+ * the holder's own save can flip its answer mid-claim, and a code rule can
+ * change while the claim is held; asking either on the way out would refuse
+ * the departing editor's own DELETE and strand the claim until its lease
+ * lapsed, leaving colleagues a holder who has already left. What a release actually rests on is the claim token, which names the one
  * acquisition being given up and fences the DELETE itself.
  *
- * Both helpers are entity-generic and read the collection and single maps
+ * Both gates are entity-generic and read the collection and single maps
  * alike, so a Single needs no branch here, and both delegate to the canonical
  * machinery rather than reproducing the API-key and super-admin rules that
  * `canReadEntity` documents at length.
@@ -135,7 +143,9 @@ async function authorize(
   const allowed =
     intent === "read"
       ? await canReadEntity(ref.slug, caller)
-      : await callerHoldsPermission(`update-${ref.slug}`, caller);
+      : intent === "claim"
+        ? !isErrorResponse(await authorizeCaller(auth, "update", ref.slug))
+        : await callerHoldsPermission(`update-${ref.slug}`, caller);
 
   if (!allowed) {
     // The same refusal either way. Distinguishing "no such document" from "not

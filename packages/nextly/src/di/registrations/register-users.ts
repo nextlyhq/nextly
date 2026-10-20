@@ -11,6 +11,11 @@
  *   EmailService for verification/reset flows.
  */
 
+import {
+  assertPasswordHasherContract,
+  DEFAULT_MIN_PASSWORD_LENGTH,
+  setMinPasswordLength,
+} from "../../auth/password/policy";
 import { resolveWebhookWritePathInfra } from "../../domains/webhooks/write-path-infra";
 import type { EmailService } from "../../services/email/email-service";
 import { UserAccountService } from "../../services/users/user-account-service";
@@ -25,6 +30,19 @@ import type { RegistrationContext } from "./types";
 
 export function registerUserServices(ctx: RegistrationContext): void {
   const { adapter, logger, config, passwordHasher } = ctx;
+
+  // The configured digester must declare its reach contract before anything
+  // consults it. A hasher the flows do not name is judged by the flows that
+  // hash with it (UserService passes it explicitly); there is no process-wide
+  // default for it — a check defaults to the digester its own flow hashes
+  // with, which for every core flow is bcrypt.
+  if (passwordHasher) assertPasswordHasherContract(passwordHasher);
+
+  // Always overwrite the configured minimum, so a registration whose config
+  // omits it returns to the default instead of keeping the previous one's.
+  setMinPasswordLength(
+    config.auth?.minPasswordLength ?? DEFAULT_MIN_PASSWORD_LENGTH
+  );
 
   // UserFieldDefinitionService — CRUD for custom user field metadata.
   container.registerSingleton<UserFieldDefinitionService>(

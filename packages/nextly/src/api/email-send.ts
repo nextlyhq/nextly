@@ -26,7 +26,10 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { sendOutcomeMessage } from "../domains/email/send-outcome";
-import { isSendableAddress } from "../domains/email/services/recipients";
+import {
+  isSendableAddress,
+  isSendableAddressList,
+} from "../domains/email/services/recipients";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
@@ -40,9 +43,11 @@ async function getEmailService(): Promise<EmailService> {
   return container.get<EmailService>("emailService");
 }
 
+// One address, or a comma-joined list of them, as the service reads a `to`
+// entry: both routes accept exactly what every other way of sending does.
 const recipientSchema = z
   .string()
-  .refine(isSendableAddress, "A valid recipient email is required");
+  .refine(isSendableAddressList, "A valid recipient email is required");
 
 const attachmentInputSchema = z.object({
   mediaId: z.string().min(1, "mediaId is required"),

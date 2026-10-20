@@ -41,17 +41,27 @@ async function removeTokenHashIndexes(fresh: FreshDatabase): Promise<void> {
   }
 }
 
-/** A reset token and a verification token issued before the indexes. */
+/**
+ * A reset token and a verification token issued before the indexes, each bound
+ * to the account it was issued for, as every token is once the core reconcile
+ * has bound it. A token with no account is the binding step's to bind or
+ * remove, which would change the rows this test says an index leaves alone.
+ */
 async function insertLegacyTokens(fresh: FreshDatabase): Promise<void> {
   // Seconds on SQLite, where the columns are integer timestamps.
   const at = (sqlite: string, other: string) =>
     fresh.dialect === "sqlite" ? sqlite : `'${other}'`;
   const expires = at("1893456000", "2030-01-01 00:00:00");
   const created = at("1767225600", "2026-01-01 00:00:00");
+  const active = fresh.dialect === "postgresql" ? "true" : "1";
+  await fresh.exec(
+    "INSERT INTO users (id, email, is_active, failed_login_attempts, created_at, updated_at) " +
+      `VALUES ('legacy-user', 'legacy@example.com', ${active}, 0, ${created}, ${created})`
+  );
   for (const table of ["password_reset_tokens", "email_verification_tokens"]) {
     await fresh.exec(
-      `INSERT INTO ${table} (identifier, token_hash, expires, created_at) ` +
-        `VALUES ('legacy@example.com', 'legacy-${table}', ${expires}, ${created})`
+      `INSERT INTO ${table} (identifier, user_id, token_hash, expires, created_at) ` +
+        `VALUES ('legacy@example.com', 'legacy-user', 'legacy-${table}', ${expires}, ${created})`
     );
   }
 }

@@ -389,6 +389,11 @@ export interface ResolvedAttachment {
  * Each email provider (SMTP, Resend, SendLayer) implements this
  * interface. The `EmailService` resolves the active provider and
  * delegates to its `send()` method.
+ *
+ * A failed send is reported by throwing. To say whether a retry can help,
+ * throw an error carrying `emailFailure: { retryable, status?, reason }`
+ * (`ClassifiedEmailError` in `domains/email/failure`); a failure without one
+ * counts as retryable.
  */
 export interface EmailProviderAdapter {
   /**
@@ -474,5 +479,18 @@ export interface EmailProviderAdapter {
      * writes against.
      */
     rejected?: string[];
+    /**
+     * @experimental What each refused recipient's refusal says about trying
+     * again, by the same bare mailbox as `rejected`.
+     *
+     * Optional: a refusal with no entry here counts as retryable, as any
+     * failure an adapter did not classify does.
+     */
+    refusals?: Array<{
+      address: string;
+      retryable: boolean;
+      status?: number;
+      reason?: string;
+    }>;
   }>;
 }

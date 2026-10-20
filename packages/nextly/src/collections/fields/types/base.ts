@@ -14,7 +14,7 @@ import type React from "react";
 
 import type { FieldHookHandler } from "@nextly/hooks/types";
 
-import type { Principal } from "../../../plugins/principals/types";
+import type { AccessRuleContext } from "../../../shared/types/access";
 
 // ============================================================
 // Field Type Union
@@ -152,37 +152,21 @@ export interface RequestContext {
  * };
  * ```
  */
-export type AccessFunction = (args: {
-  /** Request context with user and locale information */
-  req: RequestContext;
-  /** Document ID (available for read/update operations) */
-  id?: string;
-  /** Document data being created or updated */
-  data?: Record<string, unknown>;
+export type AccessFunction = (
   /**
-   * The caller's effective permissions, as `resource:action` — the SAME
-   * spelling collection-level access control receives, so a rule reads the
-   * same string wherever it is written.
+   * The one context every access rule is handed, a collection's and a
+   * Single's alike: `req`, `id` and `data` as a field rule has always read
+   * them, with the caller (`user`, `roles`, `principal`), its `permissions`
+   * spelled as the role screen spells them (`read-posts`), the `operation`
+   * and the `target` the field belongs to.
    *
-   * Note that this is not how a permission is spelled in the database or in
-   * the admin's permission matrix, where it is `action-resource`. The two are
-   * composed from one row and mean the same thing; only the string differs.
-   *
-   * Empty for an unauthenticated caller, and empty if the lookup fails — a
-   * rule that asks for a permission therefore denies rather than opens when
-   * grants cannot be read.
+   * For a plugin-defined person, `req.user` is absent and `permissions` and
+   * `roles` are empty: a person is never staff and holds neither. A caller
+   * whose grants cannot be read is handed none, so a rule that asks for a
+   * permission denies rather than opens.
    */
-  permissions: string[];
-  /** The caller's role slugs, including roles inherited from other roles. */
-  roles: string[];
-  /**
-   * @experimental The plugin-defined signed-in person the operation is made
-   * as, or `null` for any other caller. For a person, `req.user` is
-   * absent and `permissions` and `roles` are empty: a person is never
-   * staff and holds neither.
-   */
-  principal: Principal | null;
-}) => boolean | Promise<boolean>;
+  args: AccessRuleContext
+) => boolean | Promise<boolean>;
 
 /**
  * Field-level access control configuration.

@@ -32,6 +32,8 @@ export interface NodemailerModule {
     sendMail: (message: unknown) => Promise<{
       messageId?: string;
       rejected?: unknown[];
+      /** One error per refused recipient, with its `recipient` and reply code. */
+      rejectedErrors?: unknown[];
     }>;
     verify: () => Promise<unknown>;
     close: () => void;

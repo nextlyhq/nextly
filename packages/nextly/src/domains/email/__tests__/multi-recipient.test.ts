@@ -33,6 +33,7 @@ import type { Logger } from "../../../shared/types";
 import type { EmailProviderService } from "../services/email-provider-service";
 import { EmailService } from "../services/email-service";
 import type { EmailTemplateService } from "../services/email-template-service";
+import { DEFAULT_APP_NAME, renderTemplate } from "../services/render-template";
 import {
   RESEND_MAX_TO,
   createResendProvider,
@@ -155,6 +156,9 @@ function build(adapter: EmailProviderAdapter) {
       .fn()
       .mockResolvedValue({ template: TEMPLATE, preferCode: false }),
     getLayout: vi.fn(),
+    renderStored: vi.fn((template, data) =>
+      renderTemplate(template, null, data, { appName: DEFAULT_APP_NAME })
+    ),
   } as unknown as EmailTemplateService;
   const recorded: Array<Record<string, unknown>> = [];
   const deliveries = {

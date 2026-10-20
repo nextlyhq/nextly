@@ -18,14 +18,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { act, render, screen } from "@admin/__tests__/utils";
 
-const { headerProps, paneProps, mintArgs, revisionArgs, localization } =
-  vi.hoisted(() => ({
+const { headerProps, paneProps, revisionArgs, localization } = vi.hoisted(
+  () => ({
     headerProps: vi.fn(),
     revisionArgs: vi.fn(),
     paneProps: vi.fn(),
-    mintArgs: vi.fn(),
     localization: { current: { defaultLocale: "en" } },
-  }));
+  })
+);
 
 vi.mock(
   "@admin/components/features/entries/EntryForm/EntrySystemHeader",
@@ -83,13 +83,6 @@ vi.mock("@admin/hooks/useLocalization", () => ({
     fallback: true,
     getLocale: () => undefined,
   }),
-}));
-
-vi.mock("@admin/hooks/usePreviewLink", () => ({
-  usePreviewLink: (args: unknown) => {
-    mintArgs(args);
-    return { mutate: vi.fn(), isPending: false };
-  },
 }));
 
 import { SingleForm } from "../SingleForm";
@@ -169,11 +162,12 @@ describe("SingleForm offers the preview pane", () => {
     renderForm({ locale: "fr" });
 
     // The property, asserted as an EQUALITY rather than as two independently
-    // plausible values: the pane's scope and the link's request are one object,
-    // so they cannot drift into previewing different languages.
-    const minted = mintArgs.mock.calls[0]?.[0];
-    expect(minted).toEqual({ single: "landing-page", locale: "fr" });
-    expect(lastPaneProps().scope).toEqual(minted);
+    // plausible values: the pane's scope and the document a link is shared
+    // for are one object, so they cannot drift into previewing different
+    // languages.
+    const shared = lastHeaderProps().shareDocument;
+    expect(shared).toEqual({ single: "landing-page", locale: "fr" });
+    expect(lastPaneProps().scope).toEqual(shared);
   });
 
   it("calls the pane by the Single's OWN word for it", () => {

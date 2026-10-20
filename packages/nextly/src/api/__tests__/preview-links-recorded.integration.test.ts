@@ -690,33 +690,39 @@ describe.each(getConfiguredTestDialects())(
         expect(await opens(link.token)).toBe(true);
       });
 
-      it("refuses a key with edit grants on the entry a link, and records none", async () => {
-        const install = await boot(dialect);
-        const keys = install.t.getService("apiKeyService") as unknown as {
-          createApiKey: (
-            userId: string,
-            input: { name: string; tokenType: string; expiresIn: string }
-          ) => Promise<{ key: string }>;
-        };
-        // The editor's own full-access key: it holds every grant the editor
-        // does, edit of this entry included.
-        const { key } = await keys.createApiKey(install.editor, {
-          name: "automation",
-          tokenType: "full-access",
-          expiresIn: "never",
-        });
+      it.each(["entry", "single"] as const)(
+        "refuses a key with edit grants on the %s a link, and records none",
+        async which => {
+          const install = await boot(dialect);
+          const doc = which === "entry" ? install.post : install.single;
+          const keys = install.t.getService("apiKeyService") as unknown as {
+            createApiKey: (
+              userId: string,
+              input: { name: string; tokenType: string; expiresIn: string }
+            ) => Promise<{ key: string }>;
+          };
+          // The editor's own full-access key: it holds every grant the editor
+          // does, edit of this document included.
+          const { key } = await keys.createApiKey(install.editor, {
+            name: "automation",
+            tokenType: "full-access",
+            expiresIn: "never",
+          });
 
-        const res = await call({ key }, "POST", ["preview-links"], {
-          body: install.post,
-        });
+          const res = await call({ key }, "POST", ["preview-links"], {
+            body: doc,
+          });
 
-        expect(res.status).toBe(403);
-        expect(await storedRows(install)).toHaveLength(0);
-        expect(await auditRows(install, "preview-link-minted")).toHaveLength(0);
-        // The control: the same person, signed in, is given one.
-        await mint(install.editor, install.post);
-        expect(await storedRows(install)).toHaveLength(1);
-      });
+          expect(res.status).toBe(403);
+          expect(await storedRows(install)).toHaveLength(0);
+          expect(await auditRows(install, "preview-link-minted")).toHaveLength(
+            0
+          );
+          // The control: the same person, signed in, is given one.
+          await mint(install.editor, doc);
+          expect(await storedRows(install)).toHaveLength(1);
+        }
+      );
 
       it("answers a link of another document as not found", async () => {
         const install = await boot(dialect);

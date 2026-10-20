@@ -46,6 +46,7 @@ function renderTable(gates: { canEdit: boolean; canRevoke: boolean }) {
       onRevoke={vi.fn()}
       canEdit={gates.canEdit}
       canRevoke={gates.canRevoke}
+      ownersVisible
     />
   );
 }

@@ -11,7 +11,9 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../../services/lib/permissions", () => ({
   hasPermission: vi.fn(async () => true),
   isSuperAdmin: vi.fn(async () => true),
-  listEffectivePermissions: vi.fn(async () => ["posts:read"]),
+  listEffectiveGrants: vi.fn(async () => [
+    { slug: "read-posts", action: "read", resource: "posts" },
+  ]),
   listRoleSlugsForUser: vi.fn(async () => ["super-admin"]),
 }));
 
@@ -70,10 +72,12 @@ describe("a call made as a plugin-defined person", () => {
     });
     expect(seen).toEqual({
       user: null,
+      req: { user: undefined },
       roles: [],
       permissions: [],
       principal: verified,
       operation: "read",
+      target: { kind: "collection", slug: "orders" },
       collection: "orders",
     });
   });

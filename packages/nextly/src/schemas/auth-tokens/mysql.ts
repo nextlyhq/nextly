@@ -13,7 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
-import { sql } from "drizzle-orm";
+import { sql, type ColumnBuilderBase } from "drizzle-orm";
 import {
   mysqlTable,
   int,
@@ -26,15 +26,30 @@ import {
 
 import { users } from "../users/mysql";
 
-// Password reset tokens (custom table)
-export const passwordResetTokens = mysqlTable(
-  "password_reset_tokens",
-  {
+import { accountTokenIndexes } from "./account-token-indexes";
+
+/**
+ * The columns a password-reset and an email-verification token share, with a
+ * kind's own columns (`extra`) placed before `created_at`. One definition, so
+ * the two tables cannot drift apart on what binds a token to its account.
+ */
+function accountTokenColumns<E extends Record<string, ColumnBuilderBase>>(
+  extra: E
+) {
+  return {
     id: int("id").autoincrement().primaryKey(),
     identifier: varchar("identifier", { length: 255 }).notNull(),
+    // The account the token was issued for. A token is redeemed only for this
+    // account, and only while it still holds `identifier`; deleting the
+    // account deletes the token with it. Null only on a token issued before
+    // the column existed, until the upgrade binds or removes it
+    // (`domains/auth/services/token-account-binding`).
+    userId: varchar("user_id", { length: 191 }).references(() => users.id, {
+      onDelete: "cascade",
+    }),
     tokenHash: varchar("token_hash", { length: 255 }).notNull(),
     expires: datetime("expires").notNull(),
-    usedAt: datetime("used_at"),
+    ...extra,
     // DDL-side CURRENT_TIMESTAMP (matching postgres's defaultNow()):
     // a JavaScript `new Date()` default bakes one module-load-time literal
     // into the emitted DDL, so every boot saw a different default and v1's
@@ -43,17 +58,16 @@ export const passwordResetTokens = mysqlTable(
     createdAt: datetime("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
-  },
+  };
+}
+
+// Password reset tokens (custom table)
+export const passwordResetTokens = mysqlTable(
+  "password_reset_tokens",
+  accountTokenColumns({ usedAt: datetime("used_at") }),
   t => [
-    uniqueIndex("prt_identifier_token_hash_unique").on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index("prt_expires_idx").on(t.expires),
+    ...accountTokenIndexes({ index, uniqueIndex }, "prt", t),
     index("prt_used_at_idx").on(t.usedAt),
-    // Tokens are looked up by their hash alone. The unique index above leads
-    // with the identifier, so it cannot serve that lookup.
-    index("prt_token_hash_idx").on(t.tokenHash),
   ]
 );
 
@@ -91,24 +105,8 @@ export const userInviteTokens = mysqlTable(
 // Email verification tokens (custom, hashed)
 export const emailVerificationTokens = mysqlTable(
   "email_verification_tokens",
-  {
-    id: int("id").autoincrement().primaryKey(),
-    identifier: varchar("identifier", { length: 255 }).notNull(),
-    tokenHash: varchar("token_hash", { length: 255 }).notNull(),
-    expires: datetime("expires").notNull(),
-    createdAt: datetime("created_at")
-      .notNull()
-      .default(sql`CURRENT_TIMESTAMP`),
-  },
-  t => [
-    uniqueIndex("evt_identifier_token_hash_unique").on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index("evt_expires_idx").on(t.expires),
-    // Looked up by hash alone, as the reset token is.
-    index("evt_token_hash_idx").on(t.tokenHash),
-  ]
+  accountTokenColumns({}),
+  t => accountTokenIndexes({ index, uniqueIndex }, "evt", t)
 );
 
 // Refresh tokens for custom auth session management
