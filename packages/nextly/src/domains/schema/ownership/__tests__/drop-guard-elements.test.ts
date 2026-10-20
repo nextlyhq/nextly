@@ -316,7 +316,9 @@ describe("indexesNamedWithoutTable", () => {
         ],
         "postgresql"
       )
-    ).toEqual(["a", "b", "c"]);
+      // The table an ALTER TABLE names is a candidate too: it may be an index's
+      // name, which the live lookup decides.
+    ).toEqual(["a", "b", "c", "t"]);
     // MySQL's always names its table, so nothing needs reading — in the
     // statement's own form, and as clauses of an ALTER TABLE.
     expect(indexesNamedWithoutTable(["DROP INDEX a ON t"], "mysql")).toEqual(

@@ -74,6 +74,76 @@ async function selfRegister(t: TestNextly, email: string): Promise<string> {
   return String(created.id);
 }
 
+/**
+ * Hold the next account write's transaction open once all its rows are
+ * written, before it commits. `writesDone` settles there. `release` lets it
+ * commit only once the write racing it has entered its own transaction (not
+ * merely started: an account's password is hashed before its transaction
+ * opens, which can take seconds), and then either finished or had a moment
+ * to reach whatever it waits on. `onEnter` runs as the held write's
+ * transaction is about to open, after everything it did before it.
+ */
+function holdNextTransactionOpen(onEnter?: () => Promise<void>): {
+  writesDone: Promise<void>;
+  release(other: Promise<unknown>): Promise<void>;
+} {
+  let reached!: () => void;
+  const writesDone = new Promise<void>(resolve => {
+    reached = resolve;
+  });
+  let commit!: () => void;
+  const gate = new Promise<void>(resolve => {
+    commit = resolve;
+  });
+  let entered!: () => void;
+  const otherEntered = new Promise<void>(resolve => {
+    entered = resolve;
+  });
+  const prototype = UserMutationService.prototype as unknown as {
+    withTransaction: (
+      work: (tx: unknown) => Promise<unknown>
+    ) => Promise<unknown>;
+  };
+  const original = prototype.withTransaction;
+  let held = false;
+  let entering = false;
+  vi.spyOn(prototype, "withTransaction").mockImplementation(async function (
+    this: unknown,
+    work: (tx: unknown) => Promise<unknown>
+  ): Promise<unknown> {
+    // The hook's own writes are neither held nor the racing write.
+    if (entering) return original.call(this, work);
+    if (held) {
+      entered();
+      return original.call(this, work);
+    }
+    held = true;
+    entering = true;
+    try {
+      await onEnter?.();
+    } finally {
+      entering = false;
+    }
+    return original.call(this, async tx => {
+      const result = await work(tx);
+      reached();
+      await gate;
+      return result;
+    });
+  });
+  return {
+    writesDone,
+    async release(other) {
+      await Promise.race([otherEntered, other.catch(() => undefined)]);
+      await Promise.race([
+        other.catch(() => undefined),
+        new Promise(resolve => setTimeout(resolve, 500)),
+      ]);
+      commit();
+    },
+  };
+}
+
 async function isAdministrator(t: TestNextly, userId: string) {
   const { id } = await services(t).roles.ensureSuperAdminRole();
   return (await services(t).userRoles.listUserRoles(userId)).includes(id);
@@ -147,11 +217,106 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual([]);
     });
 
-    it("still makes a hand-provisioned account the administrator after a self-registered one", async () => {
+    it("never makes an account the app creates the administrator once a stranger registered first", async () => {
       const t = await boot(dialect);
       await selfRegister(t, "stranger@example.com");
-      const id = await provision(t, "owner@example.com");
-      expect(await isAdministrator(t, id)).toBe(true);
+      // The app's own provisioning (an import, the admin API) promotes only
+      // the install's very first account: here it is not the first.
+      const id = await provision(t, "customer@example.com");
+      expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
+    });
+
+    it("never promotes the app's account when a sign-up commits after the app looked", async () => {
+      const t = await boot(dialect);
+      // The app checks for accounts on an empty install, then a stranger's
+      // sign-up commits before the app's own account is inserted.
+      const prototype = UserMutationService.prototype as unknown as {
+        mayBootstrapFirstAdministrator: () => Promise<boolean>;
+      };
+      const original = prototype.mayBootstrapFirstAdministrator;
+      let signedUp = false;
+      vi.spyOn(prototype, "mayBootstrapFirstAdministrator").mockImplementation(
+        async function (this: unknown) {
+          const ready = await original.call(this);
+          if (!signedUp) {
+            signedUp = true;
+            await selfRegister(t, "stranger@example.com");
+          }
+          return ready;
+        }
+      );
+      const id = await provision(t, "customer@example.com");
+      expect(signedUp).toBe(true);
+      // The sign-up came first, so the app's account is the second: no role.
+      expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
+    });
+
+    // SQLite runs write transactions one at a time, so no account is ever
+    // uncommitted beside another write there.
+    it.skipIf(dialect === "sqlite")(
+      "never promotes the app's account while a sign-up is inserted but uncommitted",
+      async () => {
+        const t = await boot(dialect);
+        const held = holdNextTransactionOpen();
+        const signUp = selfRegister(t, "stranger@example.com");
+        await held.writesDone;
+        // The app looks while the sign-up's account is written, not committed.
+        const app = provision(t, "customer@example.com");
+        await held.release(app);
+        await signUp;
+        const id = await app;
+        // The sign-up commits first, so the app's account is the second.
+        expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "promotes the app's first account when a sign-up arrives while it is uncommitted",
+      async () => {
+        const t = await boot(dialect);
+        const held = holdNextTransactionOpen();
+        const app = provision(t, "customer@example.com");
+        await held.writesDone;
+        // The sign-up starts while the app's account is written, not committed.
+        const signUp = selfRegister(t, "stranger@example.com");
+        await held.release(signUp);
+        const id = await app;
+        const strangerId = await signUp;
+        expect(await isAdministrator(t, id)).toBe(true);
+        expect(await services(t).userRoles.listUserRoles(strangerId)).toEqual(
+          []
+        );
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "never promotes the app's account when the only account is deleted while a sign-up is under way",
+      async () => {
+        const t = await boot(dialect);
+        const early = await selfRegister(t, "early@example.com");
+        // The sign-up sees that account before its transaction, and it is gone
+        // once the transaction opens.
+        const held = holdNextTransactionOpen(async () => {
+          await services(t).users.deleteUser(early);
+        });
+        const signUp = selfRegister(t, "stranger@example.com");
+        await held.writesDone;
+        const app = provision(t, "customer@example.com");
+        await held.release(app);
+        await signUp;
+        const id = await app;
+        // The sign-up commits first, so the app's account is the second.
+        expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
+      }
+    );
+
+    it("lets a stranger register on an empty install beside a role merely named Super Admin", async () => {
+      const t = await boot(dialect);
+      await insertRole(t, "Super Admin", "custom-super-admin");
+      // The administrator role cannot be created beside it, which a sign-up,
+      // never given that role, does not depend on.
+      const id = await selfRegister(t, "stranger@example.com");
+      expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
     });
 
     it("keeps setup open after a self-registration, so the owner can still create the administrator", async () => {
@@ -170,8 +335,14 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await status.json()).toMatchObject({ isSetup: false });
 
-      const owner = await provision(t, "owner@example.com");
-      expect(await isAdministrator(t, owner)).toBe(true);
+      // Setup itself, not the app's general provisioning, creates the owner.
+      const owner = await deps.createSuperAdmin({
+        email: "owner@example.com",
+        name: "Owner",
+        password: PASSWORD,
+      });
+      expect(owner).not.toBeNull();
+      expect(await isAdministrator(t, String(owner?.id))).toBe(true);
       expect(await deps.hasAdministrator()).toBe(true);
     });
 

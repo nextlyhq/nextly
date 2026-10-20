@@ -167,13 +167,24 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
+    /**
+     * The app's own logger, which services a seeder builds for itself (the
+     * role service among them) log through, rather than the seeder's.
+     */
+    let appLogger: Logger;
+
     beforeEach(async () => {
-      handle = await boot();
+      appLogger = spyLogger();
+      handle = await boot(appLogger);
       // The provisioned database's own URL, which the boot leaves in place.
       if (dialect !== "sqlite") databaseUrl = String(process.env.DATABASE_URL);
       // An empty database: none of the default rows written yet.
       for (const table of DEFAULT_ROW_TABLES) {
         await handle.adapter.executeQuery(`DELETE FROM ${q}${table}${q}`);
+      }
+      // What the boot itself logged is not a first start's to answer for.
+      for (const method of Object.values(appLogger)) {
+        vi.mocked(method).mockClear();
       }
     });
 
@@ -185,7 +196,7 @@ describe.each(getConfiguredTestDialects())(
       const loggers = Array.from({ length: WORKERS }, spyLogger);
       const results = await firstStarts(loggers);
 
-      for (const logger of loggers) {
+      for (const logger of [...loggers, appLogger]) {
         expect(logger.warn).not.toHaveBeenCalled();
         expect(logger.error).not.toHaveBeenCalled();
       }
@@ -291,6 +302,49 @@ describe.each(getConfiguredTestDialects())(
       expect(logger.warn).toHaveBeenCalledWith(
         expect.stringContaining(`"${preset.slug}"`)
       );
+    });
+
+    it("writes a losing start's other field changes, not only the field it lost", async () => {
+      // Stored before either start: `bio`, with no maximum length.
+      const reader = new UserFieldDefinitionService(
+        handle.adapter,
+        spyLogger()
+      );
+      await reader.syncCodeFields([{ name: "bio", type: "text" }]);
+      const winner = new UserFieldDefinitionService(
+        handle.adapter,
+        spyLogger()
+      );
+      const loser = new UserFieldDefinitionService(handle.adapter, spyLogger());
+
+      // The race, made to happen: the winner writes `company` after the loser
+      // has read the stored rows and before its transaction inserts it too.
+      type Transacts = {
+        withTransaction(
+          fn: (tx: unknown) => Promise<unknown>
+        ): Promise<unknown>;
+      };
+      const transacts = loser as unknown as Transacts;
+      const original = transacts.withTransaction.bind(loser);
+      vi.spyOn(transacts, "withTransaction").mockImplementationOnce(
+        async fn => {
+          await winner.syncCodeFields([
+            { name: "bio", type: "text" },
+            { name: "company", type: "text" },
+          ]);
+          return original(fn);
+        }
+      );
+
+      // The losing start also changes `bio`, which its lost insert rolled back.
+      await loser.syncCodeFields([
+        { name: "bio", type: "text", maxLength: 50 },
+        { name: "company", type: "text" },
+      ]);
+
+      const stored = await reader.listFields();
+      expect(stored.find(field => field.name === "bio")?.maxLength).toBe(50);
+      expect(stored.filter(field => field.name === "company")).toHaveLength(1);
     });
 
     it("still fails a code field sync whose name an admin's field holds", async () => {

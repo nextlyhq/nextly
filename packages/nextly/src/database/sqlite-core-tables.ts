@@ -504,6 +504,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "action" TEXT NOT NULL,
       "member_key" TEXT NOT NULL,
       "single_slot" INTEGER,
+      "applied_revision" INTEGER,
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL
     )`,

@@ -67,6 +67,8 @@ const ROLES = {
 } as const;
 /** The install's `super-admin` role, which the first account's creation makes. */
 let SUPER_ADMIN_ROLE = "";
+/** The account that creation made super-admin, holding the role from boot on. */
+let FOUNDER = "";
 
 interface RawDb {
   insert: (table: unknown) => { values: (row: unknown) => Promise<unknown> };
@@ -112,11 +114,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       permissionId: `perm-${resource}`,
     });
   }
-  // The first account on an install is made super-admin, and its creation
-  // makes the role. A founder takes that place, and its own assignment is
-  // removed, so every assignment below is one this file chose.
-  const founder = await makeUser(handle, "founder@example.com");
-  await db.delete(tables.userRoles).where(eq(tables.userRoles.userId, founder));
+  // The first account the app provisions while nobody holds super-admin is
+  // made super-admin, and its creation makes the role. A founder takes that
+  // place and keeps it: were it removed, the next account created would be
+  // made super-admin in its stead. So every assignment of any other account
+  // below is one this file chose.
+  FOUNDER = await makeUser(handle, "founder@example.com");
   const [superAdmin] = await db
     .select({ id: tables.roles.id })
     .from(tables.roles)
@@ -338,6 +341,11 @@ describe.each(getConfiguredTestDialects())(
       await assign(t, lapsed, SUPER_ADMIN_ROLE, new Date(Date.now() - DAY_MS));
       const held = await makeUser(t, "is-admin@example.com");
       await assign(t, held, SUPER_ADMIN_ROLE, null);
+      // Only now, with both accounts made, so neither was granted the role on
+      // creation: the founder's own assignment goes, leaving these two the
+      // only ones that name it.
+      const { userRoles } = getDialectTables();
+      await raw(t).delete(userRoles).where(eq(userRoles.userId, FOUNDER));
 
       expect(await isSuperAdmin(lapsed)).toBe(false);
       expect(await isSuperAdmin(held)).toBe(true);

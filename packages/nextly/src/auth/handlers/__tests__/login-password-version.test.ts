@@ -151,10 +151,12 @@ describe("the password version a sign-in proved", () => {
     expect(rows.committed).toHaveLength(0);
   });
 
-  it("judges against the account's own epoch when the lookup did not read one", async () => {
-    // Not reading the column says nothing about the epoch. Read as zero, it
-    // would refuse every password sign-in of an account whose sessions had
-    // ever been ended.
+  it("issues no session when the lookup did not read the epoch beside the hash", async () => {
+    // Read as zero, the epoch would refuse every sign-in of an account whose
+    // sessions had ever been ended; taken from a later read instead, it would
+    // be the epoch of a reset made in the same second as the proof, and sign
+    // in the old password's holder. Neither is safe, so nothing is issued and
+    // the log says what the lookup must return.
     const { deps, rows } = await loginDeps(
       PROVEN,
       new AuthHookRegistry(),
@@ -164,8 +166,8 @@ describe("the password version a sign-in proved", () => {
 
     const res = await handleLogin(loginRequest(), deps);
 
-    expect(res.status).toBe(200);
-    expect(rows.committed).toHaveLength(1);
+    expect(res.status).toBe(500);
+    expect(rows.committed).toHaveLength(0);
   });
 
   it("signs the proven epoch into the token a second factor pauses on", async () => {
