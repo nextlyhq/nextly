@@ -449,6 +449,29 @@ for (const dialect of getConfiguredTestDialects()) {
       ).toBe("<p>Hi PRIYA &lt;3</p>");
     });
 
+    it("reads a plugin's Liquid contribution as Liquid on a new install's first boot", async () => {
+      const t = await boot(dialect);
+      // No boot has recorded the switch: this one seeds the plugin's
+      // template and records it.
+      await seedPluginTemplates(t, [
+        {
+          name: "Shout",
+          slug: "plugin-shout",
+          subject: "Hi",
+          htmlContent: FILTER,
+          useLayout: false,
+        },
+      ]);
+      const row = await t.nextly.emailTemplates.findBySlug({
+        slug: "plugin-shout",
+      });
+      expect((await templates(t).oldEngineStatus(row!.id)).kept).toBe(false);
+      expect(
+        (await t.nextly.emailTemplates.preview({ id: row!.id, data: DATA }))
+          .html
+      ).toBe("<p>Hi PRIYA &lt;3</p>");
+    });
+
     it("renders a plugin's template on the engine its current version was written for", async () => {
       const t = await boot(dialect);
       await templates(t).ensureBuiltInTemplates();

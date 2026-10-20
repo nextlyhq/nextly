@@ -1649,6 +1649,12 @@ export class EmailTemplateService extends BaseService {
       .set({ kind: "template" })
       .where(isNull(this.emailTemplates.kind));
 
+    // Recorded once, at the first boot on Liquid, whether or not anything is
+    // seeded, and before anything is: it judges the templates stored before
+    // Liquid, and every owner's version written from here on is its current
+    // one, which is Liquid unless Liquid can't read it.
+    if (this.registry.complete) await this.adoptLiquid();
+
     const rows = (await this.db
       .select()
       .from(this.emailTemplates)) as StoredTemplateRow[];
@@ -1690,11 +1696,6 @@ export class EmailTemplateService extends BaseService {
         // Conditioned on the row as read: an override saved in between stays.
         .where(this.unchanged(row));
     }
-
-    // Recorded once, at the first boot on Liquid, whether or not anything
-    // was seeded. Every stored template is in the table by now; one inserted
-    // later is the owner's current version, which is Liquid.
-    await this.adoptLiquid();
   }
 
   /**

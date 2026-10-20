@@ -153,17 +153,19 @@ describe("every filter keeps the output escaped", () => {
 
   it.each(filters)("%s", filter => {
     const args = FILTER_ARGS[filter] ?? "";
-    let out: string;
-    try {
-      out = render(
-        `{{ name | ${filter}${args} }}{{ list | ${filter}${args} }}{{ attr | ${filter}${args} }}`
-      );
-    } catch (error) {
-      // A filter that refuses these inputs writes nothing at all.
-      expect(error).toBeInstanceOf(NextlyError);
-      return;
+    // Each input on its own: a refusal of one must not hide what the filter
+    // wrote for another.
+    for (const input of ["name", "list", "attr"]) {
+      let out: string;
+      try {
+        out = render(`{{ ${input} | ${filter}${args} }}`);
+      } catch (error) {
+        // A filter that refuses this input writes nothing at all.
+        expect(error).toBeInstanceOf(NextlyError);
+        continue;
+      }
+      expectInert(out);
     }
-    expectInert(out);
   });
 
   it("has no filter that turns escaping off", () => {
