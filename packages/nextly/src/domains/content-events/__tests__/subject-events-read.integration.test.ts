@@ -539,7 +539,7 @@ describe.each(getConfiguredTestDialects())(
       ).toHaveLength(2);
     }, 120_000);
 
-    it("reads a deleted document whose reads a hook narrows only as a super-admin", async () => {
+    it("reads a deleted document whose reads a hook narrows only as trusted server code", async () => {
       const t = await boot(dialect);
       const holder = await personHolding(t, ["read-guarded"]);
       const doc = await documentIn(t, "guarded");
@@ -553,18 +553,20 @@ describe.each(getConfiguredTestDialects())(
 
       await t.nextly.delete({ collection: "guarded", id: doc });
 
-      // The hook cannot be asked about a row that is gone: refused, but not
-      // to a super-admin.
+      // The hook cannot be asked about a row that is gone, and it runs for
+      // super-admins too: refused to both, read by trusted server code.
       await expect(
         t.nextly.contentEvents.list({ subject, ...asPerson(holder) })
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        t.nextly.contentEvents.list({ subject, ...asPerson(founder!) })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
       expect(
-        (await t.nextly.contentEvents.list({ subject, ...asPerson(founder!) }))
-          .items
+        (await t.nextly.contentEvents.list({ subject })).items
       ).toHaveLength(2);
     }, 120_000);
 
-    it("reads a former document of a Single whose reads its own hook narrows only as a super-admin", async () => {
+    it("reads a former document of a Single whose reads its own hook narrows only as trusted server code", async () => {
       const t = await boot(dialect);
       const holder = await personHolding(t, ["read-notice"]);
       // A document the Single no longer has, its life ended by a deletion.
@@ -581,14 +583,16 @@ describe.each(getConfiguredTestDialects())(
       }
 
       // The Single's hook cannot be asked about a document that is gone:
-      // the permission alone does not read it, a super-admin does.
+      // neither the permission nor a super-admin reads it; trusted server
+      // code does.
       await expect(
         t.nextly.contentEvents.list({ subject, ...asPerson(holder) })
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        t.nextly.contentEvents.list({ subject, ...asPerson(founder!) })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
       expect(
-        (
-          await t.nextly.contentEvents.list({ subject, ...asPerson(founder!) })
-        ).items.map(e => e.kind)
+        (await t.nextly.contentEvents.list({ subject })).items.map(e => e.kind)
       ).toEqual(["deleted", "created"]);
     }, 120_000);
 
