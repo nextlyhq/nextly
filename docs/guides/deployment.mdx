@@ -150,6 +150,12 @@ To rate-limit sign-in per client and record real client addresses, let Nextly re
 
 For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. See [Production migrations](/docs/guides/production-migrations) for GitHub Actions, Railway, Render, Fly.io, and AWS examples.
 
+## When the database is busy
+
+A request waits for a database connection for at most `pool.connectionTimeoutMs`, 15 seconds by default, on every dialect: for a free pooled connection on PostgreSQL and MySQL, and on SQLite for the one connection behind the transactions ahead of it. A request still waiting after that fails with the code `DATABASE_BUSY`, status 503, and a `Retry-After: 5` header. Nothing it meant to write was written, so it is safe to send again.
+
+A steady stream of `DATABASE_BUSY` means the pool is too small for the traffic, or something holds its connections too long. Look for long transactions first, then raise `pool.max` within your database's connection limit, or raise `pool.connectionTimeoutMs` if a longer wait suits your traffic better than a retry. Both are set on the adapter: see the connection pool sections for [PostgreSQL](/docs/database/postgres#connection-pool), [MySQL](/docs/database/mysql#connection-pool) and [SQLite](/docs/database/sqlite#sqlite-specific-options).
+
 ## Client addresses and the auth rate limit
 
 A Next.js request carries no peer address, so Nextly learns the client's address only from a header a proxy sets, and it reads that header only when `security.trustProxy` is `true`. That is off by default, because a header a client can set itself would let anyone pick their own address.

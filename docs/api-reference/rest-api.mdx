@@ -158,7 +158,7 @@ When the failure is a validation error, `error.data` carries field-level details
 }
 ```
 
-For rate-limited responses (`code: "RATE_LIMITED"`, status 429) the runtime also sets `Retry-After` from `error.data.retryAfterSeconds`.
+When an error carries `error.data.retryAfterSeconds` the runtime also sets `Retry-After` from it: rate-limited responses (`RATE_LIMITED`, 429) and a busy database (`DATABASE_BUSY`, 503).
 
 | Status | Common codes | When |
 |---|---|---|
@@ -175,6 +175,7 @@ For rate-limited responses (`code: "RATE_LIMITED"`, status 429) the runtime also
 | `429` | `RATE_LIMITED` | Per-IP or per-key rate limit. `Retry-After` is set. |
 | `500` | `INTERNAL_ERROR`, `DATABASE_ERROR` | Server-side failure. |
 | `503` | `SERVICE_UNAVAILABLE` | Health probe / dependency outage. |
+| `503` | `DATABASE_BUSY` | The request waited `pool.connectionTimeoutMs` for a database connection and none was free, or a SQLite file stayed locked past `busyTimeout`. Nothing was written. Retryable; `Retry-After` is set. |
 
 ## Endpoint inventory
 

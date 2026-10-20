@@ -98,7 +98,8 @@ In-memory databases are extremely fast but disappear when the process exits. Eac
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `wal` | `boolean` | `true` | Enable WAL (Write-Ahead Logging) mode for better concurrent-read performance. Auto-disabled for in-memory and read-only databases. |
-| `busyTimeout` | `number` (ms) | `5000` | How long to wait when the database is locked before throwing `SQLITE_BUSY`. |
+| `busyTimeout` | `number` (ms) | `5000` | How long to wait when another process holds the database file, before the write fails as `DATABASE_BUSY` (the driver's `SQLITE_BUSY`). |
+| `pool.connectionTimeoutMs` | `number` (ms) | `15000` | How long a transaction waits for the database connection behind the transactions ahead of it, before it fails as `DATABASE_BUSY`. `0` waits without limit. |
 | `foreignKeys` | `boolean` | `true` | Enable `PRAGMA foreign_keys = ON`. SQLite ships with this off by default; the adapter turns it on. |
 | `memory` | `boolean` | `false` | Open an in-memory database. Overrides `url`. |
 | `readonly` | `boolean` | `false` | Open in read-only mode. Disables WAL because changing journal mode requires write access. |
@@ -112,6 +113,8 @@ const adapter = createSqliteAdapter({
   busyTimeout: 5000,
 });
 ```
+
+A request can wait in two places on SQLite, and each has its own setting. The adapter has one connection, so a transaction waits for the ones ahead of it to finish, for at most `pool.connectionTimeoutMs`, the same setting that bounds the wait for a pooled connection on PostgreSQL and MySQL. A write also waits while another process holds the database file, for at most `busyTimeout`. Either wait running out answers the request as `DATABASE_BUSY` (503, `Retry-After: 5`): nothing was written, and it is safe to retry.
 
 ## WAL mode
 
