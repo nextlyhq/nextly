@@ -1241,6 +1241,7 @@ jobs:
       - unit-tests-admin
       - admin-published-build
       - entry-guard-smoke
+      - playground-externals
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -1611,6 +1612,157 @@ jobs:
       - name: Run the dev-reload check
         if: steps.decide.outputs.inert != 'true'
         run: pnpm --filter @nextlyhq/e2e test:e2e:dev-reload
+
+  # Under `next dev --webpack`, Next keeps a server package external only when
+  # the playground resolves it to the copy the code it bundles loads; otherwise
+  # it bundles it, and a package that cannot be bundled answers every request
+  # with a 500. Turbopack does not ask, so nothing showed the playground broken
+  # under webpack. This reads which packages stay external and which copies
+  # load them, so a package nextly comes to need is checked the day it does.
+  #
+  # Scoped to what changes the answer: nextly's server source and every
+  # package manifest, the playground's manifest and Next config, the lockfile
+  # and workspace, and the check itself. No build: it reads manifests and
+  # folders only.
+  playground-externals:
+    name: The playground resolves the packages its server keeps external
+    needs: [ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The merge base has to be present for the scope's diff; anything the
+          # comparison cannot read runs the job (`scripts/change-scope.mjs`).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide
+        id: decide
+        env:
+          SCOPE_TITLE: Playground externals scope
+          INERT_PATHS: '^(?!(packages/nextly/src/.*|packages/[^/]+/package\.json|apps/playground/package\.json|apps/playground/next\.config\.ts|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|scripts/check-playground-externals\.mjs|\.github/workflows/ci\.yml)$)'
+        run: node scripts/change-scope.mjs
+
+      - name: Setup pnpm
+        if: steps.decide.outputs.inert != 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js with the pnpm cache
+        if: steps.decide.outputs.inert != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Check the playground's server externals
+        if: steps.decide.outputs.inert != 'true'
+        run: node --no-warnings scripts/check-playground-externals.mjs
+
+  # The playground under `next dev --webpack`, on each database it supports,
+  # serving its admin, its API and the setup page's assets, as it does under
+  # Turbopack. Run apart from `Browser tests` (which boots under Turbopack)
+  # and, like the dev-reload check, scoped to what can change the answer:
+  # the playground, the server packages it loads and their manifests, the
+  # lockfile, and the check itself.
+  playground-webpack:
+    name: The playground runs under webpack (${{ matrix.dialect }})
+    needs: [ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        dialect: [sqlite, postgresql, mysql]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide
+        id: decide
+        env:
+          SCOPE_TITLE: Playground under webpack scope
+          INERT_PATHS: '^(?!(apps/playground/.*|packages/(nextly|admin|ui|adapter-[^/]+|plugin-[^/]+)/(src/.*|package\.json)|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|scripts/playground-bundler-boot\.mjs|\.github/workflows/ci\.yml)$)'
+        run: node scripts/change-scope.mjs
+
+      # A database for the leg that needs one, on the port the URL below names.
+      - name: Start PostgreSQL
+        if: steps.decide.outputs.inert != 'true' && matrix.dialect == 'postgresql'
+        run: |
+          docker run -d --name playground-pg -p 5432:5432 \
+            -e POSTGRES_USER=nextly -e POSTGRES_PASSWORD=nextly -e POSTGRES_DB=playground \
+            --health-cmd "pg_isready -U nextly" --health-interval 5s --health-retries 20 \
+            postgres:17
+          until [ "$(docker inspect -f '{{.State.Health.Status}}' playground-pg)" = healthy ]; do sleep 2; done
+
+      - name: Start MySQL
+        if: steps.decide.outputs.inert != 'true' && matrix.dialect == 'mysql'
+        run: |
+          docker run -d --name playground-mysql -p 3306:3306 \
+            -e MYSQL_ROOT_PASSWORD=nextly -e MYSQL_DATABASE=playground \
+            --health-cmd "mysqladmin ping -h 127.0.0.1 -pnextly" --health-interval 5s --health-retries 30 \
+            mysql:8.4
+          until [ "$(docker inspect -f '{{.State.Health.Status}}' playground-mysql)" = healthy ]; do sleep 2; done
+
+      - name: Setup pnpm
+        if: steps.decide.outputs.inert != 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js with the pnpm cache
+        if: steps.decide.outputs.inert != 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm turbo build --filter='./packages/*'
+
+      - name: Start the playground under webpack and ask for its admin and API
+        if: steps.decide.outputs.inert != 'true'
+        env:
+          DIALECT: ${{ matrix.dialect }}
+        run: |
+          case "$DIALECT" in
+            postgresql) url=postgres://nextly:nextly@localhost:5432/playground ;;
+            mysql) url=mysql://root:nextly@127.0.0.1:3306/playground ;;
+            *) url= ;;
+          esac
+          node scripts/playground-bundler-boot.mjs --bundler webpack --dialect "$DIALECT" \
+            ${url:+--database-url "$url"} --log "$RUNNER_TEMP/next-dev.log"
+
+      - name: Keep the server log
+        if: failure() && steps.decide.outputs.inert != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playground-webpack-${{ matrix.dialect }}-log
+          path: ${{ runner.temp }}/next-dev.log
+          retention-days: 7
 
   # Cross-platform smoke test for the scaffolder. Catches Windows path
   # separator bugs and macOS-specific issues that only surface in fresh

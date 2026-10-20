@@ -46,6 +46,7 @@ export const WORKFLOWS = {
     "Unit tests (admin)",
     "Published admin build",
     "CLI entry guard (",
+    "The playground resolves the packages its server keeps external",
   ],
   "integration.yml": [
     "Integration (postgres) shard (1)",
