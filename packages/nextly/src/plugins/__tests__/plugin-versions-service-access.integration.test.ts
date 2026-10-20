@@ -66,7 +66,6 @@ interface PluginVersions {
     opts?: ServiceOpts
   ): Promise<unknown>;
   get(ref: VersionRef, versionNo: number): Promise<{ label?: string | null }>;
-  listWorkingDraftParts(ref: VersionRef): Promise<(string | null)[]>;
   getAutosave(ref: VersionRef, createdBy: string | null): Promise<unknown>;
 }
 
@@ -110,6 +109,11 @@ describe.each(getConfiguredTestDialects())(
       entryId,
     });
 
+    /** The working-draft parts, read from the service: the plugin view has no such read. */
+    function draftParts(ref: VersionRef): Promise<(string | null)[]> {
+      return t.getService("versionsService").listWorkingDraftParts(ref);
+    }
+
     function handler(): Handler {
       return t.getService("collectionsHandler") as unknown as Handler;
     }
@@ -127,7 +131,11 @@ describe.each(getConfiguredTestDialects())(
       return created.data!.id;
     }
 
-    /** A published document with an unpublished edit on top: a working draft. */
+    /**
+     * A published document with an unpublished edit on top: a working draft.
+     * The edit names no status, which is what holds it rather than writing it
+     * live.
+     */
     async function withWorkingDraft(slug: string): Promise<VersionRef> {
       const id = await published(slug, "live");
       await handler().updateEntry(
@@ -137,11 +145,11 @@ describe.each(getConfiguredTestDialects())(
           overrideAccess: true,
           user: { id: ownerId },
         },
-        { title: "edited", status: "draft" }
+        { title: "edited" }
       );
       const ref = refOf(slug, id);
       expect(
-        (await versions.listWorkingDraftParts(ref)).length,
+        (await draftParts(ref)).length,
         "the edit must leave a working draft"
       ).toBeGreaterThan(0);
       return ref;
@@ -233,9 +241,7 @@ describe.each(getConfiguredTestDialects())(
         await expect(
           versions.deleteWorkingDraft(ref, null, asUser(readerId))
         ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
-        expect(
-          (await versions.listWorkingDraftParts(ref)).length
-        ).toBeGreaterThan(0);
+        expect((await draftParts(ref)).length).toBeGreaterThan(0);
       });
 
       it("is refused to a public caller as an anonymous one", async () => {
@@ -243,15 +249,13 @@ describe.each(getConfiguredTestDialects())(
         await expect(
           versions.deleteWorkingDraft(ref, null, { as: "public" })
         ).rejects.toMatchObject({ code: "AUTH_REQUIRED" });
-        expect(
-          (await versions.listWorkingDraftParts(ref)).length
-        ).toBeGreaterThan(0);
+        expect((await draftParts(ref)).length).toBeGreaterThan(0);
       });
 
       it("is done for a person who may read and update", async () => {
         const ref = await withWorkingDraft(NOTES);
         await versions.deleteWorkingDraft(ref, null, asUser(editorId));
-        expect(await versions.listWorkingDraftParts(ref)).toEqual([]);
+        expect(await draftParts(ref)).toEqual([]);
       });
     });
 
