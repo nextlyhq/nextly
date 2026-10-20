@@ -24,12 +24,15 @@ const {
   useVersionsMock: vi.fn(),
   useVersionMock: vi.fn(),
   // No events unless a case gives some: a document's versions alone.
-  eventsMock: vi.fn(() => ({
-    data: { pages: [{ items: [], meta: { total: 0 } }] },
-    hasNextPage: false,
-    isFetchingNextPage: false,
-    fetchNextPage: vi.fn(),
-  })),
+  eventsMock: vi.fn(
+    (): Record<string, unknown> => ({
+      data: { pages: [{ items: [], meta: { total: 0 } }] },
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      fetchNextPage: vi.fn(),
+      refetch: vi.fn(),
+    })
+  ),
   restoreMock: vi.fn(),
   setLabelMock: vi.fn(),
   mutateMock: vi.fn(),
@@ -92,6 +95,20 @@ function listState(overrides: Record<string, unknown> = {}) {
     fetchNextPage: vi.fn(),
     refetch: vi.fn(),
     error: null,
+    ...overrides,
+  };
+}
+
+/** The document's events as the query hands them over: none, unless given. */
+function eventState(overrides: Record<string, unknown> = {}) {
+  return {
+    data: { pages: [{ items: [], meta: { total: 0 } }] },
+    isLoading: false,
+    isError: false,
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+    refetch: vi.fn(),
     ...overrides,
   };
 }
@@ -191,10 +208,12 @@ function renderPublishing(props: Record<string, unknown> = {}) {
 describe("VersionHistorySheet", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    eventsMock.mockReturnValue(eventState());
     // Every test starts from an address naming no panel, as a page load does.
     window.history.replaceState(null, "", "/");
     useVersionsMock.mockReturnValue(listState());
     useVersionMock.mockReturnValue(detailState());
+    eventsMock.mockReturnValue(eventState());
     restoreMock.mockReturnValue({ mutate: mutateMock, isPending: false });
     setLabelMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
   });
@@ -244,6 +263,71 @@ describe("VersionHistorySheet", () => {
     expect(
       screen.queryByRole("heading", { name: /No versions yet/ })
     ).toBeNull();
+  });
+
+  it("says history could not be loaded when its events failed, though its versions loaded", async () => {
+    // Events read as none would drop unpublishes and discards from the story,
+    // and pin a withdrawn version as currently published.
+    const refetchVersions = vi.fn();
+    const refetchEvents = vi.fn();
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(2)], meta: { hasNext: false } }] },
+        refetch: refetchVersions,
+      })
+    );
+    eventsMock.mockReturnValue(
+      eventState({ data: undefined, isError: true, refetch: refetchEvents })
+    );
+
+    renderSheet();
+
+    expect(screen.getByText(/could not be loaded/)).toBeInTheDocument();
+    expect(screen.queryByText(/Currently published/)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    expect(
+      [refetchVersions, refetchEvents].map(f => f.mock.calls.length)
+    ).toEqual([1, 1]);
+  });
+
+  it("is loading while its events are", () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(2)], meta: { hasNext: false } }] },
+      })
+    );
+    eventsMock.mockReturnValue(
+      eventState({ data: undefined, isLoading: true })
+    );
+
+    renderSheet();
+
+    expect(screen.getByRole("status")).toHaveTextContent(/Loading history/);
+    expect(screen.queryByText(/Currently published/)).toBeNull();
+  });
+
+  it("warns that history may be out of date when its events' refresh failed", async () => {
+    const refetchEvents = vi.fn();
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: { pages: [{ items: [version(2)], meta: { hasNext: false } }] },
+      })
+    );
+    eventsMock.mockReturnValue(
+      eventState({
+        isError: true,
+        isRefetchError: true,
+        refetch: refetchEvents,
+      })
+    );
+
+    renderSheet();
+
+    expect(
+      screen.getByText(/Couldn't refresh this history/)
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
+    expect(refetchEvents).toHaveBeenCalledTimes(1);
   });
 
   it("offers a retry when a background refresh fails after history has loaded", async () => {
@@ -778,6 +862,7 @@ describe("VersionHistorySheet", () => {
 describe("VersionHistorySheet — renaming", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    eventsMock.mockReturnValue(eventState());
     useVersionsMock.mockReturnValue(
       listState({
         data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },

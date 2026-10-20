@@ -289,18 +289,22 @@ function pinnedParts(versions: readonly VersionMeta[]): string[] {
   return parts;
 }
 
-/** Whether a part was withdrawn after a publish of it. */
-function withdrawnSince(
+/**
+ * Whether an event of this kind ended a part's state at or after a moment: an
+ * unpublish ends a publish, and a discard ends a draft.
+ */
+function endedSince(
+  kind: string,
   part: string,
-  publishedAt: string,
+  since: string,
   events: readonly DocumentEvent[]
 ): boolean {
   return events.some(
     event =>
-      event.kind === "unpublished" &&
-      // At or after: history stores whole seconds, so a withdrawal in the
-      // publish's own second is after it.
-      event.occurredAt >= publishedAt &&
+      event.kind === kind &&
+      // At or after: history stores whole seconds, so an ending in the
+      // state's own second is after it.
+      event.occurredAt >= since &&
       (event.parts.length === 0 || event.parts.includes(part))
   );
 }
@@ -318,10 +322,13 @@ function pins(
       e => e.publish && e.parts.includes(part)
     );
     const newest = entries.find(e => partOf(e.version) === part);
+    // A draft discarded since its version was saved is no longer the
+    // document's draft, though its version stays in the history.
     if (
       newest &&
       newest.version.status === "draft" &&
-      newest !== latestPublish
+      newest !== latestPublish &&
+      !endedSince("draft-discarded", part, newest.at, events)
     ) {
       drafts.push({
         part,
@@ -329,7 +336,10 @@ function pins(
         published: latestPublish !== undefined,
       });
     }
-    if (latestPublish && !withdrawnSince(part, latestPublish.at, events)) {
+    if (
+      latestPublish &&
+      !endedSince("unpublished", part, latestPublish.at, events)
+    ) {
       const row = published.find(r => r.version === latestPublish.version);
       if (row) row.parts.push(part);
       else {

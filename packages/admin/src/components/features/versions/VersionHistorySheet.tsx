@@ -588,6 +588,23 @@ export function VersionHistorySheet({
     },
   });
   const isEmpty = !list.isLoading && !list.isError && versions.length === 0;
+  // The versions and the events tell one story, so the panel loads, fails and
+  // goes stale with either. Events read as an empty list while their request
+  // is loading or has failed would drop unpublishes and discards from the
+  // story and pin a withdrawn version as currently published.
+  const storyLoading = list.isLoading || eventList.isLoading;
+  const storyLoadFailed =
+    (list.isError && versions.length === 0) ||
+    // Events that loaded can rightly be none, so it is the absence of any
+    // page, not of any event, that makes their failure a load failure.
+    (eventList.isError && eventList.data === undefined);
+  const storyStale =
+    (isRefetchError && versions.length > 0) || eventList.isRefetchError;
+  const storyRetrying = isRefetching || eventList.isRefetching;
+  const retryStory = () => {
+    void list.refetch();
+    void eventList.refetch();
+  };
 
   /*
    * The claim, and the ONE fact both behaviours below are derived from. A panel
@@ -673,7 +690,7 @@ export function VersionHistorySheet({
             another window focus could trigger. This keeps the gate but gives the
             recovery a visible control. Suppressed when there are no rows, since
             the full-panel load error covers that. */}
-          {isRefetchError && versions.length > 0 ? (
+          {storyStale ? (
             <div className="px-4 pt-4">
               <Alert variant="warning" role="status">
                 <div className="flex flex-1 flex-wrap items-center justify-between gap-3">
@@ -685,10 +702,10 @@ export function VersionHistorySheet({
                     size="sm"
                     // Disabled while a retry is in flight; the same refetch also
                     // fires from window focus, so this reflects either trigger.
-                    disabled={isRefetching}
-                    onClick={() => void list.refetch()}
+                    disabled={storyRetrying}
+                    onClick={retryStory}
                   >
-                    {isRefetching ? "Retrying…" : "Try again"}
+                    {storyRetrying ? "Retrying…" : "Try again"}
                   </Button>
                 </div>
               </Alert>
@@ -701,9 +718,9 @@ export function VersionHistorySheet({
             editor is asking is how the page read then, and only the page can
             answer it. */}
           <div className="flex-1 overflow-y-auto">
-            {list.isLoading ? (
+            {storyLoading ? (
               <ListSkeleton />
-            ) : list.isError && versions.length === 0 ? (
+            ) : storyLoadFailed ? (
               // Only a genuine load failure (no pages) replaces the panel. A failed
               // speculative next-page (from the automatic previous-version search)
               // also flips the query to error, but the loaded history stays on
@@ -714,11 +731,7 @@ export function VersionHistorySheet({
                     This document&apos;s history could not be loaded.
                   </AlertDescription>
                 </Alert>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void list.refetch()}
-                >
+                <Button variant="outline" size="sm" onClick={retryStory}>
                   Try again
                 </Button>
               </div>

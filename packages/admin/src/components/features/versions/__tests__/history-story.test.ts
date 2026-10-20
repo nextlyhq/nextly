@@ -239,6 +239,39 @@ describe("the pinned rows", () => {
     expect(result.published).toEqual([]);
   });
 
+  it("pins no draft once it was discarded, and a later draft again", () => {
+    // A held draft saved, then discarded: its version stays in the history,
+    // but it is no longer the document's draft.
+    const discarded = story(
+      [version(1, 1, { status: "published" }), version(2, 2)],
+      [
+        event("published", 1, { versionNo: 1, parts: ["en"] }),
+        event("draft-discarded", 3, { parts: ["en"] }),
+      ]
+    );
+    expect(discarded.drafts).toEqual([]);
+    expect(discarded.published).toHaveLength(1);
+
+    // A discard of another language leaves this one's draft pinned, and a
+    // draft saved after the discard is pinned.
+    const other = story(
+      [version(1, 1, { status: "published" }), version(2, 2)],
+      [
+        event("published", 1, { versionNo: 1, parts: ["en"] }),
+        event("draft-discarded", 3, { parts: ["es"] }),
+      ]
+    );
+    expect(other.drafts).toMatchObject([{ version: { versionNo: 2 } }]);
+    const later = story(
+      [version(1, 1, { status: "published" }), version(2, 2), version(3, 4)],
+      [
+        event("published", 1, { versionNo: 1, parts: ["en"] }),
+        event("draft-discarded", 3, { parts: ["en"] }),
+      ]
+    );
+    expect(later.drafts).toMatchObject([{ version: { versionNo: 3 } }]);
+  });
+
   it("pins no draft when the published version is the newest", () => {
     const result = story(
       [version(1, 1), version(2, 2, { status: "published" })],
