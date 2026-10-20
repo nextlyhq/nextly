@@ -69,14 +69,16 @@ describe("recordedStatus", () => {
 });
 
 describe("recordsServedContent", () => {
-  it("is true of a published version and of any status the lifecycle does not name", () => {
-    expect(recordsServedContent("published")).toBe(true);
-    // Recorded only by a document without the lifecycle, which is always live.
-    expect(recordsServedContent("archived")).toBe(true);
+  it("under the lifecycle, is true of a published version only", () => {
+    expect(recordsServedContent("published", true)).toBe(true);
+    expect(recordsServedContent("draft", true)).toBe(false);
+    expect(recordsServedContent("unpublished", true)).toBe(false);
   });
 
-  it("is false of a draft and of a withdrawn version", () => {
-    expect(recordsServedContent("draft")).toBe(false);
-    expect(recordsServedContent("unpublished")).toBe(false);
+  it("without the lifecycle, is true whatever the document calls itself", () => {
+    // Its own `status` field can hold the lifecycle's words as ordinary ones.
+    for (const status of ["published", "archived", "draft", "unpublished"]) {
+      expect(recordsServedContent(status, false)).toBe(true);
+    }
   });
 });

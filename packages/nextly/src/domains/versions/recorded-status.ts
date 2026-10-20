@@ -24,10 +24,7 @@
  * @module domains/versions/recorded-status
  */
 
-import {
-  isVersionStatus,
-  type VersionStatus,
-} from "../../schemas/versions/types";
+import type { VersionStatus } from "../../schemas/versions/types";
 
 import type { VersionRef } from "./versions-repository";
 
@@ -42,12 +39,31 @@ export type RecordedVersionStatus = VersionStatus | (string & {});
  * retention and the "currently published" comparison ask, never the bare
  * status.
  *
- * Under the lifecycle that is a published version. A status the lifecycle
- * does not name is recorded only by a document without one, and that document
- * is live whatever it calls itself, so its version was served too.
+ * Under the lifecycle that is a published version. Without it, every version
+ * was served, whatever the document called itself: its own `status` field can
+ * hold "draft" or "unpublished" as ordinary words, so the spelling alone
+ * cannot say which kind of document recorded it, and the entity's lifecycle
+ * setting is asked instead.
  */
-export function recordsServedContent(status: RecordedVersionStatus): boolean {
-  return status === "published" || !isVersionStatus(status);
+export function recordsServedContent(
+  status: RecordedVersionStatus,
+  lifecycle: boolean
+): boolean {
+  return !lifecycle || status === "published";
+}
+
+/**
+ * Whether a collection's or Single's record has the Draft/Published lifecycle:
+ * its `status` setting, which is what decides whether a `status` value is the
+ * lifecycle's or the document's own.
+ */
+export function hasLifecycle(entity: unknown): boolean {
+  return (
+    typeof entity === "object" &&
+    entity !== null &&
+    "status" in entity &&
+    entity.status === true
+  );
 }
 
 /** The width of the versions table's `status` column (MySQL's `varchar`). */

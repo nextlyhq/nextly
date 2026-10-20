@@ -373,6 +373,7 @@ describe.each(getConfiguredTestDialects())(
         ref: notesRef(id),
         status: "draft",
         snapshot: { title: "x" },
+        lifecycle: true,
       });
       expect(a.versionNo).not.toBe(b.versionNo);
       const numbers = await versionNumbersOf(t, id);
@@ -392,6 +393,7 @@ describe.each(getConfiguredTestDialects())(
         ref: notesRef(id),
         status: "published",
         snapshot: { title: "x" },
+        lifecycle: true,
         maxPerDoc: 2,
       });
       expect(await versionNumbersOf(t, id)).toEqual([2, 3]);

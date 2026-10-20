@@ -44,6 +44,12 @@ export interface CaptureInTxArgs {
   /** Retention cap for this document, from the resolved versions config. */
   maxPerDoc?: number | false;
   /**
+   * Whether the document's collection or Single has the Draft/Published
+   * lifecycle. Without it every version was served, whatever its own
+   * `status` field says, and retention keeps each language's latest.
+   */
+  lifecycle: boolean;
+  /**
    * The locale this snapshot holds.
    *
    * A localized document's snapshot records exactly one locale's values, not
@@ -165,5 +171,6 @@ export async function captureInTx(
     sourceVersionNo: args.sourceVersionNo ?? null,
     label: args.label ?? null,
     maxPerDoc: args.maxPerDoc,
+    lifecycle: args.lifecycle,
   });
 }

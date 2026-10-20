@@ -41,6 +41,11 @@ export interface CaptureInput {
    * insert, so the cap holds without a background worker.
    */
   maxPerDoc?: number | false;
+  /**
+   * Whether the document has the Draft/Published lifecycle, which decides
+   * which versions retention counts as served (see `recordsServedContent`).
+   */
+  lifecycle: boolean;
 }
 
 /** The allocated number of a captured version. */
@@ -117,7 +122,8 @@ export class VersionCaptureService {
         durable,
         input.maxPerDoc,
         [isRestore ? versionNo - 1 : null, input.sourceVersionNo],
-        pinned
+        pinned,
+        input.lifecycle
       );
       if (staleIds.length > 0) {
         const removed = await repo.deletePrunedVersions(staleIds);

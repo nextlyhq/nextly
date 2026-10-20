@@ -36,6 +36,7 @@ describe("captureInTx", () => {
 
   it("records the locale the snapshot was assembled from", async () => {
     await captureInTx(tx, service(), {
+      lifecycle: true,
       ref,
       parts: { parentRow: { id: "e1" } },
       locale: "de",
@@ -49,6 +50,7 @@ describe("captureInTx", () => {
 
   it("records no locale for an unlocalized document", async () => {
     await captureInTx(tx, service(), {
+      lifecycle: true,
       ref,
       parts: { parentRow: { id: "e1" } },
     });
@@ -63,6 +65,7 @@ describe("captureInTx", () => {
     // The seam does not decide whether a snapshot is locale-specific; the write
     // path does, and passes null when it captured no locale-specific state.
     await captureInTx(tx, service(), {
+      lifecycle: true,
       ref,
       parts: { parentRow: { id: "e1" } },
       locale: null,
@@ -76,6 +79,7 @@ describe("captureInTx", () => {
 
   it("records the version a restore came from", async () => {
     await captureInTx(tx, service(), {
+      lifecycle: true,
       ref,
       parts: { parentRow: { id: "e1" } },
       sourceVersionNo: 4,
@@ -91,6 +95,7 @@ describe("captureInTx", () => {
     // Lineage is recorded, never inferred: an ordinary edit that happens to
     // reproduce an earlier state is not a restore.
     await captureInTx(tx, service(), {
+      lifecycle: true,
       ref,
       parts: { parentRow: { id: "e1" } },
     });
@@ -103,6 +108,7 @@ describe("captureInTx", () => {
 
   it("still assembles the snapshot, and records a status it does not know as it is", async () => {
     await captureInTx(tx, service(), {
+      lifecycle: true,
       ref,
       contentStatus: "nonsense",
       parts: {
@@ -138,6 +144,7 @@ describe("captureInTx", () => {
 
     it("records no version for an ordinary save", async () => {
       const result = await captureInTx(unchanged, service(), {
+        lifecycle: true,
         ref,
         parts,
         onlyIfChanged: true,
@@ -148,6 +155,7 @@ describe("captureInTx", () => {
 
     it("records a restore, which names what it came from", async () => {
       await captureInTx(unchanged, service(), {
+        lifecycle: true,
         ref,
         parts,
         onlyIfChanged: true,
@@ -158,6 +166,7 @@ describe("captureInTx", () => {
 
     it("records a named version, which was asked for by name", async () => {
       await captureInTx(unchanged, service(), {
+        lifecycle: true,
         ref,
         parts,
         onlyIfChanged: true,
@@ -168,6 +177,7 @@ describe("captureInTx", () => {
 
     it("records a change of status", async () => {
       await captureInTx(unchanged, service(), {
+        lifecycle: true,
         ref,
         parts,
         onlyIfChanged: true,
@@ -180,6 +190,7 @@ describe("captureInTx", () => {
       // The document's newest version is in no language; an older Spanish one
       // could match this save yet predate a change to the shared fields.
       await captureInTx(unchanged, service(), {
+        lifecycle: true,
         ref,
         parts,
         onlyIfChanged: true,
@@ -201,6 +212,7 @@ describe("captureInTx", () => {
           ]),
       } as unknown as Parameters<typeof captureInTx>[0];
       const result = await captureInTx(spanish, service(), {
+        lifecycle: true,
         ref,
         parts,
         onlyIfChanged: true,
@@ -212,7 +224,11 @@ describe("captureInTx", () => {
 
     it("records a create whatever an earlier document under its id left", async () => {
       // No `onlyIfChanged`: a create says the document began.
-      await captureInTx(unchanged, service(), { ref, parts });
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        lifecycle: true,
+      });
       expect(capture).toHaveBeenCalledOnce();
     });
 
@@ -230,6 +246,7 @@ describe("captureInTx", () => {
           ]),
       } as unknown as Parameters<typeof captureInTx>[0];
       await captureInTx(queued, service(), {
+        lifecycle: true,
         ref,
         parts: { parentRow: { id: "e1", title: "Hi", status: "archived" } },
         contentStatus: "archived",
