@@ -298,4 +298,46 @@ describe("RecentActivity", () => {
     expect(screen.queryAllByRole("link")).toHaveLength(0);
     expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
+
+  it("heads a Single's row by its label, with no collection beside it", async () => {
+    // A collection's entry draws its collection as a chip after the title; a
+    // Single's row has no collection, and drawing its slug there would name
+    // one that does not exist. The collection row is the control: it shows
+    // the chip draws when there is something to draw.
+    const base = mockActivities[1]!;
+    mockUseRecentActivity.mockReturnValue({
+      data: {
+        activities: [
+          {
+            ...base,
+            id: "s",
+            target: "Site Settings",
+            entryTitle: "Site Settings",
+          },
+          {
+            ...base,
+            id: "c",
+            target: "Hello in posts",
+            entryTitle: "Hello",
+            collectionLabel: "posts",
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      isError: false,
+      isSuccess: true,
+      status: "success",
+    } as ReturnType<typeof useRecentActivity>);
+
+    render(<RecentActivity />);
+
+    const single = await screen.findByText("Site Settings");
+    const singleLine = single.closest("p");
+    expect(singleLine?.textContent).not.toContain("site-settings");
+    expect(singleLine?.querySelectorAll("span")).toHaveLength(3);
+    const collectionLine = screen.getByText("Hello").closest("p");
+    expect(collectionLine?.textContent).toContain("posts");
+    expect(collectionLine?.querySelectorAll("span")).toHaveLength(4);
+  });
 });
