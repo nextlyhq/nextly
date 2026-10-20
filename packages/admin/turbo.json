@@ -1,0 +1,25 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      // `build` because the bundle-report suite reads this package's OWN
+      // `dist`, and the root task depends on `^build`, which builds
+      // dependencies and not this package. The edge lives in the task graph
+      // rather than in a script that rebuilds dependencies mid-run: under the
+      // root `pnpm test`, turbo runs other packages' tests against
+      // `nextly`'s dist concurrently, and a nested dependency rebuild would
+      // pull that ground out from under them.
+      //
+      // `$TURBO_EXTENDS$` first, so the root task's `^build` edge and inputs
+      // are inherited rather than replaced.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"]
+    },
+    "test:coverage": {
+      // The same ordering as `test`, for the same reason: the coverage task
+      // runs the same real-dist suite, and inheriting only `^build` left this
+      // task with no edge to this package's own `build`.
+      "dependsOn": ["$TURBO_EXTENDS$", "build"]
+    }
+  }
+}
