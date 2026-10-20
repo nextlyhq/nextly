@@ -35,7 +35,9 @@ describe("a recovery point's age", () => {
         { enabled: true, storedAt: savedAt, pendingOfferAt: null }
       );
       // The indicator's line names the age after "stored".
-      const age = /stored (.+?)\./.exec(indicator.detail ?? "")?.[1];
+      const detail =
+        indicator !== null && "detail" in indicator ? indicator.detail : null;
+      const age = /stored (.+?)\./.exec(detail ?? "")?.[1];
 
       expect(age).toBeDefined();
       expect(screen.getByRole("status").textContent).toContain(age);
