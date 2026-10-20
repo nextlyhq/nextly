@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A Direct API call made as a user (`overrideAccess: false`), a plugin service call made `as: "user"`, and a page render with a preview now each look up the caller's roles and permissions once, however many rows and field rules they read. A 50-entry list read through either costs the same access queries as a 1-entry list. A call made inside a request shares that request's lookups.
+A Direct API call made as a user (`overrideAccess: false`), a plugin service call made `as: "user"`, and a page render now each look up the caller's roles and permissions once, however many rows, field rules and permission checks they read. That covers every Direct API method and namespace method, and both collection and Single routes, including the reads their `render` and `buildMetadata` make. A 50-entry list read through the Direct API or a plugin service costs the same access queries as a 1-entry list. A call made inside a request shares that request's lookups.

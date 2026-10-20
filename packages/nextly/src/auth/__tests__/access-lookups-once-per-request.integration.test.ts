@@ -26,6 +26,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../config";
 import { getDialectTables } from "../../database/index";
+import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import { seedAllPermissions } from "../../init/seed-permissions";
 import { definePlugin } from "../../plugins/plugin-context";
 import type { PluginCollectionService } from "../../plugins/service-opts";
@@ -550,6 +551,41 @@ describe.each(getConfiguredTestDialects())(
         ).toHaveLength(1);
       }
     );
+
+    it("a Direct API namespace call walks the caller's roles once", async () => {
+      // Asks several permissions of one caller: whether they may read the
+      // release, and each thing they might do to it.
+      const readReleases = (
+        await t.nextly.permissions.find({ limit: 200 })
+      ).items.find(permission => permission.slug === "read-content-releases");
+      if (!readReleases) throw new Error("no read-content-releases permission");
+      const releaseReader = await t.nextly.roles.create({
+        data: {
+          name: "release reader",
+          slug: "release-reader",
+          permissionIds: [String(readReleases.id)],
+        },
+      });
+      const caller = await newHolder(
+        "release-reader",
+        String(releaseReader.item.id)
+      );
+      const release = await new ReleasesRepository(t.adapter).createRelease({
+        title: "Relaunch",
+        createdBy: caller,
+      });
+      await invalidateAllPermissionCaches();
+      const { result, tables } = await tablesRead(t, () =>
+        t.nextly.releases.capabilities({
+          releases: [release],
+          overrideAccess: false,
+          userId: caller,
+        })
+      );
+      // POPULATION CONTROL: answered for the release, from the caller's roles.
+      expect(result.has(release.id)).toBe(true);
+      expect(tables.filter(table => table === "user_roles")).toHaveLength(1);
+    });
 
     it("walks the caller's roles once", async () => {
       const fifty = await listOf(50);

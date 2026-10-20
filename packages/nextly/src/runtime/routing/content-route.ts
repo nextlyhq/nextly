@@ -652,27 +652,31 @@ function buildRoute<TNode>(
   }
 
   async function generateMetadata(args: ContentRouteArgs): Promise<Metadata> {
-    if (!config.buildMetadata) return {};
+    const buildMetadata = config.buildMetadata;
+    if (!buildMetadata) return {};
     const slug = joinSlug(await args.params);
     if (isReservedPath(`/${slug}`)) return {};
-    // With one memo of access lookups for the render, so the person a preview
-    // was shared by, and the field rules of the draft read as them, look that
-    // person up once.
-    const resolved = await runWithAccessMemo(() => resolve(slug));
-    if (!resolved) return {};
-    return config.buildMetadata(resolved.entry, resolved.context);
+    // One memo of access lookups for the resolution and the callback, so the
+    // person a preview was shared by, the field rules of the draft read as
+    // them, and any read the callback makes look that person up once.
+    return runWithAccessMemo(async () => {
+      const resolved = await resolve(slug);
+      if (!resolved) return {};
+      return buildMetadata(resolved.entry, resolved.context);
+    });
   }
 
   async function ContentPage(args: ContentRouteArgs): Promise<TNode> {
     const slug = joinSlug(await args.params);
     // Never serve content at a framework/metadata path.
     if (isReservedPath(`/${slug}`)) triggerNotFound();
-    // With one memo of access lookups for the render, so the person a preview
-    // was shared by, and the field rules of the draft read as them, look that
-    // person up once.
-    const resolved = await runWithAccessMemo(() => resolve(slug));
-    if (!resolved) triggerNotFound();
-    return config.render(resolved.entry, resolved.context);
+    // One memo of access lookups for the resolution and the render; see
+    // `generateMetadata`.
+    return runWithAccessMemo(async () => {
+      const resolved = await resolve(slug);
+      if (!resolved) triggerNotFound();
+      return config.render(resolved.entry, resolved.context);
+    });
   }
 
   return { generateStaticParams, generateMetadata, ContentPage };
