@@ -1,4 +1,8 @@
-import { isDbError, type DbErrorKind } from "../database/errors";
+import {
+  isDatabaseBusy,
+  isDbError,
+  type DbErrorKind,
+} from "../database/errors";
 
 import {
   NEXTLY_ERROR_STATUS,
@@ -11,6 +15,7 @@ import type {
   ReleaseProblemsPublicData,
   ValidationPublicData,
 } from "./public-data";
+import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "./retry-after";
 
 /**
  * Default mapping from DbErrorKind to NextlyError contract. Used by
@@ -52,6 +57,14 @@ const DB_ERROR_MAPPING = {
     statusCode: 409,
     publicMessage: "The operation could not be completed. Please retry.",
   },
+  // Nothing ran, so the request is safe to send again; the retry hint says
+  // when, and becomes Retry-After on REST.
+  busy: {
+    code: "DATABASE_BUSY",
+    statusCode: NEXTLY_ERROR_STATUS.DATABASE_BUSY,
+    publicMessage: genericPublicMessage("DATABASE_BUSY"),
+    publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
+  },
   timeout: {
     code: "DATABASE_ERROR",
     statusCode: 500,
@@ -74,7 +87,12 @@ const DB_ERROR_MAPPING = {
   },
 } satisfies Record<
   DbErrorKind,
-  { code: string; statusCode: number; publicMessage: string }
+  {
+    code: string;
+    statusCode: number;
+    publicMessage: string;
+    publicData?: PublicData;
+  }
 >;
 
 /**
@@ -431,6 +449,42 @@ export class NextlyError extends Error {
     });
   }
 
+  /**
+   * A request that waited `pool.connectionTimeoutMs` for a database
+   * connection and was given none. Retryable: nothing ran. The same error
+   * `fromDatabaseError` gives a busy DbError, from the same table row.
+   */
+  static databaseBusy(opts?: {
+    cause?: Error;
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    const busy = DB_ERROR_MAPPING.busy;
+    return new NextlyError({
+      code: busy.code,
+      statusCode: busy.statusCode,
+      publicMessage: busy.publicMessage,
+      publicData: busy.publicData,
+      cause: opts?.cause,
+      logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * What a request boundary answers with for a thrown value that is not a
+   * NextlyError: "database busy" when the request waited out its bound for a
+   * connection, which is retryable and no fault of the server's code, and an
+   * internal error for anything else.
+   *
+   * The busy case has to be read here because it usually arrives raw:
+   * `withDbErrors` converts only DbErrors, so a driver's error passes through
+   * services unconverted to the boundary that answers the request.
+   */
+  static fromUnexpected(error: unknown): NextlyError {
+    const cause = error instanceof Error ? error : undefined;
+    if (isDatabaseBusy(error)) return NextlyError.databaseBusy({ cause });
+    return NextlyError.internal({ cause });
+  }
+
   static internal(opts?: {
     cause?: Error;
     logContext?: Record<string, unknown>;
@@ -503,6 +557,7 @@ export class NextlyError extends Error {
         code: mapping.code,
         statusCode: mapping.statusCode,
         publicMessage: mapping.publicMessage,
+        publicData: "publicData" in mapping ? mapping.publicData : undefined,
         logMessage: "Database error",
         logContext,
         cause: error,

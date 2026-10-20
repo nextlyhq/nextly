@@ -62,7 +62,8 @@ export interface AdapterLogger {
  *
  * @remarks
  * Controls connection pooling behavior. SQLite adapters ignore these
- * settings as SQLite uses a single connection.
+ * settings as SQLite uses a single connection, except
+ * `connectionTimeoutMs`, which bounds the wait for that one connection.
  *
  * @public
  */
@@ -76,7 +77,16 @@ export interface PoolConfig {
   /** Time (ms) before an idle connection is closed */
   idleTimeoutMs?: number;
 
-  /** Time (ms) to wait for a connection before timing out */
+  /**
+   * Time (ms) a request waits for a connection before it fails as
+   * "database busy" (code `NEXTLY_POOL_WAIT_TIMEOUT` from the adapter,
+   * `DATABASE_BUSY` from Nextly), the same on every dialect. On PostgreSQL
+   * and MySQL it is the wait for a pooled connection, and the time a new one
+   * gets to open; on SQLite, the wait for the one connection behind the
+   * transactions ahead. `0` waits without limit.
+   *
+   * @default 15000
+   */
   connectionTimeoutMs?: number;
 
   /** Time (ms) before considering an unused connection stale */

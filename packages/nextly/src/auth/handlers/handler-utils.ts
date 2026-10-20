@@ -220,7 +220,8 @@ export function loginFailureResponse(
   requestId: string
 ): Response {
   return buildAuthErrorResponse(
-    NextlyError.is(err) ? err : NextlyError.internal({ cause: err as Error }),
+    // Internal, unless the database was only busy.
+    NextlyError.is(err) ? err : NextlyError.fromUnexpected(err),
     requestId
   );
 }

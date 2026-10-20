@@ -43,6 +43,11 @@ export const NEXTLY_ERROR_STATUS = {
   BUSINESS_RULE_VIOLATION: 422,
   INTERNAL_ERROR: 500,
   DATABASE_ERROR: 500,
+  // A request waited `pool.connectionTimeoutMs` for a database connection and
+  // was given none, or found a SQLite file held past `busyTimeout`. 503, not
+  // 500 or 409: nothing ran, nothing is wrong with the request, and retrying
+  // shortly is the remedy, which `retryAfterSeconds` and Retry-After say.
+  DATABASE_BUSY: 503,
   EXTERNAL_SERVICE_ERROR: 502,
   SERVICE_UNAVAILABLE: 503,
   // Outbound-fetch safety (utils/validate-external-url): a URL refused for SSRF
@@ -294,6 +299,7 @@ const GENERIC_PUBLIC_MESSAGE: Readonly<
   RATE_LIMITED: "Too many requests. Please try again later.",
   EXTERNAL_SERVICE_ERROR: "An upstream service failed.",
   SERVICE_UNAVAILABLE: "The service is temporarily unavailable.",
+  DATABASE_BUSY: "The database is busy. Please try again shortly.",
   INTERNAL_ERROR: "An unexpected error occurred.",
 };
 
