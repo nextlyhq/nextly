@@ -109,6 +109,8 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "role-name": ({ roles }) => (roles ?? []).includes("editor"),
   "permission-spelling": ({ permissions, collection, operation }) =>
     (permissions ?? []).includes(`${collection}:${operation}`),
+  "role-screen-spelling": ({ permissions, collection, operation }) =>
+    (permissions ?? []).includes(`${operation}-${collection}`),
   "principal-kind": ({ principal }) => principal?.kind === MEMBER_KIND,
   "user-is-key-maker": ({ user }) =>
     keyMaker.id !== undefined && user?.id === keyMaker.id,

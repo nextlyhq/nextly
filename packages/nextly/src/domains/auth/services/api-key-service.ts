@@ -367,22 +367,16 @@ function keyGrantsServable(entry: KeyGrantsEntry, now: number): boolean {
 }
 
 /**
- * One key's grants, in both spellings a permission is written in.
+ * Distinct rows, keyed on the slug — the identity a grant is stored under.
  *
- * A permission row carries an `action` and a `resource`, and the codebase spells
- * the pair two ways on purpose: `action-resource` in the database and the admin
- * matrix (`read-posts`), and `resource:action` wherever a code-defined access
- * rule reads it (`posts:read`). `AccessFunction` in `collections/fields/types/base`
- * states the second as its contract, and `listEffectivePermissions` is what
- * produces it for a session caller.
- *
- * Both are projected here from the SAME rows rather than converted from one
- * another. A stored slug cannot be decomposed back into its parts — a
- * deliberately custom one (`manage-api-keys`, on action `update`) is explicitly
- * supported by `RolePermissionService`, so splitting on the hyphen would invent
- * a resource that no row names.
+ * A key's grants are kept as rows, not slugs: the slug (`read-posts`) is what
+ * every check compares and what a rule is handed, and for one release a rule
+ * is also handed the earlier `posts:read` spelling, made from the row's
+ * `action` and `resource`. A stored slug cannot be decomposed back into those
+ * parts — a deliberately custom one (`manage-api-keys`, on action `update`) is
+ * explicitly supported by `RolePermissionService`, so splitting on the hyphen
+ * would invent a resource that no row names.
  */
-/** Distinct rows, keyed on the slug — the identity a grant is stored under. */
 function dedupeGrants(rows: GrantedPermission[]): GrantedPermission[] {
   const bySlug = new Map<string, GrantedPermission>();
   for (const row of rows) if (!bySlug.has(row.slug)) bySlug.set(row.slug, row);
@@ -857,11 +851,12 @@ export class ApiKeyService extends BaseService {
   }
 
   /**
-   * The key's grants in both spellings — see {@link ApiKeyGrants}.
+   * The key's grants, as the rows they were resolved from.
    *
-   * A code-defined access rule reads `resource:action`, so an access check that
-   * judges a key on its own scope needs that projection as well as the stored
-   * slugs its coarse permission check tests.
+   * Rows rather than slugs, because a rule judging the key on its own scope is
+   * handed, for one release, each grant's earlier `resource:action` spelling
+   * beside the stored slug its coarse permission check tests, and only the
+   * row has the parts to make it.
    *
    * Returns a COPY. The cached arrays are shared by every request this key
    * makes for the TTL, and the scope built from them is handed to plugin route

@@ -15,28 +15,24 @@
 
 import { NextlyError } from "../errors/nextly-error";
 import { permissionSlug } from "../schemas/_zod/rbac";
-import type {
-  CollectionAccessControl,
-  SingleAccessControl,
-} from "../shared/types/access";
 
+import type { AccessTarget } from "./access/decide";
 import { codeAccessAllows, getRBACService } from "./code-access";
 import type { RequestActorType } from "./request-actor";
 
 /**
  * One permission the caller holds, as the row it was resolved from.
  *
- * A permission is written two ways in this codebase, both deliberately: the
- * STORED slug (`read-posts`), which the database, the admin's permission matrix
- * and a route's `requiredPermission` all use; and the RULE spelling
- * (`posts:read`), which `AccessFunction` documents as what a code-defined
- * access rule receives and which `listEffectivePermissions` produces for a
- * session caller.
+ * A permission is spelled one way wherever a developer reads or writes it:
+ * the STORED slug (`read-posts`), which the database, the admin's permission
+ * matrix, a route's `requiredPermission` and every access rule use. For one
+ * release a rule is also handed the earlier rule spelling (`posts:read`),
+ * which is made from the row's action and resource.
  *
  * The row carries what both are made of, so both are DERIVED from it rather
  * than stored beside each other. Storing them side by side is what let a
  * handler narrow one and leave the other holding the grant it had just given
- * up — the field gate reads the rule spelling and has no coarse check standing
+ * up — the field gate reads the rule's list and has no coarse check standing
  * in front of it, so the narrowing was silently undone.
  *
  * The slug cannot be recomputed from the other two: `RolePermissionService`
@@ -141,7 +137,7 @@ export function apiKeyScopeFrom(caller: {
 }): AuthenticatedScope {
   if (caller.grants) return apiKeyScope(caller.grants, caller.roles);
   // No rows, so `grants` is left ABSENT rather than empty: absent means "this
-  // scope never had them", which `ruleFacingPermissions` answers honestly, and
+  // scope never had them", which `scopeGrants` answers honestly, and
   // an empty array would mean "this key holds nothing" and deny everything.
   return freezeScope({
     actorType: "apiKey",
@@ -185,8 +181,8 @@ export function narrowScope(
   // then passes no scope, and resolves by their own RBAC exactly as before.
   if (!scope) return undefined;
   if (!scope.grants) {
-    // No rows to filter, so the slugs are all there is. Narrow those, and leave
-    // the rule spelling to `ruleFacingPermissions`, which will read them too.
+    // No rows to filter, so the slugs are all there is. Narrow those; a rule
+    // is handed them as they are, since no row is left to derive more from.
     return freezeScope({
       ...scope,
       permissions: scope.permissions.filter(slug =>
@@ -198,27 +194,27 @@ export function narrowScope(
 }
 
 /**
- * The caller's grants in the spelling a code-defined access rule receives.
- *
- * Derived from the rows, and the rows are checked against the slugs beside them
- * first, so the answer cannot name a grant `permissions` does not.
+ * The rows behind a key's grants, checked against the slugs beside them, so
+ * what a rule is handed cannot name a grant `permissions` does not.
  *
  * Every constructor here builds both halves from one list, so they agree by
  * construction and this rejects nothing they produce. What it rejects is a
  * scope assembled by SPREADING one: `{ ...scope, permissions: fewer }` narrows
- * the slugs and keeps every original row, so this function would go on
- * authorizing against grants the caller has just given up — and it is the one
- * shape the lint boundary cannot refuse, because nothing in the syntax
- * separates it from an ordinary overlay of a record holding a `permissions`
- * field. The disagreement decides an answer here, so it is refused here.
+ * the slugs and keeps every original row, so a rule handed the rows would go
+ * on seeing grants the caller has just given up — and it is the one shape the
+ * lint boundary cannot refuse, because nothing in the syntax separates it from
+ * an ordinary overlay of a record holding a `permissions` field. The
+ * disagreement decides an answer here, so it is refused here.
  *
- * When the scope carries no rows the stored slugs are returned unchanged. That
- * is the honest answer rather than a good one: such a scope never had the parts
- * a rule spelling is composed of, and splitting a slug on its hyphen would
- * invent a resource no permission row names.
+ * `undefined` when the scope carries no rows. A rule is then handed the stored
+ * slugs alone: such a scope never had the parts the earlier spelling is
+ * composed of, and splitting a slug on its hyphen would invent a resource no
+ * permission row names.
  */
-export function ruleFacingPermissions(scope: AuthenticatedScope): string[] {
-  if (!scope.grants) return [...scope.permissions];
+export function scopeGrants(
+  scope: AuthenticatedScope
+): readonly GrantedPermission[] | undefined {
+  if (!scope.grants) return undefined;
   const { grants } = scope;
   // Positional, because both halves come from one `map` over one list. A set
   // comparison would accept a reordering that no constructor can produce, and
@@ -236,7 +232,7 @@ export function ruleFacingPermissions(scope: AuthenticatedScope): string[] {
       },
     });
   }
-  return grants.map(grant => `${grant.resource}:${grant.action}`);
+  return grants;
 }
 
 /**
@@ -257,11 +253,12 @@ export function apiKeyScopeAllows(
   return scope.permissions.includes(permissionSlug(operation, resource));
 }
 
-/** The RBAC surface `apiKeyWriteAllowed` needs — the registered code access. */
+/**
+ * The RBAC surface `apiKeyWriteAllowed` needs: the registered target, with its
+ * code access and whether it is a collection or a Single.
+ */
 interface CodeAccessSource {
-  getRegisteredAccess(
-    slug: string
-  ): CollectionAccessControl | SingleAccessControl | undefined;
+  getRegisteredTarget(slug: string): AccessTarget | undefined;
 }
 
 /**
@@ -288,15 +285,15 @@ export async function apiKeyWriteAllowed(
   if (scope?.actorType !== "apiKey") return null;
   if (!scope.permissions.includes(permissionSlug(operation, resource)))
     return false;
-  const codeAccess = rbac?.getRegisteredAccess(resource);
-  if (!codeAccess) return true;
-  return codeAccessAllows(codeAccess, operation, resource, {
+  const target = rbac?.getRegisteredTarget(resource);
+  if (!target) return true;
+  return codeAccessAllows(target, operation, {
     userId: user.id,
     authMethod: "api-key",
-    // The rule-facing spelling, derived from the same rows the coarse check
-    // above compared against. A rule reads `resource:action`, and handing it
-    // the stored form denies every documented permission predicate.
-    permissions: ruleFacingPermissions(scope),
+    // The same slugs the coarse check above compared against, with the rows
+    // behind them, checked against those slugs first.
+    permissions: [...scope.permissions],
+    grants: scopeGrants(scope),
     // The KEY's roles when it carries them. `user` names the owner, so its
     // roles are the owner's — the very thing this function exists not to judge
     // on. The read paths resolve the key's roles onto the user before calling

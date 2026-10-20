@@ -1884,18 +1884,18 @@ export class CollectionRelationshipService extends BaseService {
         ? true
         : hasPermission(user.id, "read", targetCollection);
     }
-    const codeAccess = rbac.getRegisteredAccess(targetCollection);
+    const target = rbac.getRegisteredTarget(targetCollection);
+    const codeAccess = target?.access;
 
     if (authenticatedScope?.actorType === "apiKey") {
       // Judged on the operation rather than the object, because a collection
       // that declares `access.create` alone has still said nothing about
       // reading. With no read rule, the grant above is the whole answer, as it
       // is on the direct read's key branch.
-      if (codeAccess?.read === undefined) return true;
+      if (!target || codeAccess?.read === undefined) return true;
       return codeAccessAllows(
-        codeAccess,
+        target,
         "read",
-        targetCollection,
         readAccessCaller({ user, authenticatedScope })
       );
     }
