@@ -561,6 +561,8 @@ What is caught as it happens:
 
 A release whose time has passed is stopped together with every due release it shares a document
 with, as the job pass would stop them: stopping one alone would hand the others its documents.
+A release whose time has not come is stopped on its own, as if its owner had cancelled it: a
+release sharing documents with a stopped one still runs at its time.
 
 A write made inside the collection service's `withTransaction` is checked once that transaction
 commits, never inside it. A release's documents are always judged as the person who added each
