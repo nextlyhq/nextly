@@ -54,7 +54,11 @@ export default function setup(project: TestProject): () => void {
     console.log(describeInventory(lines));
     if (project.config.testNamePattern !== undefined) return;
     const stale = staleKnownEscapes(KNOWN_ESCAPES, lines, ran, legDialects());
-    if (stale.length > 0) throw new Error(describeStale(stale));
+    if (stale.length === 0) return;
+    // Vitest reports an error thrown here but keeps its own exit status, so
+    // the run's status is set too: a stale entry has to fail it.
+    process.exitCode = 1;
+    throw new Error(describeStale(stale));
   };
 }
 
