@@ -23,7 +23,7 @@ process.env.NEXTLY_SECRET =
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { resetSessionStandingForTests } from "../../auth/session/session-standing";
-import { defineCollection, text } from "../../config";
+import { defineCollection, password, text } from "../../config";
 import {
   account,
   role,
@@ -44,6 +44,8 @@ import {
 const NOTES = "plugin_history_notes";
 /** A collection with drafts but autosave turned off: drafts alone turn it on. */
 const PLAIN = "plugin_history_plain";
+/** An autosaving collection with a password field. */
+const SECRETS = "plugin_history_secrets";
 
 /** The plugin history writes, with the trailing `ServiceOpts` each takes. */
 interface PluginVersions {
@@ -69,7 +71,10 @@ interface PluginVersions {
     opts?: ServiceOpts
   ): Promise<unknown>;
   get(ref: VersionRef, versionNo: number): Promise<{ label?: string | null }>;
-  getAutosave(ref: VersionRef, createdBy: string | null): Promise<unknown>;
+  getAutosave(
+    ref: VersionRef,
+    createdBy: string | null
+  ): Promise<{ snapshot: unknown } | undefined>;
   listEvents(
     subject: { kind: "collection"; slug: string; id: string },
     query?: { kinds?: string[] }
@@ -181,6 +186,12 @@ describe.each(getConfiguredTestDialects())(
             fields: [text({ name: "title" })],
           }),
           defineCollection({
+            slug: SECRETS,
+            status: true,
+            versions: { drafts: { autosave: true } },
+            fields: [text({ name: "title" }), password({ name: "pin" })],
+          }),
+          defineCollection({
             slug: PLAIN,
             status: true,
             versions: { drafts: { autosave: false } },
@@ -196,6 +207,8 @@ describe.each(getConfiguredTestDialects())(
           `update-${NOTES}`,
           `read-${PLAIN}`,
           `update-${PLAIN}`,
+          `read-${SECRETS}`,
+          `update-${SECRETS}`,
         ]),
       ]);
       readerId = await account(t, "reader@example.com", [
@@ -368,6 +381,36 @@ describe.each(getConfiguredTestDialects())(
           createdBy: ownerId,
         });
         expect(await versions.getAutosave(ref, ownerId)).toBeDefined();
+      });
+    });
+
+    describe("a recovery point's password values", () => {
+      it("are left out, as REST leaves them out, for the plugin acting as itself", async () => {
+        const ref = refOf(SECRETS, await published(SECRETS, "n"));
+        const snapshot = { title: "typing", pin: "4321" };
+        await versions.autosave({
+          ref,
+          status: "draft",
+          snapshot,
+          createdBy: ownerId,
+        });
+        const stored = await versions.getAutosave(ref, ownerId);
+        expect(stored?.snapshot).toEqual({ title: "typing" });
+        expect(snapshot, "the plugin's own object is not changed").toEqual({
+          title: "typing",
+          pin: "4321",
+        });
+      });
+
+      it("are left out for a person the plugin acts for", async () => {
+        const ref = refOf(SECRETS, await published(SECRETS, "o"));
+        await versions.autosave(
+          { ref, status: "draft", snapshot: { title: "typing", pin: "4321" } },
+          asUser(editorId)
+        );
+        expect((await versions.getAutosave(ref, editorId))?.snapshot).toEqual({
+          title: "typing",
+        });
       });
     });
 
