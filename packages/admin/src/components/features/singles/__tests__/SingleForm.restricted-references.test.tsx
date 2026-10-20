@@ -77,4 +77,89 @@ describe("SingleForm — links the editor cannot see", () => {
       screen.getByRole("group", { name: "Restricted or missing item p2" })
     ).toBeTruthy();
   });
+
+  it("are saved as their references inside a field group and a dynamic zone", async () => {
+    const cardFields = [
+      { type: "text", name: "heading", label: "Heading" },
+      {
+        type: "relationship",
+        name: "pages",
+        label: "Pages",
+        relationTo: "pages",
+        hasMany: true,
+      },
+    ];
+    const zoneSchema = {
+      slug: "homepage",
+      label: "Homepage",
+      fields: [
+        { type: "text", name: "headline", label: "Headline" },
+        {
+          type: "component",
+          name: "card",
+          label: "Card",
+          component: "card",
+          componentFields: cardFields,
+        },
+        {
+          type: "component",
+          name: "blocks",
+          label: "Blocks",
+          components: ["card"],
+          repeatable: true,
+          componentSchemas: { card: { label: "Card", fields: cardFields } },
+        },
+      ],
+    } as unknown as SingleSchema;
+    const zoneDocument = {
+      id: "homepage",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      title: "Homepage",
+      slug: "homepage",
+      headline: "Hello",
+      card: {
+        heading: "Card",
+        pages: [
+          { id: "p1", title: "Page one" },
+          { id: "p2", [RESTRICTED_REFERENCE]: true },
+        ],
+      },
+      blocks: [
+        {
+          _componentType: "card",
+          heading: "In a zone",
+          pages: [{ id: "p3", [RESTRICTED_REFERENCE]: true }],
+        },
+      ],
+    } as unknown as SingleDocumentData;
+    const onSubmit = vi.fn(async () => {});
+    render(
+      <TooltipProvider>
+        <SingleForm
+          schema={zoneSchema}
+          document={zoneDocument}
+          onSubmit={onSubmit}
+        />
+      </TooltipProvider>
+    );
+    fireEvent.change(screen.getByLabelText("Headline"), {
+      target: { value: "Hello again" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Save/ }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card: expect.objectContaining({
+          pages: [{ id: "p1", title: "Page one" }, "p2"],
+        }) as unknown,
+        blocks: [
+          expect.objectContaining({ _componentType: "card", pages: ["p3"] }),
+        ],
+      })
+    );
+    expect(
+      screen.getByRole("group", { name: "Restricted or missing item p2" })
+    ).toBeTruthy();
+  });
 });

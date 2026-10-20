@@ -221,6 +221,25 @@ describe("an app in a workspace that hoists its dependencies", () => {
 });
 
 describe("an existing app with no Nextly package", () => {
+  // With --skip-install the person installs afterwards, by hand: the field
+  // has to be there for that install, so it is recorded all the same.
+  it("records the launching pnpm's version even with --skip-install", async () => {
+    vi.stubEnv(
+      "npm_config_user_agent",
+      "pnpm/10.18.0 npm/? node/v24.21.0 darwin arm64"
+    );
+    await withPackageJson();
+
+    await createNextly({ cwd: app, defaults: true, skipInstall: true });
+
+    const pkg = JSON.parse(
+      await readFile(path.join(app, "package.json"), "utf8")
+    );
+    expect(pkg.packageManager).toBe("pnpm@10.18.0");
+    expect(installs()).toEqual([]);
+    vi.unstubAllEnvs();
+  });
+
   it("adds Nextly's packages at exactly this release", async () => {
     await withPackageJson();
 

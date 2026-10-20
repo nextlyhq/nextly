@@ -120,6 +120,7 @@ import {
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
+  respondSubjectEvents,
   respondVersionPage,
   markVersionSeenForDocument,
   setVersionLabelForDocument,
@@ -230,6 +231,18 @@ export const COLLECTION_VERSION_METHODS: Record<
   string,
   MethodHandler<CollectionsHandlerType>
 > = {
+  // The entry's content events, behind the same read gate as its history.
+  listEntryEvents: {
+    execute: async (_svc, p) =>
+      respondSubjectEvents(
+        {
+          kind: "collection",
+          slug: String(p.collectionName ?? ""),
+          id: String(p.entryId ?? ""),
+        },
+        p
+      ),
+  },
   listEntryVersions: {
     execute: async (_svc, p) =>
       respondVersionPage(

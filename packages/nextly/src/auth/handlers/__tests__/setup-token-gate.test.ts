@@ -267,6 +267,60 @@ describe("setup in production", () => {
     }
   });
 
+  it.each([
+    "trickles past the deadline",
+    "streams past the size limit",
+    "declares a length past the size limit",
+  ] as const)("ends the client's upload of a body that %s", async how => {
+    const { deps } = await productionInstall();
+    // The client's own stream, watched: whether setup ended the upload is
+    // whether this source was cancelled, not merely whether setup answered.
+    let sourceCancelled = false;
+    const source = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            how === "streams past the size limit"
+              ? `{"padding":"${"x".repeat(40 * 1024)}`
+              : "{"
+          )
+        );
+      },
+      cancel() {
+        sourceCancelled = true;
+      },
+    });
+    const request = new Request(`${ORIGIN}/admin/api/auth/setup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: ORIGIN,
+        ...(how === "declares a length past the size limit"
+          ? { "Content-Length": String(64 * 1024) }
+          : {}),
+      },
+      body: source,
+      duplex: "half",
+    } as RequestInit);
+    vi.useFakeTimers();
+    try {
+      const settled = handleSetup(request, deps, {
+        limitWithoutValidToken: async () => null,
+      }).catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(SETUP_BODY_DEADLINE_MS);
+      expect(await settled).toMatchObject({
+        code:
+          how === "trickles past the deadline"
+            ? "VALIDATION_ERROR"
+            : "PAYLOAD_TOO_LARGE",
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sourceCancelled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses a token replaced after it was judged, creating nothing", async () => {
     const { deps, token, meta, createSuperAdmin } = await productionInstall();
     // The operator replaces the leaked token while this request is between

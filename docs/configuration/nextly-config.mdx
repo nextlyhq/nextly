@@ -120,7 +120,7 @@ export default defineConfig({
 | `db` | `DatabaseConfig` | See below | Where Drizzle schema and migration files are written. |
 | `rateLimit` | `RateLimitingConfig` | Enabled (100 read / 30 write per minute) | Global API rate limiting. |
 | `apiKeys` | `ApiKeysConfig` | 1000 req/hour, 1-hour window | Per-API-key rate limit (applies when `Authorization: Bearer nx_live_...` is used). |
-| `auth` | `AuthConfig` | `{ revealRegistrationConflict: false }` | Auth-related opt-in flags. |
+| `auth` | `AuthConfig` | `{ revealRegistrationConflict: false, allowRegistration: false }` | Auth-related opt-in flags. |
 | `storage` | `StoragePlugin[]` | `[]` (local disk used) | Cloud storage plugins. Default storage is local disk under `./public/uploads/`. |
 | `plugins` | `PluginDefinition[]` | `[]` | Plugins extending Nextly with collections, hooks, sidebar items, etc. |
 | `email` | `EmailConfig` | `undefined` | Email provider for password resets and notifications. |
@@ -327,14 +327,15 @@ Per-key rate limit applied when a request authenticates with an API key (`Author
 ### `auth`
 
 ```ts
-auth?: { revealRegistrationConflict?: boolean };
+auth?: { revealRegistrationConflict?: boolean; allowRegistration?: boolean };
 ```
 
-Auth-related opt-in flags. Today this block exposes a single flag.
+Auth-related opt-in flags.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `revealRegistrationConflict` | `boolean` | `false` | When `false` (default), `/auth/register` returns the same "we've sent a confirmation link" response whether or not the email exists, to prevent account enumeration. Set to `true` only if your threat model genuinely doesn't care about email enumeration (e.g. closed admin tool with controlled signup). |
+| `allowRegistration` | `boolean` | `false` | Whether anyone may create an account through `/auth/register`. While `false`, registration answers `403` "Registration is not open." and creates no account. A registered account gets no role and never becomes the first administrator. Needs the release after 0.0.2-alpha.68. |
+| `revealRegistrationConflict` | `boolean` | `false` | When `false` (default), `/auth/register` returns the same "we've sent a confirmation link" response whether or not the email exists, to prevent account enumeration. Set to `true` only if your threat model genuinely doesn't care about email enumeration (e.g. closed admin tool with controlled signup). Has effect only when `allowRegistration` is `true`. |
 
 Authentication is custom: email + password, JWT access/refresh tokens, sessions, API keys, RBAC. There is no OAuth.
 
