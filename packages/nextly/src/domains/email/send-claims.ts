@@ -27,6 +27,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, inArray, lt, or } from "drizzle-orm";
 
+import { toDbError } from "../../database/errors";
 import { getStaticRelations } from "../../database/static-relations";
 import { NextlyError } from "../../errors";
 import type { PrincipalRef } from "../../plugins/principals/types";
@@ -47,9 +48,12 @@ export const SITE_KEY_SCOPE = "site";
 /** The scope of core's own sends, and of a caller that names no scope. */
 export const CORE_KEY_SCOPE = "core";
 
-/** A plugin's scope: its own name, so two plugins' keys never meet. */
-export function pluginKeyScope(pluginName: string): string {
-  return `plugin:${pluginName}`;
+/**
+ * A plugin's scope: its own name, so two plugins' keys never meet. A context
+ * no plugin owns sends as the site.
+ */
+export function pluginKeyScope(pluginName: string | undefined): string {
+  return pluginName ? `plugin:${pluginName}` : SITE_KEY_SCOPE;
 }
 
 /**
@@ -256,15 +260,25 @@ export type ClaimDecision =
 /** Attempts at a claim another send keeps changing under it. */
 const CLAIM_ATTEMPTS = 3;
 
-function inOwnTransaction<T>(
-  adapter: DrizzleAdapter,
-  work: (db: ClaimDb) => Promise<T>
-): Promise<T> {
+/** A runner for work in a transaction of its own, never one the flow has open. */
+function ownTransaction(adapter: DrizzleAdapter) {
   const relations = getStaticRelations(adapter.getCapabilities().dialect);
-  return runAdapterTransaction<T, TransactionContext>(
-    run => adapter.transaction(ctx => run(ctx)),
-    ctx => work(ctx.drizzleWithRelations<ClaimDb>(relations))
-  );
+  return <T>(work: (db: ClaimDb) => Promise<T>): Promise<T> =>
+    runAdapterTransaction<T, TransactionContext>(
+      run => adapter.transaction(ctx => run(ctx)),
+      ctx => work(ctx.drizzleWithRelations<ClaimDb>(relations))
+    );
+}
+
+/**
+ * Whether a claim attempt lost to another send's write: the unique index
+ * refused a second row, or the database broke a deadlock between the two.
+ * The next attempt reads what the other send wrote.
+ */
+function lostToAnotherSend(adapter: DrizzleAdapter, error: unknown): boolean {
+  if (isUniqueViolation(error)) return true;
+  const { kind } = toDbError(adapter.getCapabilities().dialect, error);
+  return kind === "deadlock" || kind === "serialization-failure";
 }
 
 /** The first send's result, as a repeat returns it. */
@@ -378,15 +392,15 @@ export async function claimSendKey(
 ): Promise<ClaimDecision> {
   assertNoOpenTransaction(adapter, "A send with an idempotency key");
   const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
+  const transact = ownTransaction(adapter);
   for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
     try {
-      const decided = await inOwnTransaction(adapter, db =>
+      const decided = await transact(db =>
         attemptClaim(db, table, sendKey, now)
       );
       if (decided) return decided;
     } catch (error) {
-      // Another send inserted the claim first: read what it holds.
-      if (!isUniqueViolation(error)) throw error;
+      if (!lostToAnotherSend(adapter, error)) throw error;
     }
   }
   return { kind: "in-progress" };
@@ -409,7 +423,7 @@ export async function settleSendClaim(
   const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
   const now = options.now ?? Date.now();
   const held = and(eq(table.id, claim.id), eq(table.holder, claim.holder));
-  await inOwnTransaction(adapter, async db => {
+  await ownTransaction(adapter)(async db => {
     if (outcome.success && !options.keep) {
       await db.delete(table).where(held);
       return;
@@ -449,7 +463,7 @@ export async function sweepSendClaims(
       ? undefined
       : and(eq(table.state, "sent"), lt(table.settledAt, now - sentLifetimeMs))
   );
-  return inOwnTransaction(adapter, async db => {
+  return ownTransaction(adapter)(async db => {
     const rows = (await db
       .select({ id: table.id })
       .from(table)

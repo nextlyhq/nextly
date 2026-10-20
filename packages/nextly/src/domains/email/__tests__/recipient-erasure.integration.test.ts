@@ -210,6 +210,45 @@ for (const entry of DIALECTS) {
       expect(after).toHaveLength(2);
     });
 
+    it("clears a keyed send's key digest from every record of it, the copies included", async () => {
+      // One keyed send to ERASED with KEPT copied, and another send of KEPT's
+      // own under a different key.
+      const keyed = async (address: string, kind: string, keyDigest: string) =>
+        adapter.executeQuery(
+          `INSERT INTO ${q("email_deliveries")} (${q("id")}, ${q("provider_type")}, ` +
+            `${q("recipient_hash")}, ${q("recipient_kind")}, ${q("status")}, ` +
+            `${q("attempt_count")}, ${q("retention_class")}, ${q("key_digest")}, ` +
+            `${q("created_at")}) VALUES (${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(p).join(", ")})`,
+          [
+            randomUUID(),
+            "smtp",
+            recipientDigest(address),
+            kind,
+            "sent",
+            1,
+            "email",
+            keyDigest,
+            new Date(),
+          ]
+        );
+      await keyed(ERASED, "to", "a".repeat(64));
+      await keyed(KEPT, "cc", "a".repeat(64));
+      await keyed(KEPT, "to", "b".repeat(64));
+
+      await eraseRecipientDeliveries(
+        adapter.getDrizzle() as Parameters<typeof eraseRecipientDeliveries>[0],
+        deliveriesTableFor(entry.dialect),
+        ERASED
+      );
+
+      const rows = await adapter.executeQuery<{ key_digest: string | null }>(
+        `SELECT ${q("key_digest")} FROM ${q("email_deliveries")} ` +
+          `WHERE ${q("key_digest")} IS NOT NULL`
+      );
+      // The send's digest is gone from both its records; the other send's stays.
+      expect(rows.map(row => row.key_digest)).toEqual(["b".repeat(64)]);
+    });
+
     it("writes only values no collation difference can confuse", async () => {
       // The dialects do NOT agree on how this column compares. MySQL's default
       // `varchar` collation is case- and pad-insensitive; Postgres and SQLite

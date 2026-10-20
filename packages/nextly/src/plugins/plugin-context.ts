@@ -29,11 +29,7 @@ import {
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
 import type { ContentEventSubject } from "../domains/content-events/record";
-import {
-  pluginKeyScope,
-  scopedSender,
-  SITE_KEY_SCOPE,
-} from "../domains/email/send-claims";
+import { pluginKeyScope, scopedSender } from "../domains/email/send-claims";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
@@ -2099,10 +2095,7 @@ export function createPluginContext(
       // A plugin's keys are its own: scoped to its name, so two plugins, or a
       // plugin and the site, never name one send with the same key.
       email: methodFacade(
-        scopedSender(
-          emailService,
-          pluginName ? pluginKeyScope(pluginName) : SITE_KEY_SCOPE
-        ),
+        scopedSender(emailService, pluginKeyScope(pluginName)),
         PLUGIN_EMAIL_METHODS
       ),
       // Resolved on access, not at construction: `createPluginContext` is

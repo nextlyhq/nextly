@@ -8,6 +8,7 @@
  *
  * @module schemas/email-deliveries/mysql
  */
+// fallow-ignore-file code-duplication
 
 import {
   mysqlTable,

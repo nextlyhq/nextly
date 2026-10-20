@@ -4,6 +4,7 @@
  *
  * @module schemas/email-send-claims/sqlite
  */
+// fallow-ignore-file code-duplication
 
 import {
   index,

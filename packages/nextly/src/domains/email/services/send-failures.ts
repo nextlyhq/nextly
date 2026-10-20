@@ -107,8 +107,10 @@ export function refusedRecipients(
 
 /**
  * Why a message the provider answered did not reach the caller's `to`: the
- * first refused `to` recipient's refusal, or, when the provider answered that
- * it did not send at all, an unclassified failure.
+ * first retryable refusal of a `to` recipient, else the first refusal, or,
+ * when the provider answered that it did not send at all, an unclassified
+ * failure. Retryable whenever any refused `to` recipient can still be sent
+ * to, as a split send's failures are combined.
  */
 export function answeredFailure(
   result: AdapterResult,
@@ -121,12 +123,15 @@ export function answeredFailure(
   // A refused `to` recipient's own classification first, whether or not the
   // provider also answered that it did not send: it is the more specific
   // fact, and the result's `refused` entry for it says the same.
-  const primary = recipients.find(
+  const primaries = recipients.filter(
     recipient =>
       recipient.recipientKind === "to" &&
       refused.has(recipient.to.trim().toLowerCase())
   );
-  if (primary) return refusalOf(result, primary.to);
+  const refusal = combinedFailure(
+    primaries.map(primary => refusalOf(result, primary.to))
+  );
+  if (refusal) return refusal;
   return result.success !== true ? notAcceptedFailure() : unclassifiedFailure();
 }
 

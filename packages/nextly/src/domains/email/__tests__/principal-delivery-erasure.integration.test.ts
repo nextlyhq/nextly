@@ -371,6 +371,36 @@ describe.each(getConfiguredTestDialects())(
       );
     }, 120_000);
 
+    it("clears a keyed send's key digest from every record of it when the person is erased", async () => {
+      // A key is the caller's text and may be built from the person's
+      // address, so its digest goes from the copies too, whose addresses stay.
+      const t = await boot(dialect);
+      const gone = await person("acc_keyed");
+
+      const written = await added(t, () =>
+        plugin().services.email.send({
+          to: "member@example.com",
+          cc: ["staff@example.com"],
+          subject: "Order placed",
+          html: "<p>hi</p>",
+          person: gone,
+          idempotencyKey: "order-1:member@example.com",
+        })
+      );
+      const keyOf = (row: DeliveryRow) =>
+        (row as DeliveryRow & { keyDigest: string | null }).keyDigest;
+      expect(written.map(keyOf).every(digest => digest !== null)).toBe(true);
+
+      await plugin().principals!.reportDeleted(gone);
+
+      const after = (await rows(t)).filter(row =>
+        written.some(before => before.id === row.id)
+      );
+      expect(after.map(keyOf)).toEqual([null, null]);
+      const copy = after.find(row => row.recipientKind === "cc")!;
+      expect(copy.recipientHash).toBe(recipientDigest("staff@example.com"));
+    }, 120_000);
+
     it("writes the deletion email erased when it is sent in the reporting transaction", async () => {
       const t = await boot(dialect);
       const gone = await person("acc_in_tx");

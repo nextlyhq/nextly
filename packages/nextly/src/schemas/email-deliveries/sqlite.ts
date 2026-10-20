@@ -9,6 +9,7 @@
  *
  * @module schemas/email-deliveries/sqlite
  */
+// fallow-ignore-file code-duplication
 
 import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 

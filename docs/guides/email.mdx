@@ -310,6 +310,47 @@ error: nothing was sent, and the same send would be refused again.
 
 `failure` and `refused` are `@experimental`.
 
+### Sending an email once
+
+Give a send an `idempotencyKey` and it goes out once, however often it is
+repeated: on the Direct API's `send` and `sendWithTemplate`, the same two on
+`ctx.services.email`, and both REST send routes. A key is text of up to 256
+characters that names the email, such as an order's confirmation.
+
+- Nextly claims the key before contacting the provider. A repeat of a send that
+  succeeded returns the first send's result with `repeat: true`, and sends
+  nothing.
+- A repeat while the first send is still going returns `success: false` with a
+  retryable `failure`, saying a send with the key is in progress. Retry it, and
+  it returns the result once there is one.
+- A repeat after the first send failed sends again.
+- The same key with a different message is refused with a conflict error (409
+  on the REST routes). The message is everything that reaches the provider:
+  every recipient, `from`, `replyTo`, the rendered subject and bodies, the
+  attachments and the person. A template edited between two sends with one key
+  is a different message.
+- Keys belong to their caller. The site's own code (the Direct API and the REST
+  routes) shares one set; each plugin has its own; Nextly's own sends have
+  theirs. The same key from two of them names two different emails.
+- A provider that takes a key (Resend) is also handed one derived from yours, so
+  the provider itself sends the message once for 24 hours.
+
+Nextly keeps a keyed digest of the key, never the key itself, and no address. A
+successful send's key is remembered for as long as the delivery log keeps the
+send's records (90 days by default, following the retention setting). With a
+retention of zero nothing is kept, and a key protects only within the
+provider's own window. Erasing a person clears the key's digest from every
+record of the sends they were on.
+
+If the process stops while sending, the key is held for 15 minutes, after which
+a later send with it may send again. Through a provider without keys (SMTP,
+SendLayer) that can repeat the email once.
+
+A keyed send cannot run inside an open database transaction: send before
+opening it or after it has finished.
+
+`idempotencyKey` and `repeat` are `@experimental`.
+
 ### Changing a send before it goes out
 
 An `email.beforeSend` filter receives the whole envelope: `to`, `recipients`,
@@ -497,7 +538,13 @@ provider takes a message but refuses some recipients, return `rejected` with
 their bare addresses, and optionally `refusals` with
 `{ address, retryable, status }` for each.
 
-`maxToPerMessage`, `toList`, `emailFailure` and `refusals` are `@experimental`.
+A provider that sends a message once per key can declare `acceptsIdempotencyKey:
+true`. For a send that carried a key, its adapter then receives
+`idempotencyKey`, a key derived from the caller's, the same on every retry of
+that message. Nextly claims the caller's key itself either way.
+
+`maxToPerMessage`, `toList`, `emailFailure`, `refusals`, `acceptsIdempotencyKey`
+and `idempotencyKey` are `@experimental`.
 
 ## Next steps
 

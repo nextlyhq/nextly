@@ -25,16 +25,9 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import {
-  MAX_IDEMPOTENCY_KEY_LENGTH,
-  scopedSender,
-  SITE_KEY_SCOPE,
-} from "../domains/email/send-claims";
+import { scopedSender, SITE_KEY_SCOPE } from "../domains/email/send-claims";
 import { sendOutcomeMessage } from "../domains/email/send-outcome";
-import {
-  isSendableAddress,
-  isSendableAddressList,
-} from "../domains/email/services/recipients";
+import { sendRequestSchema } from "../domains/email/send-request";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
@@ -48,46 +41,10 @@ async function getEmailService(): Promise<EmailService> {
   return container.get<EmailService>("emailService");
 }
 
-// One address, or a comma-joined list of them, as the service reads a `to`
-// entry: both routes accept exactly what every other way of sending does.
-const recipientSchema = z
-  .string()
-  .refine(isSendableAddressList, "A valid recipient email is required");
-
-const attachmentInputSchema = z.object({
-  mediaId: z.string().min(1, "mediaId is required"),
-  filename: z.string().min(1).optional(),
-});
-
-const sendEmailSchema = z.object({
-  // One address, as before, or several: every one receives the email.
-  // Checked as the service checks it, so the route and the service agree on
-  // what a sendable address is (`dev@localhost`, `Name <user@example.com>`).
-  to: z.union([
-    recipientSchema,
-    z.array(recipientSchema).min(1, "At least one recipient is required"),
-  ]),
+const sendEmailSchema = sendRequestSchema({
   subject: z.string().min(1, "subject is required"),
   html: z.string().min(1, "html is required"),
   plainText: z.string().optional(),
-  // The send's own sender and Reply-To. Either may carry a display name
-  // (`Name <user@example.com>`), so the mailbox inside it is what is checked.
-  from: z
-    .string()
-    .trim()
-    .refine(isSendableAddress, "from must be an email address")
-    .optional(),
-  replyTo: z
-    .string()
-    .trim()
-    .refine(isSendableAddress, "replyTo must be an email address")
-    .optional(),
-  cc: z.array(z.string().email()).optional(),
-  bcc: z.array(z.string().email()).optional(),
-  providerId: z.string().optional(),
-  attachments: z.array(attachmentInputSchema).optional(),
-  // Sends this message once for the key; checked again by the service.
-  idempotencyKey: z.string().min(1).max(MAX_IDEMPOTENCY_KEY_LENGTH).optional(),
 });
 
 /**
@@ -102,11 +59,14 @@ const sendEmailSchema = z.object({
  * - `cc` / `bcc` (string[], optional)
  * - `providerId` (string, optional): use a specific email provider
  * - `attachments` (array, optional): `[{ mediaId, filename? }]`
+ * - `idempotencyKey` (string, optional): send this message once for the key;
+ *   a repeat answers `repeat: true` and sends nothing
  *
  * Response codes:
  * - 200 OK: `{ message, success, messageId? }` via `respondAction`.
  * - 400 Bad Request: invalid body / attachment count or size exceeded / mediaId not found.
  * - 401 Unauthorized.
+ * - 409 Conflict: the idempotency key was used for a different message.
  * - 500 Internal Server Error: storage read failed or provider error.
  */
 export const POST = withErrorHandler(
