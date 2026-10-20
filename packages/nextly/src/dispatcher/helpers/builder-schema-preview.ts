@@ -53,8 +53,19 @@ export async function builderSchemaPreviewBody(args: {
     db,
     dialect,
   });
+  // Detected by the same pipeline run, so they describe the same diff; a translated field's
+  // rename, which the pipeline cannot see on the main table, is offered on its companion.
+  const renamed = [
+    ...pipelinePreview.candidates,
+    ...(await translatedFieldRename(args, args.entity.localized === true)),
+  ];
   return previewBodyWithLeavingTranslation(
-    legacyShape,
+    // A rename offered on the companion is a change though the main table has none, so the
+    // builder opens its dialog to ask for the answer the apply requires.
+    {
+      ...legacyShape,
+      hasChanges: legacyShape.hasChanges || renamed.length > 0,
+    },
     {
       db,
       dialect,
@@ -68,12 +79,7 @@ export async function builderSchemaPreviewBody(args: {
       requestedLocalized: args.requestedLocalized,
     },
     {
-      // Detected by the same pipeline run, so they describe the same diff; a translated field's
-      // rename, which the pipeline cannot see on the main table, is offered on its companion.
-      renamed: [
-        ...pipelinePreview.candidates,
-        ...(await translatedFieldRename(args, args.entity.localized === true)),
-      ].map(toRenameCandidateWire),
+      renamed: renamed.map(toRenameCandidateWire),
       schemaVersion: args.schemaVersion,
     }
   );

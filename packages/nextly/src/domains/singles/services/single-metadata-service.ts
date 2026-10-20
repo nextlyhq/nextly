@@ -1344,6 +1344,64 @@ export class SingleMetadataService {
     });
   }
 
+  /**
+   * A translated field this save renames has its companion column renamed before the main table
+   * changes, outside the step below that records what it catches. A RENAME the database refuses
+   * then fails the save with the registry still recording the old field, so saving again retries
+   * it. Run with the rest of the companion reconcile instead, a refused RENAME would be recorded
+   * as a failed migration under the new field list, leaving nothing for a retry to rename from.
+   *
+   * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the database refuses the RENAME
+   */
+  private async renameTranslatedColumnFirst(
+    adapter: DrizzleAdapter,
+    input: UpdateSingleSchemaInput,
+    plan: UpdateDdlPlan
+  ): Promise<void> {
+    if (!input.wasLocalized || !input.isLocalized) return;
+    const renamed = await this.detectedFieldRename(
+      plan.previousFields,
+      plan.fields
+    );
+    const tableName = input.existing.tableName;
+    if (!renamed || !(await adapter.tableExists(`${tableName}_locales`))) {
+      return;
+    }
+    const { buildCompanionRenameStatements } = await import(
+      "../../i18n/migration/reconcile-companion"
+    );
+    const { companionColumnNames } = await import(
+      "../../i18n/runtime/companion-io"
+    );
+    const statements = buildCompanionRenameStatements({
+      tableName,
+      dialect: adapter.getCapabilities().dialect,
+      // A Single's table is built by the collection's generator.
+      builtBy: "collection",
+      oldFields: plan.previousFields,
+      newFields: plan.fields,
+      isLocalized: true,
+      renamed,
+      liveCompanionColumns: await companionColumnNames(adapter, tableName),
+    });
+    try {
+      for (const statement of statements) {
+        await adapter.executeQuery(statement);
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new NextlyError({
+        code: "NEXTLY_MIGRATION_APPLY_FAILED",
+        publicMessage:
+          "The translations of a renamed field could not be moved to its new name, so nothing " +
+          "was changed. Saving again tries it again.",
+        logMessage: `companion rename refused: ${reason}`,
+        logContext: { slug: input.slug, from: renamed.from, to: renamed.to },
+        cause: error instanceof Error ? error : undefined,
+      });
+    }
+  }
+
   /** The field this save renames, by field name, decided as the main table's rename is. */
   private async detectedFieldRename(
     previousFields: FieldDefinition[],
@@ -1398,6 +1456,8 @@ export class SingleMetadataService {
       input,
       plan
     );
+
+    await this.renameTranslatedColumnFirst(adapter, input, plan);
 
     if (plan.migrationSQL) {
       // Before the try below, which records what it catches: a refusal here has changed nothing

@@ -873,7 +873,33 @@ export function buildCompanionTransitionStatements(
  * when there is no such rename, or when the field's storage changes too, which a rename cannot
  * carry since it keeps the type.
  */
-function companionColumnRename(args: CompanionTransitionArgs):
+/** What a translated field's companion RENAME is decided from. */
+type CompanionRenameArgs = Pick<
+  CompanionTransitionArgs,
+  | "tableName"
+  | "dialect"
+  | "builtBy"
+  | "oldFields"
+  | "newFields"
+  | "isLocalized"
+  | "renamed"
+  | "liveCompanionColumns"
+>;
+
+/**
+ * The companion's RENAME for a translated field renamed in this change, on its own, for a caller
+ * that runs it before the main table changes, so a RENAME the database refuses fails the save
+ * while the registry still records the old field. Empty when there is no such rename, it moves
+ * nothing, or this database already made it (`liveCompanionColumns`); the transition run later
+ * then finds it made and does not repeat it.
+ */
+export function buildCompanionRenameStatements(
+  args: CompanionRenameArgs
+): string[] {
+  return companionColumnRename(args)?.statements ?? [];
+}
+
+function companionColumnRename(args: CompanionRenameArgs):
   | {
       statements: string[];
       oldFields: CompanionFieldLike[];
@@ -928,7 +954,7 @@ function liveAfterRename(
  * RENAME, which fails loudly rather than leave the translations in a column no field owns.
  */
 function companionRenameStatements(
-  args: CompanionTransitionArgs,
+  args: CompanionRenameArgs,
   from: string,
   to: string,
   { leaves }: { leaves: boolean }

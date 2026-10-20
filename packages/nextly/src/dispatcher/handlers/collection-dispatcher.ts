@@ -876,8 +876,9 @@ const COLLECTIONS_METHODS: Record<
       await archiveFieldsLeavingTranslation({
         // This builder made the table, which decides the column bounds compared.
         builtBy: "collection",
-        // The rename the admin chose, or that none was, rather than one guessed from the fields.
-        renamed: companionRename ?? null,
+        // The rename the admin chose, or that none was; when none was offered (a storage change,
+        // or no single candidate), the preflight finds it from the fields and refuses what it must.
+        renamed: companionRename,
         tableName,
         defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
         adapter,

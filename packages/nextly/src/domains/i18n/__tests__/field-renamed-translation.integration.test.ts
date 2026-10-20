@@ -968,30 +968,80 @@ describeEachDialect("a translated field that is renamed", dialect => {
     }
   );
 
-  type Answer = "rename" | "drop_and_add" | "missing" | "mismatched";
+  type Answer =
+    | "rename"
+    | "drop_and_add"
+    | "missing"
+    | "mismatched"
+    | "not offered";
+  type Storage = "same storage" | "storage changed";
+  type Target = "stays translated" | "made shared";
 
   /** What the schema dialog sends for `heading` becoming `title2` on `table`'s companion. */
   function answered(table: string, answer: Answer) {
     const [offered] = renamedOnCompanion(table);
-    if (answer === "missing") return [];
+    if (answer === "missing" || answer === "not offered") return [];
     if (answer === "drop_and_add")
       return [{ ...offered, choice: "drop_and_add" as const }];
     if (answer === "mismatched") return [{ ...offered, toColumn: "title3" }];
     return [offered];
   }
 
-  /** Each way a translated field's rename is saved, with the dialog's answer where it has one. */
+  /**
+   * The renamed field list: `heading` as `title2`, translated or shared, its storage kept or
+   * changed by `reshape`, the path's own spelling of a 32-character bound, where the seeded
+   * field's column is unbounded.
+   */
+  function renamedFields(
+    target: Target,
+    storage: Storage,
+    reshape: Record<string, unknown> = {}
+  ) {
+    const reshaped = storage === "storage changed" ? reshape : {};
+    return [
+      {
+        name: "title2",
+        type: "text",
+        ...(target === "made shared" ? { localized: false } : {}),
+        ...reshaped,
+      },
+      { name: "views", type: "number" },
+    ];
+  }
+
+  /** A schema preview's body, unwrapped from the dispatcher's response. */
+  async function previewOf(
+    response: unknown
+  ): Promise<{ hasChanges?: boolean }> {
+    const body = (await (response as Response).json()) as {
+      hasChanges?: boolean;
+      data?: { hasChanges?: boolean };
+    };
+    return body.data ?? body;
+  }
+
+  /**
+   * Each way a translated field's rename is saved, with the dialog's answer where it has one, and
+   * for a dialog the preview the Builder asks before it opens.
+   */
   const SAVES: {
     path: string;
     table: string;
     seed: () => Promise<string>;
     answers: (Answer | "none")[];
     save: (fields: unknown[], answer: Answer | "none") => Promise<unknown>;
+    preview?: (fields: unknown[]) => Promise<unknown>;
+    /**
+     * How this path bounds a text field, where it can: none for a Single or the collection's dialog,
+     * whose payloads cannot state the short variant.
+     */
+    reshape?: Record<string, unknown>;
   }[] = [
     {
       path: "the collection's settings",
       table: "dc_posts",
       seed: seedCollection,
+      reshape: { options: { variant: "short" }, validation: { maxLength: 32 } },
       answers: ["none"],
       save: async fields => {
         const saved = await handler().updateCollection(
@@ -1005,7 +1055,15 @@ describeEachDialect("a translated field that is renamed", dialect => {
       path: "the collection's schema dialog",
       table: "dc_posts",
       seed: seedCollection,
-      answers: ["rename", "drop_and_add", "missing", "mismatched"],
+      // No reshape: the dialog's payload takes `options` only as a list of choices, so it cannot
+      // state the short variant that bounds a collection's text column.
+      answers: [
+        "rename",
+        "drop_and_add",
+        "missing",
+        "mismatched",
+        "not offered",
+      ],
       save: async (fields, answer) =>
         dispatchCollections(
           {} as ServiceContainer,
@@ -1022,6 +1080,13 @@ describeEachDialect("a translated field that is renamed", dialect => {
             ),
           }
         ),
+      preview: fields =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "previewSchemaChanges",
+          { collectionName: "posts" },
+          { fields, localized: true }
+        ),
     },
     {
       path: "a Single's settings",
@@ -1035,7 +1100,13 @@ describeEachDialect("a translated field that is renamed", dialect => {
       path: "a Single's schema dialog",
       table: "single_hero",
       seed: seedSingle,
-      answers: ["rename", "drop_and_add", "missing", "mismatched"],
+      answers: [
+        "rename",
+        "drop_and_add",
+        "missing",
+        "mismatched",
+        "not offered",
+      ],
       save: async (fields, answer) =>
         dispatchSingles(
           "applySingleSchemaChanges",
@@ -1048,12 +1119,25 @@ describeEachDialect("a translated field that is renamed", dialect => {
             schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
           }
         ),
+      preview: fields =>
+        dispatchSingles(
+          "previewSingleSchemaChanges",
+          { slug: "hero" },
+          { fields, localized: true }
+        ),
     },
     {
       path: "a field group's schema dialog",
       table: "comp_banner",
       seed: seedFieldGroup,
-      answers: ["rename", "drop_and_add", "missing", "mismatched"],
+      reshape: { maxLength: 32 },
+      answers: [
+        "rename",
+        "drop_and_add",
+        "missing",
+        "mismatched",
+        "not offered",
+      ],
       save: async (fields, answer) =>
         dispatchComponents(
           "applyComponentSchemaChanges",
@@ -1069,48 +1153,79 @@ describeEachDialect("a translated field that is renamed", dialect => {
             ),
           }
         ),
+      preview: fields =>
+        dispatchComponents(
+          "previewComponentSchemaChanges",
+          { slug: "banner" },
+          { fields, localized: true }
+        ),
     },
   ];
 
+  /**
+   * Whether an answer can arise for a storage choice: a rename that also changes storage is never
+   * offered, so the dialog sends no answer for it, and one that keeps storage is always offered.
+   */
+  const applies = (answer: Answer | "none", storage: Storage) =>
+    answer === "none" ||
+    (storage === "storage changed") === (answer === "not offered");
+
   const MATRIX = SAVES.flatMap(save =>
-    save.answers.flatMap(answer =>
-      (["fresh", "part-applied"] as const).flatMap(state =>
-        (["stays translated", "made shared"] as const).map(target => ({
-          ...save,
-          answer,
-          state,
-          target,
-        }))
+    (["same storage", "storage changed"] as const)
+      .filter(storage => storage === "same storage" || save.reshape)
+      .flatMap(storage =>
+        save.answers
+          .filter(answer => applies(answer, storage))
+          .flatMap(answer =>
+            (["fresh", "part-applied"] as const).flatMap(state =>
+              (["stays translated", "made shared"] as const).map(target => ({
+                ...save,
+                storage,
+                answer,
+                state,
+                target,
+              }))
+            )
+          )
       )
-    )
   );
 
   // Every way a translated field's rename is saved, crossed with each answer the schema dialog can
-  // send, a fresh database or one an earlier apply left renamed, and the field staying translated or
-  // becoming shared. Either the change is refused, naming the field in words an admin can act on,
-  // with every language where it was; or every language survives under the new name. Only an
-  // explicit choice to drop the old field and add the new one may delete them, and an answer that
-  // is missing or names another pair is refused.
+  // send (or none, when it offered no rename), the field's storage kept or changed, a fresh
+  // database or one an earlier apply left renamed, and the field staying translated or becoming
+  // shared. A dialog's preview reports the change, so the Builder opens the dialog. Then either the
+  // change is refused, naming the field in words an admin can act on, with every language where it
+  // was; or every language survives under the new name. Only an explicit choice to drop the old
+  // field and add the new one may delete them; an answer that is missing or names another pair is
+  // refused, and so is a rename that changes storage.
   it.each(MATRIX)(
-    "keeps every language or refuses, when $path is saved with answer $answer, $state, $target",
-    async ({ table, seed, save, answer, state, target }) => {
+    "keeps every language or refuses, when $path is saved, $storage, answer $answer, $state, $target",
+    async ({
+      table,
+      seed,
+      save,
+      preview,
+      reshape,
+      storage,
+      answer,
+      state,
+      target,
+    }) => {
       const id = await seed();
-      if (state === "part-applied") {
-        await query(
-          `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "heading")} TO ${quote(dialect, "title2")}`
-        );
+      if (state === "part-applied") await renameOnCompanion(table);
+      const fields = renamedFields(target, storage, reshape);
+      // The Builder asks for a preview before it opens a dialog, when the dialog offers a rename.
+      if (preview && state === "fresh" && storage === "same storage") {
+        await expectDialogOpens(preview, fields);
       }
 
-      const refusal = await save(
-        target === "stays translated" ? RENAMED : renamedShared(),
-        answer
-      ).then(
+      const refusal = await save(fields, answer).then(
         () => undefined,
         (error: unknown) => error
       );
 
-      if (answer === "missing" || answer === "mismatched") {
-        expect(refusal, "an unanswered rename is refused").toBeDefined();
+      if (mustRefuse(answer, storage)) {
+        expect(refusal, "the change is refused").toBeDefined();
       }
       if (refusal !== undefined) {
         await expectRefusedInPlace(refusal, table, id, state);
@@ -1119,6 +1234,28 @@ describeEachDialect("a translated field that is renamed", dialect => {
       }
     }
   );
+
+  /** The state an earlier apply that renamed the companion column and stopped leaves. */
+  async function renameOnCompanion(table: string): Promise<void> {
+    await query(
+      `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "heading")} TO ${quote(dialect, "title2")}`
+    );
+  }
+
+  /** The preview reports a change, so the Builder opens its dialog to collect the answer. */
+  async function expectDialogOpens(
+    preview: (fields: unknown[]) => Promise<unknown>,
+    fields: unknown[]
+  ): Promise<void> {
+    const shown = await previewOf(await preview(fields));
+    expect(shown.hasChanges, "the Builder opens its dialog").toBe(true);
+  }
+
+  /** A change that is always refused: an unanswered rename, or a rename that changes storage. */
+  const mustRefuse = (answer: Answer | "none", storage: Storage) =>
+    answer === "missing" ||
+    answer === "mismatched" ||
+    storage === "storage changed";
 
   /**
    * A refusal an admin can act on, naming the field and the save that works, with every language
@@ -1187,5 +1324,46 @@ describeEachDialect("a translated field that is renamed", dialect => {
       `SELECT COUNT(*) AS n FROM ${quote(dialect, "nextly_i18n_archive")} WHERE ${quote(dialect, "field")} = 'title2'`
     ).catch(() => [{ n: 0 }]);
     expect(Number(rows[0]?.n ?? 0)).toBe(0);
+  });
+
+  // A Single's settings save renames the companion column before anything else changes, so a
+  // RENAME the database refuses fails the save with the old field still recorded, and saving again
+  // finishes it. Recorded as a failed migration under the new names instead, a retry would find
+  // nothing left to rename and the translations would stay under a name no field has.
+  it("fails a Single's save whose companion rename is refused, and finishes it when saved again", async () => {
+    const id = await seedSingle();
+    // A column in the way: the RENAME onto it is refused.
+    await query(
+      `ALTER TABLE ${quote(dialect, "single_hero_locales")} ADD COLUMN ${quote(dialect, "title2")} ${dialect === "mysql" ? "VARCHAR(255)" : "TEXT"}`
+    );
+
+    const refusal = await dispatchSingles(
+      "updateSingleSchema",
+      { slug: "hero" },
+      { fields: RENAMED }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(reported(refusal)).toMatch(/nothing was changed/);
+    expect(await companionValues("single_hero", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+
+    await query(
+      `ALTER TABLE ${quote(dialect, "single_hero_locales")} DROP COLUMN ${quote(dialect, "title2")}`
+    );
+    await dispatchSingles(
+      "updateSingleSchema",
+      { slug: "hero" },
+      { fields: RENAMED }
+    );
+
+    expect(await companionValues("single_hero", "title2", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
   });
 });
