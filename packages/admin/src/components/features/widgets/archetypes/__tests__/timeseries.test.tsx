@@ -97,7 +97,7 @@ describe("the timeseries archetype", () => {
     expect(within(table).queryByText(/Mar 4/)).not.toBeInTheDocument();
   });
 
-  it("carries a text alternative naming the busiest interval and the total", () => {
+  it("carries a text alternative naming the total, the latest and the highest", () => {
     draw(
       series([
         { start: "2026-03-04T00:00:00.000Z", count: 2 },
@@ -107,7 +107,7 @@ describe("the timeseries archetype", () => {
     const graphic = screen.getByRole("img");
     expect(graphic).toHaveAccessibleName(/Entries over time/);
     expect(graphic).toHaveAccessibleDescription(/11 in total/);
-    expect(graphic).toHaveAccessibleDescription(/Busiest/);
+    expect(graphic).toHaveAccessibleDescription(/Latest 9 on .*; highest 9 on/);
   });
 
   it("keeps an empty interval as a zero row rather than dropping it", () => {
@@ -139,7 +139,10 @@ describe("the timeseries archetype", () => {
         })()}
       </>
     );
-    expect(container.querySelector("circle")).not.toBeNull();
+    // A circle drawn in HTML over the line, so the stretched drawing cannot make it an ellipse.
+    expect(
+      container.querySelector('[data-testid="chart-latest-point"]')
+    ).not.toBeNull();
   });
 
   it("says the window is empty rather than drawing nothing at all", () => {
