@@ -77,6 +77,7 @@ import type { SingleRegistryService } from "../services/singles/single-registry-
 import { UserAccountService } from "../services/users/user-account-service";
 import type { UserFieldDefinitionService } from "../services/users/user-field-definition-service";
 import type { UserService } from "../services/users/user-service";
+import { consoleLogger } from "../shared/types";
 
 import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-namespace";
 import * as authNs from "./namespaces/auth";
@@ -86,6 +87,7 @@ import { runAsCaller } from "./namespaces/helpers";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
+  createContentEventsNamespace,
   createJobsNamespace,
   createNoticesNamespace,
   createReleasesNamespace,
@@ -101,6 +103,7 @@ import {
   createUsersNamespace,
   type AccessNamespace,
   type ApiKeysNamespace,
+  type ContentEventsNamespace,
   type JobsNamespace,
   type NoticesNamespace,
   type ReleasesNamespace,
@@ -117,6 +120,13 @@ import {
 } from "./namespaces/index";
 import * as singlesNs from "./namespaces/singles";
 import { guardPrincipalOperations } from "./principal-boundary";
+import type {
+  ApplyEmailTemplateUpdateArgs,
+  CompareEmailTemplateArgs,
+  OverrideEmailTemplateArgs,
+  ResetEmailTemplateArgs,
+  UndoEmailTemplateUpdateArgs,
+} from "./types/email";
 import type {
   AuthResult,
   BulkDeleteArgs,
@@ -271,6 +281,8 @@ export class Nextly implements NextlyContext {
   public readonly releases: ReleasesNamespace;
   /** @experimental A person's own notices. */
   public readonly notices: NoticesNamespace;
+  /** @experimental A subject's content events: a document's or a release's. */
+  public readonly contentEvents: ContentEventsNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
 
@@ -301,6 +313,7 @@ export class Nextly implements NextlyContext {
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
     this.notices = createNoticesNamespace();
+    this.contentEvents = createContentEventsNamespace(this);
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -366,7 +379,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
 
       const emailService = container.has("emailService")
         ? container.get<EmailService>("emailService")
@@ -397,7 +410,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       this._userAccountService = new UserAccountService(adapter, logger);
     }
     return this._userAccountService;
@@ -458,7 +471,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       this._rbacRoleService = new RoleService(adapter, logger);
     }
     return this._rbacRoleService;
@@ -473,7 +486,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       this._rbacPermissionService = new PermissionService(adapter, logger);
     }
     return this._rbacPermissionService;
@@ -488,7 +501,7 @@ export class Nextly implements NextlyContext {
       const adapter = container.get<DrizzleAdapter>("adapter");
       const logger = container.has("logger")
         ? container.get<Logger>("logger")
-        : (console as unknown as Logger);
+        : consoleLogger;
       this._rbacRolePermissionService = new RolePermissionService(
         adapter,
         logger
@@ -925,6 +938,10 @@ export const nextly = {
       requireNextly().notices.markRead(args),
   },
 
+  contentEvents: {
+    list: args => requireNextly().contentEvents.list(args),
+  } satisfies ContentEventsNamespace,
+
   // Checked against the namespace's own type, so a method added there and
   // not delegated here is a compile error rather than a gap a caller finds.
   releases: {
@@ -938,6 +955,8 @@ export const nextly = {
     capabilities: args => requireNextly().releases.capabilities(args),
     blockingReasons: args => requireNextly().releases.blockingReasons(args),
     readiness: args => requireNextly().releases.readiness(args),
+    readinessOf: args => requireNextly().releases.readinessOf(args),
+    memberCounts: args => requireNextly().releases.memberCounts(args),
     addMember: args => requireNextly().releases.addMember(args),
     removeMember: args => requireNextly().releases.removeMember(args),
     changeMemberAction: args =>
@@ -1035,6 +1054,21 @@ export const nextly = {
       requireNextly().emailTemplates.delete(args),
     preview: (args: PreviewEmailTemplateArgs) =>
       requireNextly().emailTemplates.preview(args),
+    /** @experimental */
+    override: (args: OverrideEmailTemplateArgs) =>
+      requireNextly().emailTemplates.override(args),
+    /** @experimental */
+    reset: (args: ResetEmailTemplateArgs) =>
+      requireNextly().emailTemplates.reset(args),
+    /** @experimental */
+    compare: (args: CompareEmailTemplateArgs) =>
+      requireNextly().emailTemplates.compare(args),
+    /** @experimental */
+    applyUpdate: (args: ApplyEmailTemplateUpdateArgs) =>
+      requireNextly().emailTemplates.applyUpdate(args),
+    /** @experimental */
+    undoUpdate: (args: UndoEmailTemplateUpdateArgs) =>
+      requireNextly().emailTemplates.undoUpdate(args),
   },
 
   userFields: {

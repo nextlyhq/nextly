@@ -409,6 +409,20 @@ export class UserExtSchemaService {
   }
 
   /**
+   * Whether a column of this type takes a plain unique index on this dialect.
+   * A JSON column takes none anywhere; MySQL indexes a TEXT column only with a
+   * key length, which a unique field's index has not, so a plugin type stored
+   * as long text gets no index there. PostgreSQL and SQLite index text columns
+   * as they are.
+   */
+  private canCarryUniqueIndex(columnType: string): boolean {
+    if (/json/i.test(columnType)) return false;
+    return !(
+      this.dialect === "mysql" && columnType === SQL_COLUMN_TYPES.mysql.text
+    );
+  }
+
+  /**
    * Run one schema statement. A table, index, constraint or column that
    * already exists is what a re-run expects, and is ignored. Any other failure
    * is thrown when `strict`, and ignored otherwise.
@@ -423,8 +437,56 @@ export class UserExtSchemaService {
     } catch (error) {
       if (!strict || isIdempotencyError(error)) return;
       if (this.isOwnForeignKeyRerun(error, statement)) return;
-      throw error;
+      throw this.textColumnUniqueRefusal(error, statement) ?? error;
     }
+  }
+
+  /**
+   * A unique index MySQL refused because its column is TEXT, as the refusal
+   * the person running `nextly migrate` can act on; null for any other
+   * failure. A column made before a unique field became a VARCHAR on MySQL is
+   * still TEXT: adding the field's column finds it already there and leaves
+   * it, with every value whole, so its index is all that fails (error 1170).
+   */
+  private textColumnUniqueRefusal(
+    error: unknown,
+    statement: string
+  ): NextlyError | null {
+    if (this.dialect !== "mysql") return null;
+    const column = new RegExp(`uq_${TABLE_NAME}_([a-z0-9_]+)`).exec(
+      statement
+    )?.[1];
+    if (!column || column === "user_id") return null;
+    let refusedForText = false;
+    for (let e: unknown = error, depth = 0; e && depth < 5; depth++) {
+      const { errno, message } = e as { errno?: unknown; message?: unknown };
+      if (
+        errno === 1170 ||
+        (typeof message === "string" &&
+          message.includes("used in key specification without a key length"))
+      ) {
+        refusedForText = true;
+        break;
+      }
+      e = (e as { cause?: unknown }).cause;
+    }
+    if (!refusedForText) return null;
+    const field =
+      this.getMergedFieldConfigs().find(
+        f => "name" in f && f.name && this.toSnakeCase(f.name) === column
+      )?.name ?? column;
+    const message = `The user field '${field}' is stored in a TEXT column on MySQL, which cannot carry its unique index. Its values are left as they are. Change the column to VARCHAR(255) once no value is longer, or remove \`unique\` from the field, then run \`nextly migrate\` again.`;
+    return NextlyError.validation({
+      errors: [
+        {
+          path: "users.fields",
+          code: "USER_FIELD_UNIQUE_UNSUPPORTED",
+          message,
+        },
+      ],
+      cause: error instanceof Error ? error : undefined,
+      logContext: { field, column, reason: message },
+    });
   }
 
   /**
@@ -682,7 +744,7 @@ export class UserExtSchemaService {
       // the table being made.
       if (
         userFieldUniqueRejection(field) ||
-        /json/i.test(this.getColumnType(field) ?? "")
+        !this.canCarryUniqueIndex(this.getColumnType(field) ?? "")
       ) {
         this.logger?.warn(
           "[UserExtSchemaService] Leaving out a unique index its column cannot carry",
@@ -1181,12 +1243,7 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
         : types.varchar(255);
     }
     if (isTextField(field)) {
-      if (field.maxLength) return types.varchar(field.maxLength);
-      // MySQL cannot index a TEXT column without a key length, so a unique
-      // field's index could never be made. A varchar, as the schema pipeline
-      // gives a MySQL text column, can carry it.
-      if (this.dialect === "mysql" && field.unique) return types.varchar(255);
-      return types.text;
+      return this.textColumnType(field.maxLength, field.unique === true);
     }
     if (isTextareaField(field)) {
       return types.text;
@@ -1220,10 +1277,11 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
     if (pluginStorage) {
       switch (pluginStorage) {
         case "text": {
-          const maxLength = (field as { maxLength?: number }).maxLength;
-          return typeof maxLength === "number"
-            ? types.varchar(maxLength)
-            : types.text;
+          const { maxLength, unique } = field as {
+            maxLength?: number;
+            unique?: unknown;
+          };
+          return this.textColumnType(maxLength, unique === true);
         }
         case "longText":
           return types.text;
@@ -1238,6 +1296,48 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
       }
     }
 
+    return null;
+  }
+
+  /**
+   * The column a text value is stored in, for a built-in text field and a
+   * plugin type stored as text alike: a varchar of its length when it has one
+   * (see `textLength`), else TEXT.
+   */
+  private textColumnType(maxLength: number | undefined, unique: boolean) {
+    const types = SQL_COLUMN_TYPES[this.dialect];
+    const length = this.textLength(maxLength, unique);
+    return length === null ? types.text : types.varchar(length);
+  }
+
+  /**
+   * How many characters a text value's column holds, or null when it is TEXT
+   * and holds any length: its `maxLength`, else 255 for a unique field on
+   * MySQL. MySQL cannot index a TEXT column without a key length, so there a
+   * unique field's index could never be made; a varchar, as the schema
+   * pipeline gives a MySQL text column, can carry it.
+   */
+  private textLength(maxLength: number | undefined, unique: boolean) {
+    if (typeof maxLength === "number" && maxLength > 0) return maxLength;
+    if (this.dialect === "mysql" && unique) return 255;
+    return null;
+  }
+
+  /**
+   * How many characters a field's `user_ext` column holds, for a built-in text
+   * field or a plugin type stored as text; null for any other column, or one
+   * that holds any length. A write checks a value against it first: a longer
+   * one fails at the driver, where a failed `user_ext` write is read as the
+   * table being absent.
+   */
+  textColumnLength(field: UserFieldConfig): number | null {
+    const { maxLength, unique } = field as {
+      maxLength?: number;
+      unique?: unknown;
+    };
+    if (isTextField(field) || this.pluginUserStorage(field) === "text") {
+      return this.textLength(maxLength, unique === true);
+    }
     return null;
   }
 

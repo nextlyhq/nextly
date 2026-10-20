@@ -18,6 +18,8 @@
  * SQLite runs with no URL; PostgreSQL and MySQL self-skip locally and run in
  * CI's dialect matrix.
  */
+import { randomUUID } from "node:crypto";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createAdapter } from "../../../database/factory";
@@ -32,6 +34,18 @@ import {
 import { NextlyError } from "../../../errors/nextly-error";
 import { layoutRowId } from "../../../schemas/widget-layout";
 import { WidgetLayoutService } from "../widget-layout-service";
+
+/**
+ * This run's own suffix for every scope id below.
+ *
+ * PostgreSQL and MySQL keep a slot's test database between runs, and the cases save at version 0,
+ * which a row an earlier run left behind refuses. A suffix fresh for each run gives every run rows
+ * of its own, so the suite can run again on the same database with each case asserting exactly
+ * what it did before. SQLite boots a fresh in-memory database, where the suffix changes nothing.
+ * The whole UUID rather than a prefix of it, because the teardown deletes by it on databases that
+ * other runs and other lanes share.
+ */
+const RUN = randomUUID();
 
 const silentLogger = {
   debug: () => {},
@@ -63,13 +77,27 @@ function layoutSuite(
 ) {
   describe(`widget layout row (${label})`, () => {
     let service: WidgetLayoutService;
+    // The table's rows before the first case, so the teardown can show it left them as it found
+    // them: a server database keeps whatever an earlier run, or another suite, wrote.
+    let startingRows: number | undefined;
 
     beforeAll(async () => {
       service = await makeService();
+      startingRows = await countRows(service);
+    });
+
+    // Server databases outlive the run, so the rows it wrote go with it rather than piling up,
+    // and the suite fails if any of them stayed. A setup that never reached the database wrote
+    // nothing, and has no service to count or delete with.
+    afterAll(async () => {
+      if (service === undefined || startingRows === undefined) return;
+      await deleteRunRows(service);
+      expect(await countRows(service, RUN)).toBe(0);
+      expect(await countRows(service)).toBe(startingRows);
     });
 
     it("round-trips an arrangement", async () => {
-      const scope = `u-roundtrip-${label}`;
+      const scope = `u-roundtrip-${label}-${RUN}`;
       const placements = [
         placement({ id: "a", width: "third" }),
         placement({
@@ -97,7 +125,7 @@ function layoutSuite(
       // dialect has a migration to get wrong -- which is exactly why it needs a
       // real round trip: nothing else proves the key survives a driver's text
       // handling on all three.
-      const scope = `u-arranged-${label}`;
+      const scope = `u-arranged-${label}-${RUN}`;
       await service.saveLayout(
         "user",
         scope,
@@ -125,14 +153,14 @@ function layoutSuite(
     });
 
     it("reports no row before anything is written", async () => {
-      const read = await service.getLayout("user", `u-absent-${label}`);
+      const read = await service.getLayout("user", `u-absent-${label}-${RUN}`);
       expect(read.layout).toBeUndefined();
       expect(read.version).toBe(0);
       expect(read.unreadable).toBe(false);
     });
 
     it("accepts a write that names the current version", async () => {
-      const scope = `u-bump-${label}`;
+      const scope = `u-bump-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement()], 0);
 
       const second = await service.saveLayout(
@@ -152,7 +180,7 @@ function layoutSuite(
       // 🔴 The `affectedRowCount` case. Reading the wrong driver field makes
       // this pass -- the write lands and the second tab's arrangement replaces
       // the first with nothing anywhere to say so.
-      const scope = `u-stale-${label}`;
+      const scope = `u-stale-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement()], 0);
       await service.saveLayout("user", scope, [placement({ id: "x" })], 1);
 
@@ -167,7 +195,7 @@ function layoutSuite(
     });
 
     it("refuses an insert when a row already exists", async () => {
-      const scope = `u-dup-${label}`;
+      const scope = `u-dup-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement({ id: "first" })], 0);
 
       await expect(
@@ -197,7 +225,8 @@ function layoutSuite(
       // fixture rather than on the property. 191 still proves the point the
       // test exists for: spelled into the key as `user:${scopeId}` it would be
       // 196 characters against a `varchar(191)` primary key.
-      const long = "u".repeat(191);
+      // Prefixed with this run's suffix and still 191 characters, so a rerun writes its own row.
+      const long = `${RUN}${"u".repeat(191 - RUN.length)}`;
       await service.saveLayout("user", long, [placement({ id: "long" })], 0);
       expect(
         (await service.getLayout("user", long)).layout?.placements[0].id
@@ -208,7 +237,8 @@ function layoutSuite(
       // Two ids that differ only past a truncation point must stay two rows: a
       // key that truncated would merge them and hand one reader the other's
       // dashboard.
-      const stem = "u".repeat(180);
+      // Prefixed with this run's suffix and still 180 characters before the differing tail.
+      const stem = `${RUN}${"u".repeat(180 - RUN.length)}`;
       const a = `${stem}-aaa`;
       const b = `${stem}-bbb`;
 
@@ -224,7 +254,7 @@ function layoutSuite(
     });
 
     it("reports an undecodable row rather than throwing", async () => {
-      const scope = `u-broken-${label}`;
+      const scope = `u-broken-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement()], 0);
       // Corrupt the stored payload the way a downgrade or a bad hand-edit
       // would, without going through the service that would refuse it.
@@ -246,7 +276,7 @@ function layoutSuite(
     it("converts a columns-format row on read, keeping every card", async () => {
       // Written as an earlier release wrote it, with every field that format
       // stored, so the conversion is proven against a real row's encoding.
-      const scope = `u-convert-${label}`;
+      const scope = `u-convert-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement()], 0);
       await writeRawLayout(
         service,
@@ -305,7 +335,7 @@ function layoutSuite(
     it("leaves the row's text and version exactly as they were when it reads", async () => {
       // 🔴 A read never writes: a converted row is stored at its owner's next
       // save. A read that wrote would race the version guard and a second tab.
-      const scope = `u-noread-write-${label}`;
+      const scope = `u-noread-write-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement()], 0);
       const raw = JSON.stringify({
         schemaVersion: 2,
@@ -331,7 +361,7 @@ function layoutSuite(
     });
 
     it("removes the row on a reset staged against its version", async () => {
-      const scope = `u-reset-${label}`;
+      const scope = `u-reset-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement()], 0);
 
       await service.deleteLayout("user", scope, 1);
@@ -344,7 +374,7 @@ function layoutSuite(
     it("refuses a reset staged against an older version, keeping the newer row", async () => {
       // 🔴 A stale tab resetting after another tab saved: the delete names the
       // version it was staged against, and the database refuses it.
-      const scope = `u-stale-reset-${label}`;
+      const scope = `u-stale-reset-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement()], 0);
       await service.saveLayout("user", scope, [placement({ id: "newer" })], 1);
 
@@ -358,7 +388,7 @@ function layoutSuite(
     });
 
     it("refuses a reset by a caller who saw no row, once one exists", async () => {
-      const scope = `u-reset-norow-${label}`;
+      const scope = `u-reset-norow-${label}-${RUN}`;
       await service.saveLayout("user", scope, [placement({ id: "kept" })], 0);
 
       await expect(service.deleteLayout("user", scope, 0)).rejects.toSatisfy(
@@ -371,7 +401,7 @@ function layoutSuite(
 
     it("answers a reset of a row that is already gone as done", async () => {
       // The state the caller asked for already holds.
-      const scope = `u-reset-gone-${label}`;
+      const scope = `u-reset-gone-${label}-${RUN}`;
       await expect(
         service.deleteLayout("user", scope, 0)
       ).resolves.toBeUndefined();
@@ -392,12 +422,13 @@ function internalsOf(service: WidgetLayoutService) {
         set: (v: unknown) => { where: (w: unknown) => Promise<unknown> };
       };
       select: (fields: unknown) => {
-        from: (t: unknown) => {
+        from: (t: unknown) => Promise<Array<Record<string, unknown>>> & {
           where: (w: unknown) => Promise<Array<Record<string, unknown>>>;
         };
       };
+      delete: (t: unknown) => { where: (w: unknown) => Promise<unknown> };
     };
-    table: { id: unknown; layout: unknown; version: unknown };
+    table: { id: unknown; scopeId: unknown; layout: unknown; version: unknown };
   };
 }
 
@@ -430,6 +461,33 @@ async function readRawLayout(
     .from(internals.table)
     .where(eq(internals.table.id as never, id));
   return { layout: rows[0]?.layout, version: rows[0]?.version };
+}
+
+/**
+ * Deletes every row this run wrote. Each scope id carries `RUN`, while row ids are hashes of it,
+ * so the match is on `scope_id`; `RUN` is hex and hyphens, so it holds no `LIKE` wildcard.
+ */
+async function deleteRunRows(service: WidgetLayoutService): Promise<void> {
+  const internals = internalsOf(service);
+  const { like } = await import("drizzle-orm");
+  await internals.db
+    .delete(internals.table)
+    .where(like(internals.table.scopeId as never, `%${RUN}%`));
+}
+
+/** How many rows the table holds: all of them, or those whose scope id carries `run`. */
+async function countRows(
+  service: WidgetLayoutService,
+  run?: string
+): Promise<number> {
+  const internals = internalsOf(service);
+  const { count, like } = await import("drizzle-orm");
+  const all = internals.db.select({ rows: count() }).from(internals.table);
+  const rows =
+    run === undefined
+      ? await all
+      : await all.where(like(internals.table.scopeId as never, `%${run}%`));
+  return Number(rows[0]?.rows ?? 0);
 }
 
 /** Writes a payload the decoder must refuse, bypassing the service's own guard. */

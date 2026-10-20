@@ -160,6 +160,8 @@ describe.each(getConfiguredTestDialects())("notices (%s)", dialect => {
       occurrence: "rev-3",
       data: { title: "Spring" },
     };
+    // Asked before the transaction, as a writer inside one must.
+    expect(await notices.ready()).toBe(true);
     await current!.adapter.transaction(async tx => {
       await notices.record(input, tx);
       const again = await notices.record(input, tx);
@@ -172,6 +174,7 @@ describe.each(getConfiguredTestDialects())("notices (%s)", dialect => {
 
   it("goes with the transaction it was written in", async () => {
     const notices = await boot(dialect);
+    expect(await notices.ready()).toBe(true);
     await expect(
       current!.adapter.transaction(async tx => {
         await notices.record(

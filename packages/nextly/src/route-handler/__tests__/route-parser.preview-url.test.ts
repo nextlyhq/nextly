@@ -32,8 +32,7 @@ describe("preview-url routes", () => {
   it("refuses every method but POST", () => {
     // The entry travels in the body, so nothing else can carry a request. Left
     // matching, a GET would reach the JSON-body handler rather than being
-    // answered method-not-allowed — the adjacent preview-links parser rejects
-    // non-POST on its first line for the same reason.
+    // answered method-not-allowed.
     for (const method of ["GET", "PUT", "PATCH", "DELETE", "HEAD"]) {
       expect(parseRestRoute(["preview-url"], method)).toEqual({});
     }

@@ -18,6 +18,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { GeneratedTypes } from "../direct-api/types/shared";
+import { consoleLogger } from "../shared/types";
 
 /** Minimal logger shape used for isolated-failure diagnostics. */
 interface EventLogger {
@@ -146,7 +147,7 @@ export class EventBus {
     if (!this.isKnownName(name)) {
       const text = `[events] emitted undeclared event "${name}" — declare it in a plugin's contributes.events`;
       if (this.logger?.warn) this.logger.warn(text);
-      else console.warn(text);
+      else consoleLogger.warn(text);
     }
 
     const set = this.handlers.get(name);
@@ -254,7 +255,7 @@ export class EventBus {
     const message = err instanceof Error ? err.message : String(err);
     const text = `[events] handler for "${name}" failed: ${message}`;
     if (this.logger?.error) this.logger.error(text);
-    else console.error(text);
+    else consoleLogger.error(text);
   }
 }
 

@@ -17,6 +17,7 @@ function serviceFor(opts: { passwordMatches: boolean; written: boolean }) {
     changeOwnPasswordHash: vi.fn().mockResolvedValue(opts.written),
   };
   const passwordHasher = {
+    reach: "unbounded" as const,
     verify: vi.fn().mockResolvedValue(opts.passwordMatches),
     hash: vi.fn().mockResolvedValue("new-hash"),
   };

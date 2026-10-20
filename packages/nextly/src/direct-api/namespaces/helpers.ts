@@ -9,9 +9,18 @@
  * @packageDocumentation
  */
 
+import { runWithAccessMemo } from "../../auth/access/request-memo";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import {
+  authorizeCaller,
+  authorizeCallerForAny,
+  isErrorResponse,
+  type AuthContext,
+} from "../../auth/middleware";
+import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
+import type { RouteGrant } from "../../domains/auth/system-write-policy";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
 import { assertRunnableAsPrincipal } from "../../plugins/principals/run-as";
@@ -65,6 +74,19 @@ export async function runAsCaller<
   A extends DirectAPIConfig & RunAsPrincipal,
   R,
 >(
+  defaultConfig: DirectAPIConfig,
+  args: A,
+  operation: (args: A) => Promise<R>
+): Promise<R> {
+  // One memo of access lookups for the call, so a list whose field rules ask
+  // about the caller on every row looks the caller up once. A call made inside
+  // a request shares that request's memo.
+  return runWithAccessMemo(() =>
+    runAsCallerInMemo(defaultConfig, args, operation)
+  );
+}
+
+function runAsCallerInMemo<A extends DirectAPIConfig & RunAsPrincipal, R>(
   defaultConfig: DirectAPIConfig,
   args: A,
   operation: (args: A) => Promise<R>
@@ -177,6 +199,120 @@ export function accessOptions(config: DirectAPIConfig): AccessOptions {
     authenticatedScope: config.actor,
     request: config.request,
   };
+}
+
+/**
+ * What a call supplies over the instance's defaults, as one credential.
+ *
+ * A call that passes `overrideAccess: undefined` keeps the instance's setting:
+ * `mergeConfig` is a spread and a present-but-undefined key wins it, which
+ * would otherwise erase an instance's `false` and quietly restore trust.
+ *
+ * `user` and the key scope `actor` are one credential. A call that names a
+ * user without naming a key is made as that person, not under the instance's
+ * key: keeping the instance's scope while swapping the user would authorize
+ * the call by grants that were never the new user's. A call that names
+ * `user: undefined` names nobody, and is refused.
+ */
+function suppliedByCall(args: DirectAPIConfig): DirectAPIConfig {
+  const supplied: DirectAPIConfig = { ...args };
+  if (supplied.overrideAccess === undefined) delete supplied.overrideAccess;
+  if ("user" in args && !("actor" in args)) supplied.actor = undefined;
+  return supplied;
+}
+
+/**
+ * The caller as the REST routes see one: a person signed in, or an API key
+ * judged by its own grants rather than its owner's.
+ *
+ * A key carries its whole scope, as REST's authenticated caller does: its
+ * permissions, the grant rows behind them and its OWN role slugs, never its
+ * owner's, since a rule may decide on a role. The inverse of
+ * `apiKeyScopeFrom`, so the scope a call names is the scope it is judged by.
+ */
+function asRouteCaller(userId: string, access: AccessOptions): AuthContext {
+  const scope = access.authenticatedScope;
+  if (scope?.actorType === "apiKey") {
+    return {
+      userId,
+      authMethod: "api-key",
+      permissions: [...scope.permissions],
+      ...(scope.grants ? { grants: scope.grants } : {}),
+      roles: [...(scope.roles ?? [])],
+    };
+  }
+  return {
+    userId,
+    authMethod: "session",
+    permissions: [],
+    roles: access.user?.roles ?? [],
+  };
+}
+
+/**
+ * The caller a checked operation on a system resource is made as, or `null`
+ * for a trusted one.
+ *
+ * Checked when the call, over the instance's defaults, says
+ * `overrideAccess: false`. Read through `accessOptions`, so the identity and
+ * the key scope travel together as they do at every other namespace. A checked
+ * call names who it is for, as a REST request must be signed in, so one that
+ * names nobody is refused here.
+ *
+ * Takes the defaults rather than a namespace's context, so a plugin service
+ * that resolves its own options asks the same question.
+ */
+export function checkedCaller(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig
+): AuthContext | null {
+  const access = accessOptions(
+    mergeConfig(defaultConfig, suppliedByCall(args))
+  );
+  if (access.overrideAccess !== false) return null;
+
+  const userId = access.user?.id;
+  if (!userId) {
+    throw NextlyError.authRequired({
+      logContext: { reason: "checked-direct-api-call-names-no-user" },
+    });
+  }
+  return asRouteCaller(userId, access);
+}
+
+// What a write asks, declared with the policy that says which write asks what.
+export type { RouteGrant };
+
+/**
+ * Whether `caller` holds `grant`, asked of the decision the REST route asks,
+ * so one caller gets one answer through either door: `authorizeCaller` (the
+ * `requirePermission` decision) for one permission, `authorizeCallerForAny`
+ * (`requireAnyPermission`'s) for any of several. A refusal is FORBIDDEN.
+ */
+export async function authorizeChecked(
+  caller: AuthContext,
+  grant: RouteGrant
+): Promise<void> {
+  const decision =
+    "anyOf" in grant
+      ? await authorizeCallerForAny(caller, [...grant.anyOf])
+      : await authorizeCaller(caller, grant.action, grant.resource);
+  if (isErrorResponse(decision)) throw toNextlyAuthError(decision);
+}
+
+/**
+ * The check a write to a system resource runs first, before any work: nothing
+ * for a trusted call, and for a checked one the caller's `grant`, refused as
+ * REST refuses it. Returns the checked caller, or `null` for a trusted call.
+ */
+export async function checkWrite(
+  defaultConfig: DirectAPIConfig,
+  args: DirectAPIConfig,
+  grant: RouteGrant
+): Promise<AuthContext | null> {
+  const caller = checkedCaller(defaultConfig, args);
+  if (caller) await authorizeChecked(caller, grant);
+  return caller;
 }
 
 /**

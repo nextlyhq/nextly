@@ -20,10 +20,7 @@ export interface AttachmentLimits {
   maxTotalBytes: number;
 }
 
-function parsePositiveInt(
-  value: string | undefined,
-  fallback: number
-): number {
+function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;

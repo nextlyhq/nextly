@@ -53,6 +53,48 @@ export function displayOpProblem(
 }
 
 /**
+ * Why a core display that draws rows has nothing to draw in each, or
+ * `undefined` when it does: the run-time half of the type requiring a row
+ * display's query to select a field (`QueryRequires` in `define-widget.ts`).
+ *
+ * A row display is one whose query answers a list, read from the same table
+ * as {@link displayOpProblem}, so the two checks cannot disagree about which
+ * displays draw rows. A list or table whose query selects nothing is refused
+ * where it is drawn; for a plain JavaScript declaration no type saw, startup
+ * says so first, to the author.
+ */
+export function displaySelectProblem(
+  display: CoreDisplay,
+  select: unknown
+): string | undefined {
+  const ops: readonly string[] = ARCHETYPE_OPS[display];
+  if (!ops.includes("list")) return undefined;
+  return Array.isArray(select) && select.length > 0
+    ? undefined
+    : `its query selects no fields, so the "${display}" display has nothing to show in each row`;
+}
+
+/**
+ * Why a declared widget's display cannot draw its query, or `undefined` when
+ * it can: the operation and the selection, judged together.
+ *
+ * One check for both places a declared query is built, at startup from the
+ * starting settings and for each card from its own, so a query is never
+ * accepted by one and refused by the other. A component display draws
+ * whatever its component does, so only a core display is judged.
+ */
+export function declaredQueryProblem(
+  display: unknown,
+  query: { readonly op?: unknown; readonly select?: unknown }
+): string | undefined {
+  if (!isCoreDisplay(display)) return undefined;
+  return (
+    displayOpProblem(display, query.op) ??
+    displaySelectProblem(display, query.select)
+  );
+}
+
+/**
  * Which query answer each display draws, read from the table registration
  * checks at startup (`ARCHETYPE_OPS` in `definition.ts`), so the compile-time
  * pairing and the startup check are one table.

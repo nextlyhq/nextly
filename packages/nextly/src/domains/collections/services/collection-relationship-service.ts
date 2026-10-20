@@ -38,6 +38,7 @@ import {
   boundRefuses,
   callerId,
   identifiedCallerMayRead,
+  judgedFor,
 } from "../../../services/collections/trust-bound";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
@@ -1652,7 +1653,9 @@ export class CollectionRelationshipService extends BaseService {
 
     const accessService = this.resolveAccessService();
 
-    const user = access.user as UserContext | undefined;
+    // The redaction basis when the read names one, as a preview does, so a
+    // link never shows a row its sharer could not read.
+    const user = judgedFor(access) as UserContext | undefined;
     // Super-admins bypass the read gate on every other transport. A scoped API
     // key is authoritative on its OWN grant and never on its owner's roles, so
     // the bypass does not extend to one — the same carve-out the direct read
@@ -1881,18 +1884,18 @@ export class CollectionRelationshipService extends BaseService {
         ? true
         : hasPermission(user.id, "read", targetCollection);
     }
-    const codeAccess = rbac.getRegisteredAccess(targetCollection);
+    const target = rbac.getRegisteredTarget(targetCollection);
+    const codeAccess = target?.access;
 
     if (authenticatedScope?.actorType === "apiKey") {
       // Judged on the operation rather than the object, because a collection
       // that declares `access.create` alone has still said nothing about
       // reading. With no read rule, the grant above is the whole answer, as it
       // is on the direct read's key branch.
-      if (codeAccess?.read === undefined) return true;
+      if (!target || codeAccess?.read === undefined) return true;
       return codeAccessAllows(
-        codeAccess,
+        target,
         "read",
-        targetCollection,
         readAccessCaller({ user, authenticatedScope })
       );
     }
@@ -2004,12 +2007,12 @@ export class CollectionRelationshipService extends BaseService {
         );
 
         if (fieldExists) {
-          console.log(
+          this.logger.info(
             `[LabelField] Using specified targetLabelField "${targetLabelField}" for collection "${collectionName}"`
           );
           return targetLabelField;
         } else {
-          console.warn(
+          this.logger.warn(
             `[LabelField] Specified targetLabelField "${targetLabelField}" not found in collection "${collectionName}", falling back to auto-detection`
           );
         }
@@ -2037,7 +2040,7 @@ export class CollectionRelationshipService extends BaseService {
               f.type !== "password"
           )
         ) {
-          console.log(
+          this.logger.info(
             `[LabelField] Using priority field "${labelField}" for collection "${collectionName}"`
           );
           return labelField;
@@ -2055,21 +2058,21 @@ export class CollectionRelationshipService extends BaseService {
       );
 
       if (textField) {
-        console.log(
+        this.logger.info(
           `[LabelField] Using first text field "${textField.name}" for collection "${collectionName}"`
         );
         return textField.name;
       }
 
       // Last resort: use id
-      console.warn(
+      this.logger.warn(
         `[LabelField] No suitable label field found for "${collectionName}", falling back to ID`
       );
       return "id";
     } catch (error) {
-      console.error(
-        `[LabelField] Error getting label field for "${collectionName}":`,
-        error
+      this.logger.error(
+        `[LabelField] Error getting label field for "${collectionName}"`,
+        { error: error }
       );
       return "id";
     }
@@ -2473,7 +2476,7 @@ export class CollectionRelationshipService extends BaseService {
       if (isSystemEntity(targetCollection)) {
         const targetSchema = getSystemEntityTable(targetCollection);
         if (!targetSchema) {
-          console.warn(`Unknown system entity: ${targetCollection}`);
+          this.logger.warn(`Unknown system entity: ${targetCollection}`);
           return resultMap;
         }
 
@@ -2518,9 +2521,9 @@ export class CollectionRelationshipService extends BaseService {
         }
       }
     } catch (error) {
-      console.error(
-        `Failed to batch fetch entries for ${targetCollection}:`,
-        error
+      this.logger.error(
+        `Failed to batch fetch entries for ${targetCollection}`,
+        { error: error }
       );
     }
 
@@ -2553,7 +2556,7 @@ export class CollectionRelationshipService extends BaseService {
     // code-first inserts crash with "Cannot read properties of undefined".
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] Cannot determine target collection for field "${field.name}" - check that either field.relationTo or field.options.target is set.`
       );
       return resultMap;
@@ -2610,7 +2613,9 @@ export class CollectionRelationshipService extends BaseService {
         );
       }
     } catch (error) {
-      console.error("Failed to batch fetch manyToMany relations:", error);
+      this.logger.error("Failed to batch fetch manyToMany relations", {
+        error: error,
+      });
       // Initialize empty arrays for all source entries on error
       for (const sourceId of sourceEntryIds) {
         resultMap.set(sourceId, []);
@@ -2882,7 +2887,9 @@ export class CollectionRelationshipService extends BaseService {
         }
       } catch (error) {
         // If expansion fails, keep the original value
-        console.error(`Failed to expand relation ${field.name}:`, error);
+        this.logger.error(`Failed to expand relation ${field.name}`, {
+          error: error,
+        });
       }
     }
 
@@ -3518,9 +3525,9 @@ export class CollectionRelationshipService extends BaseService {
       // that as an untyped "not found", the same shape a genuine failure takes.
       // Since the two cannot be told apart here, refusing would deny ordinary
       // reads, so this logs and leaves the target's hooks unrun.
-      console.error(
+      this.logger.error(
         `Nested field hooks skipped for "${collectionName}": its schema could not be read.`,
-        error
+        { error: error }
       );
     }
 
@@ -4117,7 +4124,7 @@ export class CollectionRelationshipService extends BaseService {
     if (sourceEntryIds.length === 0) return byEntry;
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] fetchManyToManyTargetIds: cannot determine target for field "${field.name}".`
       );
       return byEntry;
@@ -4206,7 +4213,7 @@ export class CollectionRelationshipService extends BaseService {
     // See that comment for the code-first vs UI-built shape rationale.
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] fetchManyToManyRelations: cannot determine target for field "${field.name}".`
       );
       return [];
@@ -4250,7 +4257,9 @@ export class CollectionRelationshipService extends BaseService {
         access
       );
     } catch (error) {
-      console.error("Failed to fetch many-to-many relations:", error);
+      this.logger.error("Failed to fetch many-to-many relations", {
+        error: error,
+      });
       return [];
     }
   }
@@ -4281,7 +4290,7 @@ export class CollectionRelationshipService extends BaseService {
     // See that comment for the code-first vs UI-built shape rationale.
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] insertManyToManyRelations: cannot determine target for field "${field.name}".`
       );
       return;
@@ -4292,13 +4301,13 @@ export class CollectionRelationshipService extends BaseService {
       field
     );
 
-    console.log(
+    this.logger.info(
       `[ManyToMany] Inserting into junction table: ${junctionTableName}`
     );
-    console.log(
+    this.logger.info(
       `[ManyToMany] Source: ${sourceCollectionName}, Target: ${targetCollectionName}`
     );
-    console.log(
+    this.logger.info(
       `[ManyToMany] Field: ${field.name}, IDs: ${relatedIds.join(", ")}`
     );
 
@@ -4344,9 +4353,13 @@ export class CollectionRelationshipService extends BaseService {
             `Check migration files in src/db/migrations/dynamic/`
         );
       }
-      console.log(`[ManyToMany] ✓ Junction table exists: ${junctionTableName}`);
+      this.logger.info(
+        `[ManyToMany] ✓ Junction table exists: ${junctionTableName}`
+      );
     } catch (error: unknown) {
-      console.error(`[ManyToMany] Junction table check failed:`, error);
+      this.logger.error(`[ManyToMany] Junction table check failed`, {
+        error: error,
+      });
       throw error;
     }
 
@@ -4414,7 +4427,7 @@ export class CollectionRelationshipService extends BaseService {
     // See that comment for the code-first vs UI-built shape rationale.
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
-      console.error(
+      this.logger.error(
         `[CollectionRelationshipService] deleteManyToManyRelations: cannot determine target for field "${field.name}".`
       );
       return;

@@ -8,13 +8,16 @@
  * `@tanstack/react-query`, and neither can come from the yalc store, so a yalc
  * install that only runs `yalc add` leaves those peers unresolved.
  */
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installDependencies } from "../installers/dependencies";
+import type { NextlySource } from "../lib/nextly-release";
 import type { DatabaseConfig, ProjectInfo } from "../types";
 
 const execa = vi.hoisted(() => vi.fn().mockResolvedValue({ stdout: "" }));
@@ -30,6 +33,9 @@ vi.mock("../installers/native-build-approvals", () => ({
 }));
 
 const projectInfo = { packageManager: "pnpm" } as ProjectInfo;
+// Where the Nextly packages come from: linked local builds, or a release.
+const YALC: NextlySource = { kind: "yalc", cliVersion: "0.0.2-alpha.40" };
+const RELEASE: NextlySource = { kind: "release", cliVersion: "0.0.2-alpha.40" };
 const database = { adapter: "@nextlyhq/adapter-postgres" } as DatabaseConfig;
 
 /** Every package name passed to the package manager across all calls. */
@@ -57,7 +63,7 @@ describe("installDependencies (existing project)", () => {
       "/tmp/project",
       projectInfo,
       database,
-      /* useYalc */ true,
+      YALC,
       /* isFreshProject */ false
     );
 
@@ -72,7 +78,7 @@ describe("installDependencies (existing project)", () => {
       "/tmp/project",
       projectInfo,
       database,
-      true,
+      YALC,
       false
     );
 
@@ -87,22 +93,53 @@ describe("installDependencies (existing project)", () => {
       "/tmp/project",
       projectInfo,
       database,
-      false,
+      RELEASE,
       false
     );
 
-    const installed = installedFromRegistry();
-    for (const pkg of [
-      "nextly",
-      "@nextlyhq/admin",
-      "@nextlyhq/ui",
-      "lucide-react",
-      "@tanstack/react-query",
-      "@nextlyhq/adapter-postgres",
-    ]) {
-      expect(installed).toContain(pkg);
-    }
+    // Nextly's packages at the release, recorded exactly (npm would record
+    // `nextly@X` as `^X`); the others as before, at what the registry has.
+    const adds = execa.mock.calls
+      .filter(
+        ([cmd, args]: [string, string[]]) => cmd === "pnpm" && args[0] === "add"
+      )
+      .map(([, args]: [string, string[]]) => args.slice(1));
+    expect(adds).toContainEqual([
+      "--save-exact",
+      "nextly@0.0.2-alpha.40",
+      "@nextlyhq/admin@0.0.2-alpha.40",
+      "@nextlyhq/adapter-drizzle@0.0.2-alpha.40",
+      "@nextlyhq/ui@0.0.2-alpha.40",
+      "@nextlyhq/adapter-postgres@0.0.2-alpha.40",
+    ]);
+    expect(adds).toContainEqual(["@tanstack/react-query", "lucide-react"]);
     expect(execa.mock.calls.filter(([cmd]) => cmd === "yalc")).toHaveLength(0);
+  });
+});
+
+describe("installDependencies (existing project, a source given on purpose)", () => {
+  beforeEach(() => {
+    execa.mockClear();
+  });
+
+  // --local-template on an existing app takes the active release line, by
+  // its tag, recorded as the package manager records a tag.
+  it("adds Nextly's packages from the alpha tag, not pinned", async () => {
+    await installDependencies(
+      "/tmp/project",
+      projectInfo,
+      database,
+      { kind: "alpha", cliVersion: "0.0.2-alpha.40" },
+      false
+    );
+
+    const adds = execa.mock.calls
+      .filter(
+        ([cmd, args]: [string, string[]]) => cmd === "pnpm" && args[0] === "add"
+      )
+      .map(([, args]: [string, string[]]) => args.slice(1));
+    expect(adds).toContainEqual(expect.arrayContaining(["nextly@alpha"]));
+    expect(adds.flat()).not.toContain("--save-exact");
   });
 });
 
@@ -125,7 +162,7 @@ describe("installDependencies (existing project, what reading the config needs)"
       "/tmp/project",
       { packageManager } as ProjectInfo,
       database,
-      false,
+      RELEASE,
       false
     );
 
@@ -166,7 +203,7 @@ describe("installDependencies (existing project, what reading the config needs)"
         dir,
         { packageManager: "npm" } as ProjectInfo,
         database,
-        false,
+        RELEASE,
         false
       );
 
@@ -253,6 +290,90 @@ describe("installDependencies (existing project, what reading the config needs)"
   });
 });
 
+/**
+ * The required (non-optional) peers each workspace package declares, read
+ * from the packages themselves so the model below moves with them.
+ */
+function requiredPeersByPackage(): Map<string, string[]> {
+  const packagesDir = fileURLToPath(new URL("../../../", import.meta.url));
+  const peers = new Map<string, string[]>();
+  for (const dir of readdirSync(packagesDir)) {
+    const file = join(packagesDir, dir, "package.json");
+    if (!existsSync(file)) continue;
+    const manifest = JSON.parse(readFileSync(file, "utf8")) as {
+      name: string;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+    };
+    peers.set(
+      manifest.name,
+      Object.keys(manifest.peerDependencies ?? {}).filter(
+        peer => manifest.peerDependenciesMeta?.[peer]?.optional !== true
+      )
+    );
+  }
+  return peers;
+}
+
+describe("installDependencies (existing project, strict peers)", () => {
+  afterEach(() => {
+    execa.mockReset();
+    execa.mockResolvedValue({ stdout: "" });
+  });
+
+  // pnpm with auto-install-peers=false and strict-peer-dependencies=true
+  // refuses an add whose packages' required peers are neither in the app yet
+  // nor in the same command. @nextlyhq/ui requires lucide-react, which is not
+  // one of Nextly's packages, so it must not arrive after them.
+  it.each([
+    ["the release", RELEASE],
+    ["the alpha tag", { kind: "alpha", cliVersion: "0.0.2-alpha.40" }],
+  ] as const)(
+    "adds every package after its required peers, from %s",
+    async (_label, source: NextlySource) => {
+      const peers = requiredPeersByPackage();
+      const present = new Set(["next", "react", "react-dom"]);
+      execa.mockImplementation(async (cmd: string, args: string[]) => {
+        if (cmd === "pnpm" && args[0] === "add") {
+          const adding = args
+            .slice(1)
+            .filter(arg => !arg.startsWith("-"))
+            // `@scope/pkg@1` → `@scope/pkg`; `lucide-react` stays whole.
+            .map(spec => {
+              const at = spec.lastIndexOf("@");
+              return at > 0 ? spec.slice(0, at) : spec;
+            });
+          const after = new Set([...present, ...adding]);
+          for (const name of adding) {
+            const missing = (peers.get(name) ?? []).filter(
+              peer => !after.has(peer)
+            );
+            if (missing.length > 0) {
+              throw new Error(
+                `${name} is missing required peers: ${missing.join(", ")}`
+              );
+            }
+          }
+          for (const name of adding) present.add(name);
+        }
+        return { stdout: "" };
+      });
+
+      await installDependencies(
+        "/tmp/project",
+        projectInfo,
+        database,
+        source,
+        false
+      );
+
+      // The model saw Nextly's packages added, so it judged them.
+      expect(present).toContain("@nextlyhq/ui");
+      expect(present).toContain("lucide-react");
+    }
+  );
+});
+
 describe("installDependencies (fresh plugin scaffold)", () => {
   beforeEach(() => {
     execa.mockClear();
@@ -266,7 +387,7 @@ describe("installDependencies (fresh plugin scaffold)", () => {
       "/tmp/plugin",
       projectInfo,
       database,
-      /* useYalc */ true,
+      YALC,
       /* isFreshProject */ true,
       "plugin"
     );
@@ -283,7 +404,7 @@ describe("installDependencies (fresh plugin scaffold)", () => {
       "/tmp/blog",
       projectInfo,
       database,
-      /* useYalc */ true,
+      YALC,
       /* isFreshProject */ true,
       "blog"
     );
@@ -297,7 +418,7 @@ describe("installDependencies (fresh plugin scaffold)", () => {
       "/tmp/app",
       projectInfo,
       database,
-      true,
+      YALC,
       true,
       "blank"
     );

@@ -11,7 +11,6 @@
  */
 
 import { NextlyError } from "../../errors";
-import type { VersionStatus } from "../../schemas/versions/types";
 import { markWriteIntegrityFailure } from "../../shared/write-integrity";
 import {
   CORE_CONTENT_EVENT_KINDS,
@@ -20,6 +19,7 @@ import {
 import { recordContentEvent } from "../content-events/record";
 
 import type { VersionsDbApi } from "./db-api";
+import type { RecordedVersionStatus } from "./recorded-status";
 import { selectVersionsToPrune } from "./retention";
 import { VersionConflictError, isUniqueViolation } from "./version-conflict";
 import { pinnedVersionNos } from "./version-pins";
@@ -28,7 +28,8 @@ import { VersionsRepository, type VersionRef } from "./versions-repository";
 /** Input to capture a durable version. */
 export interface CaptureInput {
   ref: VersionRef;
-  status: VersionStatus;
+  /** The document's status as a version records it (see `recorded-status`). */
+  status: RecordedVersionStatus;
   snapshot: unknown;
   createdBy?: string | null;
   label?: string | null;
@@ -40,6 +41,11 @@ export interface CaptureInput {
    * insert, so the cap holds without a background worker.
    */
   maxPerDoc?: number | false;
+  /**
+   * Whether the document has the Draft/Published lifecycle, which decides
+   * which versions retention counts as served (see `recordsServedContent`).
+   */
+  lifecycle: boolean;
 }
 
 /** The allocated number of a captured version. */
@@ -60,45 +66,27 @@ export class VersionCaptureService {
    *
    * A duplicate version_no is still possible when two transactions allocate
    * concurrently, because each reads a max the other has not yet committed.
-   * That race is caught by the durable-sequence unique index and surfaced as a
-   * VersionConflictError for the write path to retry.
+   * The durable-sequence unique index catches it, and the insert alone is
+   * retried with the latest number (see `insertWithRetry`), so a batch is not
+   * aborted, nor its hooks run twice, for a number another write took.
    */
   async capture(
     db: VersionsDbApi,
     input: CaptureInput
   ): Promise<CaptureResult> {
     const repo = new VersionsRepository(db);
-    const versionNo = (await repo.getMaxVersionNo(input.ref)) + 1;
-    try {
-      await repo.insertVersion({
-        ref: input.ref,
-        versionNo,
-        status: input.status,
-        isAutosave: false,
-        snapshot: input.snapshot,
-        label: input.label ?? null,
-        locale: input.locale ?? null,
-        sourceVersionNo: input.sourceVersionNo ?? null,
-        createdBy: input.createdBy ?? null,
-      });
-    } catch (err) {
-      // The only unique index on nextly_versions is the version_no sequence, so
-      // a unique violation here is a lost allocation race (concurrent capture on
-      // the same document read the same max). The tx-context insert throws the
-      // RAW driver error (not yet normalized to a DbError), so isUniqueViolation
-      // recognizes raw driver codes / the adapter DatabaseError too. Surface it
-      // as a distinct error so the write path retries the whole transaction;
-      // anything else propagates.
-      if (isUniqueViolation(err)) {
-        throw new VersionConflictError(err);
-      }
-      throw err;
-    }
+    const { versionNo, retried } = await insertWithRetry(db, repo, input);
     // Trim history to the configured cap inside the caller's transaction. What
     // is always kept (the newest version, each language's latest published one,
     // named versions and restore lineage) is decided by selectVersionsToPrune.
     if (typeof input.maxPerDoc === "number") {
-      const durable = await repo.listDurableForPrune(input.ref);
+      // After a lost race the scan reads with a lock too: on MySQL a plain read
+      // answers from the snapshot the first allocation took, which lacks the
+      // version that won, so retention would count, protect and check restore
+      // lineage against a history that is no longer the document's.
+      const durable = await repo.listDurableForPrune(input.ref, {
+        latest: retried,
+      });
       // A restore's own capture additionally protects two versions. The one
       // holding the content it just replaced — the one the editor is told they
       // can go back to — is `versionNo - 1`: this insert took the next number,
@@ -134,7 +122,8 @@ export class VersionCaptureService {
         durable,
         input.maxPerDoc,
         [isRestore ? versionNo - 1 : null, input.sourceVersionNo],
-        pinned
+        pinned,
+        input.lifecycle
       );
       if (staleIds.length > 0) {
         const removed = await repo.deletePrunedVersions(staleIds);
@@ -173,5 +162,85 @@ async function recordRetentionRemoval(
     });
   } catch (error) {
     throw markWriteIntegrityFailure(error);
+  }
+}
+
+/** How many numbers one capture tries before giving the race up. */
+const INSERT_ATTEMPTS = 3;
+
+let savepointSequence = 0;
+
+/**
+ * Insert the version under the next free number, retrying the insert alone
+ * when a concurrent transaction took that number first.
+ *
+ * Only the insert repeats: the write around it, and its hooks, ran once and
+ * stay as they are. On PostgreSQL a failed statement aborts the transaction,
+ * so each attempt runs in a savepoint and a clash rolls back to it; SQLite
+ * has savepoints too. MySQL has none here and needs none: a duplicate key
+ * fails the statement, not the transaction. Each retry re-reads the newest
+ * number with a locking read, which sees the row the other transaction
+ * committed (a plain read on MySQL would answer from a stale snapshot).
+ *
+ * Three lost races in a row surface as a VersionConflictError, which an
+ * interactive write retries whole.
+ */
+async function insertWithRetry(
+  db: VersionsDbApi,
+  repo: VersionsRepository,
+  input: CaptureInput
+): Promise<{ versionNo: number; retried: boolean }> {
+  for (let attempt = 1; ; attempt += 1) {
+    const versionNo =
+      (await repo.getMaxVersionNo(input.ref, { latest: attempt > 1 })) + 1;
+    try {
+      await underSavepoint(db, () =>
+        repo.insertVersion({
+          ref: input.ref,
+          versionNo,
+          status: input.status,
+          isAutosave: false,
+          snapshot: input.snapshot,
+          label: input.label ?? null,
+          locale: input.locale ?? null,
+          sourceVersionNo: input.sourceVersionNo ?? null,
+          createdBy: input.createdBy ?? null,
+        })
+      );
+      return { versionNo, retried: attempt > 1 };
+    } catch (err) {
+      // The only unique index on nextly_versions is the version_no sequence,
+      // so a unique violation is a lost allocation race. The insert throws the
+      // RAW driver error, which isUniqueViolation recognizes; anything else
+      // propagates as it is.
+      if (!isUniqueViolation(err)) throw err;
+      if (attempt >= INSERT_ATTEMPTS) throw new VersionConflictError(err);
+    }
+  }
+}
+
+/**
+ * Run `work` inside a savepoint where the transaction has them, so a failure
+ * rolls back only `work` and the transaction carries on; without them, run it
+ * plainly.
+ */
+async function underSavepoint<T>(
+  db: VersionsDbApi,
+  work: () => Promise<T>
+): Promise<T> {
+  if (!db.savepoint || !db.rollbackToSavepoint || !db.releaseSavepoint) {
+    return work();
+  }
+  savepointSequence += 1;
+  const name = `nextly_version_insert_${savepointSequence}`;
+  await db.savepoint(name);
+  try {
+    const result = await work();
+    await db.releaseSavepoint(name);
+    return result;
+  } catch (err) {
+    await db.rollbackToSavepoint(name);
+    await db.releaseSavepoint(name);
+    throw err;
   }
 }

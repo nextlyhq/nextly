@@ -14,6 +14,7 @@ import { fileURLToPath } from "url";
 
 import { skillsVersion, skillsVersionIn } from "../lib/bundled-skills";
 import { EXACT_VERSION } from "../lib/exact-version";
+import { installedVersion } from "../lib/nextly-release";
 
 import type { GeneratedFiles } from "./generated-files";
 
@@ -167,8 +168,9 @@ export function updateSkillsCommand(version: string): string {
 export async function projectNextlyVersion(
   projectRoot: string
 ): Promise<string | null> {
-  const installed = await installedNextlyVersion(projectRoot);
-  if (installed !== null) return installed;
+  // The nextly the project loads, found as the version guard finds it.
+  const installed = await installedVersion(projectRoot, "nextly");
+  if (installed !== undefined) return installed;
   const manifest = await readJson(path.join(projectRoot, "package.json"));
   for (const field of ["dependencies", "devDependencies"] as const) {
     const declared = (manifest?.[field] as Record<string, unknown> | undefined)
@@ -178,27 +180,6 @@ export async function projectNextlyVersion(
     }
   }
   return null;
-}
-
-/**
- * The version of the `nextly` Node.js would load from `projectRoot`: the
- * first `node_modules/nextly` in it or a folder above, as a workspace that
- * hoists its dependencies puts it. Null when there is none, as under Yarn
- * Plug'n'Play, which keeps no such folder.
- */
-async function installedNextlyVersion(
-  projectRoot: string
-): Promise<string | null> {
-  let folder = path.resolve(projectRoot);
-  for (;;) {
-    const manifest = await readJson(
-      path.join(folder, "node_modules", "nextly", "package.json")
-    );
-    if (typeof manifest?.version === "string") return manifest.version;
-    const parent = path.dirname(folder);
-    if (parent === folder) return null;
-    folder = parent;
-  }
 }
 
 /** A JSON file's object, or null when it is missing or not an object. */

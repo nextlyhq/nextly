@@ -1,5 +1,6 @@
 import { like, or, sql, type AnyColumn, type SQL } from "drizzle-orm";
 
+import { consoleLogger } from "../../shared/types";
 import { isTransientError, withRetry } from "../../storage/retry";
 
 import { canonicalStoredPath } from "./orphan-thumbnails";
@@ -65,9 +66,9 @@ export function warnNotRemoved(
   mediaId: string,
   error: unknown
 ): void {
-  console.warn(
-    `[MediaService] Could not remove ${storedPathForLog(filePath)} of media ${mediaId}:`,
-    errorForLog(error)
+  consoleLogger.warn(
+    `[MediaService] Could not remove ${storedPathForLog(filePath)} of media ${mediaId}`,
+    { error: errorForLog(error) }
   );
 }
 
@@ -76,7 +77,7 @@ export function warnNotRemoved(
  * the one identifier there is: nothing was removed in its place.
  */
 export function warnUnlocated(url: string, mediaId: string): void {
-  console.warn(
+  consoleLogger.warn(
     `[MediaService] Left the thumbnail of media ${mediaId} at ${storedPathForLog(url)}: its stored location could not be worked out from the record.`
   );
 }
@@ -209,11 +210,11 @@ export async function filesKeptByOthers(
     }
     return pathsReferencedAmong(paths, rows);
   } catch (error) {
-    console.warn(
+    consoleLogger.warn(
       mediaIds.length > 0
-        ? `[MediaService] Left the files of media ${mediaIds.join(", ")}: could not check whether another item refers to them:`
-        : `[MediaService] Left ${paths.map(storedPathForLog).join(", ")}: could not check whether a media item refers to them:`,
-      errorForLog(error)
+        ? `[MediaService] Left the files of media ${mediaIds.join(", ")}: could not check whether another item refers to them`
+        : `[MediaService] Left ${paths.map(storedPathForLog).join(", ")}: could not check whether a media item refers to them`,
+      { error: errorForLog(error) }
     );
     return null;
   }
@@ -245,9 +246,9 @@ export async function removeStoredFiles(
             baseDelayMs: 500,
             shouldRetry: isTransientError,
             onRetry: (err, attempt) => {
-              console.warn(
-                `[MediaService] Delete retry ${attempt} for ${storedPathForLog(filePath)}:`,
-                errorForLog(err)
+              consoleLogger.warn(
+                `[MediaService] Delete retry ${attempt} for ${storedPathForLog(filePath)}`,
+                { error: errorForLog(err) }
               );
             },
           });

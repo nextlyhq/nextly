@@ -344,17 +344,18 @@ function validateNextlyConfig(config: NextlyConfig): void {
   }
 
   if (config.users) {
-    // Plugin field types this config declares for the users surface. Config is
-    // validated here at definition time, before boot registers plugin field
-    // types into the global registry, so the users validator accepts these
-    // directly rather than rejecting a valid code-defined plugin user field.
-    const configUsersTypes = new Set<string>(
+    // Plugin field types this config declares for the users surface, with the
+    // storage each declares. Config is validated here at definition time,
+    // before boot registers plugin field types into the global registry, so
+    // the users validator accepts these directly rather than rejecting a valid
+    // code-defined plugin user field, and reads a field's storage from here.
+    const configUsersTypes = new Map(
       (config.plugins ?? [])
         .flatMap(plugin => plugin.contributes?.fieldTypes ?? [])
         .filter(fieldType =>
           (fieldType.surfaces ?? ["entries"]).includes("users")
         )
-        .map(fieldType => fieldType.type)
+        .map(fieldType => [fieldType.type, fieldType.storage] as const)
     );
     assertValidUserConfig(config.users, configUsersTypes);
   }

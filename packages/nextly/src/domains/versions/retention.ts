@@ -8,13 +8,16 @@
  * @module domains/versions/retention
  */
 
-import type { VersionStatus } from "../../schemas/versions/types";
+import {
+  recordsServedContent,
+  type RecordedVersionStatus,
+} from "./recorded-status";
 
 /** The minimum shape retention needs from a durable version row. */
 export interface PrunableVersion {
   id: string;
   versionNo: number | null;
-  status: VersionStatus;
+  status: RecordedVersionStatus;
   /**
    * The language the version holds, or null. On today's rows null means a
    * document with no languages, a snapshot of every language at once (a
@@ -66,15 +69,22 @@ export function selectVersionsToPrune(
    */
   protectVersionNos?: readonly (number | null | undefined)[],
   /** Version numbers a feature has pinned; see `version-pins`. */
-  pinnedVersionNos?: readonly number[]
+  pinnedVersionNos?: readonly number[],
+  /**
+   * Whether the document has the Draft/Published lifecycle. Without it every
+   * version was served, so each language's latest version is kept whatever
+   * its status says. The capture service always states it.
+   */
+  lifecycle = true
 ): string[] {
   if (maxPerDoc === false) return [];
   if (rows.length <= maxPerDoc) return [];
 
-  const protectedIds = protectedVersionIds(rows, [
-    ...(protectVersionNos ?? []),
-    ...(pinnedVersionNos ?? []),
-  ]);
+  const protectedIds = protectedVersionIds(
+    rows,
+    [...(protectVersionNos ?? []), ...(pinnedVersionNos ?? [])],
+    lifecycle
+  );
   return rows
     .slice(Math.max(maxPerDoc, 0))
     .filter(r => !protectedIds.has(r.id))
@@ -84,9 +94,12 @@ export function selectVersionsToPrune(
 /** The ids of every row kept whatever the cap (see selectVersionsToPrune). */
 function protectedVersionIds(
   rows: PrunableVersion[],
-  protectVersionNos: readonly (number | null | undefined)[]
+  protectVersionNos: readonly (number | null | undefined)[],
+  lifecycle: boolean
 ): Set<string> {
-  const protectedIds = new Set<string>(latestPublishedPerLocale(rows));
+  const protectedIds = new Set<string>(
+    latestPublishedPerLocale(rows, lifecycle)
+  );
   // Newest durable version: the history head is always kept, even at cap 0.
   if (rows[0]) protectedIds.add(rows[0].id);
 
@@ -113,12 +126,19 @@ function protectedVersionIds(
 /**
  * The id of the latest published row of each language, null (no language)
  * keyed like any code. Rows arrive newest-first, so the first published row
- * seen for a language is its latest.
+ * seen for a language is its latest. "Published" is content readers were
+ * served, which without the lifecycle is every version whatever its status.
  */
-function latestPublishedPerLocale(rows: PrunableVersion[]): string[] {
+function latestPublishedPerLocale(
+  rows: PrunableVersion[],
+  lifecycle: boolean
+): string[] {
   const latest = new Map<string | null, string>();
   for (const row of rows) {
-    if (row.status === "published" && !latest.has(row.locale)) {
+    if (
+      recordsServedContent(row.status, lifecycle) &&
+      !latest.has(row.locale)
+    ) {
       latest.set(row.locale, row.id);
     }
   }

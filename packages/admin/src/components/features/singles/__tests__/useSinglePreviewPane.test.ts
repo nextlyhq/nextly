@@ -22,8 +22,7 @@ import type { SinglePreviewLink } from "../useSinglePreviewLink";
 
 const link: SinglePreviewLink = {
   isAvailable: true,
-  copy: () => {},
-  isCopying: false,
+  shareDocument: { single: "landing-page", locale: "en" },
   scope: { single: "landing-page", locale: "en" },
 };
 

@@ -74,6 +74,9 @@ describe("Deliveries page — Process queue now", () => {
           auth: 0,
           emailDeliveries: 0,
           oneTimeSecrets: 0,
+          previewLinks: 0,
+          notices: 0,
+          contentEvents: 0,
         },
       });
     });

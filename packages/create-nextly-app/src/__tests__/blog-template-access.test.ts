@@ -4,7 +4,7 @@
  * The collections are loaded as the template ships them (vitest.config.ts
  * aliases `nextly` to a stub whose builders pass the config through), and each
  * rule is called with the context Nextly gives a rule: the caller's role slugs,
- * and their permissions as `resource:action`.
+ * and their permissions as the Roles screen spells them (`update-posts`).
  *
  * The case that separates the two is a role named for nothing in particular
  * that holds the permission: a rule reading role names refuses it, and so does
@@ -60,7 +60,7 @@ describe("blog template — access rules", () => {
         const ctx = context(slug, operation, {
           user: { id: "u1" },
           roles: ["reviewer"],
-          permissions: [`${slug}:${operation}`],
+          permissions: [`${operation}-${slug}`],
         });
         expect(await rule(ctx)).toBe(true);
       });
@@ -69,7 +69,7 @@ describe("blog template — access rules", () => {
         const ctx = context(slug, operation, {
           user: { id: "key-owner" },
           roles: [],
-          permissions: [`${slug}:${operation}`],
+          permissions: [`${operation}-${slug}`],
         });
         expect(await rule(ctx)).toBe(true);
       });

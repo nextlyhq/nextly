@@ -24,6 +24,7 @@ import {
   getSchemaRegistryFromDI,
 } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { consoleLogger } from "../../../shared/types";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import {
@@ -190,7 +191,7 @@ export async function reconcileSingleCompanion(
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn(
+      consoleLogger.warn(
         `[reconcileSingleCompanion] Companion runtime registration failed for '${slug}': ${msg}.`
       );
     }

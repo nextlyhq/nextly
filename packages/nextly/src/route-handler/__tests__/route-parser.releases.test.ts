@@ -134,6 +134,15 @@ describe("releases routes", () => {
     ).not.toBe("getReleaseReadiness");
   });
 
+  it("reads a page of releases' readiness at its own word, not as a release id", () => {
+    expect(parseRestRoute(["releases", "readiness"], "GET")).toMatchObject({
+      method: "listReleasesReadiness",
+    });
+    expect(parseRestRoute(["releases", "readiness"], "GET").method).not.toBe(
+      "getRelease"
+    );
+  });
+
   it("claims only the verb each route declares", () => {
     // A branch that ignored the verb would turn a read into a schedule, or let
     // a GET remove a member. Each case below is a route that must NOT match.

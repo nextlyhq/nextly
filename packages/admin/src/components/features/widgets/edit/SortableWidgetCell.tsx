@@ -44,6 +44,8 @@ export interface SortableWidgetCellProps {
   /** What the reader calls this card, so the handle can name what it moves. */
   title: string;
   isEditing: boolean;
+  /** The card just added from the add panel: ringed so the reader sees where it landed. */
+  highlighted?: boolean;
   className?: string;
   "data-testid"?: string;
   children: ReactNode;
@@ -53,6 +55,7 @@ export function SortableWidgetCell({
   id,
   title,
   isEditing,
+  highlighted = false,
   className,
   "data-testid": testId,
   children,
@@ -77,9 +80,13 @@ export function SortableWidgetCell({
     <div
       ref={setNodeRef}
       data-testid={testId}
+      data-highlighted={highlighted || undefined}
       style={style}
       className={cn(
         className,
+        // Ringed in the focus colour, offset from the card so it reads in both schemes.
+        highlighted &&
+          "rounded-lg ring-2 ring-primary ring-offset-2 ring-offset-background",
         // Lifted while dragging so it reads as picked up rather than as a hole
         // in the grid. `relative` because a transformed cell with no stacking
         // context slides UNDER its neighbours.

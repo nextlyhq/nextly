@@ -96,6 +96,52 @@ export interface PreviewRouteConfig {
    * Defaults to `draftMode` from `next/headers`.
    */
   draftMode?: () => { enable: () => void } | Promise<{ enable: () => void }>;
+  /**
+   * What the link's own record says, asked once its token has verified.
+   *
+   * Defaults to the recorded-links store. Injected so the route is testable
+   * without a database, like the generation.
+   */
+  links?: PreviewLinkChecks;
+}
+
+/** A verified link, as {@link PreviewLinkChecks} is asked about it. */
+export interface VerifiedPreviewLink {
+  scope: PreviewTokenScope;
+  /** When the token says it was minted. */
+  issuedAt: Date;
+  /** The recorded link's id; absent on a link made before links were recorded. */
+  linkId?: string;
+}
+
+/**
+ * The questions a link's record answers, beyond what its token carries.
+ *
+ * Two, because opening a link and rendering in the session it opened are
+ * different events: only the first is counted. Both refuse a revoked link, so
+ * a revocation reaches a reviewer who already holds the cookie as well as the
+ * next click.
+ */
+export interface PreviewLinkChecks {
+  /** The link is being opened: count it, and say whether it may open. */
+  opened: (link: VerifiedPreviewLink) => Promise<boolean>;
+  /** A page is rendering in a session the link opened: may it still? */
+  live: (link: VerifiedPreviewLink) => Promise<boolean>;
+}
+
+/** The link a verified token describes. */
+function verifiedLink(verified: {
+  scope: PreviewTokenScope;
+  issuedAt?: Date;
+  linkId?: string;
+}): VerifiedPreviewLink {
+  return {
+    scope: verified.scope,
+    // Absent only on a result built outside the verifier: the epoch, which
+    // fails closed against any cutoff.
+    issuedAt: verified.issuedAt ?? new Date(0),
+    ...(verified.linkId === undefined ? {} : { linkId: verified.linkId }),
+  };
 }
 
 /**
@@ -186,6 +232,53 @@ async function verificationInputs(config: {
   };
 }
 
+/**
+ * Where a verified link sends its visitor, as a site-relative path, or `null`
+ * when it may send them nowhere.
+ *
+ * A lookup here is the likeliest thing to reject: a link outlives what it
+ * points at, and the entry can be deleted between minting and clicking. A
+ * throw is answered like every other failure rather than as a 500, which is
+ * what would make the endpoint an oracle again — a stranger could tell an
+ * entry that once existed from one that never did.
+ */
+async function previewLocation(
+  redirectTo: NonNullable<PreviewRouteConfig["redirectTo"]>,
+  scope: PreviewTokenScope,
+  requestUrl: string
+): Promise<string | null> {
+  let target: string | null;
+  try {
+    target = await redirectTo(scope, {
+      requestOrigin: new URL(requestUrl).origin,
+    });
+  } catch {
+    return null;
+  }
+  return target === null ? null : siteRelativeTarget(target, requestUrl);
+}
+
+/**
+ * The link a preview request carries, verified: its token and what the token
+ * says, or `null` when there is no token or it does not verify.
+ */
+async function linkInRequest(
+  request: Request,
+  config: PreviewRouteConfig
+): Promise<{
+  token: string;
+  verified: Extract<
+    Awaited<ReturnType<typeof verifyPreviewToken>>,
+    { valid: true }
+  >;
+} | null> {
+  const token = new URL(request.url).searchParams.get("token");
+  if (token === null || token.length === 0) return null;
+  const { secret, generation } = await verificationInputs(config);
+  const verified = await verifyPreviewToken(token, secret, { generation });
+  return verified.valid ? { token, verified } : null;
+}
+
 export function createPreviewRoute(config: PreviewRouteConfig = {}): {
   GET: (request: Request) => Promise<Response>;
 } {
@@ -198,37 +291,34 @@ export function createPreviewRoute(config: PreviewRouteConfig = {}): {
 
   return {
     async GET(request: Request): Promise<Response> {
-      const token = new URL(request.url).searchParams.get("token");
-      if (token === null || token.length === 0) return refuse();
+      const opened = await linkInRequest(request, config);
+      if (opened === null) return refuse();
+      const { token, verified } = opened;
 
-      const { secret, generation } = await verificationInputs(config);
-
-      const verified = await verifyPreviewToken(token, secret, {
-        generation,
-      });
-      if (!verified.valid) return refuse();
+      // A revoked link stops here, before its target is resolved: resolving is
+      // a trusted read of the draft that may run the application's preview
+      // callback and read hooks, and a revoked link must not keep setting that
+      // work off. Not counted; the count is taken last, below.
+      const links = config.links ?? (await loadDefaults()).defaultLinkChecks;
+      const link = verifiedLink(verified);
+      if (!(await links.live(link))) return refuse();
 
       // Everything that can fail happens before draft mode is enabled, so the
-      // request is never given a session it is then refused. A lookup here is
-      // the likeliest thing to reject: a link outlives what it points at, and
-      // the entry can be deleted between minting and clicking. Answering that
-      // with a 500 while every other failure answers 404 is what would make the
-      // endpoint an oracle again — a stranger could tell an entry that once
-      // existed from one that never did.
-      let target: string | null;
-      try {
-        const redirectTo =
-          config.redirectTo ?? (await loadDefaults()).defaultRedirectTo;
-        target = await redirectTo(verified.scope, {
-          requestOrigin: new URL(request.url).origin,
-        });
-      } catch {
-        return refuse();
-      }
-      if (target === null) return refuse();
-
-      const location = siteRelativeTarget(target, request.url);
+      // request is never given a session it is then refused.
+      const location = await previewLocation(
+        config.redirectTo ??
+          (async (scope, context) =>
+            (await loadDefaults()).defaultRedirectTo(scope, context)),
+        verified.scope,
+        request.url
+      );
       if (location === null) return refuse();
+
+      // Last of the checks, so a link refused for any other reason is not
+      // counted as opened. Asked again rather than trusted from the check
+      // above: the count and its check are one statement, so a revocation
+      // landing in between is not missed.
+      if (!(await links.opened(link))) return refuse();
 
       const response = new Response(null, {
         status: 307,
@@ -285,6 +375,11 @@ export interface PreviewScopeReaderConfig {
   cookies?: () =>
     | { get: (name: string) => { value: string } | undefined }
     | Promise<{ get: (name: string) => { value: string } | undefined }>;
+  /**
+   * What the link's own record says; see {@link PreviewRouteConfig.links}.
+   * Defaults to the recorded-links store.
+   */
+  links?: PreviewLinkChecks;
 }
 
 /** What a verified preview cookie says about the request carrying it. */
@@ -339,6 +434,12 @@ export async function readPreviewSession(
     generation,
   });
   if (!verified.valid) return null;
+
+  // Asked on every render, not only when the link was opened, so revoking one
+  // link ends a session already in flight.
+  const links = config.links ?? (await loadDefaults()).defaultLinkChecks;
+  if (!(await links.live(verifiedLink(verified)))) return null;
+
   return {
     scope: verified.scope,
     ...(verified.minter === undefined ? {} : { minter: verified.minter }),

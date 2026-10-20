@@ -39,14 +39,17 @@
  * ```
  */
 
+import type { AccessTarget } from "../../../auth/access/decide";
+import { buildRuleContext } from "../../../auth/access/rule-context";
 import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
 import {
   hasPermission,
   isSuperAdmin,
-  listEffectivePermissions,
+  listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../../services/lib/permissions";
+import { consoleLogger } from "../../../shared/types";
 
 import type {
   AccessControlContext,
@@ -111,7 +114,39 @@ export class RBACAccessControlService {
   getRegisteredAccess(
     slug: string
   ): CollectionAccessControl | SingleAccessControl | undefined {
-    return this.collectionAccessMap.get(slug) ?? this.singleAccessMap.get(slug);
+    return this.getRegisteredTarget(slug)?.access;
+  }
+
+  /**
+   * The collection or Single registered under `slug`, with its code-defined
+   * access: what a rule is told it is judging. Checks collections first, then
+   * Singles, as {@link getRegisteredAccess} does, since it is derived from
+   * this.
+   */
+  getRegisteredTarget(slug: string): AccessTarget | undefined {
+    const collection = this.collectionAccessMap.get(slug);
+    if (collection) return { kind: "collection", slug, access: collection };
+    const single = this.singleAccessMap.get(slug);
+    if (single) return { kind: "single", slug, access: single };
+    return undefined;
+  }
+
+  /**
+   * The target a rule for `resource` judges: the registered one, with an
+   * explicitly given access object in place of its own where one is passed.
+   * A slug nothing registered is a collection, since a Single's rules are
+   * always registered.
+   */
+  private targetFor(
+    resource: string,
+    codeAccess?: CollectionAccessControl | SingleAccessControl
+  ): AccessTarget {
+    const registered = this.getRegisteredTarget(resource);
+    return {
+      kind: registered?.kind ?? "collection",
+      slug: resource,
+      access: codeAccess ?? registered?.access,
+    };
   }
 
   /**
@@ -152,10 +187,10 @@ export class RBACAccessControlService {
       return true;
     }
 
-    const codeAccess = params.codeAccess ?? this.getRegisteredAccess(resource);
+    const target = this.targetFor(resource, params.codeAccess);
 
     const operationAccess =
-      codeAccess?.[
+      target.access?.[
         operation as keyof (CollectionAccessControl | SingleAccessControl)
       ];
 
@@ -168,16 +203,17 @@ export class RBACAccessControlService {
         const ctx = await this.buildContext(
           userId,
           operation,
-          resource,
+          target,
+          operationAccess,
           executor
         );
         try {
           return await operationAccess(ctx);
         } catch (error) {
           // Code access function threw — fail-secure
-          console.error(
-            `[rbac] Code access function for ${operation}:${resource} threw:`,
-            error
+          consoleLogger.error(
+            `[rbac] Code access function for ${operation}:${resource} threw`,
+            { error: error }
           );
           return false;
         }
@@ -187,19 +223,6 @@ export class RBACAccessControlService {
     return hasPermission(userId, operation, resource, executor);
   }
 
-  /**
-   * Build the full access control context for code-defined functions.
-   *
-   * Resolves role slugs and effective permissions from the database.
-   * This is only called when a code-defined access function needs
-   * the full context — simple boolean checks and DB permission
-   * fallbacks skip this entirely.
-   *
-   * @param userId - The authenticated user's ID
-   * @param operation - The CRUD operation
-   * @param resource - The collection/single slug
-   * @returns Fully resolved AccessControlContext
-   */
   /**
    * A collection's code-defined rule, judged for a caller with NO session.
    *
@@ -270,9 +293,9 @@ export class RBACAccessControlService {
     principal: Principal | null
   ): Promise<boolean | undefined> {
     const { operation, resource } = params;
-    const codeAccess = params.codeAccess ?? this.getRegisteredAccess(resource);
+    const target = this.targetFor(resource, params.codeAccess);
     const rule =
-      codeAccess?.[
+      target.access?.[
         operation as keyof (CollectionAccessControl | SingleAccessControl)
       ];
 
@@ -281,46 +304,54 @@ export class RBACAccessControlService {
     if (typeof rule !== "function") return undefined;
 
     try {
-      return await rule({
-        user: null,
-        roles: [],
-        permissions: [],
-        principal,
-        operation,
-        collection: resource,
-      });
+      return await rule(
+        buildRuleContext(
+          rule,
+          { user: null, roles: [], permissions: [], principal },
+          { operation, target: { kind: target.kind, slug: target.slug } }
+        )
+      );
     } catch (error) {
       // Fail-secure, exactly as the authenticated path does. A rule that threw
       // did not allow anything.
-      console.error(
-        `[rbac] Code access function for ${operation}:${resource} threw:`,
-        error
+      consoleLogger.error(
+        `[rbac] Code access function for ${operation}:${resource} threw`,
+        { error: error }
       );
       return false;
     }
   }
 
+  /**
+   * The context a staff user's rule is handed, with the user's roles and
+   * permissions resolved from the database. Only called when a rule function
+   * is about to run, so a boolean rule and a permission check skip the
+   * lookups entirely.
+   */
   async buildContext(
     userId: string,
     operation: AccessOperation,
-    resource: string,
+    target: AccessTarget,
+    rule: object,
     // Optional transaction-bound executor so the role/permission reads run on the
     // caller's transaction connection instead of the pool; see `checkAccess`.
     executor?: unknown
   ): Promise<AccessControlContext> {
-    const [roleSlugs, permissions] = await Promise.all([
+    const [roleSlugs, grants] = await Promise.all([
       listRoleSlugsForUser(userId, executor),
-      listEffectivePermissions(userId, executor),
+      listEffectiveGrants(userId, executor),
     ]);
 
-    return {
-      user: { id: userId },
-      roles: roleSlugs,
-      permissions,
-      // A staff user is never a plugin-defined person.
-      principal: null,
-      operation,
-      collection: resource,
-    };
+    return buildRuleContext(
+      rule,
+      {
+        user: { id: userId },
+        roles: roleSlugs,
+        permissions: grants,
+        // A staff user is never a plugin-defined person.
+        principal: null,
+      },
+      { operation, target: { kind: target.kind, slug: target.slug } }
+    );
   }
 }

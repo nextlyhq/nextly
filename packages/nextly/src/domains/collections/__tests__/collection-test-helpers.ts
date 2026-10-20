@@ -264,12 +264,19 @@ export function createMockCollectionService(
  * have to say so.
  */
 export function createMockRbacAccessControlService(): MockRecord {
+  const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {
     checkAccess: vi.fn().mockResolvedValue(true),
     // Answers `undefined`: no code-defined rule governs the operation, so an
     // anonymous caller falls through to the public default.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    getRegisteredAccess,
+    // Derived from `getRegisteredAccess`, as the service derives it, so a rule a test
+    // registers there reaches every caller that asks for the target.
+    getRegisteredTarget: (slug: string) => {
+      const access: unknown = getRegisteredAccess(slug);
+      return access ? { kind: "collection", slug, access } : undefined;
+    },
   };
 }
 
