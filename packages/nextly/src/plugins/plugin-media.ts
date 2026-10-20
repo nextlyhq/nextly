@@ -156,10 +156,25 @@ const MEDIA_WRITES = {
 >;
 
 /**
+ * Whether `named` is someone other than `own`. An id is compared only when
+ * both carry one: `{ type: "user" }` names no one else, and a key's own id is
+ * not known here.
+ */
+function namesAnother(
+  named: RequestActor | undefined,
+  own: RequestActor | undefined
+): boolean {
+  if (!named) return false;
+  if (!own || named.type !== own.type) return true;
+  return named.id !== undefined && own.id !== undefined && named.id !== own.id;
+}
+
+/**
  * The actor a write records. A trusted write records whatever the plugin
  * named, as before. A checked write records its caller, and refuses an actor
- * naming anyone else. A key carries no id the caller can be matched on, so a
- * named key is matched by kind alone; the actor recorded is still the caller's.
+ * naming anyone else. An actor naming only the caller's kind is the caller, and
+ * a key carries no id the caller can be matched on, so a named key is matched
+ * by kind alone; the actor recorded is still the caller's.
  */
 function actorFor(
   name: keyof PluginMediaWrites,
@@ -169,8 +184,7 @@ function actorFor(
 ): RequestActor | undefined {
   if (!caller) return named;
   const own = directApiActor({}, config);
-  const sameKind = !named || (own !== undefined && named.type === own.type);
-  if (!sameKind || (own?.id !== undefined && named && named.id !== own.id)) {
+  if (namesAnother(named, own)) {
     throw NextlyError.forbidden({
       logContext: {
         reason: "checked-media-write-names-another-actor",

@@ -147,7 +147,10 @@ export function directApiActor(
   defaultConfig: DirectAPIConfig,
   args: DirectAPIConfig
 ): RequestActor | undefined {
-  const config = mergeConfig(defaultConfig, args);
+  // Read as the access check reads the call (`suppliedByCall`): a call naming a
+  // user without a key is that person, not the instance's key, so the record
+  // names whoever the check judged.
+  const config = mergeConfig(defaultConfig, suppliedByCall(args));
   if (config.actor?.actorType === "apiKey") return { type: "apiKey" };
 
   const id = config.user?.id;
