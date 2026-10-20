@@ -10,7 +10,6 @@
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { NextlyError } from "../../../../errors";
 import type { Operation } from "../diff/types";
 import type {
   Classifier,
@@ -22,6 +21,7 @@ import {
   type ClassifierEvent,
 } from "../resolution/types";
 
+import { narrowingRefusal } from "./narrowing-refusal";
 import { buildPerDialectWarning } from "./type-warnings";
 import { isWideningChange, stringNarrowingLimit } from "./type-widening";
 
@@ -91,25 +91,13 @@ export class RealClassifier implements Classifier {
             limit
           );
           if (longer === 0) continue;
-          throw NextlyError.validation({
-            errors: [
-              {
-                path: `schema.${op.tableName}.${op.columnName}`,
-                code: "NARROWING_WOULD_TRUNCATE",
-                message:
-                  `${op.tableName}.${op.columnName} cannot become ${op.toType}: ` +
-                  `${String(longer)} row(s) hold a value longer than ${String(limit)} characters. ` +
-                  `Shorten those values, or give the field a type that holds them (a textarea, ` +
-                  `or a larger maxLength), then apply again.`,
-              },
-            ],
-            logContext: {
-              table: op.tableName,
-              column: op.columnName,
-              fromType: op.fromType,
-              toType: op.toType,
-              longer,
-            },
+          throw narrowingRefusal({
+            tableName: op.tableName,
+            columnName: op.columnName,
+            fromType: op.fromType,
+            toType: op.toType,
+            limit,
+            longer,
           });
         }
         if (!widening) {

@@ -28,6 +28,8 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { countLongerThan } from "../classifier/count-helpers";
+import { narrowingRefusal } from "../classifier/narrowing-refusal";
 import { stringNarrowingLimit } from "../classifier/type-widening";
 import {
   isPreResolutionOp,
@@ -88,6 +90,7 @@ export async function executePreResolutionOps(
   // run, and the column is left renamed and unconverted with nothing able to take it back. The only
   // safe moment to discover that the data will not convert is before the first statement.
   await assertConversionsAreSafe(txOrDb, ordered, dialect);
+  await assertNarrowingsFit(txOrDb, ordered, dialect);
 
   for (const statement of leadingStatements) {
     await runRaw(txOrDb, statement, dialect);
@@ -95,7 +98,10 @@ export async function executePreResolutionOps(
 
   for (const op of ordered) {
     if (isMysqlStringNarrowing(op, dialect)) {
-      await runInStrictMysqlSession(txOrDb, generateSQL(op, dialect));
+      await runInStrictMysqlSession(
+        txOrDb,
+        generateSQL(withLiveNullability(op), dialect)
+      );
       continue;
     }
     for (const statement of statementsForOp(op, dialect)) {
@@ -119,7 +125,11 @@ export async function executePreResolutionOps(
   for (const op of ordered) {
     if (op.type !== "rename_column") continue;
     for (const conversion of conversionForRename(op, dialect)) {
-      await runRaw(txOrDb, generateSQL(conversion, dialect), dialect);
+      if (isMysqlStringNarrowing(conversion, dialect)) {
+        await runInStrictMysqlSession(txOrDb, generateSQL(conversion, dialect));
+      } else {
+        await runRaw(txOrDb, generateSQL(conversion, dialect), dialect);
+      }
     }
   }
 
@@ -330,6 +340,82 @@ function isMysqlStringNarrowing(
     op.conversion === undefined &&
     stringNarrowingLimit(op.fromType, op.toType, dialect) !== null
   );
+}
+
+/**
+ * Refuses the apply, before any statement runs, when a MySQL string narrowing it is about to make
+ * would cut a stored value short: its own narrowings, and the type change a confirmed rename
+ * carries. The classifier counts the first kind already, but a rename reached it as a drop and an
+ * add, with no type change to count; asked here, every narrowing is counted where the values still
+ * sit, under the table and column names they have before any rename runs. MySQL commits each
+ * statement as it runs, so a refusal found after the first one would leave it behind.
+ */
+async function assertNarrowingsFit(
+  txOrDb: unknown,
+  ordered: readonly Operation[],
+  dialect: SupportedDialect
+): Promise<void> {
+  if (dialect !== "mysql") return;
+  const tableBeforeRename = new Map<string, string>();
+  for (const op of ordered) {
+    if (op.type === "rename_table")
+      tableBeforeRename.set(op.toName, op.fromName);
+  }
+  const liveTable = (name: string) => tableBeforeRename.get(name) ?? name;
+
+  const checks: Array<{ op: Operation; table: string; column: string }> = [];
+  for (const op of ordered) {
+    if (
+      isMysqlStringNarrowing(op, dialect) &&
+      op.type === "change_column_type"
+    ) {
+      checks.push({
+        op,
+        table: liveTable(op.tableName),
+        column: op.columnName,
+      });
+    } else if (op.type === "rename_column") {
+      for (const conversion of conversionForRename(op, dialect)) {
+        if (isMysqlStringNarrowing(conversion, dialect)) {
+          checks.push({
+            op: conversion,
+            table: liveTable(op.tableName),
+            column: op.fromColumn,
+          });
+        }
+      }
+    }
+  }
+  for (const { op, table, column } of checks) {
+    if (op.type !== "change_column_type") continue;
+    const limit = stringNarrowingLimit(op.fromType, op.toType, dialect);
+    if (limit === null) continue;
+    const longer = await countLongerThan(txOrDb, dialect, table, column, limit);
+    if (longer > 0) {
+      throw narrowingRefusal({
+        tableName: table,
+        columnName: column,
+        fromType: op.fromType,
+        toType: op.toType,
+        limit,
+        longer,
+      });
+    }
+  }
+}
+
+/**
+ * A narrowing restated with the nullability the column has now. MySQL's MODIFY restates the whole
+ * definition, so the diff's operation carries the target nullability; run here, ahead of the
+ * pre-cleanup that fills or removes the NULLs a NOT NULL would refuse, it would fail on exactly the
+ * rows the operator chose to resolve. The column keeps what it has, and the NOT NULL is left to
+ * the route that runs after the cleanup.
+ */
+function withLiveNullability(op: Operation): Operation {
+  if (op.type !== "change_column_type" || op.fromNullable === undefined) {
+    return op;
+  }
+  return { ...op, nullable: op.fromNullable };
 }
 
 /**
