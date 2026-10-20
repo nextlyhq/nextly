@@ -1,6 +1,6 @@
-import { POOL_WAIT_TIMEOUT_CODE } from "@nextlyhq/adapter-drizzle/types";
-
 import type { SupportedDialect } from "../types/database";
+
+import { POOL_WAIT_TIMEOUT_CODE } from "./pool-wait-code";
 
 // 🌟 Big Picture
 // This file is a translator for database errors.
