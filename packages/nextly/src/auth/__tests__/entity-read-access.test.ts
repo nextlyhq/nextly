@@ -5,10 +5,19 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { hasSpy, checkAccessSpy, registeredAccessSpy } = vi.hoisted(() => ({
-  hasSpy: vi.fn(),
-  checkAccessSpy: vi.fn(),
-  registeredAccessSpy: vi.fn(),
+const { hasSpy, checkAccessSpy, registeredAccessSpy, actorForUserSpy } =
+  vi.hoisted(() => ({
+    hasSpy: vi.fn(),
+    checkAccessSpy: vi.fn(),
+    registeredAccessSpy: vi.fn(),
+    actorForUserSpy: vi.fn(),
+  }));
+
+// A signed-in user's actor: their roles and grants, as one lookup resolves
+// them. Mocked so each case names the grants the decision reads.
+vi.mock("../access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<typeof import("../access/resolve-actor")>()),
+  actorForUser: actorForUserSpy,
 }));
 
 vi.mock("../../di/container", () => ({
@@ -27,6 +36,7 @@ vi.mock("../../di/container", () => ({
   },
 }));
 
+import { userActor } from "../access/actor";
 import { apiKeyScope } from "../authenticated-scope";
 import {
   canReadEntity,
@@ -56,6 +66,18 @@ const session: ReadAccessCaller = {
   permissions: [],
   roles: ["editor"],
 };
+
+/** The session user's actor, holding `read` on each of `slugs`. */
+const readerOf = (...slugs: string[]) =>
+  userActor({
+    userId: "u1",
+    roles: ["editor"],
+    permissions: slugs.map(slug => ({
+      slug: `read-${slug}`,
+      action: "read",
+      resource: slug,
+    })),
+  });
 
 describe("canReadEntity — API key callers", () => {
   beforeEach(() => {
@@ -192,21 +214,34 @@ describe("canReadEntity — session callers", () => {
     registeredAccessSpy.mockReturnValue(undefined);
   });
 
-  it("defers to the RBAC decision", async () => {
-    checkAccessSpy.mockResolvedValue(true);
+  it("allows a user whose grants hold the read, through the decision", async () => {
+    actorForUserSpy.mockResolvedValue(readerOf("posts"));
 
     await expect(canReadEntity("posts", session)).resolves.toBe(true);
+    expect(actorForUserSpy).toHaveBeenCalledWith("u1");
+    // With no rule declared there is nothing for the service to judge alone.
+    expect(checkAccessSpy).not.toHaveBeenCalled();
+  });
+
+  it("denies a user whose grants do not hold the read", async () => {
+    actorForUserSpy.mockResolvedValue(readerOf("pages"));
+
+    await expect(canReadEntity("posts", session)).resolves.toBe(false);
+  });
+
+  it("lets a declared read rule decide alone, its answer handed back as given", async () => {
+    // Kept as today: the service asks the rule once, whatever the grants,
+    // and its answer comes back as the rule gave it.
+    actorForUserSpy.mockResolvedValue(readerOf());
+    registeredAccessSpy.mockReturnValue({ read: () => true });
+    checkAccessSpy.mockResolvedValue(null);
+
+    await expect(canReadEntity("posts", session)).resolves.toBeNull();
     expect(checkAccessSpy).toHaveBeenCalledWith({
       userId: "u1",
       operation: "read",
       resource: "posts",
     });
-  });
-
-  it("denies when RBAC denies", async () => {
-    checkAccessSpy.mockResolvedValue(false);
-
-    await expect(canReadEntity("posts", session)).resolves.toBe(false);
   });
 });
 
@@ -242,6 +277,7 @@ describe("readableEntities", () => {
     hasSpy.mockReturnValue(true);
     registeredAccessSpy.mockReturnValue(undefined);
     checkAccessSpy.mockResolvedValue(true);
+    actorForUserSpy.mockResolvedValue(readerOf("posts", "pages", "broken"));
   });
 
   it("denies only the slug whose check THREW, not the whole set", async () => {
@@ -250,11 +286,11 @@ describe("readableEntities", () => {
     // dashboard's readable resources, the widget layout, the workspace payload
     // -- into an error rather than a narrower answer. A check that threw has
     // told us nothing, and "nothing" must not read as "allowed" either.
-    checkAccessSpy.mockImplementation(({ resource }: { resource: string }) =>
-      resource === "broken"
-        ? Promise.reject(new Error("rbac unreachable"))
-        : Promise.resolve(true)
+    // `broken` declares a read rule, so the service judges it, and fails.
+    registeredAccessSpy.mockImplementation((slug: string) =>
+      slug === "broken" ? { read: () => true } : undefined
     );
+    checkAccessSpy.mockRejectedValue(new Error("rbac unreachable"));
 
     const allowed = await readableEntities(
       ["posts", "broken", "pages"],
@@ -270,7 +306,7 @@ describe("readableEntities", () => {
     // a dashboard offering two cards per collection names each one twice.
     await readableEntities(["posts", "posts", "posts"], session);
 
-    expect(checkAccessSpy).toHaveBeenCalledTimes(1);
+    expect(actorForUserSpy).toHaveBeenCalledTimes(1);
   });
 
   it("still returns what the caller may read", async () => {

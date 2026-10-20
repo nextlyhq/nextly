@@ -24,7 +24,7 @@ service user-without read collection true at website  # rule-alone-for-people
 service user-without read collection true at route  # rule-alone-for-people
 service user-without read collection true at can
 service user-without read collection true at service  # rule-alone-for-people
-service user-without read collection true at entity
+service user-without read collection true at entity  # rule-alone-for-people
 service user-without create collection true at rest
 service user-without create collection true at direct  # rule-alone-for-people
 service user-without create collection true at route  # rule-alone-for-people
@@ -82,7 +82,7 @@ service user-without read collection returns-true at website  # rule-alone-for-p
 service user-without read collection returns-true at route  # rule-alone-for-people
 service user-without read collection returns-true at can
 service user-without read collection returns-true at service  # rule-alone-for-people
-service user-without read collection returns-true at entity
+service user-without read collection returns-true at entity  # rule-alone-for-people
 service user-without create collection returns-true at rest
 service user-without create collection returns-true at direct  # rule-alone-for-people
 service user-without create collection returns-true at route  # rule-alone-for-people
@@ -135,19 +135,19 @@ service visitor read collection returns-null at direct  # visitor-public-default
 service visitor read collection returns-null at website  # visitor-public-default
 service visitor read collection returns-null at service  # visitor-public-default
 service user-with read collection returns-null at can
-service user-with read collection returns-null at entity
+service user-with read collection returns-null at entity  # rule-alone-for-people
 service user-with read collection returns-null at schema
 service user-without read collection returns-null at can
-service user-without read collection returns-null at entity
+service user-without read collection returns-null at entity  # rule-alone-for-people
 service custom-role read collection returns-null at can
-service custom-role read collection returns-null at entity
+service custom-role read collection returns-null at entity  # rule-alone-for-people
 service custom-role read collection returns-null at schema
 service key-read-only read collection returns-null at schema
 service key-full-access read collection returns-null at schema
 service key-role-based read collection returns-null at schema
 service key-super-admin read collection returns-null at schema
 service user-partial read collection returns-null at can
-service user-partial read collection returns-null at entity
+service user-partial read collection returns-null at entity  # rule-alone-for-people
 service user-partial read collection returns-null at schema
 service key-partial read collection returns-null at schema
 service user-with create collection returns-null at can
@@ -174,19 +174,19 @@ service visitor read collection returns-undefined at direct  # visitor-public-de
 service visitor read collection returns-undefined at website  # visitor-public-default
 service visitor read collection returns-undefined at service  # visitor-public-default
 service user-with read collection returns-undefined at can
-service user-with read collection returns-undefined at entity
+service user-with read collection returns-undefined at entity  # rule-alone-for-people
 service user-with read collection returns-undefined at schema
 service user-without read collection returns-undefined at can
-service user-without read collection returns-undefined at entity
+service user-without read collection returns-undefined at entity  # rule-alone-for-people
 service custom-role read collection returns-undefined at can
-service custom-role read collection returns-undefined at entity
+service custom-role read collection returns-undefined at entity  # rule-alone-for-people
 service custom-role read collection returns-undefined at schema
 service key-read-only read collection returns-undefined at schema
 service key-full-access read collection returns-undefined at schema
 service key-role-based read collection returns-undefined at schema
 service key-super-admin read collection returns-undefined at schema
 service user-partial read collection returns-undefined at can
-service user-partial read collection returns-undefined at entity
+service user-partial read collection returns-undefined at entity  # rule-alone-for-people
 service user-partial read collection returns-undefined at schema
 service key-partial read collection returns-undefined at schema
 service user-with create collection returns-undefined at can
@@ -226,7 +226,7 @@ service user-without read collection async-true at website  # rule-alone-for-peo
 service user-without read collection async-true at route  # rule-alone-for-people
 service user-without read collection async-true at can
 service user-without read collection async-true at service  # rule-alone-for-people
-service user-without read collection async-true at entity
+service user-without read collection async-true at entity  # rule-alone-for-people
 service user-without create collection async-true at rest
 service user-without create collection async-true at direct  # rule-alone-for-people
 service user-without create collection async-true at route  # rule-alone-for-people
@@ -297,7 +297,7 @@ service user-without read single true at rest
 service user-without read single true at direct  # rule-alone-for-people
 service user-without read single true at route  # rule-alone-for-people
 service user-without read single true at can
-service user-without read single true at entity
+service user-without read single true at entity  # rule-alone-for-people
 service user-without update single true at rest
 service user-without update single true at direct  # rule-alone-for-people
 service user-without update single true at route  # rule-alone-for-people
@@ -307,33 +307,33 @@ service user-without read single returns-true at rest
 service user-without read single returns-true at direct  # rule-alone-for-people
 service user-without read single returns-true at route  # rule-alone-for-people
 service user-without read single returns-true at can
-service user-without read single returns-true at entity
+service user-without read single returns-true at entity  # rule-alone-for-people
 service user-without update single returns-true at rest
 service user-without update single returns-true at direct  # rule-alone-for-people
 service user-without update single returns-true at route  # rule-alone-for-people
 service user-without update single returns-true at can
 service visitor read single returns-null at direct  # visitor-public-default
 service user-with read single returns-null at can
-service user-with read single returns-null at entity
+service user-with read single returns-null at entity  # rule-alone-for-people
 service user-without read single returns-null at can
-service user-without read single returns-null at entity
+service user-without read single returns-null at entity  # rule-alone-for-people
 service custom-role read single returns-null at can
-service custom-role read single returns-null at entity
+service custom-role read single returns-null at entity  # rule-alone-for-people
 service user-partial read single returns-null at can
-service user-partial read single returns-null at entity
+service user-partial read single returns-null at entity  # rule-alone-for-people
 service user-with update single returns-null at can
 service user-without update single returns-null at can
 service custom-role update single returns-null at can
 service user-partial update single returns-null at can
 service visitor read single returns-undefined at direct  # visitor-public-default
 service user-with read single returns-undefined at can
-service user-with read single returns-undefined at entity
+service user-with read single returns-undefined at entity  # rule-alone-for-people
 service user-without read single returns-undefined at can
-service user-without read single returns-undefined at entity
+service user-without read single returns-undefined at entity  # rule-alone-for-people
 service custom-role read single returns-undefined at can
-service custom-role read single returns-undefined at entity
+service custom-role read single returns-undefined at entity  # rule-alone-for-people
 service user-partial read single returns-undefined at can
-service user-partial read single returns-undefined at entity
+service user-partial read single returns-undefined at entity  # rule-alone-for-people
 service user-with update single returns-undefined at can
 service user-without update single returns-undefined at can
 service custom-role update single returns-undefined at can
@@ -343,7 +343,7 @@ service user-without read single async-true at rest
 service user-without read single async-true at direct  # rule-alone-for-people
 service user-without read single async-true at route  # rule-alone-for-people
 service user-without read single async-true at can
-service user-without read single async-true at entity
+service user-without read single async-true at entity  # rule-alone-for-people
 service user-without update single async-true at rest
 service user-without update single async-true at direct  # rule-alone-for-people
 service user-without update single async-true at route  # rule-alone-for-people
@@ -364,31 +364,31 @@ service principal read media none at population
 service principal-other read media none at population
 no-service visitor read collection none at direct  # visitor-public-default
 no-service user-with read collection none at can
-no-service user-with read collection none at entity
+no-service user-with read collection none at entity  # no-service
 no-service visitor read collection returns-true at direct  # visitor-public-default
 no-service user-with read collection returns-true at can
-no-service user-with read collection returns-true at entity
+no-service user-with read collection returns-true at entity  # no-service
 no-service visitor read collection returns-false at direct  # visitor-public-default
 no-service user-with read collection returns-false at rest
 no-service user-with read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at rest
 no-service key-role-based read collection returns-false at direct  # no-service
 no-service key-role-based read collection returns-false at can
-no-service key-role-based read collection returns-false at entity
+no-service key-role-based read collection returns-false at entity  # no-service
 no-service visitor read collection returns-null at direct  # visitor-public-default
 no-service user-with read collection returns-null at rest
 no-service user-with read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at rest
 no-service key-role-based read collection returns-null at direct  # no-service
 no-service key-role-based read collection returns-null at can
-no-service key-role-based read collection returns-null at entity
+no-service key-role-based read collection returns-null at entity  # no-service
 no-service visitor read single none at direct  # visitor-public-default
 no-service user-with read single none at can
-no-service user-with read single none at entity
+no-service user-with read single none at entity  # no-service
 no-service user-without read single none at direct  # no-service
 no-service visitor read single returns-true at direct  # visitor-public-default
 no-service user-with read single returns-true at can
-no-service user-with read single returns-true at entity
+no-service user-with read single returns-true at entity  # no-service
 no-service user-without read single returns-true at direct  # no-service
 no-service visitor read single returns-false at direct  # visitor-public-default
 no-service user-with read single returns-false at rest
@@ -397,7 +397,7 @@ no-service user-without read single returns-false at direct  # no-service
 no-service key-role-based read single returns-false at rest
 no-service key-role-based read single returns-false at direct  # no-service
 no-service key-role-based read single returns-false at can
-no-service key-role-based read single returns-false at entity
+no-service key-role-based read single returns-false at entity  # no-service
 no-service visitor read single returns-null at direct  # visitor-public-default
 no-service user-with read single returns-null at rest
 no-service user-with read single returns-null at direct  # no-service
@@ -405,7 +405,7 @@ no-service user-without read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at rest
 no-service key-role-based read single returns-null at direct  # no-service
 no-service key-role-based read single returns-null at can
-no-service key-role-based read single returns-null at entity
+no-service key-role-based read single returns-null at entity  # no-service
 no-service visitor read related none at population
 no-service visitor read related returns-true at population
 no-service visitor read related returns-false at population
@@ -584,9 +584,9 @@ service visitor read related publish-false at population
 # Readers handed a caller: a scope without its permission rows, a Direct API
 # user naming a role it does not hold, reads without the service of media
 # and users, and a trusted read bounded to its own collection.
-service key-without-rows read collection permission-spelling at entity
+service key-without-rows read collection permission-spelling at entity  # key-slug-string-match
 service key-without-rows read related permission-spelling at population
-service key-without-rows read single permission-spelling at entity
+service key-without-rows read single permission-spelling at entity  # key-slug-string-match
 service user-naming-super-admin read related async-false at population
 service user-naming-super-admin read related async-throws at population
 service user-naming-super-admin read related async-true at population
