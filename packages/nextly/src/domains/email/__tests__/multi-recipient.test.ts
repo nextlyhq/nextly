@@ -554,6 +554,32 @@ describe("several `to` addresses reach the provider", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("returns a split send's result when an action and the registry's own reporting both fail", async () => {
+    getFilterRegistry().setLogger({
+      error: () => {
+        throw new Error("log transport down");
+      },
+    });
+    let actions = 0;
+    getFilterRegistry().addAction(FilterSeams.EmailAfterSend, () => {
+      actions++;
+      throw new Error("action failed");
+    });
+    const { adapter, send } = mockAdapter();
+    const { service } = build(adapter);
+
+    const result = await service.send({
+      to: [A, B],
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ success: true, messageId: "m-1" });
+    // Each message's actions still ran.
+    expect(actions).toBe(2);
+  });
+
   it("sends the same address once when it is listed twice", async () => {
     const { adapter, send } = mockAdapter();
     const { service } = build(adapter);

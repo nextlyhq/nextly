@@ -676,7 +676,19 @@ export class EmailService extends BaseService {
         })
       );
     }
-    for (const value of deferred) await runAfterSend(value);
+    for (const value of deferred) {
+      // Every message has been handed over by now, so nothing an action or
+      // its reporting does can change what was sent. Contained per message,
+      // as a one-message send's are: a failure here would otherwise replace
+      // the send's result with an exception and skip the remaining actions.
+      try {
+        await runAfterSend(value);
+      } catch {
+        // The registry already isolates a failing action; reaching here
+        // means its own reporting failed too, and there is nowhere left to
+        // report it. The send's result stands.
+      }
+    }
 
     // One message is today's send, and its result is returned as it is.
     if (outcomes.length === 1) return outcomes[0];
