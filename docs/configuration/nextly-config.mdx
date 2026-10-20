@@ -237,7 +237,12 @@ Controls TypeScript type generation.
 | `outputFile` | `string` | `"./src/types/generated/nextly-types.ts"` | Path the generator writes types to. |
 | `declare` | `boolean` | `true` | Whether to add `declare module` blocks for runtime type inference. |
 
-Earlier versions wrote the default file as `payload-types.ts`. If your config doesn't set `outputFile` and that file is still there, the generator writes `nextly-types.ts` and turns `payload-types.ts` into a one-line re-export of it, so existing imports keep compiling. It tells you when it does. Change imports of `payload-types` to `nextly-types`, then delete the old file: a later release stops keeping it. A `payload-types.ts` that Nextly didn't generate is never changed. To keep the old name, set `outputFile` to it.
+Earlier versions wrote the default file as `payload-types.ts`. If your config doesn't set `outputFile` and that file is still there, the generator writes `nextly-types.ts` and leaves `payload-types.ts` as it is, telling you what to do with it:
+
+- **A one-line re-export of `nextly-types`**, which 0.0.2-alpha.67 and alpha.68 wrote: it still compiles. Change imports of `payload-types` to `nextly-types`, then delete it.
+- **Types an earlier version generated**: it's no longer updated. Unless it was generated with `--no-declare`, it declares `module "nextly"` as `nextly-types.ts` does, so the two clash and TypeScript may use the old types. Delete it and change imports of `payload-types` to `nextly-types`.
+
+A `payload-types.ts` that Nextly didn't generate is never changed. To keep the old name, set `outputFile` to it.
 
 ---
 
@@ -295,7 +300,7 @@ Every REST request is limited, the admin's included, and each is counted by who 
 
 - A signed-in session spends its own budget, per user and whatever address it comes from: by default five times `readLimit` and `writeLimit`, so the admin's parallel page loads never meet it. A session that does not verify, an expired or revoked one included, counts as carrying none.
 - An API key that resolves spends its own [`apiKeys.rateLimit`](#apikeys) budget, once per request. Invalid keys spend their address's budget, or with no address a ceiling of their own, so a flood of them can refuse a valid key sent under the same bound, and nothing else.
-- A plugin's signed-in person, on a route that asks for one, spends a budget of the session's size.
+- A plugin's signed-in person, on a route that asks for one, spends a budget of the session's size, whatever staff session or key the request also carries. A person who does not resolve costs the plugin's resolver a lookup, so failed resolutions are bounded as invalid keys are, per plugin: by a budget for that address the size of its own and apart from it, or with no address by a ceiling of their own the size of `unresolvedCeiling`. A flood of them can refuse a valid person of that plugin sent under the same bound, and nothing else.
 - Anything else spends its client address's `readLimit` or `writeLimit`. Without [`security.trustProxy`](#security) no address resolves, and such requests share `unresolvedCeiling` instead. It never refuses a session, a key or a sign-in, which the auth limits judge.
 
 The deprecated `defaultSkipAdminApi`, once the default `skip`, is still exported for an app that passes it to exempt `/admin/api/*`; a later release removes it.
@@ -308,7 +313,7 @@ The deprecated `defaultSkipAdminApi`, once the default `skip`, is still exported
 apiKeys?: { rateLimit?: { requestsPerHour?: number; windowMs?: number } };
 ```
 
-Per-key rate limit applied when a request authenticates with an API key (`Authorization: Bearer nx_live_...`). The global [`rateLimit`](#ratelimit) counts a request whose key resolves against this budget, once, rather than against its address. Session-cookie requests spend the global limit's session budget instead. Omitting this block falls back to built-in defaults.
+Per-key rate limit applied when a request authenticates with an API key (`Authorization: Bearer nx_live_...`). The global [`rateLimit`](#ratelimit) counts a request whose key resolves against this budget, once, rather than against its address. Session-cookie requests spend the global limit's session budget instead. Omitting this block falls back to built-in defaults. A key whose budget is spent is still looked up on each request before it is refused with `429`, so a client holding one costs a key lookup per request until its window resets.
 
 | Property | Type | Default | Description |
 |---|---|---|---|

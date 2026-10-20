@@ -29,11 +29,25 @@
  */
 
 import { SQL_RESERVED_KEYWORDS } from "../../collections/config/validate-config";
+import type { FieldStoragePrimitive } from "../../collections/fields/catalog";
 import { isVirtualField } from "../../collections/fields/virtual";
-import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
+import {
+  getFieldType,
+  isPluginFieldTypeOnSurface,
+} from "../../domains/schema/field-types/field-type-registry";
 import { RESERVED_PLUGIN_OPTION_KEYS } from "../../plugins/plugin-options";
 
 import type { UserConfig } from "./types";
+
+/**
+ * The users-surface plugin field types a config declares, which validation
+ * accepts before boot registers them: their names, or each name with the
+ * storage primitive it declares, which is what decides whether such a field
+ * can be unique.
+ */
+type ConfigUsersTypes =
+  | ReadonlySet<string>
+  | ReadonlyMap<string, FieldStoragePrimitive>;
 
 // ============================================================
 // Validation Error Types
@@ -209,22 +223,43 @@ const USER_EXT_OWN_COLUMNS: ReadonlySet<string> = new Set([
  * Why a field's `unique` cannot be honoured, or null when it can (or is off).
  *
  * A textarea is TEXT on MySQL and a multi-value select is JSON, and neither
- * takes a plain unique index on every dialect. One rule everywhere, rather
- * than a field that works on SQLite and stops `nextly migrate` elsewhere.
+ * takes a plain unique index on every dialect; nor does a plugin type stored
+ * as long text or JSON. One rule everywhere, rather than a field that works
+ * on SQLite and goes without its index, or stops `nextly migrate`, elsewhere.
  * The table's statements ask the same question, for definitions stored before
  * validation refused it.
  */
-export function userFieldUniqueRejection(field: {
-  type?: unknown;
-  hasMany?: unknown;
-  unique?: unknown;
-}): string | null {
+export function userFieldUniqueRejection(
+  field: {
+    type?: unknown;
+    hasMany?: unknown;
+    unique?: unknown;
+  },
+  configUsersTypes?: ConfigUsersTypes
+): string | null {
   if (field.unique !== true) return null;
   if (field.type === "textarea") {
     return "A textarea field cannot be unique: its column cannot carry a unique index on every database. Use a text field with a maxLength.";
   }
   if (field.type === "select" && field.hasMany === true) {
     return "A select field holding several values cannot be unique: its values are stored together, in one JSON column.";
+  }
+  // A plugin type on the users surface is stored as its declared primitive,
+  // so the primitive decides whether its column can be unique: from the
+  // registry once boot has registered it, else from the config declaring it.
+  const pluginType = typeof field.type === "string" ? field.type : undefined;
+  const storage = pluginType
+    ? isPluginFieldTypeOnSurface(pluginType, "users")
+      ? getFieldType(pluginType)?.storage
+      : configUsersTypes instanceof Map
+        ? configUsersTypes.get(pluginType)
+        : undefined
+    : undefined;
+  if (storage === "longText") {
+    return `A '${pluginType}' field cannot be unique: it is stored as long text, whose column cannot carry a unique index on every database.`;
+  }
+  if (storage === "json") {
+    return `A '${pluginType}' field cannot be unique: it is stored as JSON, whose column cannot carry a unique index.`;
   }
   return null;
 }
@@ -295,7 +330,7 @@ export function checkUserFieldType(
    * whose plugin has not been registered into the global registry yet (config is
    * validated at definition time, before boot registers `contributes.fieldTypes`).
    */
-  configUsersTypes?: ReadonlySet<string>
+  configUsersTypes?: ConfigUsersTypes
 ): UserFieldNameRejection | null {
   if (!type) {
     return {
@@ -373,7 +408,7 @@ function validateUserFieldType(
   field: Record<string, unknown>,
   path: string,
   errors: UserValidationError[],
-  configUsersTypes?: ReadonlySet<string>
+  configUsersTypes?: ConfigUsersTypes
 ): void {
   const rejection = checkUserFieldType(field.type, configUsersTypes);
   if (rejection) {
@@ -434,7 +469,7 @@ function validateUserSelectOptions(
 function validateUserFields(
   fields: unknown,
   errors: UserValidationError[],
-  configUsersTypes?: ReadonlySet<string>
+  configUsersTypes?: ConfigUsersTypes
 ): Set<string> {
   const fieldNames = new Set<string>();
 
@@ -464,7 +499,7 @@ function validateUserFields(
 
     validateUserFieldType(f, fieldPath, errors, configUsersTypes);
     validateUserFieldName(f.name, fieldPath, errors, seenNames);
-    const uniqueRejection = userFieldUniqueRejection(f);
+    const uniqueRejection = userFieldUniqueRejection(f, configUsersTypes);
     if (uniqueRejection) {
       errors.push({
         path: `${fieldPath}.unique`,
@@ -648,7 +683,7 @@ function validateAdminOptions(
  */
 export function validateUserConfig(
   config: UserConfig,
-  configUsersTypes?: ReadonlySet<string>
+  configUsersTypes?: ConfigUsersTypes
 ): UserValidationResult {
   const errors: UserValidationError[] = [];
 
@@ -691,7 +726,7 @@ export function validateUserConfig(
  */
 export function assertValidUserConfig(
   config: UserConfig,
-  configUsersTypes?: ReadonlySet<string>
+  configUsersTypes?: ConfigUsersTypes
 ): void {
   const result = validateUserConfig(config, configUsersTypes);
 

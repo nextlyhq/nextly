@@ -23,6 +23,9 @@ export const NEXTLY_ERROR_STATUS = {
   // every permission, and a client can recover by reloading, not by asking
   // an administrator for access.
   CSRF_FAILED: 403,
+  // First-administrator setup in production without the setup token that
+  // opens it: missing, wrong, expired, or a configured one too weak to accept.
+  SETUP_TOKEN_REQUIRED: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
   DUPLICATE: 409,

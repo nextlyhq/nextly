@@ -118,6 +118,22 @@ describe("a payload-types.ts left by the old default", () => {
     "}",
     "",
   ].join("\n");
+  /**
+   * The re-export 0.0.2-alpha.67 and alpha.68 wrote in place of a generated
+   * payload-types.ts, as it stands on disk, pointing at `target`. Spelled out
+   * rather than produced by the code under test, so the test holds what those
+   * releases actually left in projects.
+   */
+  const shimFrom = (target: string) =>
+    [
+      "/**",
+      " * Nextly's generated types are in nextly-types.ts. This file only",
+      " * re-exports them, so imports of payload-types keep compiling; a later",
+      " * release removes it. Import from nextly-types instead.",
+      " */",
+      `export * from "${target}";`,
+      "",
+    ].join("\n");
   const DEFAULT = DEFAULT_TYPESCRIPT_CONFIG.outputFile;
 
   function appWith(layout: string, dir: string, content: string): string {
@@ -130,49 +146,120 @@ describe("a payload-types.ts left by the old default", () => {
   const settle = (root: string, configured = DEFAULT) =>
     retireOldDefaultTypesFile(root, configured);
 
-  it("becomes a re-export of nextly-types.ts, so imports of either name get the current types", () => {
-    const root = appWith("src/app", "src/types/generated", GENERATED_HEADER);
+  describe("the re-export earlier releases wrote", () => {
+    it("is left as it is, and the run says it can be deleted once imports name nextly-types", () => {
+      const shim = shimFrom("./nextly-types.js");
+      const root = appWith("src/app", "src/types/generated", shim);
 
-    const notices = settle(root);
+      const notices = settle(root);
 
-    // One declaration of "nextly": a stale copy beside the new file would
-    // declare GeneratedTypes twice.
-    expect(oldFile(root)).not.toContain("declare module");
-    expect(oldFile(root)).toContain('export * from "./nextly-types.js";');
-    expect(notices).toHaveLength(1);
-    expect(notices[0]).toContain("src/types/generated/payload-types.ts");
-    expect(notices[0]).toContain("src/types/generated/nextly-types.ts");
-    expect(notices[0]).toMatch(/import/);
+      expect(oldFile(root)).toBe(shim);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toContain("src/types/generated/payload-types.ts");
+      expect(notices[0]).toContain("src/types/generated/nextly-types.ts");
+      expect(notices[0]).toMatch(/delete it/);
+      expect(notices[0]).toMatch(/nextly-types/);
+    });
+
+    it("is recognised when checked out with Windows line endings", () => {
+      const shim = shimFrom("./nextly-types.js").replace(/\n/g, "\r\n");
+      const root = appWith("src/app", "src/types/generated", shim);
+
+      const notices = settle(root);
+
+      expect(oldFile(root)).toBe(shim);
+      expect(notices[0]).toMatch(/only re-exports/);
+    });
+
+    it("is recognised at the old src/ path in an app without src/", () => {
+      const shim = shimFrom("../../../types/generated/nextly-types.js");
+      const root = appWith("app", "src/types/generated", shim);
+
+      const notices = settle(root);
+
+      expect(oldFile(root)).toBe(shim);
+      expect(notices[0]).toMatch(/only re-exports/);
+      expect(notices[0]).toContain("types/generated/nextly-types.ts");
+    });
   });
 
-  it("recognises the file the current generator writes", () => {
-    const generated = new TypeGenerator().generateTypesFile([]).code;
-    const root = appWith("src/app", "src/types/generated", generated);
+  describe("a payload-types.ts an earlier version generated", () => {
+    // Never turned into a re-export any more: a project that skipped the
+    // releases that wrote one is told to delete it instead.
+    it("is left as it is, and the run says it clashes and how to settle it", () => {
+      const root = appWith("src/app", "src/types/generated", GENERATED_HEADER);
 
-    settle(root);
+      const notices = settle(root);
 
-    expect(oldFile(root)).toContain('export * from "./nextly-types.js";');
-  });
+      expect(oldFile(root)).toBe(GENERATED_HEADER);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toContain("src/types/generated/payload-types.ts");
+      expect(notices[0]).toContain("src/types/generated/nextly-types.ts");
+      expect(notices[0]).toMatch(/delete/i);
+      expect(notices[0]).toMatch(/typescript\.outputFile/);
+    });
 
-  it("recognises a generated file checked out with Windows line endings", () => {
-    const root = appWith(
-      "src/app",
-      "src/types/generated",
-      GENERATED_HEADER.replace(/\n/g, "\r\n")
-    );
+    // `generate:types --no-declare` writes no augmentation, so such a file
+    // cannot clash with the new one; it is only stale.
+    it("is named stale, not clashing, when it was generated without the module declaration", () => {
+      const withoutDeclare = GENERATED_HEADER.replace(
+        /declare module "nextly" \{[^}]*\}\n/,
+        ""
+      );
+      expect(withoutDeclare).not.toContain("declare module");
+      const root = appWith("src/app", "src/types/generated", withoutDeclare);
 
-    settle(root);
+      const notices = settle(root);
 
-    expect(oldFile(root)).toContain('export * from "./nextly-types.js";');
-  });
+      expect(oldFile(root)).toBe(withoutDeclare);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatch(/no longer updated/);
+      expect(notices[0]).toMatch(/delete/i);
+      expect(notices[0]).not.toMatch(/clash/);
+    });
 
-  it("says nothing once it is already the re-export", () => {
-    const root = appWith("src/app", "src/types/generated", GENERATED_HEADER);
-    settle(root);
-    const reexport = oldFile(root);
+    it("is recognised as generated from what the current generator writes", () => {
+      const generated = new TypeGenerator().generateTypesFile([]).code;
+      const root = appWith("src/app", "src/types/generated", generated);
 
-    expect(settle(root)).toEqual([]);
-    expect(oldFile(root)).toBe(reexport);
+      const notices = settle(root);
+
+      expect(oldFile(root)).toBe(generated);
+      expect(notices[0]).toMatch(/generated/);
+      expect(notices[0]).not.toMatch(/was not written by Nextly/);
+    });
+
+    it("is recognised as generated with Windows line endings", () => {
+      const crlf = GENERATED_HEADER.replace(/\n/g, "\r\n");
+      const root = appWith("src/app", "src/types/generated", crlf);
+
+      const notices = settle(root);
+
+      expect(oldFile(root)).toBe(crlf);
+      expect(notices[0]).not.toMatch(/was not written by Nextly/);
+    });
+
+    it("is found beside the default in an app without src/", () => {
+      const root = appWith("app", "types/generated", GENERATED_HEADER);
+
+      const notices = settle(root);
+
+      expect(oldFile(root, "types/generated")).toBe(GENERATED_HEADER);
+      expect(notices[0]).toContain("types/generated/payload-types.ts");
+      expect(notices[0]).toContain("types/generated/nextly-types.ts");
+    });
+
+    it("is found at the old src/ path in an app without src/, where earlier versions wrote it", () => {
+      // Before generated paths followed the app's layout, the default's src/
+      // was written as it stands, even in an app whose code is at the root.
+      const root = appWith("app", "src/types/generated", GENERATED_HEADER);
+
+      const notices = settle(root);
+
+      expect(oldFile(root)).toBe(GENERATED_HEADER);
+      expect(notices[0]).toContain("src/types/generated/payload-types.ts");
+      expect(notices[0]).toContain("types/generated/nextly-types.ts");
+    });
   });
 
   it("leaves a file Nextly didn't write as it is, and warns about it", () => {
@@ -185,7 +272,7 @@ describe("a payload-types.ts left by the old default", () => {
     expect(notices).toHaveLength(1);
     expect(notices[0]).toContain("src/types/generated/payload-types.ts");
     expect(notices[0]).toContain("nextly-types.ts");
-    expect(notices[0]).not.toMatch(/moved/);
+    expect(notices[0]).toMatch(/was not written by Nextly/);
   });
 
   it("leaves a file that only quotes the generated header as it is", () => {
@@ -197,41 +284,17 @@ describe("a payload-types.ts left by the old default", () => {
     ].join("\n");
     const root = appWith("src/app", "src/types/generated", own);
 
-    settle(root);
+    const notices = settle(root);
 
     expect(oldFile(root)).toBe(own);
+    expect(notices[0]).toMatch(/was not written by Nextly/);
   });
 
-  it("is left alone when the project names its types file", () => {
+  it("is left alone, and nothing is said, when the project names its types file", () => {
     const root = appWith("src/app", "src/types/generated", GENERATED_HEADER);
 
     expect(settle(root, "./src/types/generated/payload-types.ts")).toEqual([]);
     expect(oldFile(root)).toBe(GENERATED_HEADER);
-  });
-
-  it("is found beside the default in an app without src/", () => {
-    const root = appWith("app", "types/generated", GENERATED_HEADER);
-
-    const notices = settle(root);
-
-    expect(oldFile(root, "types/generated")).toContain(
-      'export * from "./nextly-types.js";'
-    );
-    expect(notices[0]).toContain("types/generated/nextly-types.ts");
-  });
-
-  it("is found at the old src/ path in an app without src/, where earlier versions wrote it", () => {
-    // Before generated paths followed the app's layout, the default's src/
-    // was written as it stands, even in an app whose code is at the root.
-    const root = appWith("app", "src/types/generated", GENERATED_HEADER);
-
-    const notices = settle(root);
-
-    expect(oldFile(root)).toContain(
-      'export * from "../../../types/generated/nextly-types.js";'
-    );
-    expect(notices[0]).toContain("src/types/generated/payload-types.ts");
-    expect(notices[0]).toContain("types/generated/nextly-types.ts");
   });
 
   it("does nothing when there is no old file", () => {

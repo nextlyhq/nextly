@@ -5,7 +5,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, defineSingle, text } from "../../../config";
+import { defineCollection, defineSingle, select, text } from "../../../config";
+import { getVersionDiffForDocument } from "../../../dispatcher/handlers/versions-methods";
 import { restoreVersion } from "../restore-version";
 import {
   createTestNextly,
@@ -327,6 +328,81 @@ describe.each(getConfiguredTestDialects())(
       // newest English saves, plus German's published version.
       expect(rows).toHaveLength(4);
     });
+
+    it.each(["draft", "unpublished"])(
+      "keeps another language's latest version of a document without the lifecycle whose own status reads %s, and compares with it as published",
+      async word => {
+        // Without the lifecycle `status` is the document's own field, and a
+        // word the lifecycle also uses means nothing to it: every version was
+        // what that language's readers got.
+        current = await createTestNextly({
+          dialect,
+          collections: [
+            defineCollection({
+              slug: "journal",
+              localized: true,
+              versions: { drafts: false, maxPerDoc: 3 },
+              fields: [
+                text({ name: "title" }),
+                select({
+                  name: "status",
+                  options: [
+                    { label: "Draft", value: "draft" },
+                    { label: "Unpublished", value: "unpublished" },
+                  ],
+                }),
+              ],
+            }),
+          ],
+          localization,
+        });
+        const handler =
+          current.getService<CollectionsHandler>("collectionsHandler");
+        const save = (locale: string, title: string, id?: string) =>
+          id === undefined
+            ? handler.createEntry(
+                { collectionName: "journal", overrideAccess: true, locale },
+                { title, status: word }
+              )
+            : handler.updateEntry(
+                {
+                  collectionName: "journal",
+                  entryId: id,
+                  overrideAccess: true,
+                  locale,
+                },
+                { title, status: word }
+              );
+
+        const created = await save("en", "Hello");
+        const id = (created.data as { id: string }).id;
+        await save("de", "Hallo 1", id);
+        await save("de", "Hallo 2", id);
+        const german = (await versionsFor(current, "journal")).filter(
+          r => r.locale === "de"
+        );
+        expect(german.map(r => r.status)).toEqual([word, word]);
+
+        // The comparison finds German's latest version as what is published.
+        const diff = await getVersionDiffForDocument({
+          scopeKind: "collection",
+          slug: "journal",
+          entryId: id,
+          user: { id: "tester", roles: ["super-admin"] },
+          to: german[0].versionNo,
+          baseline: "published",
+        });
+        expect(diff.baseline).toMatchObject({
+          name: "published",
+          versionNo: german[1].versionNo,
+        });
+
+        // Saves in English, past the cap, keep German's latest version.
+        for (const n of [2, 3, 4, 5, 6]) await save("en", `Hello ${n}`, id);
+        const rows = await versionsFor(current, "journal");
+        expect(rows.map(r => r.versionNo)).toContain(german[1].versionNo);
+      }
+    );
 
     it("keeps another language's latest published version of a Single", async () => {
       // Singles record their versions through their own write path, so the rule
