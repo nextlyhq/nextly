@@ -26,6 +26,7 @@ import {
   installDependencies,
   nextlyPackagesToInstall,
 } from "./installers/dependencies";
+import { recordLaunchingPackageManager } from "./installers/package-manager-field";
 import {
   resolveTemplateSource,
   cleanupDownload,
@@ -611,6 +612,19 @@ export async function createNextly(
 
   if (skipInstall) {
     p.log.warn("Skipping dependency installation (--skip-install)");
+    // The person installs by hand next, so the version that launched this
+    // is recorded for that install, as the installer records it otherwise.
+    if (!isFreshProject) {
+      const recorded = await recordLaunchingPackageManager(
+        cwd,
+        projectInfo.packageManager
+      );
+      if (recorded) {
+        p.log.info(
+          `Set packageManager to ${recorded} in package.json, the version that ran this, so Corepack installs with it.`
+        );
+      }
+    }
   } else {
     const s = p.spinner();
     s.start("Installing dependencies...");

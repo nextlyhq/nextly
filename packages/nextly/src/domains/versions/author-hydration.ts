@@ -154,9 +154,14 @@ async function producersOfDocument(
 /**
  * People by id, in one query. A person's current name wins over the name an
  * event kept, as history showed it before events.
+ *
+ * The one lookup for naming a person on a read already granted: version
+ * history and the release list's owners both go through it, so the two can
+ * never name someone differently. A name and nothing else; someone who cannot
+ * be named (deleted, or a lookup that failed) is absent.
  */
-async function peopleById(
-  candidates: readonly (string | null)[]
+export async function peopleById(
+  candidates: readonly (string | null | undefined)[]
 ): Promise<Map<string, VersionAuthor>> {
   const ids = [
     ...new Set(
