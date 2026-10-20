@@ -63,7 +63,10 @@ import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
-import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import {
+  recordMutationEvent,
+  recordSingleSaveActivity,
+} from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
 import type {
@@ -525,6 +528,13 @@ export class SinglePublishAllService extends BaseService {
       versionNo: publishVersionNo,
     });
 
+    // A publish that moved nothing — no main lifecycle and no stored
+    // translation — has no content write for the caller to flush or prune, and
+    // nothing for the activity trail to record.
+    const committed = hasMainStatus || priorCompanionStatuses.size > 0;
+
+    await this.recordPublishActivity(tx, plan, committed);
+
     const eventRecorded = plan.recordingEnabled
       ? await this.recordPublishEvents(tx, {
           plan,
@@ -538,11 +548,30 @@ export class SinglePublishAllService extends BaseService {
 
     return {
       documentVanished: false,
-      // A publish that moved nothing — no main lifecycle and no stored
-      // translation — has no content write for the caller to flush or prune.
-      committed: hasMainStatus || priorCompanionStatuses.size > 0,
+      committed,
       eventRecorded,
     };
+  }
+
+  /**
+   * The publish's row in the activity trail: one for the whole publish, every
+   * language at once, so no language is named. Written outside the outbox
+   * gate, as a single save's row is: the trail holds on every install,
+   * webhooks or not. A publish that moved nothing records nothing.
+   */
+  private async recordPublishActivity(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    committed: boolean
+  ): Promise<void> {
+    if (!committed) return;
+    await recordSingleSaveActivity(tx, {
+      slug: plan.slug,
+      entryId: plan.existingDoc.id,
+      label: plan.singleMeta.label,
+      locale: null,
+      actor: plan.actor,
+    });
   }
 
   /**
