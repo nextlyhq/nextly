@@ -41,9 +41,23 @@ function byResource(abilities: ApiKeyAbility[]): Map<string, string[]> {
 }
 
 /**
+ * What the server refused, by the code its error carries. Both refusals are
+ * 403s with one sentence, so only the code tells a role above its creator
+ * ("choose a smaller one") from a viewer who may not create keys at all, as
+ * when that permission is taken while the form is open.
+ */
+const REFUSAL_MESSAGES: ReadonlyMap<string, string> = new Map([
+  [
+    "API_KEY_ROLE_ABOVE_CREATOR",
+    "You can't create a key with this role: it allows more than you can do.",
+  ],
+  ["FORBIDDEN", "You can no longer create API keys."],
+]);
+
+/**
  * The sentence shown instead of the list, or null when there is a list to
- * show. A 403 is the server refusing this key (a role above its creator), not
- * failing to answer, and says so.
+ * show. A refusal is the server saying no to this key or this viewer, not
+ * failing to answer, and says which.
  */
 function summaryMessage(state: {
   needsRole: boolean;
@@ -54,9 +68,11 @@ function summaryMessage(state: {
     return "Choose a role to see what this key will be able to do.";
   }
   if (state.error) {
-    return "status" in state.error && state.error.status === 403
-      ? "You can't create a key with this role: it allows more than you can do."
-      : "What this key can do couldn't be loaded.";
+    const code = "code" in state.error ? state.error.code : undefined;
+    return (
+      (typeof code === "string" ? REFUSAL_MESSAGES.get(code) : undefined) ??
+      "What this key can do couldn't be loaded."
+    );
   }
   if (state.abilities?.length === 0) {
     return "This key would be able to do nothing.";

@@ -20,26 +20,38 @@
  * @module hooks/queries/useReleases
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 
 import { toast } from "@admin/components/ui";
 import {
   addReleaseMember,
   cancelRelease,
   createRelease,
+  deleteRelease,
   fetchRelease,
   fetchReleaseBlockers,
   fetchReleaseMembers,
+  fetchReleasesReadiness,
   fetchReleases,
+  publishReleaseNow,
   removeReleaseMember,
   scheduleRelease,
 } from "@admin/services/releaseApi";
-import type {
-  AddReleaseMemberPayload,
-  CreateReleasePayload,
-  ReleaseDocumentRef,
-  ReleaseListParams,
-  ScheduleReleasePayload,
+import {
+  RELEASE_LIST_TABS,
+  type AddReleaseMemberPayload,
+  type CreateReleasePayload,
+  type ReleaseDocumentRef,
+  type ReleaseKind,
+  type ReleaseListParams,
+  type ReleaseListTab,
+  type ScheduleReleasePayload,
 } from "@admin/types/releases";
 
 export const releaseKeys = {
@@ -48,6 +60,8 @@ export const releaseKeys = {
   detail: (id: string) => ["releases", "detail", id] as const,
   members: (id: string) => ["releases", "members", id] as const,
   blockers: (id: string) => ["releases", "blockers", id] as const,
+  readiness: (ids: readonly string[], listReadAt: number) =>
+    ["release-page-readiness", [...ids], listReadAt] as const,
 };
 
 export function useReleases(params: ReleaseListParams = {}, enabled = true) {
@@ -74,6 +88,124 @@ export function useReleases(params: ReleaseListParams = {}, enabled = true) {
         ? PENDING_RELEASE_POLL_MS
         : NO_RELEASE_POLL_MS,
     refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * One page of one tab of the release list.
+ *
+ * The list's own read rather than {@link useReleases}, for one reason: while
+ * the next page or search of the SAME tab is being fetched it keeps showing
+ * the rows it has, so the table and its pager hold still instead of
+ * collapsing to a loading row on every page turn. Never across tabs: a tab
+ * showing another tab's releases, even for a moment, says something untrue
+ * about where they are, and offers a pager for a list it is not showing.
+ * Polled on the same two speeds as the rest of the releases screens, and for
+ * the same reason.
+ */
+export function useReleaseListPage(params: ReleaseListParams) {
+  return useQuery({
+    queryKey: releaseKeys.list(params),
+    queryFn: () => fetchReleases(params),
+    placeholderData: (previous, previousQuery) =>
+      sameTab(previousQuery?.queryKey[2], params) ? previous : undefined,
+    refetchInterval: data =>
+      hasPendingRelease(data.state.data)
+        ? PENDING_RELEASE_POLL_MS
+        : NO_RELEASE_POLL_MS,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/** Whether two list reads are of the same tab and the same part of it. */
+function sameTab(
+  previous: ReleaseListParams | undefined,
+  next: ReleaseListParams
+): boolean {
+  return (
+    previous !== undefined &&
+    previous.tab === next.tab &&
+    previous.reason === next.reason
+  );
+}
+
+/**
+ * How many releases each tab holds, under the same search and filter as the
+ * list.
+ *
+ * Read from each tab's own list total, asked for one row, so a count is
+ * always the number the tab would page through: the server applies the same
+ * rule to both, and there is no second way of counting here to disagree with
+ * it. The current tab's count is a separate request from its page for the
+ * same reason the page is polled: a count shown beside a tab must not depend
+ * on which tab happens to be open.
+ */
+export function useReleaseTabCounts(filters: {
+  search?: string;
+  kind?: ReleaseKind;
+}) {
+  const results = useQueries({
+    queries: RELEASE_LIST_TABS.map(tab => {
+      const params: ReleaseListParams = {
+        tab,
+        limit: 1,
+        ...(filters.search ? { search: filters.search } : {}),
+        ...(filters.kind ? { kind: filters.kind } : {}),
+      };
+      return {
+        queryKey: releaseKeys.list(params),
+        queryFn: () => fetchReleases(params),
+        placeholderData: keepPreviousData,
+        // A release moves between tabs on its own when its instant passes,
+        // so the counts are re-asked on the list's pending speed.
+        refetchInterval: PENDING_RELEASE_POLL_MS,
+        refetchOnWindowFocus: true,
+      };
+    }),
+  });
+  const counts = {} as Record<ReleaseListTab, number | undefined>;
+  RELEASE_LIST_TABS.forEach((tab, index) => {
+    counts[tab] = results[index]?.data?.meta.total;
+  });
+  return {
+    counts,
+    isPending: results.some(result => result.isPending),
+    isError: results.some(result => result.isError),
+    /** Ask every tab's count again, as a retry after a failure. */
+    refetch: () => {
+      for (const result of results) void result.refetch();
+    },
+  };
+}
+
+/**
+ * What the checks say about each release on a page, in one request.
+ *
+ * Asked again every time the list it describes is read again: `listReadAt` is
+ * that list's own read time, so the list's poll, or the refresh after an
+ * action, is what refreshes this too. A document can become invalid while the
+ * page stays open, and a release must not go on reading "Ready" after it
+ * stopped being so. No timer of its own: it follows the list's.
+ *
+ * Keyed outside the `releases` root for the same reason: invalidating that
+ * root re-reads the list, which moves `listReadAt`, which asks this once.
+ * Inside the root it would be asked twice. The previous answer stays on
+ * screen while the next one loads, so the column does not flicker on a poll.
+ * Its own key rather than the blockers', because the schedule dialog's
+ * preflight must never be answered from a cache, and this may be.
+ */
+export function useReleasesReadiness(
+  releaseIds: readonly string[],
+  listReadAt: number
+) {
+  return useQuery({
+    queryKey: releaseKeys.readiness(releaseIds, listReadAt),
+    queryFn: () => fetchReleasesReadiness(releaseIds),
+    enabled: releaseIds.length > 0,
+    placeholderData: keepPreviousData,
+    // Each list read makes a new key; one only the last read uses need not
+    // be kept long.
+    gcTime: 60_000,
   });
 }
 
@@ -318,6 +450,36 @@ export function useRemoveReleaseMember(releaseId: string) {
     onSuccess: () => {
       refresh(releaseId);
       toast.success("Removed from release.");
+    },
+  });
+}
+
+export function usePublishReleaseNow(id: string) {
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: () => publishReleaseNow(id),
+    onSuccess: result => {
+      refresh(id);
+      // The server's own sentence: a run can publish everything, stop
+      // part-way, or leave the rest to the runner, and only it knows which.
+      toast.success(result.message ?? "Release published.");
+    },
+  });
+}
+
+export function useDeleteRelease(id: string) {
+  const queryClient = useQueryClient();
+  const refresh = useRefreshRelease();
+  return useMutation({
+    ...NO_RETRY,
+    mutationFn: () => deleteRelease(id),
+    onSuccess: () => {
+      // Removed rather than refetched: the release is gone, and asking for it
+      // again would only answer 404.
+      queryClient.removeQueries({ queryKey: releaseKeys.detail(id) });
+      refresh();
+      toast.success("Release deleted.");
     },
   });
 }

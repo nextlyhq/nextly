@@ -73,7 +73,7 @@ export async function writeGeneratedTypesFile(
   const typesFilePath = generatedTypesFile(options.cwd, options.outputFile);
   await mkdir(dirname(typesFilePath), { recursive: true });
   await writeFile(typesFilePath, typesFile.code, "utf-8");
-  // After the new file exists, so the re-export never points at nothing.
+  // After the new file exists, so a message naming it names a real file.
   for (const notice of retireOldDefaultTypesFile(
     options.cwd,
     options.outputFile

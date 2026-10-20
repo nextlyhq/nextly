@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { packageVersion } from "../lib/package-version";
 import type { DatabaseConfig } from "../types";
 import { generatePackageJson } from "../utils/template";
 
@@ -35,10 +36,13 @@ describe("plugin peers in the scaffold's package.json", () => {
 
   it("declares @nextlyhq/plugin-sdk beside the form builder, on the same release", async () => {
     const pkg = JSON.parse(
-      await generatePackageJson("blog-app", sqlite, false, "blog")
+      await generatePackageJson("blog-app", sqlite, undefined, "blog")
     );
 
-    expect(pkg.dependencies["@nextlyhq/plugin-form-builder"]).toBe(`^${ALPHA}`);
+    // A scaffold on the default path declares this CLI's own release.
+    expect(pkg.dependencies["@nextlyhq/plugin-form-builder"]).toBe(
+      packageVersion()
+    );
     expect(pkg.dependencies["@nextlyhq/plugin-sdk"]).toBe(
       pkg.dependencies["@nextlyhq/plugin-form-builder"]
     );
@@ -46,7 +50,7 @@ describe("plugin peers in the scaffold's package.json", () => {
 
   it("leaves both out of a scaffold without the form builder", async () => {
     const pkg = JSON.parse(
-      await generatePackageJson("blank-app", sqlite, false, "blank")
+      await generatePackageJson("blank-app", sqlite, undefined, "blank")
     );
 
     expect(pkg.dependencies["@nextlyhq/plugin-form-builder"]).toBeUndefined();

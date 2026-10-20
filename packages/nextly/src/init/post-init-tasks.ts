@@ -15,6 +15,7 @@ import {
 import { getService } from "../di/register";
 import { warnAboutUnusableProviders } from "../domains/email/boot-check";
 import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
+import { ownershipFromConfig } from "../domains/email/template-ownership";
 import { provisionUserFieldStorage } from "../domains/users/services/provision-user-field-storage";
 
 /**
@@ -32,20 +33,16 @@ import { provisionUserFieldStorage } from "../domains/users/services/provision-u
  * Failures are caught and logged — they should never prevent Nextly from starting.
  */
 export async function runPostInitTasks(): Promise<void> {
-  // Seed built-in + plugin-contributed email templates (C2/D65). Idempotent by
-  // slug; plugin templates never clobber a built-in or an admin's edits.
+  // Reconcile email templates with their owners: core's built-ins, each
+  // running plugin's contributions, and what the site's code sets. Owned
+  // templates follow their owner until the site overrides them, and an edit
+  // made before ownership existed is kept as an override. Idempotent.
   try {
     const emailTemplateService = getService("emailTemplateService");
+    emailTemplateService.configureOwnership(
+      ownershipFromConfig(getService("config"))
+    );
     await emailTemplateService.ensureBuiltInTemplates();
-
-    const config = getService("config");
-    for (const plugin of config.plugins ?? []) {
-      if (plugin.enabled === false) continue;
-      const templates = plugin.contributes?.emailTemplates;
-      if (templates && templates.length > 0) {
-        await emailTemplateService.ensurePluginTemplates(templates);
-      }
-    }
   } catch {
     // Silently skip — email services may not be registered,
     // or the email_templates table may not exist yet (migrations not run)

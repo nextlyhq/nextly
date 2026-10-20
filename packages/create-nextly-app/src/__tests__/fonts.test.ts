@@ -242,7 +242,7 @@ describe("the scaffold installs the fonts its templates import", () => {
         await generatePackageJson(
           "font-fixture",
           { type: "sqlite" } as DatabaseConfig,
-          true,
+          { kind: "yalc", cliVersion: "0.0.2-alpha.40" },
           template,
           [
             path.join(TEMPLATES_ROOT, "base"),

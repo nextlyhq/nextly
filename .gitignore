@@ -55,15 +55,15 @@ coverage
 
 # Build Outputs
 .next/
-# Build directory for the browser suite's own dev server (see e2e/playwright.config.ts).
-.next-e2e/
-# And for the production exit demo, which builds rather than serving from source
-# (see e2e/playwright.production.config.ts). A separate directory because two
-# Next processes on one app fight over the same one.
-.next-e2e-prod/
-# And for the nightly Lighthouse run, which builds the playground for
-# production on its own port (see .github/workflows/lighthouse.yml).
-.next-lighthouse/
+# Every other Next build directory: the browser suite's own dev server
+# (.next-e2e, see e2e/playwright.config.ts), the production exit demo
+# (.next-e2e-prod), the nightly Lighthouse run (.next-lighthouse), and each
+# server a spec starts for itself (.next-<label>, see
+# e2e/support/playground-dev-server.ts). Ignored by one pattern rather than by
+# name, because Tailwind finds class names in every file git does not ignore:
+# a build directory it can see feeds it Next's binary cache, and the stylesheet
+# every running server of the app compiles stops parsing.
+.next-*/
 out/
 build
 dist

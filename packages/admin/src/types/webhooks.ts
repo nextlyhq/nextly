@@ -204,8 +204,10 @@ export interface ListDeliveriesParams {
 
 /**
  * Summary of one manual/scheduled drain pass (the `item` of the drain mutation
- * envelope). Mirrors the backend `RunDrainResult`.
+ * envelope). Mirrors the backend `RunDrainResult`, which the admin cannot
+ * import across the package boundary, so the two are alike by design.
  */
+// fallow-ignore-next-line code-duplication
 export interface RunDrainResult {
   rounds: number;
   eventsProcessed: number;
@@ -218,10 +220,12 @@ export interface RunDrainResult {
   /**
    * Rows retention removed on this pass. `events` and `deliveries` are the
    * webhook ledger; `activity` and `auth` are the audit trails, which the drain
-   * prunes on their own windows; `emailDeliveries` is the email delivery log
-   * and `oneTimeSecrets` plugins' expired one-purpose secrets. Reported
-   * separately rather than summed — they are different tables answering
-   * different questions.
+   * prunes on their own windows; `emailDeliveries` is the email delivery log,
+   * `oneTimeSecrets` plugins' expired one-purpose secrets, `previewLinks`
+   * recorded preview links long past their end, `notices` notices past the
+   * activity log's window, and `contentEvents` the content events of subjects
+   * deleted longer ago than that. Reported separately rather than summed —
+   * they are different tables answering different questions.
    */
   pruned: {
     events: number;
@@ -230,5 +234,8 @@ export interface RunDrainResult {
     auth: number;
     emailDeliveries: number;
     oneTimeSecrets: number;
+    previewLinks: number;
+    notices: number;
+    contentEvents: number;
   };
 }

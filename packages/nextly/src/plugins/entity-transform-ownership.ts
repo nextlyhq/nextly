@@ -38,6 +38,11 @@ import {
   type ColumnOrigin,
   type SupportedDialect,
 } from "../domains/schema/services/field-column-descriptor";
+import {
+  resolveCollectionTableName,
+  resolveComponentTableName,
+} from "../domains/schema/utils/resolve-table-name";
+import { resolveSingleTableName } from "../domains/singles/services/resolve-single-table-name";
 import { NextlyError } from "../errors/nextly-error";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import { validateFieldGroupConfig } from "../field-groups/config/validate-field-group";
@@ -362,11 +367,53 @@ function storageOf(
 }
 
 /**
- * The entity-level settings that decide its tables, as the desired schema
- * reads them: its table's name, the `status` column Draft/Published adds,
- * and the `_locales` companion localization adds.
+ * The entity-level settings that decide its tables: its table's name, the
+ * `status` column Draft/Published adds, and the `_locales` companion
+ * localization adds.
  */
 const TABLE_SETTINGS = ["dbName", "status", "localized"] as const;
+
+type TableSetting = (typeof TABLE_SETTINGS)[number];
+
+/**
+ * The table each kind's entity is stored in while it sets no `dbName`, by the
+ * resolvers the schema pipeline names tables with.
+ */
+const DEFAULT_TABLE_OF: Record<EntityKind, (slug: string) => string> = {
+  collection: slug => resolveCollectionTableName(slug),
+  single: slug => resolveSingleTableName({ slug }),
+  component: slug => resolveComponentTableName(slug),
+};
+
+/**
+ * The table settings as they are read, so a transform that restates them in
+ * an equivalent form changes nothing: `status` and `localized` are on only
+ * when `true`, so an explicit `false` reads as the unset setting it is, and
+ * an unset `dbName` reads as the name of the default table.
+ *
+ * A `dbName` that is set is compared as written. The schema pipeline
+ * resolves it, prefixing and normalizing it, but `i18n:restore` reads it
+ * verbatim to find the `_locales` companion: `orders` and `dc_orders` are one
+ * table to the first and two to the second. Only the default table's own
+ * name reads as that table everywhere.
+ */
+function tableSettingsOf(
+  kind: EntityKind,
+  slug: string,
+  definition: Record<string, unknown>
+): Record<TableSetting, unknown> {
+  const dbName = definition.dbName;
+  return {
+    // A blank slug names no default table, and is its own validation's to
+    // refuse: an unset `dbName` then stays unset rather than resolved.
+    dbName:
+      dbName === undefined && slug.trim() !== ""
+        ? DEFAULT_TABLE_OF[kind](slug)
+        : dbName,
+    status: definition.status === true,
+    localized: definition.localized === true,
+  };
+}
 
 /**
  * Who, other than the transforming plugin, keeps data in the entity's
@@ -391,10 +438,12 @@ function tableKeeper(
  * whose column or companion table holds data, while another plugin keeps
  * data there: its owner, or a plugin that added a field to it. The owner
  * moving its own table, or a plugin moving the app's, would carry that
- * plugin's stored values along.
+ * plugin's stored values along. Settings are compared as the pipeline reads
+ * them, so restating one in an equivalent form is not a change.
  */
 function assertTableKept(
   slug: string,
+  kind: EntityKind,
   ledger: OwnershipLedger,
   before: Record<string, unknown>,
   after: Record<string, unknown>,
@@ -402,8 +451,10 @@ function assertTableKept(
 ): void {
   const keeper = tableKeeper(ledger, plugin);
   if (keeper === undefined) return;
+  const was = tableSettingsOf(kind, slug, before);
+  const now = tableSettingsOf(kind, slug, after);
   const changed = TABLE_SETTINGS.find(
-    setting => !isDeepStrictEqual(before[setting], after[setting])
+    setting => !isDeepStrictEqual(was[setting], now[setting])
   );
   if (changed === undefined) return;
   throw refusal(
@@ -689,7 +740,7 @@ export function settleTransform(
   plugin: TransformingPlugin
 ): OwnershipLedger {
   const { slug, kind } = entity;
-  assertTableKept(slug, ledger, before, after, plugin);
+  assertTableKept(slug, kind, ledger, before, after, plugin);
   assertUniqueIndexesKept(slug, ledger, before, after, plugin);
   assertFieldsKept(slug, kind, ledger, before, after, plugin);
   const behaviour = settleBehaviour(slug, ledger, after, plugin);

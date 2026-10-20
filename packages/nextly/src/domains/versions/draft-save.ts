@@ -91,6 +91,8 @@ export async function storeDraftSave(
       createdBy: input.createdBy,
       locale: input.locale,
       label: "Before restore",
+      // A held draft exists only under the Draft/Published lifecycle.
+      lifecycle: true,
     });
   }
 
@@ -102,6 +104,7 @@ export async function storeDraftSave(
     locale: input.locale,
     sourceVersionNo: input.sourceVersionNo ?? null,
     maxPerDoc: input.maxPerDoc,
+    lifecycle: true,
   });
   return { versionNo };
 }

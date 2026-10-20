@@ -21,6 +21,7 @@ Before you ship, set the following:
 | `DATABASE_URL` | yes (Postgres / MySQL) | Database connection string. |
 | `NEXTLY_SECRET` | yes | JWT signing secret, **at least 32 characters**. Generate with `openssl rand -base64 32`. |
 | `NEXT_PUBLIC_APP_URL` | yes | The public URL of your deployment (used in client code and email links). |
+| `NEXTLY_SETUP_TOKEN` | no | The token that opens `/admin/setup` in production, at least 43 characters with at least 16 distinct ones. Unset, Nextly generates one and prints it to the server's output. See [The first administrator](#the-first-administrator). |
 | `NEXTLY_ALLOWED_ORIGINS` | self-hosted | Comma-separated additional CSRF origins: the origin browsers use whenever it differs from the address a self-hosted server listens on -- behind a proxy, by IP or hostname, or in a container (the origin check otherwise sees only that address, and refuses sign-in and plugin-route writes with `CSRF_FAILED`), plus any other origin such as a separate frontend domain. |
 
 Plus storage env vars if you're using cloud storage (see [Media & Storage](/docs/guides/media-storage)) and email env vars if you're using a real provider (see [Email](/docs/guides/email)).
@@ -209,6 +210,30 @@ Only turn `security.trustProxy` on when every request reaches Nextly through the
 
 If requests arrive with proxy headers that Nextly still cannot use, because `security.trustProxy` is unset or every address in the header is listed as a trusted proxy, Nextly logs one warning per process naming both settings.
 
+## The first administrator
+
+> **Needs the release after 0.0.2-alpha.68.** Before it, setup has no token and closes once the first account exists, and registration is open: create the first administrator before the site is reachable, or keep it behind your host's access protection until you have.
+
+A production install with no administrator does not hand setup to whoever reaches it first. Create the first administrator in one of two ways.
+
+**With the setup token**, in the browser:
+
+1. Find the token. Either set your own before deploying, `NEXTLY_SETUP_TOKEN` (generate one with `pnpm nextly setup-token --generate`), or let Nextly generate one: at the first production start it prints a line starting with `[nextly] SETUP TOKEN` to the server's output. On Vercel, search the deployment's runtime logs for that prefix.
+2. Open `/admin/setup` on the site, enter the token, and create the account.
+
+A generated token lasts 24 hours and one setup. If you lost it, `pnpm nextly setup-token`, run with the production environment, replaces it and prints the new one. The token is spent by the setup it opens, so nothing opens setup again afterwards.
+
+**From the command line**, with no browser and no token:
+
+```bash
+NEXTLY_ADMIN_PASSWORD='<your password>' \
+  pnpm nextly users:create-admin --email admin@example.com --name "Site Admin"
+```
+
+Run it with the production environment (`DATABASE_URL`, and `DB_DIALECT` if you set it), from your machine or a CI step. The password must be 8 to 128 characters with a lowercase letter, an uppercase letter, a number and a symbol. Without `NEXTLY_ADMIN_PASSWORD`, it prompts for the password at a terminal.
+
+Both refuse once an administrator exists. The details, the refusals and the rules the password must pass are in [Authentication](/docs/guides/authentication#the-first-administrator).
+
 ## Final checklist
 
 Before going live, verify:
@@ -220,6 +245,7 @@ Before going live, verify:
 - [ ] `NEXTLY_ALLOWED_ORIGINS` lists the origin browsers use whenever it differs from the address the self-hosted server listens on (behind a proxy, by IP or hostname, or in a container), and any additional CSRF origins (separate frontend domain, mobile bundle, etc.).
 - [ ] Storage adapter is configured for non-ephemeral filesystems (no local disk on serverless).
 - [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
+- [ ] The first administrator exists: created at `/admin/setup` with the setup token, or with `nextly users:create-admin`.
 - [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished).
 - [ ] The reverse proxy / load balancer terminates TLS and forwards real client headers.
 - [ ] `security.trustProxy` is `true` on Vercel or behind a proxy every request passes through, with `TRUSTED_PROXY_IPS` listing any hops in front of it (see [Client addresses and the auth rate limit](#client-addresses-and-the-auth-rate-limit)).

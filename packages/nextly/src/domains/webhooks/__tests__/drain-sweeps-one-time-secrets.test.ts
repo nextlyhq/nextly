@@ -20,6 +20,7 @@ import {
   EMAIL_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
+  PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
   type RetentionGateStore,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../retention/gate";
@@ -54,6 +55,10 @@ const DRAIN_PASS: Record<
   oneTimeSecrets: {
     input: { oneTimeSecrets: true },
     claims: ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
+  },
+  previewLinks: {
+    input: { previewLinks: true },
+    claims: PREVIEW_LINKS_RETENTION_DRAIN_GATE_KEY,
   },
 };
 
@@ -207,6 +212,44 @@ describe("the scheduled drain and plugins' one-purpose secrets", () => {
     expect(store.tables).not.toContain("nextly_one_time_secrets");
     expect(result.pruned.oneTimeSecrets).toBe(0);
     expect(released).toContain(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
+  });
+});
+
+describe("the scheduled drain and recorded preview links", () => {
+  it("leaves them their share behind a secrets backlog that never ends", async () => {
+    // Every secrets batch takes time and there is always another, so a sweep
+    // given the whole remainder would spend it all and the preview-links
+    // sweep after it would never start.
+    let clock = 0;
+    const tables: string[] = [];
+    const remove = async () => {
+      clock += 50;
+      return 500;
+    };
+    const adapter = {
+      select: async (table: string) => {
+        tables.push(table);
+        return Array.from({ length: 500 }, (_, i) => ({ id: `row-${i}` }));
+      },
+      delete: remove,
+      transaction: async (
+        fn: (tx: { delete: typeof remove }) => Promise<unknown>
+      ) => fn({ delete: remove }),
+    };
+
+    await drain(
+      {
+        oneTimeSecrets: true,
+        previewLinks: true,
+        prune: { adapter } as never,
+        gate: { claim: async () => true, release: async () => undefined },
+      },
+      () => new Date(clock),
+      1_000
+    );
+
+    expect(tables).toContain("nextly_one_time_secrets");
+    expect(tables).toContain("nextly_preview_links");
   });
 });
 

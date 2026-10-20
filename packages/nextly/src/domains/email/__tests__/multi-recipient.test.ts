@@ -129,6 +129,11 @@ const TEMPLATE = {
   replyTo: null,
   createdAt: new Date(),
   updatedAt: new Date(),
+  description: null,
+  owner: { kind: "site" },
+  overridden: false,
+  ownerChanged: false,
+  setInCode: false,
 } satisfies EmailTemplateRecord;
 
 /** A service that sends through `adapter`, and every surface over it. */
@@ -146,6 +151,9 @@ function build(adapter: EmailProviderAdapter) {
   } as unknown as EmailProviderService;
   const templateService = {
     getTemplateBySlug: vi.fn().mockResolvedValue(TEMPLATE),
+    resolveForSend: vi
+      .fn()
+      .mockResolvedValue({ template: TEMPLATE, preferCode: false }),
     getLayout: vi.fn(),
   } as unknown as EmailTemplateService;
   const recorded: Array<Record<string, unknown>> = [];
