@@ -13,27 +13,21 @@
  * @packageDocumentation
  */
 
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq } from "drizzle-orm";
-
 import {
   authorizeCallerForAny,
   isErrorResponse,
   type AuthContext,
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
-import { container } from "../../di/container";
 import {
   apiKeyPermissionsFor,
   type ApiKeyOperation,
 } from "../../domains/auth/api-key-policy";
 import {
-  apiKeyAsSeenBy,
+  apiKeyViewer,
   type ApiKeyMeta,
-  type ApiKeyService,
 } from "../../domains/auth/services/api-key-service";
 import { NextlyError } from "../../errors/nextly-error";
-import { isSuperAdmin } from "../../services/lib/permissions";
 import type {
   CheckAccessArgs,
   CheckApiKeyArgs,
@@ -401,64 +395,6 @@ export function createAccessNamespace(ctx: NextlyContext): AccessNamespace {
 }
 
 /**
- * Narrow structural view of the private `apiKeysTable` field on
- * `ApiKeyService`. The service does not expose a public method to look up a
- * key's owner by ID, so we reach into the table via this cast exclusively for
- * the trusted server-side ownership-resolution path used by
- * `apiKeys.update()` and `apiKeys.revoke()`.
- */
-interface ApiKeyServicePrivateTable {
-  readonly apiKeysTable: {
-    readonly id: unknown;
-    readonly userId: unknown;
-  };
-}
-
-/**
- * Resolve the owner userId of an API key. Required because
- * `ApiKeyService.updateApiKey()` / `revokeApiKey()` expect a `userId`
- * argument for their internal ownership check, which a TRUSTED call
- * (`overrideAccess: true`, the default) bypasses. A checked call never comes
- * here: it acts as its caller, so the ownership check applies.
- */
-async function resolveApiKeyOwner(
-  apiKeyService: ApiKeyService,
-  id: string
-): Promise<string> {
-  const adapter = container.get<DrizzleAdapter>("adapter");
-  const privateTable = (apiKeyService as unknown as ApiKeyServicePrivateTable)
-    .apiKeysTable;
-
-  // Drizzle's builder chain is generic over dialect and the adapter
-  // returns `unknown` to keep the interface dialect-neutral. Use the
-  // adapter's generic parameter to narrow to just the chain we need -
-  // avoids an `as` cast that ESLint's "unnecessary type assertion"
-  // autofix would strip.
-  const db = adapter.getDrizzle<{
-    select: (columns: Record<string, unknown>) => {
-      from: (table: unknown) => {
-        where: (cond: unknown) => {
-          limit: (n: number) => Promise<unknown[]>;
-        };
-      };
-    };
-  }>();
-
-  const rows = (await db
-    .select({ userId: privateTable.userId })
-    .from(privateTable)
-    .where(eq(privateTable.id as never, id))
-    .limit(1)) as Array<{ userId: string }>;
-
-  if (rows.length === 0) {
-    throw NextlyError.notFound({
-      logContext: { entity: "apiKey", apiKeyId: id },
-    });
-  }
-  return rows[0].userId;
-}
-
-/**
  * `nextly.apiKeys.*` namespace — API key lifecycle management.
  */
 export interface ApiKeysNamespace {
@@ -470,25 +406,57 @@ export interface ApiKeysNamespace {
 }
 
 /**
+ * What a call supplies over the instance's defaults, as one credential.
+ *
+ * A call that passes `overrideAccess: undefined` keeps the instance's setting:
+ * `mergeConfig` is a spread and a present-but-undefined key wins it, which
+ * would otherwise erase an instance's `false` and quietly restore trust.
+ *
+ * `user` and the key scope `actor` are one credential. A call that names a
+ * user without naming a key is made as that person, not under the instance's
+ * key: keeping the instance's scope while swapping the user would authorize
+ * the call by grants that were never the new user's. A call that names
+ * `user: undefined` names nobody, and is refused.
+ */
+function suppliedByCall(args: DirectAPIConfig): DirectAPIConfig {
+  const supplied: DirectAPIConfig = { ...args };
+  if (supplied.overrideAccess === undefined) delete supplied.overrideAccess;
+  if ("user" in args && !("actor" in args)) supplied.actor = undefined;
+  return supplied;
+}
+
+/**
+ * The caller as the REST routes see one: a person signed in, or an API key
+ * judged by its own grants rather than its owner's.
+ */
+function asRouteCaller(
+  userId: string,
+  access: ReturnType<typeof accessOptions>
+): AuthContext {
+  const scope = access.authenticatedScope;
+  const byKey = scope?.actorType === "apiKey";
+  return {
+    userId,
+    permissions: byKey ? [...scope.permissions] : [],
+    roles: access.user?.roles ?? [],
+    authMethod: byKey ? "api-key" : "session",
+  };
+}
+
+/**
  * The caller a checked `apiKeys` call is made as, or `null` for a trusted one.
  *
  * Checked when the call, over the instance's defaults, says
- * `overrideAccess: false`. Keys a call passes as `undefined` are dropped before
- * merging: `mergeConfig` is a spread and a present-but-undefined key wins it,
- * so `{ overrideAccess: undefined }` would otherwise erase an instance's `false`
- * and quietly restore trust, and `{ user: undefined }` would erase its user.
- *
- * Read through `accessOptions`, so the identity and the key scope travel
- * together as they do at every other namespace.
+ * `overrideAccess: false`. Read through `accessOptions`, so the identity and
+ * the key scope travel together as they do at every other namespace.
  */
 function checkedCaller(
   ctx: NextlyContext,
   args: DirectAPIConfig
 ): AuthContext | null {
-  const supplied = Object.fromEntries(
-    Object.entries(args).filter(([, value]) => value !== undefined)
-  ) as DirectAPIConfig;
-  const access = accessOptions(mergeConfig(ctx.defaultConfig, supplied));
+  const access = accessOptions(
+    mergeConfig(ctx.defaultConfig, suppliedByCall(args))
+  );
   if (access.overrideAccess !== false) return null;
 
   // A checked call names who it is for, as a REST request must be signed in.
@@ -498,17 +466,7 @@ function checkedCaller(
       logContext: { reason: "direct-api-api-keys-no-user" },
     });
   }
-
-  // The caller as the REST routes see one: a person signed in, or an API key
-  // judged by its own grants rather than its owner's.
-  const scope = access.authenticatedScope;
-  const byKey = scope?.actorType === "apiKey";
-  return {
-    userId,
-    permissions: byKey ? [...scope.permissions] : [],
-    roles: access.user?.roles ?? [],
-    authMethod: byKey ? "api-key" : "session",
-  };
+  return asRouteCaller(userId, access);
 }
 
 /**
@@ -538,54 +496,31 @@ async function authorizeKeyOperation(
  *
  * A trusted call (the default) does what server code asks, for any person's
  * keys. A checked call is judged as the REST routes judge its caller: the same
- * permissions, a key made only for the caller, only the caller's own keys
- * changed (a super-admin's included), and every key readable only by a
- * super-admin. Each check runs before anything is written.
+ * permission for each operation, which then reaches every key (reading,
+ * updating and revoking anyone's), a key made only for the caller, and an
+ * owner's name shown only to a caller who may read users. Each check runs
+ * before anything is written.
  */
 export function createApiKeysNamespace(ctx: NextlyContext): ApiKeysNamespace {
   return {
     async list(args: ListApiKeysArgs = {}): Promise<ApiKeyMeta[]> {
       const caller = checkedCaller(ctx, args);
-      if (!caller) {
-        const allUsers = !args.userId;
-        return await ctx.apiKeyService.listApiKeys(args.userId ?? "", {
-          allUsers,
-        });
-      }
-
-      await authorizeKeyOperation(caller, "read");
-      const superAdmin = await isSuperAdmin(caller.userId);
-      if (args.userId && args.userId !== caller.userId && !superAdmin) {
-        throw NextlyError.forbidden({
-          logContext: { reason: "other-owner", entity: "apiKey" },
-        });
-      }
-      // Only a super-admin reads everyone's keys, or names whose to read.
-      const keys = superAdmin
-        ? await ctx.apiKeyService.listApiKeys(args.userId ?? "", {
-            allUsers: !args.userId,
-          })
-        : await ctx.apiKeyService.listApiKeys(caller.userId);
-      return keys.map(key => apiKeyAsSeenBy(caller, key));
+      if (caller) await authorizeKeyOperation(caller, "read");
+      const keys = await ctx.apiKeyService.listApiKeys(args.userId ?? "", {
+        allUsers: !args.userId,
+      });
+      if (!caller) return keys;
+      return keys.map(await apiKeyViewer(caller));
     },
 
     async findByID(args: FindApiKeyByIDArgs): Promise<ApiKeyMeta | null> {
       const caller = checkedCaller(ctx, args);
-      if (!caller) {
-        return await ctx.apiKeyService.getApiKeyById(args.id, "", {
-          allUsers: true,
-        });
-      }
-
-      await authorizeKeyOperation(caller, "read");
-      // Someone else's key reads as missing, as over REST, for anyone but a
-      // super-admin.
-      const key = await ctx.apiKeyService.getApiKeyById(
-        args.id,
-        caller.userId,
-        { allUsers: await isSuperAdmin(caller.userId) }
-      );
-      return key ? apiKeyAsSeenBy(caller, key) : null;
+      if (caller) await authorizeKeyOperation(caller, "read");
+      const key = await ctx.apiKeyService.getApiKeyById(args.id, "", {
+        allUsers: true,
+      });
+      if (!caller || !key) return key;
+      return (await apiKeyViewer(caller))(key);
     },
 
     async create(
@@ -616,25 +551,25 @@ export function createApiKeysNamespace(ctx: NextlyContext): ApiKeysNamespace {
     async update(args: UpdateApiKeyArgs): Promise<ApiKeyMeta> {
       const caller = checkedCaller(ctx, args);
       if (caller) await authorizeKeyOperation(caller, "update");
-      // A checked call acts as its caller, so the service finds someone
-      // else's key missing and changes nothing.
-      const userId =
-        caller?.userId ??
-        (await resolveApiKeyOwner(ctx.apiKeyService, args.id));
-      return await ctx.apiKeyService.updateApiKey(args.id, userId, {
-        name: args.name,
-        description: args.description ?? undefined,
-      });
+      // Any key: the permission to update keys reaches every key, and a
+      // trusted call is server code acting for any owner.
+      const updated = await ctx.apiKeyService.updateApiKey(
+        args.id,
+        caller?.userId ?? "",
+        { name: args.name, description: args.description ?? undefined },
+        { allUsers: true }
+      );
+      if (!caller) return updated;
+      return (await apiKeyViewer(caller))(updated);
     },
 
     async revoke(args: RevokeApiKeyArgs): Promise<{ success: true }> {
       const caller = checkedCaller(ctx, args);
       if (caller) await authorizeKeyOperation(caller, "delete");
-      // As `update`: a checked call can revoke only its caller's own key.
-      const userId =
-        caller?.userId ??
-        (await resolveApiKeyOwner(ctx.apiKeyService, args.id));
-      await ctx.apiKeyService.revokeApiKey(args.id, userId);
+      // As `update`: the permission to revoke keys reaches every key.
+      await ctx.apiKeyService.revokeApiKey(args.id, caller?.userId ?? "", {
+        allUsers: true,
+      });
       return { success: true };
     },
   };

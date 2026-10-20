@@ -2,10 +2,11 @@
  * The Direct API's `apiKeys` namespace is checked when its caller asks to be.
  *
  * A Nextly instance (or a single call) with `overrideAccess: false` and a
- * `user` is judged as the REST routes judge that user: the same permissions,
- * keys made and changed only by and for that person, and writes refused to an
- * API key. Every refusal leaves the keys as they were. A trusted instance, the
- * default, keeps doing what server code asks of it.
+ * `user` is judged as the REST routes judge that user: the same permission for
+ * each operation, which then reaches every key; keys made only for that
+ * person; an owner named only to someone who may read users; and writes
+ * refused to an API key. Every refusal leaves the keys as they were. A trusted
+ * instance, the default, keeps doing what server code asks of it.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -61,6 +62,8 @@ describe.each(getConfiguredTestDialects())(
     let superAdminId: string;
     let holderId: string;
     let lackerId: string;
+    let readerId: string;
+    let auditorId: string;
 
     async function account(email: string, roles: string[] = []) {
       const created = await (t.nextly as unknown as Direct).users.create({
@@ -140,6 +143,12 @@ describe.each(getConfiguredTestDialects())(
       ]);
       lackerId = await account("lacker@example.com", [
         await role("no-keys", ["read-users"]),
+      ]);
+      readerId = await account("reader@example.com", [
+        await role("key-readers", ["read-api-keys"]),
+      ]);
+      auditorId = await account("auditor@example.com", [
+        await role("key-auditors", ["read-api-keys", "read-users"]),
       ]);
     });
 
@@ -234,46 +243,69 @@ describe.each(getConfiguredTestDialects())(
         expect(await ownedBy(lackerId)).toBe(before);
       });
 
-      it("finds someone else's key missing to update or revoke, and it is left as it was", async () => {
-        const key = await keyOf(lackerId, "theirs");
-
-        for (const caller of [holderId, superAdminId]) {
-          await expect(
-            checkedAs(caller).apiKeys.update({ id: key.id, name: "taken" })
-          ).rejects.toMatchObject({ code: "NOT_FOUND" });
-          await expect(
-            checkedAs(caller).apiKeys.revoke({ id: key.id })
-          ).rejects.toMatchObject({ code: "NOT_FOUND" });
-        }
-
-        const after = await stored(key.id);
-        expect(after?.name).toBe("theirs");
-        expect(after?.isActive).toBe(true);
-      });
-
-      it("reads only their own keys, unless they are a super-admin", async () => {
-        const mine = await keyOf(holderId, "listed mine");
-        const theirs = await keyOf(lackerId, "listed theirs");
+      it("updates and revokes anyone's key: the permission reaches every key", async () => {
+        const renamed = await keyOf(lackerId, "theirs");
+        const revoked = await keyOf(lackerId, "theirs to revoke");
         const as = checkedAs(holderId);
 
-        const listed = (await as.apiKeys.list()).map(k => k.id);
-        expect(listed).toContain(mine.id);
-        expect(listed).not.toContain(theirs.id);
-        expect((await as.apiKeys.findByID({ id: mine.id }))?.id).toBe(mine.id);
-        expect(await as.apiKeys.findByID({ id: theirs.id })).toBeNull();
-        await expect(
-          as.apiKeys.list({ userId: lackerId })
-        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
-
-        const admin = checkedAs(superAdminId);
-        const all = (await admin.apiKeys.list()).map(k => k.id);
-        expect(all).toEqual(expect.arrayContaining([mine.id, theirs.id]));
         expect(
-          (await admin.apiKeys.list({ userId: lackerId })).map(k => k.id)
-        ).toContain(theirs.id);
-        expect((await admin.apiKeys.findByID({ id: theirs.id }))?.id).toBe(
-          theirs.id
+          (await as.apiKeys.update({ id: renamed.id, name: "renamed" })).name
+        ).toBe("renamed");
+        await expect(as.apiKeys.revoke({ id: revoked.id })).resolves.toEqual({
+          success: true,
+        });
+
+        expect((await stored(renamed.id))?.name).toBe("renamed");
+        expect((await stored(revoked.id))?.isActive).toBe(false);
+      });
+
+      it("may read but not change someone else's key with only the permission to read keys", async () => {
+        const key = await keyOf(lackerId, "read, not changed");
+        const as = checkedAs(readerId);
+
+        expect((await as.apiKeys.findByID({ id: key.id }))?.id).toBe(key.id);
+        await expect(
+          as.apiKeys.update({ id: key.id, name: "changed" })
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        await expect(as.apiKeys.revoke({ id: key.id })).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          statusCode: 403,
+        });
+
+        expect(await stored(key.id)).toMatchObject({
+          name: "read, not changed",
+          isActive: true,
+        });
+      });
+
+      it("reads everyone's keys, naming an owner only to someone who may read users", async () => {
+        const mine = await keyOf(holderId, "listed mine");
+        const theirs = await keyOf(lackerId, "listed theirs");
+        const ownerOf = (keys: ApiKeyMeta[], id: string) =>
+          keys.find(k => k.id === id)?.owner;
+
+        // May read keys, not users: every key, with their own owner only.
+        const holder = checkedAs(holderId);
+        const listed = await holder.apiKeys.list();
+        expect(listed.map(k => k.id)).toEqual(
+          expect.arrayContaining([mine.id, theirs.id])
         );
+        expect(ownerOf(listed, mine.id)?.id).toBe(holderId);
+        expect(ownerOf(listed, theirs.id)).toBeNull();
+        expect(await holder.apiKeys.findByID({ id: theirs.id })).toMatchObject({
+          id: theirs.id,
+          owner: null,
+        });
+        const named = await holder.apiKeys.list({ userId: lackerId });
+        expect(named.map(k => k.id)).toContain(theirs.id);
+        expect(named.every(k => k.owner === null)).toBe(true);
+
+        // May read keys and users: every owner.
+        for (const reader of [auditorId, superAdminId]) {
+          const seen = await checkedAs(reader).apiKeys.list();
+          expect(ownerOf(seen, theirs.id)?.id).toBe(lackerId);
+          expect(ownerOf(seen, mine.id)?.id).toBe(holderId);
+        }
       });
     });
 
@@ -350,7 +382,30 @@ describe.each(getConfiguredTestDialects())(
           "read-api-keys",
           "read-users",
         ]).apiKeys.list();
-        expect(named.every(k => k.owner?.id === holderId)).toBe(true);
+        expect(named.length).toBe(unnamed.length);
+        expect(named.every(k => k.owner !== null)).toBe(true);
+      });
+
+      it("judges a call that names another person as that person, not by the instance's key", async () => {
+        // The instance acts as a key that may read keys. A call naming a
+        // person who may not, and no key of their own, is made as that person.
+        const asKey = new Nextly({
+          overrideAccess: false,
+          user: { id: holderId },
+          actor: { actorType: "apiKey", permissions: ["read-api-keys"] },
+        });
+        await expect(asKey.apiKeys.list()).resolves.toBeDefined();
+        await expect(
+          asKey.apiKeys.list({ user: { id: lackerId } })
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+
+        // Naming the person together with a key of their own is judged by it.
+        await expect(
+          asKey.apiKeys.list({
+            user: { id: lackerId },
+            actor: { actorType: "apiKey", permissions: ["read-api-keys"] },
+          })
+        ).resolves.toBeDefined();
       });
     });
 

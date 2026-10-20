@@ -681,10 +681,9 @@ The Direct API also exposes typed namespaces for users, media, forms, field grou
 
 `nextly.apiKeys` honours `overrideAccess: false`, set on the call or on the instance (`new Nextly({ overrideAccess: false, user })`), and judges the `user` the way the admin's API key routes judge them:
 
-- Each operation needs the matching `api-keys` permission.
+- Each operation needs the matching `api-keys` permission, which then reaches every key: reading, updating and revoking anyone's.
 - `create` makes a key only for that user.
-- `update` and `revoke` reach only their own keys.
-- Only a super-admin lists or reads other people's keys.
+- A key's owner is shown only to a `user` who may read users, or on their own keys.
 - Making or changing keys as an API key (`actor`) is refused.
 - A call that names no `user` is refused with `AUTH_REQUIRED`.
 

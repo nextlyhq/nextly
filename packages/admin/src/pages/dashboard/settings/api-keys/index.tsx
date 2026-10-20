@@ -85,6 +85,7 @@ const ApiKeysContent: React.FC = () => {
         onRevoke={handleRevoke}
         canEdit={mayPerformApiKeyAction("update", hasPermission)}
         canRevoke={mayPerformApiKeyAction("delete", hasPermission)}
+        ownersVisible={hasPermission("read-users")}
       />
 
       {/* Revoke dialog */}
