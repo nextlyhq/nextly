@@ -2147,10 +2147,8 @@ export class ReleasesService {
     const hidden = entries.flatMap(entry =>
       entry.checked ? entry.hidden : []
     );
-    if (hidden.length === 0 || this.deps.scopeLabels === undefined) {
-      return entries;
-    }
-    const labels = await this.deps.scopeLabels(hidden);
+    if (hidden.length === 0) return entries;
+    const labels = await this.labelsFor(hidden);
     return entries.map(entry =>
       entry.checked
         ? { ...entry, hidden: withLabelsFrom(entry.hidden, labels) }
@@ -2401,10 +2399,32 @@ export class ReleasesService {
   private async labelled<T extends HiddenReleaseMembers>(
     hidden: T[]
   ): Promise<T[]> {
-    if (hidden.length === 0 || this.deps.scopeLabels === undefined) {
-      return hidden;
+    if (hidden.length === 0) return hidden;
+    return withLabelsFrom(hidden, await this.labelsFor(hidden));
+  }
+
+  /**
+   * The display names of these collections and Singles, or none.
+   *
+   * A name is decoration over a count that already carries the slug, so a
+   * lookup that fails leaves the slugs and is reported, and never fails the
+   * read or the refusal the counts belong to.
+   */
+  private async labelsFor(
+    scopes: ReadonlyArray<{ scopeKind: VersionScopeKind; scopeSlug: string }>
+  ): Promise<ReadonlyMap<string, ReleaseScopeLabels>> {
+    if (scopes.length === 0 || this.deps.scopeLabels === undefined) {
+      return new Map();
     }
-    return withLabelsFrom(hidden, await this.deps.scopeLabels(hidden));
+    try {
+      return await this.deps.scopeLabels(scopes);
+    } catch (error) {
+      this.deps.logger?.warn(
+        "Could not name the collections of documents a reader may not read; their counts carry the slug alone.",
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+      return new Map();
+    }
   }
 
   /**

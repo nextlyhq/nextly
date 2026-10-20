@@ -24,6 +24,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { buildClaims } from "../../../auth/jwt/claims";
+import { signAccessToken } from "../../../auth/jwt/sign";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import type { CollectionsHandler } from "../../../services/collections-handler";
@@ -61,6 +63,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         status: true,
         fields: [text({ name: "title" })],
       }),
+      // Read by a code rule naming a role by its SLUG, beside the grant.
+      defineCollection({
+        slug: "memos",
+        status: true,
+        access: {
+          read: ({ roles }) => roles.includes("memo-reader"),
+        },
+        fields: [text({ name: "title" })],
+      }),
     ],
   });
   return current;
@@ -68,7 +79,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 
 async function entry(
   t: TestNextly,
-  collection: "posts" | "secrets"
+  collection: "posts" | "secrets" | "memos"
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
   const created = await handler.createEntry(
@@ -144,6 +155,15 @@ async function reader(t: TestNextly): Promise<{ userId: string; key: string }> {
     "publish-content-releases",
     "read-posts",
   ]);
+  return { userId, key: await keyFor(t, userId, roleId) };
+}
+
+/** A role-based API key of this role, minted by this user. */
+async function keyFor(
+  t: TestNextly,
+  userId: string,
+  roleId: string
+): Promise<string> {
   const apiKeys = t.getService("apiKeyService") as unknown as {
     createApiKey: (
       userId: string,
@@ -156,12 +176,51 @@ async function reader(t: TestNextly): Promise<{ userId: string; key: string }> {
     ) => Promise<{ key: string }>;
   };
   const { key } = await apiKeys.createApiKey(userId, {
-    name: "post reader",
+    name: "reader",
     tokenType: "role-based",
     roleId,
     expiresIn: "unlimited",
   });
-  return { userId, key };
+  return key;
+}
+
+/**
+ * A signed-in session's cookie for this user, carrying these role ids, as a
+ * sign-in issues one: a session names its roles by id, never by slug.
+ */
+async function sessionCookie(
+  userId: string,
+  roleIds: string[]
+): Promise<string> {
+  const token = await signAccessToken(
+    buildClaims({
+      userId,
+      email: `${userId}@example.com`,
+      name: "Reader",
+      image: null,
+      roleIds,
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  return `nextly_session=${token}`;
+}
+
+/** One GET to `/api/<path>` as a signed-in session, as status and JSON body. */
+async function restAsSession(
+  cookie: string,
+  path: string[]
+): Promise<{ status: number; json: Record<string, unknown> }> {
+  const res = await createDynamicHandlers().GET(
+    new Request(`http://localhost/api/${path.join("/")}`, {
+      headers: { cookie },
+    }),
+    { params: Promise.resolve({ params: path }) }
+  );
+  return {
+    status: res.status,
+    json: (await res.json()) as Record<string, unknown>,
+  };
 }
 
 /** One REST call to `/api/<path>`, answered as status and JSON body. */
@@ -463,6 +522,70 @@ describe.each(getConfiguredTestDialects())(
         refusedOverRest.json,
       ]);
       for (const id of hiddenIds) expect(given).not.toContain(id);
+    });
+
+    it("judges a signed-in reader by role slug, as the collection's own read rule does", async () => {
+      const t = await boot(dialect);
+      const admin = await seedLiveAuthor(t);
+      const memo = await entry(t, "memos");
+      const release = await t.nextly.releases.create({ title: "Memos" });
+      await t.nextly.releases.addMember({
+        releaseId: release.id,
+        scopeKind: "collection",
+        scopeSlug: "memos",
+        entryId: memo,
+        locale: null,
+        action: "publish",
+        userId: admin,
+      });
+
+      // Over REST as a signed-in session, by role: the rule names the role's
+      // SLUG, while a session carries its roles by id. The collection's own
+      // list judges by slug, and so must the release.
+      const byRole = await seedPlainAuthor(t);
+      const memoReader = await grantRole(t, byRole, "memo-reader", [
+        "read-content-releases",
+        "read-memos",
+      ]);
+      const cookie = await sessionCookie(byRole, [memoReader]);
+      const list = await restAsSession(cookie, [
+        "collections",
+        "memos",
+        "entries",
+      ]);
+      expect(list.status).toBe(200);
+      const overRest = await restAsSession(cookie, [
+        "releases",
+        release.id,
+        "members",
+      ]);
+      expect(overRest.status).toBe(200);
+      expect(
+        (overRest.json.items as { entryId: string }[]).map(m => m.entryId)
+      ).toEqual([memo]);
+
+      // The control: a session that may read memos by grant but holds no
+      // role the rule names is refused by the collection's own list, and is
+      // told only a count by the release.
+      const noRole = await seedPlainAuthor(t);
+      const plainReader = await grantRole(t, noRole, "plain-reader", [
+        "read-content-releases",
+        "read-memos",
+      ]);
+      const plainCookie = await sessionCookie(noRole, [plainReader]);
+      expect(
+        (await restAsSession(plainCookie, ["collections", "memos", "entries"]))
+          .status
+      ).toBe(403);
+      const counted = await restAsSession(plainCookie, [
+        "releases",
+        release.id,
+        "members",
+      ]);
+      expect(counted.json.items).toEqual([]);
+      expect((counted.json.meta as { hidden?: unknown }).hidden).toEqual([
+        expect.objectContaining({ scopeSlug: "memos", count: 1 }),
+      ]);
     });
 
     it("shows a trusted caller every document", async () => {
