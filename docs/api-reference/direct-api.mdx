@@ -653,6 +653,8 @@ result.email; // address whose password was reset
 
 **Returns:** `{ success: true, email? }`. Throws `NextlyError` (`VALIDATION_ERROR` / `NOT_FOUND`) when the token is invalid or expired.
 
+A token works only for the account it was issued for, while that account still holds the address it was sent to: changing the account's address or deleting the account revokes it ([Authentication](/docs/guides/authentication#reset-and-verification-links-belong-to-one-account)).
+
 ### verifyEmail
 
 ```typescript

@@ -13,6 +13,8 @@
 
 import { join } from "node:path";
 
+import { consoleLogger } from "../../shared/types";
+
 import { NDJSONChannel } from "./channels/ndjson";
 import { TerminalChannel } from "./channels/terminal";
 import { createNotifier } from "./dispatcher";
@@ -30,7 +32,7 @@ export function getProductionNotifier(): Notifier {
       }),
     ],
     logger: {
-      warn: msg => console.warn(msg),
+      warn: msg => consoleLogger.warn(msg),
     },
   });
   return cached;

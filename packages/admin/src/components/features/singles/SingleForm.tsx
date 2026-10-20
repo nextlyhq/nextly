@@ -963,8 +963,11 @@ export function SingleForm({
                    server's call, and it refuses with a message naming what is
                    missing rather than handing out one that 404s. */
                                 isLinkAvailable={previewLink.isAvailable}
-                                onCopyLink={previewLink.copy}
-                                isCopyingLink={previewLink.isCopying}
+                                {...(previewLink.shareDocument === undefined
+                                  ? {}
+                                  : {
+                                      shareDocument: previewLink.shareDocument,
+                                    })}
                                 /* The pane is offered on exactly the terms the
                            shareable link is: a Single with a draft lifecycle
                            and a resolvable language. Withheld in translation

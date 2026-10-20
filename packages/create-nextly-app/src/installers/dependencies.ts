@@ -3,6 +3,11 @@ import path from "path";
 import { execa } from "execa";
 import fs from "fs-extra";
 
+import {
+  EXACT_FLAG,
+  isNextlyPackage,
+  type NextlySource,
+} from "../lib/nextly-release";
 import type {
   DatabaseConfig,
   PackageManager,
@@ -16,6 +21,7 @@ import {
 } from "../utils/template";
 
 import { approveNativeBuilds } from "./native-build-approvals";
+import { recordLaunchingPackageManager } from "./package-manager-field";
 
 const INSTALL_COMMANDS: Record<PackageManager, string[]> = {
   npm: ["npm", "install"],
@@ -120,6 +126,11 @@ function getPackagesToInstall(database: DatabaseConfig): string[] {
   return [...CORE_PACKAGES, database.adapter];
 }
 
+/** The Nextly packages adding Nextly to an existing app installs. */
+export function nextlyPackagesToInstall(database: DatabaseConfig): string[] {
+  return getPackagesToInstall(database).filter(isNextlyPackage);
+}
+
 /**
  * Install Nextly and database adapter dependencies.
  * Spinners are managed by the caller.
@@ -133,15 +144,17 @@ export async function installDependencies(
   cwd: string,
   projectInfo: ProjectInfo,
   database: DatabaseConfig,
-  useYalc: boolean = false,
+  /** Where Nextly's packages come from; see NextlySource. */
+  source: NextlySource,
   isFreshProject: boolean = false,
   projectType?: ProjectType
 ): Promise<string[]> {
   const pm = projectInfo.packageManager;
   const pluginPackages = templatePluginPackages(projectType);
+  const useYalc = source.kind === "yalc";
 
   if (!isFreshProject) {
-    return installIntoExistingApp(cwd, pm, database, useYalc, pluginPackages);
+    return installIntoExistingApp(cwd, pm, database, source, pluginPackages);
   }
 
   if (useYalc) {
@@ -196,16 +209,26 @@ async function installIntoExistingApp(
   cwd: string,
   pm: PackageManager,
   database: DatabaseConfig,
-  useYalc: boolean,
+  source: NextlySource,
   pluginPackages: string[]
 ): Promise<string[]> {
-  const notes = await approveNativeBuilds(
-    cwd,
-    pm,
-    pm === "pnpm" ? await readPnpmVersion(cwd) : undefined
-  );
+  // First, so the pnpm version the approvals read and the version that
+  // installs are the one recorded.
+  const recorded = await recordLaunchingPackageManager(cwd, pm);
+  const notes = [
+    ...(recorded
+      ? [
+          `Set packageManager to ${recorded} in package.json, the version that ran this, so Corepack installs with it.`,
+        ]
+      : []),
+    ...(await approveNativeBuilds(
+      cwd,
+      pm,
+      pm === "pnpm" ? await readPnpmVersion(cwd) : undefined
+    )),
+  ];
   try {
-    await installPackages(cwd, pm, database, useYalc, pluginPackages);
+    await installPackages(cwd, pm, database, source, pluginPackages);
   } catch (error) {
     // The notes are printed after a successful install, so a failed one
     // carries them: a version-scoped rule the app kept is what makes pnpm
@@ -222,14 +245,32 @@ async function installPackages(
   cwd: string,
   pm: PackageManager,
   database: DatabaseConfig,
-  useYalc: boolean,
+  source: NextlySource,
   pluginPackages: string[]
 ): Promise<void> {
   const allPackages = getPackagesToInstall(database);
-  if (useYalc) {
+  if (source.kind === "yalc") {
     await installWithYalc(cwd, pm, allPackages, pluginPackages);
   } else {
-    await runInstall(INSTALL_COMMANDS[pm], allPackages, cwd);
+    // The others first: they include peers Nextly's packages require
+    // (@nextlyhq/ui needs lucide-react), and pnpm with auto-install-peers off
+    // and strict-peer-dependencies on refuses an add whose required peers
+    // are not there yet. They go in a command of their own, at what the
+    // registry has, so the exact flag below never pins them.
+    const others = allPackages.filter(pkg => !isNextlyPackage(pkg));
+    if (others.length > 0) {
+      await runInstall(INSTALL_COMMANDS[pm], others, cwd);
+    }
+    // Nextly's packages at the release, recorded exactly as a new project
+    // declares them: npm records `nextly@X` as `^X` unless told not to, and a
+    // range would float to a later release. On the alpha line, the tag.
+    const release = source.kind === "release";
+    const spec = release ? source.cliVersion : "alpha";
+    await runInstall(
+      [...INSTALL_COMMANDS[pm], ...(release ? [EXACT_FLAG[pm]] : [])],
+      allPackages.filter(isNextlyPackage).map(pkg => `${pkg}@${spec}`),
+      cwd
+    );
   }
   const tooling = await notYetDeclared(cwd, CONFIG_TOOLING_DEV_DEPENDENCIES);
   if (tooling.length > 0) {

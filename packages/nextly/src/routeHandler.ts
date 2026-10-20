@@ -69,7 +69,12 @@ import {
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
-import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
+import {
+  listPreviewLinks,
+  mintPreviewLink,
+  revokePreviewLink,
+  revokePreviewLinks,
+} from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
 import { handleReleaseRequest } from "./api/releases";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
@@ -104,6 +109,7 @@ import {
   putWidgetLayout,
 } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
+import { runWithAccessMemo } from "./auth/access/request-memo";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import { runWithCallerScope } from "./auth/caller-scope";
 import {
@@ -189,6 +195,7 @@ import {
   isBuilderEnabled,
   isBuilderRoute,
 } from "./shared/builder-access";
+import { consoleLogger } from "./shared/types";
 import {
   hexToCssColor,
   getForegroundForBackground,
@@ -1447,9 +1454,19 @@ async function handleServiceRequest(
   // Above the body read below, like the handlers beside it: these parse their
   // own JSON, and a consumed stream would reach them empty.
   if (service === "previewLinks") {
-    return method === "revokePreviewLinks"
-      ? revokePreviewLinks(req)
-      : mintPreviewLink(req);
+    // Named per method, with minting the one an unrecognised name would NOT
+    // fall into by accident: each is matched exactly, and anything else is
+    // not found.
+    if (method === "listPreviewLinks") return listPreviewLinks(req);
+    if (method === "revokePreviewLink") {
+      return revokePreviewLink(req, routeParams ?? {});
+    }
+    if (method === "revokePreviewLinks") return revokePreviewLinks(req);
+    if (method === "mintPreviewLink") return mintPreviewLink(req);
+    throw NextlyError.notFound({
+      message: `Unknown preview-links operation: ${method}`,
+      logContext: { service: "previewLinks", method },
+    });
   }
 
   // ==================== PREVIEW URL DIRECT DISPATCH ====================
@@ -2053,7 +2070,9 @@ async function buildAdminMeta(
     }
   } catch (err) {
     // DB not ready or table missing — fall back to config values silently
-    console.error("[ADMIN-META] Error fetching settings from DB:", err);
+    consoleLogger.error("[ADMIN-META] Error fetching settings from DB", {
+      error: err,
+    });
   }
 
   return { branding, workspace };
@@ -2500,7 +2519,12 @@ export function createDynamicHandlers(options?: {
     let flattenedInRequest: NextlyError[] = [];
     const { result: response } = await withSideEffectWarnings(async () => {
       try {
-        return await runWithRestLimitGate(gate, handler);
+        // One memo of access lookups per request, so every gate, rule and
+        // field rule the request reaches asks the database about its caller
+        // once rather than each time.
+        return await runWithAccessMemo(() =>
+          runWithRestLimitGate(gate, handler)
+        );
       } finally {
         flattenedInRequest = currentFlattenedErrors();
       }

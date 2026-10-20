@@ -14,9 +14,9 @@
  *   the row, which is gone, so it cannot be evaluated. Only a caller it never
  *   limited reads: a super-admin signed in. An API key is refused, since the
  *   rule judged keys too.
- * - The same where hooks may narrow its reads (`beforeOperation`,
- *   `beforeRead` or `afterRead`, its own or the site's): a tenant filter in a
- *   hook is a document-level rule by another name, and it too needs the row.
+ * - Where hooks may narrow its reads (`beforeOperation`, `beforeRead` or
+ *   `afterRead`, its own or the site's), no caller reads: a hook runs for
+ *   super-admins too, and it needs the row to answer.
  *
  * Trusted server code (`overrideAccess`) is the caller's to skip, before this.
  *
@@ -68,8 +68,12 @@ export async function mayReadDeletedDocument(
   caller: ReadAccessCaller
 ): Promise<boolean> {
   const { slug } = owner;
+  // A hook runs for every caller, super-admins included: their bypass is of
+  // rules, not hooks. It needs the row, which is gone, so no caller can be
+  // shown to have passed it, and the history stays closed to all of them.
+  if (hooksMayNarrowReads(owner)) return false;
   const rule = getRBACService()?.getRegisteredAccess(slug)?.read;
-  if (typeof rule === "function" || hooksMayNarrowReads(owner)) {
+  if (typeof rule === "function") {
     // The session path only: a super-admin's key is judged by its own scope,
     // which the rule limited like any other.
     return (

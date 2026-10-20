@@ -166,6 +166,7 @@ For rate-limited responses (`code: "RATE_LIMITED"`, status 429) the runtime also
 | `401` | `AUTH_REQUIRED`, `AUTH_INVALID_CREDENTIALS` | Missing or bad credentials. |
 | `403` | `FORBIDDEN` | Authenticated but lacks permission. |
 | `403` | `EMAIL_NOT_VERIFIED` | Login with the correct password for an address not yet verified. |
+| `403` | `API_KEY_ROLE_ABOVE_CREATOR` | Creating an API key (or its summary) with a role that allows more than you can. |
 | `404` | `NOT_FOUND` | Resource does not exist. |
 | `409` | `CONFLICT`, `DUPLICATE` | Concurrent edit, duplicate email, etc. |
 | `413` | `PAYLOAD_TOO_LARGE` | Upload bigger than configured cap. |
@@ -207,7 +208,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `POST` | `/admin/api/users` | Create user. | `create-users` |
 | `GET` | `/admin/api/users/{id}` | Get user. | `read-users` |
 | `PATCH` | `/admin/api/users/{id}` | Update user. | `update-users` |
-| `DELETE` | `/admin/api/users/{id}` | Delete user. | `delete-users` |
+| `DELETE` | `/admin/api/users/{id}` | Delete user. Erases their email delivery records ([Email](/docs/guides/email#when-a-staff-user-is-deleted)); an email the provider already accepted may still be delivered. | `delete-users` |
 | `PATCH` | `/admin/api/users/{id}/password` | Set password hash directly. | `update-users` |
 | `GET` | `/admin/api/users/{id}/roles` | List user roles. | `read-roles` |
 | `POST` | `/admin/api/users/{id}/roles` | Assign role to user. | `update-users` |

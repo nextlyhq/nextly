@@ -22,6 +22,10 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+import {
+  isFieldGroupFieldType,
+  readFieldGroupType,
+} from "nextly/field-group-type";
 
 import { storedValueOf } from "./default-values";
 
@@ -125,6 +129,67 @@ function nestedFields(field: FieldConfig): FieldConfig[] {
   return Array.isArray(fields) ? (fields as FieldConfig[]) : [];
 }
 
+/**
+ * The fields of one field group instance, as the schema API enriches the
+ * field: its component's under `componentFields`, or, in a dynamic zone, those
+ * of the type the instance names, under `componentSchemas`.
+ */
+function instanceFields(field: FieldConfig, instance: Doc): FieldConfig[] {
+  const enriched = field as {
+    componentFields?: unknown;
+    componentSchemas?: Record<string, { fields?: unknown } | undefined>;
+  };
+  const type = readFieldGroupType(instance);
+  const fields =
+    (type === undefined
+      ? undefined
+      : enriched.componentSchemas?.[type]?.fields) ?? enriched.componentFields;
+  return Array.isArray(fields) ? (fields as FieldConfig[]) : [];
+}
+
+/**
+ * Applies `each` to a field group's instances: a list of them, or one on its
+ * own. Both reads give the same shape for the same field.
+ */
+function eachInstance(
+  value: unknown,
+  each: (instance: unknown) => unknown
+): unknown {
+  return Array.isArray(value) ? value.map(each) : each(value);
+}
+
+/**
+ * One field group instance, merged with the stored one at its position. Two
+ * reads naming different types for one row are of different versions, and the
+ * populated row is kept as it is.
+ */
+function mergeInstance(
+  field: FieldConfig,
+  populated: unknown,
+  stored: unknown
+): unknown {
+  if (!isRecord(populated) || !isRecord(stored)) return populated;
+  if (readFieldGroupType(populated) !== readFieldGroupType(stored)) {
+    return populated;
+  }
+  return mergeFields(instanceFields(field, populated), populated, stored);
+}
+
+/** A field group, or a dynamic zone: its instances paired by position. */
+function mergeFieldGroup(
+  field: FieldConfig,
+  populated: unknown,
+  stored: unknown
+): unknown {
+  if (!Array.isArray(populated) || !Array.isArray(stored)) {
+    return mergeInstance(field, populated, stored);
+  }
+  if (populated.length !== stored.length) return populated;
+  return populated.map((row: unknown, index) =>
+    mergeInstance(field, row, stored[index])
+  );
+}
+
 /** A group: its own fields, merged the same way. */
 function mergeGroup(
   field: FieldConfig,
@@ -157,6 +222,11 @@ function mergeField(
   populated: unknown,
   stored: unknown
 ): unknown {
+  // Either stored spelling of a field group, asked through the shared
+  // predicate rather than compared to one literal.
+  if (isFieldGroupFieldType(field.type)) {
+    return mergeFieldGroup(field, populated, stored);
+  }
   switch (field.type) {
     case "relationship":
     case "upload":
@@ -243,6 +313,37 @@ const repeaterAmongStored: AmongCheck = (field, populated, stored) => {
   );
 };
 
+/**
+ * A field group instance: present in both reads or in neither, the same
+ * instance (its id) of the same type, and its own fields compared the same
+ * way. Two reads straddling an edit made in the same second share a timestamp
+ * stored to the second, but not an instance that was added, removed or
+ * replaced between them.
+ */
+const instanceAmongStored: AmongCheck = (field, populated, stored) => {
+  if (!isRecord(populated) || !isRecord(stored)) {
+    return !isRecord(populated) && !isRecord(stored);
+  }
+  return (
+    populated.id === stored.id &&
+    readFieldGroupType(populated) === readFieldGroupType(stored) &&
+    populatedAmongStored(instanceFields(field, populated), populated, stored)
+  );
+};
+
+/** A field group, or a dynamic zone: instances paired by position. */
+const fieldGroupAmongStored: AmongCheck = (field, populated, stored) => {
+  if (!Array.isArray(populated) || !Array.isArray(stored)) {
+    return instanceAmongStored(field, populated, stored);
+  }
+  return (
+    populated.length === stored.length &&
+    populated.every((row: unknown, index) =>
+      instanceAmongStored(field, row, stored[index])
+    )
+  );
+};
+
 /** How each field kind is compared; any other kind cannot tell versions apart. */
 const AMONG_STORED: Record<string, AmongCheck> = {
   relationship: referenceAmongLinks,
@@ -268,7 +369,9 @@ export function populatedAmongStored(
     if (typeof name !== "string") return true;
     const storedValue = storedValueOf(stored, name);
     if (storedValue === undefined) return true;
-    const check = AMONG_STORED[field.type as string];
+    const check = isFieldGroupFieldType(field.type)
+      ? fieldGroupAmongStored
+      : AMONG_STORED[field.type as string];
     return check
       ? check(field, storedValueOf(populated, name), storedValue)
       : true;
@@ -285,6 +388,13 @@ function referenceOf(value: unknown): unknown {
 
 /** One field's value to write, by what kind of field it is. */
 function writableField(field: FieldConfig, value: unknown): unknown {
+  if (isFieldGroupFieldType(field.type)) {
+    return eachInstance(value, instance =>
+      isRecord(instance)
+        ? withoutPlaceholders(instanceFields(field, instance), instance)
+        : instance
+    );
+  }
   switch (field.type) {
     case "relationship":
     case "upload":
@@ -309,8 +419,9 @@ function writableField(field: FieldConfig, value: unknown): unknown {
  * it stands for: the bare id, or the `{ relationTo, value }` pair.
  *
  * The marker is the admin's own and never reaches the server. Only
- * relationship and upload values are read, at the top level and inside groups
- * and repeaters, which is everywhere {@link withStoredReferences} puts one: a
+ * relationship and upload values are read, at the top level and inside groups,
+ * repeaters and field groups (dynamic zones included), which is everywhere
+ * {@link withStoredReferences} puts one: a
  * JSON value that happens to carry the marker key is the author's content and
  * is sent as it is. The server reduces a related object to its id at the top
  * level, but not an upload inside a group or a repeater.
@@ -333,7 +444,8 @@ export function withoutPlaceholders<T extends Doc>(
  * read gave no row for becomes a placeholder, at its stored position.
  *
  * Both documents must be reads of the same version. Relationship and upload
- * fields are merged at the top level and inside groups and repeaters; any
+ * fields are merged at the top level and inside groups, repeaters and field
+ * groups, a dynamic zone's rows each by the fields of the type they name; any
  * other value is the populated read's.
  */
 export function withStoredReferences<T extends Doc>(

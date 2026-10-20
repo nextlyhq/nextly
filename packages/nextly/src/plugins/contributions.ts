@@ -134,9 +134,11 @@ export interface ScheduledTask {
 export type PluginEmailProvider = RegisteredEmailProvider;
 
 /**
- * @experimental A plugin-contributed email template, seeded into the
- * `email_templates` table on boot (idempotent by slug; never clobbers admin
- * edits). Resolvable by slug via `sendWithTemplate` and the direct API.
+ * @experimental A plugin-contributed email template. The plugin owns it: on
+ * each boot the stored template follows the plugin's current version until
+ * the site overrides it, and an override keeps the site's version while the
+ * plugin's later changes wait for the site's review. Resolvable by slug via
+ * `sendWithTemplate` and the direct API.
  */
 export interface PluginEmailTemplate {
   slug: string;
@@ -149,6 +151,12 @@ export interface PluginEmailTemplate {
   variables?: Array<{ name: string; description?: string; required?: boolean }>;
   /** Wrap with the shared layout; default true. */
   useLayout?: boolean;
+  /**
+   * @experimental When the template is sent, in a sentence the admin shows
+   * beside it (for example "Sent when a customer asks to reset their
+   * password").
+   */
+  description?: string;
 }
 
 /**

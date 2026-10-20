@@ -138,3 +138,6 @@ export {
   nextlyContentEventsPg as nextlyContentEvents,
   nextlyContentEventPartsPg as nextlyContentEventParts,
 } from "../content-events/postgres";
+// Recorded preview links; in the bundle so freshPushSchema creates the table on
+// a fresh database, for the reason the release tables above give.
+export { nextlyPreviewLinksPg as nextlyPreviewLinks } from "../preview-links/postgres";

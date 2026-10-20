@@ -60,7 +60,7 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["1/2", "full"],
+  widths: ["half", "full"],
   width: "full",
 ${fields}
 });
@@ -88,8 +88,9 @@ const SHAPES: Record<(typeof CORE_DISPLAYS)[number], string> = {
 /** The query each core display draws, as a widget writes it. */
 const QUERIES: Record<(typeof CORE_DISPLAYS)[number], string> = {
   metric: `op: "count"`,
-  list: `op: "list"`,
-  table: `op: "list"`,
+  // A row display's query names the fields its rows are drawn from.
+  list: `op: "list", select: ["title"]`,
+  table: `op: "list", select: ["title"]`,
   bars: `op: "groupBy", groupBy: "state"`,
   timeseries: `op: "timeseries", dateField: "createdAt", interval: "day"`,
 };
@@ -247,6 +248,7 @@ export function Card({ data }: WidgetProps<typeof revenue>) {
     { kind: "a map", value: `new Map([["paid", 3]])` },
     { kind: "a set", value: `new Set(["paid"])` },
     { kind: "a bigint", value: `BigInt(3)` },
+    { kind: "a symbol", value: `Symbol("paid")` },
   ].map(
     ({ kind, value }): Case => ({
       name: `a data function's answer may not hold ${kind}`,
@@ -448,6 +450,92 @@ export const w = defineWidget({
     message: "display must be exactly one display, not a choice of several",
   },
   {
+    name: "a component display's path is a literal, not read from a string",
+    ...pair(
+      display => `${imports}import type { ComponentDisplay } from "../displays";
+
+const card: ComponentDisplay = { component: "@test/w/admin#Card" };
+
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ total: 3 }),
+  display: ${display}, ${MARK}
+});
+`,
+      "card",
+      `{ component: "@test/w/admin#Card" }`
+    ),
+    code: 2322,
+    message: "a component display's path must be written as a literal string",
+  },
+  {
+    // Narrower than `string`, but still a pattern: a map keyed by it is an
+    // index signature that an empty map satisfies, as one keyed by `string`.
+    name: "a component display's path is a literal, not a template pattern",
+    ...pair(
+      display => `${imports}declare const pattern: \`@test/\${string}/admin#Card\`;
+
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ total: 3 }),
+  display: ${display}, ${MARK}
+});
+`,
+      "{ component: pattern }",
+      `{ component: "@test/w/admin#Card" }`
+    ),
+    code: 2322,
+    message: "a component display's path must be written as a literal string",
+  },
+  ...(["list", "table"] as const).map(
+    (display): Case => ({
+      name: `the ${display} display refuses a query that selects no fields`,
+      ...pair(
+        select =>
+          widget(`  settings: { collection: settings.collection() },
+  data: { query: ({ settings }) => ({ collection: settings.collection, op: "list"${select} }) }, ${MARK}
+  display: "${display}",`),
+        "",
+        `, select: ["title"]`
+      ),
+      code: 2322,
+      message: "Property 'select' is missing",
+    })
+  ),
+  {
+    name: "a data function's answer may not hold a symbol-keyed property",
+    ...pair(
+      property => `${imports}
+const tag = Symbol("tag");
+
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ ${property} }), ${MARK}
+  display: { component: "@test/w/admin#Card" },
+});
+`,
+      `[tag]: "paid"`,
+      `paid: tag.description ?? ""`
+    ),
+    code: 2322,
+    message: "is not assignable to type 'never'",
+  },
+  {
     name: "a hand-written object is not a widget a plugin can contribute",
     ...pair(
       entry => `import type { DashboardContribution } from "../dashboard";
@@ -531,17 +619,17 @@ export const w = defineWidget({
   title: "W",
   description: "A widget under test",
   category: "Test",
-  widths: ["1/3", "1/2"],
+  widths: ["third", "half"],
   width: "${width}", ${MARK}
   data: async () => ({ total: 3 }),
   display: "metric",
 });
 `,
       "full",
-      "1/2"
+      "half"
     ),
     code: 2322,
-    message: `Type '"full"' is not assignable to type '"1/3" | "1/2"'`,
+    message: `Type '"full"' is not assignable to type '"third" | "half"'`,
   },
   {
     name: "a plugin offers an alternative to a built-in widget that does not exist",

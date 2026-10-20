@@ -69,6 +69,7 @@ import {
   consumeHmrReloadFlag,
   markHmrReloadInFlight,
 } from "./runtime/hmr-listener";
+import { consoleLogger } from "./shared/types";
 
 // ============================================================
 // Re-exports
@@ -182,6 +183,8 @@ function buildNextlyInstance(
     // stops at the class is absent from the documented `await getNextly()`
     // path, which is the one the REST handlers use.
     releases: directAPI.releases,
+    // A subject's content events, forwarded for the same reason.
+    contentEvents: directAPI.contentEvents,
     // A person's own notices, forwarded for the same reason.
     notices: directAPI.notices,
 
@@ -204,7 +207,7 @@ function buildNextlyInstance(
     shutdown: async () => {
       await shutdownServices();
       globalForInit.__nextly_cachedInstance = null;
-      console.log("Nextly shutdown complete");
+      consoleLogger.info("Nextly shutdown complete");
     },
   };
 
@@ -274,7 +277,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
   if (!globalForInit.__nextly_drizzleVersionChecked) {
     globalForInit.__nextly_drizzleVersionChecked = true;
     const mismatch = checkConsumerDrizzleVersion(process.cwd());
-    if (mismatch) console.warn(`[nextly] ${mismatch}`);
+    if (mismatch) consoleLogger.warn(`[nextly] ${mismatch}`);
   }
 
   // Fast path: return already-initialised instance immediately.
@@ -301,7 +304,7 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         for (const plugin of options.config.storage) {
           mediaStorage.registerPlugin(plugin);
         }
-        console.log(
+        consoleLogger.info(
           `[Nextly] Late-registered ${options.config.storage.length} storage plugin(s)`
         );
       }
@@ -354,10 +357,14 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         const adapter = getService("adapter");
         const capabilities = adapter.getCapabilities();
 
-        console.log(`Nextly initialized with ${capabilities.dialect} database`);
-        console.log(`  - JSONB support: ${capabilities.supportsJsonb}`);
-        console.log(`  - RETURNING support: ${capabilities.supportsReturning}`);
-        console.log(`  - Full-text search: ${capabilities.supportsFts}`);
+        consoleLogger.info(
+          `Nextly initialized with ${capabilities.dialect} database`
+        );
+        consoleLogger.info(`  - JSONB support: ${capabilities.supportsJsonb}`);
+        consoleLogger.info(
+          `  - RETURNING support: ${capabilities.supportsReturning}`
+        );
+        consoleLogger.info(`  - Full-text search: ${capabilities.supportsFts}`);
 
         // F8 PR 6: drift check. First-run static-table setup already
         // ran inside registerServices (see first-run.ts). This path
@@ -369,10 +376,10 @@ export async function getNextly(options: GetNextlyOptions): Promise<Nextly> {
         // crashes loudly instead of being masked.
         const config = getService("config");
         const driftLogger = {
-          debug: (msg: string) => console.debug(msg),
-          info: (msg: string) => console.log(msg),
-          warn: (msg: string) => console.warn(msg),
-          error: (msg: string) => console.error(msg),
+          debug: (msg: string) => consoleLogger.debug(msg),
+          info: (msg: string) => consoleLogger.info(msg),
+          warn: (msg: string) => consoleLogger.warn(msg),
+          error: (msg: string) => consoleLogger.error(msg),
         };
         // Reduced by the drift check's own helper, which carries every
         // attribute that changes a table (status, declared indexes).

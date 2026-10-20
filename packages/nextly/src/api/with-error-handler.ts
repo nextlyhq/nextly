@@ -18,6 +18,7 @@
 // cached at module scope so the resolution cost is paid once.
 import { createRequire } from "node:module";
 
+import { runWithAccessMemo } from "../auth/access/request-memo";
 import { isDbError } from "../database/errors";
 import { NextlyError } from "../errors/nextly-error";
 import { runWithRequestScope } from "../hooks/request-scope";
@@ -112,7 +113,11 @@ export function withErrorHandler<TArgs extends unknown[]>(
           // several layers down is told about the caller without every layer
           // between having to forward it. An operation handed one explicitly
           // still uses that one.
-          return await runWithRequestScope(req, () => handler(...args));
+          // With one memo of access lookups for the request; see
+          // `runWithAccessMemo`.
+          return await runWithAccessMemo(() =>
+            runWithRequestScope(req, () => handler(...args))
+          );
         } finally {
           // Captured, not logged, and inside the scope because it closes when
           // this returns. In a `finally` because a request that flattened an

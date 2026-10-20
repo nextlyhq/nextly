@@ -46,6 +46,7 @@ import {
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
 import { addressableFields } from "../addressable-fields";
+import { consoleLogger } from "../types";
 
 import { detachData } from "./detach";
 import type { ValidatableField } from "./entry-validation";
@@ -1062,9 +1063,9 @@ async function runFieldHooksRec(
             registryKey,
             { fieldName: name }
           );
-          console.error(
-            `Field hook "afterChange" failed for "${registryKey}.${name}" after the write committed:`,
-            normalized
+          consoleLogger.error(
+            `Field hook "afterChange" failed for "${registryKey}.${name}" after the write committed`,
+            { normalized }
           );
           recordSideEffectWarning({
             phase: committedPhase,

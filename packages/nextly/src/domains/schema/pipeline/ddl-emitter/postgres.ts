@@ -8,7 +8,13 @@
 // would double-apply.
 
 import { NextlyError } from "../../../../errors/nextly-error";
-import type { IndexSpec, Operation, TableSpec } from "../diff/types";
+import { isPreResolutionOp } from "../diff/types";
+import type {
+  ChangeColumnTypeOp,
+  IndexSpec,
+  Operation,
+  TableSpec,
+} from "../diff/types";
 import { createIndexSql } from "../sql-templates/create-index";
 import { columnDefinition } from "../sql-templates/create-table-body";
 
@@ -75,6 +81,22 @@ function createTableCanonicalIndexes(spec: TableSpec): string[] {
   return stmts;
 }
 
+/**
+ * A column type change, as this route spells it.
+ *
+ * Nothing for a reference-list conversion: that is a pre-resolution op, which the executor ran
+ * before this route, as it runs a rename or a drop.
+ */
+function changeColumnTypeStatements(op: ChangeColumnTypeOp): string[] {
+  if (isPreResolutionOp(op)) return [];
+  return [
+    `ALTER TABLE ${quoteIdent(op.tableName)} ` +
+      `ALTER COLUMN ${quoteIdent(op.columnName)} ` +
+      `SET DATA TYPE ${op.toType} ` +
+      renderAlterTypeUsing(op.columnName, op.toType),
+  ];
+}
+
 export function emitPostgresDdl(op: Operation): string[] {
   switch (op.type) {
     case "rename_table":
@@ -115,12 +137,7 @@ export function emitPostgresDdl(op: Operation): string[] {
       return [createIndexStatement(op.tableName, op.index)];
 
     case "change_column_type":
-      return [
-        `ALTER TABLE ${quoteIdent(op.tableName)} ` +
-          `ALTER COLUMN ${quoteIdent(op.columnName)} ` +
-          `SET DATA TYPE ${op.toType} ` +
-          renderAlterTypeUsing(op.columnName, op.toType),
-      ];
+      return changeColumnTypeStatements(op);
 
     case "change_column_nullable": {
       // Postgres requires the verb (SET / DROP) on its own statement;
