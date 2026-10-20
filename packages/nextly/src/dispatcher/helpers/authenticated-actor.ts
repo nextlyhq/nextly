@@ -46,8 +46,8 @@ export function readAuthenticatedScope(
   // The reconstruction is kept for callers that reach the dispatcher without
   // that pin — a direct dispatch, a test driving `Params` by hand — and it is
   // LOSSY by construction: route params are strings, so it recovers the stored
-  // permission slugs and neither the caller's roles nor the rows the
-  // `resource:action` spelling is derived from. A rule reading either of those
+  // permission slugs and neither the caller's roles nor the rows a rule's
+  // permission list is built from. A rule reading either of those
   // is answered wrongly from it, which is why the pin is preferred and not
   // merely a fallback for it.
   const pinned = currentCallerScope();

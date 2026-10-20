@@ -109,6 +109,8 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "role-name": ({ roles }) => (roles ?? []).includes("editor"),
   "permission-spelling": ({ permissions, collection, operation }) =>
     (permissions ?? []).includes(`${collection}:${operation}`),
+  "role-screen-spelling": ({ permissions, collection, operation }) =>
+    (permissions ?? []).includes(`${operation}-${collection}`),
   "principal-kind": ({ principal }) => principal?.kind === MEMBER_KIND,
   "user-is-key-maker": ({ user }) =>
     keyMaker.id !== undefined && user?.id === keyMaker.id,
@@ -435,8 +437,11 @@ export function personRoute(caller: Caller): string | undefined {
 export interface CallerHandle {
   /** REST and plugin route headers: a session cookie, a key, or nothing. */
   headers: Record<string, string>;
-  /** The user a Direct API or service call names. */
-  user?: { id: string };
+  /**
+   * The user a Direct API or service call names, and the role it names, which
+   * only `user-naming-super-admin` does.
+   */
+  user?: { id: string; role?: string };
   /** An API key's own scope, as REST authentication resolves it. */
   actor?: AuthenticatedScope;
   /** A plugin-defined person. */
@@ -734,11 +739,47 @@ async function handleFor(
   };
 }
 
+/**
+ * The callers only a call hands over, made from the callers they stand for.
+ * They send no headers, since no request presents them.
+ */
+function handedOnly(
+  handles: Map<Caller, CallerHandle>
+): [Caller, CallerHandle][] {
+  const key = handles.get("key-role-based");
+  const without = handles.get("user-without");
+  if (!key?.actor || !without?.user) {
+    throw new Error("the callers a call hands over have nothing to stand for");
+  }
+  return [
+    [
+      "key-without-rows",
+      {
+        headers: {},
+        user: key.user,
+        // Rebuilt from the slugs alone, as a scope that never had the rows is.
+        actor: apiKeyScopeFrom({
+          permissions: key.actor.permissions,
+          ...(key.actor.roles ? { roles: key.actor.roles } : {}),
+        }),
+      },
+    ],
+    [
+      "user-naming-super-admin",
+      { headers: {}, user: { id: without.user.id, role: "super-admin" } },
+    ],
+  ];
+}
+
 async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
   const headers = await callerHeaders(t);
   const handles = new Map<Caller, CallerHandle>();
   for (const caller of CALLERS) {
-    handles.set(caller, await handleFor(t, caller, headers.get(caller) ?? {}));
+    const sent = headers.get(caller);
+    if (sent) handles.set(caller, await handleFor(t, caller, sent));
+  }
+  for (const [caller, handle] of handedOnly(handles)) {
+    handles.set(caller, handle);
   }
   return handles;
 }
@@ -749,6 +790,9 @@ export const USER_MARKER = "root@access.test";
 
 async function seedRefs(t: TestNextly, seeded: Map<string, Seeded>) {
   const db = t.adapter.getDrizzle() as unknown as Db;
+  const owner = (
+    await t.adapter.select<{ id: string; email: string }>("users", {})
+  ).find(user => user.email === USER_MARKER)?.id;
   await db.insert(getDialectTables().media).values({
     id: "media-probe",
     filename: MEDIA_MARKER,
@@ -756,12 +800,12 @@ async function seedRefs(t: TestNextly, seeded: Map<string, Seeded>) {
     mimeType: "image/png",
     size: 1,
     url: `/uploads/${MEDIA_MARKER}`,
+    // Who filed it: a column a read refused media populates without, so a
+    // whole row can be told from one with its internal columns taken off.
+    uploadedBy: owner,
     uploadedAt: new Date(),
     updatedAt: new Date(),
   });
-  const owner = (
-    await t.adapter.select<{ id: string; email: string }>("users", {})
-  ).find(user => user.email === USER_MARKER)?.id;
   const made = await t.nextly.create({
     collection: "refs",
     data: {

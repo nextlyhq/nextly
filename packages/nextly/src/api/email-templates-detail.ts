@@ -17,6 +17,8 @@
  * @module api/email-templates-detail
  */
 
+import { z } from "zod";
+
 import { actorFromAuthContext } from "../auth/request-actor";
 import { container } from "../di";
 import { getCachedNextly } from "../init";
@@ -26,6 +28,13 @@ import { readJsonBody } from "./read-json-body";
 import { respondAction, respondDoc, respondMutation } from "./response-shapes";
 import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
+
+/**
+ * A template's description on update: text, or null to clear it. Parsed as
+ * a field of an object so a refusal names `description` as its path.
+ */
+const descriptionSchema = z.object({ description: z.string().nullable() });
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -71,11 +80,12 @@ export const GET = withErrorHandler(
  *
  * Request Body (all fields optional):
  * - name, subject, htmlContent, plainTextContent, variables, useLayout,
- *   isActive, providerId.
+ *   isActive, providerId, description (a string, or null to clear it).
  *
  * Response Codes:
  * - 200 OK: Template updated successfully
- * - 400 Bad Request: Invalid JSON body
+ * - 400 Bad Request: Invalid JSON body, or a description that is neither
+ *   a string nor null
  * - 401 Unauthorized: Authentication required
  * - 404 Not Found: Template with ID does not exist
  * - 500 Internal Server Error: Update failed
@@ -105,6 +115,16 @@ export const PATCH = withErrorHandler(
     if (body.useLayout !== undefined) updateData.useLayout = body.useLayout;
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
     if (body.providerId !== undefined) updateData.providerId = body.providerId;
+    // A description is new to this handler, so it is parsed rather than
+    // copied: a string sets it, null clears it, anything else is refused
+    // instead of being written to the column.
+    if (body.description !== undefined) {
+      const parsed = descriptionSchema.safeParse({
+        description: body.description,
+      });
+      if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+      updateData.description = parsed.data.description;
+    }
 
     const service = await getEmailTemplateService();
     const template = await service.updateTemplate(

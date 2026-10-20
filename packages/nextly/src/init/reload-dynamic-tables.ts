@@ -25,6 +25,7 @@ import type {
   DynamicTableLoadResult,
   loadDynamicTables,
 } from "../di/load-dynamic-tables";
+import { consoleLogger } from "../shared/types";
 
 /**
  * The in-flight reload and the one queued behind it.
@@ -156,20 +157,20 @@ async function runReload(label: string): Promise<void> {
     const components = await registerComponents(deps, label, failures);
 
     if (failures.length > 0) {
-      console.warn(
+      consoleLogger.warn(
         `${label} Schema registry reload INCOMPLETE (${failures.join("; ")}). ` +
           `Entities this boot registered may not be queryable until a restart.`
       );
       return;
     }
 
-    console.log(
+    consoleLogger.info(
       `${label} Schema registry reloaded: ${registered} entities, ` +
         `${components} field groups.`
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
+    consoleLogger.warn(
       `${label} Schema registry reload failed: ${msg}. ` +
         `Entities this boot registered are not queryable until a restart.`
     );
@@ -197,10 +198,10 @@ async function registerComponents(
       registry: deps.registry,
       dialect: deps.dialect,
       logger: {
-        debug: (m: string) => console.debug(`${label} ${m}`),
-        info: (m: string) => console.log(`${label} ${m}`),
-        warn: (m: string) => console.warn(`${label} ${m}`),
-        error: (m: string) => console.error(`${label} ${m}`),
+        debug: (m: string) => consoleLogger.debug(`${label} ${m}`),
+        info: (m: string) => consoleLogger.info(`${label} ${m}`),
+        warn: (m: string) => consoleLogger.warn(`${label} ${m}`),
+        error: (m: string) => consoleLogger.error(`${label} ${m}`),
       },
     });
   } catch (err) {
@@ -221,7 +222,7 @@ async function resolveDeps(label: string): Promise<ReloadDeps | undefined> {
   const schemaRegistry = container.get("schemaRegistry");
 
   if (!schemaRegistry || !adapter) {
-    console.warn(
+    consoleLogger.warn(
       `${label} ${!schemaRegistry ? "Schema registry" : "Adapter"} not available for reload. ` +
         `Collections this boot registered are not queryable until a restart.`
     );

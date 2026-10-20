@@ -114,6 +114,7 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   draftComponentValues,
@@ -3197,6 +3198,20 @@ export class SingleMutationService extends BaseService {
       }
 
       let updatedDoc = updatedRows[0];
+
+      // A saved Single, its pending work included, can give a scheduled
+      // release holding it a hard problem: handed to the early stop once the
+      // write is durable, so that release stops now rather than at its
+      // instant. Inside an enclosing SQLite transaction this waits for its
+      // commit, and never runs for a write it rolls back.
+      const savedId = String(updatedDoc.id);
+      await this.afterCommit(() =>
+        stopReleasesHolding({
+          documents: [
+            { scopeKind: "single", scopeSlug: slug, entryId: savedId },
+          ],
+        })
+      );
 
       // 10. Deserialize JSON fields for response
       updatedDoc = this.queryService.deserializeJsonFields(

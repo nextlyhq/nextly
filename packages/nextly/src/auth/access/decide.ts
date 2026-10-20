@@ -103,7 +103,7 @@ export async function askRule(
   if (rule === undefined) return { declared: false };
   if (typeof rule === "boolean") return { declared: true, value: rule };
   try {
-    const value: unknown = await rule(ruleContext(actor, action, target.slug));
+    const value: unknown = await rule(ruleContext(actor, action, target, rule));
     return { declared: true, value };
   } catch {
     return { declared: true, threw: true };

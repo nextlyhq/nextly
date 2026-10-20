@@ -22,13 +22,14 @@ import {
   type Nextly,
 } from "../init";
 
-// Mock console.log to avoid noise in tests
-const originalLog = console.log;
+// Mock console.info to avoid noise in tests: Nextly reports through
+// consoleLogger, whose info level writes there.
+const originalLog = console.info;
 beforeEach(() => {
-  console.log = vi.fn();
+  console.info = vi.fn();
 });
 afterEach(() => {
-  console.log = originalLog;
+  console.info = originalLog;
 });
 
 function testOptions(): Parameters<typeof getNextly>[0] {
@@ -106,14 +107,12 @@ describe("init - Nextly API", () => {
         .map(([name]) => name);
 
       expect(offered).toContain("releases");
+      expect(offered).toContain("apiKeys");
 
-      const missing = offered
-        // apiKeys: not forwarded to the public instance; outside this change.
-        .filter(name => name !== "apiKeys")
-        .filter(name => {
-          const value = (instance as unknown as Record<string, unknown>)[name];
-          return typeof value !== "object" || value === null;
-        });
+      const missing = offered.filter(name => {
+        const value = (instance as unknown as Record<string, unknown>)[name];
+        return typeof value !== "object" || value === null;
+      });
       expect(
         missing,
         "namespaces the lazy API offers that getNextly() lacks"
@@ -131,7 +130,7 @@ describe("init - Nextly API", () => {
 
     it("should log database capabilities on first initialization", async () => {
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
 
       await getNextly(testOptions());
 
@@ -150,7 +149,7 @@ describe("init - Nextly API", () => {
 
       // Clear mock
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
 
       // Second call - should not log
       await getNextly(testOptions());
@@ -175,7 +174,7 @@ describe("init - Nextly API", () => {
       await getNextly(testOptions());
 
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
 
       await shutdownNextly();
 
@@ -195,7 +194,7 @@ describe("init - Nextly API", () => {
       const nextly = await getNextly(testOptions());
 
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
 
       await nextly.shutdown();
 
@@ -227,6 +226,7 @@ describe("init - Nextly API", () => {
     const PUBLIC_MEMBERS = [
       "access",
       "adapter",
+      "apiKeys",
       "bulkDelete",
       "changePassword",
       "collections",
@@ -307,13 +307,13 @@ describe("init - Nextly API", () => {
       expect(second).toBe(first);
 
       const mockLog = vi.fn();
-      console.log = mockLog;
+      console.info = mockLog;
       await first.shutdown();
       expect(isServicesRegistered()).toBe(false);
       // Both construction paths share one shutdown, so the fallback logs
       // the completion line the factory path always has. Pins the unified
       // behavior.
-      expect(mockLog).toHaveBeenCalledWith("Nextly shutdown complete");
+      expect(mockLog).toHaveBeenCalledWith("[INFO] Nextly shutdown complete");
     });
   });
 });

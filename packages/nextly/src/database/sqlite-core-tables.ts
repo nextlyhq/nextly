@@ -60,12 +60,18 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE TABLE IF NOT EXISTS "password_reset_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
+      "user_id" TEXT REFERENCES "users"("id") ON DELETE CASCADE,
       "token_hash" TEXT NOT NULL,
       "expires" INTEGER NOT NULL,
       "used_at" INTEGER,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("identifier", "token_hash")
     )`,
+    // Its own statement, as the other indexes are. On a database whose table
+    // predates "user_id" it fails and is skipped, until the core reconcile
+    // adds the column and the index with it.
+    `CREATE INDEX IF NOT EXISTS "prt_user_id_idx"
+      ON "password_reset_tokens" ("user_id")`,
     `CREATE INDEX IF NOT EXISTS "prt_expires_idx"
       ON "password_reset_tokens" ("expires")`,
     `CREATE INDEX IF NOT EXISTS "prt_used_at_idx"
@@ -75,11 +81,14 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
+      "user_id" TEXT REFERENCES "users"("id") ON DELETE CASCADE,
       "token_hash" TEXT NOT NULL,
       "expires" INTEGER NOT NULL,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       UNIQUE("identifier", "token_hash")
     )`,
+    `CREATE INDEX IF NOT EXISTS "evt_user_id_idx"
+      ON "email_verification_tokens" ("user_id")`,
     `CREATE INDEX IF NOT EXISTS "evt_expires_idx"
       ON "email_verification_tokens" ("expires")`,
     `CREATE INDEX IF NOT EXISTS "evt_token_hash_idx"

@@ -32,6 +32,7 @@ import { runWithAccessMemo } from "../../auth/access/request-memo";
 import { requireNextly } from "../../direct-api/nextly";
 import type { UserContext } from "../../domains/collections/services/collection-types";
 import { NextlyError } from "../../errors/nextly-error";
+import { consoleLogger } from "../../shared/types";
 
 import { triggerNotFound } from "./not-found";
 import { isReservedPath } from "./reserved-paths";
@@ -440,7 +441,7 @@ function buildRoute<TNode>(
       if (warnedCollections.has(context.collection)) return;
       warnedCollections.add(context.collection);
 
-      console.warn(
+      consoleLogger.warn(
         `[nextly] This route serves "${context.collection}" and declares no ` +
           "`draft` hook, so a preview link for that collection cannot be " +
           "served here — a reviewer following one gets a 404 that looks like " +
