@@ -30,8 +30,11 @@ import { requireRouteAnyPermission } from "./route-auth";
 import { withErrorHandler } from "./with-error-handler";
 import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
-/** A template's description on update: text, or null to clear it. */
-const descriptionSchema = z.string().nullable();
+/**
+ * A template's description on update: text, or null to clear it. Parsed as
+ * a field of an object so a refusal names `description` as its path.
+ */
+const descriptionSchema = z.object({ description: z.string().nullable() });
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -116,9 +119,11 @@ export const PATCH = withErrorHandler(
     // copied: a string sets it, null clears it, anything else is refused
     // instead of being written to the column.
     if (body.description !== undefined) {
-      const parsed = descriptionSchema.safeParse(body.description);
+      const parsed = descriptionSchema.safeParse({
+        description: body.description,
+      });
       if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
-      updateData.description = parsed.data;
+      updateData.description = parsed.data.description;
     }
 
     const service = await getEmailTemplateService();

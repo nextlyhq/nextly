@@ -143,9 +143,14 @@ describe("creating a template through the standalone handler", () => {
   });
 
   it("refuses a description that is not text", async () => {
-    const { res } = await create({ ...newsletter, description: 42 });
+    const res = await list.POST(
+      request("POST", "", { ...newsletter, description: 42 })
+    );
 
     expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      error: { data: { errors: [{ path: "description" }] } },
+    });
     expect(await service.getTemplateBySlug("newsletter")).toBeNull();
   });
 });
@@ -196,9 +201,16 @@ describe("updating a template through the standalone detail handler", () => {
   it("refuses a description that is not text, and changes nothing", async () => {
     const id = await seed("Sent monthly.");
 
-    const { res } = await patch(id, { subject: "Hello", description: 42 });
+    const res = await detail.PATCH(
+      request("PATCH", `/${id}`, { subject: "Hello", description: 42 }),
+      context(id)
+    );
 
     expect(res.status).toBe(400);
+    // The refusal names the field, so a client can show it beside that input.
+    expect(await res.json()).toMatchObject({
+      error: { data: { errors: [{ path: "description" }] } },
+    });
     expect(await service.getTemplate(id)).toMatchObject({
       subject: "Hi",
       description: "Sent monthly.",
