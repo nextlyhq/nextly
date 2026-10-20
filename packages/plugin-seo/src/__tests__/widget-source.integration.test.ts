@@ -21,7 +21,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { defaultSeoFields } from "../fields";
 import { seoPlugin } from "../plugin";
 import { seoIssuesWidget } from "../widget-card";
-import { SEO_ISSUES_SOURCE_ID, seoIssuesWidgetSource } from "../widget-source";
+import {
+  ISSUE_FIELD,
+  ISSUE_SCAN_ROW_BUDGET,
+  SEO_ISSUES_SOURCE_ID,
+  seoIssuesWidgetSource,
+} from "../widget-source";
 
 const PROBE_NAME = "@test/seo-probe";
 // Segments after `/api/`, matching how the catch-all splits the path. The
@@ -78,9 +83,111 @@ function probePlugin(collections: string[]): unknown {
             });
           },
         },
+        {
+          // The card's five cells answered together (`resolveMany`) or one by
+          // one (`resolve`), with the pages the REAL collection service read.
+          method: "GET",
+          path: "/cells",
+          public: true,
+          handler: async (req, ctx) => {
+            const { resolve, resolveMany } = seoIssuesWidgetSource(
+              collections,
+              defaultSeoFields()
+            );
+            const cells = (
+              seoIssuesWidget(defaultSeoFields())?.cells ?? []
+            ).map(cell => cell.query);
+            const counted = countingReads(ctx);
+            const answers =
+              new URL(req.url).searchParams.get("mode") === "many" &&
+              resolveMany
+                ? await resolveMany(cells, reader, counted.ctx, undefined)
+                : await Promise.all(
+                    cells.map(cell =>
+                      resolve(cell, reader, counted.ctx, undefined)
+                    )
+                  );
+            return new Response(
+              JSON.stringify({ answers, pagesRead: counted.pagesRead() }),
+              { headers: { "content-type": "application/json" } }
+            );
+          },
+        },
+        {
+          method: "GET",
+          path: "/grouped",
+          public: true,
+          handler: async (_req, ctx) => {
+            const { resolve } = seoIssuesWidgetSource(
+              collections,
+              defaultSeoFields()
+            );
+            const result = await resolve(
+              {
+                source: SEO_ISSUES_SOURCE_ID,
+                op: "groupBy",
+                groupBy: ISSUE_FIELD,
+              },
+              reader,
+              ctx,
+              undefined
+            );
+            return new Response(JSON.stringify(result), {
+              headers: { "content-type": "application/json" },
+            });
+          },
+        },
       ],
     },
   });
+}
+
+/**
+ * The plugin's context with its collection reads counted, the real service doing
+ * the reading. Through a `Proxy`, because the service's methods live on its
+ * prototype: a spread copy would lose them.
+ */
+function countingReads<C extends { services: object }>(ctx: C) {
+  let pages = 0;
+  const bind = (target: object, value: unknown) =>
+    typeof value === "function" ? value.bind(target) : value;
+  const services = ctx.services as { collections: object };
+  const collections = new Proxy(services.collections, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (key !== "listEntries" || typeof value !== "function") {
+        return bind(target, value);
+      }
+      return (...args: unknown[]) => {
+        pages += 1;
+        return (value as (...a: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  });
+  const counted = new Proxy(services, {
+    get(target, key, receiver) {
+      return key === "collections"
+        ? collections
+        : bind(target, Reflect.get(target, key, receiver));
+    },
+  });
+  return {
+    ctx: { ...ctx, services: counted } as C,
+    pagesRead: () => pages,
+  };
+}
+
+async function probe(path: string, query = ""): Promise<unknown> {
+  const handlers = createDynamicHandlers();
+  const res = await handlers.GET(
+    new Request(`http://localhost/api/plugins/${PROBE_NAME}/${path}${query}`),
+    {
+      params: Promise.resolve({
+        params: ["plugins", "@test", "seo-probe", path],
+      }),
+    }
+  );
+  return (await res.json()) as unknown;
 }
 
 const pages = () =>
@@ -137,7 +244,7 @@ describe("the SEO source, booted", () => {
     const published = listSources().find(s => s.id === SEO_ISSUES_SOURCE_ID);
     expect(published).toBeDefined();
     expect(published?.kind).toBe("plugin");
-    expect(published?.supports).toEqual(["count"]);
+    expect(published?.supports).toEqual(["count", "groupBy"]);
   });
 
   it("counts the gaps in real rows through the real services", async () => {
@@ -207,4 +314,57 @@ describe("the SEO source, booted", () => {
     // And the numbers are not all zero, which would satisfy the sum trivially.
     expect(perCell.filter(n => n > 0).length).toBeGreaterThan(1);
   });
+});
+
+describe("the SEO card, from one scan", () => {
+  it("answers its five cells from ONE scan, each equal to the cell asked alone", async () => {
+    const t = await boot(["pages"]);
+    await write(t, "Bare");
+    await write(t, "Titled", { metaTitle: "Titled" });
+    await write(t, "Hidden", { metaTitle: "H", noindex: true });
+
+    const together = (await probe("cells", "?mode=many")) as {
+      answers: unknown[];
+      pagesRead: number;
+    };
+    const alone = (await probe("cells", "?mode=each")) as {
+      answers: unknown[];
+      pagesRead: number;
+    };
+
+    expect(together.answers).toEqual(alone.answers);
+    expect(alone.answers).toHaveLength(5);
+    // The baseline was one scan per cell: five here, one when asked together.
+    expect(alone.pagesRead).toBe(5);
+    expect(together.pagesRead).toBe(1);
+  });
+
+  it("groups the issues by kind, and says the counts are floors past the scan bound", async () => {
+    const t = await boot(["pages"]);
+    // Bare rows, each with the same four gaps, one more than the scan may read.
+    const rows = ISSUE_SCAN_ROW_BUDGET + 1;
+    for (let start = 0; start < rows; start += 100) {
+      await Promise.all(
+        Array.from({ length: Math.min(100, rows - start) }, (_, i) =>
+          write(t, `Bare ${start + i}`)
+        )
+      );
+    }
+
+    const grouped = (await probe("grouped")) as {
+      op: string;
+      buckets: { value: string; count: number }[];
+      atLeast?: boolean;
+      truncated?: boolean;
+    };
+
+    expect(grouped.op).toBe("groupBy");
+    expect(grouped.atLeast).toBe(true);
+    // Every kind the scan found is here; its count is what was read, a floor.
+    expect(grouped.truncated).toBeUndefined();
+    expect(grouped.buckets.map(bucket => bucket.count)).toEqual(
+      grouped.buckets.map(() => ISSUE_SCAN_ROW_BUDGET)
+    );
+    expect(grouped.buckets.length).toBeGreaterThan(0);
+  }, 120_000);
 });

@@ -60,6 +60,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { isKeptOffDashboard } from "../widgets/kept-off-dashboard";
 import type { WidgetQuery } from "../widgets/query";
+import type { ResolverOptions } from "../widgets/resolved-sources";
 import type { WidgetResult, WidgetResultField } from "../widgets/result";
 import { refuseUnconsumedQueryFields } from "../widgets/sources";
 import { VERSIONS_SOURCE_ID } from "../widgets/system-source-ids";
@@ -361,12 +362,17 @@ async function gatherVisibleDocuments(
   return { documents: gathered.documents, exhausted: false };
 }
 
-async function resolveVersions(
-  query: WidgetQuery,
-  caller: ReadCaller
-): Promise<WidgetResult> {
-  refuseUnconsumed(query);
+/** The scope key the pending-edit snapshot is kept under; scopes are per source. */
+const READABLE_SCOPE_KEY = "readable-scope";
 
+/**
+ * The pending-edit snapshot and the slugs this caller may read in it, together.
+ *
+ * Kept as ONE value in the batch's scope, so every card this source answers in a
+ * batch -- the count and the list alike -- is judged against the same snapshot,
+ * for the reason one query is: two snapshots are two chances to disagree.
+ */
+async function readableScope(caller: ReadCaller) {
   // Resolved ONCE per query and passed down, rather than each read asking
   // again: the two ops answer about the same set, and two resolutions of one
   // caller's permissions are two chances to disagree.
@@ -400,6 +406,21 @@ async function resolveVersions(
     const kind = scope.kinds.get(slug);
     return kind === undefined || !isKeptOffDashboard(kind, slug);
   });
+
+  return { scope, readableSlugs };
+}
+
+async function resolveVersions(
+  query: WidgetQuery,
+  caller: ReadCaller,
+  opts?: ResolverOptions
+): Promise<WidgetResult> {
+  refuseUnconsumed(query);
+  const { scope, readableSlugs } = opts?.scope
+    ? await opts.scope.getOrCompute(READABLE_SCOPE_KEY, () =>
+        readableScope(caller)
+      )
+    : await readableScope(caller);
 
   if (query.op === "count") {
     // 🔴 No pre-authorization aggregate decides anything here any more. Counting

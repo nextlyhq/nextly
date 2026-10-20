@@ -20,15 +20,17 @@
  * is not. The same choice core's own `versions-widget-source` makes, for the
  * same reason.
  *
- * ## Why `count` and not a chart, yet
+ * ## A count, or the issues grouped by kind, from one scan
  *
- * A grouped answer cannot be reported honestly under a bound. `WidgetResult`'s
- * `groupBy` arm carries `truncated`, which means BUCKETS WERE LEFT OUT -- not
- * "these bucket counts are floors". A bounded scan produces the second, and
- * saying the first would be a different claim. Until the grouped shape can
- * express a bounded grouping, this source supports the op it can answer
- * truthfully -- and `where` on `issue` gives a card the same per-issue number
- * without needing one.
+ * A bounded scan's grouping is honest because `WidgetResult`'s `groupBy` arm
+ * says `atLeast`: every bucket found is real and every count may be short. It
+ * does not say `truncated`, which would claim buckets were left out of what was
+ * read. `where` on `issue` gives a card a per-kind count.
+ *
+ * Every question asked of this source in a batch is answered from ONE scan: the
+ * scan tallies issues by kind, and each count or grouping is read from the
+ * tally. `resolveMany` answers a batch's queries in one call, and a query
+ * answered on its own shares the scan through the batch's scope.
  *
  * @module widget-source
  */
@@ -37,6 +39,7 @@ import {
   callerReadOptions,
   NextlyError,
   type FieldConfig,
+  type PluginManySourceResolver,
   type PluginSourceResolver,
   type PluginWidgetSource,
 } from "@nextlyhq/plugin-sdk";
@@ -99,6 +102,9 @@ const PAGE_BUDGET = Math.ceil(ISSUE_SCAN_ROW_BUDGET / ISSUE_SCAN_PAGE_SIZE);
 
 /** Only what the scan reads: the SEO group, and the id the sort orders by. */
 const SCAN_SELECT = { id: true, seo: true } as const;
+
+/** The scope key this source's scan is kept under; scopes are per source, so it need only be unique here. */
+const ISSUE_SCAN_KEY = "issue-scan";
 
 /**
  * The field whose presence means "kept out of search deliberately", rather than
@@ -349,8 +355,20 @@ type SeoIssueServices = CollectionReads<ReturnType<typeof callerReadOptions>>;
 interface ScanTally {
   /** Pages FETCHED, which is the work this scan caused. */
   pagesUsed: number;
-  issues: number;
   /** Whether pages were left unfetched because the budget ran out. */
+  bounded: boolean;
+}
+
+/**
+ * Every issue the scan found, by kind, and whether the scan stopped at its bound.
+ *
+ * Kept by kind rather than as one total, so ONE scan answers every question this
+ * source takes: a count of all issues, a count of some kinds, and the grouping by
+ * kind -- each read from the same tally rather than from a scan of its own.
+ */
+interface IssueTally {
+  byIssue: ReadonlyMap<string, number>;
+  /** The rows read stopped at the budget, so every count is a floor. */
   bounded: boolean;
 }
 
@@ -398,11 +416,11 @@ function assertStatusIsAnswerable(status: string | undefined): void {
   });
 }
 
-/** How this scan counts one page's rows, and what it is allowed to read. */
+/** What this scan looks for, what it may read, and where it tallies what it finds. */
 interface ScanRules {
   checks: IssueChecks;
-  keep: (label: string) => boolean;
   readOptions: ReturnType<typeof callerReadOptions>;
+  byIssue: Map<string, number>;
 }
 
 /**
@@ -424,11 +442,10 @@ async function scanCollection(
   abandoned: () => boolean
 ): Promise<ScanTally> {
   let pagesUsed = 0;
-  let issues = 0;
 
   for (let page = 1; ; page += 1) {
-    if (pagesUsed >= pagesAllowed) return { pagesUsed, issues, bounded: true };
-    if (abandoned()) return { pagesUsed, issues, bounded: false };
+    if (pagesUsed >= pagesAllowed) return { pagesUsed, bounded: true };
+    if (abandoned()) throwAbandoned();
 
     const result = await services.collections.listEntries(
       slug,
@@ -449,11 +466,12 @@ async function scanCollection(
     pagesUsed += 1;
 
     for (const row of result.data) {
-      issues += issuesFor(row, rules.checks).filter(rules.keep).length;
+      for (const issue of issuesFor(row, rules.checks)) {
+        rules.byIssue.set(issue, (rules.byIssue.get(issue) ?? 0) + 1);
+      }
     }
 
-    if (!result.pagination.hasMore)
-      return { pagesUsed, issues, bounded: false };
+    if (!result.pagination.hasMore) return { pagesUsed, bounded: false };
   }
 }
 
@@ -472,30 +490,47 @@ function isDenial(error: unknown): boolean {
 }
 
 /**
- * Count the issues across `collections`, for this caller, within the budget.
+ * A scan the host stopped waiting for, ended rather than reported.
+ *
+ * 🔴 Thrown, not returned as a short tally. A scan is shared by every question
+ * asked of this source in a batch, so a partial tally returned here would reach
+ * a card whose own wait had not ended, as a number that looks whole.
+ */
+function throwAbandoned(): never {
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "This widget took too long to answer",
+    logMessage: `plugin-seo: "${SEO_ISSUES_SOURCE_ID}" scan abandoned`,
+  });
+}
+
+/**
+ * Tally the issues across `collections`, by kind, for this caller, within the
+ * budget.
  *
  * 🔴 Every read is scoped to the caller through `callerReadOptions`, so the
- * number describes what THEY can see. A count assembled as `system` would be the
- * same figure for everyone and would tell an author how much content exists that
- * they cannot read.
+ * numbers describe what THEY can see. A tally assembled as `system` would be the
+ * same for everyone and would tell an author how much content exists that they
+ * cannot read.
  */
-async function countIssues(
+async function tallyIssues(
   services: SeoIssueServices,
   caller: Parameters<PluginSourceResolver>[1],
   collections: readonly string[],
-  rules: Omit<ScanRules, "readOptions">,
+  checks: IssueChecks,
   signal: AbortSignal | undefined
-): Promise<{ total: number; atLeast: boolean }> {
+): Promise<IssueTally> {
+  const byIssue = new Map<string, number>();
   const scanRules: ScanRules = {
-    ...rules,
+    checks,
     readOptions: callerReadOptions(caller),
+    byIssue,
   };
   // Read through a call rather than inline: the value changes between awaits,
   // and an inline check narrows it for the rest of the block, so the second
   // look would be compiled away as unreachable.
   const abandoned = (): boolean => signal?.aborted === true;
   let pagesUsed = 0;
-  let total = 0;
   let bounded = false;
 
   for (const slug of collections) {
@@ -506,7 +541,7 @@ async function countIssues(
     // The host aborts this when the dashboard has stopped waiting. Checked
     // between collections and between pages rather than once at the top: a scan
     // that has already started is exactly the work worth abandoning.
-    if (abandoned()) break;
+    if (abandoned()) throwAbandoned();
 
     try {
       const tally = await scanCollection(
@@ -517,15 +552,74 @@ async function countIssues(
         abandoned
       );
       pagesUsed += tally.pagesUsed;
-      total += tally.issues;
       if (tally.bounded) bounded = true;
     } catch (error) {
       if (!isDenial(error)) throw error;
-      // Denied: this collection contributes zero rather than failing the card.
+      // Denied: this collection contributes nothing rather than failing the card.
     }
   }
 
-  return { total, atLeast: bounded };
+  return { byIssue, bounded };
+}
+
+/**
+ * One query's answer, read from a tally: the count of the kinds it keeps, or
+ * those kinds as groups. A floor is said as `atLeast` on either.
+ */
+function answerFrom(
+  query: Parameters<PluginSourceResolver>[0],
+  tally: IssueTally
+): ReturnType<typeof countAnswer> | ReturnType<typeof groupAnswer> {
+  return query.op === "groupBy"
+    ? groupAnswer(query, tally)
+    : countAnswer(query, tally);
+}
+
+function countAnswer(
+  query: Parameters<PluginSourceResolver>[0],
+  tally: IssueTally
+) {
+  const keep = issueFilter(query.where);
+  let total = 0;
+  for (const [issue, count] of tally.byIssue) if (keep(issue)) total += count;
+  return {
+    op: "count" as const,
+    total,
+    ...(tally.bounded ? { atLeast: true } : {}),
+  };
+}
+
+function groupAnswer(
+  query: Parameters<PluginSourceResolver>[0],
+  tally: IssueTally
+) {
+  const keep = issueFilter(query.where);
+  const buckets = [...tally.byIssue]
+    .filter(([issue]) => keep(issue))
+    .map(([value, count]) => ({ value, count }));
+  // Under the bound, every bucket found is real and every count may be short:
+  // `atLeast` says so. No bucket is left out of what was read, so `truncated`
+  // would claim something false.
+  return {
+    op: "groupBy" as const,
+    buckets,
+    ...(tally.bounded ? { atLeast: true } : {}),
+  };
+}
+
+/** Refuse what this source cannot answer, before any row is read. */
+function assertAnswerable(query: Parameters<PluginSourceResolver>[0]): void {
+  assertStatusIsAnswerable(query.status);
+  if (query.op !== "count" && query.op !== "groupBy") {
+    throw new Error(
+      `plugin-seo: "${SEO_ISSUES_SOURCE_ID}" answers "count" and "groupBy", not "${query.op}"`
+    );
+  }
+  if (query.op === "groupBy" && query.groupBy !== ISSUE_FIELD) {
+    throw new Error(
+      `plugin-seo: "${SEO_ISSUES_SOURCE_ID}" groups by "${ISSUE_FIELD}" only`
+    );
+  }
 }
 
 /**
@@ -534,10 +628,9 @@ async function countIssues(
  * `installed` is the `seo` field set this project actually configured, because
  * `seoPlugin({ fields })` replaces the defaults -- see {@link checksFor}.
  *
- * `count` alone: see the module docblock for why a grouped answer cannot be
- * reported honestly under a bound. `issue` is published so a card can ask for
- * one kind of issue by name, which is the per-issue number a chart would
- * otherwise be needed for.
+ * `count`, and `groupBy` on `issue`, both read from one scan; see the module
+ * docblock. `issue` is published so a card can ask for one kind of issue by name
+ * or chart them all.
  */
 export function seoIssuesWidgetSource(
   collections: readonly string[],
@@ -547,31 +640,54 @@ export function seoIssuesWidgetSource(
     id: SEO_ISSUES_SOURCE_ID,
     label: "SEO issues",
     kind: "plugin",
-    supports: ["count"],
+    supports: ["count", "groupBy"],
     fields: [{ name: ISSUE_FIELD, type: "string" }],
   };
 
   const checks = checksFor(installed);
 
-  const resolve: PluginSourceResolver = async (query, caller, ctx, opts) => {
-    assertStatusIsAnswerable(query.status);
-
-    if (query.op !== "count") {
-      throw new Error(
-        `plugin-seo: "${SEO_ISSUES_SOURCE_ID}" answers "count", not "${query.op}"`
-      );
-    }
-
-    const { total, atLeast } = await countIssues(
-      ctx.services,
-      caller,
-      collections,
-      { checks, keep: issueFilter(query.where) },
-      opts?.signal
-    );
-
-    return { op: "count", total, ...(atLeast ? { atLeast: true } : {}) };
+  // ONE scan per batch for this caller, however many of this source's cards it
+  // holds: through the batch's scope when the host hands one, so a card answered
+  // on its own still shares the scan with its neighbours.
+  const tallyFor = (
+    caller: Parameters<PluginSourceResolver>[1],
+    ctx: Parameters<PluginSourceResolver>[2],
+    opts: Parameters<PluginSourceResolver>[3]
+  ): Promise<IssueTally> => {
+    const scan = () =>
+      tallyIssues(ctx.services, caller, collections, checks, opts?.signal);
+    return opts?.scope ? opts.scope.getOrCompute(ISSUE_SCAN_KEY, scan) : scan();
   };
 
-  return { source, resolve };
+  const resolve: PluginSourceResolver = async (query, caller, ctx, opts) => {
+    assertAnswerable(query);
+    return answerFrom(query, await tallyFor(caller, ctx, opts));
+  };
+
+  // Several of this source's cards in one call: each query is checked on its
+  // own, so one it cannot answer fails alone, and the rest share one scan.
+  const resolveMany: PluginManySourceResolver = async (
+    queries,
+    caller,
+    ctx,
+    opts
+  ) => {
+    const refusals = queries.map(query => {
+      try {
+        assertAnswerable(query);
+        return undefined;
+      } catch (error) {
+        return error instanceof Error ? error : new Error(String(error));
+      }
+    });
+    if (refusals.every(refusal => refusal !== undefined)) {
+      return refusals.map(refusal => refusal ?? new Error("unanswerable"));
+    }
+    const tally = await tallyFor(caller, ctx, opts);
+    return queries.map(
+      (query, index) => refusals[index] ?? answerFrom(query, tally)
+    );
+  };
+
+  return { source, resolve, resolveMany };
 }

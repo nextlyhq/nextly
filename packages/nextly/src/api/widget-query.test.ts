@@ -59,6 +59,7 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
 });
 
 import { requireAuthentication } from "../auth/middleware";
+import { registerResolvedSource } from "../domains/widgets/resolved-sources";
 import { clearSources, registerSource } from "../domains/widgets/sources";
 import {
   clearSystemResolvers,
@@ -1218,5 +1219,202 @@ describe("a resolver that returns something the response cannot encode", () => {
     };
     expect(body.results[0].ok).toBe(true);
     expect(body.results[0].result?.total).toBe(11);
+  });
+});
+
+describe("a batch that asks one source several times", () => {
+  const ISSUES = "plugin:acme/issues";
+  const info: object[] = [];
+
+  /** A plugin source that answers several queries in one call, with `resolveMany` as given. */
+  function registerManySource(resolveMany: unknown) {
+    registerResolvedSource(
+      {
+        id: ISSUES,
+        label: "Issues",
+        kind: "plugin",
+        supports: ["count"],
+        fields: [{ name: "issue", type: "string" }],
+      },
+      vi.fn(),
+      resolveMany as never
+    );
+  }
+
+  const count = (issue: string) => ({
+    source: ISSUES,
+    op: "count",
+    where: { issue: { equals: issue } },
+  });
+
+  beforeEach(() => {
+    info.length = 0;
+    setNextlyLogger({ ...testLogger, info: (p: object) => void info.push(p) });
+  });
+
+  it("asks a source with resolveMany ONCE for all its queries, and maps the answers back by position", async () => {
+    const resolveMany = vi.fn(async (queries: unknown[]) =>
+      queries.map((_, i) => ({ op: "count", total: (i + 1) * 10 }))
+    );
+    registerManySource(resolveMany);
+
+    const res = await postWidgetQuery(
+      makeReq({ queries: [count("a"), count("b"), count("c")] })
+    );
+    const slots = (await res.json()) as {
+      results: Array<{ ok: boolean; result?: { total: number } }>;
+    };
+
+    expect(resolveMany).toHaveBeenCalledTimes(1);
+    expect(executeWidgetQuery).not.toHaveBeenCalled();
+    expect(slots.results.map(slot => slot.result?.total)).toEqual([10, 20, 30]);
+    // Handed this source's own view of the batch's shared work, and the group's signal.
+    expect(resolveMany).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.anything(),
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+        scope: expect.objectContaining({ getOrCompute: expect.any(Function) }),
+      })
+    );
+    expect(info).toContainEqual(
+      expect.objectContaining({
+        kind: "widget-source-asked-several",
+        source: ISSUES,
+        queries: 3,
+        grouped: true,
+      })
+    );
+  });
+
+  it("fails only the query whose answer is an Error", async () => {
+    registerManySource(async () => [
+      { op: "count", total: 4 },
+      new Error("cannot answer this one"),
+    ]);
+
+    const slots = await slotsOf(
+      await postWidgetQuery(makeReq({ queries: [count("a"), count("b")] }))
+    );
+
+    expect(slots[0].ok).toBe(true);
+    expect(slots[1].ok).toBe(false);
+    // A plain Error's message is not put on the wire.
+    expect(slots[1].error).toBe("An unexpected error occurred.");
+  });
+
+  it.each([
+    ["one too few", 1],
+    ["one too many", 3],
+  ])("fails the whole group when it answers %s", async (_, answers) => {
+    registerManySource(async () =>
+      Array.from({ length: answers }, () => ({ op: "count", total: 1 }))
+    );
+
+    const slots = await slotsOf(
+      await postWidgetQuery(makeReq({ queries: [count("a"), count("b")] }))
+    );
+
+    expect(slots.map(slot => slot.ok)).toEqual([false, false]);
+    expect(
+      logged.some(
+        entry =>
+          JSON.stringify(entry).includes("widget-resolve-many-length") &&
+          JSON.stringify(entry).includes(ISSUES)
+      )
+    ).toBe(true);
+  });
+
+  it("holds the group to ONE budget: a group that hangs times out together, and is told to stop", async () => {
+    vi.useFakeTimers();
+    let handed: AbortSignal | undefined;
+    registerManySource(
+      async (_queries: unknown, _caller: unknown, opts: unknown) => {
+        handed = (opts as { signal: AbortSignal }).signal;
+        return new Promise(() => {});
+      }
+    );
+
+    const pending = postWidgetQuery(
+      makeReq({ queries: [count("a"), count("b")] })
+    );
+    await vi.advanceTimersByTimeAsync(31_000);
+    const slots = await slotsOf(await pending);
+    vi.useRealTimers();
+
+    expect(slots.map(slot => slot.error)).toEqual([
+      "This widget took too long to answer",
+      "This widget took too long to answer",
+    ]);
+    expect(handed?.aborted).toBe(true);
+  });
+
+  it("answers ONE query from such a source on its own, through the one-query path", async () => {
+    const resolveMany = vi.fn();
+    registerManySource(resolveMany);
+
+    await postWidgetQuery(makeReq({ queries: [count("a")] }));
+
+    expect(resolveMany).not.toHaveBeenCalled();
+    expect(executeWidgetQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a source WITHOUT resolveMany per query, as before, and says so in the log", async () => {
+    registerSystemSource(
+      {
+        id: "system:releases",
+        label: "Releases",
+        kind: "system",
+        supports: ["count"],
+        fields: [{ name: "title", type: "string" }],
+      },
+      vi.fn()
+    );
+
+    await postWidgetQuery(
+      makeReq({
+        queries: [
+          { source: "system:releases", op: "count" },
+          { source: "system:releases", op: "count" },
+        ],
+      })
+    );
+
+    expect(executeWidgetQuery).toHaveBeenCalledTimes(2);
+    expect(info).toContainEqual(
+      expect.objectContaining({
+        kind: "widget-source-asked-several",
+        source: "system:releases",
+        queries: 2,
+        grouped: false,
+      })
+    );
+  });
+
+  it("checks each query first: one that fails validation is refused alone and never joins the group", async () => {
+    const resolveMany = vi.fn(async (queries: unknown[]) =>
+      queries.map(() => ({ op: "count", total: 1 }))
+    );
+    registerManySource(resolveMany);
+
+    const slots = await slotsOf(
+      await postWidgetQuery(
+        makeReq({
+          queries: [
+            count("a"),
+            {
+              source: ISSUES,
+              op: "count",
+              where: { undeclared: { equals: 1 } },
+            },
+            count("c"),
+          ],
+        })
+      )
+    );
+
+    expect(slots.map(slot => slot.ok)).toEqual([true, false, true]);
+    expect(resolveMany).toHaveBeenCalledTimes(1);
+    expect((resolveMany.mock.calls[0]?.[0] as unknown[]).length).toBe(2);
   });
 });

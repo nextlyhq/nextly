@@ -275,12 +275,14 @@ describe("cancellation", () => {
     controller.abort();
     const services = servicesWith({ pages: [{ seo: {} }] });
 
-    const result = await countFor(services, ["pages"], {
-      signal: controller.signal,
-    });
+    // Ended rather than reported: a scan is shared by every card of this source
+    // in a batch, so a short tally returned here could reach a card that was
+    // still waiting, as a number that looks whole.
+    await expect(
+      countFor(services, ["pages"], { signal: controller.signal })
+    ).rejects.toThrow(/took too long/);
 
     expect(services.collections.listEntries).not.toHaveBeenCalled();
-    expect(result).toEqual({ op: "count", total: 0 });
   });
 
   it("reads normally when the signal is live", async () => {
@@ -296,13 +298,13 @@ describe("cancellation", () => {
 });
 
 describe("the published source", () => {
-  it("declares the plugin namespace and the op it can answer", () => {
+  it("declares the plugin namespace and the ops it can answer", () => {
     const { source } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
 
     expect(source.id).toBe(SEO_ISSUES_SOURCE_ID);
     expect(source.id.startsWith("plugin:")).toBe(true);
     expect(source.kind).toBe("plugin");
-    expect(source.supports).toEqual(["count"]);
+    expect(source.supports).toEqual(["count", "groupBy"]);
   });
 
   it("refuses an op it did not publish", async () => {
@@ -632,5 +634,139 @@ describe("a membership operand that is not a list", () => {
         where: { [ISSUE_FIELD]: { not_in: "Missing meta title" } },
       })
     ).toEqual({ op: "count", total: 3 });
+  });
+});
+
+describe("one scan for every question in a batch", () => {
+  const LABELS = [
+    "Missing meta title",
+    "Missing canonical URL",
+    "Missing meta description",
+    "Missing social image",
+    "Hidden from search engines",
+  ];
+  /** The five cells the SEO card asks for, one count per kind of issue. */
+  const cells = LABELS.map(label => ({
+    source: SEO_ISSUES_SOURCE_ID,
+    op: "count" as const,
+    where: { [ISSUE_FIELD]: { equals: label } },
+  }));
+  const rows = {
+    pages: [
+      untitled,
+      { seo: { ...clean.seo, canonical: "", noindex: true } },
+      { seo: {} },
+      clean,
+    ],
+  };
+
+  it("answers the five cells from ONE scan, each equal to its own resolve call", async () => {
+    const { resolve, resolveMany } = seoIssuesWidgetSource(
+      ["pages"],
+      defaultSeoFields()
+    );
+    if (!resolveMany) throw new Error("resolveMany is published");
+
+    const together = servicesWith(rows);
+    const many = await resolveMany(
+      cells,
+      caller,
+      { services: together } as never,
+      undefined
+    );
+
+    const alone = await Promise.all(
+      cells.map(cell =>
+        resolve(
+          cell,
+          caller,
+          { services: servicesWith(rows) } as never,
+          undefined
+        )
+      )
+    );
+
+    expect(many).toEqual(alone);
+    // One scan: one page of `pages` read, not five.
+    expect(together.collections.listEntries).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares the scan through the batch's scope when its cards are answered one at a time", async () => {
+    const { resolve } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
+    const services = servicesWith(rows);
+    const kept = new Map<string, Promise<unknown>>();
+    const scope = {
+      getOrCompute: <T>(key: string, compute: () => Promise<T>) => {
+        if (!kept.has(key)) kept.set(key, compute());
+        return kept.get(key) as Promise<T>;
+      },
+    };
+
+    await Promise.all(
+      cells.map(cell => resolve(cell, caller, { services } as never, { scope }))
+    );
+
+    expect(services.collections.listEntries).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails only the query it cannot answer, and answers the rest", async () => {
+    const { resolveMany } = seoIssuesWidgetSource(
+      ["pages"],
+      defaultSeoFields()
+    );
+    if (!resolveMany) throw new Error("resolveMany is published");
+
+    const answers = await resolveMany(
+      [cells[0], { ...cells[1], status: "all" } as never, cells[2]],
+      caller,
+      { services: servicesWith(rows) } as never,
+      undefined
+    );
+
+    expect(answers[0]).toEqual({ op: "count", total: 2 });
+    expect(answers[1]).toBeInstanceOf(Error);
+    expect(answers[2]).toEqual({ op: "count", total: 1 });
+  });
+
+  it("groups the issues by kind, and says the counts are floors past the bound", async () => {
+    const { resolve } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
+    const grouped = {
+      source: SEO_ISSUES_SOURCE_ID,
+      op: "groupBy" as const,
+      groupBy: ISSUE_FIELD,
+    };
+
+    const whole = await resolve(
+      grouped,
+      caller,
+      { services: servicesWith(rows) } as never,
+      undefined
+    );
+    expect(whole).toEqual({
+      op: "groupBy",
+      buckets: expect.arrayContaining([
+        { value: "Missing meta title", count: 2 },
+        { value: "Hidden from search engines", count: 1 },
+      ]),
+    });
+    expect(whole).not.toHaveProperty("atLeast");
+
+    const many = Array.from(
+      { length: ISSUE_SCAN_ROW_BUDGET + 1 },
+      () => untitled
+    );
+    const bounded = await resolve(
+      grouped,
+      caller,
+      { services: servicesWith({ pages: many }) } as never,
+      undefined
+    );
+    expect(bounded).toMatchObject({
+      op: "groupBy",
+      buckets: [{ value: "Missing meta title", count: ISSUE_SCAN_ROW_BUDGET }],
+      atLeast: true,
+    });
+    // Every bucket the scan found is here: a floor, not buckets left out.
+    expect(bounded).not.toHaveProperty("truncated");
   });
 });
