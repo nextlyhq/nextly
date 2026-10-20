@@ -131,6 +131,7 @@ export function OverTimeChart({
           series: series.length > 1 ? keyedLine.name : undefined,
           when: domain.labels[reach.keyed.index] ?? "",
           value: valueAt(keyedLine, intervals[reach.keyed.index]?.key),
+          position: { index: reach.keyed.index, of: domain.labels.length },
         })
       : "";
   const shownAt = reach.shown ? intervals[reach.shown.index] : undefined;

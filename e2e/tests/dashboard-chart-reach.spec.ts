@@ -180,7 +180,7 @@ test("the keyboard reaches each bar from one tab stop, and the live region reads
   await expect(chart).toBeFocused();
   const live = cell(page, BREAKDOWN).getByTestId("chart-live");
   const first = await live.textContent();
-  expect(first).toMatch(/^.+: \d[\d,]*\.$/);
+  expect(first).toMatch(/^.+: \d[\d,]*\. \d+ of \d+\.$/);
   await expect(tooltipIn(page, BREAKDOWN)).toBeVisible();
 
   await page.keyboard.press("ArrowDown");
@@ -201,7 +201,7 @@ test("the keyboard starts a chart over time at its latest point", async ({
   const chart = chartIn(page, TIMELINE);
   await chart.focus();
   const live = cell(page, TIMELINE).getByTestId("chart-live");
-  await expect(live).toHaveText(/^.+: (\d[\d,]*|no value)\.$/);
+  await expect(live).toHaveText(/^.+: (\d[\d,]*|no value)\. \d+ of \d+\.$/);
   await expect(tooltipIn(page, TIMELINE)).toBeVisible();
 });
 

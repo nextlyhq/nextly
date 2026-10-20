@@ -74,14 +74,17 @@ export function GroupsChart({
   const note = moreGroupsNote(truncated, ordered.length - drawn.length);
   const reach = useChartReach({ kind: "bars", bars: drawn.length });
   const keyed = reach.keyed ? drawn[reach.keyed.index] : undefined;
-  // What the live region reads for the bar the keyboard is on: its group and its count, heard as
-  // the table's figure is ("N or more" for a floor).
-  const announcement = keyed
-    ? currentPointText({
-        when: keyed.label,
-        value: cardNumber(keyed.count, { floor: keyed.floor }).label,
-      })
-    : "";
+  // What the live region reads for the bar the keyboard is on: its group as the table speaks it
+  // ("no value stored", not the "(none)" drawn), its count heard as the table's figure is ("N or
+  // more" for a floor), and its place among the bars drawn.
+  const announcement =
+    keyed && reach.keyed
+      ? currentPointText({
+          when: keyed.announce ?? keyed.label,
+          value: cardNumber(keyed.count, { floor: keyed.floor }).label,
+          position: { index: reach.keyed.index, of: drawn.length },
+        })
+      : "";
 
   return (
     <ChartFrame

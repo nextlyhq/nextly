@@ -305,3 +305,34 @@ describe("the tooltip's width", () => {
     );
   });
 });
+
+describe("what the live region reads for a bar", () => {
+  it("names a group as the table speaks it, not as it is drawn", async () => {
+    render(
+      groupsTree([
+        {
+          key: "null",
+          value: null,
+          label: "(none)",
+          count: 9,
+          announce: "no value stored",
+        },
+        group("draft", 2, "Draft"),
+      ])
+    );
+    await userEvent.setup().tab();
+    expect(live()).toHaveTextContent("no value stored: 9. 1 of 2.");
+    expect(live()).not.toHaveTextContent("(none)");
+  });
+
+  it("is heard on every move, even between two bars that read alike", async () => {
+    // Two stored values sharing one label and one count draw as two bars that look the same.
+    render(groupsTree([group("done", 4, "Done"), group("closed", 4, "Done")]));
+    const user = userEvent.setup();
+    await user.tab();
+    const before = live().textContent;
+    await user.keyboard("{ArrowDown}");
+    expect(live().textContent).not.toBe(before);
+    expect(live()).toHaveTextContent("Done: 4. 2 of 2.");
+  });
+});
