@@ -68,7 +68,10 @@ import {
   type ReleaseTabQuery,
 } from "./release-tabs";
 import type { DueMember } from "./resolve-release-effect";
-import { resolveReleaseEffect } from "./resolve-release-effect";
+import {
+  resolveReleaseEffect,
+  winnerAuthorCanAct,
+} from "./resolve-release-effect";
 import { invalidateTransitionCacheFor } from "./transition-cache-registry";
 
 /**
@@ -2203,6 +2206,7 @@ export class ReleasesRepository {
         action: member.action,
         scheduledAt: release.scheduledAt,
         createdAt: member.createdAt,
+        createdBy: member.createdBy,
       });
       grouped.set(key, list);
     }
@@ -2326,7 +2330,7 @@ export class ReleasesRepository {
       // reaches the same verdict — there is nobody to act as, and the only
       // fallback is the privileged principal it refuses — so projecting this
       // would show an effect no write could perform.
-      if (author === null || !live.has(author)) continue;
+      if (!winnerAuthorCanAct(author, live)) continue;
       // BOTH directions. Reading only the publish half made a scheduled
       // takedown a no-op: the decision said `unpublish`, the id was simply left
       // out of the reveal set, and the ordinary `status = published` filter went
