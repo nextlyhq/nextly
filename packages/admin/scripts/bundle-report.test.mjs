@@ -14,6 +14,7 @@ import {
   formatKB,
   formatReport,
   measureBundle,
+  parseArgs,
   parseChunkImports,
   readCommit,
 } from "./bundle-report.mjs";
@@ -84,6 +85,30 @@ describe("bundle-report", () => {
       const result = parseChunkImports("test.js", code);
       expect(result.staticImports).toEqual(["./shared.mjs"]);
       expect(result.dynamicImports).toEqual(["./lazy.mjs"]);
+    });
+  });
+
+  describe("parseArgs", () => {
+    it("parses the flags it knows", () => {
+      expect(parseArgs([])).toEqual({ json: false, dist: null });
+      expect(parseArgs(["--json"])).toEqual({ json: true, dist: null });
+      expect(parseArgs(["--dist", "some/dir"])).toEqual({
+        json: false,
+        dist: "some/dir",
+      });
+      expect(parseArgs(["--json", "--dist", "d"])).toEqual({
+        json: true,
+        dist: "d",
+      });
+    });
+
+    it("refuses a trailing --dist with no value instead of measuring the default", () => {
+      expect(() => parseArgs(["--dist"])).toThrow(/--dist requires/);
+    });
+
+    it("refuses an unrecognized option instead of ignoring it", () => {
+      expect(() => parseArgs(["--jsoon"])).toThrow(/unknown option/);
+      expect(() => parseArgs(["out.json"])).toThrow(/unknown option/);
     });
   });
 
@@ -212,13 +237,15 @@ describe("bundle-report", () => {
       );
     });
 
-    it("classifies a declared independent entrypoint as other-entry, an unimported chunk as unreachable", () => {
+    it("classifies a declared independent entrypoint and its exclusive imports as other-entry, a truly unimported chunk as unreachable", () => {
       // lib/plugins/plugin-components.mjs is a separate entry the build
       // declares for a different consumer: reachable from index.mjs by
       // neither edge, so it is not a lazy route and must not pad the
-      // route-later subtotal. chunk-devtools.mjs is reachable by nothing at
-      // all — an orphan the build retained, which no consumer can load —
-      // and the report must not dress it up as an entrypoint either.
+      // route-later subtotal. Its OWN import (chunk-plugin-only.mjs, shared
+      // with nothing else) ships for that consumer too, so it is other-entry
+      // as well — not an orphan. chunk-devtools.mjs is reachable by nothing
+      // at all — retained by the build, loadable by no consumer — and the
+      // report must not dress it up as an entrypoint either.
       const dist = createFixtureDist({
         "index.mjs": `
           import { shell } from "./chunk-shell.mjs";
@@ -236,8 +263,12 @@ describe("bundle-report", () => {
           export default "page";
         `,
         "lib/plugins/plugin-components.mjs": `
-          import { util } from "./chunk-shared.mjs";
-          export const components = { util };
+          import { util } from "../../chunk-shared.mjs";
+          import { extra } from "./chunk-plugin-only.mjs";
+          export const components = { util, extra };
+        `,
+        "lib/plugins/chunk-plugin-only.mjs": `
+          export const extra = "extra";
         `,
         "chunk-devtools.mjs": `
           export const devtools = { render() {} };
@@ -252,8 +283,11 @@ describe("bundle-report", () => {
       const otherEntryFiles = report.categories.otherEntry.chunks.map(
         c => c.rel
       );
-      expect(otherEntryFiles).toEqual(["lib/plugins/plugin-components.mjs"]);
-      expect(report.totals.otherEntry.count).toBe(1);
+      expect(otherEntryFiles).toEqual([
+        "lib/plugins/chunk-plugin-only.mjs",
+        "lib/plugins/plugin-components.mjs",
+      ]);
+      expect(report.totals.otherEntry.count).toBe(2);
 
       const unreachableFiles = report.categories.unreachable.chunks.map(
         c => c.rel
@@ -271,8 +305,8 @@ describe("bundle-report", () => {
 
       // Browser = first-screen + route-later + other entries + unreachable;
       // all five categories reassemble into the emitted total.
-      expect(report.totals.browser.count).toBe(6);
-      expect(report.totals.totalEmitted.count).toBe(7);
+      expect(report.totals.browser.count).toBe(7);
+      expect(report.totals.totalEmitted.count).toBe(8);
       expect(report.totals.totalEmitted.count).toBe(
         report.totals.firstScreen.count +
           report.totals.routeLater.count +
@@ -292,7 +326,7 @@ describe("bundle-report", () => {
       ).toBe(true);
 
       const text = formatReport(report, { json: false });
-      expect(text).toContain("Other entry chunks (1 chunks");
+      expect(text).toContain("Other entry chunks (2 chunks");
       expect(text).toContain("Unreachable chunks (1 chunks");
       expect(text).toContain("raw sizes: the CLI build does not minify");
     });

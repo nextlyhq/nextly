@@ -82,6 +82,11 @@ function dynamicImportSpecifier(node) {
 
 /**
  * Parse an emitted JS chunk to extract relative static and dynamic import specifiers.
+ *
+ * The tree is walked with an explicit stack: a minified chunk is one deep
+ * expression chain, and a recursive visitor over it can blow the call stack
+ * before the report renders (check-published-build.mjs walks the same
+ * artifacts this way).
  */
 export function parseChunkImports(filePath, code) {
   const sourceFile = ts.createSourceFile(
@@ -94,8 +99,10 @@ export function parseChunkImports(filePath, code) {
 
   const staticImports = [];
   const dynamicImports = [];
+  const stack = [sourceFile];
 
-  function visit(node) {
+  while (stack.length > 0) {
+    const node = stack.pop();
     const declared = declarationSpecifier(node);
     if (declared !== null) {
       if (declared.startsWith(".")) staticImports.push(declared);
@@ -105,10 +112,19 @@ export function parseChunkImports(filePath, code) {
         dynamicImports.push(dynamic);
       }
     }
-    ts.forEachChild(node, visit);
+    // Braces, not a bare arrow body: forEachChild stops at the first child
+    // whose callback returns truthy, and Array.push returns that length.
+    // Children go on the stack last-first, so pops — and the collected
+    // specifiers — keep the source document order.
+    const children = [];
+    ts.forEachChild(node, child => {
+      children.push(child);
+    });
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push(children[i]);
+    }
   }
 
-  visit(sourceFile);
   return {
     staticImports: [...new Set(staticImports)],
     dynamicImports: [...new Set(dynamicImports)],
@@ -206,30 +222,53 @@ function reachableClosure(graph, entryChunk) {
 }
 
 /**
- * The browser entrypoints the build declares (tsup.config.ts `entry`), as
- * their emitted dist paths. A chunk reachable by neither edge from the
- * entry is one of these — an entrypoint for a different consumer — or it
- * is an ORPHAN: bytes the build retained that nothing imports, which a
- * consumer cannot load either. The two must not share a category, or the
- * report misstates why the bytes ship.
+ * The browser entrypoints the package publishes, derived from the `exports`
+ * map rather than re-typed here: each export's `import` target that names an
+ * emitted chunk, with the `dist/` prefix stripped to a graph path. A new
+ * published entrypoint is then classified correctly without editing a
+ * second list.
  */
-const DECLARED_BROWSER_ENTRIES = new Set([
-  "index.mjs",
-  "lib/plugins/component-registry.mjs",
-  "lib/plugins/plugin-components.mjs",
-]);
+const DECLARED_BROWSER_ENTRIES = new Set(
+  Object.values(
+    JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8"))
+      .exports ?? {}
+  )
+    .map(target => (typeof target === "string" ? target : target?.import))
+    .filter(target => typeof target === "string" && /\.(mjs|cjs)$/.test(target))
+    .map(target => target.replace(/^\.?\/?dist\//, ""))
+);
+
+/**
+ * Everything the package's OTHER declared entrypoints can reach, eagerly or
+ * lazily. These chunks ship for a consumer of that entry, so when the main
+ * entry's graph does not reach them they are still not orphans — only what
+ * no declared entry reaches is.
+ */
+function otherEntryClosure(graph, entryChunk) {
+  const reachable = new Set();
+  for (const entry of DECLARED_BROWSER_ENTRIES) {
+    if (entry === entryChunk || !graph.has(entry)) continue;
+    for (const rel of closureFrom(graph, entry, [
+      "staticImports",
+      "dynamicImports",
+    ])) {
+      reachable.add(rel);
+    }
+  }
+  return reachable;
+}
 
 /**
  * The category one chunk belongs to, by the report's definitions:
  * - cli: the CLI tools, not loaded by any browser.
  * - first-screen: in the entry's static pre-render closure.
  * - route-later: reachable from the entry, but only through dynamic imports.
- * - other-entry: reachable by neither edge, but a declared entrypoint — the
- *   build emits it for a different consumer.
- * - unreachable: reachable by neither edge and not declared: an orphan the
+ * - other-entry: outside the entry's graph, but reachable from another
+ *   declared entrypoint — the build emits it for that consumer.
+ * - unreachable: reachable from no declared entrypoint: an orphan the
  *   build retained that no consumer can load.
  */
-function categoryOf(rel, firstScreenSet, reachableSet) {
+function categoryOf(rel, firstScreenSet, reachableSet, otherEntrySet) {
   if (rel.startsWith("cli.") || rel.includes("/cli.")) {
     return "cli";
   }
@@ -239,7 +278,7 @@ function categoryOf(rel, firstScreenSet, reachableSet) {
   if (reachableSet.has(rel)) {
     return "route-later";
   }
-  if (DECLARED_BROWSER_ENTRIES.has(rel)) {
+  if (otherEntrySet.has(rel)) {
     return "other-entry";
   }
   return "unreachable";
@@ -291,6 +330,7 @@ export function measureBundle({
 
   const firstScreenSet = firstScreenClosure(graph, entryChunk);
   const reachableSet = reachableClosure(graph, entryChunk);
+  const otherEntrySet = otherEntryClosure(graph, entryChunk);
 
   const buckets = {
     "first-screen": [],
@@ -302,7 +342,12 @@ export function measureBundle({
   const chunks = [];
 
   for (const [rel, node] of graph.entries()) {
-    const category = categoryOf(rel, firstScreenSet, reachableSet);
+    const category = categoryOf(
+      rel,
+      firstScreenSet,
+      reachableSet,
+      otherEntrySet
+    );
     buckets[category].push(node);
     chunks.push({
       file: rel,
@@ -488,12 +533,26 @@ export function formatReport(result, { json = false } = {}) {
 // CLI Execution
 // ---------------------------------------------------------------------------
 
-function parseArgs(argv) {
+/**
+ * Parses the CLI flags, refusing what the caller got wrong: an unrecognized
+ * option or a trailing `--dist` without a value would otherwise be silently
+ * ignored and the command would measure something other than what the
+ * caller asked it to.
+ */
+export function parseArgs(argv) {
   const flags = { json: false, dist: null };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--json") flags.json = true;
-    else if (arg === "--dist" && i + 1 < argv.length) flags.dist = argv[++i];
+    if (arg === "--json") {
+      flags.json = true;
+    } else if (arg === "--dist") {
+      if (i + 1 >= argv.length) {
+        throw new Error("--dist requires a directory argument");
+      }
+      flags.dist = argv[++i];
+    } else {
+      throw new Error(`unknown option: ${arg}`);
+    }
   }
   return flags;
 }
