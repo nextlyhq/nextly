@@ -520,6 +520,23 @@ const MUST_AGREE: Array<{
     },
   },
   {
+    // A content setting is judged by the same rules on both channels: one
+    // whose dependency names no Collection setting is refused by both.
+    case: "a content setting depending on no Collection setting",
+    expect: /not a Collection setting of this widget/,
+    widget: {
+      id: "acme/thing",
+      title: "T",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      settings: [
+        { name: "collection", type: "collection" },
+        { name: "by", type: "groupBy", of: "missing" },
+      ],
+    },
+  },
+  {
     case: "two settings of one name",
     expect: /duplicate setting/,
     widget: {
@@ -737,6 +754,24 @@ describe("the registry and contributions channels agree except where declared", 
       component: "p#X",
       chrome: "none",
     };
+    expect(refuses(() => assertAdminWidgets([asPlugin(widget)]))).toBe(false);
+  });
+
+  it("accepts content settings through BOTH channels", () => {
+    // The control for the row above: the same settings, well formed, are
+    // taken by the registry and by a plugin's contribution alike.
+    const widget = {
+      id: "acme/recent",
+      title: "Recent",
+      archetype: "custom",
+      defaultSize: "sm",
+      component: "p#X",
+      settings: [
+        { name: "collection", type: "collection" },
+        { name: "by", type: "groupBy", of: "collection" },
+      ],
+    };
+    expect(refuses(() => validateWidgetDefinition(widget))).toBe(false);
     expect(refuses(() => assertAdminWidgets([asPlugin(widget)]))).toBe(false);
   });
 

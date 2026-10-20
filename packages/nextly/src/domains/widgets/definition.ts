@@ -18,7 +18,7 @@ import {
   type WidgetLifecycle,
 } from "./lifecycle";
 import type { WidgetQuery, WidgetQuerySpec } from "./query";
-import { validateWidgetSettings, type WidgetSetting } from "./settings";
+import { type AnyWidgetSetting, validateWidgetSettings } from "./settings";
 import type { WidgetOp } from "./sources";
 
 /*
@@ -292,11 +292,13 @@ export interface WidgetDefinition {
    * What a reader may change about THIS card, per placement.
    *
    * Declared as field configs so the admin draws them with the renderer it
-   * already has and a plugin author needs no new vocabulary. The stored values
-   * live on the placement, not here: this is the offer, and the placement is
-   * one reader's answer to it.
+   * already has and a plugin author needs no new vocabulary, plus the four
+   * content settings (Collection, Filter, Sort, Group by), which the sheet
+   * draws with its own controls from the choices the server offers the
+   * reader. The stored values live on the placement, not here: this is the
+   * offer, and the placement is one reader's answer to it.
    */
-  settings?: WidgetSetting[];
+  settings?: AnyWidgetSetting[];
   defaultSize: WidgetSize;
   /**
    * Where this widget sits by default, ascending. Omitted means "after

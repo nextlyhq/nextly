@@ -16,6 +16,7 @@
 import { expectTypeOf } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import type { WidgetDefinition } from "../definition";
 import type { AnyWidgetSetting, WidgetSetting } from "../settings";
 
 // Each variant, named individually: a union asserted as a whole passes when
@@ -121,3 +122,11 @@ expectTypeOf<
 expectTypeOf<Extract<AnyWidgetSetting, { type: "filter" }>>().not.toBeNever();
 expectTypeOf<Extract<AnyWidgetSetting, { type: "sort" }>>().not.toBeNever();
 expectTypeOf<Extract<AnyWidgetSetting, { type: "groupBy" }>>().not.toBeNever();
+
+/*
+ * And a widget may declare them: the settings sheet draws the content settings
+ * with controls of its own, so a widget's `settings` take every setting type,
+ * while `WidgetSetting`, what `FieldRenderer` draws, stays the field settings.
+ */
+type DeclaredSetting = NonNullable<WidgetDefinition["settings"]>[number];
+expectTypeOf<AnyWidgetSetting>().toExtend<DeclaredSetting>();

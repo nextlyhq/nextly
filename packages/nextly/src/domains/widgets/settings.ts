@@ -109,14 +109,12 @@ export type WidgetSetting =
  * declaration rules and the same reader below. A dependent setting (`filter`,
  * `sort`, `groupBy`) names in `of` the Collection setting it works over.
  *
- * 🔴 Not yet a member of `WidgetSetting`, and that is about drawing, not about
+ * 🔴 Not a member of `WidgetSetting`, and that is about drawing, not about
  * rules. `WidgetSetting` is what the settings sheet hands to `FieldRenderer`
  * with no cast, and no field config draws a collection picker or a filter
- * builder. Joined to it now, a registered widget declaring one would compile
- * and then crash the sheet. So registration refuses these by name
- * (`CONTENT_SETTING_NOT_DRAWN`) and only a declared widget, which nothing
- * offers to the admin yet, may hold one. The sheet gaining these controls is
- * what widens the published type.
+ * builder: the sheet draws these with controls of its own, from the choices
+ * the server offers the reader. A widget's `settings` take either
+ * (`AnyWidgetSetting`).
  *
  * @experimental The shape may still change while the settings sheet's
  * content controls are built.
@@ -158,27 +156,6 @@ type DependentSetting = Extract<AnyWidgetSetting, { of: string }>;
 /** Whether a setting names, in `of`, the Collection setting it works over. */
 function isDependent(setting: AnyWidgetSetting): setting is DependentSetting {
   return DEPENDENT_TYPES.has(setting.type);
-}
-
-/**
- * The stable mark of registration's refusal of a content setting, which a
- * test or a caller can match whatever the sentence around it says.
- */
-export const CONTENT_SETTING_NOT_DRAWN = "WIDGET_CONTENT_SETTING_NOT_DRAWN";
-
-/** The setting types `FieldRenderer` draws, as registration admits them. */
-const FIELD_DRAWN: Record<WidgetSetting["type"], true> = {
-  text: true,
-  number: true,
-  checkbox: true,
-  select: true,
-};
-
-/** Whether a setting is one the settings sheet cannot draw yet. */
-function isContentSetting(
-  setting: AnyWidgetSetting
-): setting is ContentSetting {
-  return !Object.hasOwn(FIELD_DRAWN, setting.type);
 }
 
 /**
@@ -357,25 +334,7 @@ function fail(message: string): never {
  */
 export function widgetSettingsProblem(settings: unknown): string | undefined {
   const [problem] = widgetSettingsProblems(settings);
-  if (problem !== undefined) return problem;
-  // Every setting is now known to be well formed, so each has a type.
-  const content = (settings as readonly AnyWidgetSetting[] | undefined)?.find(
-    isContentSetting
-  );
-  return content === undefined ? undefined : contentSettingRefusal(content);
-}
-
-/**
- * Registration's refusal of a setting the settings sheet cannot draw yet,
- * saying what to use instead. It carries `CONTENT_SETTING_NOT_DRAWN`, so it
- * can be told apart from every other settings fault by more than its words.
- */
-function contentSettingRefusal({ name, type }: ContentSetting): string {
-  return (
-    `setting "${name}" is a "${type}" setting, which the settings sheet cannot draw yet ` +
-    `(${CONTENT_SETTING_NOT_DRAWN}): use a text, number, checkbox or select ` +
-    `setting until the sheet supports collection pickers, filters, sorts and groupings`
-  );
+  return problem;
 }
 
 /**
@@ -625,7 +584,7 @@ function defaultProblem(
 export function validateWidgetSettings(
   settings: unknown,
   widgetId: string
-): asserts settings is WidgetSetting[] | undefined {
+): asserts settings is AnyWidgetSetting[] | undefined {
   const problem = widgetSettingsProblem(settings);
   if (problem !== undefined) fail(`${widgetId}: ${problem}`);
 }

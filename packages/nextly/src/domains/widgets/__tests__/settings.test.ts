@@ -13,7 +13,6 @@ import { NextlyError } from "../../../errors/nextly-error";
 import {
   type AnyWidgetSetting,
   applyWidgetSettings,
-  CONTENT_SETTING_NOT_DRAWN,
   MAX_WIDGET_SETTINGS,
   resolveWidgetSettings,
   validateWidgetSettings,
@@ -555,23 +554,18 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     expect(list).toContain('setting "where" is typed "filter"');
   });
 
-  it("is refused at registration, naming its mark and what to use instead", () => {
-    // Registration publishes to the settings sheet, which draws field settings
-    // only; a declared widget, offered to no sheet yet, may hold these.
-    for (const setting of content) {
-      const set =
-        setting.type === "collection" ? [setting] : [content[0], setting];
-      const problem = widgetSettingsProblem(set);
-      expect(problem, setting.type).toContain(CONTENT_SETTING_NOT_DRAWN);
-      expect(problem).toContain(
-        "use a text, number, checkbox or select setting until the sheet supports"
-      );
-    }
-    expect(() => validateWidgetSettings(content, "core/x")).toThrow(
-      CONTENT_SETTING_NOT_DRAWN
+  it("is accepted at registration, judged by the same rules as at declaration", () => {
+    // The settings sheet draws these now, so registration takes them, and a
+    // fault in one is found by the one rule set both channels read.
+    expect(widgetSettingsProblem(content)).toBeUndefined();
+    expect(() => validateWidgetSettings(content, "core/x")).not.toThrow();
+    const broken = [content[0], { name: "by", type: "groupBy", of: "missing" }];
+    expect(widgetSettingsProblem(broken)).toBe(
+      widgetSettingsProblems(broken)[0]
     );
-    // The control: the field settings beside it register as before.
-    expect(widgetSettingsProblem([limit, compact])).toBeUndefined();
+    expect(widgetSettingsProblem(broken)).toBe(
+      'setting "by" depends on "missing", which is not a Collection setting of this widget'
+    );
   });
 
   it("reads a stored value its type can hold, and the starting value otherwise", () => {
