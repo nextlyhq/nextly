@@ -112,6 +112,22 @@ describe("SaveStateIndicator", () => {
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
+  it("offers no Retry for a failure nothing here can try again, and still says what failed", async () => {
+    const user = userEvent.setup();
+    const failed: DocumentSaveState = {
+      kind: "failed",
+      message:
+        "Site colours wasn't saved: offline Make that change again where you made it, and this page can then be saved.",
+    };
+    render(<SaveStateIndicator saveState={failed} recovery={noRecovery} />);
+
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    const details = screen.getByRole("button", { name: "Details" });
+    expect(details).toHaveAccessibleDescription(failed.message);
+    await user.tab();
+    expect(details).toHaveFocus();
+  });
+
   it("says nothing for an opened document nothing has been stored in yet", () => {
     render(
       <SaveStateIndicator

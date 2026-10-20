@@ -220,6 +220,67 @@ describe("before a storing action", () => {
     expect(onSaveDraft).toHaveBeenCalledTimes(1);
   });
 
+  it("also waits for a write that starts while it is waiting", async () => {
+    const onSaveDraft = vi.fn(() => Promise.resolve(saved));
+    const probe = renderHost({ onSaveDraft });
+    const first = deferred();
+    const second = deferred();
+    act(() => {
+      probe.track("Site colours", first.promise);
+    });
+
+    let outcome: Promise<unknown> = Promise.resolve();
+    act(() => {
+      outcome = probe.run("save");
+    });
+    // The save is now waiting for the first change; a second starts.
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    act(() => {
+      probe.track("Site fonts", second.promise);
+    });
+    // The first lands, and the save is given every chance to go on.
+    await act(async () => {
+      first.resolve();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
+    expect(onSaveDraft).not.toHaveBeenCalled();
+
+    second.resolve();
+    await act(async () => {
+      await expect(outcome).resolves.toEqual(saved);
+    });
+    expect(onSaveDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses, rather than waiting forever, while writes keep starting", async () => {
+    const onSaveDraft = vi.fn(() => Promise.resolve(saved));
+    const probe = renderHost({ onSaveDraft });
+    // Each write, as it lands, is followed by another: twenty of them, far
+    // more rounds than a store waits through, so the stream outlasts it.
+    let left = 20;
+    function keepWriting(): Promise<void> {
+      return Promise.resolve().then(() => {
+        left -= 1;
+        if (left > 0) probe.track("Site colours", keepWriting());
+      });
+    }
+    act(() => {
+      probe.track("Site colours", keepWriting());
+    });
+
+    const outcome = await runAction(probe, "save");
+
+    expect(onSaveDraft).not.toHaveBeenCalled();
+    expect(outcome).toEqual({
+      ok: false,
+      reason: "busy",
+      message:
+        "Changes on this page are still being saved. Try again in a moment.",
+    });
+  });
+
   it("refuses to store, naming the change, when a tracked write failed", async () => {
     const onPublish = vi.fn(() => Promise.resolve(saved));
     const probe = renderHost({ onPublish });

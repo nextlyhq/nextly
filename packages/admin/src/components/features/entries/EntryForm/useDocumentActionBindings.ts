@@ -231,8 +231,9 @@ export interface DocumentActionBindings {
  * - `saving`: a write is in flight — a submit, a storing action readying the
  *   work, or a tracked write the page depends on.
  * - `failed`: the last Save or Publish did not store, or a tracked write's
- *   latest attempt failed. `retry` runs that action again; it lasts for this
- *   session only, since the offer to restore unsaved work covers a reload.
+ *   latest attempt failed. `retry` runs a failed Save or Publish again; it
+ *   lasts for this session only, since the offer to restore unsaved work
+ *   covers a reload. A failed tracked write has none: see `retry`.
  * - `unsaved`: there is unsaved work, including work a field holds.
  * - `saved`: none of those; `at` is when this session last stored, or null
  *   when it has not.
@@ -247,7 +248,12 @@ export type DocumentSaveState =
   | {
       kind: "failed";
       message: string;
-      retry: () => Promise<DocumentActionOutcome>;
+      /**
+       * Runs the failed action again. Absent when nothing here can: a tracked
+       * write belongs to the surface that started it, and only that surface
+       * can write it again.
+       */
+      retry?: () => Promise<DocumentActionOutcome>;
     };
 
 /** Run before an action that stores the editor's work; given its id. */
@@ -328,6 +334,10 @@ function useActionConfirmation(
         asked?.answer(await act());
         return;
       }
+      // A second confirm while the first runs (a double click, before the
+      // pending state reaches the dialog) is the same answer given twice, not
+      // a second action: the first one's outcome is the answer.
+      if (confirming.current) return;
       confirming.current = true;
       try {
         const outcome = await act();
@@ -851,12 +861,12 @@ function deriveSaveState({
     };
   }
   if (trackedFailure !== null) {
+    // No Retry: running Save again would refuse on the same failure, every
+    // time, until the change itself is written again, which only the surface
+    // that made it can do. The message says where.
     return {
       kind: "failed",
-      message: `${trackedFailure.label} wasn't saved: ${trackedFailure.message}`,
-      // Running Save again is the honest retry: it waits for the change to be
-      // written again, and refuses until it has been.
-      retry: () => run("save"),
+      message: `${trackedFailure.label} wasn't saved: ${trackedFailure.message} Make that change again where you made it, and this page can then be saved.`,
     };
   }
   if (isDirty) return { kind: "unsaved" };

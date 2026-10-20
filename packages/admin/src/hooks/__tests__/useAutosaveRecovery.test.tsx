@@ -186,3 +186,27 @@ describe("useAutosaveRecovery", () => {
     expect(result.current.isDirty).toBe(false);
   });
 });
+
+describe("after a save", () => {
+  it("offers no recovery point from before it", async () => {
+    getSpy.mockResolvedValue({
+      updatedAt: "2026-10-20T10:00:00.000Z",
+      snapshot: { title: "recovered" },
+    });
+    const { result, rerender } = renderHook(
+      ({ savedCount }: { savedCount: number }) => {
+        const form = useForm<Record<string, unknown>>({
+          defaultValues: STORED,
+        });
+        return useAutosaveRecovery({ scope: SCOPE, form, savedCount });
+      },
+      { wrapper, initialProps: { savedCount: 0 } }
+    );
+    await waitFor(() => expect(result.current.offer).not.toBeNull());
+
+    // A save lands: the server has deleted the point this offer reads.
+    rerender({ savedCount: 1 });
+
+    expect(result.current.offer).toBeNull();
+  });
+});

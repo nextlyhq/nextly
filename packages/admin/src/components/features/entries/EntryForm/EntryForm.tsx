@@ -635,6 +635,7 @@ export function EntryForm({
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
     form,
+    savedCount,
   });
 
   /*

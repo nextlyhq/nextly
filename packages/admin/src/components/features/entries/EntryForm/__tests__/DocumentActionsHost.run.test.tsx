@@ -12,7 +12,13 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-import { act, render, screen, waitFor } from "@admin/__tests__/utils";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@admin/__tests__/utils";
 
 import {
   DocumentActionsHost,
@@ -269,6 +275,53 @@ describe("running a document action through the host", () => {
       reason: "failed",
       message: "offline",
     });
+  });
+
+  it("answers the first discard when it is confirmed twice before the dialog updates", async () => {
+    let finish: () => void = () => {};
+    // The first discard is still running; a second call returns at once, as
+    // the Single editor's latched handler does.
+    const onDiscardWorkingDraft = vi
+      .fn<() => Promise<void>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>(resolve => {
+            finish = resolve;
+          })
+      )
+      .mockResolvedValue(undefined);
+    const runner = renderHost({
+      entry: { ...published, _isWorkingDraft: true },
+      draftsEnabled: true,
+      onDiscardWorkingDraft,
+    });
+
+    let settled = false;
+    let pending: Promise<unknown> = Promise.resolve();
+    act(() => {
+      pending = runner.run("discard-draft").then(outcome => {
+        settled = true;
+        return outcome;
+      });
+    });
+    const confirm = await screen.findByRole("button", {
+      name: "Discard draft",
+    });
+    // Twice, in one turn: the dialog has not yet drawn its progress.
+    act(() => {
+      fireEvent.click(confirm);
+      fireEvent.click(confirm);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(onDiscardWorkingDraft).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    await act(async () => {
+      finish();
+    });
+    await expect(pending).resolves.toEqual({ ok: true });
   });
 
   it("cannot be dismissed while the discard runs, and answers what it came to", async () => {

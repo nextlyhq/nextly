@@ -153,7 +153,11 @@ describe("the document's save state", () => {
     });
 
     await act(async () => {
-      if (failed.kind === "failed") await failed.retry();
+      if (failed.kind === "failed") {
+        // A failed Save has a Retry: running it again can succeed.
+        expect(failed.retry).toBeDefined();
+        await failed.retry?.();
+      }
     });
     expect(onSaveDraft).toHaveBeenCalledTimes(2);
     rerender({ isDirty: false, onSaveDraft });
@@ -176,8 +180,11 @@ describe("the document's save state", () => {
 
     expect(state(probe)).toMatchObject({
       kind: "failed",
-      message: "Site colours wasn't saved: The server is unreachable.",
+      message:
+        "Site colours wasn't saved: The server is unreachable. Make that change again where you made it, and this page can then be saved.",
     });
+    // Saving again would only refuse on the same failure: nothing to retry.
+    expect(state(probe)).not.toHaveProperty("retry");
   });
 
   it("is unchanged by a save refused as busy: the one in flight answers for itself", async () => {

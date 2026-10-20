@@ -911,6 +911,7 @@ export function SingleForm({
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,
     form,
+    savedCount,
   });
 
   /*

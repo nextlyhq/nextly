@@ -128,19 +128,33 @@ function FailedSaveState({
         <Tooltip>
           <TooltipTrigger asChild>
             {/* A real button, so Retry is reachable from the keyboard and
-                focusing it shows what failed. */}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 px-2"
-              aria-describedby={detailId}
-              onClick={() => {
-                void view.retry();
-              }}
-            >
-              Retry
-            </Button>
+                focusing it shows what failed. A failure nothing here can try
+                again offers no Retry that would only fail again; its control
+                still takes focus, to say what failed and where to fix it. */}
+            {view.retry === undefined ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2"
+                aria-describedby={detailId}
+              >
+                Details
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2"
+                aria-describedby={detailId}
+                onClick={() => {
+                  void view.retry?.();
+                }}
+              >
+                Retry
+              </Button>
+            )}
           </TooltipTrigger>
           <TooltipContent side="bottom" align="end">
             <p>{view.detail}</p>

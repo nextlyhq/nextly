@@ -36,7 +36,7 @@ expectTypeOf<DocumentSaveState["kind"]>().toEqualTypeOf<
   "saved" | "unsaved" | "saving" | "failed"
 >();
 expectTypeOf<
-  Extract<DocumentSaveState, { kind: "failed" }>["retry"]
+  NonNullable<Extract<DocumentSaveState, { kind: "failed" }>["retry"]>
 >().returns.toEqualTypeOf<Promise<DocumentActionOutcome>>();
 
 expectTypeOf(useBeforeDocumentAction)

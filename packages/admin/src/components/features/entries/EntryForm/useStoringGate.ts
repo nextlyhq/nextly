@@ -49,6 +49,20 @@ export interface StoringGate {
  *   translation offers its Retry only while that translation is on screen, and
  *   a Retry that ran in another would store, or publish, the wrong one.
  */
+/**
+ * How many rounds of tracked writes a store waits through. Each round awaits
+ * every write pending at its start; a write that starts during one is caught
+ * by the next. Writes still starting after this many are a surface that keeps
+ * writing, and the store is refused rather than held.
+ */
+const MAX_WRITE_PASSES = 5;
+
+const stillWriting: DocumentActionOutcome = {
+  ok: false,
+  reason: "busy",
+  message: "Changes on this page are still being saved. Try again in a moment.",
+};
+
 export function useStoringGate(scope: string): StoringGate {
   const beforeActions = useRef(new Set<BeforeDocumentAction>());
   const registerBeforeAction = useCallback((handler: BeforeDocumentAction) => {
@@ -112,7 +126,13 @@ export function useStoringGate(scope: string): StoringGate {
         message: apiErrorMessage(error, "An open edit couldn't be committed."),
       };
     }
-    await Promise.allSettled([...writes.current.pending.values()]);
+    // Every write registered before the store is awaited, including one
+    // started while an earlier one was being waited for. Bounded, so writes
+    // that keep starting refuse the store rather than hold it forever.
+    for (let pass = 0; writes.current.pending.size > 0; pass++) {
+      if (pass === MAX_WRITE_PASSES) return stillWriting;
+      await Promise.allSettled([...writes.current.pending.values()]);
+    }
     const failure = firstFailure(writes.current.failed);
     return failure === null
       ? null
