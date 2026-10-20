@@ -7,6 +7,7 @@ import fs from "fs-extra";
 
 import { bundledSkillsVersionOrNull } from "../generators/agent-skills";
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { recordLaunchingPackageManager } from "../installers/package-manager-field";
 import { EXACT_VERSION } from "../lib/exact-version";
 import { nextlySource, type NextlySource } from "../lib/nextly-release";
 import { packageVersion } from "../lib/package-version";
@@ -1919,6 +1920,8 @@ export async function copyTemplate(
       packageManager,
       source,
     });
+    // As for an app below: before the first install.
+    await recordLaunchingPackageManager(targetDir, packageManager);
     return;
   }
 
@@ -2064,6 +2067,10 @@ export async function copyTemplate(
     packageJsonContent,
     "utf-8"
   );
+  // Before the first install, which runs once the files are in place: the
+  // pnpm or Yarn version that launched the scaffold, so Corepack installs
+  // with it rather than its own default.
+  await recordLaunchingPackageManager(targetDir, packageManager);
 
   // Step 6b: Write pnpm-workspace.yaml carrying the native-dependency build
   // allowlist. pnpm 10+ blocks dependency build scripts by default and pnpm 11
