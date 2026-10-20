@@ -36,22 +36,21 @@ describe("the dispatcher's read-access caller", () => {
     expect(caller.roles).toEqual(["editor"]);
   });
 
-  it("hands a rule the resource:action spelling, and the coarse check the stored one", () => {
-    // 🔴 Two spellings of one list. `AccessControlContext.permissions`
-    // promises `posts:read`; the coarse `read-{slug}` check compares against
-    // `read-posts`. Forwarding the stored slugs to the rule refused every key
-    // whose rule was written to the documented promise.
+  it("carries the stored slugs for the coarse check, with the rows a rule's list is built from", () => {
+    // The coarse `read-{slug}` check compares the stored slugs; a rule is
+    // handed them too, and, for one release, each row's earlier spelling,
+    // which only the rows can give.
     const caller = runWithCallerScope(apiKeyScope(GRANTS), () =>
       readAccessCallerForDispatch({}, user)
     );
     expect(caller.permissions).toEqual(["read-posts", "update-posts"]);
-    expect(caller.rulePermissions).toEqual(["posts:read", "posts:update"]);
+    expect(caller.grants).toEqual(GRANTS);
   });
 
-  it("falls back to the params when nothing is pinned, and says so by carrying no rule spelling", () => {
+  it("falls back to the params when nothing is pinned, and says so by carrying no rows", () => {
     // A direct dispatch outside the route handler. The stored slugs are all
-    // the params hold, and the caller is honest about it: no rule-facing
-    // spelling rather than one invented by splitting a slug on its hyphen.
+    // the params hold, and the caller is honest about it: no rows rather than
+    // ones invented by splitting a slug on its hyphen.
     const caller = readAccessCallerForDispatch(
       {
         _authenticatedActorType: "apiKey",
@@ -61,7 +60,7 @@ describe("the dispatcher's read-access caller", () => {
     );
     expect(caller.authMethod).toBe("api-key");
     expect(caller.permissions).toEqual(["read-posts"]);
-    expect(caller.rulePermissions).toBeUndefined();
+    expect(caller.grants).toBeUndefined();
   });
 
   it("builds a session caller with no grants of its own", () => {

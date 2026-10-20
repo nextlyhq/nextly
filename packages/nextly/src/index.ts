@@ -1039,9 +1039,14 @@ export {
   type CollectionHooks,
   type CustomEndpoint,
   type HttpMethod,
-  // Access control types (shared by collections, singles, and Direct API)
+  // Access control types (shared by collections, singles, and Direct API).
+  // `AccessRuleContext` is the one context every rule is handed, collection,
+  // Single and field alike; `AccessControlContext` is the same type.
   type AccessControlContext,
   type AccessControlFunction,
+  type AccessRuleContext,
+  type AccessRuleOperation,
+  type AccessRuleTarget,
   type MinimalUser,
 } from "./collections/config";
 

@@ -7,7 +7,9 @@
  * @packageDocumentation
  */
 
+import type { EmailFailure } from "../../domains/email/failure";
 import type { OwnerUpdateUndo } from "../../domains/email/services/email-template-service";
+import type { RefusedRecipient } from "../../domains/email/services/send-failures";
 import type { OwnerChangeChoice } from "../../domains/email/template-merge";
 import type { EmailAttachmentInput } from "../../domains/email/types";
 import type { PrincipalRef } from "../../plugins/principals/types";
@@ -465,6 +467,18 @@ export interface SendEmailResult {
   success: boolean;
   /** Provider-assigned message ID (on success) */
   messageId?: string;
-  /** Error message (on failure) */
+  /**
+   * Why the send failed (on failure): the same sentence as `failure.reason`.
+   */
   error?: string;
+  /**
+   * @experimental On failure: whether a retry can help, the provider's status
+   * where it gave one, and a short reason free of configuration and secrets.
+   */
+  failure?: EmailFailure;
+  /**
+   * @experimental Recipients the provider refused while taking the message,
+   * by line and position, never by address.
+   */
+  refused?: RefusedRecipient[];
 }
