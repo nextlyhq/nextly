@@ -255,7 +255,7 @@ async function authorizeSubject(
   if (ended !== null && !(await documentExists(subject))) {
     if (!caller.overrideAccess) {
       const reader = readerOf(caller);
-      if (!(await mayReadDeletedDocument(subject.slug, reader))) {
+      if (!(await mayReadDeletedDocument(subject, reader))) {
         throw refused(subject, "deleted-document-not-readable");
       }
     }

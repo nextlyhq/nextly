@@ -21,7 +21,7 @@ import { randomUUID } from "node:crypto";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import { defineCollection, defineSingle, text } from "../../../config";
 import { seedPermissionsAndRolePresets } from "../../../init/seed-permissions";
 import {
   definePlugin,
@@ -156,6 +156,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug: "secrets",
         access: { read: ({ user }) => user?.id === ruleAllows },
         fields: [text({ name: "title" })],
+      }),
+    ],
+    // A Single whose reads its own hook narrows. A Single's hooks register
+    // under its own namespace, not its bare slug.
+    singles: [
+      defineSingle({
+        slug: "notice",
+        hooks: { beforeRead: [({ data }) => data] },
+        fields: [text({ name: "heading" })],
       }),
     ],
     plugins: [probe],
@@ -463,6 +472,34 @@ describe.each(getConfiguredTestDialects())(
         (await t.nextly.contentEvents.list({ subject, ...asPerson(founder!) }))
           .items
       ).toHaveLength(2);
+    }, 120_000);
+
+    it("reads a former document of a Single whose reads its own hook narrows only as a super-admin", async () => {
+      const t = await boot(dialect);
+      const holder = await personHolding(t, ["read-notice"]);
+      // A document the Single no longer has, its life ended by a deletion.
+      const subject = {
+        kind: "single" as const,
+        slug: "notice",
+        id: randomUUID(),
+      };
+      ensureCoreContentEventKinds();
+      for (const kind of ["created", "deleted"]) {
+        await t.adapter.transaction(tx =>
+          recordContentEvent(tx, { subject, kind, actor: { kind: "system" } })
+        );
+      }
+
+      // The Single's hook cannot be asked about a document that is gone:
+      // the permission alone does not read it, a super-admin does.
+      await expect(
+        t.nextly.contentEvents.list({ subject, ...asPerson(holder) })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(
+        (
+          await t.nextly.contentEvents.list({ subject, ...asPerson(founder!) })
+        ).items.map(e => e.kind)
+      ).toEqual(["deleted", "created"]);
     }, 120_000);
 
     it("answers a Direct API caller exactly as the document's own read does", async () => {

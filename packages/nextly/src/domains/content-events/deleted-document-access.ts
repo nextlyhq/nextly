@@ -30,6 +30,7 @@ import {
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
 import { getHookRegistry } from "../../hooks/hook-registry";
+import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { isSuperAdmin } from "../../services/lib/permissions";
 
 /** The hooks that may narrow which documents a caller reads. */
@@ -39,22 +40,36 @@ const READ_NARROWING_HOOKS = [
   "afterRead",
 ] as const;
 
-/** Whether any hook may narrow reads of `slug`, so a deleted row's answer is unknown. */
-function hooksMayNarrowReads(slug: string): boolean {
-  const registry = getHookRegistry();
-  return READ_NARROWING_HOOKS.some(hook => registry.hasHooks(hook, slug));
+/** The collection or Single a deleted document belonged to. */
+export interface DeletedDocumentOwner {
+  kind: "collection" | "single";
+  slug: string;
 }
 
 /**
- * Whether this caller may read the events of the deleted document of the
- * collection or Single named `slug`.
+ * Whether any hook may narrow reads of the owner's documents, so a deleted
+ * row's answer is unknown. A Single's hooks are registered, and looked up by
+ * its reads, under its own namespace rather than its bare slug, so they are
+ * asked for there.
+ */
+function hooksMayNarrowReads(owner: DeletedDocumentOwner): boolean {
+  const registry = getHookRegistry();
+  const key =
+    owner.kind === "single" ? singleHookNamespace(owner.slug) : owner.slug;
+  return READ_NARROWING_HOOKS.some(hook => registry.hasHooks(hook, key));
+}
+
+/**
+ * Whether this caller may read the events of a deleted document of this
+ * collection or Single.
  */
 export async function mayReadDeletedDocument(
-  slug: string,
+  owner: DeletedDocumentOwner,
   caller: ReadAccessCaller
 ): Promise<boolean> {
+  const { slug } = owner;
   const rule = getRBACService()?.getRegisteredAccess(slug)?.read;
-  if (typeof rule === "function" || hooksMayNarrowReads(slug)) {
+  if (typeof rule === "function" || hooksMayNarrowReads(owner)) {
     // The session path only: a super-admin's key is judged by its own scope,
     // which the rule limited like any other.
     return (
