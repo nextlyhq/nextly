@@ -132,6 +132,33 @@ describe("what is stored on save", () => {
     ).toEqual({ legacy: "kept", limit: 12 });
   });
 
+  it("does not store a filter equal to its default, however it was built", () => {
+    // A filter's value is an object: the same condition read from storage or
+    // written again by the row is a different object, in whatever key order.
+    // Compared by reference it was stored, pinning today's default.
+    const where: AnyWidgetSetting = {
+      name: "where",
+      type: "filter",
+      of: "collection",
+      defaultValue: { status: { equals: "published", not_equals: "x" } },
+    };
+    expect(
+      toStoredConfig(
+        [where],
+        { where: { status: { not_equals: "x", equals: "published" } } },
+        undefined
+      )
+    ).toEqual({});
+    // The control: a different condition is stored.
+    expect(
+      toStoredConfig(
+        [where],
+        { where: { status: { equals: "draft" } } },
+        undefined
+      )
+    ).toEqual({ where: { status: { equals: "draft" } } });
+  });
+
   it("still lets the form clear a key the declaration DOES know", () => {
     // The other half. Carrying the old config must not resurrect a value the
     // reader just emptied, which is what a plain merge would do.
@@ -160,7 +187,7 @@ describe("what Reset to defaults leaves in the form", () => {
     defaultValue: 5,
   };
 
-  it("restores every setting but a placed Collection", () => {
+  it("restores every setting but the card's Collection, which it leaves as it is", () => {
     expect(
       resetToDefaults([collection, sort, items], {
         collection: "posts",
@@ -168,6 +195,37 @@ describe("what Reset to defaults leaves in the form", () => {
         items: 12,
       })
     ).toEqual({ collection: "posts", sort: "-updatedAt", items: 5 });
+  });
+
+  it("leaves a dependent with no choice where its default names a field the collection lacks", () => {
+    // Pages keeps no timestamps, so the sort's default names nothing there.
+    const sources = [
+      {
+        collection: "posts",
+        label: "Posts",
+        fields: [{ name: "updatedAt", type: "date" }],
+      },
+      {
+        collection: "pages",
+        label: "Pages",
+        fields: [{ name: "title", type: "string" }],
+      },
+    ];
+    expect(
+      resetToDefaults(
+        [collection, sort],
+        { collection: "pages", sort: "title" },
+        sources
+      )
+    ).toEqual({ collection: "pages", sort: "" });
+    // The control: where the default fits, it is what Reset restores.
+    expect(
+      resetToDefaults(
+        [collection, sort],
+        { collection: "posts", sort: "-updatedAt" },
+        sources
+      )
+    ).toEqual({ collection: "posts", sort: "-updatedAt" });
   });
 
   it("resets a Collection that declares its own default, as Recently edited's does", () => {

@@ -32,7 +32,14 @@ const sources: PublishedContentSource[] = [
     fields: [
       { name: "title", type: "string" },
       { name: "updatedAt", type: "date" },
+      // Offered to filter and sort; the read will not group by it.
+      { name: "headline", type: "string", groupable: false },
     ],
+  },
+  {
+    collection: "pages",
+    label: "Pages",
+    fields: [{ name: "title", type: "string" }],
   },
 ];
 
@@ -68,7 +75,52 @@ describe("a stored value naming a field no longer offered", () => {
       {
         name: "by",
         notice: "Group by was reset: state is no longer available",
+        // No default declared, so none.
+        replacement: "",
       },
+    ]);
+  });
+
+  it("covers a Group by naming a field the read will not group by", () => {
+    expect(
+      staleContentValues(
+        settings,
+        {
+          collection: "posts",
+          by: "headline",
+          where: { headline: { equals: "a" } },
+        },
+        sources
+      ).map(stale => stale.name)
+    ).toEqual(["by"]);
+  });
+
+  it("judges a default as well, and replaces one the collection lacks with none", () => {
+    // Pages has no updatedAt, so Sort's default names nothing there.
+    expect(
+      staleContentValues(
+        settings,
+        { collection: "pages", order: "-updatedAt" },
+        sources
+      )
+    ).toEqual([
+      {
+        name: "order",
+        notice: "Sort's default, updatedAt, is not available for Pages",
+        replacement: "",
+      },
+    ]);
+  });
+
+  it("replaces a stale stored value with the default where the default fits", () => {
+    expect(
+      staleContentValues(
+        settings,
+        { collection: "posts", order: "-gone" },
+        sources
+      )
+    ).toEqual([
+      expect.objectContaining({ name: "order", replacement: "-updatedAt" }),
     ]);
   });
 

@@ -20,7 +20,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@nextlyhq/ui";
-import type { AnyWidgetSetting } from "nextly/config";
+import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
 import { useCallback, useEffect, useMemo } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
@@ -30,7 +30,10 @@ import { useBranding } from "@admin/context/providers/BrandingProvider";
 import {
   dependentsOf,
   isContentSetting,
+  isDependentSetting,
+  sameSettingValue,
   staleContentValues,
+  startingValue,
 } from "./content-settings";
 import { ContentSettingControl } from "./ContentSettingControl";
 
@@ -115,7 +118,7 @@ export function toStoredConfig(
     if (!Object.hasOwn(values, setting.name)) continue;
     const value = values[setting.name];
     if (value === undefined || value === "") continue;
-    if (value === setting.defaultValue) continue;
+    if (sameSettingValue(value, setting.defaultValue)) continue;
     stored[setting.name] = value;
   }
   return stored;
@@ -125,26 +128,37 @@ export function toStoredConfig(
  * What the form holds after "Reset to defaults".
  *
  * Every setting goes back to its declared default, its dependents with it,
- * except a Collection setting that declares no default. That one was given its
- * value when the card was placed, from the collection group it was added from:
- * it is the card's identity rather than a preference, so resetting it would
- * turn a "Recent posts" card into a card of no collection at all. A Collection
- * setting that declares a default (Recently edited's "All collections") resets
- * like any other.
+ * except a Collection setting that declares no default, which Reset leaves as
+ * it is. Such a setting names the card's collection: it is the card's identity
+ * rather than a preference, chosen when the card was placed and changed with
+ * the Collection control itself, so Reset does not undo it, and does not
+ * empty it into a card of no collection at all. A Collection setting that
+ * declares a default (Recently edited's "All collections") resets like any
+ * other.
+ *
+ * A dependent goes back to its default only where the default names a field
+ * it may use over the collection kept; otherwise to none, so Reset never
+ * draws a choice the collection does not have.
  */
 export function resetToDefaults(
   settings: readonly AnyWidgetSetting[],
-  values: Record<string, unknown>
+  values: Record<string, unknown>,
+  sources?: readonly PublishedContentSource[]
 ): Record<string, unknown> {
   const reset: Record<string, unknown> = Object.create(null);
   for (const setting of settings) {
-    const placed =
+    const kept =
       setting.type === "collection" &&
       setting.defaultValue === undefined &&
       Object.hasOwn(values, setting.name);
-    reset[setting.name] = placed
+    reset[setting.name] = kept
       ? values[setting.name]
       : (setting.defaultValue ?? "");
+  }
+  for (const setting of settings) {
+    if (isDependentSetting(setting)) {
+      reset[setting.name] = startingValue(setting, reset[setting.of], sources);
+    }
   }
   return reset;
 }
@@ -171,28 +185,38 @@ export function WidgetSettingsSheet({
   );
   const defaultValues = useMemo(() => {
     const values = initialValues(settings, config);
-    for (const { name } of stale) {
-      const setting = settings.find(candidate => candidate.name === name);
-      values[name] = setting?.defaultValue ?? "";
-    }
+    for (const { name, replacement } of stale) values[name] = replacement;
     return values;
   }, [settings, config, stale]);
 
   const form = useForm({ defaultValues });
 
-  // A filter, sort or grouping names fields of ONE collection: when a person
-  // picks another collection, the settings over it go back to their defaults
-  // rather than name fields the new collection may not have. Only a person's
-  // change does this; a reset or the form opening names no field.
+  // The form keeps the values it was mounted with, and `defaultValues` changing
+  // later does not replace them. So while the sheet is closed it is rebuilt
+  // from the latest baseline: sources that arrive or change after mounting are
+  // what it opens with, and a value a notice says was reset is the value Save
+  // writes. Never while it is open, where it would discard the reader's edits.
   useEffect(() => {
-    const subscription = form.watch((_values, { name }) => {
+    if (!open) form.reset(defaultValues);
+  }, [open, defaultValues, form]);
+
+  // A filter, sort or grouping names fields of ONE collection: when a person
+  // picks another collection, the settings over it go back to where they
+  // start over the new one -- the default where it fits, none where it names
+  // a field the new collection lacks. Only a person's change does this; a
+  // reset or the form opening names no field.
+  useEffect(() => {
+    const subscription = form.watch((values, { name }) => {
       if (name === undefined) return;
       for (const dependent of dependentsOf(settings, name)) {
-        form.setValue(dependent.name, dependent.defaultValue ?? "");
+        form.setValue(
+          dependent.name,
+          startingValue(dependent, values[name], sources)
+        );
       }
     });
     return () => subscription.unsubscribe();
-  }, [form, settings]);
+  }, [form, settings, sources]);
 
   const submit = useCallback(
     (values: Record<string, unknown>) => {
@@ -252,7 +276,9 @@ export function WidgetSettingsSheet({
                 variant="ghost"
                 className="mr-auto"
                 onClick={() =>
-                  form.reset(resetToDefaults(settings, form.getValues()))
+                  form.reset(
+                    resetToDefaults(settings, form.getValues(), sources)
+                  )
                 }
               >
                 Reset to defaults

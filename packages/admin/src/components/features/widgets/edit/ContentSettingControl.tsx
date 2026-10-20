@@ -11,15 +11,17 @@
  * is a field definition, and building one keeps a reader on inputs they know.
  * Filter is one condition row, written as the query's `where`.
  */
+import { Button } from "@nextlyhq/ui";
 import type {
   ContentSetting,
   PublishedContentSource,
   WidgetSetting,
 } from "nextly/config";
+import { useEffect, useRef, useState } from "react";
 import { useController, useWatch } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
-import { ConditionRow } from "@admin/components/field-ui";
+import { ConditionRow, type ConditionValue } from "@admin/components/field-ui";
 
 import {
   conditionToWhere,
@@ -27,6 +29,7 @@ import {
   filterOperatorsFor,
   whereToCondition,
 } from "./content-filter";
+import { fieldFits, sameSettingValue } from "./content-settings";
 
 export interface ContentSettingControlProps {
   setting: ContentSetting;
@@ -82,7 +85,11 @@ export function ContentSettingControl({
       <FieldRenderer
         field={selectOf(
           setting,
-          fields.map(field => ({ label: labelOf(field), value: field.name }))
+          // Only keys the read will group by: a field offered to filter and
+          // sort may still be one it refuses as a group key.
+          fields
+            .filter(field => fieldFits(setting, field))
+            .map(field => ({ label: labelOf(field), value: field.name }))
         )}
         mode="edit"
       />
@@ -105,6 +112,14 @@ export function ContentSettingControl({
   return <FilterControl setting={setting} fields={fields} />;
 }
 
+/** The row's type for each field, by name, for reading a stored `where`. */
+function typesOf(fields: readonly Field[]) {
+  return (name: string) => {
+    const found = fields.find(candidate => candidate.name === name);
+    return found === undefined ? undefined : conditionTypeOf(found);
+  };
+}
+
 function FilterControl({
   setting,
   fields,
@@ -113,35 +128,85 @@ function FilterControl({
   fields: readonly Field[];
 }) {
   const { field } = useController({ name: setting.name });
-  const typeOf = (name: string) => {
-    const found = fields.find(candidate => candidate.name === name);
-    return found === undefined ? undefined : conditionTypeOf(found);
+
+  // The row a person is building, kept here rather than read back from the
+  // form: a condition with a field and an operator but no value yet writes no
+  // `where`, so reading the row from the form would clear the field the moment
+  // it was chosen. The form holds only what can be written; this holds the
+  // rest of the row until it can.
+  const [draft, setDraft] = useState<ConditionValue | undefined>(() =>
+    whereToCondition(field.value, typesOf(fields))
+  );
+  // What this row last wrote, so a change made elsewhere -- a reset, another
+  // collection, the sheet reopening -- is told apart from the row's own
+  // writes and redraws the row from the form.
+  const written = useRef<unknown>(field.value);
+  useEffect(() => {
+    if (sameSettingValue(field.value, written.current)) return;
+    written.current = field.value;
+    setDraft(whereToCondition(field.value, typesOf(fields)));
+  }, [field.value, fields]);
+
+  /**
+   * Keep the row as built, and write what of it can be written: an incomplete
+   * row stores nothing, so the card keeps reading every row until the
+   * condition is complete.
+   */
+  const write = (next: ConditionValue | undefined) => {
+    setDraft(next);
+    const where = conditionToWhere(next) ?? "";
+    written.current = where;
+    field.onChange(where);
   };
+
+  // A stored filter the one row cannot show (several conditions, or an
+  // operator it has no name for) still filters the card. Said so, with a way
+  // to clear it, rather than drawn as an empty row over a filter that applies.
+  const unshown =
+    draft === undefined &&
+    typeof field.value === "object" &&
+    field.value !== null &&
+    Object.keys(field.value).length > 0;
+
   return (
     <div className="flex flex-col gap-1.5">
       <span className="text-sm font-medium">
         {setting.label ?? setting.name}
       </span>
-      <ConditionRow
-        condition={whereToCondition(field.value, typeOf)}
-        sources={fields.map(source => ({
-          name: source.name,
-          label: labelOf(source),
-          type: conditionTypeOf(source),
-          ...(source.choices === undefined
-            ? {}
-            : {
-                options: source.choices.map(choice => ({
-                  value: choice.value,
-                  label: choice.label,
-                })),
-              }),
-        }))}
-        operatorsFor={filterOperatorsFor}
-        // An incomplete row stores nothing, so the card keeps reading every
-        // row until the condition can be written.
-        onChange={next => field.onChange(conditionToWhere(next) ?? "")}
-      />
+      {unshown ? (
+        <div className="flex items-center justify-between gap-2">
+          <p role="status" className="text-sm text-muted-foreground">
+            This card has a filter that can&apos;t be shown here.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => write(undefined)}
+          >
+            Clear filter
+          </Button>
+        </div>
+      ) : (
+        <ConditionRow
+          condition={draft}
+          sources={fields.map(source => ({
+            name: source.name,
+            label: labelOf(source),
+            type: conditionTypeOf(source),
+            ...(source.choices === undefined
+              ? {}
+              : {
+                  options: source.choices.map(choice => ({
+                    value: choice.value,
+                    label: choice.label,
+                  })),
+                }),
+          }))}
+          operatorsFor={filterOperatorsFor}
+          onChange={write}
+        />
+      )}
     </div>
   );
 }
