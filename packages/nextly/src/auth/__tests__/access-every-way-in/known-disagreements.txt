@@ -632,7 +632,9 @@ bound visitor read related returns-null at population
 bound visitor read related returns-true at population
 bound visitor read related returns-undefined at population
 bound visitor read related true at population
-service key-super-admin update providers none at rest
+service key-super-admin update providers none at route
+service key-super-admin update providers none at can
+service key-super-admin update providers none at widget
 service user-without read collection true at widget
 service user-without create collection true at widget
 service user-partial create collection true at widget

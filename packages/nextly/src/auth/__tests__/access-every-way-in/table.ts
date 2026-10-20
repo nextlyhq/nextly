@@ -562,8 +562,20 @@ const SEEDED: Partial<Record<Target, readonly Action[]>> = {
   providers: ["create", "read", "delete"],
 };
 
+/**
+ * Resources whose routes accept the resource's `manage-` permission in place
+ * of any action's own, as the email provider routes do. Only the
+ * super-admin's full-access key, which carries the whole catalogue, holds a
+ * `manage-` permission here; the super-admin sessions pass every gate anyway.
+ */
+const MANAGED: readonly Target[] = ["providers"];
+
+const holdsManage = (caller: Caller, target: Target) =>
+  MANAGED.includes(target) && caller === "key-super-admin";
+
 /** Whether the role screen grants the caller this action on this target. */
 function holdsPermission(caller: Caller, action: Action, target: Target) {
+  if (holdsManage(caller, target)) return true;
   if (!(SEEDED[target]?.includes(action) ?? true)) return false;
   // A full-access key carries its maker's live permissions, and a
   // super-admin's are the whole catalogue, users included.

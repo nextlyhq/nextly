@@ -18,6 +18,10 @@ import { CollectionAccessService } from "../../../domains/collections/services/c
 import { checkSingleAccess } from "../../../domains/singles/services/single-query-service";
 import { getPluginRouteRegistry } from "../../../plugins/routes/route-registry";
 import { runPluginRoute } from "../../../plugins/routes/dispatch";
+import type {
+  DocumentLockService,
+  DocumentRef,
+} from "../../../domains/document-lock";
 import { widgetAudience } from "../../../domains/widgets/visibility";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
@@ -573,11 +577,17 @@ async function singleDocumentId(world: World, slug: string): Promise<string> {
 
 /**
  * Claims the entry's or Single's document lock through REST, as an editor
- * opening it does, and gives a granted claim straight back, so the next
- * caller finds the document free rather than held.
+ * opening it does. Only an `acquired` claim is an `A`: a claim answered
+ * `held` was never this caller's, so it is recorded as such rather than as an
+ * answer about this caller.
+ *
+ * Every acquired claim is given straight back through the lock service with
+ * its token, never through the route: a caller a rule lets claim may hold no
+ * grant to release with, and a claim it left behind would answer every caller
+ * after it `held`.
  */
 async function lock(world: World, row: Row, who: CallerHandle) {
-  const ref =
+  const ref: DocumentRef =
     row.target === "single"
       ? {
           scopeKind: "single",
@@ -591,15 +601,16 @@ async function lock(world: World, row: Row, who: CallerHandle) {
         };
   const res = await request("POST", ["document-lock"], who.headers, ref);
   if (res.status !== 200) return fromStatus(res.status);
-  const body = (await res.json()) as { item?: { claimToken?: unknown } };
-  const claimToken = body.item?.claimToken;
+  const body = (await res.json()) as {
+    item?: { status?: unknown; claimToken?: unknown };
+  };
+  const { status, claimToken } = body.item ?? {};
   if (typeof claimToken === "string") {
-    await request("DELETE", ["document-lock"], who.headers, {
-      ...ref,
-      claimToken,
-    });
+    await container
+      .get<DocumentLockService>("documentLockService")
+      .release(ref, claimToken);
   }
-  return "A";
+  return status === "acquired" ? "A" : `=${String(status)}`;
 }
 
 const ADAPTERS: Record<
