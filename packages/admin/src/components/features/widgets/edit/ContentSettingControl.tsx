@@ -78,13 +78,7 @@ export function ContentSettingControl({
   if (setting.type === "collection") {
     return (
       <FieldRenderer
-        field={selectOf(
-          setting,
-          sources.map(source => ({
-            label: source.label,
-            value: source.collection,
-          }))
-        )}
+        field={selectOf(setting, collectionOptions(setting, sources))}
         mode="edit"
       />
     );
@@ -120,7 +114,38 @@ export function ContentSettingControl({
       />
     );
   }
-  return <FilterControl setting={setting} fields={fields} />;
+  // Keyed by the collection, so choosing another one starts the row afresh:
+  // a half-built condition names a field of the collection it was begun on,
+  // and nothing the form holds says so once it has written nothing.
+  return (
+    <FilterControl key={String(collection)} setting={setting} fields={fields} />
+  );
+}
+
+/**
+ * A Collection setting's choices: the collections the server sent, and its
+ * own default when that names none of them. A widget may declare a default
+ * that is not a collection (one meaning every collection, say); it is what
+ * the card uses until the reader chooses, so it is offered by name rather
+ * than left as a value the select cannot show or return to.
+ */
+function collectionOptions(
+  setting: Extract<ContentSetting, { type: "collection" }>,
+  sources: readonly PublishedContentSource[]
+): { label: string; value: string }[] {
+  const options = sources.map(source => ({
+    label: source.label,
+    value: source.collection,
+  }));
+  const fallback = setting.defaultValue;
+  if (
+    fallback === undefined ||
+    fallback === "" ||
+    options.some(option => option.value === fallback)
+  ) {
+    return options;
+  }
+  return [{ label: "Default", value: fallback }, ...options];
 }
 
 /** The row's type for each field, by name, for reading a stored `where`. */

@@ -260,6 +260,47 @@ describe("the settings sheet with content settings", () => {
     expect(saved(onSave)).toEqual({});
   });
 
+  it("offers a Collection default that names no collection, and can return to it", async () => {
+    const anyCollection: AnyWidgetSetting[] = [
+      {
+        name: "collection",
+        type: "collection",
+        label: "Collection",
+        defaultValue: "*",
+      },
+    ];
+    const onSave = open({}, anyCollection);
+    const picker = screen.getByRole("combobox", { name: /Collection/ });
+    // The value the card uses is shown, not an empty select.
+    expect(picker.textContent).toContain("Default");
+    await userEvent.click(picker);
+    await userEvent.click(screen.getByRole("option", { name: "Posts" }));
+    await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
+    await userEvent.click(screen.getByRole("option", { name: "Default" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    // Back at the default, so nothing is stored.
+    expect(saved(onSave)).toEqual({});
+  });
+
+  it("starts the filter row afresh when the collection changes, even half-built", async () => {
+    const onSave = open({ collection: "posts" }, withFilter);
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Condition field" })
+    );
+    // Updated is a field of Posts only, and the row is left without a value.
+    await userEvent.click(screen.getByRole("option", { name: "Updated" }));
+    await userEvent.click(screen.getByRole("combobox", { name: /Collection/ }));
+    await userEvent.click(screen.getByRole("option", { name: "Pages" }));
+    // A row still holding Updated would take a value and write a filter on a
+    // field Pages does not have. Started afresh, it has no value to take.
+    const value = screen.queryByLabelText("Condition value");
+    if (value !== null) await userEvent.type(value, "2026-01-01");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(saved(onSave)).toEqual({ collection: "pages" });
+  });
+
   it("resets every setting to its default but keeps the card's collection", async () => {
     const onSave = open({ collection: "posts", by: "title", items: 9 });
     await userEvent.click(
