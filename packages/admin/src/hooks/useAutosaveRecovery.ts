@@ -85,23 +85,32 @@ export function useAutosaveRecovery({
   form,
   savedCount = 0,
 }: UseAutosaveRecoveryOptions): UseAutosaveRecoveryResult {
+  // Keyed by the document, so switching entries asks again rather than
+  // reusing the previous document's answer.
+  const queryKey = [
+    "autosave-recovery",
+    scope?.kind,
+    scope?.slug,
+    scope?.kind === "single" ? scope.documentId : scope?.entryId,
+  ];
   const [dismissed, setDismissed] = useState(false);
-  // Withdrawn once a save lands: see `savedCount`.
+  // Withdrawn once a save lands: see `savedCount`. Both answers belong to the
+  // document they were given for: an editor that moves to another document
+  // offers that one's recovery point, whatever was dismissed or saved before.
   const [savesSeen, setSavesSeen] = useState(savedCount);
-  if (savesSeen !== savedCount) {
+  const documentKey = JSON.stringify(queryKey);
+  const [documentSeen, setDocumentSeen] = useState(documentKey);
+  if (documentSeen !== documentKey) {
+    setDocumentSeen(documentKey);
+    setSavesSeen(savedCount);
+    setDismissed(false);
+  } else if (savesSeen !== savedCount) {
     setSavesSeen(savedCount);
     setDismissed(true);
   }
 
   const { data, isPending, isError } = useQuery({
-    // Keyed by the document, so switching entries asks again rather than
-    // reusing the previous document's answer.
-    queryKey: [
-      "autosave-recovery",
-      scope?.kind,
-      scope?.slug,
-      scope?.kind === "single" ? scope.documentId : scope?.entryId,
-    ],
+    queryKey,
     queryFn: () => (scope ? versionApi.getAutosave(scope) : null),
     enabled: scope !== null,
     // Read once when the editor opens. Refetching on focus would surface an

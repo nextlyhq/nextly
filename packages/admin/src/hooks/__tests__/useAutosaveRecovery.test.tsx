@@ -209,4 +209,32 @@ describe("after a save", () => {
 
     expect(result.current.offer).toBeNull();
   });
+
+  it("offers the next document's recovery point when the editor moves to it", async () => {
+    getSpy.mockResolvedValue({
+      updatedAt: "2026-10-20T10:00:00.000Z",
+      snapshot: { title: "recovered" },
+    });
+    const { result, rerender } = renderHook(
+      ({ entryId, savedCount }: { entryId: string; savedCount: number }) => {
+        const form = useForm<Record<string, unknown>>({
+          defaultValues: STORED,
+        });
+        return useAutosaveRecovery({
+          scope: { ...SCOPE, entryId },
+          form,
+          savedCount,
+        });
+      },
+      { wrapper, initialProps: { entryId: "e1", savedCount: 0 } }
+    );
+    await waitFor(() => expect(result.current.offer).not.toBeNull());
+    rerender({ entryId: "e1", savedCount: 1 });
+    expect(result.current.offer).toBeNull();
+
+    // The same editor opens another entry, which has a point of its own.
+    rerender({ entryId: "e2", savedCount: 1 });
+
+    await waitFor(() => expect(result.current.offer).not.toBeNull());
+  });
 });
