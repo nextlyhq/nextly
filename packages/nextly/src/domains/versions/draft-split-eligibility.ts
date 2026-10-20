@@ -379,22 +379,48 @@ function reachedOnlyThroughVirtualFields(
   fields: FieldConfig[],
   componentSchemas: ComponentSchemas | null
 ): Set<string> {
-  const stored = new Set<string>();
-  const virtual = new Set<string>();
-  const visit = (list: readonly unknown[], inVirtual: boolean): void => {
+  const reached = { stored: new Set<string>(), virtual: new Set<string>() };
+  // Each field list once per state, so a group whose fields lead back to
+  // itself ends, and a work list rather than recursion, so a deep chain of
+  // groups and components cannot exhaust the stack.
+  const walked = { stored: new Set<unknown>(), virtual: new Set<unknown>() };
+  const work: WalkStep[] = [[fields, "stored"]];
+  for (let next = work.pop(); next; next = work.pop()) {
+    const [list, state] = next;
+    if (walked[state].has(list)) continue;
+    walked[state].add(list);
     for (const field of list.filter(isFieldRecord)) {
-      const isVirtual = inVirtual || isVirtualField(field);
-      const reached = isVirtual ? virtual : stored;
-      for (const slug of componentSlugsOf(field)) {
-        if (reached.has(slug)) continue;
-        reached.add(slug);
-        visit(componentSchemas?.get(slug)?.fields ?? [], isVirtual);
-      }
-      visit(childFieldsOf(field), isVirtual);
+      work.push(...stepsFrom(field, state, reached, componentSchemas));
     }
-  };
-  visit(fields, false);
-  return new Set([...virtual].filter(slug => !stored.has(slug)));
+  }
+  return new Set(
+    [...reached.virtual].filter(slug => !reached.stored.has(slug))
+  );
+}
+
+/** Whether the walk is under a virtual field, which stores nothing. */
+type WalkState = "stored" | "virtual";
+type WalkStep = [readonly unknown[], WalkState];
+
+/**
+ * Records the components one field names under the state it is reached in,
+ * and returns the field lists to walk from it: its own children, and the
+ * fields of each component it names.
+ */
+function stepsFrom(
+  field: FieldRecord,
+  inherited: WalkState,
+  reached: Record<WalkState, Set<string>>,
+  componentSchemas: ComponentSchemas | null
+): WalkStep[] {
+  const state: WalkState =
+    inherited === "virtual" || isVirtualField(field) ? "virtual" : "stored";
+  const next: WalkStep[] = [[childFieldsOf(field), state]];
+  for (const slug of componentSlugsOf(field)) {
+    reached[state].add(slug);
+    next.push([componentSchemas?.get(slug)?.fields ?? [], state]);
+  }
+  return next;
 }
 
 /** A field definition as the walk above reads it. */

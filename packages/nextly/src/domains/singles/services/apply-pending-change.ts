@@ -23,7 +23,10 @@ import {
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
 import { draftComponentValues } from "../../versions/draft-components";
-import { stripSingleComponentTags } from "../../versions/tag-component-types";
+import {
+  type ComponentFieldResolver,
+  stripSingleComponentTags,
+} from "../../versions/tag-component-types";
 
 import { serializeJsonFields } from "./single-utils";
 
@@ -64,10 +67,23 @@ export function splitPendingChange(
    */
   fields: Parameters<typeof stripImmutableSystemFields>[3],
   companion: CompanionSchema | null,
-  overrides?: Record<string, unknown>
+  overrides?: Record<string, unknown>,
+  /**
+   * A component's fields by its slug, so the type tags on components nested
+   * in other components come off too, at every depth the draft recorded them.
+   */
+  componentFields?: ComponentFieldResolver
 ): PendingChangeParts {
   const draft = (snapshot ?? {}) as Record<string, unknown>;
-  const components = draftComponentValues(draft, fields as FieldConfig[]);
+  // The draft records each fixed component with its type; neither the rows
+  // nor a component write's validators see that tag on an ordinary write, so
+  // it comes off both halves here. A dynamic zone's row type is its public
+  // discriminator and is kept.
+  const untagged = (values: Record<string, unknown>) =>
+    stripSingleComponentTags(values, fields as FieldConfig[], componentFields);
+  const components = untagged(
+    draftComponentValues(draft, fields as FieldConfig[])
+  );
   // The component values leave the row-shaped halves: neither row has a
   // column for them. Own keys only, so a field named like an Object.prototype
   // member stays with the row.
@@ -76,13 +92,12 @@ export function splitPendingChange(
   // container's value, and is recorded in the draft with its type. The row
   // stores the container as one JSON value, so the record comes off here, as a
   // restore takes it off, or it would be stored and served by every read.
-  const rowValues = stripSingleComponentTags(
+  const rowValues = untagged(
     Object.fromEntries(
       Object.entries(draft).filter(
         ([key]) => !Object.prototype.hasOwnProperty.call(components, key)
       )
-    ),
-    fields as FieldConfig[]
+    )
   );
   // A draft holds JSON-backed fields parsed, as reads do; the row stores them
   // encoded, as an ordinary write encodes them. Encoding is idempotent, so a

@@ -190,6 +190,48 @@ describe.each(getConfiguredTestDialects())(
   }
 );
 
+describe.each(getConfiguredTestDialects())(
+  "a second held patch to a component that only the draft holds (integration, %s)",
+  dialect => {
+    // The component has no live row yet, so the publish creates it from the
+    // draft's merged value. A later patch carries only the sub-field it
+    // changes, and is judged with the value it is merged into, not alone.
+    it("is judged merged into the draft, as the publish would write it", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [heroGroup()],
+        singles: [
+          defineSingle({
+            slug: "home",
+            status: true,
+            versions: true,
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "hero", component: "hero" }),
+            ],
+          }),
+        ],
+      });
+      const singles = current.getService("singleEntryService");
+      const update = (data: Record<string, unknown>) =>
+        outcomeOf(() => singles.update("home", data, { overrideAccess: true }));
+      expect((await update({ title: "T", status: "published" })).ok).toBe(true);
+
+      expect(
+        (await update({ hero: { heading: "Valid", code: "ok" } })).ok
+      ).toBe(true);
+      const second = await update({ hero: { code: "new" } });
+      expect(second, JSON.stringify(second)).toMatchObject({ ok: true });
+
+      expect((await update({ status: "published" })).ok).toBe(true);
+      expect(await liveHero(current)).toMatchObject({
+        heading: "Valid",
+        code: "new",
+      });
+    });
+  }
+);
+
 const cases = [
   ["a required component field left empty", { heading: "", code: "ok" }],
   ["a component field's own validator", { heading: "Live", code: "forbidden" }],
