@@ -510,12 +510,17 @@ describe("bodies held open", () => {
     const h = harness({ budget: 1 }); // ceiling 100
     await holdOpen(h, 100);
 
+    // Before the extra request: what the counter tracks while every place is
+    // held, which the refusal must leave exactly as it is.
+    const trackedBefore = h.counter.trackedKeys;
     const extra = heldLogin(h, "extra@example.com");
     const refused = await extra.response;
     expect(refused?.status).toBe(429);
     expect(Number(refused?.headers.get("retry-after"))).toBeGreaterThan(0);
-    // Refused before its body was read.
+    // Refused before its body was read, and without a bucket: an empty one
+    // spends no budget, so only the count of tracked keys would show it.
     expect(await readStarts(extra)).toBe(false);
+    expect(h.counter.trackedKeys).toBe(trackedBefore);
 
     // The refusal spent nothing: once the held bodies arrive (one admitted,
     // the rest refused by their shared address's budget), the one admission
