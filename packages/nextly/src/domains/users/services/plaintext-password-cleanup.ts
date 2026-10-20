@@ -145,6 +145,7 @@ export class PlainTextPasswordCleanup extends BaseService {
               this.dialect,
               {
                 userId: candidate.id,
+                adapter: this.adapter,
                 // Moving the password version refuses a sign-in or refresh
                 // already under way with the old credentials.
                 set: {

@@ -306,6 +306,25 @@ passes `person` to `ctx.services.email.send` or `sendWithTemplate`. The delivery
 record then names the person, so the plugin's report that they were deleted erases
 it, and leaves alone the records of anyone else at the same address.
 
+### Email to a staff user
+
+A send can name a staff user the same way, as `{ kind: "staff", id }`, on
+`nextly.email.send`, `nextly.email.sendWithTemplate` and a plugin's
+`ctx.services.email`. The delivery record then names that user by kind and id
+beside the address it went to. A send naming a staff user who does not exist is
+refused before anything is sent. `person` is `@experimental`.
+
+```typescript
+await nextly.email.sendWithTemplate({
+  to: user.email,
+  template: "account-notice",
+  person: { kind: "staff", id: user.id },
+});
+```
+
+Core's own emails to a staff user name them this way: the welcome email, the
+password reset and the email verification.
+
 ### Auth flow auto-sends
 
 The `AuthService` handles email sending for auth flows automatically when an email service is configured:

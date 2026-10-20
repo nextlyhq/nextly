@@ -1710,6 +1710,54 @@ function parseEmailProviderRoutes(
 // Email Template Routes Parser
 // ============================================================================
 
+/** The template ownership routes, by their URL token. */
+const EMAIL_TEMPLATE_OWNERSHIP_ROUTES: Record<
+  string,
+  { httpMethod: "GET" | "PATCH"; method: string }
+> = {
+  override: { httpMethod: "PATCH", method: "overrideTemplate" },
+  reset: { httpMethod: "PATCH", method: "resetTemplate" },
+  compare: { httpMethod: "GET", method: "compareTemplate" },
+  "apply-update": { httpMethod: "PATCH", method: "applyOwnerUpdate" },
+  "undo-update": { httpMethod: "PATCH", method: "undoOwnerUpdate" },
+};
+
+/** A route's operation (which picks nothing: the HTTP method picks the permission) and service method. */
+type EmailTemplateRoute = { operation: OperationType; method: string };
+
+/** `/api/email-templates`, by HTTP method. */
+const EMAIL_TEMPLATE_COLLECTION_ROUTES: Record<string, EmailTemplateRoute> = {
+  GET: { operation: "list", method: "listTemplates" },
+  POST: { operation: "create", method: "createTemplate" },
+};
+
+/** `/api/email-templates/[id]`, by HTTP method. */
+const EMAIL_TEMPLATE_ITEM_ROUTES: Record<string, EmailTemplateRoute> = {
+  GET: { operation: "single", method: "getTemplate" },
+  PATCH: { operation: "update", method: "updateTemplate" },
+  DELETE: { operation: "delete", method: "deleteTemplate" },
+};
+
+/** `/api/email-templates/[id]/<subresource>`: preview with sample data, and the ownership steps. */
+function emailTemplateSubresourceRoute(
+  subresource: string,
+  httpMethod: string
+): EmailTemplateRoute | undefined {
+  if (subresource === "preview") {
+    return httpMethod === "POST"
+      ? { operation: "single", method: "previewTemplate" }
+      : undefined;
+  }
+  // The ownership steps. Each changes the template, so each is a PATCH and
+  // needs the update permission, as an edit does; the comparison only reads.
+  const ownership = EMAIL_TEMPLATE_OWNERSHIP_ROUTES[subresource];
+  if (!ownership || httpMethod !== ownership.httpMethod) return undefined;
+  return {
+    operation: ownership.httpMethod === "GET" ? "single" : "update",
+    method: ownership.method,
+  };
+}
+
 /**
  * Parse Email Template routes
  *
@@ -1723,6 +1771,11 @@ function parseEmailProviderRoutes(
  * - DELETE /api/email-templates/[id] → delete template
  * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
+ * - PATCH /api/email-templates/[id]/override → override an owned template
+ * - PATCH /api/email-templates/[id]/reset → return it to its owner's version
+ * - GET /api/email-templates/[id]/compare → the owner's changes since the override
+ * - PATCH /api/email-templates/[id]/apply-update → apply a review of them
+ * - PATCH /api/email-templates/[id]/undo-update → undo that review
  */
 function parseEmailTemplateRoutes(
   id: string | undefined,
@@ -1730,25 +1783,15 @@ function parseEmailTemplateRoutes(
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
-  // GET /api/email-templates → list all templates
-  if (!id && httpMethod === "GET") {
-    return {
-      service: "emailTemplates",
-      operation: "list",
-      method: "listTemplates",
-      routeParams,
-    };
-  }
+  // Every email template route goes to the same service with the same
+  // params; the tables only differ in operation and method.
+  const parsed = (route: EmailTemplateRoute | undefined) =>
+    route
+      ? { service: "emailTemplates" as const, ...route, routeParams }
+      : null;
 
-  // POST /api/email-templates → create template
-  if (!id && httpMethod === "POST") {
-    return {
-      service: "emailTemplates",
-      operation: "create",
-      method: "createTemplate",
-      routeParams,
-    };
-  }
+  // GET lists the templates; POST creates one.
+  if (!id) return parsed(EMAIL_TEMPLATE_COLLECTION_ROUTES[httpMethod]);
 
   // POST /api/email-templates/preview → render UNSAVED fields
   //
@@ -1763,59 +1806,15 @@ function parseEmailTemplateRoutes(
   // permission here — that comes from the HTTP method — so POST resolves to
   // create-or-manage on email-templates either way.
   if (id === "preview" && !subresource && httpMethod === "POST") {
-    return {
-      service: "emailTemplates",
-      operation: "single",
-      method: "previewDraft",
-      routeParams,
-    };
+    return parsed({ operation: "single", method: "previewDraft" });
   }
 
-  // POST /api/email-templates/[id]/preview → preview with sample data
-  if (id && subresource === "preview" && httpMethod === "POST") {
-    routeParams.templateId = id;
-    return {
-      service: "emailTemplates",
-      operation: "single",
-      method: "previewTemplate",
-      routeParams,
-    };
-  }
-
-  // GET /api/email-templates/[id] → get template by id
-  if (id && !subresource && httpMethod === "GET") {
-    routeParams.templateId = id;
-    return {
-      service: "emailTemplates",
-      operation: "single",
-      method: "getTemplate",
-      routeParams,
-    };
-  }
-
-  // PATCH /api/email-templates/[id] → update template
-  if (id && !subresource && httpMethod === "PATCH") {
-    routeParams.templateId = id;
-    return {
-      service: "emailTemplates",
-      operation: "update",
-      method: "updateTemplate",
-      routeParams,
-    };
-  }
-
-  // DELETE /api/email-templates/[id] → delete template
-  if (id && !subresource && httpMethod === "DELETE") {
-    routeParams.templateId = id;
-    return {
-      service: "emailTemplates",
-      operation: "delete",
-      method: "deleteTemplate",
-      routeParams,
-    };
-  }
-
-  return null;
+  const route = subresource
+    ? emailTemplateSubresourceRoute(subresource, httpMethod)
+    : EMAIL_TEMPLATE_ITEM_ROUTES[httpMethod];
+  if (!route) return null;
+  routeParams.templateId = id;
+  return parsed(route);
 }
 
 // ============================================================================

@@ -13,6 +13,7 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import {
   getFilterRegistry,
@@ -23,12 +24,18 @@ import {
 } from "../../../filters";
 import { getBaseUrl } from "../../../lib/get-base-url";
 import { maskingServiceLogger } from "../../../observability/mask-emails";
-import { principalRefOf } from "../../../plugins/principals/ref";
+import {
+  isStaffPersonId,
+  principalRefOf,
+  staffPerson,
+  staffPersonOf,
+} from "../../../plugins/principals/ref";
 import { getPrincipalKind } from "../../../plugins/principals/registry";
 import type { PrincipalRef } from "../../../plugins/principals/types";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import {
   isRecognisedMessageId,
   mailboxOf,
@@ -38,6 +45,7 @@ import {
 } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
 import { describeProviderFailure } from "../provider-definition";
+import { CODE_TEMPLATE_KEYS } from "../template-ownership";
 import type {
   EmailAttachmentInput,
   EmailConfig,
@@ -80,23 +88,6 @@ export interface EmailAttachmentSource {
   findMedia: (mediaId: string) => Promise<AttachmentMediaRecord | null>;
   readBytes: (storagePath: string) => Promise<Buffer>;
 }
-
-// ============================================================
-// Slug-to-code-template key mapping
-// ============================================================
-
-/**
- * Maps DB template slugs to `EmailConfig.templates` keys.
- * Used for code-first template fallback resolution.
- */
-const SLUG_TO_TEMPLATE_KEY: Record<
-  string,
-  keyof NonNullable<EmailConfig["templates"]>
-> = {
-  welcome: "welcome",
-  "password-reset": "passwordReset",
-  "email-verification": "emailVerification",
-};
 
 // ============================================================
 // Email Service
@@ -312,9 +303,10 @@ export class EmailService extends BaseService {
    * Send an email using a named template.
    *
    * Resolution order for templates:
-   * 1. DB template (by slug) — interpolates variables, composes with layout
-   * 2. Code-first template override from `defineConfig({ email: { templates } })`
-   * 3. Error if neither exists
+   * 1. The site's override of the template, when it has one
+   * 2. The site's code version, from `defineConfig({ email: { templates } })`
+   * 3. The owner's version, as stored
+   * 4. Error if none exists
    *
    * @param templateSlug - Template slug (e.g., "password-reset", "welcome")
    * @param to - Recipient email address, or several: every one receives the
@@ -349,10 +341,14 @@ export class EmailService extends BaseService {
     const fromOverride = options?.from?.trim() || undefined;
     const replyToOverride = options?.replyTo?.trim() || undefined;
 
-    // 1. Try DB template first
+    // The stored template, and whether the site's code version comes first:
+    // it does unless the site has overridden the template.
+    const codeFn = this.codeTemplateFor(templateSlug);
     let dbTemplate: EmailTemplateRecord | null = null;
+    let preferCode = true;
     try {
-      dbTemplate = await this.templateService.getTemplateBySlug(templateSlug);
+      ({ template: dbTemplate, preferCode } =
+        await this.templateService.resolveForSend(templateSlug));
     } catch (error) {
       this.logger.warn(
         "Failed to look up email template from DB — will try code-first fallback",
@@ -363,7 +359,7 @@ export class EmailService extends BaseService {
       );
     }
 
-    if (dbTemplate && dbTemplate.isActive) {
+    if (dbTemplate && dbTemplate.isActive && !(codeFn && preferCode)) {
       // Surface missing required variables without blocking the send — the
       // authoring UI validates at edit time, and existing sends must not
       // start failing on data that previously rendered (blank).
@@ -420,12 +416,7 @@ export class EmailService extends BaseService {
       });
     }
 
-    // 2. Try code-first template override
-    const templateKey = SLUG_TO_TEMPLATE_KEY[templateSlug];
-    const codeFn = templateKey
-      ? this.emailConfig?.templates?.[templateKey]
-      : undefined;
-
+    // The site's code version.
     if (codeFn) {
       const result = codeFn({
         user: {
@@ -439,11 +430,16 @@ export class EmailService extends BaseService {
           (variables.resetLink as string) ?? (variables.verifyLink as string),
       });
 
-      // Merge code-first template's default attachments with per-send
-      // attachments (same rules as DB templates — per-send wins by
+      // The code supplies the content; how it is delivered (provider, From,
+      // Reply-To, attachments) stays the stored template's settings, which
+      // are the site's whichever version it sends.
+      const settings = dbTemplate;
+
+      // Merge the code's attachments, then the stored template's, then the
+      // per-send ones (same rules as DB templates — a later entry wins by
       // mediaId, combined list validated by the resolver).
       const mergedAttachments = mergeTemplateAttachments(
-        result.attachments,
+        mergeTemplateAttachments(result.attachments, settings?.attachments),
         options?.attachments
       );
 
@@ -451,14 +447,14 @@ export class EmailService extends BaseService {
         to,
         subject: result.subject,
         html: result.html,
-        providerId: options?.providerId,
+        providerId: options?.providerId ?? settings?.providerId ?? undefined,
         templateSlug,
         person: options?.person,
         // Forward cc/bcc/from/replyTo here too — the DB-template path already
         // does, and omitting them on this branch silently dropped them for
         // code-first templates.
-        from: fromOverride,
-        replyTo: replyToOverride,
+        from: fromOverride ?? settings?.fromOverride ?? undefined,
+        replyTo: replyToOverride ?? settings?.replyTo ?? undefined,
         cc: options?.cc,
         bcc: options?.bcc,
         attachments:
@@ -525,7 +521,7 @@ export class EmailService extends BaseService {
   }): Promise<{ success: boolean; messageId?: string }> {
     // A precondition, before anything is resolved or sent: a person that
     // cannot be read would leave the record unable to be erased with them.
-    const person = personToRecord(options.person);
+    const person = await this.personToRecord(options.person);
 
     // The caller's recipients are a precondition too. They are checked again
     // once filters have run, against the envelope that is actually sent.
@@ -1055,7 +1051,15 @@ export class EmailService extends BaseService {
     to: string,
     user: { name: string | null; email: string },
     token: string,
-    options?: { path?: string }
+    options?: {
+      path?: string;
+      /**
+       * The staff user the email goes to, by id, so its delivery records name
+       * them. Named explicitly, never read off `user`: a caller's user object
+       * may carry an id of its own that is no staff user's.
+       */
+      staffUserId?: string;
+    }
   ): Promise<{ success: boolean; messageId?: string }> {
     const baseUrl = this.getBaseUrl();
     const path =
@@ -1064,15 +1068,20 @@ export class EmailService extends BaseService {
       "/admin/reset-password";
     const resetLink = `${baseUrl}${path}?token=${encodeURIComponent(token)}`;
 
-    return this.sendWithTemplate("password-reset", to, {
-      resetLink,
-      expiresIn: "1 hour",
-      appName: this.getAppName(),
-      userName: user.name ?? user.email,
-      userEmail: user.email,
-      token,
-      year: new Date().getFullYear().toString(),
-    });
+    return this.sendWithTemplate(
+      "password-reset",
+      to,
+      {
+        resetLink,
+        expiresIn: "1 hour",
+        appName: this.getAppName(),
+        userName: user.name ?? user.email,
+        userEmail: user.email,
+        token,
+        year: new Date().getFullYear().toString(),
+      },
+      staffRecipient(options?.staffUserId)
+    );
   }
 
   /**
@@ -1096,7 +1105,15 @@ export class EmailService extends BaseService {
     to: string,
     user: { name: string | null; email: string },
     token: string,
-    options?: { path?: string }
+    options?: {
+      path?: string;
+      /**
+       * The staff user the email goes to, by id, so its delivery records name
+       * them. Named explicitly, never read off `user`: a caller's user object
+       * may carry an id of its own that is no staff user's.
+       */
+      staffUserId?: string;
+    }
   ): Promise<{ success: boolean; messageId?: string }> {
     const baseUrl = this.getBaseUrl();
     const path =
@@ -1105,15 +1122,20 @@ export class EmailService extends BaseService {
       "/admin/verify-email";
     const verifyLink = `${baseUrl}${path}?token=${encodeURIComponent(token)}`;
 
-    return this.sendWithTemplate("email-verification", to, {
-      verifyLink,
-      expiresIn: "24 hours",
-      appName: this.getAppName(),
-      userName: user.name ?? user.email,
-      userEmail: user.email,
-      token,
-      year: new Date().getFullYear().toString(),
-    });
+    return this.sendWithTemplate(
+      "email-verification",
+      to,
+      {
+        verifyLink,
+        expiresIn: "24 hours",
+        appName: this.getAppName(),
+        userName: user.name ?? user.email,
+        userEmail: user.email,
+        token,
+        year: new Date().getFullYear().toString(),
+      },
+      staffRecipient(options?.staffUserId)
+    );
   }
 
   /**
@@ -1132,16 +1154,29 @@ export class EmailService extends BaseService {
   async sendWelcomeEmail(
     to: string,
     user: { name: string | null; email: string },
-    options?: { verifyLink?: string }
+    options?: {
+      verifyLink?: string;
+      /**
+       * The staff user the email goes to, by id, so its delivery records name
+       * them. Named explicitly, never read off `user`: a caller's user object
+       * may carry an id of its own that is no staff user's.
+       */
+      staffUserId?: string;
+    }
   ): Promise<{ success: boolean; messageId?: string }> {
-    return this.sendWithTemplate("welcome", to, {
-      userName: user.name ?? user.email,
-      appName: this.getAppName(),
-      userEmail: user.email,
-      verifyLink: options?.verifyLink ?? "",
-      expiresIn: "24 hours",
-      year: new Date().getFullYear().toString(),
-    });
+    return this.sendWithTemplate(
+      "welcome",
+      to,
+      {
+        userName: user.name ?? user.email,
+        appName: this.getAppName(),
+        userEmail: user.email,
+        verifyLink: options?.verifyLink ?? "",
+        expiresIn: "24 hours",
+        year: new Date().getFullYear().toString(),
+      },
+      staffRecipient(options?.staffUserId)
+    );
   }
 
   /**
@@ -1179,9 +1214,13 @@ export class EmailService extends BaseService {
     let providerId: string | undefined;
 
     try {
-      const template =
-        await this.templateService.getTemplateBySlug(templateSlug);
-      if (template?.isActive) {
+      const { template } =
+        await this.templateService.resolveForSend(templateSlug);
+      // The stored template's provider, whichever version sends: the code
+      // supplies only content (see sendWithTemplate), and sends whenever the
+      // stored template doesn't (inactive, or not overridden).
+      const hasCode = !!this.codeTemplateFor(templateSlug);
+      if (template && (template.isActive || hasCode)) {
         providerId = template.providerId ?? undefined;
       }
     } catch {
@@ -1195,6 +1234,12 @@ export class EmailService extends BaseService {
     } catch {
       return false;
     }
+  }
+
+  /** The site's code version of a template, from `email.templates`, if it sets one. */
+  private codeTemplateFor(slug: string) {
+    const key = CODE_TEMPLATE_KEYS[slug];
+    return key ? this.emailConfig?.templates?.[key] : undefined;
   }
 
   // ============================================================
@@ -1400,6 +1445,45 @@ export class EmailService extends BaseService {
   }
 
   /**
+   * The person a send names, by kind and id, or null for none: a staff user
+   * (`{ kind: "staff", id }`) or a plugin-defined person. Refused when it is
+   * given and cannot name a person, since a record kept under it could never
+   * be matched by the deletion that erases the person's records; and refused
+   * when it names a staff user who does not exist, for the same reason.
+   */
+  private async personToRecord(value: unknown): Promise<PrincipalRef | null> {
+    if (value === undefined || value === null) return null;
+    const staff = staffPersonOf(value);
+    if (!staff) return pluginPersonToRecord(value);
+    let user: { id: string } | undefined;
+    try {
+      user = await this.db.query.users.findFirst({
+        where: { id: requireFilterValue(staff.id, "person.id") },
+        columns: { id: true },
+      });
+    } catch (error) {
+      // The canonical error, as every other database failure of a send is.
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+    if (!user) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "person",
+            code: "NOT_FOUND",
+            message: "`person` names a staff user who does not exist.",
+          },
+        ],
+        logContext: { operation: "email.send" },
+      });
+    }
+    // The id as stored, not as the caller spelled it: on MySQL's usual
+    // case-insensitive collation the two can differ, and the record, the
+    // deleted-people digest and the deletion must all name one spelling.
+    return staffPerson(String(user.id));
+  }
+
+  /**
    * Format a "from" address: `"Name <email>"` or just `"email"`.
    */
   private formatFromAddress(name: string | null, email: string): string {
@@ -1409,12 +1493,26 @@ export class EmailService extends BaseService {
 }
 
 /**
- * The person a send names, by kind and id, or null for none. Refused when it
- * is given and cannot name a person: recorded as it is, it could never be
- * matched by the report that erases the person's records.
+ * The send options that name the staff user a core email goes to, so its
+ * delivery records name them and their deletion erases those records; none
+ * for a caller that named no staff user.
  */
-function personToRecord(value: unknown): PrincipalRef | null {
-  if (value === undefined || value === null) return null;
+function staffRecipient(
+  staffUserId: string | undefined
+): { person: PrincipalRef } | undefined {
+  // An id longer than a record can hold is sent naming nobody, as every core
+  // email was before staff users were named, rather than refused.
+  return isStaffPersonId(staffUserId)
+    ? { person: staffPerson(staffUserId) }
+    : undefined;
+}
+
+/**
+ * The plugin-defined person a send names, by kind and id. Refused when it
+ * cannot name one: recorded as it is, it could never be matched by the report
+ * that erases the person's records.
+ */
+function pluginPersonToRecord(value: unknown): PrincipalRef {
   const ref = principalRefOf(value);
   // Of a kind a running plugin registers, too: a misspelled kind is one no
   // deletion report can name, so a record kept under it would outlive the
@@ -1426,7 +1524,7 @@ function personToRecord(value: unknown): PrincipalRef | null {
         path: "person",
         code: "INVALID",
         message:
-          "`person` must name a plugin-defined person by the full name of a registered kind and an id of 1 to 128 characters.",
+          '`person` must name a staff user (`{ kind: "staff", id }`) or a plugin-defined person by the full name of a registered kind, with an id a delivery record can hold for a staff user, and of 1 to 128 characters for a plugin-defined person.',
       },
     ],
     logContext: { operation: "email.send" },

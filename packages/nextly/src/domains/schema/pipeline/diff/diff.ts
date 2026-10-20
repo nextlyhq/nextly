@@ -434,6 +434,12 @@ function columnTypeChange(
     ...(prevC.default !== undefined
       ? { fromColumnDefault: prevC.default }
       : {}),
+    // A column becoming a relation's list of references holds a bare id, an array literal or a JSON
+    // list, and a plain cast reads none of them as a list. Read from the DESIRED side alone: a
+    // previous snapshot can carry the same flag, and what matters is what the column is becoming.
+    ...(curC.holdsReferenceList === true
+      ? { conversion: "referenceList" as const }
+      : {}),
   };
 }
 

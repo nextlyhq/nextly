@@ -121,6 +121,13 @@ import {
 import * as singlesNs from "./namespaces/singles";
 import { guardPrincipalOperations } from "./principal-boundary";
 import type {
+  ApplyEmailTemplateUpdateArgs,
+  CompareEmailTemplateArgs,
+  OverrideEmailTemplateArgs,
+  ResetEmailTemplateArgs,
+  UndoEmailTemplateUpdateArgs,
+} from "./types/email";
+import type {
   AuthResult,
   BulkDeleteArgs,
   BulkOperationResult,
@@ -1045,6 +1052,21 @@ export const nextly = {
       requireNextly().emailTemplates.delete(args),
     preview: (args: PreviewEmailTemplateArgs) =>
       requireNextly().emailTemplates.preview(args),
+    /** @experimental */
+    override: (args: OverrideEmailTemplateArgs) =>
+      requireNextly().emailTemplates.override(args),
+    /** @experimental */
+    reset: (args: ResetEmailTemplateArgs) =>
+      requireNextly().emailTemplates.reset(args),
+    /** @experimental */
+    compare: (args: CompareEmailTemplateArgs) =>
+      requireNextly().emailTemplates.compare(args),
+    /** @experimental */
+    applyUpdate: (args: ApplyEmailTemplateUpdateArgs) =>
+      requireNextly().emailTemplates.applyUpdate(args),
+    /** @experimental */
+    undoUpdate: (args: UndoEmailTemplateUpdateArgs) =>
+      requireNextly().emailTemplates.undoUpdate(args),
   },
 
   userFields: {
