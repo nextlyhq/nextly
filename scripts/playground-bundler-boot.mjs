@@ -40,11 +40,22 @@ export function linkedAssets(html) {
   ].map(m => m[1].replace(/&amp;/g, "&"));
 }
 
-/** The first line of a server log that reports an error, if any. */
+/**
+ * The first line of a server log that reports an error, with the line after
+ * it, or `undefined`. Two lines, because Next prints a compile error's place
+ * (`⨯ file:line:col`) on one and what went wrong on the next.
+ */
 export function firstError(log) {
-  return log
-    .split("\n")
-    .find(line => /Module not found|Can't resolve|Error:|⨯/.test(line));
+  const lines = log.split("\n");
+  const at = lines.findIndex(line =>
+    /Module not found|Can't resolve|Error:|⨯/.test(line)
+  );
+  if (at === -1) return undefined;
+  return lines
+    .slice(at, at + 2)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join(" ");
 }
 
 async function status(base, path) {

@@ -1558,9 +1558,10 @@ jobs:
   # specs.
   #
   # Scoped to what it checks: the watcher and the reload it triggers, the config
-  # loader, the playground's config and probe, the spec, and the lockfile, since
-  # a Next.js upgrade is what broke this before. Any other commit skips it within
-  # a minute rather than paying three dev-server boots.
+  # loader, the playground's config, manifest and probe, the spec, and the
+  # lockfile, since a Next.js upgrade is what broke this before. The manifest is
+  # what lets the webpack case boot at all. Any other commit skips it within a
+  # minute rather than paying three dev-server boots.
   dev-reload:
     name: Dev reload applies a saved schema edit
     needs: [ci]
@@ -1587,7 +1588,7 @@ jobs:
           SCOPE_TITLE: Dev reload scope
           # Every path is inert EXCEPT these: an inclusion list, as
           # `generated-code-compiles.yml` uses for its one pipeline.
-          INERT_PATHS: '^(?!(packages/nextly/src/runtime/(hmr-listener|config-dependencies)\.ts|packages/nextly/src/init\.ts|packages/nextly/src/init/(boot-apply|reload-config)\.ts|packages/nextly/src/route-handler/auth-handler\.ts|packages/nextly/src/init/config-reload-failure\.ts|packages/nextly/src/cli/utils/(config-loader|config-bundler|esbuild-loader)\.ts|apps/playground/nextly\.config\.ts|apps/playground/next\.config\.ts|apps/playground/src/collections/dev-reload-probe\.ts|e2e/dev-reload/.*|e2e/playwright\.dev-reload\.config\.ts|e2e/package\.json|pnpm-lock\.yaml|\.github/workflows/ci\.yml)$)'
+          INERT_PATHS: '^(?!(packages/nextly/src/runtime/(hmr-listener|config-dependencies)\.ts|packages/nextly/src/init\.ts|packages/nextly/src/init/(boot-apply|reload-config)\.ts|packages/nextly/src/route-handler/auth-handler\.ts|packages/nextly/src/init/config-reload-failure\.ts|packages/nextly/src/cli/utils/(config-loader|config-bundler|esbuild-loader)\.ts|apps/playground/nextly\.config\.ts|apps/playground/next\.config\.ts|apps/playground/package\.json|apps/playground/src/collections/dev-reload-probe\.ts|e2e/dev-reload/.*|e2e/playwright\.dev-reload\.config\.ts|e2e/package\.json|pnpm-lock\.yaml|\.github/workflows/ci\.yml)$)'
         run: node scripts/change-scope.mjs
 
       - name: Setup pnpm

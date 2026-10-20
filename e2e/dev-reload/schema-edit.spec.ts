@@ -1,12 +1,14 @@
 /**
  * A schema edit saved while `next dev` runs reaches the database without a
- * restart, on a port given by `-p` or by `PORT`.
+ * restart, on a port given by `-p` or by `PORT`, under Turbopack and under
+ * webpack (`next dev --webpack`).
  *
- * Turbopack only: the playground's dev setup bundles the workspace packages
- * from source through Turbopack aliases, and does not run under
- * `next dev --webpack` at all. Nextly's trigger is a file save seen inside the
- * dev server, which does not depend on the bundler; the save-to-column path is
- * covered on every database by
+ * Both bundlers, because they build the playground's server differently:
+ * Turbopack bundles the workspace packages from source through its aliases,
+ * and webpack keeps the server packages external only where the playground
+ * resolves them to the copy Nextly loads, so either can boot while the other
+ * answers every request with a 500. The save-to-column path itself is covered
+ * on every database by
  * packages/nextly/src/runtime/__tests__/config-edit-applies.integration.test.ts.
  *
  * Each case starts the playground's own dev server, with the dev-reload probe
@@ -47,7 +49,7 @@ const PROBE_TABLE = "dc_dev_reload_probe";
 
 type Case = {
   name: string;
-  bundler: "--turbopack";
+  bundler: "--turbopack" | "--webpack";
   portGivenBy: "flag" | "env";
 };
 
@@ -61,6 +63,11 @@ const CASES: Case[] = [
     name: "Turbopack, port from PORT",
     bundler: "--turbopack",
     portGivenBy: "env",
+  },
+  {
+    name: "webpack, port from -p",
+    bundler: "--webpack",
+    portGivenBy: "flag",
   },
 ];
 
