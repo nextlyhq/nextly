@@ -88,6 +88,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
+import { withoutPlaceholders } from "@admin/lib/form/stored-references";
 import { cn } from "@admin/lib/utils";
 import type { SingleAdminOptions } from "@admin/types/entities";
 
@@ -602,7 +603,10 @@ export function SingleForm({
           const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
 
           try {
-            await onSubmit(data);
+            // A link the editor cannot see is held in the form as a
+            // placeholder and written as the reference it stands for. The
+            // form keeps the placeholder, so it is reset to `data`.
+            await onSubmit(withoutPlaceholders(schema.fields, data));
             // After the write lands and before the reset: this is the only
             // point that knows a save succeeded, and a revision that misses
             // one leaves the pane showing the previous draft.
@@ -616,7 +620,7 @@ export function SingleForm({
         submissionLatch.current = false;
       }
     },
-    [form, onSubmit, blankPasswordFields, busy, writesHeld]
+    [form, onSubmit, blankPasswordFields, busy, writesHeld, schema.fields]
   );
 
   const handleCancel = useCallback(() => {

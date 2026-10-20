@@ -29,7 +29,7 @@ export function mergeTemplateAttachments(
   const calls = callAttachments ?? [];
   if (defaults.length === 0 && calls.length === 0) return [];
 
-  const callByMediaId = new Map(calls.map((a) => [a.mediaId, a]));
+  const callByMediaId = new Map(calls.map(a => [a.mediaId, a]));
   const merged: EmailAttachmentInput[] = [];
   const seen = new Set<string>();
 

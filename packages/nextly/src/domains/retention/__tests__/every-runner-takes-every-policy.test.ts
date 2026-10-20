@@ -173,6 +173,9 @@ describe("the derived policy list", () => {
       // Notices follow the activity log's window, so the audit policy brings
       // their pass too.
       "notices.retention.lastPassAt",
+      // Recorded preview links long past their end, with nothing to configure,
+      // as the one-purpose secrets beside them.
+      "preview-links.retention.lastPassAt",
       "secrets.retention.lastPassAt",
       "webhooks.retention.lastPassAt",
     ]);

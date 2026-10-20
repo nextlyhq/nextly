@@ -28,8 +28,10 @@ import { createSqliteAdapter } from "@nextlyhq/adapter-sqlite";
 import { getSQLiteDrizzleKit } from "../../../database/drizzle-kit-lazy";
 import { getDialectTables } from "../../../database/index";
 import { SchemaRegistry } from "../../../database/schema-registry";
+import { nextlyDeletedPrincipals as deletedPrincipalsSqlite } from "../../../schemas/deleted-principals/sqlite";
 import { emailDeliveriesSqlite } from "../../../schemas/email-deliveries/sqlite";
 import { emailProvidersSqlite } from "../../../schemas/email-providers/sqlite";
+import { nextlyMeta as metaSqlite } from "../../../schemas/nextly-meta/sqlite";
 import {
   ADMINISTRATOR_TABLES_SQLITE,
   makeAdministrator,
@@ -72,6 +74,11 @@ async function ddl(): Promise<string[]> {
       // key pointing at nothing, which SQLite reports on first use.
       emailProviders: emailProvidersSqlite,
       emailDeliveries: emailDeliveriesSqlite,
+      // The delivery log names people, and a deletion erases those records by
+      // person through the deleted-people list and the key kept in the meta
+      // table, which arrive with it.
+      nextlyDeletedPrincipals: deletedPrincipalsSqlite,
+      nextlyMeta: metaSqlite,
     })
   );
   return splitStatements(statements);

@@ -13,7 +13,7 @@
  * cannot disagree about where a file goes.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { DEFAULT_DB_CONFIG, DEFAULT_TYPESCRIPT_CONFIG } from "../types/config";
@@ -54,7 +54,7 @@ const OLD_DEFAULT_TYPES_FILE = "payload-types.ts";
 
 /**
  * How every types file Nextly generates opens, unchanged in every version so
- * far: what tells a `payload-types.ts` Nextly wrote from one the app wrote.
+ * far: what tells a `payload-types.ts` Nextly generated from one the app wrote.
  * Matched at the start of the file only, so app code that quotes it is never
  * taken for generated output.
  */
@@ -67,15 +67,13 @@ const GENERATED_TYPES_PREAMBLE = [
 ].join("\n");
 
 /**
- * What a generated `payload-types.ts` becomes: a re-export of the new file, so
- * imports of either name compile against the current types while only one
- * file declares `module "nextly"`. Two declarations of `GeneratedTypes` that
- * differ are refused by TypeScript, or, under `skipLibCheck`, the first one
- * the program reaches silently wins. The `.js` spelling resolves under
- * `nodenext` as well as `bundler`. It does not open with the generated
- * preamble, so a later run sees it is already settled.
+ * The re-export 0.0.2-alpha.67 and alpha.68 wrote in place of a generated
+ * `payload-types.ts`, for one release of imports under the old name. Nextly
+ * no longer writes it; this only recognises one a project still has, which
+ * compiles as it is (one declaration of `module "nextly"`, in the new file)
+ * and can be deleted once nothing imports `payload-types`.
  */
-function reexportOfTypesFile(oldFile: string, typesFile: string): string {
+function earlierReleasesReexport(oldFile: string, typesFile: string): string {
   const fromOld = relative(dirname(oldFile), typesFile)
     .split(sep)
     .join("/")
@@ -114,15 +112,21 @@ function oldDefaultTypesFiles(cwd: string, typesFile: string): string[] {
 }
 
 /**
- * Settles each `payload-types.ts` an earlier version wrote where the default
- * types file went, and returns what to tell the developer, one message per
- * file it found.
+ * What to tell the developer about each `payload-types.ts` an earlier version
+ * left where the default types file went, one message per file it found. It
+ * changes no file.
  *
  * Only when the project leaves the types path at its default: a configured
- * path, even the old one, is the project's own and is written as it says. A
- * `payload-types.ts` Nextly generated becomes a re-export of the new file. One
- * Nextly did not write is left as it is, with a warning, since it may be the
- * app's own code.
+ * path, even the old one, is the project's own and is written as it says.
+ * Every file found is left as it is:
+ * - the re-export earlier releases wrote compiles, and can be deleted once
+ *   imports name the new file;
+ * - a file an earlier version generated is stale, and, unless it was
+ *   generated without the augmentation, declares `module "nextly"` a second
+ *   time, so TypeScript refuses the two once they differ, or under
+ *   `skipLibCheck` silently uses whichever it reaches first. Rewriting it was
+ *   a one-release bridge; now the developer is told to delete it;
+ * - a file Nextly did not write may be the app's own code.
  */
 export function retireOldDefaultTypesFile(
   cwd: string,
@@ -135,13 +139,20 @@ export function retireOldDefaultTypesFile(
   for (const oldFile of oldDefaultTypesFiles(cwd, typesFile)) {
     if (!existsSync(oldFile)) continue;
 
-    const reexport = reexportOfTypesFile(oldFile, typesFile);
-    // A checkout with Windows line endings still reads as generated.
+    // A checkout with Windows line endings still reads as Nextly's.
     const content = readFileSync(oldFile, "utf-8").replace(/\r\n/g, "\n");
-    if (content === reexport) continue;
-
     const oldShown = shownPath(cwd, oldFile);
     const newShown = shownPath(cwd, typesFile);
+
+    if (content === earlierReleasesReexport(oldFile, typesFile)) {
+      notices.push(
+        `${oldShown} only re-exports ${newShown}, and Nextly no longer ` +
+          `writes it. Once nothing imports payload-types, delete it: import ` +
+          `from nextly-types instead.`
+      );
+      continue;
+    }
+
     if (!content.startsWith(GENERATED_TYPES_PREAMBLE)) {
       notices.push(
         `${oldShown} was not written by Nextly, so it was left as it is. ` +
@@ -152,13 +163,18 @@ export function retireOldDefaultTypesFile(
       continue;
     }
 
-    writeFileSync(oldFile, reexport, "utf-8");
+    // Only a file generated with the augmentation clashes with the new one:
+    // `generate:types --no-declare` writes none, and such a file is only stale.
+    const clash = content.includes('declare module "nextly"')
+      ? `Both declare module "nextly", so they clash, and TypeScript may ` +
+        `use the old types. `
+      : "";
     notices.push(
-      `Generated types moved from ${oldShown} to ${newShown}, the name Nextly ` +
-        `now uses by default. ${oldShown} now only re-exports the new file, so ` +
-        `existing imports keep compiling until a later release removes it: ` +
-        `change imports of payload-types to nextly-types. To keep the old ` +
-        `name, set typescript.outputFile in your Nextly config.`
+      `${oldShown} holds types an earlier version of Nextly generated, and is ` +
+        `no longer updated: generated types now go to ${newShown}. ${clash}` +
+        `Delete ${oldShown} and change imports of payload-types to ` +
+        `nextly-types. To keep the old name, set typescript.outputFile in ` +
+        `your Nextly config.`
     );
   }
   return notices;

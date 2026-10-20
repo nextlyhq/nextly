@@ -582,9 +582,8 @@ export class CollectionMetadataService extends BaseService {
       // `c.slug` and `c.admin.sidebarGroup` are typed `unknown`; narrow each to a
       // string before interpolation to satisfy restrict-template-expressions and
       // no-base-to-string (which forbid stringifying objects via template literals).
-      console.log(
-        "[listCollections] Collections admin summary:",
-        transformedCollections
+      this.logger.info("[listCollections] Collections admin summary", {
+        detail: transformedCollections
           .map((c: Record<string, unknown>) => {
             const slug = typeof c.slug === "string" ? c.slug : String(c.slug);
             const sidebarGroupRaw = (
@@ -596,8 +595,8 @@ export class CollectionMetadataService extends BaseService {
                 : "none";
             return `${slug}: sidebarGroup=${sidebarGroup}`;
           })
-          .join(", ")
-      );
+          .join(", "),
+      });
 
       return {
         success: true,
@@ -647,8 +646,8 @@ export class CollectionMetadataService extends BaseService {
       // Dynamic collections: source is "ui", undefined, or null
       // Code-first collections: source is "code" or "built-in"
 
-      console.log(
-        `[NEXTLY DEBUG] getCollection - raw DB record for "${params.collectionName}":`,
+      this.logger.info(
+        `[NEXTLY DEBUG] getCollection - raw DB record for "${params.collectionName}"`,
         {
           id: collection.id,
           slug: collection.slug,
@@ -679,8 +678,8 @@ export class CollectionMetadataService extends BaseService {
       // Parse labels from JSON string if needed (SQLite stores JSON as strings)
       const parsedLabels = parseLabels(collection.labels);
 
-      console.log(
-        `[NEXTLY DEBUG] getCollection - parsed labels for "${params.collectionName}":`,
+      this.logger.info(
+        `[NEXTLY DEBUG] getCollection - parsed labels for "${params.collectionName}"`,
         {
           parsedLabels,
           finalName: collection.slug,
@@ -704,8 +703,8 @@ export class CollectionMetadataService extends BaseService {
         },
       };
 
-      console.log(
-        `[NEXTLY DEBUG] getCollection - final transformed for "${params.collectionName}":`,
+      this.logger.info(
+        `[NEXTLY DEBUG] getCollection - final transformed for "${params.collectionName}"`,
         {
           name: transformedCollection.name,
           label: transformedCollection.label,

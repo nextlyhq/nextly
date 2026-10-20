@@ -207,7 +207,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `POST` | `/admin/api/users` | Create user. | `create-users` |
 | `GET` | `/admin/api/users/{id}` | Get user. | `read-users` |
 | `PATCH` | `/admin/api/users/{id}` | Update user. | `update-users` |
-| `DELETE` | `/admin/api/users/{id}` | Delete user. | `delete-users` |
+| `DELETE` | `/admin/api/users/{id}` | Delete user. Erases their email delivery records ([Email](/docs/guides/email#when-a-staff-user-is-deleted)); an email the provider already accepted may still be delivered. | `delete-users` |
 | `PATCH` | `/admin/api/users/{id}/password` | Set password hash directly. | `update-users` |
 | `GET` | `/admin/api/users/{id}/roles` | List user roles. | `read-roles` |
 | `POST` | `/admin/api/users/{id}/roles` | Assign role to user. | `update-users` |
@@ -289,6 +289,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `DELETE` | `/admin/api/user-fields/{id}` | Delete user field. | `delete-settings` |
 | `GET` | `/admin/api/api-keys` | List API keys for current user. | Cookie (session-only) |
 | `POST` | `/admin/api/api-keys` | Create API key. | Cookie (session-only) |
+| `GET` | `/admin/api/api-keys/abilities?tokenType=…&roleId=…` | **Experimental.** What a key you create now, of this type (and role, for `role-based`), would be able to do: `{ items: [{ slug, action, resource }], meta }`. Refused as creating that key would be. | Cookie (session-only) |
 | `GET` | `/admin/api/api-keys/{id}` | Get API key metadata. | Cookie (session-only) |
 | `PATCH` | `/admin/api/api-keys/{id}` | Update name/description. | Cookie (session-only) |
 | `DELETE` | `/admin/api/api-keys/{id}` | Revoke API key. | Cookie (session-only) |
@@ -592,6 +593,10 @@ curl http://localhost:3000/admin/api/api-keys -b "nextly_session=..."
 ```
 
 `POST /admin/api/api-keys` returns the new key value once at creation; it is hashed on the server and never displayed again.
+
+Each key in the list and in `GET /admin/api/api-keys/{id}` carries its `owner` (`{ id, name, email }`) and its `lastUsedAt`, which a request made with the key advances. `owner` is `null` once that account is gone, and also when the request is made with an API key that does not hold `read-users`: a key learns who owns a key only if it may read users. These responses are private to the caller (`Cache-Control: private, no-store`).
+
+`GET /admin/api/api-keys/abilities` is **experimental**: its shape may change while the key form that uses it does. It answers from the same resolution a key's own requests use, so the summary is the permissions the key gets. A collection's or Single's access rule written in code can still refuse a request those permissions allow, and may depend on the entry, so it is not reflected here. A read-only or full-access key follows its creator's permissions, so its answer changes as theirs do.
 
 ## Query parameters
 

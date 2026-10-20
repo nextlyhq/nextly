@@ -123,6 +123,7 @@ import {
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
+import { hasLifecycle } from "../../versions/recorded-status";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -2760,6 +2761,7 @@ export class SingleMutationService extends BaseService {
                 await captureInTx(tx, this.versionCapture, {
                   // An update: a save that changes nothing records nothing.
                   onlyIfChanged: true,
+                  lifecycle: hasLifecycle(singleMeta),
                   ref: {
                     scopeKind: "single",
                     scopeSlug: slug,
@@ -2832,6 +2834,7 @@ export class SingleMutationService extends BaseService {
               const { versionNo } = await captureInTx(tx, this.versionCapture, {
                 // An update: a save that changes nothing records nothing.
                 onlyIfChanged: true,
+                lifecycle: hasLifecycle(singleMeta),
                 ref: {
                   scopeKind: "single",
                   scopeSlug: slug,

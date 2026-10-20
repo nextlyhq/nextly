@@ -111,6 +111,8 @@ export type ValidationErrorCode =
   | "FIELD_NAME_SYSTEM_ALIAS"
   // A name that reaches a column the Draft/Published lifecycle owns, while it is enabled.
   | "FIELD_NAME_LIFECYCLE_RESERVED"
+  // A `status` choice longer than a version's status can record.
+  | "FIELD_STATUS_OPTION_TOO_LONG"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -230,6 +232,51 @@ const INDEX_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]*$/;
 /**
  * Validates the indexes configuration.
  */
+/** The longest status a version can record (the versions table's `status` column). */
+const STATUS_OPTION_MAX_LENGTH = 32;
+
+/**
+ * The refusal for a `status` choice field with an option longer than a version's status can
+ * record, or null. Shared by the collection and Single validators, so both refuse it in one
+ * sentence.
+ */
+export function statusOptionError(
+  column: string,
+  field: Record<string, unknown>,
+  path: string
+): {
+  path: string;
+  message: string;
+  code: "FIELD_STATUS_OPTION_TOO_LONG";
+} | null {
+  if (column !== "status") return null;
+  const tooLong = statusOptionTooLong(field);
+  if (tooLong === null) return null;
+  return {
+    path,
+    message: `The status option '${tooLong}' is ${tooLong.length} characters; a status holds at most ${STATUS_OPTION_MAX_LENGTH}. Shorten its value (its label can stay as long as you like)`,
+    code: "FIELD_STATUS_OPTION_TOO_LONG",
+  };
+}
+
+/**
+ * The first option value of a select or radio field that is longer than a status can be, or null.
+ * Other field types declare no values, and a free-text status is shortened where it is recorded.
+ */
+function statusOptionTooLong(field: Record<string, unknown>): string | null {
+  if (field.type !== "select" && field.type !== "radio") return null;
+  if (!Array.isArray(field.options)) return null;
+  const values = (field.options as unknown[]).map(optionValue);
+  return values.find(value => value.length > STATUS_OPTION_MAX_LENGTH) ?? null;
+}
+
+/** An option's stored value: the option itself when a string, else its `value`. */
+function optionValue(option: unknown): string {
+  if (typeof option === "string") return option;
+  const value = (option as { value?: unknown } | null)?.value;
+  return typeof value === "string" ? value : "";
+}
+
 function validateIndexes(
   indexes: unknown,
   fields: unknown[],
@@ -604,6 +651,19 @@ function validateFields(
         message: `Field name '${name}' becomes the column '${column}', which the Draft/Published lifecycle owns. Rename the field, or turn the lifecycle off`,
         code: "FIELD_NAME_LIFECYCLE_RESERVED",
       });
+      return;
+    }
+    // Without the lifecycle, a field named `status` is what each version records as its status
+    // (see `domains/versions/recorded-status`), and a version's status holds 32 characters. A
+    // choice field declares every value it can hold, so a longer option is refused here, where it
+    // is written, rather than shortened in history on every save that picks it.
+    const statusError = statusOptionError(
+      column,
+      candidate,
+      `${path}[${index}].options`
+    );
+    if (statusError !== null) {
+      errors.push(statusError);
       return;
     }
     // Two names that reach one column cannot both be emitted, so the table could never be

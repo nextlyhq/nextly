@@ -762,9 +762,13 @@ describe("webhook outbox capture — singles (integration)", () => {
     expect(String(logged.mock.calls[0][0])).toContain("afterUpdate");
     // The exception, not only the phase line. This hook throws a typed error
     // carrying its reason, and that reason is what an operator has to go on.
-    const loggedError = logged.mock.calls[0][1] as {
-      logContext?: Record<string, unknown>;
-    };
+    // The masked console logger passes its fields as one object, the error
+    // under `error`.
+    const loggedError = (
+      logged.mock.calls[0][1] as {
+        error?: { logContext?: Record<string, unknown> };
+      }
+    )?.error;
     expect(loggedError?.logContext?.reason).toBe("afterUpdate-observer-failed");
 
     const rows = (await events(current)).filter(

@@ -190,7 +190,7 @@ export class UserAccountService extends BaseService {
           tx as PasswordWriteTx,
           this.tables,
           this.dialect,
-          { userId, set }
+          { userId, set, adapter: this.adapter }
         );
       });
     } catch (err) {
@@ -227,6 +227,7 @@ export class UserAccountService extends BaseService {
             userId,
             set,
             unlessDeactivated: true,
+            adapter: this.adapter,
           }
         );
       });

@@ -30,6 +30,7 @@ import {
 } from "../../../shared/base-validator";
 import { env } from "../../../shared/lib/env";
 import { storageTypeToken } from "../../../shared/lib/plugin-storage";
+import { consoleLogger } from "../../../shared/types";
 import {
   fieldGroupSlugList,
   isFieldGroupFieldType,
@@ -2409,7 +2410,7 @@ ${allColumnDefs.join(",\n")}
     }
 
     if (oldOnly.length > 1 || newOnly.length > 1) {
-      console.warn(
+      consoleLogger.warn(
         `[Nextly schema] Detected ${oldOnly.length} removed and ` +
           `${newOnly.length} added field(s) in the same save on this ` +
           `collection. Skipping rename detection (ambiguous) — emitting ` +
@@ -2432,7 +2433,7 @@ ${allColumnDefs.join(",\n")}
     if (!fieldProducesColumn(from) && !fieldProducesColumn(to)) return null;
 
     if (!this.areFieldTypesCompatible(from, to)) {
-      console.warn(
+      consoleLogger.warn(
         `[Nextly schema] Field "${from.name}" was removed and ` +
           `"${to.name}" was added in the same save, but their types ` +
           `(${from.type} vs ${to.type}) are not compatible. Treating ` +

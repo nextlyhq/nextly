@@ -13,6 +13,7 @@ import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { reservedSystemFieldNames } from "../../../lib/system-columns";
+import { consoleLogger } from "../../../shared/types";
 import { usesJunctionTable } from "../../schema/services/field-column-descriptor";
 
 const MAX_REGEX_PATTERN_LENGTH = 200;
@@ -310,7 +311,7 @@ export class DynamicCollectionValidationService {
       !field.unique &&
       !field.required
     ) {
-      console.warn(
+      consoleLogger.warn(
         `One-to-one relationship "${field.name}" should typically be unique. Consider setting unique: true.`
       );
     }
