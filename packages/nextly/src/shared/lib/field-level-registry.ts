@@ -27,56 +27,51 @@
  */
 
 import {
+  buildRuleContext,
+  type HeldPermission,
+} from "../../auth/access/rule-context";
+import {
   type AuthenticatedScope,
-  ruleFacingPermissions,
+  scopeGrants,
 } from "../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../auth/caller-scope";
 import {
   currentPrincipal,
   withCurrentPrincipal,
 } from "../../auth/principal-scope";
+import type { RequestContext } from "../../collections/fields/types/base";
 import { NextlyError } from "../../errors/nextly-error";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
-import type { Principal } from "../../plugins/principals/types";
 import {
-  listEffectivePermissions,
+  listEffectiveGrants,
   listRoleSlugsForUser,
 } from "../../services/lib/permissions";
 import { addressableFields } from "../addressable-fields";
 import { consoleLogger } from "../types";
+import type { AccessRuleContext, AccessRuleTarget } from "../types/access";
 
 import { detachData } from "./detach";
 import type { ValidatableField } from "./entry-validation";
 
 type MaybePromise<T> = T | Promise<T>;
 
-interface FieldRequestContext {
-  user?: Record<string, unknown>;
-}
-
-type FieldAccessFn = (args: {
-  req: FieldRequestContext;
-  id?: string;
-  data?: Record<string, unknown>;
-  permissions: string[];
-  roles: string[];
-  principal: Principal | null;
-}) => MaybePromise<boolean>;
+/** A field rule, handed the one context every access rule is handed. */
+type FieldAccessFn = (args: AccessRuleContext) => MaybePromise<boolean>;
 
 /**
- * The caller's grants, in the SAME spelling collection-level access uses.
+ * The caller's grants, as the rows they were resolved from.
  *
  * A field rule and a collection rule are written by the same person, minutes
- * apart, and a permission that reads `pages:create` in one and something else
- * in the other is a rule that silently denies. `listEffectivePermissions` is
- * the single source for the string, so this carries what it returns rather
- * than re-deriving it.
+ * apart, and a permission that reads one way in one and another way in the
+ * other is a rule that silently denies. So both are handed their list by the
+ * one rule-context builder, from these rows; a key whose scope carried slugs
+ * alone holds those.
  */
 export interface CallerGrants {
-  permissions: string[];
+  permissions: readonly HeldPermission[];
   roles: string[];
 }
 
@@ -114,7 +109,7 @@ function grantsResolver(
     const effective = effectiveCallerScope(scope);
     if (effective?.actorType === "apiKey") {
       pending = Promise.resolve({
-        permissions: ruleFacingPermissions(effective),
+        permissions: scopeGrants(effective) ?? [...effective.permissions],
         roles: [...(effective.roles ?? [])],
       });
       return pending;
@@ -124,7 +119,7 @@ function grantsResolver(
       return pending;
     }
     pending = Promise.all([
-      listEffectivePermissions(userId),
+      listEffectiveGrants(userId),
       listRoleSlugsForUser(userId),
     ])
       .then(([permissions, roles]) => ({ permissions, roles }))
@@ -488,11 +483,21 @@ function levelHasAccessCallback(
   return false;
 }
 
-/** What a field rule is told about the caller and the row. */
+/** What a field rule is told about the caller, the row and its entity. */
 export interface FieldRuleCaller {
   user?: Record<string, unknown>;
   id?: string;
   grants: () => Promise<CallerGrants>;
+  /** The collection, Single or component the field is declared on. */
+  target: AccessRuleTarget;
+}
+
+/** The target a field rule judges, for the entity kind it is registered under. */
+export function fieldRuleTarget(
+  kind: EntityKind,
+  slug: string
+): AccessRuleTarget {
+  return { kind: kind === "fieldGroup" ? "component" : kind, slug };
 }
 
 /**
@@ -503,11 +508,15 @@ export interface FieldRuleCaller {
  */
 async function fieldRuleAllows(
   fn: FieldAccessFn,
+  operation: FieldRuleOperation,
   ctx: FieldRuleCaller,
   snapshot: Record<string, unknown> | undefined
 ): Promise<boolean> {
-  return runFieldRule(fn, ctx, { id: ctx.id, data: snapshot });
+  return runFieldRule(fn, operation, ctx, { id: ctx.id, data: snapshot });
 }
+
+/** What a field rule may be asked: the field operations alone. */
+type FieldRuleOperation = "create" | "read" | "update";
 
 /**
  * Call a field rule with the caller's grants and the entry fields given, and
@@ -518,23 +527,33 @@ async function fieldRuleAllows(
  */
 async function runFieldRule(
   fn: FieldAccessFn,
+  operation: FieldRuleOperation,
   ctx: Omit<FieldRuleCaller, "id">,
-  entry: Pick<Parameters<FieldAccessFn>[0], "id" | "data">
+  entry: Pick<AccessRuleContext, "id" | "data">
 ): Promise<boolean> {
   try {
     const { permissions, roles } = await ctx.grants();
-    const args = Object.defineProperties(
+    const userId = ctx.user?.id;
+    const email = ctx.user?.email;
+    const args = buildRuleContext(
+      fn,
       {
-        req: { user: ctx.user },
-        permissions,
+        user:
+          typeof userId === "string"
+            ? { id: userId, ...(typeof email === "string" ? { email } : {}) }
+            : null,
+        // The request's own user object, as a field rule has always read it.
+        requestUser: ctx.user as RequestContext["user"],
         roles,
+        permissions,
         // The person the operation is made as, from the same frame the
         // collection gate reads, so a field rule and the gate above it agree
         // on who is asking.
         principal: currentPrincipal(),
       },
-      Object.getOwnPropertyDescriptors(entry)
-    ) as Parameters<FieldAccessFn>[0];
+      { operation, target: ctx.target },
+      entry
+    );
     return await fn(args);
   } catch {
     // Fail-secure: an access rule that throws denies the field.
@@ -566,7 +585,7 @@ async function ruleAllowsWithoutEntry(
       return undefined;
     },
   };
-  const allowed = await runFieldRule(rule, caller, entry);
+  const allowed = await runFieldRule(rule, "read", caller, entry);
   return allowed === true && !readsEntry;
 }
 
@@ -608,11 +627,7 @@ async function applyWriteAccessRec(
   data: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
   operation: "create" | "update",
-  ctx: {
-    user?: Record<string, unknown>;
-    id?: string;
-    grants: () => Promise<CallerGrants>;
-  }
+  ctx: FieldRuleCaller
 ): Promise<void> {
   // Taken BEFORE the recursion below, which rewrites nested containers in
   // place as it redacts them: a rule at this level that reads into a nested
@@ -632,7 +647,7 @@ async function applyWriteAccessRec(
     }
     const fn = entry.access?.[operation];
     if (!fn) continue;
-    const allowed = await fieldRuleAllows(fn, ctx, snapshot);
+    const allowed = await fieldRuleAllows(fn, operation, ctx, snapshot);
     if (!allowed) denied.push(name);
   }
   for (const name of denied) delete data[name];
@@ -683,6 +698,7 @@ export async function applyFieldWriteAccess(opts: {
   await applyWriteAccessRec(opts.data, fns, opts.operation, {
     user: opts.user,
     id: opts.id,
+    target: fieldRuleTarget(opts.kind, opts.slug),
     // An anonymous writer resolves to NO grants — `grantsResolver(undefined)`
     // answers `{ permissions: [], roles: [] }` — so a rule written as
     // `({ permissions }) => permissions.includes(...)` refuses it, which is
@@ -817,11 +833,7 @@ function restoreReadAccessEvidence(
 async function applyReadAccessRec(
   entry: Record<string, unknown>,
   fns: Record<string, FieldFunctions>,
-  ctx: {
-    user?: Record<string, unknown>;
-    id?: string;
-    grants: () => Promise<CallerGrants>;
-  },
+  ctx: FieldRuleCaller,
   redactions: ReadAccessRedactions,
   restoredByRow: RestoredByRow
 ): Promise<void> {
@@ -852,7 +864,7 @@ async function applyReadAccessRec(
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
-    const allowed = await fieldRuleAllows(fn, ctx, snapshot);
+    const allowed = await fieldRuleAllows(fn, "read", ctx, snapshot);
     if (!allowed) denied.push(name);
   }
   // Record what stays removed for the next pass to restore as evidence. A prior
@@ -972,6 +984,7 @@ export async function applyFieldReadAccess(
     {
       user: opts.user,
       id: typeof opts.entry.id === "string" ? opts.entry.id : undefined,
+      target: fieldRuleTarget(opts.kind, opts.slug),
       // An unauthenticated read still runs the rules — this path, unlike the
       // write one, does not bail without a user — so the resolver is handed the
       // same absent id and answers with no grants rather than not being called.

@@ -322,9 +322,9 @@ export default defineCollection({
     read: true,
 
     // Function: the caller's role holds the permission (`create-posts`, ...)
-    create: ({ permissions }) => permissions.includes("posts:create"),
-    update: ({ permissions }) => permissions.includes("posts:update"),
-    delete: ({ permissions }) => permissions.includes("posts:delete"),
+    create: ({ permissions }) => permissions.includes("create-posts"),
+    update: ({ permissions }) => permissions.includes("update-posts"),
+    delete: ({ permissions }) => permissions.includes("delete-posts"),
   },
   fields: [
     // ...

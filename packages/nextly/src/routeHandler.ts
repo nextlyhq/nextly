@@ -1652,8 +1652,8 @@ async function handleServiceRequest(
   // The key's own scope is pinned for the whole dispatch rather than serialized
   // into route params beside it. The params carry strings, so the scope written
   // there was a lossy copy: it held the stored permission slugs and neither the
-  // caller's roles nor the rows a rule's `resource:action` spelling is derived
-  // from, and every gate underneath that read it judged the key on a scope
+  // caller's roles nor the permission rows a rule's list is built from, and
+  // every gate underneath that read it judged the key on a scope
   // missing most of itself. Pinning hands the same object to all of them, and a
   // field added to the scope later reaches them without a second edit here.
   const result = await runWithCallerScope(

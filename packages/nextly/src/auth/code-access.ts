@@ -12,20 +12,23 @@
 
 import { container } from "../di/container";
 import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
+import type { AccessOperation } from "../services/access/types";
 import type {
-  AccessControlContext,
   CollectionAccessControl,
   SingleAccessControl,
 } from "../shared/types/access";
 
+import type { AccessTarget } from "./access/decide";
+import { buildRuleContext } from "./access/rule-context";
+import type { GrantedPermission } from "./authenticated-scope";
+
 /**
  * The resolved identity a read decision needs.
  *
- * `permissions` are the API key's OWN scoped grants in `{action}-{resource}`
- * form. Note the format: `listEffectivePermissions` returns the other one
- * (`{resource}:{action}`), and mixing them silently answers "denied" for every
- * check. Session callers carry an empty list — their grants are resolved from
- * the database instead.
+ * `permissions` are the API key's OWN scoped grants, in the stored spelling
+ * (`read-posts`) the coarse `read-{slug}` check compares against. Session
+ * callers carry an empty list: their grants are resolved from the database
+ * instead.
  */
 export interface ReadAccessCaller {
   userId: string;
@@ -37,19 +40,12 @@ export interface ReadAccessCaller {
    */
   permissions: string[];
   /**
-   * The same grants in the spelling a code-defined rule reads (`posts:read`),
-   * when the caller's scope carried the rows to derive it from.
-   *
-   * 🔴 Two spellings of one list, kept apart because they are read by two
-   * different judges. `AccessControlContext.permissions` promises the
-   * `resource:action` form, and a rule written to that promise --
-   * `({ permissions }) => permissions.includes("posts:read")` -- was handed
-   * the stored form and refused a correctly scoped key. Absent when the scope
-   * never had the rows, in which case the stored slugs are what a rule gets:
-   * the honest answer, since a slug cannot be split into parts no permission
-   * row names.
+   * The rows behind `permissions`, when the caller's scope carried them. A
+   * rule is handed the stored slugs either way; the rows also give it, for
+   * one release, each permission's earlier `posts:read` spelling, which a
+   * slug alone cannot be split into.
    */
-  rulePermissions?: readonly string[];
+  grants?: readonly GrantedPermission[];
   /** Role slugs, already normalized (session roles arrive as ids). */
   roles: string[];
 }
@@ -82,13 +78,12 @@ export function getRBACService(): RBACAccessControlService | undefined {
  * revoke it. A rule that throws denies, so a broken rule fails closed.
  */
 export async function codeAccessAllows(
-  codeAccess: CollectionAccessControl | SingleAccessControl,
-  operation: "create" | "read" | "update" | "delete" | "publish" | "unpublish",
-  resource: string,
+  target: AccessTarget,
+  operation: AccessOperation,
   caller: ReadAccessCaller
 ): Promise<boolean> {
   const operationAccess =
-    codeAccess[
+    target.access?.[
       operation as keyof (CollectionAccessControl | SingleAccessControl)
     ];
 
@@ -98,17 +93,20 @@ export async function codeAccessAllows(
   // The context carries the CALLER's roles and permissions. For an API key
   // those are the key's own scoped values, not its owner's — which is the
   // whole point of evaluating the rule against the key.
-  const ctx: AccessControlContext = {
-    user: { id: caller.userId },
-    roles: caller.roles,
-    // The RULE-facing spelling, which is what the context promises. The
-    // stored spelling is a fallback for a scope that never carried the rows.
-    permissions: [...(caller.rulePermissions ?? caller.permissions)],
-    // A staff user or an API key, never a plugin-defined person.
-    principal: null,
-    operation,
-    collection: resource,
-  };
+  const ctx = buildRuleContext(
+    operationAccess,
+    {
+      user: { id: caller.userId },
+      roles: caller.roles,
+      // The rows where the scope carried them, so the rule also gets the
+      // earlier spelling for its deprecation release; the stored slugs alone
+      // otherwise.
+      permissions: caller.grants ?? caller.permissions,
+      // A staff user or an API key, never a plugin-defined person.
+      principal: null,
+    },
+    { operation, target: { kind: target.kind, slug: target.slug } }
+  );
 
   try {
     return (await operationAccess(ctx)) === true;

@@ -24,6 +24,7 @@ import {
   forgetRequestAccess,
   rememberForRequest,
 } from "../../auth/access/request-memo";
+import type { GrantedPermission } from "../../auth/authenticated-scope";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { PermissionCacheService } from "../../domains/auth/services/permission-cache-service";
@@ -869,14 +870,38 @@ export async function hasAllPermissions(
  * Lists all effective permissions for a user by resolving role assignments and inheritance.
  * Returns permissions in the format '<resource>:<action>' (e.g., 'users:read', 'content:create').
  *
- * This function replaces static role-to-permission mappings with dynamic RBAC resolution.
- * Uses existing caching and database query optimization.
+ * Derived from {@link listEffectiveGrants}, the one lookup, so the two can
+ * never name different permissions for one caller.
  */
 export async function listEffectivePermissions(
   userId: string,
   // Optional transaction-bound executor; see `hasPermission`.
   executor?: unknown
 ): Promise<string[]> {
+  const grants = await listEffectiveGrants(userId, executor);
+  return Array.from(
+    new Set(grants.map(grant => `${grant.resource}:${grant.action}`))
+  ).sort();
+}
+
+/**
+ * The permissions a user holds through their roles, inheritance included, as
+ * the rows name them: each one's stored slug and the action and resource it
+ * grants. Sorted by slug, each slug once.
+ *
+ * The rows rather than one spelling of them, because a rule is handed the
+ * stored slug (`read-posts`) and, for one release, the earlier
+ * `<resource>:<action>` spelling too, and a slug cannot be rebuilt from its
+ * parts: `manage-api-keys` grants `update` on `api-keys`.
+ *
+ * Empty for a missing user id, and empty if the lookup fails (fail-closed):
+ * a rule that asks for a permission then denies rather than opens.
+ */
+export async function listEffectiveGrants(
+  userId: string,
+  // Optional transaction-bound executor; see `hasPermission`.
+  executor?: unknown
+): Promise<GrantedPermission[]> {
   if (!userId) {
     getAuthLogger()?.log?.("debug", {
       category: "auth",
@@ -890,12 +915,12 @@ export async function listEffectivePermissions(
     // Looked up once per request on the pool, so the field rules on every row
     // of a list read one answer rather than each asking again.
     if (executor !== undefined) {
-      return await loadEffectivePermissions(userId, executor);
+      return await loadEffectiveGrants(userId, executor);
     }
     // A list of its own for each caller: a rule handed it may change it.
     return [
-      ...(await keptForRequest(userId, "permissions", () =>
-        loadEffectivePermissions(userId)
+      ...(await keptForRequest(userId, "grants", () =>
+        loadEffectiveGrants(userId)
       )),
     ];
   } catch (error) {
@@ -909,52 +934,60 @@ export async function listEffectivePermissions(
   }
 }
 
-/** The lookup behind {@link listEffectivePermissions}; throws on a failed read. */
-async function loadEffectivePermissions(
+/** The lookup behind {@link listEffectiveGrants}; throws on a failed read. */
+async function loadEffectiveGrants(
   userId: string,
   executor?: unknown
-): Promise<string[]> {
-  {
-    const checker = new PermissionChecker();
-    const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
+): Promise<GrantedPermission[]> {
+  const checker = new PermissionChecker();
+  const roleIds = await checker.getAllRoleIdsForUser(userId, executor);
 
-    if (roleIds.size === 0) {
-      return [];
-    }
-
-    const t = getTablesLazy();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { rolePermissions, permissions } = t as any;
-
-    // Join role_permissions with permissions to get all permissions for user's roles
-    const rows = await rbacQuery(executor)
-      .select({
-        action: permissions.action,
-        resource: permissions.resource,
-      })
-      .from(rolePermissions)
-      .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
-      .where(inArray(rolePermissions.roleId, Array.from(roleIds)));
-
-    // Build permission strings and deduplicate
-    const permissionStrings = new Set<string>();
-    for (const row of rows as Array<{ action: string; resource: string }>) {
-      permissionStrings.add(`${row.resource}:${row.action}`);
-    }
-
-    const result = Array.from(permissionStrings).sort();
-
-    if (process.env.DEBUG_RBAC === "1") {
-      consoleLogger.info("[permissions][dbg] listEffectivePermissions", {
-        userId,
-        roleCount: roleIds.size,
-        permissionCount: result.length,
-        permissions: result,
-      });
-    }
-
-    return result;
+  if (roleIds.size === 0) {
+    return [];
   }
+
+  const t = getTablesLazy();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { rolePermissions, permissions } = t as any;
+
+  // Join role_permissions with permissions to get all permissions for user's roles
+  const rows = await rbacQuery(executor)
+    .select({
+      slug: permissions.slug,
+      action: permissions.action,
+      resource: permissions.resource,
+    })
+    .from(rolePermissions)
+    .innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id))
+    .where(inArray(rolePermissions.roleId, Array.from(roleIds)));
+
+  // Each slug once: two roles granting one permission name the same row. The
+  // three columns are NOT NULL, so the narrowing below keeps every real row.
+  const bySlug = new Map<string, GrantedPermission>();
+  for (const { slug, action, resource } of rows) {
+    if (
+      typeof slug === "string" &&
+      typeof action === "string" &&
+      typeof resource === "string" &&
+      !bySlug.has(slug)
+    ) {
+      bySlug.set(slug, { slug, action, resource });
+    }
+  }
+  const result = [...bySlug.values()].sort((a, b) =>
+    a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0
+  );
+
+  if (process.env.DEBUG_RBAC === "1") {
+    consoleLogger.info("[permissions][dbg] listEffectiveGrants", {
+      userId,
+      roleCount: roleIds.size,
+      permissionCount: result.length,
+      permissions: result.map(grant => grant.slug),
+    });
+  }
+
+  return result;
 }
 
 /**
