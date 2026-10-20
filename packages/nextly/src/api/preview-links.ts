@@ -1177,8 +1177,9 @@ export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
 
   const auth = await requireRoutePermission(req, "manage", "settings");
   const generation = await (await settingsService()).revokeAllPreviewTokens();
-  // The generation has ended every link; the rows also record when.
-  await revokeAllRecordedLinks(auth.userId, new Date());
+  // The generation has ended every link: the revocation has happened, so it is
+  // recorded before anything that could still fail. The rows are marked after.
+  const revokedAt = new Date();
 
   /*
    * The counterpart to the mint row, and the one an incident actually starts
@@ -1229,6 +1230,10 @@ export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
       ...(auth.apiKeyId === undefined ? {} : { apiKeyId: auth.apiKeyId }),
     },
   });
+
+  // Bookkeeping on top of the generation: the rows say when they ended, so
+  // the list and retention read it. Failing here ends no link it had not.
+  await revokeAllRecordedLinks(auth.userId, revokedAt);
 
   return respondMutation("Preview links revoked", { generation });
 });

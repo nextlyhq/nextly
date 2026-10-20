@@ -1573,6 +1573,24 @@ describe("the audit trail a preview link leaves", () => {
     expect(meta()).toMatchObject({ generation: 1 });
   });
 
+  it("records a site-wide revoke even when marking the rows then fails", async () => {
+    // The generation has already ended every link by then, so the revocation
+    // happened and the trail must say who did it.
+    records.revokeAllRecordedLinks.mockRejectedValueOnce(
+      new Error("connection reset")
+    );
+
+    const response = await revokePreviewLinks(
+      post({}, "http://x/api/nextly/preview-links/revoke")
+    );
+
+    expect(response.status).toBe(500);
+    expect(recorded()).toMatchObject({
+      kind: "preview-links-revoked",
+      actorUserId: "admin-1",
+    });
+  });
+
   /*
    * A refused mint produces no credential, so it must produce no row. Recorded
    * before the refusal, the trail would claim access was handed out that never
