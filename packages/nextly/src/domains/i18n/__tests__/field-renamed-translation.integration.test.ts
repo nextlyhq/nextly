@@ -717,4 +717,170 @@ describeEachDialect("a translated field that is renamed", dialect => {
 
     await expectUnchanged(id);
   });
+
+  /** The main table's value of `column` for row `id`. */
+  async function mainValue(
+    table: string,
+    column: string,
+    id: string
+  ): Promise<unknown> {
+    const [row] = await query<{ value: unknown }>(
+      `SELECT ${quote(dialect, column)} AS value FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    return row?.value;
+  }
+
+  // Turning translation off restores each field from the companion under the name it had, so a
+  // rename in the same change would leave the value under a name no field has. It is refused
+  // before anything runs, naming the two saves that work.
+  it.each([
+    {
+      path: "the builder saves the collection",
+      table: "dc_posts",
+      seed: seedCollection,
+      change: async () => {
+        const saved = await handler().updateCollection(
+          { collectionName: "posts" },
+          { localized: false, fields: renamedShared() }
+        );
+        if (!saved.success) throw new Error(JSON.stringify(saved));
+      },
+    },
+    {
+      path: "the collection's schema dialog applies it",
+      table: "dc_posts",
+      seed: seedCollection,
+      change: async () => {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields: renamedShared(),
+            confirmed: true,
+            localized: false,
+            renameResolutions: renamedOnCompanion("dc_posts"),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "posts"
+            ),
+          }
+        );
+      },
+    },
+    {
+      path: "a Single's schema dialog applies it",
+      table: "single_hero",
+      seed: seedSingle,
+      change: async () => {
+        await dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "hero" },
+          {
+            fields: renamedShared(),
+            confirmed: true,
+            localized: false,
+            renameResolutions: renamedOnCompanion("single_hero"),
+            schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
+          }
+        );
+      },
+    },
+  ])(
+    "refuses renaming a translated field while turning translation off, and changes nothing, when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+
+      const refusal = await change().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(reported(refusal)).toMatch(
+        /TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS/
+      );
+      expect(await companionValues(table, "heading", id)).toEqual({
+        en: "Hello",
+        es: "Hola",
+      });
+      expect(await columnsOf(table)).not.toContain("title2");
+    }
+  );
+
+  // A save that renames a translated field and makes it shared, and stops after the companion's
+  // RENAME, is finished by saving again: its values are read from the column as it is now.
+  it.each([
+    {
+      path: "the builder saves the collection",
+      table: "dc_posts",
+      seed: seedCollection,
+      change: async () => {
+        const saved = await handler().updateCollection(
+          { collectionName: "posts" },
+          { fields: renamedShared() }
+        );
+        if (!saved.success) throw new Error(JSON.stringify(saved));
+      },
+    },
+    {
+      path: "the collection's schema dialog applies it",
+      table: "dc_posts",
+      seed: seedCollection,
+      change: async () => {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields: renamedShared(),
+            confirmed: true,
+            localized: true,
+            renameResolutions: renamedOnCompanion("dc_posts"),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "posts"
+            ),
+          }
+        );
+      },
+    },
+    {
+      path: "a field group's schema dialog applies it",
+      table: "comp_banner",
+      seed: seedFieldGroup,
+      change: async () => {
+        await dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields: renamedShared(),
+            confirmed: true,
+            localized: true,
+            renameResolutions: renamedOnCompanion("comp_banner"),
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
+          }
+        );
+      },
+    },
+  ])(
+    "finishes a rename to shared an earlier apply already made on the companion when $path",
+    async ({ table, seed, change }) => {
+      const id = await seed();
+      await query(
+        `ALTER TABLE ${quote(dialect, `${table}_locales`)} RENAME COLUMN ${quote(dialect, "heading")} TO ${quote(dialect, "title2")}`
+      );
+
+      await change();
+
+      expect(await mainValue(table, "title2", id)).toBe("Hello");
+      const [archived] = await query<{ value: unknown }>(
+        `SELECT ${quote(dialect, "value")} AS value FROM ${quote(dialect, "nextly_i18n_archive")} ` +
+          `WHERE ${quote(dialect, "field")} = 'title2' AND ${quote(dialect, "locale")} = 'es'`
+      );
+      expect(String(archived?.value)).toContain("Hola");
+    }
+  );
 });

@@ -17,6 +17,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
+import { companionColumnNames } from "../runtime/companion-io";
 
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
@@ -25,6 +26,7 @@ import {
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
   refusalsForTranslatedFieldRenamedAndReshaped,
+  refusalsForTranslatedFieldRenamedAsTranslationEnds,
   storageDiffers,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
@@ -114,7 +116,11 @@ export async function archiveFieldsLeavingTranslation(args: {
   wasLocalized: boolean;
   isLocalized: boolean;
 }): Promise<void> {
-  if (!args.wasLocalized || !args.isLocalized) return;
+  if (!args.wasLocalized) return;
+  if (!args.isLocalized) {
+    await refuseRenameAsTranslationEnds(args);
+    return;
+  }
   const mayRenameTranslated = oneTranslatedFieldReplaced(args);
   // A translated field renamed in this change is judged under its new name, as the companion
   // transition will move it: renamed and made shared, it leaves translation, and its archive,
@@ -175,10 +181,58 @@ export async function archiveFieldsLeavingTranslation(args: {
       defaultLocale: args.defaultLocale,
       oldFields,
       newFields: args.newFields,
-      // A renamed field's values are still in the column it had: the rename runs after this.
-      renamedFrom: renamedColumn(rename, args.builtBy, dialect),
+      // A renamed field's values are in the column it had, unless an earlier apply already
+      // renamed it: the rename runs after this.
+      renamedFrom: await renamedColumnAsItIs(
+        args.adapter,
+        args.tableName,
+        renamedColumn(rename, args.builtBy, dialect)
+      ),
     })
   );
+}
+
+/**
+ * Refuses a translated field renamed in the change that turns translation off
+ * (`refusalsForTranslatedFieldRenamedAsTranslationEnds`), before anything runs.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming the field and the two saves that work
+ */
+async function refuseRenameAsTranslationEnds(
+  args: Parameters<typeof archiveFieldsLeavingTranslation>[0]
+): Promise<void> {
+  if (!oneTranslatedFieldReplaced(args)) return;
+  const rename = await translatedFieldRename(
+    args,
+    args.adapter.getCapabilities().dialect
+  );
+  const refusals = refusalsForTranslatedFieldRenamedAsTranslationEnds({
+    renamed: rename?.to.name,
+  });
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+  });
+}
+
+/**
+ * The renamed column's source as this database has it: the old column while it is there, none
+ * once an earlier apply renamed it and stopped before the registry recorded the change, so the
+ * archive reads the values from the column they are in now.
+ */
+async function renamedColumnAsItIs(
+  adapter: DrizzleAdapter,
+  tableName: string,
+  renamed: ReadonlyMap<string, string> | undefined
+): Promise<ReadonlyMap<string, string> | undefined> {
+  if (!renamed) return undefined;
+  const live = new Set(await companionColumnNames(adapter, tableName));
+  // Renamed already: the new column is there and the old one is gone.
+  const kept = [...renamed].filter(
+    ([to, from]) => !(live.has(to) && !live.has(from))
+  );
+  return kept.length > 0 ? new Map(kept) : undefined;
 }
 
 /**

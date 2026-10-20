@@ -32,7 +32,8 @@ export interface LeavingTranslationRefusal {
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
     | "CONSTRAINED_FIELD_LEAVES_TRANSLATION"
     | "RESHAPED_FIELD_JOINS_TRANSLATION"
-    | "RESHAPED_TRANSLATED_FIELD_RENAMED";
+    | "RESHAPED_TRANSLATED_FIELD_RENAMED"
+    | "TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS";
   /** Why the field cannot leave or join translation in this change, as one sentence. */
   reason: string;
   /** The changes that get there instead, in order, each one sentence. */
@@ -253,6 +254,26 @@ export function refusalsForFieldsJoiningTranslation(args: {
  * the two together would leave every language's value behind. The Builder's paths only: a code
  * rename is not yet decided as one.
  */
+/**
+ * A translated field renamed in the same change that turns translation off for the whole entity.
+ * The disable restores each field from the companion under the name it had, so the value would
+ * land under a name no field has any more. Refused, naming the two saves that work.
+ */
+export function refusalsForTranslatedFieldRenamedAsTranslationEnds(args: {
+  /** The renamed field's new name, when translation ends in the same change. */
+  renamed: string | undefined;
+}): LeavingTranslationRefusal[] {
+  if (args.renamed === undefined) return [];
+  return [
+    refusal(
+      `fields.${args.renamed}`,
+      "TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS",
+      "It is renamed in the same change that turns translation off.",
+      ["Rename it and save.", "Turn translation off and save."]
+    ),
+  ];
+}
+
 export function refusalsForTranslatedFieldRenamedAndReshaped(args: {
   /** The renamed field's new name, when the rename changes its storage too. */
   reshaped: string | undefined;

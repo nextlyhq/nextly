@@ -98,6 +98,8 @@ A field whose type, length or precision changes in the same change is refused, b
 
 Renaming a translated field in the Schema Builder keeps every language's value under the new name, for a collection, a Single or a field group. The schema dialog lists it as a rename; keep that choice to keep the values. Renamed and made shared in the same change, the field keeps the default language's value as its shared value, and the other languages go to the archive under the new name, so `nextly i18n:restore --field <new name>` brings them back once the field is translated again.
 
+Two changes are refused alongside a rename, before anything is saved, and each works as two saves instead: changing how the field is stored (its length, its precision, or its type to a compatible one), and turning translation off for the whole collection, Single or field group. Rename the field and save, then make the other change. A change to an incompatible type is not a rename: the dialog lists it as removing one field and adding another.
+
 A translated field renamed in code is not yet carried over: the old column keeps every language's value, and the new field starts empty. To rename one in code today, keep the old name until its values are moved.
 
 ## Fallback chains
