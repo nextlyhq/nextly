@@ -520,25 +520,25 @@ const CHART_MARKS: Pairing[] = [
       label: `chart series ${n} on card`,
     })
   ),
-  {
-    // The bars archetype paints the fill over its own track, not over the card,
-    // so the track is the surface that decides whether the bar is visible.
-    fg: "--nx-primary",
-    bg: "--nx-muted",
-    kind: "ui",
-    label: "bar fill on its track",
-  },
-  // The builder's style inspector paints a 6px provenance dot per row, and its
-  // background is `--nx-builder-surface`, an alias of `--nx-muted`. Slots 2 and
-  // 4 are the two it uses -- 1 is skipped there because it resolves to the
-  // label text's own colour, and 5 reads as an error. So these two slots meet a
-  // second surface, and it is the one where the light ramp has least headroom.
-  ...[2, 4].map(
+  // A bar is painted over its own track, `--nx-muted`, not over the card, so the track is the
+  // surface that decides whether a bar is visible; a bar takes any slot, by its group's value.
+  // The same surface is the builder's style inspector (`--nx-builder-surface` aliases it), whose
+  // provenance dots use slots 2 and 4.
+  ...[1, 2, 3, 4, 5].map(
     (n): Pairing => ({
       fg: `--nx-chart-${n}`,
       bg: "--nx-muted",
       kind: "ui",
-      label: `chart series ${n} on the inspector surface`,
+      label: `chart series ${n} on a bar's track`,
+    })
+  ),
+  // A chart's tooltip shows the mark's colour beside its value, on the popover surface.
+  ...[1, 2, 3, 4, 5].map(
+    (n): Pairing => ({
+      fg: `--nx-chart-${n}`,
+      bg: "--nx-popover",
+      kind: "ui",
+      label: `chart series ${n} on the tooltip`,
     })
   ),
 ];

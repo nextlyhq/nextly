@@ -38,6 +38,10 @@ import {
   refreshTokens as refreshTokensSqlite,
 } from "../../../schemas/auth-tokens/sqlite";
 import { users as usersSqlite } from "../../../schemas/users/sqlite";
+import {
+  ADMINISTRATOR_TABLES_SQLITE,
+  makeAdministrator,
+} from "./administrator-fixture";
 import { nextlyEvents as eventsSqlite } from "../../../schemas/webhooks/sqlite";
 import { AuthService } from "../../auth/services/auth-service";
 import { UserMutationService } from "../services/user-mutation-service";
@@ -61,6 +65,7 @@ async function ddl(): Promise<string[]> {
     await kit.generateDrizzleJson({}),
     await kit.generateDrizzleJson({
       users: usersSqlite,
+      ...ADMINISTRATOR_TABLES_SQLITE,
       userInviteTokens: userInviteTokensSqlite,
       passwordResetTokens: passwordResetTokensSqlite,
       emailVerificationTokens: emailVerificationTokensSqlite,
@@ -94,14 +99,17 @@ describe("user email normalization across create, duplicate check and lookup", (
     for (const stmt of await ddl()) {
       await adapter.executeQuery(stmt);
     }
-    // A sentinel user so createLocalUser's "first user ever" branch (which
-    // needs more of the RBAC wiring) is never taken.
+    // An administrator already, so no account this suite creates is made the
+    // install's first one: deleting it would then be refused as removing the
+    // last administrator. A user row alone does not settle that; holding the
+    // role does.
     const nowEpoch = Math.floor(Date.now() / 1000);
     await adapter.executeQuery(
       `INSERT INTO users (id, email, name, is_active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       ["sentinel", "sentinel@test.local", "Sentinel", 1, nowEpoch, nowEpoch]
     );
+    await makeAdministrator(adapter, "sentinel");
     // The adapter resolves a table name through a SchemaRegistry, which boot
     // normally installs; the mutation service writes the user.created event
     // by name inside its transaction.

@@ -874,12 +874,16 @@
    * mode do not reach it: slots 2 and 4 measured 2.21:1 and 2.15:1 at cyan-500
    * and amber-500, and moved down the ramp rather than being re-hued. Dark mode
    * keeps the lighter steps, where they measure 9.0:1 and 9.3:1 -- the two modes
-   * need different steps of the same ramp, not one shared value. */
+   * need different steps of the same ramp, not one shared value. A bar is drawn
+   * over its track (--nx-muted) and a tooltip on --nx-popover, both darker than
+   * the card, so every slot is held there too; slot 3 moved down a step for
+   * them, as 2 and 4 did for the card: at green-600 it measured 3.02:1 on the
+   * track. */
   --nx-chart-1: var(--nx-primary);
   --nx-chart-2: oklch(0.6089 0.1109 221.72);
   /* cyan-600 */
-  --nx-chart-3: oklch(0.6273 0.17 149.2);
-  /* green-600 */
+  --nx-chart-3: oklch(0.527 0.154 150.069);
+  /* green-700 */
   --nx-chart-4: oklch(0.5553 0.1455 49);
   /* amber-700 */
   --nx-chart-5: oklch(0.6368 0.2078 25.33);

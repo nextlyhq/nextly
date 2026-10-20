@@ -121,6 +121,35 @@ function configs(slug: string) {
 describe.each(getConfiguredTestDialects())(
   "localization turned off and on again (%s)",
   (dialect: TestDialect) => {
+    it("gives every existing entry its default-language row when localization is turned on, an empty one included", async () => {
+      // The schema apply moves a translated field's value once, and the provisioning pass around
+      // it takes that move as done: an entry with no value still gets its row, so it reads as an
+      // untranslated entry and not as a missing one.
+      const slug = "locevery";
+      const { off, on } = configs(slug);
+      const q = (name: string) => quote(dialect, name);
+      const main = q(`dc_${slug}`);
+      const companion = q(`dc_${slug}_locales`);
+      await runSync(dialect, off);
+      await target?.adapter.executeQuery(
+        `INSERT INTO ${main} (${q("id")}, ${q("slug")}, ${q("title")}) VALUES ('row1', 'r1', 'Before localizing'), ('row2', 'r2', NULL)`
+      );
+
+      await runSync(dialect, on);
+
+      const rows = await target?.adapter.executeQuery<{
+        parent: string;
+        title: string | null;
+      }>(
+        `SELECT ${q("_parent")} AS parent, ${q("title")} AS title FROM ${companion} ` +
+          `WHERE ${q("_locale")} = 'en' ORDER BY ${q("_parent")}`
+      );
+      expect(rows).toEqual([
+        { parent: "row1", title: "Before localizing" },
+        { parent: "row2", title: null },
+      ]);
+    });
+
     it("keeps an edit made to the main table after localization was turned off", async () => {
       const slug = "locoff";
       const { off, on } = configs(slug);

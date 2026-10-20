@@ -144,6 +144,47 @@ export async function singleDocumentReadable(
  */
 export async function singleDocumentEditable(
   slug: string,
+  subject: SingleAccessSubject
+): Promise<boolean> {
+  return storedSingleDocumentAllows(slug, "update", subject);
+}
+
+/**
+ * Whether the caller may read the Single's live document, asked WITHOUT
+ * reading it: nothing is created and no hook runs.
+ *
+ * {@link singleDocumentReadable} answers through `SingleEntryService.get`,
+ * which creates a Single that has no row yet (row, localized defaults and a
+ * first version) and runs its read hooks. That is right for a caller who is
+ * about to be handed the document, and wrong for one that only needs the
+ * verdict on a request that must not write, such as an anonymous page view
+ * re-checking whoever shared a preview link.
+ *
+ * The decision is the one `get` makes, `checkSingleAccess` for `read`,
+ * applied to the stored row, so the two cannot answer the permission
+ * differently. What it does not repeat is `get`'s lifecycle filter, which
+ * decides which STATUS a reader may see rather than whether they may read the
+ * Single: a caller that needs that too asks {@link singleDocumentReadable}.
+ * A Single with no row is not readable here, as it is not editable, since
+ * there is no document to judge.
+ */
+export async function singleStoredDocumentReadable(
+  slug: string,
+  subject: SingleAccessSubject
+): Promise<boolean> {
+  return storedSingleDocumentAllows(slug, "read", subject);
+}
+
+/**
+ * The stored row's existence, then the Single's access gate for `operation`.
+ *
+ * Loaded through the adapter rather than a read, so asking creates nothing and
+ * runs no hook. One body for both operations, so the read and update probes
+ * cannot drift apart in what they treat as "no document".
+ */
+async function storedSingleDocumentAllows(
+  slug: string,
+  operation: "read" | "update",
   { user, actor, routeAuthorized }: SingleAccessSubject
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
@@ -159,7 +200,7 @@ export async function singleDocumentEditable(
 
   const denied = await checkSingleAccess({
     slug,
-    operation: "update",
+    operation,
     user,
     overrideAccess: false,
     routeAuthorized,

@@ -123,7 +123,7 @@ export interface VersionHistorySheetProps {
   liveDirty?: boolean;
   /**
    * A transient reason the confirm action must refuse: the document
-   * becoming read-only while the confirmation is open. The banner trigger
+   * becoming read-only while the confirmation is open. The Restore… trigger
    * removes itself on the same signal, but an already-open dialog outlives
    * it, so the refusal has to be carried into the confirmation as well.
    */
@@ -226,38 +226,11 @@ export function VersionHistorySheet({
   } = list;
   const detail = useVersion({ scope, versionNo: selected, enabled: open });
 
-  // Hand the chosen version to the document area, and take it back whenever
-  // nothing is chosen — including when the panel closes, so dismissing it never
-  // strands the editor on a version it can no longer see the list for.
   const { setViewing, setRestore } = useDocumentHistory();
   const viewedSnapshot = detail.data?.snapshot;
   const viewedLocale = detail.data?.locale ?? null;
   const viewedLoading = detail.isLoading;
   const viewedError = detail.error ?? null;
-  useEffect(() => {
-    if (!open || selected === null) {
-      setViewing(null);
-      return;
-    }
-    // Published on SELECTION rather than on arrival: the document has to show
-    // that it is fetching, or a click that leaves the live document on screen
-    // reads as a control that did nothing.
-    setViewing({
-      versionNo: selected,
-      snapshot: viewedSnapshot,
-      locale: viewedLocale,
-      isLoading: viewedLoading,
-      error: viewedError,
-    });
-  }, [
-    open,
-    selected,
-    viewedSnapshot,
-    viewedLocale,
-    viewedLoading,
-    viewedError,
-    setViewing,
-  ]);
 
   // Shown once it has arrived and is on screen: chosen and still loading, or
   // failed, is not a version the person has seen.
@@ -273,7 +246,7 @@ export function VersionHistorySheet({
       : null
   );
 
-  // Returning to the live document from the banner clears the selection here
+  // Returning to the live document from Back to current clears the selection here
   // too, so the list stops showing a row as active for a version that is no
   // longer on screen.
   useEffect(() => {
@@ -295,7 +268,8 @@ export function VersionHistorySheet({
   const wide = useMediaQuery(`(min-width: ${PANEL_WIDE_WINDOW}px)`);
   const panelWidth = wide ? PANEL_WIDTH : PANEL_NARROW_WIDTH;
   // Without room beside the document the panel is a page over it, so a chosen
-  // version is read with that page stepped aside, and the banner leads back.
+  // version is read with that page stepped aside, and the comparison bar
+  // leads back.
   const steppedAside = open && !roomBeside && selected !== null;
 
   const restore = useRestoreVersion({
@@ -350,6 +324,64 @@ export function VersionHistorySheet({
     selected === null ? null : predecessorOf(versions, selected, false);
   const previousVersionNo =
     previousTarget?.kind === "version" ? previousTarget.versionNo : null;
+
+  // Hand the chosen version to the document area, and take it back whenever
+  // nothing is chosen — including when the panel closes, so dismissing it never
+  // strands the editor on a version it can no longer see the list for. It
+  // carries what the version is compared with, so the document marks changes
+  // against the same version the panel pairs it with.
+  //
+  // Its name, time and author from the list's own row, which carries the
+  // author by name; the version read alone carries only an id. The read is
+  // the fallback for a version a link names beyond the rows loaded.
+  const viewedAbout =
+    versions.find(v => v.versionNo === selected) ?? detail.data ?? null;
+  // The scope is read through a ref, keyed by `scopeId`: the object is rebuilt
+  // on every render, and publishing it as a dependency would republish the
+  // version, re-rendering the editor, every time.
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
+  // A "first" is believed only once the list has really ended: while older
+  // pages remain (the search paused, or a page failed) the predecessor is
+  // unknown, and the document must not present the version as the first.
+  const comparedWithKind =
+    previousTarget?.kind === "first" && hasNextPage
+      ? "unknown"
+      : (previousTarget?.kind ?? "unknown");
+  useEffect(() => {
+    if (!open || selected === null) {
+      setViewing(null);
+      return;
+    }
+    // Published on SELECTION rather than on arrival: the document has to show
+    // that it is fetching, or a click that leaves the live document on screen
+    // reads as a control that did nothing.
+    setViewing({
+      versionNo: selected,
+      snapshot: viewedSnapshot,
+      locale: viewedLocale,
+      isLoading: viewedLoading,
+      error: viewedError,
+      scope: scopeRef.current,
+      comparedWith:
+        comparedWithKind === "version" && previousVersionNo !== null
+          ? { kind: "version", versionNo: previousVersionNo }
+          : { kind: comparedWithKind === "first" ? "first" : "unknown" },
+      about: viewedAbout,
+    });
+  }, [
+    open,
+    selected,
+    viewedSnapshot,
+    viewedLocale,
+    viewedLoading,
+    viewedError,
+    viewedAbout,
+    comparedWithKind,
+    previousVersionNo,
+    scopeId,
+    setViewing,
+  ]);
   // The previewed version must still be in the refreshed list. Retention can
   // prune it out from under the preview (a save in another tab, then a focus
   // refetch), and comparing a version that no longer exists would request a diff
@@ -371,7 +403,7 @@ export function VersionHistorySheet({
   const canCompareCurrent =
     selectedPresent && newestVersionNo !== null && listFresh;
 
-  // Restoring is offered from the banner in the document, which is where the
+  // Restoring is offered beside the version in the document, where the
   // reader is looking — but it stays THIS component's mutation, guarded by
   // this component's confirmation. Only the trigger travels.
   const requestRestore = useCallback(() => setConfirmingRestore(true), []);
@@ -427,8 +459,9 @@ export function VersionHistorySheet({
       canRestore,
       request: requestRestore,
       returnToCurrent,
-      // Where the page steps aside, the banner is all that is on screen, so
-      // it carries the way back to the list and the comparison too.
+      // Where the page steps aside, the version is all that is on screen, so
+      // its comparison bar carries the way back to the list and the
+      // comparisons too.
       ...(roomBeside
         ? {}
         : {
@@ -439,7 +472,7 @@ export function VersionHistorySheet({
               : {}),
           }),
     });
-    // Withdrawn on unmount as well as on close: a banner left holding a
+    // Withdrawn on unmount as well as on close: a Restore… left holding a
     // trigger into an unmounted panel would open a dialog nothing renders.
     return () => setRestore(null);
   }, [
@@ -751,7 +784,7 @@ export function VersionHistorySheet({
             clipped it. With the exit in the header, a second line costs
             nothing. */}
           {/* No way back to the list here: the list never left the panel, and
-            the banner over the version offers Back to current. */}
+            the title bar over the version offers Back to current. */}
           {selected !== null && (canComparePrevious || canCompareCurrent) ? (
             <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
               {/* The full comparison, on a page of its own, from the version
@@ -775,13 +808,13 @@ export function VersionHistorySheet({
                   Compare with current
                 </Button>
               ) : null}
-              {/* Restoring is offered in the BANNER over the version being
+              {/* Restoring is offered in the title bar over the version being
                   read, not here. The panel only ever offered it while a
-                  version was selected, which is exactly when the banner is on
+                  version was selected, which is exactly when the version is on
                   screen — so a button here would be a second control with the
                   same label, and the further one from what it acts on. This
                   component still owns the mutation and its confirmation; the
-                  banner holds the trigger. */}
+                  title bar holds the trigger. */}
             </div>
           ) : null}
         </SheetContent>
@@ -797,7 +830,7 @@ export function VersionHistorySheet({
             unsavedChanges={liveDirty}
             confirmDisabled={restoreRefused}
             isRestoring={restore.isPending}
-            // Re-checked at confirm time: the banner trigger can vanish while
+            // Re-checked at confirm time: the Restore… trigger can vanish while
             // the dialog is open (a claim arriving mid-dialog), and an open
             // dialog must not restore past a refusal that arrived after it.
             onConfirm={() => {
