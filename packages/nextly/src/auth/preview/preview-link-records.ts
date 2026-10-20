@@ -27,7 +27,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, count, desc, eq, gt, isNull, sql, type SQL } from "drizzle-orm";
 
 import { getDialectTables } from "../../database/index";
-import { getService } from "../../di";
+import { container, getService } from "../../di";
 import { isMissingTable } from "../../domains/field-groups/migration/session";
 import { NextlyError } from "../../errors/nextly-error";
 import {
@@ -238,15 +238,24 @@ export async function recordPreviewLink(input: {
   const cutoff = await getService("metaService").get<string>(
     cutoffKey(document)
   );
+  // A site-wide revoke that moved the generation after this mint read it
+  // ends every token signed under the old one, this one included, before it
+  // was handed out: the row would be a live record of a dead link.
+  const currentGeneration = await container
+    .get<{
+      getPreviewTokenGeneration(): Promise<number>;
+    }>("generalSettingsService")
+    .getPreviewTokenGeneration();
   if (
-    typeof cutoff === "string" &&
-    new Date(cutoff).getTime() >= input.mintStartedAt.getTime()
+    currentGeneration !== input.generation ||
+    (typeof cutoff === "string" &&
+      new Date(cutoff).getTime() >= input.mintStartedAt.getTime())
   ) {
     await linkDb(db).delete(table).where(eq(table.id, input.id));
     throw NextlyError.conflict({
       reason: "state",
       message:
-        "This page's links were revoked while the link was being made, so it was not created. Make it again.",
+        "Links were revoked while this one was being made, so it was not created. Make it again.",
       logContext: { reason: "preview-link-mint-crossed-revoke-all" },
     });
   }
@@ -483,7 +492,7 @@ export async function revokeDocumentLinks(
   const dialect = dialectOf(db);
   const table = linksTable(dialect);
 
-  await getService("metaService").set(cutoffKey(document), now.toISOString());
+  await advanceCutoff(cutoffKey(document), now);
 
   try {
     return affectedRowCount(
@@ -504,12 +513,42 @@ export async function revokeDocumentLinks(
 }
 
 /**
+ * Move a document's cutoff to `now`, never back.
+ *
+ * Two revoke-alls can overlap, and instances' clocks differ: a slower one
+ * finishing last would otherwise write an earlier moment over a later one, and
+ * a link without a record minted between the two would work again. Moved only
+ * by a compare-and-set against the value read, retried if another moved it.
+ */
+async function advanceCutoff(key: string, now: Date): Promise<void> {
+  const meta = getService("metaService");
+  const next = now.toISOString();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const entry = await meta.getEntry<string>(key);
+    if (!entry.present) {
+      await meta.insertIfAbsent(key, next);
+      const settled = await meta.get<string>(key);
+      if (settled === next) return;
+      continue;
+    }
+    const current = typeof entry.value === "string" ? entry.value : null;
+    if (current !== null && new Date(current).getTime() >= now.getTime()) {
+      return;
+    }
+    if (await meta.compareAndSet(key, entry.value, next)) return;
+  }
+  // Still contended after retries: another revoke-all is moving it forward
+  // too, and a later moment is what both want.
+}
+
+/**
  * Mark every recorded link revoked, at the moment of a site-wide revoke.
  *
  * The generation already ends them; this records WHEN, so retention keeps
  * them for its window from that moment rather than from their scheduled end,
- * and the rows say what happened to them. A database not yet updated has no
- * rows to mark.
+ * and the rows say what happened to them. Only links still live are marked:
+ * one already ended needs nothing, so the statement reaches at most the links
+ * of the last seven days. A database not yet updated has no rows to mark.
  */
 export async function revokeAllRecordedLinks(
   revokedBy: string,
@@ -522,7 +561,7 @@ export async function revokeAllRecordedLinks(
     await linkDb(db)
       .update(table)
       .set({ revokedAt: at, revokedBy })
-      .where(isNull(table.revokedAt));
+      .where(and(isNull(table.revokedAt), gt(table.expiresAt, at)) as SQL);
   } catch (error) {
     if (tableMissing(error)) return;
     throw error;

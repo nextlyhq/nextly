@@ -132,12 +132,14 @@ export interface PreviewLinkChecks {
 /** The link a verified token describes. */
 function verifiedLink(verified: {
   scope: PreviewTokenScope;
-  issuedAt: Date;
+  issuedAt?: Date;
   linkId?: string;
 }): VerifiedPreviewLink {
   return {
     scope: verified.scope,
-    issuedAt: verified.issuedAt,
+    // Absent only on a result built outside the verifier: the epoch, which
+    // fails closed against any cutoff.
+    issuedAt: verified.issuedAt ?? new Date(0),
     ...(verified.linkId === undefined ? {} : { linkId: verified.linkId }),
   };
 }

@@ -505,6 +505,12 @@ async function respondWithPreviewLink(
     await settingsService()
   ).getPreviewTokenGeneration();
 
+  // Everything the answer needs that can still fail is read BEFORE the link is
+  // recorded. A failure after the row is written would leave a live row whose
+  // token nobody received, listed until it expired.
+  const settings = await (await settingsService()).getSettings();
+  const viewports = await resolvePreviewViewports(declaration?.breakpoints);
+
   // Before signing: a revoke-all of this document that begins after this
   // moment has to be able to stop the link.
   const mintStartedAt = new Date();
@@ -539,7 +545,6 @@ async function respondWithPreviewLink(
     mintStartedAt,
   });
 
-  const settings = await (await settingsService()).getSettings();
   const url = previewLinkUrl({
     siteUrl: resolvePreviewSiteUrl(settings.siteUrl),
     route: resolvePreviewRoute(
@@ -610,7 +615,7 @@ async function respondWithPreviewLink(
      * the admin never needs to know where a site keeps its breakpoints — which
      * is what lets a plugin supply them without the admin depending on it.
      */
-    viewports: await resolvePreviewViewports(declaration?.breakpoints),
+    viewports,
   });
 }
 

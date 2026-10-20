@@ -192,8 +192,13 @@ export type PreviewVerifyResult =
        * When the link was minted, from its `iat`. A link from before links
        * were recorded is ended by a per-document revoke-all through this, as
        * it has no row to mark.
+       *
+       * Optional in the type only, so a result built by a caller to this
+       * published shape before the field existed still compiles. The verifier
+       * always sets it, and a reader missing it treats the link as minted at
+       * the epoch, which any revoke-all has ended.
        */
-      issuedAt: Date;
+      issuedAt?: Date;
       /**
        * The recorded link's id (the token's `jti`), present exactly when the
        * token says it is recorded. Absent means a link from before links were

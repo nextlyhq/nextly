@@ -852,6 +852,27 @@ describe.each(getConfiguredTestDialects())(
         expect(await storedRows(install)).toHaveLength(0);
       });
 
+      it("is not recorded when a site-wide revoke moved the generation mid-mint", async () => {
+        const install = await boot(dialect);
+        // Signed under generation 0; the site-wide revoke lands before the row.
+        await call({ session: await adminId(install) }, "POST", [
+          "preview-links",
+          "revoke",
+        ]);
+        await expect(
+          recordPreviewLink({
+            id: "fedcba9876543210fedcba9876543210",
+            scope: install.post as { collection: string; entryId: string },
+            createdBy: install.editor,
+            createdAt: new Date(Math.floor(Date.now() / 1000) * 1000),
+            expiresAt: new Date(Date.now() + DAY * 1000),
+            generation: 0,
+            mintStartedAt: new Date(Date.now() - 1000),
+          })
+        ).rejects.toMatchObject({ statusCode: 409 });
+        expect(await storedRows(install)).toHaveLength(0);
+      });
+
       it("is recorded when the mint began after the revoke-all", async () => {
         const install = await boot(dialect);
         await revokeDocument({ session: install.editor }, install.post);
@@ -959,6 +980,21 @@ describe.each(getConfiguredTestDialects())(
         ).toHaveLength(1);
       });
 
+      it("never moves a document's cutoff back", async () => {
+        const install = await boot(dialect);
+        const doc = {
+          kind: "entry" as const,
+          ...(install.post as { collection: string; entryId: string }),
+        };
+        const now = Date.now();
+        // A link without a record minted a moment ago, then a revoke-all now,
+        // then a slower, older revoke-all finishing after it.
+        const older = await olderLink(install, install.post);
+        await revokeDocumentLinks(doc, install.editor, new Date(now + 2000));
+        await revokeDocumentLinks(doc, install.editor, new Date(now - 60_000));
+        expect(await opens(older)).toBe(false);
+      });
+
       it("still ends a link without a record minted long after recording began", async () => {
         // A rolling upgrade: an instance still on the earlier version mints
         // links without a record after another has begun recording, and such
@@ -999,6 +1035,28 @@ describe.each(getConfiguredTestDialects())(
           new Date(start.getTime() + 31 * DAY * 1000)
         );
         expect(removed).toBe(1);
+      });
+
+      it("leaves a link that had already ended as it was", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        const start = new Date("2030-07-01T09:00:00Z");
+        vi.setSystemTime(start);
+        const install = await boot(dialect);
+        const ended = await mint(install.editor, install.post, DAY);
+        vi.setSystemTime(new Date(start.getTime() + 2 * DAY * 1000));
+        const live = await mint(install.editor, install.post, DAY);
+
+        await call({ session: await adminId(install) }, "POST", [
+          "preview-links",
+          "revoke",
+        ]);
+
+        // Only the live link is marked: the ended one keeps its natural end,
+        // which is what its retention is measured from.
+        const rows = await storedRows(install);
+        const rowOf = (linkId: string) => rows.find(r => r.id === linkId);
+        expect(rowOf(live.id)?.revokedAt).not.toBeNull();
+        expect(rowOf(ended.id)?.revokedAt).toBeNull();
       });
 
       it("shows no earlier-links row on any document after a site-wide revoke", async () => {

@@ -1684,7 +1684,7 @@ describe("mintPreviewLink records the link it hands out", () => {
       mintStartedAt: Date;
     };
     expect(mintStartedAt.getTime()).toBeLessThanOrEqual(
-      verified.issuedAt.getTime() + 1000
+      verified.issuedAt!.getTime() + 1000
     );
   });
 
@@ -1703,5 +1703,21 @@ describe("mintPreviewLink records the link it hands out", () => {
     expect(text).not.toContain("token");
     // Nothing recorded as minted either: no credential exists.
     expect(auditWrite).not.toHaveBeenCalled();
+  });
+});
+
+describe("mintPreviewLink records nothing it cannot hand out", () => {
+  it("reads everything the answer needs before it records the link", async () => {
+    // A read that fails after the row is written leaves a live row whose
+    // token nobody received. Every fallible input is read first, so a failure
+    // stops the mint with nothing kept.
+    const response = await mintPreviewLink(
+      post({ collection: "pages", entryId: "7" })
+    );
+    expect(response.status).toBe(200);
+    const recordedAt = records.recordPreviewLink.mock.invocationCallOrder[0]!;
+    for (const readAt of getSettings.mock.invocationCallOrder) {
+      expect(readAt).toBeLessThan(recordedAt);
+    }
   });
 });

@@ -11,7 +11,10 @@ import {
   signPreviewToken,
   verifyPreviewToken,
 } from "../preview-token";
-import type { SignPreviewTokenOptions } from "../preview-token";
+import type {
+  PreviewVerifyResult,
+  SignPreviewTokenOptions,
+} from "../preview-token";
 
 const TEST_SECRET = "preview-test-secret-at-least-32-characters-long!!";
 const GENERATION = 1;
@@ -449,7 +452,7 @@ describe("recorded links", () => {
     if (!result.valid) return;
     expect(result.linkId).toBe(linkId);
     expect(linkId).toMatch(/^[0-9a-f]{32}$/);
-    expect(result.issuedAt.getTime()).toBe(issuedAt.getTime());
+    expect(result.issuedAt?.getTime()).toBe(issuedAt.getTime());
   });
 
   it("names no row for a link made before links were recorded", async () => {
@@ -509,5 +512,18 @@ describe("recorded links", () => {
       valid: true,
       linkId: "0123456789abcdef0123456789abcdef",
     });
+  });
+});
+
+describe("the published verifier result", () => {
+  it("still accepts the shape callers built before links were recorded", () => {
+    // `PreviewVerifyResult` is exported, and a mock or adapter written against
+    // it builds this. Compiling is the assertion.
+    const before: PreviewVerifyResult = {
+      valid: true,
+      scope: SCOPE,
+      expiresAt: new Date(),
+    };
+    expect(before.valid).toBe(true);
   });
 });
