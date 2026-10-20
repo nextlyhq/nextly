@@ -512,42 +512,48 @@ describe("askRule", () => {
   });
 });
 
+/**
+ * The decision's expected answer, written out from the composition apart
+ * from the code: what each caller holds is stated here by hand rather than
+ * read off its actor, so a judgement that slipped would disagree with it.
+ */
+const HOLDS: Record<CallerName, "principal" | "super-admin" | AccessAction[]> =
+  {
+    visitor: [],
+    "visitor-public-read": ["read", "update", "publish", "unpublish"],
+    principal: "principal",
+    "user-with": [...ACTIONS],
+    "user-without": [],
+    "super-admin": "super-admin",
+    "key-with": [...ACTIONS],
+    "key-without": [],
+  };
+
+const changesState = (action: AccessAction) =>
+  action === "publish" || action === "unpublish";
+
+/** Holds the action, and update as well for a publish or an unpublish. */
+const holdsFor = (held: AccessAction[], action: AccessAction) =>
+  held.includes(action) && (!changesState(action) || held.includes("update"));
+
+/** The same rule answers every action, the update rule included. */
+function expected(
+  caller: CallerName,
+  action: AccessAction,
+  rule: RuleName
+): boolean {
+  const ruleAllows = ALLOWING.includes(rule);
+  const held = HOLDS[caller];
+  if (held === "principal") {
+    return !changesState(action) && rule !== "absent" && ruleAllows;
+  }
+  if (caller.startsWith("visitor") && changesState(action)) return false;
+  if (held === "super-admin") return true;
+  return holdsFor(held, action) && ruleAllows;
+}
+
 describe("the judge seam", () => {
   it("judges the outcomes it is handed as the decision's composition says", async () => {
-    // The expectation is written out from the composition, apart from the
-    // code: what each caller holds is stated here by hand rather than read off
-    // its actor, so a judgement that slipped would disagree with it.
-    const HOLDS: Record<
-      CallerName,
-      "principal" | "super-admin" | AccessAction[]
-    > = {
-      visitor: [],
-      "visitor-public-read": ["read", "update", "publish", "unpublish"],
-      principal: "principal",
-      "user-with": [...ACTIONS],
-      "user-without": [],
-      "super-admin": "super-admin",
-      "key-with": [...ACTIONS],
-      "key-without": [],
-    };
-    const expected = (
-      caller: CallerName,
-      action: AccessAction,
-      rule: RuleName
-    ): boolean => {
-      const lifecycle = action === "publish" || action === "unpublish";
-      // The same rule answers every action, the update rule included.
-      const ruleAllows = ALLOWING.includes(rule);
-      const held = HOLDS[caller];
-      if (held === "principal") {
-        return !lifecycle && rule !== "absent" && ruleAllows;
-      }
-      if (caller.startsWith("visitor") && lifecycle) return false;
-      if (held === "super-admin") return true;
-      if (!held.includes(action)) return false;
-      if (lifecycle && !held.includes("update")) return false;
-      return ruleAllows;
-    };
     for (const caller of Object.keys(callers) as CallerName[]) {
       for (const action of ACTIONS) {
         for (const rule of Object.keys(RULES) as RuleName[]) {
