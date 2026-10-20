@@ -3,7 +3,7 @@
  *
  * Groups the two email service maps into one handler file because both
  * share the same DI-resolution pattern and neither has enough logic to
- * warrant its own module. Routes 7 provider ops and 8 template ops.
+ * warrant its own module. Routes 7 provider ops and the template ops.
  *
  * Every handler returns a Response built via the respondX helpers in
  * `../../api/response-shapes.ts`. The dispatcher passes the Response
@@ -24,6 +24,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { nextlyValidationFromZod } from "../../api/zod-to-nextly-error";
+import { brandSettingsUpdateSchema } from "../../domains/email/brand-settings";
 import { draftPreviewSchema } from "../../domains/email/draft-preview-request";
 import { toDescriptor } from "../../domains/email/provider-definition";
 import { getEmailProviderRegistry } from "../../domains/email/services/email-provider-registry";
@@ -313,6 +314,18 @@ const EMAIL_TEMPLATE_METHODS: Record<
         readAuthenticatedActor()
       );
       return respondMutation("Owner's update undone.", template);
+    },
+  },
+  getBrand: {
+    // A non-CRUD read: the brand settings, what each starts from, the fonts
+    // they can use and which emails they reach.
+    execute: async svc => respondData(await svc.templateService.getBrand()),
+  },
+  updateBrand: {
+    execute: async (svc, _p, body) => {
+      const change = parseBody(brandSettingsUpdateSchema, body ?? {});
+      const settings = await svc.templateService.updateBrand(change);
+      return respondMutation("Email brand settings saved.", settings);
     },
   },
   previewTemplate: {

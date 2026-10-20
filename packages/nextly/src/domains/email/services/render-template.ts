@@ -23,6 +23,11 @@ import type {
   EmailTemplateKind,
   EmailTemplateRecord,
 } from "../../../schemas/email-templates/types";
+import {
+  brandVariables,
+  STARTING_BRAND,
+  type BrandSettings,
+} from "../brand-settings";
 
 import { markHtml, renderLiquid, type LiquidContext } from "./liquid-engine";
 import { htmlToText, interpolateTemplate } from "./template-engine";
@@ -92,6 +97,12 @@ export type RenderedTemplate = {
 export interface RenderTemplateOptions {
   /** Value for `{{appName}}` when the caller's data supplies none. */
   appName: string;
+  /**
+   * The site's brand settings, read by a layout as `brand`. Absent means the
+   * starting values, which render core's default layout as it was before
+   * brand settings.
+   */
+  brand?: BrandSettings;
 }
 
 /**
@@ -171,16 +182,25 @@ export function renderTemplate(
  * itself: they are the same markup, and filling one but not the other is what
  * made a layout preview its own footer as blank.
  *
- * Only where the caller said nothing — an explicit value always wins.
+ * Only where the caller said nothing — an explicit value always wins. The
+ * one exception is `brand`, the site's brand settings, which a layout always
+ * reads from the settings: core's default layout is written in it, so a send
+ * whose data happens to carry a `brand` of its own (a product's brand name,
+ * say) must not take the layout's colours and footer with it. The body still
+ * reads the caller's value.
  */
 function withLayoutChrome(
   data: Record<string, unknown>,
   options: RenderTemplateOptions
 ): Record<string, unknown> {
-  return {
+  const chrome = {
     ...data,
     year: data.year ?? new Date().getFullYear().toString(),
     appName: data.appName ?? options.appName,
+  };
+  return {
+    ...chrome,
+    brand: brandVariables(options.brand ?? STARTING_BRAND, chrome),
   };
 }
 

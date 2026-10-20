@@ -45,6 +45,14 @@ import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { MetaService } from "../../meta";
 import {
+  EMAIL_SAFE_FONTS,
+  resolveBrand,
+  type BrandOverview,
+  type BrandReach,
+  type BrandSettings,
+  type BrandSettingsUpdate,
+} from "../brand-settings";
+import {
   changedTemplateFields,
   recordTemplateActivity,
   type EmailTemplateActivityInput,
@@ -61,6 +69,7 @@ import {
   buildTemplateOwnerRegistry,
   carriesSecret,
   detailsOf,
+  isOwnersVersion,
   isProtectedOwner,
   ownerOf,
   ownershipFromConfig,
@@ -76,8 +85,9 @@ import {
 } from "../template-ownership";
 import type { EmailConfig } from "../types";
 
+import { EmailBrandStore } from "./email-brand-store";
 import { LIQUID_FIELDS, oldEngineReasons } from "./liquid-compat";
-import { parseLiquid, writesOutput } from "./liquid-engine";
+import { parseLiquid, readsVariable, writesOutput } from "./liquid-engine";
 import {
   DEFAULT_APP_NAME,
   renderTemplate,
@@ -87,6 +97,7 @@ import {
 import {
   BUILT_IN_TEMPLATES,
   DEFAULT_LAYOUT_SLUG,
+  EARLIER_BUILT_IN_VERSIONS,
   LAYOUT_CONTENT_PLACEHOLDER,
 } from "./templates";
 
@@ -319,6 +330,13 @@ type StoredTemplateRow = Omit<
 // Email Template Service
 // ============================================================
 
+/** A template's own layout, when what it names is one; otherwise null, for the default. */
+function ownLayout(
+  candidate: EmailTemplateRecord | null
+): EmailTemplateRecord | null {
+  return candidate?.kind === "layout" ? candidate : null;
+}
+
 /** Union of all dialect-specific email_templates table definitions. */
 type EmailTemplatesTable =
   | typeof emailTemplatesPg
@@ -358,6 +376,8 @@ export class EmailTemplateService extends BaseService {
    */
   private engineState: { adopted: boolean | null; keys: Set<string> } | null =
     null;
+  /** The site's brand settings, which every layout reads as `brand`. */
+  private readonly brandStore: EmailBrandStore;
 
   constructor(adapter: DrizzleAdapter, logger: Logger, appName?: string) {
     // Masked here whatever logger an app supplied: what this service logs,
@@ -368,10 +388,12 @@ export class EmailTemplateService extends BaseService {
     this.appName = appName ?? DEFAULT_APP_NAME;
     this.registry = buildTemplateOwnerRegistry({
       builtIns: BUILT_IN_TEMPLATES,
+      earlierBuiltIns: EARLIER_BUILT_IN_VERSIONS,
       plugins: [],
       complete: false,
     }).registry;
     this.meta = new MetaService(adapter, logger);
+    this.brandStore = new EmailBrandStore(adapter, logger);
 
     switch (this.dialect) {
       case "postgresql":
@@ -404,6 +426,7 @@ export class EmailTemplateService extends BaseService {
   configureOwnership(input: TemplateOwnershipInput): void {
     const built: RegistryInput = {
       builtIns: BUILT_IN_TEMPLATES,
+      earlierBuiltIns: EARLIER_BUILT_IN_VERSIONS,
       plugins: input.plugins,
       codeTemplates: input.codeTemplates,
       complete: true,
@@ -959,8 +982,24 @@ export class EmailTemplateService extends BaseService {
       { ...template, legacy: await this.keptOnOldEngine(template) },
       layout && { ...layout, legacy: await this.keptOnOldEngine(layout) },
       data,
-      { appName: options?.appName ?? this.appName }
+      {
+        appName: options?.appName ?? this.appName,
+        brand: await this.brandFor(template, layout),
+      }
     );
+  }
+
+  /**
+   * The brand settings for a render that has a layout to read them: one
+   * wrapping the template, or the template when it is a layout. Nothing is
+   * read for a render without one.
+   */
+  private async brandFor(
+    template: Pick<TemplateFields, "kind">,
+    layout: EmailTemplateRecord | null
+  ): Promise<BrandSettings | undefined> {
+    if (!layout && template.kind !== "layout") return undefined;
+    return this.brandStore.read();
   }
 
   /**
@@ -1829,7 +1868,7 @@ export class EmailTemplateService extends BaseService {
         legacy: await this.keptOnOldEngine(layout),
       },
       sampleData,
-      { appName: this.appName }
+      { appName: this.appName, brand: await this.brandFor(draft, layout) }
     );
   }
 
@@ -2048,8 +2087,10 @@ export class EmailTemplateService extends BaseService {
     entry: OwnedTemplate
   ): Promise<void> {
     const firstTime = row.ownerKind === null;
+    // A row holding one of the owner's earlier versions was never edited,
+    // only not brought up to date, so it follows the owner too.
     const keepSitesVersion =
-      !sameVersion(versionOf(row), entry.version) ||
+      !isOwnersVersion(entry, versionOf(row)) ||
       (firstTime && this.registry.setInCode.has(row.slug)) ||
       row.overridden === true;
     const owner = storedOwner(entry.owner);
@@ -2241,15 +2282,110 @@ export class EmailTemplateService extends BaseService {
   async getLayoutFor(
     template: Pick<EmailTemplateRecord, "layoutId">
   ): Promise<EmailTemplateRecord | null> {
+    let own: EmailTemplateRecord | null = null;
     if (template.layoutId) {
       try {
-        const layout = await this.getTemplate(template.layoutId);
-        if (layout.kind === "layout") return layout;
+        own = await this.getTemplate(template.layoutId);
       } catch (error) {
         if (!NextlyError.isCode(error, "NOT_FOUND")) throw error;
       }
     }
-    return this.getDefaultLayout();
+    return ownLayout(own) ?? this.getDefaultLayout();
+  }
+
+  // ============================================================
+  // Brand settings
+  // ============================================================
+
+  /**
+   * The brand settings, the starting value of each, the fonts they can use,
+   * and which emails they reach.
+   */
+  async getBrand(): Promise<BrandOverview> {
+    return {
+      settings: await this.brandStore.read(),
+      starting: resolveBrand(null),
+      fonts: EMAIL_SAFE_FONTS.map(({ key, label, stack }) => ({
+        key,
+        label,
+        stack,
+      })),
+      reach: await this.brandReach(),
+    };
+  }
+
+  /**
+   * Save a change to the brand settings, already parsed at the boundary, and
+   * return them as they now are. Every email whose layout reads `brand`
+   * looks different from its next render.
+   */
+  async updateBrand(change: BrandSettingsUpdate): Promise<BrandSettings> {
+    const settings = await this.brandStore.update(change);
+    this.logger.info("Saved the email brand settings", {
+      changed: Object.keys(change),
+    });
+    return settings;
+  }
+
+  /**
+   * Which emails the brand settings reach: each template that is not a
+   * layout, with the layout a send wraps it in (as `getLayoutFor` chooses
+   * it) and whether that layout reads `brand`. Read from one query of the
+   * templates, so the answer costs the same however many there are.
+   */
+  async brandReach(): Promise<BrandReach[]> {
+    const rows = (await this.db
+      .select()
+      .from(this.emailTemplates)
+      .orderBy(desc(this.emailTemplates.createdAt))) as StoredTemplateRow[];
+    const records = rows.map(row => this.toRecord(row));
+    const byId = new Map(records.map(record => [record.id, record]));
+    const defaultLayout =
+      records.find(
+        record =>
+          record.slug === DEFAULT_LAYOUT_SLUG && record.kind === "layout"
+      ) ?? null;
+
+    return rows.flatMap((row, i): BrandReach[] => {
+      const template = records[i];
+      if (template.kind === "layout") return [];
+      const base = {
+        templateId: template.id,
+        slug: template.slug,
+        name: template.name,
+      };
+      // The site's code version sends whenever the stored one is not an
+      // override (as `resolveForSend` decides), and it has no stored layout.
+      if (
+        this.registry.setInCode.has(template.slug) &&
+        row.ownerKind !== null &&
+        row.overridden !== true
+      ) {
+        return [{ ...base, reached: false, reason: "setInCode", layout: null }];
+      }
+      const layout = template.useLayout
+        ? (ownLayout(
+            template.layoutId ? (byId.get(template.layoutId) ?? null) : null
+          ) ?? defaultLayout)
+        : null;
+      if (!layout) {
+        return [{ ...base, reached: false, reason: "noLayout", layout: null }];
+      }
+      const reached = readsVariable(layout.htmlContent, "brand");
+      return [
+        {
+          ...base,
+          reached,
+          reason: reached ? null : "layoutWithoutBrand",
+          layout: {
+            id: layout.id,
+            slug: layout.slug,
+            name: layout.name,
+            overridden: layout.overridden,
+          },
+        },
+      ];
+    });
   }
 
   // ============================================================
