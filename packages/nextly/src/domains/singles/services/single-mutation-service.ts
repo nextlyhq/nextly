@@ -569,6 +569,8 @@ export class SingleMutationService extends BaseService {
             slug: params.slug,
             defaultLocale: this.localization?.defaultLocale ?? null,
             fields: fieldConfigs,
+            componentFields: componentSlug =>
+              componentSchemas?.get(componentSlug)?.fields,
             // The caller the release's write has: the member's author, checked.
             options: { user: params.user, overrideAccess: false },
             grants,
@@ -1649,6 +1651,8 @@ export class SingleMutationService extends BaseService {
                 slug,
                 defaultLocale: this.localization?.defaultLocale ?? null,
                 fields: fieldConfigs,
+                componentFields: componentSlug =>
+                  singleComponentSchemas?.get(componentSlug)?.fields,
                 options,
                 grants: promoteGrants,
               }),
@@ -2218,26 +2222,38 @@ export class SingleMutationService extends BaseService {
             // 9.5. Save component field data to separate comp_{slug} tables. The
             // write locale is threaded so an embedded localized component stores
             // its translatable fields to the companion for this language.
+            //
+            // A held edit writes no component rows, but its values are judged
+            // here all the same, by the pass the write runs, so a value the
+            // publish would refuse is refused now, with the same issues, and
+            // no working draft or version is recorded for it.
             if (
-              !holdEdit &&
               this.fieldGroupDataService &&
               Object.keys(attemptComponentData).length > 0
             ) {
-              await this.fieldGroupDataService.saveComponentDataInTransaction(
-                tx,
-                {
-                  parentId: existingDoc.id,
-                  parentTable: singleMeta.tableName,
-                  fields: fieldConfigs,
-                  data: attemptComponentData,
-                  locale: options.locale,
-                  // A component instance is validated by its own pass inside the
-                  // field-group service, so the request has to travel with it for a
-                  // field rule nested in a field group to see the same `user` a
-                  // top-level field rule sees.
-                  req: options.user ? { user: options.user } : {},
-                }
-              );
+              const componentWrite = {
+                parentId: existingDoc.id,
+                parentTable: singleMeta.tableName,
+                fields: fieldConfigs,
+                data: attemptComponentData,
+                locale: options.locale,
+                // A component instance is validated by its own pass inside the
+                // field-group service, so the request has to travel with it for a
+                // field rule nested in a field group to see the same `user` a
+                // top-level field rule sees.
+                req: options.user ? { user: options.user } : {},
+              };
+              if (holdEdit) {
+                await this.fieldGroupDataService.validateComponentDataInTransaction(
+                  tx,
+                  componentWrite
+                );
+              } else {
+                await this.fieldGroupDataService.saveComponentDataInTransaction(
+                  tx,
+                  componentWrite
+                );
+              }
             }
 
             // 9.6. i18n: upsert the companion row for the write locale in the SAME
@@ -2527,6 +2543,18 @@ export class SingleMutationService extends BaseService {
                   singleComponentSchemas
                 );
               }
+              // A component nested in a group or repeater rides in that
+              // container's value, so the tagging above never reached it. It
+              // is recorded with its type as a captured version records it, so
+              // a restore after its field is pointed at another component can
+              // tell which schema the value belonged to. Both sides, so an
+              // unchanged save still compares equal and records no version.
+              const recordNested = (document: Record<string, unknown>) =>
+                tagNestedComponentTypes(
+                  document,
+                  fieldConfigs,
+                  componentResolver
+                ) as Record<string, unknown>;
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.
               const { versionNo: draftVersionNo } = await storeDraftSave(
@@ -2535,8 +2563,8 @@ export class SingleMutationService extends BaseService {
                 {
                   ref: draftRef,
                   locale: singleDraftLocale,
-                  snapshot: pending,
-                  replaces: base,
+                  snapshot: recordNested(pending),
+                  replaces: recordNested(base),
                   createdBy: options.user?.id ?? null,
                   sourceVersionNo: options.sourceVersionNo ?? null,
                   maxPerDoc: singleMeta.versions?.maxPerDoc,

@@ -672,12 +672,24 @@ export class SinglePublishAllService extends BaseService {
     const localizedFieldNames = new Set(
       (companion?.localizedFields ?? []).map(f => f.name)
     );
+    // The component schemas the gate needs to take the type tags off nested
+    // components, read on this transaction's connection as the snapshot's own
+    // tagging reads them.
+    const componentSchemas = this.fieldGroupDataService
+      ? await resolveComponentFieldMap(fieldConfigs, componentSlug =>
+          this.fieldGroupDataService!.getComponentFields(
+            componentSlug,
+            tx.getDrizzle()
+          )
+        )
+      : new Map<string, FieldConfig[]>();
     await assertDraftsMayBePromoted(pending, {
       ...promoteCallerFor({
         tx,
         slug,
         defaultLocale: this.localization?.defaultLocale ?? null,
         fields: fieldConfigs,
+        componentFields: componentSlug => componentSchemas.get(componentSlug),
         options,
         grants: promoteGrants,
       }),

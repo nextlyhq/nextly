@@ -26,8 +26,10 @@
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
+import { isVirtualField } from "../../collections/fields/virtual";
 import { hasPasswordField } from "../../shared/lib/password-fields";
 import { consoleLogger } from "../../shared/types";
+import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 
 import { resolveVersionsConfig } from "./resolve-config";
 import type { ComponentSchemas } from "./restore-snapshot";
@@ -150,7 +152,15 @@ export function evaluateDraftSplitEligibility(
     };
   }
   if (input.entityKind === "single" && input.documentLocalized === false) {
-    const localized = schemas.find(([, schema]) => schema.localized);
+    // A component named only by virtual fields stores no rows, so it holds no
+    // per-language values for a language-less draft to mix.
+    const virtualOnly = reachedOnlyThroughVirtualFields(
+      input.fields,
+      input.componentSchemas
+    );
+    const localized = schemas.find(
+      ([slug, schema]) => schema.localized && !virtualOnly.has(slug)
+    );
     if (localized) {
       return {
         eligible: false,
@@ -353,4 +363,54 @@ export async function collectionDraftSplit(
     fields: collection.fields,
     slug: collection.slug,
   });
+}
+
+/**
+ * The components `fields` reach only through virtual fields: named by a virtual
+ * field-group field, or by any field under a virtual container, and by no
+ * stored field anywhere. A virtual field stores nothing, and the field-group
+ * write skips it, so such a component has no rows of this entity's at all.
+ *
+ * Follows a component into its own fields, so one embedded in a virtually
+ * reached component counts as virtually reached too. A component nothing names
+ * is in neither set, and is judged as before.
+ */
+function reachedOnlyThroughVirtualFields(
+  fields: FieldConfig[],
+  componentSchemas: ComponentSchemas | null
+): Set<string> {
+  const stored = new Set<string>();
+  const virtual = new Set<string>();
+  const visit = (list: readonly unknown[], inVirtual: boolean): void => {
+    for (const field of list.filter(isFieldRecord)) {
+      const isVirtual = inVirtual || isVirtualField(field);
+      const reached = isVirtual ? virtual : stored;
+      for (const slug of componentSlugsOf(field)) {
+        if (reached.has(slug)) continue;
+        reached.add(slug);
+        visit(componentSchemas?.get(slug)?.fields ?? [], isVirtual);
+      }
+      visit(childFieldsOf(field), isVirtual);
+    }
+  };
+  visit(fields, false);
+  return new Set([...virtual].filter(slug => !stored.has(slug)));
+}
+
+/** A field definition as the walk above reads it. */
+type FieldRecord = { virtual?: unknown; options?: unknown; fields?: unknown };
+
+function isFieldRecord(entry: unknown): entry is FieldRecord {
+  return typeof entry === "object" && entry !== null;
+}
+
+/** Every component a field names, through the shared reference reader. */
+function componentSlugsOf(field: FieldRecord): string[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  return [...(single ? [single] : []), ...(many ?? [])];
+}
+
+/** A container's own fields; none for a field that holds no others. */
+function childFieldsOf(field: FieldRecord): readonly unknown[] {
+  return Array.isArray(field.fields) ? field.fields : [];
 }

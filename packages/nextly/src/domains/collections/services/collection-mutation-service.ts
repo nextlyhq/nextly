@@ -8601,28 +8601,39 @@ export class CollectionMutationService extends BaseService {
           // this same post-save copy (ids populated) rather than the raw input.
           const attemptComponentData = structuredClone(componentFieldData);
 
-          // Save component field data to separate comp_{slug} tables
+          // Save component field data to separate comp_{slug} tables. A held
+          // edit writes no component rows, but its values are judged here all
+          // the same, by the pass the write runs, so a value the publish would
+          // refuse is refused now, with the same issues, and no working draft
+          // or version is recorded for it.
           if (
-            !storeAsWorkingDraft &&
             this.fieldGroupDataService &&
             Object.keys(attemptComponentData).length > 0
           ) {
-            await this.fieldGroupDataService.saveComponentDataInTransaction(
-              tx,
-              {
-                parentId: params.entryId,
-                parentTable: tableName,
-                fields: fields as unknown as FieldConfig[],
-                data: attemptComponentData,
-                // i18n: thread the write locale so an embedded localized component writes
-                // translatable fields to its companion within the same transaction.
-                locale: params.locale,
-                // A component instance is validated by its own pass inside the field-group
-                // service, so the request has to travel with it for a field rule nested in
-                // a field group to see the same `user` a top-level field rule sees.
-                req: params.user ? { user: params.user } : {},
-              }
-            );
+            const componentWrite = {
+              parentId: params.entryId,
+              parentTable: tableName,
+              fields: fields as unknown as FieldConfig[],
+              data: attemptComponentData,
+              // i18n: thread the write locale so an embedded localized component writes
+              // translatable fields to its companion within the same transaction.
+              locale: params.locale,
+              // A component instance is validated by its own pass inside the field-group
+              // service, so the request has to travel with it for a field rule nested in
+              // a field group to see the same `user` a top-level field rule sees.
+              req: params.user ? { user: params.user } : {},
+            };
+            if (storeAsWorkingDraft) {
+              await this.fieldGroupDataService.validateComponentDataInTransaction(
+                tx,
+                componentWrite
+              );
+            } else {
+              await this.fieldGroupDataService.saveComponentDataInTransaction(
+                tx,
+                componentWrite
+              );
+            }
           }
 
           // Replace many-to-many junction rows inside the transaction so a

@@ -23,6 +23,7 @@ import {
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
 import { draftComponentValues } from "../../versions/draft-components";
+import { stripSingleComponentTags } from "../../versions/tag-component-types";
 
 import { serializeJsonFields } from "./single-utils";
 
@@ -70,10 +71,18 @@ export function splitPendingChange(
   // The component values leave the row-shaped halves: neither row has a
   // column for them. Own keys only, so a field named like an Object.prototype
   // member stays with the row.
-  const rowValues = Object.fromEntries(
-    Object.entries(draft).filter(
-      ([key]) => !Object.prototype.hasOwnProperty.call(components, key)
-    )
+  //
+  // A component nested in a group or repeater stays with the row, inside its
+  // container's value, and is recorded in the draft with its type. The row
+  // stores the container as one JSON value, so the record comes off here, as a
+  // restore takes it off, or it would be stored and served by every read.
+  const rowValues = stripSingleComponentTags(
+    Object.fromEntries(
+      Object.entries(draft).filter(
+        ([key]) => !Object.prototype.hasOwnProperty.call(components, key)
+      )
+    ),
+    fields as FieldConfig[]
   );
   // A draft holds JSON-backed fields parsed, as reads do; the row stores them
   // encoded, as an ordinary write encodes them. Encoding is idempotent, so a
