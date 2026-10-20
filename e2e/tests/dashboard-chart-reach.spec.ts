@@ -33,7 +33,11 @@ const created: string[] = [];
 interface Layout {
   version: number;
   scope: string;
-  available: string[];
+  /**
+   * Every widget this reader may see, by id. Generated collection cards are never offered in
+   * `available`, but one placed is still drawn, and the layout write accepts any visible widget.
+   */
+  widgets: Record<string, unknown>;
   placements: Array<{
     id: string;
     widgetId: string;
@@ -88,8 +92,8 @@ async function placeCharts(page: Page): Promise<void> {
   const layout = (await read.json()) as Layout;
   for (const id of [BREAKDOWN, TIMELINE]) {
     const placed = layout.placements.some(p => p.widgetId === id);
-    if (!placed && !layout.available.includes(id))
-      throw new Error(`the generated ${id} card cannot be added`);
+    if (!placed && !(id in layout.widgets))
+      throw new Error(`the generated ${id} card is not visible to this reader`);
   }
   const others = layout.placements.filter(
     p => p.widgetId !== BREAKDOWN && p.widgetId !== TIMELINE

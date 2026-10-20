@@ -18,8 +18,12 @@ type Width = "quarter" | "third" | "half" | "twoThirds" | "full";
 interface Layout {
   version: number;
   scope: string;
-  /** Widget ids this reader may add: a generated collection card is offered, not placed. */
-  available: string[];
+  /**
+   * Every widget this reader may see, by id. A generated collection card is never offered in
+   * `available` (the add panel retired them), but one placed is still drawn, so it is placed here
+   * through the layout write, which accepts any widget the reader may see.
+   */
+  widgets: Record<string, unknown>;
   placements: Array<{
     id: string;
     widgetId: string;
@@ -35,10 +39,12 @@ async function placeRecentPosts(page: Page, width: Width): Promise<void> {
   const placed = layout.placements.some(
     placement => placement.widgetId === RECENT_POSTS
   );
-  // A generated collection card is not on the default dashboard, only offered to add, so a
-  // fresh install places it here; one already placed is moved to the width.
-  if (!placed && !layout.available.includes(RECENT_POSTS))
-    throw new Error("the generated Recent posts card cannot be added");
+  // A generated collection card is not on the default dashboard, so a fresh install places it
+  // here; one already placed is moved to the width.
+  if (!placed && !(RECENT_POSTS in layout.widgets))
+    throw new Error(
+      "the generated Recent posts card is not visible to this reader"
+    );
   const placements = placed
     ? layout.placements.map(placement =>
         placement.widgetId === RECENT_POSTS
