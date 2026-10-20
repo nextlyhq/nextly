@@ -85,14 +85,14 @@ export const defaultLinkChecks: PreviewLinkChecks = {
     await getCachedNextly();
     const records = await import("../../auth/preview/preview-link-records");
     return link.linkId === undefined
-      ? records.olderLinkStanding(link.scope, link.issuedAt)
+      ? records.olderLinkStanding(link.scope)
       : records.openRecordedLink(link.linkId, link.scope, new Date());
   },
   live: async (link: VerifiedPreviewLink) => {
     await getCachedNextly();
     const records = await import("../../auth/preview/preview-link-records");
     return link.linkId === undefined
-      ? records.olderLinkStanding(link.scope, link.issuedAt)
+      ? records.olderLinkStanding(link.scope)
       : records.recordedLinkLive(link.linkId, link.scope, new Date());
   },
 };

@@ -10,8 +10,8 @@
  * never reach the database.
  *
  * Links made before links were recorded have no row and never will. They are
- * judged as they always were, plus a per-document cutoff a revoke-all writes,
- * and they can all still be alive for at most the maximum lifetime after
+ * judged as they always were, and a document's first revoke-all writes a
+ * cutoff that ends every one of them for good. They can all still be alive for at most the maximum lifetime after
  * recording began. That moment and the cutoffs are kept in `nextly_meta`
  * rather than a table of their own: both are a handful of values, and a new
  * column on an existing table would break every read of it on a database that
@@ -506,7 +506,8 @@ export async function revokeRecordedLink(
  * recording began. During a rolling upgrade an instance still on the earlier
  * version keeps minting links without a record after another has begun
  * recording, and each of those can work for up to seven days after its own
- * mint, which no fixed window can bound. One key per document, overwritten.
+ * mint, which no fixed window can bound. One key per document: while it
+ * exists, no link of that document made without a record opens.
  *
  * The cutoff is written FIRST, so a failure between the two leaves the older
  * links ended rather than the recorded ones ended and the older ones not.
@@ -680,23 +681,22 @@ function documentKey(prefix: string, document: PreviewLinkDocument): string {
 }
 
 /**
- * Whether a link made before recording began may still be used: it may unless
- * a revoke-all of its document came at or after the moment it was minted.
+ * Whether a link made without a record may still be used: it may until its
+ * document's links are first revoked, and never after.
  *
- * To the second, as a token's `iat` is: a link minted in the same second as a
- * revoke-all is refused, deliberately, since which came first cannot be told.
+ * Not compared with the token's `iat`. That is the minting instance's clock
+ * and the cutoff is the revoking one's, so with the two apart a link minted
+ * before a revoke-all could carry a later moment and survive it. Such links
+ * come only from an instance on the earlier version, which a rolling upgrade
+ * retires; one made there after a revoke-all is refused, and made again.
  */
 export async function olderLinkStanding(
-  scope: PreviewTokenScope,
-  issuedAt: Date
+  scope: PreviewTokenScope
 ): Promise<boolean> {
   const stored = await getService("metaService").get<string>(
     cutoffKey(previewLinkDocument(scope))
   );
-  if (typeof stored !== "string") return true;
-  const cutoff = new Date(stored);
-  if (Number.isNaN(cutoff.getTime())) return false;
-  return issuedAt.getTime() > cutoff.getTime();
+  return stored === null || stored === undefined;
 }
 
 /** What the retention pass needs of the adapter. */

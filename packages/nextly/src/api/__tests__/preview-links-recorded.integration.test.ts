@@ -1111,6 +1111,21 @@ describe.each(getConfiguredTestDialects())(
         expect(await renders(late)).toBe(false);
       });
 
+      it("ends a link without a record whose minting instance's clock is ahead", async () => {
+        const install = await boot(dialect);
+        await revokeDocument({ session: install.editor }, install.post);
+        // Minted by an instance on the earlier version whose clock reads an
+        // hour ahead of the one that revoked, so its `iat` is after the
+        // cutoff even if it was minted before the revoke-all.
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(Date.now() + HOUR * 1000));
+        const ahead = await olderLink(install, install.post, DAY);
+        vi.useRealTimers();
+
+        expect(await opens(ahead)).toBe(false);
+        expect(await renders(ahead)).toBe(false);
+      });
+
       it("marks every recorded link revoked at the moment of a site-wide revoke", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         const start = new Date("2030-07-01T09:00:00Z");
