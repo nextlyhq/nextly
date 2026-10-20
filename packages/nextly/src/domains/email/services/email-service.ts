@@ -880,7 +880,7 @@ export class EmailService extends BaseService {
       failure: deliveredToCaller
         ? undefined
         : answeredFailure(result, recipients, refused),
-      refused: refusedRecipients(recipients, refused, result),
+      refused: refusedRecipients(message, refused, result),
     });
 
     // The provider has answered. Everything below this line is bookkeeping

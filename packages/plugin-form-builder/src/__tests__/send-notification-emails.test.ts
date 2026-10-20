@@ -4,6 +4,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+
 import { sendNotificationEmails } from "../plugin";
 import type { FormEmailNotification } from "../types";
 
@@ -98,6 +100,32 @@ describe("sending a form's notifications", () => {
     await done;
 
     expect(logger.error).toHaveBeenCalledWith(
+      "Form Builder: notification failed",
+      expect.objectContaining({ retryable: true })
+    );
+  });
+
+  it("logs a validation refusal as not retryable, and any other thrown failure as retryable", async () => {
+    const refused = run(
+      vi.fn().mockRejectedValue(
+        NextlyError.validation({
+          errors: [
+            { path: "to", code: "INVALID", message: "Invalid address." },
+          ],
+        })
+      )
+    );
+    await refused.done;
+    expect(refused.logger.error).toHaveBeenCalledWith(
+      "Form Builder: notification failed",
+      expect.objectContaining({ retryable: false })
+    );
+
+    const outage = run(
+      vi.fn().mockRejectedValue(new Error("storage read timed out"))
+    );
+    await outage.done;
+    expect(outage.logger.error).toHaveBeenCalledWith(
       "Form Builder: notification failed",
       expect.objectContaining({ retryable: true })
     );

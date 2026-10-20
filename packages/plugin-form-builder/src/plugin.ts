@@ -1293,12 +1293,13 @@ export async function sendNotificationEmails(input: {
         });
       }
     } catch (err) {
-      // A refusal before sending (an invalid address, a missing template) is
-      // thrown rather than returned; nothing was sent, and a retry with the
-      // same notification would be refused again.
+      // Thrown rather than returned: nothing was sent. A refusal of the send
+      // itself (an invalid address) would be refused again, so it is not
+      // retryable; anything else, a storage read or a lookup that failed, may
+      // pass, and counts as retryable, as an unclassified failure does.
       logger.error?.("Form Builder: notification failed", {
         ...identity,
-        retryable: false,
+        retryable: !NextlyError.isCode(err, "VALIDATION_ERROR"),
         error: err instanceof Error ? err.message : String(err),
       });
     }

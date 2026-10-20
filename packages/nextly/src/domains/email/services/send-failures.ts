@@ -9,7 +9,7 @@
  * @module domains/email/services/send-failures
  */
 
-import type { EmailDeliveryRecipientKind } from "../delivery-record";
+import { type EmailDeliveryRecipientKind, mailboxOf } from "../delivery-record";
 import { type EmailFailure, failureOf, unclassifiedFailure } from "../failure";
 import type { EmailProviderAdapter } from "../types";
 
@@ -63,32 +63,40 @@ export function refusalOf(
 /**
  * Every refused recipient of a message, by line and position.
  *
- * `recipients` is the message's recipients in the order they are recorded,
- * one entry per mailbox; its position on a line is counted in that order.
+ * Positions are counted on each line as the message gives it, duplicates
+ * included, so a caller matching a refusal to its own list by position finds
+ * the address it wrote. A mailbox on several lines, or twice on one, is
+ * reported once, where it first appears, as it is recorded once.
  */
 export function refusedRecipients(
-  recipients: ReadonlyArray<{
-    to: string;
-    recipientKind: EmailDeliveryRecipientKind;
-  }>,
+  message: {
+    to: readonly string[];
+    cc?: readonly string[];
+    bcc?: readonly string[];
+  },
   refused: ReadonlySet<string>,
   result: AdapterResult
 ): RefusedRecipient[] {
-  const counts: Record<EmailDeliveryRecipientKind, number> = {
-    to: 0,
-    cc: 0,
-    bcc: 0,
-  };
+  const seen = new Set<string>();
   const list: RefusedRecipient[] = [];
-  for (const recipient of recipients) {
-    const position = counts[recipient.recipientKind]++;
-    if (!refused.has(recipient.to.trim().toLowerCase())) continue;
-    const { retryable, status } = refusalOf(result, recipient.to);
-    list.push({
-      kind: recipient.recipientKind,
-      position,
-      retryable,
-      ...(status !== undefined ? { status } : {}),
+  const lines: Array<[EmailDeliveryRecipientKind, readonly string[]]> = [
+    ["to", message.to],
+    ["cc", message.cc ?? []],
+    ["bcc", message.bcc ?? []],
+  ];
+  for (const [kind, addresses] of lines) {
+    addresses.forEach((address, position) => {
+      const key = mailboxOf(address).toLowerCase();
+      if (key === "" || seen.has(key)) return;
+      seen.add(key);
+      if (!refused.has(key)) return;
+      const { retryable, status } = refusalOf(result, mailboxOf(address));
+      list.push({
+        kind,
+        position,
+        retryable,
+        ...(status !== undefined ? { status } : {}),
+      });
     });
   }
   return list;

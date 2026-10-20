@@ -289,6 +289,27 @@ describe("what a provider's own answer may and may not carry", () => {
     expect(result.failure).toMatchObject({ retryable: true });
   });
 
+  it("counts a refusal's position on its line as the send gave it, duplicates included", async () => {
+    const { plugin } = build({
+      maxToPerMessage: 10,
+      send: () =>
+        Promise.resolve({
+          success: true,
+          messageId: "m-1",
+          rejected: ["bad@example.com"],
+        }),
+    });
+
+    const result = await plugin.send({
+      ...message,
+      cc: ["x@example.com", "x@example.com", "bad@example.com"],
+    });
+
+    expect(result.refused).toEqual([
+      { kind: "cc", position: 2, retryable: true },
+    ]);
+  });
+
   it("never reports a number that is not a status", async () => {
     const { plugin } = build({
       send: () =>
