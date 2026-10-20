@@ -774,6 +774,31 @@ describe.each(getConfiguredTestDialects())(
           })
         ),
       ]).toEqual(["refused", "refused", "refused"]);
+
+      // Once the document is deleted its events are read without it, and a
+      // language nothing can be asked about stays withheld.
+      await t.nextly.delete({ collection: "plain", id });
+      const afterDelete = await t.nextly.contentEvents.list({
+        subject,
+        ...asPerson(reader),
+      });
+      expect(afterDelete.items.map(e => e.kind)).toContain("deleted");
+      expect(afterDelete.items.map(e => e.note)).not.toContain(
+        "in Spanish, before"
+      );
+      expect(afterDelete.items.flatMap(e => e.parts)).not.toContain("es");
+      expect(
+        await outcome(
+          t.nextly.contentEvents.list({
+            subject,
+            parts: ["es"],
+            ...asPerson(reader),
+          })
+        )
+      ).toBe("refused");
+      expect(
+        (await t.nextly.contentEvents.list({ subject })).items.map(e => e.note)
+      ).toContain("in Spanish, before");
     }, 120_000);
 
     it("judges a history read by the document the read loaded, not by the id its output carries", async () => {

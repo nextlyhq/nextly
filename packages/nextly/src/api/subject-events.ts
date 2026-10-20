@@ -39,6 +39,7 @@ import {
   type ContentEventQuery,
   type ContentEventRecord,
 } from "../domains/content-events/repository";
+import { configuredLocales } from "../domains/i18n/configured-locales";
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
@@ -269,17 +270,37 @@ async function authorizeSubject(
   }
   const ended = await repository.latestEnd(subject);
   if (ended !== null && !(await documentExists(subject))) {
-    if (!caller.overrideAccess) {
-      const reader = readerOf(caller);
-      if (!(await mayReadDeletedDocument(subject, reader))) {
-        throw refused(subject, "deleted-document-not-readable");
-      }
-    }
-    return { life: { endedBy: ended }, ended };
+    const life = { endedBy: ended };
+    if (caller.overrideAccess) return { life, ended };
+    const visibleParts = await authorizeDeletedDocument(subject, query, caller);
+    return { life, ended, visibleParts };
   }
   if (caller.overrideAccess) return { life: "current", ended };
   const visibleParts = await authorizeLiveDocument(subject, query, caller);
   return { life: "current", ended, visibleParts };
+}
+
+/**
+ * A deleted document's gate, and the parts its events may show.
+ *
+ * A row that is gone cannot be read in any language, so the languages shown
+ * are the configured ones, which `mayReadDeletedDocument` decides alike. A
+ * language no longer configured is withheld here as it is from a live
+ * document's history, and a read naming one is refused.
+ */
+async function authorizeDeletedDocument(
+  subject: Exclude<ContentEventSubject, { kind: "release" }>,
+  query: ContentEventQuery,
+  caller: SubjectEventsCaller
+): Promise<readonly string[]> {
+  if (!(await mayReadDeletedDocument(subject, readerOf(caller)))) {
+    throw refused(subject, "deleted-document-not-readable");
+  }
+  const visibleParts = [...(configuredLocales() ?? []), SHARED_PART];
+  if ((query.parts ?? []).some(part => !visibleParts.includes(part))) {
+    throw refused(subject, "deleted-document-language-not-readable");
+  }
+  return visibleParts;
 }
 
 /**
