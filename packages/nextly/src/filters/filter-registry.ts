@@ -14,6 +14,8 @@
  * @module filters/filter-registry
  */
 
+import { consoleLogger } from "../shared/types";
+
 /**
  * @experimental The seam/registry key used by BOTH filters and actions (D63).
  * Pass this as the `name` argument to `addFilter`, `addAction`, `applyFilters`,
@@ -299,7 +301,7 @@ export class FilterRegistry {
     const message = err instanceof Error ? err.message : String(err);
     const text = `[filters] ${kind} for "${name}" threw and was ${kind === "filter" ? "skipped" : "isolated"}: ${message}`;
     if (this.logger?.error) this.logger.error(text, err);
-    else console.error(text, err);
+    else consoleLogger.error(text, { error: err });
   }
 }
 

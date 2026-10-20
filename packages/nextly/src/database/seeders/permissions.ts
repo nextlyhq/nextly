@@ -11,6 +11,8 @@ import {
 } from "@nextly/schemas/_zod/rbac";
 import { ServiceContainer } from "@nextly/services/index";
 
+import { seederLog } from "./seeder-log";
+
 /**
  * Type for adapters that support getDrizzle() method
  */
@@ -69,8 +71,7 @@ export async function seedPermissions(
     silent = false,
   } = options || {};
 
-  const log = silent ? () => {} : console.log;
-  const errorLog = silent ? () => {} : console.error;
+  const { log, errorLog } = seederLog(silent);
 
   log("🌱 Starting permission seeding...\n");
 

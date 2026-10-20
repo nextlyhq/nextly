@@ -17,6 +17,8 @@
 import { watch, type FSWatcher } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import { consoleLogger } from "../shared/types";
+
 // Process-wide state lives on globalThis so it survives Turbopack and webpack
 // re-executing this module. Same pattern as init.ts and the drizzle-kit-lazy
 // module.
@@ -159,7 +161,7 @@ function watchConfigFiles(
       // be what keeps a script that booted Nextly from exiting.
       watcher.unref();
       watcher.on("error", error => {
-        console.warn(
+        consoleLogger.warn(
           `[Nextly] Stopped watching ${dir} for config edits: ${error.message}. ` +
             `Restart next dev to apply schema changes saved there.`
         );
@@ -167,7 +169,7 @@ function watchConfigFiles(
       });
       state.watchers.push(watcher);
     } catch (error) {
-      console.warn(
+      consoleLogger.warn(
         `[Nextly] Cannot watch ${dir} for config edits: ${
           error instanceof Error ? error.message : String(error)
         }. Restart next dev to apply schema changes saved there.`
@@ -271,7 +273,7 @@ function retryRefused(retry: number): void {
     scheduleReload(retry + 1);
     return;
   }
-  console.warn(
+  consoleLogger.warn(
     `[Nextly HMR] The saved config was not applied: the schema reload was ` +
       `refused ${retry + 1} times in a row, for the reason logged above. Save ` +
       `the config again once that is resolved, or restart next dev.`

@@ -33,13 +33,13 @@ export type AccessOverrides = Pick<
  * A collection's rule is the whole answer for a signed-in user, so "signed in"
  * here would admit every staff member whatever their role holds, and a role
  * name would refuse a custom role that holds the permission. The rule is given
- * the caller's permissions as `resource:action`, for a session and an API key
- * alike, and a visitor holds none. `collection` is the slug the host installed
+ * the caller's permissions as the role screen spells them, `<action>-<slug>`,
+ * for a session and an API key alike, and a visitor holds none. `collection` is the slug the host installed
  * the collection under, so a renamed collection is judged by its own
  * permissions. A super-admin is admitted before any rule runs.
  */
 const permitted: AccessRule = ({ permissions, collection, operation }) =>
-  permissions.includes(`${collection}:${operation}`);
+  permissions.includes(`${operation}-${collection}`);
 
 /**
  * Host overrides applied over this plugin's defaults, per operation.

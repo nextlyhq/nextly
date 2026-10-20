@@ -32,9 +32,11 @@ import { BlockPages } from "./src/collections/block-pages";
 import { Categories } from "./src/collections/categories";
 import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { HistoryNotes } from "./src/collections/history-notes";
+import { LinkedEntries } from "./src/collections/linked-entries";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { TranslatedPages } from "./src/collections/translated-pages";
+import { LinkCard, LinkQuote } from "./src/field-groups/related-link-groups";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
@@ -116,6 +118,10 @@ export default defineConfig({
     // collection with a translated blocks field; registered for the e2e run
     // only, by the same switch as the style fixture below.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatedPages] : []),
+    // A collection embedding field groups that hold a relationship and an
+    // upload, for the browser test of a related item the editor cannot read
+    // inside one; registered for the e2e run only, by the same switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [LinkedEntries] : []),
     // The history browser test needs a document with a group and an embedded
     // field group, so a past version can be read in that layout; registered
     // for the e2e run only, by the same switch.
@@ -134,7 +140,14 @@ export default defineConfig({
     // the same switch as the style fixture below.
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [RelatedLinks] : []),
   ],
-  fieldGroups: [Seo],
+  fieldGroups: [
+    Seo,
+    // The field groups the e2e fixtures above embed, registered by the same
+    // switch.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
+      ? [LinkCard, LinkQuote]
+      : []),
+  ],
   // Dev-harness plugins: page builder and form builder are what a contributor
   // works against.
   //

@@ -1,5 +1,6 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { runWithAccessMemo } from "../auth/access/request-memo";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
 import { runAsPrincipal } from "../auth/principal-scope";
@@ -643,7 +644,7 @@ function translateServiceOpts(
       const verb = (WRITE_VERB as Record<string, string | undefined>)[
         prop as string
       ];
-      return async (...args: unknown[]) => {
+      const accessCall = async (args: unknown[]) => {
         const opts = (args[idx] as ServiceOpts | undefined) ?? {};
         const resolved = await resolveServiceOpts(opts, deps);
         // Nothing past the context travels. The context is the last argument
@@ -697,6 +698,10 @@ function translateServiceOpts(
           ...(warnings ? { warnings } : {}),
         };
       };
+      // Each call with one memo of access lookups, so the caller named by
+      // `as: "user"` is looked up once for the call and its rows; a call made
+      // inside a request shares that request's memo.
+      return (...args: unknown[]) => runWithAccessMemo(() => accessCall(args));
     },
   });
 }

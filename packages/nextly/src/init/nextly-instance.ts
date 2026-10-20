@@ -14,9 +14,11 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { ServiceMap } from "../di/register";
+import type { ContentEventsNamespace } from "../direct-api/namespaces/content-events";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
 import type { NoticesNamespace } from "../direct-api/namespaces/notices";
+import type { ApiKeysNamespace } from "../direct-api/namespaces/rbac";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
 import type {
   AuthResult,
@@ -987,6 +989,22 @@ export interface Nextly {
   releases: ReleasesNamespace;
 
   /**
+   * A subject's content events — a document's or a release's — newest first,
+   * page by page, refused exactly where REST would refuse the caller.
+   *
+   * @example
+   * ```typescript
+   * const { items, meta } = await nextly.contentEvents.list({
+   *   subject: { kind: "collection", slug: "posts", id: post.id },
+   *   kinds: ["published"],
+   * });
+   * ```
+   *
+   * @experimental
+   */
+  contentEvents: ContentEventsNamespace;
+
+  /**
    * A person's own notices — read, count and mark read, for the person named.
    *
    * @example
@@ -1060,6 +1078,31 @@ export interface Nextly {
   access: {
     check: (args: CheckAccessArgs) => Promise<boolean>;
   };
+
+  /**
+   * API keys: list, read, create, rename and revoke.
+   *
+   * Trusted by default, like the rest of the Direct API. A call with
+   * `overrideAccess: false` and a `user` is judged as the admin's key routes
+   * judge that user: the matching `api-keys` permission, which reaches every
+   * key; a key made only for that user; owners shown only to someone who may
+   * read users; and no making or changing keys as an API key. Declared as the
+   * namespace's own type, so a method added to it cannot be missing here.
+   *
+   * @example
+   * ```typescript
+   * const nextly = await getNextly({ config });
+   * const { doc, key } = await nextly.apiKeys.create({
+   *   userId: user.id,
+   *   name: "Build server",
+   *   tokenType: "read-only",
+   *   expiresIn: "90d",
+   *   overrideAccess: false,
+   *   user: { id: user.id },
+   * });
+   * ```
+   */
+  apiKeys: ApiKeysNamespace;
 
   /**
    * Shutdown the Nextly instance and clean up resources.

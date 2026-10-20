@@ -22,7 +22,7 @@
  * @module domains/email/erase-recipient
  */
 
-import { and, eq, inArray, type Column, type Table } from "drizzle-orm";
+import { and, eq, inArray, type Column, type Table, isNull } from "drizzle-orm";
 
 import { ERASED_RECIPIENT_HASH, recipientDigests } from "./delivery-record";
 
@@ -114,6 +114,30 @@ export type PersonDeliveriesTable = ErasableDeliveriesTable & {
   principalKind: Column;
   principalId: Column;
 };
+
+/**
+ * Erase the address digest of every delivery to `address` that names nobody.
+ *
+ * What a staff user's deletion erases by address: the records written before
+ * sends named their person. A record that names a person belongs to that
+ * person, whoever else holds or once held the address, and is erased by that
+ * person's own deletion instead (`erasePrincipalDeliveries`).
+ */
+export async function eraseUnnamedRecipientDeliveries(
+  db: RecipientErasureCapableDb,
+  deliveries: PersonDeliveriesTable,
+  address: string
+): Promise<void> {
+  await db
+    .update(deliveries)
+    .set({ recipientHash: ERASED_RECIPIENT_HASH })
+    .where(
+      and(
+        inArray(deliveries.recipientHash, recipientDigests(address)),
+        isNull(deliveries.principalKind)
+      )
+    );
+}
 
 /**
  * Erase the address digest of every delivery recorded for a plugin-defined

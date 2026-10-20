@@ -412,33 +412,49 @@ async function schema(world: World, row: Row, who: CallerHandle) {
   return answer.includes(collectionOf(row.rule)) ? "A" : "R";
 }
 
+/**
+ * A trusted read whose bound reaches only `refs`, the collection it reads,
+ * so every target it populates is read as the caller would read it.
+ */
+function boundCaller(who: CallerHandle) {
+  return {
+    overrideAccess: true as const,
+    trusted: (collection: string) => collection === "refs",
+    ...(who.user ? { user: who.user } : {}),
+    ...(who.actor ? { actor: who.actor } : {}),
+  };
+}
+
+/** The field of `refs` that points at a row's target, and what a populated one carries. */
+function populatedField(row: Row): { field: string; marker: string } {
+  if (row.target === "media") return { field: "picture", marker: MEDIA_MARKER };
+  if (row.target === "users") return { field: "owner", marker: USER_MARKER };
+  return { field: relationOf(row.rule), marker: "probe" };
+}
+
+/**
+ * What a populated field says: `R` when its target was withheld, `S` when a
+ * media row came without who filed it, a refusal presented as the file
+ * alone, and `A` when the whole row came.
+ */
+function populationAnswer(value: unknown, row: Row, marker: string): Answer {
+  if (typeof value !== "object" || value === null) return "R";
+  if (!JSON.stringify(value).includes(marker)) return "R";
+  if (row.target !== "media") return "A";
+  return "uploadedBy" in value || "uploaded_by" in value ? "A" : "S";
+}
+
 /** Reads `refs` with its relationships populated, once per caller. */
 async function population(world: World, row: Row, who: CallerHandle) {
   const ref = (await world.t.nextly.findByID({
     collection: "refs",
     id: world.refId,
     depth: 1,
-    ...directCaller(who),
+    ...(row.setup === "bound" ? boundCaller(who) : directCaller(who)),
   })) as Record<string, unknown> | null;
   if (!ref) return "R";
-  const field =
-    row.target === "media"
-      ? "picture"
-      : row.target === "users"
-        ? "owner"
-        : relationOf(row.rule);
-  const marker =
-    row.target === "media"
-      ? MEDIA_MARKER
-      : row.target === "users"
-        ? USER_MARKER
-        : "probe";
-  const value = ref[field];
-  const populated =
-    typeof value === "object" &&
-    value !== null &&
-    JSON.stringify(value).includes(marker);
-  return populated ? "A" : "R";
+  const { field, marker } = populatedField(row);
+  return populationAnswer(ref[field], row, marker);
 }
 
 async function system(_world: World, row: Row, who: CallerHandle) {

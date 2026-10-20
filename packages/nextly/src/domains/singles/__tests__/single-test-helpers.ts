@@ -179,6 +179,7 @@ export function createMockComponentDataService(): MockRecord {
 // ── Mock RBACAccessControlService ───────────────────────────────────────
 
 export function createMockRBACService(allowed: boolean = true): MockRecord {
+  const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {
     checkAccess: vi.fn().mockResolvedValue(allowed),
     // Answers `undefined`: no code-defined rule governs the operation for an
@@ -186,7 +187,13 @@ export function createMockRBACService(allowed: boolean = true): MockRecord {
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
     // Consulted by the API-key scope path to evaluate a code-defined access
     // rule; no rule by default.
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    getRegisteredAccess,
+    // Derived from `getRegisteredAccess`, as the service derives it, so a rule a test
+    // registers there reaches every caller that asks for the target.
+    getRegisteredTarget: (slug: string) => {
+      const access: unknown = getRegisteredAccess(slug);
+      return access ? { kind: "single", slug, access } : undefined;
+    },
   };
 }
 
