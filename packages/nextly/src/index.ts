@@ -299,6 +299,14 @@ export type {
   SendEmailResult,
 } from "./direct-api/types";
 
+// Email templates (experimental). Template data takes lists and objects;
+// a template escapes every value it writes, except pre-rendered HTML that
+// code marks with `markHtml`. Only code marks HTML, and only markup it built
+// itself: never a value from a request, a form, a stored row or another
+// plugin.
+export { markHtml, TrustedHtml } from "./domains/email/services/liquid-engine";
+export type { EmailTemplateData } from "./direct-api/types/email";
+
 // TypeGenerator types - for advanced type generation use cases
 export type {
   TypeGeneratorOptions,

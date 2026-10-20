@@ -291,7 +291,7 @@ export interface PreviewEmailTemplateArgs extends DirectAPIConfig {
   /** Template ID (required) */
   id: string;
   /** Variable values for interpolation */
-  data?: Record<string, string>;
+  data?: EmailTemplateData;
 }
 
 /**
@@ -422,6 +422,14 @@ export interface SendEmailArgs extends DirectAPIConfig {
 }
 
 /**
+ * The data a template renders with: any value, nested objects and lists
+ * included, which a template can loop over and branch on, and HTML the
+ * calling code marked with `markHtml`. Every value but a marked one is
+ * escaped where it is written into HTML.
+ */
+export type EmailTemplateData = Record<string, unknown>;
+
+/**
  * Arguments for sending an email using a database template.
  */
 export interface SendTemplateEmailArgs extends DirectAPIConfig {
@@ -433,8 +441,12 @@ export interface SendTemplateEmailArgs extends DirectAPIConfig {
   to: string | string[];
   /** Template slug (required) */
   template: string;
-  /** Variables for template interpolation */
-  variables?: Record<string, string>;
+  /**
+   * The template's data. Any JSON-shaped value: text, numbers, yes/no, lists
+   * and objects, which a template can loop over and branch on. Every value is
+   * escaped where it is written into HTML.
+   */
+  variables?: EmailTemplateData;
   /** Override the "from" address */
   from?: string;
   /** @experimental The Reply-To address. */

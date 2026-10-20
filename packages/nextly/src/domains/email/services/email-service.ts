@@ -77,7 +77,7 @@ import {
   type SendEnvelope,
   type SendMessage,
 } from "./recipients";
-import { DEFAULT_APP_NAME, renderTemplate } from "./render-template";
+import { DEFAULT_APP_NAME } from "./render-template";
 import {
   answeredFailure,
   type EmailSendOutcome,
@@ -400,18 +400,15 @@ export class EmailService extends BaseService {
         );
       }
 
-      // One composition, shared with every preview surface. Resolving WHICH
-      // layout wraps this template needs the database; composing with it does
-      // not, so only the resolution stays here.
-      const layout = dbTemplate.useLayout
-        ? await this.templateService.getLayoutFor(dbTemplate)
-        : null;
-
+      // One composition, shared with every preview surface: the layout, and
+      // the engine each renders with, are resolved by the template service. A
+      // template that cannot be rendered throws here, before any provider is
+      // asked, and the send fails; retrying cannot fix a template.
       const {
         subject,
         html,
         text: plainText,
-      } = renderTemplate(dbTemplate, layout, variables, {
+      } = await this.templateService.renderStored(dbTemplate, variables, {
         appName: this.getAppName(),
       });
 
@@ -444,16 +441,19 @@ export class EmailService extends BaseService {
 
     // The site's code version.
     if (codeFn) {
+      // Template data may now hold any value; the code version's contract is
+      // strings, so only a string reaches it.
+      const text = (value: unknown) =>
+        typeof value === "string" ? value : undefined;
       const result = codeFn({
         user: {
-          name: (variables.userName as string) ?? null,
+          name: text(variables.userName) ?? null,
           // A code-first template renders for one user; with several `to`
           // addresses it is given the first, and `send` delivers to all.
           email: firstAddress(to),
         },
-        token: variables.token as string | undefined,
-        url:
-          (variables.resetLink as string) ?? (variables.verifyLink as string),
+        token: text(variables.token),
+        url: text(variables.resetLink) ?? text(variables.verifyLink),
       });
 
       // The code supplies the content; how it is delivered (provider, From,
