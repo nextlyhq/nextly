@@ -42,7 +42,6 @@ import { and, desc, eq, inArray, isNull, lt, or } from "drizzle-orm";
 import type { GrantedPermission } from "../../../auth/authenticated-scope";
 import { accountIsActive } from "../../../auth/session/session-standing";
 import { toDbError } from "../../../database/errors";
-import { genericPublicMessage } from "../../../errors/error-codes";
 import { NextlyError } from "../../../errors/nextly-error";
 import { apiKeys as apiKeysMysql } from "../../../schemas/api-keys/mysql";
 import { apiKeys as apiKeysPg } from "../../../schemas/api-keys/postgres";
@@ -1388,9 +1387,7 @@ export class ApiKeyService extends BaseService {
         // logContext for operators. The code is this refusal's own, so the
         // key form can tell "choose a smaller role" from "you may not create
         // keys", which is plain FORBIDDEN.
-        throw new NextlyError({
-          code: "API_KEY_ROLE_ABOVE_CREATOR",
-          publicMessage: genericPublicMessage("FORBIDDEN"),
+        throw NextlyError.apiKeyRoleAboveCreator({
           logContext: {
             reason: "permission-ceiling-exceeded",
             exceededPermission: slug,
