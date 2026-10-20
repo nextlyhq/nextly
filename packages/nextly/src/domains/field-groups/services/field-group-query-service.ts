@@ -40,6 +40,8 @@ import {
   DEFAULT_COMPONENT_DEPTH,
   POPULATE_INTERNAL_COLUMNS,
   toSnakeCase,
+  asComponentReferenceList,
+  asRowBackedRelationFields,
   shouldTreatAsJson,
   type ComponentRow,
 } from "./field-group-utils";
@@ -1130,10 +1132,14 @@ export class FieldGroupQueryService extends BaseService {
       result[currentFieldGroupTypeKey] = row[STORAGE_FORMAT.columns.type];
     }
 
+    // A row's keys may be the field's name or its snake_case column name, so
+    // a field is found under either. Missed, a JSON field such as a to-many
+    // relationship named `cardTags` comes back as its stored text.
     const fieldByColumn = new Map<string, FieldConfig>();
     for (const field of componentFields) {
       if ("name" in field && field.name) {
         fieldByColumn.set(toSnakeCase(field.name), field);
+        fieldByColumn.set(field.name, field);
       }
     }
 
@@ -1159,6 +1165,9 @@ export class FieldGroupQueryService extends BaseService {
         }
       } else {
         result[fieldName] = value ?? null;
+      }
+      if (field) {
+        result[fieldName] = asComponentReferenceList(field, result[fieldName]);
       }
     }
 
@@ -1206,8 +1215,13 @@ export class FieldGroupQueryService extends BaseService {
 
     try {
       // FieldConfig[] and FieldDefinition[] are structurally compatible
-      // for the purposes of relationship expansion.
-      const fields = componentFields as unknown as Parameters<
+      // for the purposes of relationship expansion. A many-to-many is handed
+      // over as the row-backed list it is on a component, so its related
+      // entries are found from the ids on the row rather than a junction table
+      // a component does not have.
+      const fields = asRowBackedRelationFields(
+        componentFields
+      ) as unknown as Parameters<
         typeof this.relationshipService.expandRelationships
       >[2];
 

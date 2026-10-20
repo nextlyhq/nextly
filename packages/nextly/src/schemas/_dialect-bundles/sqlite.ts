@@ -112,3 +112,6 @@ export {
   nextlyContentEventsSqlite as nextlyContentEvents,
   nextlyContentEventPartsSqlite as nextlyContentEventParts,
 } from "../content-events/sqlite";
+// Recorded preview links; in the bundle so freshPushSchema creates the table on
+// a fresh database, for the reason the release tables above give.
+export { nextlyPreviewLinksSqlite as nextlyPreviewLinks } from "../preview-links/sqlite";

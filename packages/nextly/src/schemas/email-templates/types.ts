@@ -173,6 +173,46 @@ export interface EmailTemplateInsert {
    * no default attachments.
    */
   attachments?: EmailAttachmentInput[] | null;
+
+  /**
+   * When the template is sent, in a sentence. Owners write one for each
+   * template they own; a site may write one for its own.
+   */
+  description?: string | null;
+}
+
+// ============================================================
+// Ownership
+// ============================================================
+
+/**
+ * Who a template belongs to.
+ *
+ * - `core`: one of Nextly's own templates or layouts.
+ * - `plugin`: contributed by the plugin named `name`. `installed` is false when
+ *   that plugin is no longer running; its templates are kept, and the site may
+ *   delete them.
+ * - `site`: made by the site.
+ */
+export type EmailTemplateOwner =
+  | { kind: "core" }
+  | { kind: "plugin"; name: string; installed: boolean }
+  | { kind: "site" };
+
+/** The stored owner kinds. */
+export type EmailTemplateOwnerKind = EmailTemplateOwner["kind"];
+
+/**
+ * The part of a template its owner versions and a site's override replaces:
+ * what the email says. Settings such as the provider, the layout, From,
+ * Reply-To, attachments and whether it is active are the site's and are never
+ * changed by an owner update.
+ */
+export interface EmailTemplateVersion {
+  subject: string;
+  htmlContent: string;
+  plainTextContent: string | null;
+  preheader: string | null;
 }
 
 // ============================================================
@@ -248,4 +288,29 @@ export interface EmailTemplateRecord extends EmailTemplateInsert {
 
   /** When the template was last updated. */
   updatedAt: Date;
+
+  /** When the template is sent (required on record, nullable). */
+  description: string | null;
+
+  /** Who owns the template. */
+  owner: EmailTemplateOwner;
+
+  /**
+   * Whether the site has overridden an owned template. Always false for a
+   * site's own template, which has nothing to override.
+   */
+  overridden: boolean;
+
+  /**
+   * Whether the owner's version changed since the override started, so an
+   * update is waiting for review. False when not overridden.
+   */
+  ownerChanged: boolean;
+
+  /**
+   * Whether the site's code sets this template (`email.templates` in
+   * `defineConfig()`). Such a version is sent while the template is not
+   * overridden.
+   */
+  setInCode: boolean;
 }

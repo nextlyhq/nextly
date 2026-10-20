@@ -270,6 +270,14 @@ async function parseSetupBody(request: Request): Promise<{
     };
   } finally {
     clearTimeout(timer);
+    // Setup reads a clone, and cancelling that clone's reader ends only its
+    // own branch: the client's upload goes on until the request's own body is
+    // cancelled too. Nothing reads that body after this read, whatever its
+    // outcome, so it is cancelled here, and a body cut short at the size
+    // limit or the deadline stops arriving rather than outliving the answer.
+    // Not awaited: a cloned body's cancel settles only once both branches
+    // have ended, which the client decides.
+    request.body?.cancel().catch(() => undefined);
   }
 }
 

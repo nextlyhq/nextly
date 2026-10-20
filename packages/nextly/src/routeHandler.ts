@@ -40,6 +40,7 @@ import {
   getApiKeyAbilities,
 } from "./api/api-keys";
 import { readAccessCaller, readCaller } from "./api/authenticated-read";
+import { handleContentEventsRequest } from "./api/content-events";
 import {
   getDashboardOnboarding,
   getDashboardStats,
@@ -68,7 +69,12 @@ import {
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
 import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
-import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
+import {
+  listPreviewLinks,
+  mintPreviewLink,
+  revokePreviewLink,
+  revokePreviewLinks,
+} from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
 import { handleReleaseRequest } from "./api/releases";
 import { readOrGenerateRequestId, withRequestIdHeader } from "./api/request-id";
@@ -103,6 +109,7 @@ import {
   putWidgetLayout,
 } from "./api/widget-layout";
 import { postWidgetQuery } from "./api/widget-query";
+import { runWithAccessMemo } from "./auth/access/request-memo";
 import { apiKeyScopeFrom } from "./auth/authenticated-scope";
 import { runWithCallerScope } from "./auth/caller-scope";
 import {
@@ -412,6 +419,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "translations",
   "schema",
   "email",
+  "contentEvents",
 ]);
 
 /**
@@ -725,6 +733,8 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   // Version history is guarded by the same per-collection read permission as
   // the entry itself; the document-level rules run inside the methods.
   "listEntryVersions",
+  // The entry's content events, guarded the same way.
+  "listEntryEvents",
   "getEntryVersion",
   "getEntryVersionDiff",
   // Restoring writes the document, so the route parser marks it an `update`
@@ -757,6 +767,8 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   "updateSingleDocument",
   // Read-only history for the document, guarded by the same read permission.
   "listSingleVersions",
+  // The document's content events, guarded the same way.
+  "listSingleEvents",
   "getSingleVersion",
   "getSingleVersionDiff",
   // A write, authorized as an update of the document.
@@ -827,6 +839,9 @@ const ROLE_AWARE_READ_METHODS = new Set([
   "listSingleVersions",
   "getSingleVersion",
   "getSingleVersionDiff",
+  // A document's events run the same document gate, which reads roles.
+  "listEntryEvents",
+  "listSingleEvents",
 ]);
 
 /**
@@ -909,6 +924,7 @@ async function resolveAuthorization(
       const action =
         method === "getSingleDocument" ||
         method === "listSingleVersions" ||
+        method === "listSingleEvents" ||
         method === "getSingleVersion" ||
         method === "getSingleVersionDiff" ||
         method === "getSingleAutosave" ||
@@ -1410,6 +1426,13 @@ async function handleServiceRequest(
     return handleReleaseRequest(req, method, routeParams);
   }
 
+  // ==================== CONTENT EVENTS BY SUBJECT ====================
+  // A subject's events read by subject (a release's, or a deleted
+  // document's). The handler owns its authorization.
+  if (service === "contentEvents") {
+    return handleContentEventsRequest(req);
+  }
+
   // ==================== JOBS DIRECT DISPATCH ====================
   // Beside the webhook drain and for the same reason: the handler owns its own
   // authorization, and it must stay above the shared body read below.
@@ -1433,9 +1456,19 @@ async function handleServiceRequest(
   // Above the body read below, like the handlers beside it: these parse their
   // own JSON, and a consumed stream would reach them empty.
   if (service === "previewLinks") {
-    return method === "revokePreviewLinks"
-      ? revokePreviewLinks(req)
-      : mintPreviewLink(req);
+    // Named per method, with minting the one an unrecognised name would NOT
+    // fall into by accident: each is matched exactly, and anything else is
+    // not found.
+    if (method === "listPreviewLinks") return listPreviewLinks(req);
+    if (method === "revokePreviewLink") {
+      return revokePreviewLink(req, routeParams ?? {});
+    }
+    if (method === "revokePreviewLinks") return revokePreviewLinks(req);
+    if (method === "mintPreviewLink") return mintPreviewLink(req);
+    throw NextlyError.notFound({
+      message: `Unknown preview-links operation: ${method}`,
+      logContext: { service: "previewLinks", method },
+    });
   }
 
   // ==================== PREVIEW URL DIRECT DISPATCH ====================
@@ -2110,6 +2143,10 @@ const SESSION_PRIVATE_METHODS = new Set([
   "listSingleVersions",
   "getEntryVersionDiff",
   "getSingleVersionDiff",
+  // Whether a document's events are readable depends on who asks, so neither
+  // the list nor the refusal is shared between callers.
+  "listEntryEvents",
+  "listSingleEvents",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from
@@ -2488,7 +2525,12 @@ export function createDynamicHandlers(options?: {
     let flattenedInRequest: NextlyError[] = [];
     const { result: response } = await withSideEffectWarnings(async () => {
       try {
-        return await runWithRestLimitGate(gate, handler);
+        // One memo of access lookups per request, so every gate, rule and
+        // field rule the request reaches asks the database about its caller
+        // once rather than each time.
+        return await runWithAccessMemo(() =>
+          runWithRestLimitGate(gate, handler)
+        );
       } finally {
         flattenedInRequest = currentFlattenedErrors();
       }

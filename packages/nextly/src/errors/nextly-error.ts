@@ -1,6 +1,10 @@
 import { isDbError, type DbErrorKind } from "../database/errors";
 
-import { NEXTLY_ERROR_STATUS, type NextlyErrorCode } from "./error-codes";
+import {
+  NEXTLY_ERROR_STATUS,
+  genericPublicMessage,
+  type NextlyErrorCode,
+} from "./error-codes";
 import type {
   PublicData,
   ReleaseNotDeletablePublicData,
@@ -302,6 +306,22 @@ export class NextlyError extends Error {
       code: "FORBIDDEN",
       publicMessage: "You don't have permission to perform this action.",
       cause: opts?.cause,
+      logContext: opts?.logContext,
+    });
+  }
+
+  /**
+   * An API key refused because its role allows more than the person creating
+   * it may do. The sentence is FORBIDDEN's and names no permission; which one
+   * exceeded goes to the log through `logContext`. The code is its own, so a
+   * client can tell "choose a smaller role" from plain FORBIDDEN.
+   */
+  static apiKeyRoleAboveCreator(opts?: {
+    logContext?: Record<string, unknown>;
+  }): NextlyError {
+    return new NextlyError({
+      code: "API_KEY_ROLE_ABOVE_CREATOR",
+      publicMessage: genericPublicMessage("FORBIDDEN"),
       logContext: opts?.logContext,
     });
   }

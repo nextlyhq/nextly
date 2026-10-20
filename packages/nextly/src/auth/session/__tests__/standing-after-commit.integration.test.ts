@@ -112,6 +112,7 @@ describe.each(pooled)(
         await updateUserEndingSessions(tx, getDialectTables(dialect), dialect, {
           userId: item.id,
           set: { isActive: false, deactivatedAt: new Date() },
+          adapter: t.adapter,
         });
         // The control: the writer's transaction is open in its own flow and
         // not in the other request's, so the read below is that request's.
@@ -162,6 +163,7 @@ describe.each(pooled)(
         await updateUserEndingSessions(tx, getDialectTables(dialect), dialect, {
           userId: item.id,
           set: { isActive: false, deactivatedAt: new Date() },
+          adapter: t.adapter,
         });
         offset += SESSION_STANDING_TTL_MS + 1_000;
         expect(await elsewhere(() => accountIsActive(item.id))).toBe(true);

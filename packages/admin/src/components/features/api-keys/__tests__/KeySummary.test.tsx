@@ -29,8 +29,9 @@ vi.mock("@admin/hooks/queries/useApiKeys", () => ({
   },
 }));
 
-function refusal(status: number): Error {
-  return Object.assign(new Error("refused"), { status });
+/** An error as `parseApiError` makes it from the server's envelope. */
+function refusal(status: number, code: string): Error {
+  return Object.assign(new Error("refused"), { status, code });
 }
 
 beforeEach(() => {
@@ -94,7 +95,7 @@ describe("KeySummary", () => {
   });
 
   it("says a refused role is above its creator, apart from a failed load", () => {
-    answer.current.error = refusal(403);
+    answer.current.error = refusal(403, "API_KEY_ROLE_ABOVE_CREATOR");
     const { unmount } = render(
       <KeySummary tokenType="role-based" roleId="role-1" />
     );
@@ -105,11 +106,21 @@ describe("KeySummary", () => {
     ).toBeTruthy();
     unmount();
 
-    answer.current.error = refusal(500);
+    answer.current.error = refusal(500, "INTERNAL_ERROR");
     render(<KeySummary tokenType="role-based" roleId="role-1" />);
     expect(
       screen.getByText("What this key can do couldn't be loaded.")
     ).toBeTruthy();
+  });
+
+  it("says plainly when its viewer may no longer create keys, apart from a role above them", () => {
+    // Both are 403s; only the code tells them apart. A person whose
+    // permission to create keys is taken while the form is open is told
+    // that, not that the role they chose is too wide.
+    answer.current.error = refusal(403, "FORBIDDEN");
+    render(<KeySummary tokenType="role-based" roleId="role-1" />);
+    expect(screen.getByText("You can no longer create API keys.")).toBeTruthy();
+    expect(screen.queryByText(/allows more than you can do/)).toBeNull();
   });
 
   it("says when the key would be able to do nothing", () => {
