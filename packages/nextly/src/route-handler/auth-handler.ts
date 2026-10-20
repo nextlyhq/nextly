@@ -572,6 +572,20 @@ async function getDispatcherInstance(): Promise<ServiceDispatcher> {
 }
 
 /**
+ * Drop the cached dispatcher, so the next request builds one on whatever
+ * adapter is registered then.
+ *
+ * A server registers one adapter for its life and keeps one dispatcher on it,
+ * and nothing in product code calls this. The test harness does: it boots one
+ * instance after another in one process and disconnects each one's adapter on
+ * teardown, and a dispatcher kept from an earlier instance would answer the
+ * next instance's REST requests from that closed adapter.
+ */
+export function resetDispatcherForTests(): void {
+  _dispatcher = null;
+}
+
+/**
  * Handle authentication-specific API requests.
  * Routes all auth endpoints through the custom auth router (replaces Auth.js).
  *

@@ -22,6 +22,7 @@ import {
   type EmailAfterSendValue,
 } from "../../../filters";
 import { getBaseUrl } from "../../../lib/get-base-url";
+import { maskingServiceLogger } from "../../../observability/mask-emails";
 import { principalRefOf } from "../../../plugins/principals/ref";
 import { getPrincipalKind } from "../../../plugins/principals/registry";
 import type { PrincipalRef } from "../../../plugins/principals/types";
@@ -155,7 +156,10 @@ export class EmailService extends BaseService {
      */
     private readonly deliveries?: EmailDeliveryService
   ) {
-    super(adapter, logger);
+    // Masked here whatever logger an app supplied: what this service logs,
+    // a provider error quoting a recipient included, never carries a full
+    // email address outside development and test.
+    super(adapter, maskingServiceLogger(logger));
   }
 
   /**

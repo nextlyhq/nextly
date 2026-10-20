@@ -17,6 +17,10 @@
 
 import { createContext, useContext } from "react";
 
+import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
+
+import type { Predecessor } from "./version-pairing";
+
 export interface ViewedVersion {
   versionNo: number;
   /**
@@ -32,12 +36,21 @@ export interface ViewedVersion {
   isLoading: boolean;
   /** Set when the read failed, so the document says so rather than blanking. */
   error: Error | null;
+  /** The document whose history this is, so its changes can be read. */
+  scope: VersionScope;
+  /**
+   * What the version is compared with: the version before it in its own
+   * language, as the panel pairs it. Changes are marked against this.
+   */
+  comparedWith: Predecessor;
+  /** The version's name, time and author, once read; null until then. */
+  about: VersionMeta | null;
 }
 
 /**
  * Restoring, offered by the panel that owns the mutation and its confirmation.
  *
- * Published rather than reimplemented beside the banner: a second restore path
+ * Published rather than reimplemented beside the version: a second restore path
  * would be a second answer to "may this caller write, and what happens when
  * they do" — and the panel already holds the permission, the mutation and the
  * dialog that guards it.

@@ -281,6 +281,11 @@ export function createMockRelationshipService(): MockRecord {
     expandRelationships: vi
       .fn()
       .mockImplementation((entry: unknown) => Promise.resolve(entry)),
+    // A read at depth 0 gives junction fields their stored ids through this,
+    // so a double without it certifies a path that throws for real.
+    withStoredManyToManyIds: vi
+      .fn()
+      .mockImplementation((entries: unknown[]) => Promise.resolve(entries)),
     // The read paths call this once the document is assembled. A double that
     // omits it certifies a path that throws for real.
     applyNestedFieldHooks: vi.fn().mockResolvedValue(undefined),

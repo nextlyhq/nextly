@@ -210,7 +210,9 @@ export async function filesKeptByOthers(
     return pathsReferencedAmong(paths, rows);
   } catch (error) {
     console.warn(
-      `[MediaService] Left the files of media ${mediaIds.join(", ")}: could not check whether another item refers to them:`,
+      mediaIds.length > 0
+        ? `[MediaService] Left the files of media ${mediaIds.join(", ")}: could not check whether another item refers to them:`
+        : `[MediaService] Left ${paths.map(storedPathForLog).join(", ")}: could not check whether a media item refers to them:`,
       errorForLog(error)
     );
     return null;

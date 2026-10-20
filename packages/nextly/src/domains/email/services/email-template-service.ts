@@ -21,6 +21,7 @@ import { and, eq, desc, isNull } from "drizzle-orm";
 import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
+import { maskingServiceLogger } from "../../../observability/mask-emails";
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
 import { emailTemplatesMysql } from "../../../schemas/email-templates/mysql";
 import { emailTemplatesPg } from "../../../schemas/email-templates/postgres";
@@ -114,7 +115,10 @@ export class EmailTemplateService extends BaseService {
   private readonly appName: string;
 
   constructor(adapter: DrizzleAdapter, logger: Logger, appName?: string) {
-    super(adapter, logger);
+    // Masked here whatever logger an app supplied: what this service logs,
+    // a provider error quoting a recipient included, never carries a full
+    // email address outside development and test.
+    super(adapter, maskingServiceLogger(logger));
 
     this.appName = appName ?? DEFAULT_APP_NAME;
 

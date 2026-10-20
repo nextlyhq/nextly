@@ -12,6 +12,10 @@
  * @module domains/email/services/providers/log-provider
  */
 
+import {
+  emailMaskingEnabled,
+  maskEmails,
+} from "../../../../observability/mask-emails";
 import type { EmailProviderAdapter } from "../../types";
 
 /** The registered type id for the fallback transport. */
@@ -29,18 +33,29 @@ export interface LogProviderConfig {
    * delivery record.
    */
   includeBody: boolean;
+  /**
+   * Whether every address in the envelope, the subject included, is masked
+   * to its first character and domain (`j***@example.com`). Decided once at
+   * construction, for the reason `includeBody` is.
+   */
+  maskAddresses: boolean;
 }
 
 /**
- * Whether a given environment may see rendered bodies.
+ * What the fallback transport may write in a given environment.
  *
- * Separated from the adapter so the rule is one testable function rather than
- * a condition buried at a construction site. Anything that is not explicitly
- * production is treated as a developer's machine, so an unset NODE_ENV shows
- * the body rather than hiding it.
+ * One rule for both halves, from the shared masking decision: in development
+ * and test a developer sees full addresses and the body, so they can follow a
+ * reset link; anywhere else, an unset NODE_ENV included, addresses are masked
+ * and the body, which carries live tokens, is left out. Separated from the
+ * adapter so the rule is one testable function rather than a condition buried
+ * at a construction site.
  */
-export function shouldIncludeBody(nodeEnv: string | undefined): boolean {
-  return nodeEnv !== "production";
+export function logProviderConfigFor(
+  nodeEnv: string | undefined
+): LogProviderConfig {
+  const masked = emailMaskingEnabled(nodeEnv);
+  return { includeBody: !masked, maskAddresses: masked };
 }
 
 /**
@@ -73,7 +88,7 @@ export function createLogProvider(
     // contract asks only for a promise. Marking it async would claim work that
     // never happens and read as though delivery were being awaited.
     send(options) {
-      const envelope = {
+      const written = {
         provider: LOG_PROVIDER_TYPE,
         to: options.to,
         from: options.from,
@@ -82,6 +97,8 @@ export function createLogProvider(
         ...(options.bcc ? { bcc: options.bcc } : {}),
         ...(options.replyTo ? { replyTo: options.replyTo } : {}),
       };
+      // Every field, the subject included: a subject can name the recipient.
+      const envelope = config.maskAddresses ? maskEmails(written) : written;
 
       if (config.includeBody) {
         console.info(
