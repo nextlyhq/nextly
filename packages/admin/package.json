@@ -38,7 +38,7 @@
     "report:bundle": "node scripts/bundle-report.mjs",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
-    "test": "vitest run",
+    "test": "node scripts/ensure-dist.mjs && vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",

@@ -51,6 +51,36 @@ export function findJsFiles(dir) {
 }
 
 /**
+ * The relative specifier an import/export declaration names, or null.
+ */
+function declarationSpecifier(node) {
+  if (!ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)) {
+    return null;
+  }
+  if (!node.moduleSpecifier || !ts.isStringLiteralLike(node.moduleSpecifier)) {
+    return null;
+  }
+  return node.moduleSpecifier.text;
+}
+
+/**
+ * The relative specifier a dynamic `import("...")` call names, or null.
+ */
+function dynamicImportSpecifier(node) {
+  if (
+    !ts.isCallExpression(node) ||
+    node.expression.kind !== ts.SyntaxKind.ImportKeyword
+  ) {
+    return null;
+  }
+  const [arg] = node.arguments;
+  if (!arg || !ts.isStringLiteralLike(arg)) {
+    return null;
+  }
+  return arg.text;
+}
+
+/**
  * Parse an emitted JS chunk to extract relative static and dynamic import specifiers.
  */
 export function parseChunkImports(filePath, code) {
@@ -66,19 +96,13 @@ export function parseChunkImports(filePath, code) {
   const dynamicImports = [];
 
   function visit(node) {
-    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-      if (node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
-        const spec = node.moduleSpecifier.text;
-        if (spec.startsWith(".")) staticImports.push(spec);
-      }
-    } else if (
-      ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword
-    ) {
-      const [arg] = node.arguments;
-      if (arg && ts.isStringLiteralLike(arg)) {
-        const spec = arg.text;
-        if (spec.startsWith(".")) dynamicImports.push(spec);
+    const declared = declarationSpecifier(node);
+    if (declared !== null) {
+      if (declared.startsWith(".")) staticImports.push(declared);
+    } else {
+      const dynamic = dynamicImportSpecifier(node);
+      if (dynamic !== null && dynamic.startsWith(".")) {
+        dynamicImports.push(dynamic);
       }
     }
     ts.forEachChild(node, visit);
@@ -140,6 +164,83 @@ export function readCommit(cwd = PACKAGE_ROOT) {
 }
 
 /**
+ * The transitive closure of `entry` over the named edge kinds, throwing when
+ * an edge names a chunk the graph does not hold — a dangling edge means the
+ * emit and the graph disagree, and the classification would be fiction.
+ */
+function closureFrom(graph, entry, edgeKinds) {
+  const seen = new Set();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (seen.has(current)) continue;
+    seen.add(current);
+    const node = graph.get(current);
+    if (!node) {
+      throw new Error(`import edge resolves to unknown chunk: ${current}`);
+    }
+    for (const kind of edgeKinds) {
+      for (const target of node[kind]) {
+        if (!seen.has(target)) queue.push(target);
+      }
+    }
+  }
+  return seen;
+}
+
+/**
+ * The static pre-render closure of the entry chunk: everything the first
+ * screen loads before it renders.
+ */
+function firstScreenClosure(graph, entryChunk) {
+  return closureFrom(graph, entryChunk, ["staticImports"]);
+}
+
+/**
+ * Everything the entry chunk can reach at all, eagerly or lazily. Route-later
+ * is the lazily reached part of this set — a chunk outside it is reached by
+ * neither edge from the entry, and is some other entrypoint's business.
+ */
+function reachableClosure(graph, entryChunk) {
+  return closureFrom(graph, entryChunk, ["staticImports", "dynamicImports"]);
+}
+
+/**
+ * The category one chunk belongs to, by the report's definitions:
+ * - cli: the CLI tools, not loaded by any browser.
+ * - first-screen: in the entry's static pre-render closure.
+ * - route-later: reachable from the entry, but only through dynamic imports.
+ * - other-entry: reachable by neither edge — another entrypoint the build
+ *   emits for a different consumer, not a lazy route.
+ */
+function categoryOf(rel, firstScreenSet, reachableSet) {
+  if (rel.startsWith("cli.") || rel.includes("/cli.")) {
+    return "cli";
+  }
+  if (firstScreenSet.has(rel)) {
+    return "first-screen";
+  }
+  if (reachableSet.has(rel)) {
+    return "route-later";
+  }
+  return "other-entry";
+}
+
+/**
+ * The newest mtime among the measured files: when the bytes the dist holds
+ * were built. A report's commit means nothing without it — a dist built
+ * before the last commit would otherwise wear that commit's label.
+ */
+function builtAtOf(files) {
+  let newest = 0;
+  for (const file of files) {
+    const mtime = statSync(file).mtimeMs;
+    if (mtime > newest) newest = mtime;
+  }
+  return new Date(newest).toISOString();
+}
+
+/**
  * Measure and classify the bundle chunks in distDir.
  */
 export function measureBundle({
@@ -161,41 +262,28 @@ export function measureBundle({
 
   const graph = buildImportGraph(distDir, files);
 
-  // Compute transitive static closure of entryChunk (first-screen bundle)
-  const firstScreenSet = new Set();
-  if (graph.has(entryChunk)) {
-    const queue = [entryChunk];
-    while (queue.length > 0) {
-      const current = queue.shift();
-      if (firstScreenSet.has(current)) continue;
-      firstScreenSet.add(current);
-      const node = graph.get(current);
-      if (node) {
-        for (const target of node.staticImports) {
-          if (!firstScreenSet.has(target)) queue.push(target);
-        }
-      }
-    }
+  // The report claims to measure the entry's pre-render closure; an absent
+  // entry would silently measure an empty first screen instead.
+  if (!graph.has(entryChunk)) {
+    throw new Error(
+      `entry chunk ${entryChunk} not found in ${distDir} — is this dist the build you meant to measure?`
+    );
   }
 
+  const firstScreenSet = firstScreenClosure(graph, entryChunk);
+  const reachableSet = reachableClosure(graph, entryChunk);
+
+  const buckets = {
+    "first-screen": [],
+    "route-later": [],
+    "other-entry": [],
+    cli: [],
+  };
   const chunks = [];
-  const firstScreenChunks = [];
-  const routeLaterChunks = [];
-  const cliChunks = [];
 
   for (const [rel, node] of graph.entries()) {
-    let category;
-    if (rel.startsWith("cli.") || rel.includes("/cli.")) {
-      category = "cli";
-      cliChunks.push(node);
-    } else if (firstScreenSet.has(rel)) {
-      category = "first-screen";
-      firstScreenChunks.push(node);
-    } else {
-      category = "route-later";
-      routeLaterChunks.push(node);
-    }
-
+    const category = categoryOf(rel, firstScreenSet, reachableSet);
+    buckets[category].push(node);
     chunks.push({
       file: rel,
       category,
@@ -207,9 +295,9 @@ export function measureBundle({
   }
 
   // Sort chunks alphabetically within categories for deterministic output
-  firstScreenChunks.sort((a, b) => a.rel.localeCompare(b.rel));
-  routeLaterChunks.sort((a, b) => a.rel.localeCompare(b.rel));
-  cliChunks.sort((a, b) => a.rel.localeCompare(b.rel));
+  for (const list of Object.values(buckets)) {
+    list.sort((a, b) => a.rel.localeCompare(b.rel));
+  }
   chunks.sort((a, b) => a.file.localeCompare(b.file));
 
   const sumBytes = list => ({
@@ -218,18 +306,27 @@ export function measureBundle({
     gzippedBytes: list.reduce((sum, c) => sum + c.gzippedBytes, 0),
   });
 
-  const firstScreenTotal = sumBytes(firstScreenChunks);
-  const routeLaterTotal = sumBytes(routeLaterChunks);
-  const cliTotal = sumBytes(cliChunks);
+  const firstScreenTotal = sumBytes(buckets["first-screen"]);
+  const routeLaterTotal = sumBytes(buckets["route-later"]);
+  const otherEntryTotal = sumBytes(buckets["other-entry"]);
+  const cliTotal = sumBytes(buckets.cli);
 
-  const browserChunks = [...firstScreenChunks, ...routeLaterChunks];
+  const browserChunks = [
+    ...buckets["first-screen"],
+    ...buckets["route-later"],
+    ...buckets["other-entry"],
+  ];
   const browserTotal = sumBytes(browserChunks);
   const totalEmitted = sumBytes(chunks);
 
-  // Assert accounting invariant: total == firstScreen + routeLater + cli
+  // Assert accounting invariant: every chunk lands in exactly one bucket,
+  // so the categories always reassemble into the emitted total.
   if (
     chunks.length !==
-    firstScreenChunks.length + routeLaterChunks.length + cliChunks.length
+    firstScreenTotal.count +
+      routeLaterTotal.count +
+      otherEntryTotal.count +
+      cliTotal.count
   ) {
     throw new Error("Accounting error: total chunks count mismatch");
   }
@@ -237,22 +334,46 @@ export function measureBundle({
   return {
     date,
     commit,
+    builtAt: builtAtOf(files),
     distDir,
     entryChunk,
     chunks,
     categories: {
-      firstScreen: { chunks: firstScreenChunks, ...firstScreenTotal },
-      routeLater: { chunks: routeLaterChunks, ...routeLaterTotal },
-      cli: { chunks: cliChunks, ...cliTotal },
+      firstScreen: { chunks: buckets["first-screen"], ...firstScreenTotal },
+      routeLater: { chunks: buckets["route-later"], ...routeLaterTotal },
+      otherEntry: { chunks: buckets["other-entry"], ...otherEntryTotal },
+      cli: { chunks: buckets.cli, ...cliTotal },
     },
     totals: {
       firstScreen: firstScreenTotal,
       routeLater: routeLaterTotal,
+      otherEntry: otherEntryTotal,
       browser: browserTotal,
       cli: cliTotal,
       totalEmitted,
     },
   };
+}
+
+/**
+ * One report section: the heading, the chunk table, and its subtotal.
+ */
+function pushChunkSection(lines, { heading, chunks, subtotalLabel, total }) {
+  lines.push("");
+  lines.push(heading);
+  lines.push("-".repeat(72));
+  for (const chunk of chunks) {
+    const min = `${formatKB(chunk.minifiedBytes)} KB`.padStart(11);
+    const gz = `${formatKB(chunk.gzippedBytes)} KB gzip`.padStart(16);
+    lines.push(`  ${chunk.rel.padEnd(42)} ${min}  (${gz})`);
+  }
+  lines.push("-".repeat(72));
+  const min = `${formatKB(total.minifiedBytes)} KB`;
+  const gz = `${formatKB(total.gzippedBytes)} KB`;
+  lines.push(
+    `  ${subtotalLabel}`.padEnd(44) +
+      `${min.padStart(11)}  (${gz.padStart(11)} gzip)`
+  );
 }
 
 /**
@@ -268,63 +389,40 @@ export function formatReport(result, { json = false } = {}) {
   lines.push("=".repeat(72));
   lines.push(`Date:    ${result.date}`);
   lines.push(`Commit:  ${result.commit}`);
+  lines.push(`Built:   ${result.builtAt}`);
   lines.push(`Entry:   ${result.entryChunk}`);
   lines.push("=".repeat(72));
 
-  lines.push("");
-  lines.push(
-    `📦 First-screen chunks (${result.categories.firstScreen.count} chunks — pre-render static closure of ${result.entryChunk}):`
-  );
-  lines.push("-".repeat(72));
-  for (const chunk of result.categories.firstScreen.chunks) {
-    const min = `${formatKB(chunk.minifiedBytes)} KB`.padStart(11);
-    const gz = `${formatKB(chunk.gzippedBytes)} KB gzip`.padStart(16);
-    lines.push(`  ${chunk.rel.padEnd(42)} ${min}  (${gz})`);
-  }
-  lines.push("-".repeat(72));
-  const fsMin = `${formatKB(result.totals.firstScreen.minifiedBytes)} KB`;
-  const fsGz = `${formatKB(result.totals.firstScreen.gzippedBytes)} KB`;
-  lines.push(
-    `  Subtotal First-Screen:`.padEnd(44) +
-      `${fsMin.padStart(11)}  (${fsGz.padStart(11)} gzip)`
-  );
+  pushChunkSection(lines, {
+    heading: `📦 First-screen chunks (${result.categories.firstScreen.count} chunks — pre-render static closure of ${result.entryChunk}):`,
+    chunks: result.categories.firstScreen.chunks,
+    subtotalLabel: "Subtotal First-Screen:",
+    total: result.totals.firstScreen,
+  });
 
-  lines.push("");
-  lines.push(
-    `🔄 Route-later chunks (${result.categories.routeLater.count} chunks — on-demand / lazy routes):`
-  );
-  lines.push("-".repeat(72));
-  for (const chunk of result.categories.routeLater.chunks) {
-    const min = `${formatKB(chunk.minifiedBytes)} KB`.padStart(11);
-    const gz = `${formatKB(chunk.gzippedBytes)} KB gzip`.padStart(16);
-    lines.push(`  ${chunk.rel.padEnd(42)} ${min}  (${gz})`);
+  pushChunkSection(lines, {
+    heading: `🔄 Route-later chunks (${result.categories.routeLater.count} chunks — on-demand / lazy routes):`,
+    chunks: result.categories.routeLater.chunks,
+    subtotalLabel: "Subtotal Route-Later:",
+    total: result.totals.routeLater,
+  });
+
+  if (result.categories.otherEntry.count > 0) {
+    pushChunkSection(lines, {
+      heading: `🚪 Other entry chunks (${result.categories.otherEntry.count} chunks — entrypoints the build emits for other consumers, not lazy routes):`,
+      chunks: result.categories.otherEntry.chunks,
+      subtotalLabel: "Subtotal Other Entries:",
+      total: result.totals.otherEntry,
+    });
   }
-  lines.push("-".repeat(72));
-  const rlMin = `${formatKB(result.totals.routeLater.minifiedBytes)} KB`;
-  const rlGz = `${formatKB(result.totals.routeLater.gzippedBytes)} KB`;
-  lines.push(
-    `  Subtotal Route-Later:`.padEnd(44) +
-      `${rlMin.padStart(11)}  (${rlGz.padStart(11)} gzip)`
-  );
 
   if (result.categories.cli.count > 0) {
-    lines.push("");
-    lines.push(
-      `⚙️  Non-browser chunks (${result.categories.cli.count} chunks — CLI tools):`
-    );
-    lines.push("-".repeat(72));
-    for (const chunk of result.categories.cli.chunks) {
-      const min = `${formatKB(chunk.minifiedBytes)} KB`.padStart(11);
-      const gz = `${formatKB(chunk.gzippedBytes)} KB gzip`.padStart(16);
-      lines.push(`  ${chunk.rel.padEnd(42)} ${min}  (${gz})`);
-    }
-    lines.push("-".repeat(72));
-    const cliMin = `${formatKB(result.totals.cli.minifiedBytes)} KB`;
-    const cliGz = `${formatKB(result.totals.cli.gzippedBytes)} KB`;
-    lines.push(
-      `  Subtotal CLI:`.padEnd(44) +
-        `${cliMin.padStart(11)}  (${cliGz.padStart(11)} gzip)`
-    );
+    pushChunkSection(lines, {
+      heading: `⚙️  Non-browser chunks (${result.categories.cli.count} chunks — CLI tools):`,
+      chunks: result.categories.cli.chunks,
+      subtotalLabel: "Subtotal CLI:",
+      total: result.totals.cli,
+    });
   }
 
   lines.push("");
@@ -363,11 +461,41 @@ function parseArgs(argv) {
   return flags;
 }
 
+/**
+ * The committer date of `commit` as a millisecond timestamp, or Infinity
+ * when it cannot be read — the staleness warning then stays silent rather
+ * than firing on a guess.
+ */
+function commitTimeMs(commit) {
+  if (commit === "unversioned") return Infinity;
+  try {
+    const ms = Number(
+      execFileSync("git", ["show", "-s", "--format=%ct", commit], {
+        cwd: PACKAGE_ROOT,
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "ignore"],
+      }).trim()
+    );
+    return Number.isFinite(ms) ? ms * 1000 : Infinity;
+  } catch {
+    return Infinity;
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   try {
     const flags = parseArgs(process.argv.slice(2));
     const distDir = flags.dist ? resolve(flags.dist) : resolve(PACKAGE_ROOT, "dist");
     const result = measureBundle({ distDir });
+    // The report labels the bytes with the current revision; say so loudly
+    // when the bytes predate it, so a stale dist cannot wear a fresh commit
+    // unnoticed.
+    const builtMs = Date.parse(result.builtAt);
+    if (Number.isFinite(builtMs) && builtMs < commitTimeMs(result.commit)) {
+      console.error(
+        `bundle-report warning: the dist was built at ${result.builtAt}, before commit ${result.commit.slice(0, 12)} — the report's commit labels older bytes. Rebuild for a fresh attribution.`
+      );
+    }
     console.log(formatReport(result, { json: flags.json }));
     process.exit(0);
   } catch (err) {

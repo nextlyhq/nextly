@@ -128,6 +128,7 @@ describe("bundle-report", () => {
       // Verify every chunk is accounted for
       expect(report.chunks).toHaveLength(6);
       expect(report.totals.totalEmitted.count).toBe(6);
+      expect(report.builtAt).toBeDefined();
 
       // First-screen: index.mjs, chunk-shell.mjs, chunk-shared.mjs
       const firstScreenFiles = report.categories.firstScreen.chunks.map(
@@ -140,12 +141,16 @@ describe("bundle-report", () => {
       ]);
       expect(report.totals.firstScreen.count).toBe(3);
 
-      // Route-later: chunk-route.mjs
+      // Route-later: chunk-route.mjs — reachable from index.mjs, but only
+      // through its dynamic import
       const routeLaterFiles = report.categories.routeLater.chunks.map(
         c => c.rel
       );
       expect(routeLaterFiles).toEqual(["chunk-route.mjs"]);
       expect(report.totals.routeLater.count).toBe(1);
+
+      // No independent entrypoints in this fixture: nothing is unreachable
+      expect(report.categories.otherEntry.count).toBe(0);
 
       // CLI: cli.cjs, cli.mjs
       const cliFiles = report.categories.cli.chunks.map(c => c.rel);
@@ -187,6 +192,85 @@ describe("bundle-report", () => {
         /no JS chunks found/
       );
     });
+
+    it("throws when the entry chunk is absent rather than reporting an empty first screen", () => {
+      const dist = createFixtureDist({
+        "main.mjs": `export const app = "app";`,
+        "cli.cjs": `console.log("cli");`,
+      });
+      expect(() => measureBundle({ distDir: dist })).toThrow(
+        /entry chunk index\.mjs not found/
+      );
+    });
+
+    it("throws when an import edge resolves to a chunk the dist does not hold", () => {
+      const dist = createFixtureDist({
+        "index.mjs": `import { shell } from "./chunk-gone.mjs";`,
+      });
+      expect(() => measureBundle({ distDir: dist })).toThrow(
+        /import edge resolves to unknown chunk/
+      );
+    });
+
+    it("classifies an independent entrypoint as other-entry, not route-later", () => {
+      // plugin-components.mjs is a separate entry the build emits for a
+      // different consumer: reachable from index.mjs by neither edge, so it
+      // is not a lazy route and must not pad the route-later subtotal.
+      const dist = createFixtureDist({
+        "index.mjs": `
+          import { shell } from "./chunk-shell.mjs";
+          const LazyRoute = () => import("./chunk-route.mjs");
+        `,
+        "chunk-shell.mjs": `
+          import { util } from "./chunk-shared.mjs";
+          export const shell = "shell";
+        `,
+        "chunk-shared.mjs": `
+          export const util = "util";
+        `,
+        "chunk-route.mjs": `
+          import { util } from "./chunk-shared.mjs";
+          export default "page";
+        `,
+        "plugin-components.mjs": `
+          import { util } from "./chunk-shared.mjs";
+          export const components = { util };
+        `,
+        "cli.cjs": `
+          console.log("cli tool");
+        `,
+      });
+
+      const report = measureBundle({ distDir: dist });
+
+      const otherEntryFiles = report.categories.otherEntry.chunks.map(
+        c => c.rel
+      );
+      expect(otherEntryFiles).toEqual(["plugin-components.mjs"]);
+      expect(report.totals.otherEntry.count).toBe(1);
+
+      // The lazy route stays route-later even though plugin-components.mjs
+      // shares its imports.
+      expect(
+        report.categories.routeLater.chunks.map(c => c.rel)
+      ).toEqual(["chunk-route.mjs"]);
+      // First-screen is untouched by the other entry.
+      expect(report.totals.firstScreen.count).toBe(3);
+
+      // Browser = first-screen + route-later + other entries; all four
+      // categories reassemble into the emitted total.
+      expect(report.totals.browser.count).toBe(5);
+      expect(report.totals.totalEmitted.count).toBe(6);
+      expect(report.totals.totalEmitted.count).toBe(
+        report.totals.firstScreen.count +
+          report.totals.routeLater.count +
+          report.totals.otherEntry.count +
+          report.totals.cli.count
+      );
+
+      const text = formatReport(report, { json: false });
+      expect(text).toContain("Other entry chunks (1 chunks");
+    });
   });
 
   describe("measureBundle on actual admin build dist", () => {
@@ -204,21 +288,37 @@ describe("bundle-report", () => {
 
         expect(report.commit).toBeDefined();
         expect(report.date).toBeDefined();
+        expect(report.builtAt).toBeDefined();
 
-        // Invariant 1: Total emitted chunks equals first-screen + route-later + cli
-        const { firstScreen, routeLater, cli, totalEmitted, browser } =
-          report.totals;
+        // Invariant 1: Total emitted chunks equals first-screen + route-later
+        // + other entries + cli
+        const {
+          firstScreen,
+          routeLater,
+          otherEntry,
+          cli,
+          totalEmitted,
+          browser,
+        } = report.totals;
         expect(totalEmitted.count).toBe(
-          firstScreen.count + routeLater.count + cli.count
+          firstScreen.count +
+            routeLater.count +
+            otherEntry.count +
+            cli.count
         );
         expect(totalEmitted.minifiedBytes).toBe(
           firstScreen.minifiedBytes +
             routeLater.minifiedBytes +
+            otherEntry.minifiedBytes +
             cli.minifiedBytes
         );
-        expect(browser.count).toBe(firstScreen.count + routeLater.count);
+        expect(browser.count).toBe(
+          firstScreen.count + routeLater.count + otherEntry.count
+        );
         expect(browser.minifiedBytes).toBe(
-          firstScreen.minifiedBytes + routeLater.minifiedBytes
+          firstScreen.minifiedBytes +
+            routeLater.minifiedBytes +
+            otherEntry.minifiedBytes
         );
 
         // Invariant 2: index.mjs must be in first-screen
