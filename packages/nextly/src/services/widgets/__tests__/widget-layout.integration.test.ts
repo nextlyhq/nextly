@@ -42,8 +42,10 @@ import { WidgetLayoutService } from "../widget-layout-service";
  * which a row an earlier run left behind refuses. A suffix fresh for each run gives every run rows
  * of its own, so the suite can run again on the same database with each case asserting exactly
  * what it did before. SQLite boots a fresh in-memory database, where the suffix changes nothing.
+ * The whole UUID rather than a prefix of it, because the teardown deletes by it on databases that
+ * other runs and other lanes share.
  */
-const RUN = randomUUID().slice(0, 8);
+const RUN = randomUUID();
 
 const silentLogger = {
   debug: () => {},
@@ -78,6 +80,12 @@ function layoutSuite(
 
     beforeAll(async () => {
       service = await makeService();
+    });
+
+    // Server databases outlive the run, so the rows it wrote go with it rather than piling up.
+    // A setup that never reached the database wrote nothing, and has no service to delete with.
+    afterAll(async () => {
+      if (service !== undefined) await deleteRunRows(service);
     });
 
     it("round-trips an arrangement", async () => {
@@ -410,8 +418,9 @@ function internalsOf(service: WidgetLayoutService) {
           where: (w: unknown) => Promise<Array<Record<string, unknown>>>;
         };
       };
+      delete: (t: unknown) => { where: (w: unknown) => Promise<unknown> };
     };
-    table: { id: unknown; layout: unknown; version: unknown };
+    table: { id: unknown; scopeId: unknown; layout: unknown; version: unknown };
   };
 }
 
@@ -444,6 +453,18 @@ async function readRawLayout(
     .from(internals.table)
     .where(eq(internals.table.id as never, id));
   return { layout: rows[0]?.layout, version: rows[0]?.version };
+}
+
+/**
+ * Deletes every row this run wrote. Each scope id carries `RUN`, while row ids are hashes of it,
+ * so the match is on `scope_id`; `RUN` is hex and hyphens, so it holds no `LIKE` wildcard.
+ */
+async function deleteRunRows(service: WidgetLayoutService): Promise<void> {
+  const internals = internalsOf(service);
+  const { like } = await import("drizzle-orm");
+  await internals.db
+    .delete(internals.table)
+    .where(like(internals.table.scopeId as never, `%${RUN}%`));
 }
 
 /** Writes a payload the decoder must refuse, bypassing the service's own guard. */
