@@ -13,9 +13,22 @@
  * @module components/features/widgets/archetypes/tiered-rows
  */
 
+import { cn } from "@admin/lib/utils";
 import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 
-import { rowsDrawn, useCardTier, useRowsTier } from "../frame/tier";
+import {
+  LIST_CLASS,
+  LIST_DETAIL_CLASS,
+  LIST_LABEL_CLASS,
+  LIST_ROW_CLASS,
+  ROWS_STACK_CLASS,
+  TABLE_CELL_CLASS,
+  TABLE_CLASS,
+  TABLE_HEAD_ROW_CLASS,
+  TABLE_HEADING_CLASS,
+  TABLE_ROW_CLASS,
+} from "../frame/geometry";
+import { rowsDrawn, rowsLayout, useCardTier, useRowsTier } from "../frame/tier";
 
 import { asPresentedText } from "./cell-text";
 import { MoreExist } from "./more-exist";
@@ -46,8 +59,8 @@ export function TieredRows({
   const columnOf = new Map(columns.map(column => [column.name, column]));
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      {tier === "large" && columns.length > 0 ? (
+    <div className={ROWS_STACK_CLASS}>
+      {rowsLayout(tier, columns.length).kind === "table" ? (
         <RowsTable rows={rows} columns={columns} />
       ) : (
         <RowsList
@@ -75,7 +88,7 @@ function RowsList({
   detailField: string | undefined;
 }) {
   return (
-    <ul data-testid="widget-list" className="flex flex-col gap-2">
+    <ul data-testid="widget-list" className={LIST_CLASS}>
       {rows.map((item, index) => {
         const label = asPresentedText(
           item[labelField],
@@ -93,16 +106,16 @@ function RowsList({
             // reorderable, so there is no state for a wrong key to strand.
             key={index}
             data-testid="widget-list-row"
-            className="flex min-w-0 flex-col gap-0.5"
+            className={LIST_ROW_CLASS}
           >
             {/* An em dash rather than an empty line, so a row whose label is absent or
                 unprintable still occupies its place and the count of rows matches the
                 count of results. */}
-            <span className="break-words text-sm text-foreground">
+            <span className={cn(LIST_LABEL_CLASS, "text-foreground")}>
               {label ?? "—"}
             </span>
             {detail !== undefined && (
-              <span className="break-words text-xs text-muted-foreground">
+              <span className={cn(LIST_DETAIL_CLASS, "text-muted-foreground")}>
                 {detail}
               </span>
             )}
@@ -121,15 +134,15 @@ function RowsTable({
   columns: readonly WidgetResultField[];
 }) {
   return (
-    <table data-testid="widget-table" className="w-full table-fixed text-sm">
+    <table data-testid="widget-table" className={TABLE_CLASS}>
       <thead>
-        <tr className="border-b border-border">
+        <tr className={TABLE_HEAD_ROW_CLASS}>
           {columns.map(column => (
             <th
               key={column.name}
               scope="col"
               data-testid="widget-table-heading"
-              className="break-words pb-1 pr-4 text-left text-xs font-medium text-muted-foreground last:pr-0"
+              className={cn(TABLE_HEADING_CLASS, "text-muted-foreground")}
             >
               {/* The source's label when it has one. A field name is a poor heading, but it is
                   true, which an invented one would not be. */}
@@ -149,14 +162,14 @@ function RowsTable({
             // against the card, which is not a lighter separator but an absent one. Not a 3:1
             // claim: `styles/contrast/pairings.ts` excludes this token deliberately, since a
             // table whose rows are identified by their content needs no rule to be operable.
-            className="border-b border-border last:border-0"
+            className={TABLE_ROW_CLASS}
           >
             {columns.map(column => (
               <td
                 key={column.name}
                 // Fixed layout and wrapping cells: the columns share the card's width, so a
                 // long value takes more lines rather than widening the card or scrolling it.
-                className="break-words py-1 pr-4 align-top text-foreground last:pr-0"
+                className={cn(TABLE_CELL_CLASS, "text-foreground")}
               >
                 {/* Presented by the column's declared kind, so a date column reads as a date
                     rather than as the ISO string it crossed the wire as. An em dash rather than
