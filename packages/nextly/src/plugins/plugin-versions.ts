@@ -14,7 +14,8 @@
  * refused rather than guessed at.
  *
  * The plugin acting as itself, with no options or `{ as: "system" }`, stays
- * trusted and writes exactly what it is given, as before.
+ * trusted. Every recovery point, trusted or checked, is stored as REST stores
+ * one, without password values.
  *
  * @module plugins/plugin-versions
  */
@@ -23,16 +24,17 @@ import {
   assertDocumentUpdatable,
   assertVersionDocumentReadable,
   resolveVersionsPolicy,
+  stripAutosavePasswords,
 } from "../api/versions-access";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { canReadEntity, readAccessCaller } from "../auth/entity-read-access";
 import type { RequestActor } from "../auth/request-actor";
-import type { DirectAPIConfig } from "../direct-api/types";
 import {
   authorizeChecked,
   checkedCaller,
   directApiActor,
 } from "../direct-api/namespaces/helpers";
+import type { DirectAPIConfig } from "../direct-api/types";
 import type { UserContext } from "../domains/singles/types";
 import type {
   AutosaveWriteResult,
@@ -86,7 +88,8 @@ export interface PluginVersionWrites {
    * @experimental Record an author's recovery point. Made as a person, the
    * person needs to read and update the document, its autosave must be on, and
    * the point is theirs: `createdBy` left out files it under them, and one
-   * naming anyone else is refused.
+   * naming anyone else is refused. Stored, whoever the call is made as,
+   * without password values, as REST stores one.
    */
   autosave(
     input: AutosaveInput,
@@ -237,12 +240,23 @@ export function pluginVersionWrites(
 
     async autosave(input, opts) {
       const writer = await checkedWriter(input.ref, opts, "autosave");
-      if (!writer) return service().autosave(input);
       const named = input.createdBy ?? null;
-      if (named !== null && named !== writer.user.id) {
+      if (writer && named !== null && named !== writer.user.id) {
         refuseOtherAuthor(input.ref, "autosave");
       }
-      return service().autosave({ ...input, createdBy: writer.user.id });
+      // Stored as REST stores one, without password values, whoever the call
+      // is made as. A copy is stripped: the snapshot is the plugin's object.
+      const snapshot: unknown = structuredClone(input.snapshot);
+      await stripAutosavePasswords(
+        input.ref.scopeKind,
+        input.ref.scopeSlug,
+        snapshot
+      );
+      return service().autosave({
+        ...input,
+        snapshot,
+        ...(writer ? { createdBy: writer.user.id } : {}),
+      });
     },
   };
 }

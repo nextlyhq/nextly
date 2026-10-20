@@ -774,6 +774,146 @@ export async function tryResolveCurrentFields(
 }
 
 /**
+ * Leave a recovery point's password-field values out of `snapshot`, in place.
+ *
+ * The snapshot of an autosave arrives from whoever is editing, so it carries
+ * whatever they have typed, a new password included, which no write has hashed
+ * yet. Durable capture never faces this: it snapshots the stored row, where the
+ * value is already hashed or absent. One function for every door that records
+ * an autosave, REST and the plugin service alike, with the same schema-driven
+ * recursive helper the version reads use, so no door stores a value another
+ * would have left out.
+ */
+export async function stripAutosavePasswords(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  snapshot: unknown
+): Promise<void> {
+  // `page` scopes hold block documents rather than user-defined fields, and
+  // field resolution has no answer for them.
+  if (scopeKind !== "collection" && scopeKind !== "single") return;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+    return;
+  }
+  const fields = await autosaveFieldsOrRefuse(scopeKind, slug);
+  if (fields.length === 0) return;
+
+  // Walks the SNAPSHOT rather than an expanded schema. A component may
+  // reference itself, so a schema-side expansion has to stop at some
+  // depth, and everything below that cut-off would keep its passwords.
+  // The data is finite, so this terminates on its own and strips every
+  // level that actually exists.
+  stripPasswordsThroughComponents(
+    snapshot,
+    fields,
+    await autosaveComponentFields(fields, scopeKind, slug),
+    stripPasswordFieldValues
+  );
+}
+
+/**
+ * The entity's fields, or a refusal when they cannot be read.
+ *
+ * Fail CLOSED on a failed LOOKUP, which is what `null` means here. An empty
+ * list is a different answer: a valid entity can have no user-defined fields
+ * at all (a freshly created Single, whose identity columns alone form a
+ * document), and there is genuinely nothing to strip from one. Treating those
+ * alike would refuse every autosave for such an entity, while treating a
+ * failed lookup as "nothing to strip" would write whatever the editor sent,
+ * credentials included, exactly when the lookup meant to find them had broken.
+ */
+async function autosaveFieldsOrRefuse(
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<FieldConfig[]> {
+  const fields = await tryResolveCurrentFields(scopeKind, slug);
+  if (fields === null) {
+    throw NextlyError.internal({
+      logContext: {
+        reason: "autosave-field-resolution-failed",
+        scopeKind,
+        scopeSlug: slug,
+      },
+    });
+  }
+  return fields;
+}
+
+/**
+ * The schemas of the components `fields` reference, by slug.
+ *
+ * A `component` field is a REFERENCE: its schema lives under another slug, so
+ * the stripper sees `{ type: "component" }` and has nothing to descend into. A
+ * password declared inside a referenced component would survive in the
+ * snapshot. Resolved here so the stripper can rewrite the references into the
+ * container shapes it already walks, and strip once.
+ */
+async function autosaveComponentFields(
+  fields: FieldConfig[],
+  scopeKind: "collection" | "single",
+  slug: string
+): Promise<Map<string, FieldConfig[]>> {
+  const dataService = container.has("fieldGroupDataService")
+    ? container.get<FieldGroupDataService>("fieldGroupDataService")
+    : null;
+  // Fail CLOSED where a reference cannot be resolved. `resolveComponentFieldMap`
+  // propagates a lookup error rather than reporting the component absent, so
+  // an unresolvable schema arrives here as a thrown error and refuses the
+  // write; what this guards is the other case, a registry that is not wired at
+  // all while the schema still declares references.
+  if (!dataService) {
+    if (declaresComponentReference(fields)) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "autosave-component-schema-unavailable",
+          scopeKind,
+          scopeSlug: slug,
+        },
+      });
+    }
+    return new Map();
+  }
+  // No executor: autosave runs outside any transaction by design, and the
+  // parameter exists so an in-transaction caller can read on its own
+  // connection rather than take a second one.
+  return resolveComponentFieldMap(fields, component =>
+    dataService.getComponentFields(component)
+  );
+}
+
+/**
+ * Whether any field in this schema references a component by slug, at any
+ * depth. Used to decide whether an unavailable component registry is a problem
+ * for THIS entity: a schema with no references has nothing unresolvable in it.
+ */
+function declaresComponentReference(fields: FieldConfig[]): boolean {
+  for (const field of fields) {
+    // Either spelling declares a reference: a migrated definition whose keys
+    // went unread would skip the registry-unavailable guard entirely.
+    if (typeof (field as { component?: unknown }).component === "string") {
+      return true;
+    }
+    if (typeof (field as { fieldGroup?: unknown }).fieldGroup === "string") {
+      return true;
+    }
+    if (Array.isArray((field as { components?: unknown }).components)) {
+      return true;
+    }
+    if (Array.isArray((field as { fieldGroups?: unknown }).fieldGroups)) {
+      return true;
+    }
+    const children = (field as { fields?: unknown }).fields;
+    if (
+      Array.isArray(children) &&
+      declaresComponentReference(children as FieldConfig[])
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Current fields, with a failed lookup flattened to an empty list.
  *
  * Kept for the redaction paths, where "no fields" and "could not look" lead to
