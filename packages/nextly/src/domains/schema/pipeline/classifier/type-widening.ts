@@ -102,7 +102,13 @@ export function isWideningChange(
   // (see introspect-live.ts), so we normalize bpchar to char-family here.
   const fromIsCharFamily = CHAR_RE.test(from) || from === "bpchar";
   if (fromIsCharFamily && (to === "varchar" || VARCHAR_RE.test(to))) {
-    return true;
+    // Only a varchar at least as long holds every fixed-width value; a shorter one cuts them.
+    // An unbounded side (PG's `bpchar`, a bare `varchar`) carries no length to compare.
+    const fromLen = CHAR_RE.exec(from);
+    const toLen = VARCHAR_RE.exec(to);
+    return fromLen && toLen
+      ? parseInt(toLen[1], 10) >= parseInt(fromLen[1], 10)
+      : true;
   }
   // bpchar -> text on PG widens too (text accepts any char content).
   if (dialect === "postgresql" && from === "bpchar" && to === "text") {

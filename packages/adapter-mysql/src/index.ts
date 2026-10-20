@@ -576,12 +576,13 @@ export class MySqlAdapter extends DrizzleAdapter {
       // Set when the ROLLBACK failed (`returnTransactionConnection`).
       let rollbackFailed = false;
       // What `beginTransaction` changed on the session, to put back once the
-      // transaction has ended.
-      let restore: SessionRestore = null;
+      // transaction has ended. Filled in as each change lands, so a setup
+      // that fails part way still puts back what it had already changed.
+      const restore: NonNullable<SessionRestore> = {};
 
       try {
         // Begin transaction with options
-        restore = await this.beginTransaction(connection, options);
+        await this.beginTransaction(connection, options, restore);
 
         // Create transaction context
         const ctx = this.createTransactionContext(connection);
@@ -844,13 +845,15 @@ export class MySqlAdapter extends DrizzleAdapter {
   }
 
   /**
-   * Begins a transaction with the specified options, and returns what it
-   * changed on the session for `restoreSession` to put back.
+   * Begins a transaction with the specified options, recording in `changed`
+   * each session setting it changes, as it changes it, for `restoreSession`
+   * to put back.
    */
   private async beginTransaction(
     connection: PoolConnection,
-    options?: TransactionOptions
-  ): Promise<SessionRestore> {
+    options: TransactionOptions | undefined,
+    changed: NonNullable<SessionRestore>
+  ): Promise<void> {
     // Set isolation level if specified (must be done before BEGIN)
     if (options?.isolationLevel) {
       const isolationMap: Record<string, string> = {
@@ -873,8 +876,6 @@ export class MySqlAdapter extends DrizzleAdapter {
     // Begin the transaction
     await connection.query("START TRANSACTION");
 
-    let restore: SessionRestore = null;
-
     // Set lock wait timeout if specified
     if (options?.timeoutMs) {
       // Read first, so the session's own value can be put back once the
@@ -888,9 +889,7 @@ export class MySqlAdapter extends DrizzleAdapter {
       await connection.query(
         `SET SESSION innodb_lock_wait_timeout = ${timeoutSeconds}`
       );
-      restore = {
-        lockWaitTimeout: Number.isInteger(previous) ? previous : null,
-      };
+      changed.lockWaitTimeout = Number.isInteger(previous) ? previous : null;
     }
 
     // Strict mode for this transaction: an INSERT, UPDATE or ALTER that would
@@ -905,12 +904,8 @@ export class MySqlAdapter extends DrizzleAdapter {
       await connection.query(
         "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))"
       );
-      restore = {
-        ...restore,
-        sqlMode: typeof previous === "string" ? previous : null,
-      };
+      changed.sqlMode = typeof previous === "string" ? previous : null;
     }
-    return restore;
   }
 
   /**

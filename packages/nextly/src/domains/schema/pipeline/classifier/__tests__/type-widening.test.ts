@@ -148,6 +148,12 @@ describe("stringNarrowingLimit", () => {
       10
     );
   });
+  it("bounds a fixed-width char narrowed to a shorter varchar", () => {
+    expect(stringNarrowingLimit("char(255)", "varchar(10)", "mysql")).toBe(10);
+    expect(isWideningChange("char(255)", "varchar(10)", "mysql")).toBe(false);
+    expect(isWideningChange("char(10)", "varchar(255)", "mysql")).toBe(true);
+    expect(isWideningChange("char(10)", "varchar", "postgresql")).toBe(true);
+  });
   it("is null for a widening string change", () => {
     expect(
       stringNarrowingLimit("varchar(100)", "varchar(255)", "mysql")

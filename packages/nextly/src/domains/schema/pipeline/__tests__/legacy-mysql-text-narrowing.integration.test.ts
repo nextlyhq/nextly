@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import mysql from "mysql2/promise";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { baselineCore } from "../../../../cli/commands/migrate-baseline";
 import {
@@ -56,6 +56,27 @@ import { generateMigration } from "../../migrate-create/generate";
 import { resolveComponentTableName } from "../../utils/resolve-table-name";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+/**
+ * Runs just before the apply's pre-resolution DDL, after the classifier has counted: a write
+ * landing here is the one a count alone cannot see. Unset, the executor runs as it is.
+ */
+let beforePreResolution: (() => Promise<void>) | undefined;
+vi.mock("../pre-resolution/executor", async importOriginal => {
+  const original =
+    await importOriginal<typeof import("../pre-resolution/executor")>();
+  return {
+    ...original,
+    executePreResolutionOps: async (
+      ...args: Parameters<typeof original.executePreResolutionOps>
+    ) => {
+      const hook = beforePreResolution;
+      beforePreResolution = undefined;
+      await hook?.();
+      return original.executePreResolutionOps(...args);
+    },
+  };
+});
 
 const MYSQL_URL = process.env.TEST_MYSQL_URL ?? "";
 const describeMysql = describe.skipIf(!MYSQL_URL);
@@ -95,7 +116,7 @@ interface Harness {
 
 let seq = 0;
 
-async function makeHarness(): Promise<Harness> {
+async function makeHarness(poolMax?: number): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "nextly-legacy-text-"));
   const dbName = `nextly_legacy_text_${RUN_ID}_${seq++}`;
   const server = new URL(MYSQL_URL);
@@ -110,6 +131,7 @@ async function makeHarness(): Promise<Harness> {
   const adapter = await createAdapter({
     type: "mysql",
     url: url.toString(),
+    ...(poolMax === undefined ? {} : { pool: { max: poolMax } }),
   } as Parameters<typeof createAdapter>[0]);
   return {
     adapter: adapter as unknown as CLIDatabaseAdapter,
@@ -327,5 +349,40 @@ describeMysql("legacy MySQL TEXT columns on Singles and field groups", () => {
       title: ["text", 300],
       metaTitle: ["text", 300],
     });
+  });
+
+  it("db:sync refuses, rather than cuts, a long value written after the count, on a server that is not in strict mode", async () => {
+    await h.dispose();
+    h = await makeHarness(2);
+    await legacyTables(h, 255);
+
+    // Both pooled connections without strict mode, standing for a server configured that way: two
+    // transactions held open at once take one connection each, and the adapter puts back only a
+    // setting it changed itself, so each keeps the mode set here.
+    const drizzleAdapter = h.adapter as unknown as DrizzleAdapter;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    let entered = 0;
+    const laxen = () =>
+      drizzleAdapter.transaction(async ctx => {
+        await ctx.execute("SET SESSION sql_mode = ''");
+        if (++entered === 2) release();
+        await held;
+      });
+    await Promise.all([laxen(), laxen()]);
+
+    beforePreResolution = async () => {
+      await h.root.query(`UPDATE \`${SINGLE_TABLE}\` SET title = ?`, [
+        "y".repeat(300),
+      ]);
+    };
+
+    // The driver's error names the statement it refused; MySQL's reason, "Data too long", is its
+    // cause. What separates this from the unguarded apply is that the apply fails at all.
+    await expect(dbSync(h)).rejects.toThrow(
+      /MODIFY COLUMN `title` varchar\(255\)/
+    );
+
+    expect((await readBack(h)).title).toEqual(["text", 300]);
   });
 });

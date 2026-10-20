@@ -28,6 +28,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { stringNarrowingLimit } from "../classifier/type-widening";
 import {
   isPreResolutionOp,
   isReferenceListConversion,
@@ -73,7 +74,9 @@ export async function executePreResolutionOps(
    */
   leadingStatements: readonly string[] = []
 ): Promise<number> {
-  const preOps = ops.filter(isPreResolutionOp);
+  const preOps = ops.filter(
+    op => isPreResolutionOp(op) || isMysqlStringNarrowing(op, dialect)
+  );
   if (preOps.length === 0 && leadingStatements.length === 0) return 0;
 
   const ordered = orderForExecution(preOps);
@@ -91,6 +94,10 @@ export async function executePreResolutionOps(
   }
 
   for (const op of ordered) {
+    if (isMysqlStringNarrowing(op, dialect)) {
+      await runInStrictMysqlSession(txOrDb, generateSQL(op, dialect));
+      continue;
+    }
     for (const statement of statementsForOp(op, dialect)) {
       await runRaw(txOrDb, statement, dialect);
     }
@@ -294,7 +301,58 @@ function orderForExecution(ops: Operation[]): Operation[] {
     ...dropColumns,
     ...dropTables,
     ...referenceListConversions,
+    // Last, like the conversions and for the same reason: a MySQL string narrowing
+    // (`isMysqlStringNarrowing`) names its column as every rename has left it.
+    ...ops.filter(
+      op => op.type === "change_column_type" && !isReferenceListConversion(op)
+    ),
   ];
+}
+
+/**
+ * Whether `op` narrows a MySQL string column to `varchar(N)`, so that running it can cut a stored
+ * value short.
+ *
+ * The classifier lets such a change through without a prompt once it has counted no value longer
+ * than N, but a value written after that count is one it never saw, and drizzle-kit would run the
+ * change on whichever pooled connection it takes, in whatever mode the server gives it. So it runs
+ * here instead, on the apply's own connection in strict mode (`runInStrictMysqlSession`), and a
+ * value that no longer fits makes the statement fail rather than lose its end. The kit then finds
+ * the column already converted, and plans nothing for it.
+ */
+function isMysqlStringNarrowing(
+  op: Operation,
+  dialect: SupportedDialect
+): boolean {
+  return (
+    dialect === "mysql" &&
+    op.type === "change_column_type" &&
+    op.conversion === undefined &&
+    stringNarrowingLimit(op.fromType, op.toType, dialect) !== null
+  );
+}
+
+/**
+ * Run one MySQL statement in strict mode on this connection, with the session's own mode put back
+ * afterwards whether the statement succeeded or not, so the pooled connection the apply returns
+ * carries nothing of it. `STRICT_ALL_TABLES` is added to the session's mode, keeping its other
+ * flags.
+ */
+async function runInStrictMysqlSession(
+  txOrDb: unknown,
+  statement: string
+): Promise<void> {
+  await runRaw(txOrDb, "SET @nextly_sql_mode = @@SESSION.sql_mode", "mysql");
+  await runRaw(
+    txOrDb,
+    "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))",
+    "mysql"
+  );
+  try {
+    await runRaw(txOrDb, statement, "mysql");
+  } finally {
+    await runRaw(txOrDb, "SET SESSION sql_mode = @nextly_sql_mode", "mysql");
+  }
 }
 
 // F11 PR 3: this function used to dispatch to four `buildXxxSql` helpers

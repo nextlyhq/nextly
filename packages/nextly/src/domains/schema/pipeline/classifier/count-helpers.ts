@@ -12,18 +12,22 @@
 //   - SQLite: db.all() returns T[] (no execute()); take first row.
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { sql } from "drizzle-orm";
+import { sql, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-function quoteIdent(name: string, dialect: SupportedDialect): string {
+function assertSafeIdent(name: string): void {
   if (!SAFE_IDENT.test(name)) {
     throw new Error(
       `unsafe identifier: ${name} (only [A-Za-z_][A-Za-z0-9_]* allowed)`
     );
   }
+}
+
+function quoteIdent(name: string, dialect: SupportedDialect): string {
+  assertSafeIdent(name);
   return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 }
 
@@ -105,8 +109,9 @@ export async function countNulls(
 /**
  * How many rows hold a value in `column` longer than `length` characters: the values a narrowing to
  * `varchar(length)` would cut short. Counted in characters, as `varchar(N)` bounds them, by each
- * dialect's character-length function. `length` is an integer the classifier parsed from a type,
- * never caller input; it is still bound as a parameter.
+ * dialect's character-length function. The names go through Drizzle's identifier quoting and the
+ * length is a bound parameter, so nothing reaches the SQL text as a string; a name that would need
+ * escaping is refused all the same, as the other counts refuse it.
  */
 export async function countLongerThan(
   db: unknown,
@@ -115,22 +120,35 @@ export async function countLongerThan(
   column: string,
   length: number
 ): Promise<number> {
-  const tbl = quoteIdent(table, dialect);
-  const col = quoteIdent(column, dialect);
-  const charLength = dialect === "sqlite" ? "length" : "CHAR_LENGTH";
-  const query = sql`${sql.raw(
-    `SELECT COUNT(*) AS count FROM ${tbl} WHERE ${charLength}(${col}) > `
-  )}${length}`;
+  assertSafeIdent(table);
+  assertSafeIdent(column);
+  const charLength = dialect === "sqlite" ? sql`length` : sql`CHAR_LENGTH`;
+  return readCount(
+    db,
+    dialect,
+    sql`SELECT COUNT(*) AS count FROM ${sql.identifier(table)} WHERE ${charLength}(${sql.identifier(column)}) > ${length}`
+  );
+}
+
+/**
+ * A count query's one number, read from each dialect's result shape: SQLite's synchronous `all`,
+ * the others' `execute`. A query that returns no row is a broken integration, never a zero.
+ */
+async function readCount(
+  db: unknown,
+  dialect: SupportedDialect,
+  query: SQL
+): Promise<number> {
   if (dialect === "sqlite") {
-    const dbTyped = db as SqliteAll;
-    const rows = dbTyped.all(query);
-    if (rows.length === 0)
-      throw new Error("SQLite count query returned no rows");
+    const rows = (db as SqliteAll).all(query);
+    if (rows.length === 0) {
+      throw NextlyError.internal({
+        logContext: { reason: "count query returned no rows", dialect },
+      });
+    }
     return asNumber(rows[0].count);
   }
-  const dbTyped = db as PgMysqlExecute;
-  const result = await dbTyped.execute(query);
-  return extractCount(result, dialect);
+  return extractCount(await (db as PgMysqlExecute).execute(query), dialect);
 }
 
 export async function countRows(
