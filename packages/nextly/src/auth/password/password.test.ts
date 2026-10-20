@@ -696,6 +696,47 @@ describe("password utilities", () => {
         expect(res.errors).toEqual(["Password exceeds the digester's reach."]);
         expect(res.errors?.some(e => e.includes("HSM vault"))).toBe(false);
       });
+
+      it("refuses on an empty validator message instead of reading it as acceptance", () => {
+        // An explicit `false` or `{ ok: false }` verdict with an empty
+        // message is still a refusal: the generic message stands in, and an
+        // empty refusal must never read as "no error".
+        for (const answer of [
+          "",
+          false,
+          { ok: false },
+          { ok: false, message: "" },
+        ]) {
+          const refusingHasher: PasswordHasher = {
+            name: "EmptyMessageHasher",
+            validate: () => answer,
+            hash: async () => "",
+            verify: async () => true,
+          };
+          const res = validatePasswordStrength("some-secret-password", {
+            hasher: refusingHasher,
+          });
+          expect(res.ok).toBe(false);
+          expect(res.errors).toEqual([
+            "Password exceeds the digester's reach.",
+          ]);
+        }
+
+        // `{ ok: false, message: "..." }` with a real message keeps it.
+        const messagedHasher: PasswordHasher = {
+          name: "MessagedHasher",
+          validate: () => ({
+            ok: false,
+            message: "too long for this digester",
+          }),
+          hash: async () => "",
+          verify: async () => true,
+        };
+        const res = validatePasswordStrength("some-secret-password", {
+          hasher: messagedHasher,
+        });
+        expect(res.errors).toEqual(["too long for this digester"]);
+      });
     });
   });
 

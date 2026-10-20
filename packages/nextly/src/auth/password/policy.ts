@@ -104,14 +104,15 @@ export function assertPasswordHasherContract(hasher: unknown): void {
 
 /**
  * The refusal a validator's ANSWER states — `false`, a message, or a
- * `{ ok: false }` verdict — or null when it accepts.
+ * `{ ok: false }` verdict — or null when it accepts. An empty message is
+ * still a refusal: it falls back to the generic one, never to acceptance.
  */
 function validatorResultRefusal(result: unknown): string | null {
   if (result === false) {
     return "Password exceeds the digester's reach.";
   }
   if (typeof result === "string") {
-    return result;
+    return result || "Password exceeds the digester's reach.";
   }
   if (
     typeof result === "object" &&
@@ -120,7 +121,7 @@ function validatorResultRefusal(result: unknown): string | null {
     !(result as { ok: boolean }).ok
   ) {
     return (
-      (result as { message?: string }).message ??
+      (result as { message?: string }).message ||
       "Password exceeds the digester's reach."
     );
   }
