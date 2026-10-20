@@ -129,8 +129,9 @@ export async function updateUserEndingSessions(
   // This process stops answering from what it holds for the account now
   // rather than when its cache entry would lapse. The write may not have
   // committed yet, so a read in between still sees the old row; the cache
-  // answers that read but keeps nothing for the account for a lifetime after
-  // this, so the first request after the commit reads the new row.
+  // answers that read but keeps nothing for the account until this flow's
+  // transaction has finished, so the first request after the commit reads
+  // the new row.
   forgetSessionStanding(args.userId);
   return changed;
 }

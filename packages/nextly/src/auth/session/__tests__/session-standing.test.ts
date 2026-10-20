@@ -26,12 +26,15 @@ import type { NextlyError } from "../../../errors/nextly-error";
 import {
   SESSION_CUTOFF_SECONDS,
   SESSION_STANDING_TTL_MS,
+  accountIsActive,
   createSessionStandingCache,
+  forgetSessionStanding,
   readSessionStanding,
   resetSessionStandingForTests,
   sessionTokenIsCurrent,
   setSessionStandingBoot,
   standingAdmits,
+  watchTransaction,
   type SessionStanding,
 } from "../session-standing";
 
@@ -397,6 +400,71 @@ describe("createSessionStandingCache", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps nothing read while the change that forgot it has not committed, however long it takes", async () => {
+    // A writer that holds its transaction open past the lifetime, waiting on
+    // a lock say, must not let a read of the old row be kept: that answer
+    // would outlive the commit by a whole lifetime.
+    const { rows, read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({ read, now: c.now });
+    let writing = true;
+
+    await cache.standing("u1", 0);
+    cache.forget("u1", () => writing);
+    c.advance(SESSION_STANDING_TTL_MS + 1_000);
+    // Not committed yet: the row still reads as it was.
+    expect(await cache.standing("u1", 0)).toEqual(ACTIVE);
+    rows.u1 = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await cache.standing("u1", 0)).toEqual({
+      isActive: false,
+      sessionEpoch: 1,
+    });
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps a mark whose change is still uncommitted when the marks are full", async () => {
+    // A writer held open while more accounts are forgotten than the cache
+    // keeps marks for: the open writer's mark is the one that must stay.
+    const { rows, read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({
+      read,
+      now: c.now,
+      maxEntries: 2,
+    });
+    let writing = true;
+
+    cache.forget("u1", () => writing);
+    cache.forget("u2");
+    cache.forget("u3");
+    c.advance(SESSION_STANDING_TTL_MS + 1_000);
+    expect(await cache.standing("u1", 0)).toEqual(ACTIVE);
+    rows.u1 = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await cache.standing("u1", 0)).toEqual({
+      isActive: false,
+      sessionEpoch: 1,
+    });
+  });
+
+  it("keeps answers again once the forgetting change has committed and a lifetime has passed", async () => {
+    const { read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({ read, now: c.now });
+    let writing = true;
+
+    cache.forget("u1", () => writing);
+    writing = false;
+    c.advance(SESSION_STANDING_TTL_MS);
+    await cache.standing("u1", 0);
+    await cache.standing("u1", 0);
+
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
   it("reads an account that no longer exists again on its next request", async () => {
     // Only an active account's answer is kept. A refusal kept for the
     // lifetime would refuse the account's next session too, had it come back.
@@ -555,6 +623,7 @@ function adapterHolding(standing: SessionStanding) {
   return {
     getCapabilities: () => ({ dialect: "postgresql" }),
     inTransaction: () => false,
+    transactionOpenInFlow: () => false,
     getDrizzle: () => ({
       select: () => ({
         from: () => ({
@@ -590,6 +659,181 @@ describe("sessionTokenIsCurrent across a change of database", () => {
     );
 
     expect(await sessionTokenIsCurrent(claims)).toBe(false);
+  });
+});
+
+describe("forgetSessionStanding across a change of database", () => {
+  afterEach(() => {
+    resetSessionStandingForTests();
+    container.clear();
+    ready.registered = false;
+  });
+
+  it("marks the cache the registered adapter reads through, not one it replaced", async () => {
+    // The cache still belongs to the old adapter until something reads
+    // through the new one. A forget made then has to land where the next
+    // read looks, or that read keeps the uncommitted change's old row.
+    ready.registered = true;
+    container.registerSingleton("adapter", () => adapterHolding(ACTIVE));
+    expect(await accountIsActive("u1")).toBe(true);
+
+    let row: SessionStanding = ACTIVE;
+    let writing = true;
+    container.clear();
+    container.registerSingleton("adapter", () => ({
+      ...adapterHolding(ACTIVE),
+      transactionOpenInFlow: () => writing,
+      getDrizzle: () => ({
+        select: () => ({
+          from: () => ({
+            where: () => ({ limit: async () => [row] }),
+          }),
+        }),
+      }),
+    }));
+
+    forgetSessionStanding("u1");
+    // Read before the change commits: the row is still as it was.
+    expect(await accountIsActive("u1")).toBe(true);
+    row = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await accountIsActive("u1")).toBe(false);
+  });
+});
+
+describe("forgetSessionStanding while the writer's adapter is being replaced", () => {
+  afterEach(() => {
+    resetSessionStandingForTests();
+    container.clear();
+    ready.registered = false;
+  });
+
+  it("asks the adapter that holds the write whether it has committed", async () => {
+    // Services registered again while a write on the old adapter is still
+    // open: the mark goes to the new adapter's cache, but only the old one
+    // can say whether the write has committed.
+    const c = clock();
+    resetSessionStandingForTests({ now: c.now });
+    let writing = true;
+    ready.registered = true;
+    container.registerSingleton("adapter", () => ({
+      ...adapterHolding(ACTIVE),
+      transactionOpenInFlow: () => writing,
+    }));
+    expect(await accountIsActive("u1")).toBe(true);
+
+    let row: SessionStanding = ACTIVE;
+    container.clear();
+    container.registerSingleton("adapter", () => ({
+      ...adapterHolding(ACTIVE),
+      transactionOpenInFlow: () => false,
+      getDrizzle: () => ({
+        select: () => ({
+          from: () => ({
+            where: () => ({ limit: async () => [row] }),
+          }),
+        }),
+      }),
+    }));
+
+    forgetSessionStanding("u1");
+    c.advance(SESSION_STANDING_TTL_MS + 1_000);
+    // Still uncommitted, past the lifetime: the row reads as it was.
+    expect(await accountIsActive("u1")).toBe(true);
+    row = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await accountIsActive("u1")).toBe(false);
+  });
+});
+
+describe("forgetSessionStanding after a read has already moved the cache", () => {
+  afterEach(() => {
+    resetSessionStandingForTests();
+    container.clear();
+    ready.registered = false;
+  });
+
+  it("asks an adapter the cache served before, not only the one it serves now", async () => {
+    // The write began on the old adapter; services were registered again and
+    // a read through the new one moved the cache before the write forgot the
+    // account. The old adapter is still the only one that knows the write is
+    // open.
+    const c = clock();
+    resetSessionStandingForTests({ now: c.now });
+    let writing = true;
+    ready.registered = true;
+    container.registerSingleton("adapter", () => ({
+      ...adapterHolding(ACTIVE),
+      transactionOpenInFlow: () => writing,
+    }));
+    expect(await accountIsActive("u1")).toBe(true);
+
+    let row: SessionStanding = ACTIVE;
+    container.clear();
+    container.registerSingleton("adapter", () => ({
+      ...adapterHolding(ACTIVE),
+      getDrizzle: () => ({
+        select: () => ({
+          from: () => ({
+            where: () => ({ limit: async () => [row] }),
+          }),
+        }),
+      }),
+    }));
+    // The read that moves the cache to the new adapter.
+    expect(await accountIsActive("u2")).toBe(true);
+
+    forgetSessionStanding("u1");
+    c.advance(SESSION_STANDING_TTL_MS + 1_000);
+    expect(await accountIsActive("u1")).toBe(true);
+    row = { isActive: false, sessionEpoch: 1 };
+    writing = false;
+
+    expect(await accountIsActive("u1")).toBe(false);
+  });
+});
+
+describe("watchTransaction", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("stops watching, rather than throwing, when the probe fails", () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const writing = watchTransaction(() => {
+      calls += 1;
+      if (calls > 1) throw new Error("probe failed");
+      return true;
+    }, 50);
+
+    expect(() => vi.advanceTimersByTime(50)).not.toThrow();
+    expect(writing?.()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("answers nothing for a caller outside any transaction", () => {
+    expect(watchTransaction(() => false)).toBeUndefined();
+  });
+
+  it("reports the transaction open until it ends, then stops watching", () => {
+    // Watching holds the writer's context through its timer, so it must stop
+    // once the transaction ends rather than keep that context for as long as
+    // the mark it feeds is kept.
+    vi.useFakeTimers();
+    let open = true;
+    const writing = watchTransaction(() => open, 50);
+
+    expect(writing?.()).toBe(true);
+    vi.advanceTimersByTime(200);
+    expect(writing?.()).toBe(true);
+    open = false;
+    vi.advanceTimersByTime(50);
+
+    expect(writing?.()).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

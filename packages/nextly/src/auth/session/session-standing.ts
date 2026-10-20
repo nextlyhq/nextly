@@ -97,8 +97,14 @@ export interface SessionStandingCache {
    * just signed.
    */
   standing(userId: string, tokenEpoch: number): Promise<SessionStanding | null>;
-  /** Drop what is held for the account, so its next request reads the row. */
-  forget(userId: string): void;
+  /**
+   * Drop what is held for the account, so its next request reads the row.
+   *
+   * `writing` answers whether the change that made this call is still
+   * uncommitted. While it answers true nothing read for the account is kept,
+   * however long that takes; without it, nothing is kept for one lifetime.
+   */
+  forget(userId: string, writing?: () => boolean): void;
 }
 
 /** A read of one account's row, and whether a `forget` has overtaken it. */
@@ -152,21 +158,24 @@ export function createSessionStandingCache(options: {
   const now = options.now ?? (() => performance.now());
   const held = new Map<string, { standing: SessionStanding; readAt: number }>();
   const reading = new Map<string, Reading>();
-  // When each account was last forgotten. A writer forgets inside its
-  // transaction, and on PostgreSQL and MySQL a read on another connection
-  // before the commit still sees the old row, so no read that began within a
-  // lifetime of the forget is kept: it is answered, and the next request
-  // reads again. Past that lifetime the mark goes, and so does the cost.
-  const forgottenAt = new Map<string, number>();
+  // When each account was last forgotten, and whether the change that forgot
+  // it is still being written. A writer forgets inside its transaction, and
+  // on PostgreSQL and MySQL a read on another connection before the commit
+  // still sees the old row, so no read that BEGINS while that transaction is
+  // open, or within a lifetime of the forget, is kept: it is answered, and
+  // the next request reads again. The lifetime is the floor for a writer that
+  // cannot say when it commits. Past both the mark goes, and so does the cost.
+  const forgotten = new Map<string, { at: number; writing?: () => boolean }>();
 
   function recentlyForgotten(userId: string, readAt: number): boolean {
-    const at = forgottenAt.get(userId);
-    if (at === undefined) return false;
+    const mark = forgotten.get(userId);
+    if (mark === undefined) return false;
+    if (mark.writing?.() === true) return true;
     // A negative age is a clock that moved backward, which proves nothing
     // about the change having committed, so it still counts as recent.
-    const age = readAt - at;
+    const age = readAt - mark.at;
     if (age >= 0 && age >= ttlMs) {
-      forgottenAt.delete(userId);
+      forgotten.delete(userId);
       return false;
     }
     return true;
@@ -193,6 +202,9 @@ export function createSessionStandingCache(options: {
     // it answers with may be from before a change made while it was slow, and
     // the bound is counted from that change.
     const startedAt = now();
+    // Judged as the read begins: one sent before the change committed answers
+    // with the old row even if it returns after the commit.
+    const keepable = !recentlyForgotten(userId, startedAt);
     const entry: Reading = {
       superseded: false,
       promise: options
@@ -210,11 +222,7 @@ export function createSessionStandingCache(options: {
                 "standing cache's lifetime, so its answer was not used",
             });
           }
-          if (
-            !entry.superseded &&
-            standing?.isActive === true &&
-            !recentlyForgotten(userId, startedAt)
-          ) {
+          if (!entry.superseded && standing?.isActive === true && keepable) {
             keep(userId, standing, startedAt);
           }
           return standing;
@@ -257,15 +265,23 @@ export function createSessionStandingCache(options: {
       );
     },
 
-    forget(userId) {
+    forget(userId, writing) {
       held.delete(userId);
-      forgottenAt.delete(userId);
-      if (forgottenAt.size >= maxEntries) {
+      forgotten.delete(userId);
+      if (forgotten.size >= maxEntries) {
         // Insertion order again: the oldest mark is the nearest to lapsing.
-        const oldest = forgottenAt.keys().next();
-        if (!oldest.done) forgottenAt.delete(oldest.value);
+        // A mark whose change is still uncommitted is never the one to go:
+        // it is the only thing keeping that change's old row out of the
+        // cache. With every mark still open, which takes that many writers
+        // open at once, the marks grow rather than drop one.
+        for (const [id, mark] of forgotten) {
+          if (mark.writing?.() !== true) {
+            forgotten.delete(id);
+            break;
+          }
+        }
       }
-      forgottenAt.set(userId, now());
+      forgotten.set(userId, { at: now(), ...(writing ? { writing } : {}) });
       const running = reading.get(userId);
       if (running) {
         running.superseded = true;
@@ -451,8 +467,29 @@ let held: { cache: SessionStandingCache; adapter: DrizzleAdapter } | null =
   null;
 let cacheClock: (() => number) | undefined;
 
+/**
+ * The adapters the cache has belonged to lately, newest last. Services
+ * registered again bring a new adapter while a write on an old one may still
+ * be open, and only the adapter a write runs on can say whether it has
+ * committed, so a forget asks these as well as the registered one. Held
+ * weakly, so an adapter that is gone, and its connections, can be collected.
+ */
+const MAX_RECENT_ADAPTERS = 4;
+let recentAdapters: Array<WeakRef<DrizzleAdapter>> = [];
+
+function rememberAdapter(adapter: DrizzleAdapter): void {
+  recentAdapters = [
+    ...recentAdapters.filter(ref => {
+      const known = ref.deref();
+      return known !== undefined && known !== adapter;
+    }),
+    new WeakRef(adapter),
+  ].slice(-MAX_RECENT_ADAPTERS);
+}
+
 function cacheFor(adapter: DrizzleAdapter): SessionStandingCache {
   if (held?.adapter !== adapter) {
+    rememberAdapter(adapter);
     held = {
       cache: createSessionStandingCache({
         read: userId => readSessionStanding(userId, adapter),
@@ -509,7 +546,72 @@ export async function accountIsActive(userId: string): Promise<boolean> {
  * without waiting out the cache.
  */
 export function forgetSessionStanding(userId: string | number): void {
-  held?.cache.forget(String(userId));
+  // The registered adapter first: after services are registered again, the
+  // cache can still belong to the adapter they replaced until something reads
+  // through the new one, and a mark left there is one the next read never
+  // sees. The cache is made here when no request has made it yet, for the
+  // same reason.
+  const adapter = adapterIsRegistered()
+    ? container.get<DrizzleAdapter>("adapter")
+    : held?.adapter;
+  if (adapter === undefined) return;
+  // Whether the change that made this call has committed: a transaction this
+  // flow is inside is still open, which every dialect answers. Asked of the
+  // adapters the cache served lately too: while services are registered
+  // again, the write can be open on one they replaced, and only that adapter
+  // knows, even once a read has moved the cache to the new one.
+  const writers = new Set<DrizzleAdapter>([adapter]);
+  for (const ref of recentAdapters) {
+    const known = ref.deref();
+    if (known !== undefined) writers.add(known);
+  }
+  const writing = watchTransaction(() =>
+    [...writers].some(writer => writer.transactionOpenInFlow())
+  );
+  cacheFor(adapter).forget(String(userId), writing);
+}
+
+/**
+ * Whether `isOpen` answers yes. A probe that fails is not a yes: watching
+ * stops, and the mark falls back to its fixed lifetime, rather than an
+ * error escaping from a timer no request is waiting on.
+ */
+function openNow(isOpen: () => boolean): boolean {
+  try {
+    return isOpen();
+  } catch {
+    return false;
+  }
+}
+
+/** How often {@link watchTransaction} asks whether the transaction ended. */
+const TRANSACTION_WATCH_MS = 50;
+
+/**
+ * Whether the calling flow's transaction is still open, readable from any
+ * other request; undefined when the caller is in no transaction.
+ *
+ * `isOpen` can only answer in the calling flow's own async context, so it is
+ * asked from a timer started here, which runs in that context, until it says
+ * no. What the returned reader keeps is the answer alone. The timer holds
+ * the context only while the transaction is open, and lets it go within one
+ * interval of its end; it never keeps the process alive.
+ */
+export function watchTransaction(
+  isOpen: () => boolean,
+  intervalMs = TRANSACTION_WATCH_MS
+): (() => boolean) | undefined {
+  if (!openNow(isOpen)) return undefined;
+  let open = true;
+  const check = (): void => {
+    if (openNow(isOpen)) {
+      setTimeout(check, intervalMs).unref?.();
+      return;
+    }
+    open = false;
+  };
+  setTimeout(check, intervalMs).unref?.();
+  return () => open;
 }
 
 /**
@@ -520,5 +622,6 @@ export function resetSessionStandingForTests(options?: {
   now?: () => number;
 }): void {
   held = null;
+  recentAdapters = [];
   cacheClock = options?.now;
 }
