@@ -121,12 +121,18 @@ describe("a rule checking the old spelling", () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
-  it("is warned even when the caller lacks the permission it names", () => {
+  it("is warned even when the caller lacks the permission it names, with no slug guessed", () => {
+    // A slug can be custom (`manage-api-keys` grants `update` on `api-keys`),
+    // and only a held row says which, so an unheld permission is named by its
+    // action and resource rather than by a slug that may not exist.
     const rule = ({ permissions }: AccessRuleContext) =>
-      permissions.includes("posts:delete");
+      permissions.includes("api-keys:update");
     expect(ask(rule)).toBe(false);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls[0][0]).toContain('"delete-posts"');
+    const [line] = warn.mock.calls[0] as [string];
+    expect(line).toContain('"api-keys:update"');
+    expect(line).toContain('action "update" on "api-keys"');
+    expect(line).not.toContain("update-api-keys");
   });
 
   it("is told the stored slug where the role screen's spelling is a custom one", () => {

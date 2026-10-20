@@ -18,7 +18,6 @@
  */
 import type { RequestContext } from "../../collections/fields/types/base";
 import type { Principal } from "../../plugins/principals/types";
-import { permissionSlug } from "../../schemas/_zod/rbac";
 import { consoleLogger } from "../../shared/types";
 import type {
   AccessRuleContext,
@@ -102,12 +101,18 @@ function permissionList(
     const parts = EARLIER_SPELLING.exec(search);
     if (!parts) return;
     warnedRules.add(rule);
-    // The stored slug where the caller holds it, since a custom one differs
-    // from `<action>-<resource>`; otherwise the slug the role screen makes.
-    const instead = earlier.get(search) ?? permissionSlug(parts[2], parts[1]);
+    // The stored slug only where the caller holds it: a slug may be custom
+    // (`manage-api-keys` grants `update` on `api-keys`), and only a held row
+    // says which, so an unheld permission is named by its parts instead of
+    // by a slug that may not exist.
+    const held = earlier.get(search);
+    const instead =
+      held !== undefined
+        ? `check "${held}", as the role screen spells it`
+        : `check the slug the role screen shows for action "${parts[2]}" on "${parts[1]}"`;
     consoleLogger.warn(
       `The ${question.operation} rule of "${question.target.slug}" checks the permission "${search}". ` +
-        `That spelling is deprecated and stops being accepted in a later release: check "${instead}", as the role screen spells it.`
+        `That spelling is deprecated and stops being accepted in a later release: ${instead}.`
     );
   };
   // Own, non-enumerable methods over the array's own, so the list still
