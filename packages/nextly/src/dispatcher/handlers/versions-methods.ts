@@ -20,10 +20,12 @@ import {
 } from "../../api/subject-events";
 import {
   assertComparisonRequest,
+  assertHistoryLocalesReadable,
   assertVersionDocumentReadable,
   assertDocumentUpdatable,
   compareDocumentVersions,
   type ComparisonQuery,
+  historyListLanguages,
   parseComparisonQuery,
   hydrateVersionSnapshot,
   readingPersonId,
@@ -230,6 +232,16 @@ export async function listVersionsForDocument(
     args.user,
     args.authenticatedScope
   );
+  // The languages this caller may read the history in: the one asked for, or
+  // every one they may read.
+  const languages = await historyListLanguages(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope,
+    args.locale
+  );
 
   const limit = Math.min(args.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
   const versions = getService("versionsService");
@@ -246,9 +258,10 @@ export async function listVersionsForDocument(
       limit: limit + 1,
       ...(args.cursor !== undefined ? { cursor: args.cursor } : {}),
       // An empty `?locale=` reaches the dispatcher as "" (the route parser keeps
-      // it); treat that as absent so both list surfaces list every locale rather
-      // than matching a non-existent empty-string locale and returning nothing.
-      ...(args.locale ? { locale: args.locale } : {}),
+      // it); `historyListLanguages` treats that as absent, so both list surfaces
+      // list every readable locale rather than matching a non-existent
+      // empty-string locale and returning nothing.
+      ...languages,
     }
   );
   const hasNext = window.length > limit;
@@ -359,6 +372,17 @@ export async function getVersionForDocument(
     },
     args.versionNo
   );
+  // The version is of the language it records, asked about before any of it
+  // is returned.
+  await assertHistoryLocalesReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope,
+    {},
+    [row.locale]
+  );
 
   // What the read rules withheld is named beside the snapshot, so a reader is
   // told a value is held back rather than shown a version that lacks it.
@@ -436,6 +460,23 @@ export async function markVersionSeenForDocument(
     NextlyError.notFound({
       logContext: { reason, ...ref, versionNo: args.versionNo },
     });
+  // The version's language is asked about before anything is written. A
+  // version's language never changes, so the mark below records the part
+  // judged here.
+  const versionPart = await getService("versionsService").partOfVersion(
+    ref,
+    args.versionNo
+  );
+  if (versionPart === undefined) throw notFound("mark-seen-version-missing");
+  await assertHistoryLocalesReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope,
+    {},
+    [versionPart]
+  );
   // One transaction holding the locks the sweeps of markers take: the
   // person's account row (account deletion), then the entity's registry row
   // and the document's row (entity and document deletion). A mark either

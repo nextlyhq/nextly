@@ -45,6 +45,11 @@ export interface VersionListOptions {
   includeAutosave?: boolean;
   /** Scope the listing to one locale's versions. Absent lists every locale. */
   locale?: string;
+  /**
+   * Only versions in these languages, and those in none. Absent applies no
+   * such limit. A history read passes the languages its caller may read.
+   */
+  locales?: readonly string[];
 }
 
 export class VersionsService {
@@ -171,6 +176,17 @@ export class VersionsService {
       }
     });
     return this.get(ref, versionNo);
+  }
+
+  /**
+   * The part a durable version records: its language, null for none, or
+   * undefined when there is no such version. Reads no snapshot.
+   */
+  async partOfVersion(
+    ref: VersionRef,
+    versionNo: number
+  ): Promise<string | null | undefined> {
+    return this.repo.findPartOfVersion(ref, versionNo);
   }
 
   /** One full version, including its snapshot. */
