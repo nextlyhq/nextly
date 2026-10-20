@@ -17,12 +17,20 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { dirname, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 import ts from "typescript";
+
+import { exportTargets } from "./check-published-build.mjs";
 
 const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -223,18 +231,20 @@ function reachableClosure(graph, entryChunk) {
 
 /**
  * The browser entrypoints the package publishes, derived from the `exports`
- * map rather than re-typed here: each export's `import` target that names an
- * emitted chunk, with the `dist/` prefix stripped to a graph path. A new
- * published entrypoint is then classified correctly without editing a
- * second list.
+ * map rather than re-typed here: `exportTargets` (the traversal
+ * check-published-build.mjs already maintains) walks the manifest to any
+ * depth of nested conditions, and every target that names an emitted chunk
+ * keeps its `dist/` prefix stripped to a graph path. A new published
+ * entrypoint — however its conditions nest — is then classified correctly
+ * without editing a second list.
  */
 const DECLARED_BROWSER_ENTRIES = new Set(
-  Object.values(
+  exportTargets(
     JSON.parse(readFileSync(join(PACKAGE_ROOT, "package.json"), "utf8"))
       .exports ?? {}
   )
-    .map(target => (typeof target === "string" ? target : target?.import))
-    .filter(target => typeof target === "string" && /\.(mjs|cjs)$/.test(target))
+    .map(({ target }) => target)
+    .filter(target => /\.(mjs|cjs)$/.test(target))
     .map(target => target.replace(/^\.?\/?dist\//, ""))
 );
 
@@ -578,7 +588,25 @@ function commitTimeMs(commit) {
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+/**
+ * Whether this module is the entry the command named. Compared on real
+ * paths too: Node canonicalizes `import.meta.url` through a symlink while
+ * `process.argv[1]` stays lexical, and a lexical-only compare would let the
+ * command exit silently, having produced no report at all.
+ */
+function invokedAsScript() {
+  if (!process.argv[1]) return false;
+  const named = resolve(process.argv[1]);
+  const self = resolve(fileURLToPath(import.meta.url));
+  if (named === self) return true;
+  try {
+    return realpathSync(named) === realpathSync(self);
+  } catch {
+    return false;
+  }
+}
+
+if (invokedAsScript()) {
   // Exit by exitCode rather than process.exit: exit() can cut off a pipe
   // before the queued report bytes are written, leaving a truncated JSON.
   process.exitCode = 1;

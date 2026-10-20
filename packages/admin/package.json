@@ -39,9 +39,9 @@
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix",
     "test": "node scripts/ensure-dist.mjs && vitest run",
-    "test:watch": "vitest",
-    "test:ui": "vitest --ui",
-    "test:coverage": "vitest run --coverage",
+    "test:watch": "node scripts/ensure-dist.mjs && vitest",
+    "test:ui": "node scripts/ensure-dist.mjs && vitest --ui",
+    "test:coverage": "node scripts/ensure-dist.mjs && vitest run --coverage",
     "clean": "rimraf dist",
     "analyze": "ANALYZE=true pnpm build"
   },
