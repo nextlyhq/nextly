@@ -118,6 +118,17 @@ export async function requireRouteVersionReadAccess(
 }
 
 /**
+ * What the document's read hooks are handed besides the caller: the request
+ * behind the read and the context its caller passed. A hook that narrows reads
+ * by either must see the same values here as on the caller's own document read,
+ * or the probe answers a different caller than the one asking.
+ */
+export interface DocumentReadHookInputs {
+  request?: Request;
+  context?: Record<string, unknown>;
+}
+
+/**
  * Confirm a caller may see this document's history, assuming they are already
  * authenticated and coarsely authorized.
  *
@@ -138,14 +149,16 @@ export async function assertVersionDocumentReadable(
   // document, so a scoped API key is judged on its OWN read grant here — a
   // super-admin-owned key does not skip the document's own read gate before
   // its snapshots are exposed.
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  hookInputs: DocumentReadHookInputs = {}
 ): Promise<void> {
   const readable = await canReadLiveDocument(
     scopeKind,
     slug,
     entryId,
     user,
-    authenticatedScope
+    authenticatedScope,
+    hookInputs
   );
   if (!readable) {
     // Deliberately "not found" rather than "forbidden": a distinct 403 would
@@ -262,10 +275,17 @@ async function canReadLiveDocument(
   slug: string,
   entryId: string,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope: AuthenticatedScope | undefined,
+  hookInputs: DocumentReadHookInputs
 ): Promise<boolean> {
   if (scopeKind === "single") {
-    return canReadLiveSingle(slug, entryId, user, authenticatedScope);
+    return canReadLiveSingle(
+      slug,
+      entryId,
+      user,
+      authenticatedScope,
+      hookInputs
+    );
   }
 
   const collections = getService("collectionsHandler");
@@ -285,8 +305,26 @@ async function canReadLiveDocument(
     // collection filters to published only, and a draft would report no
     // history — exactly when an author needs it most.
     status: "all",
+    // The request and context the caller's own read would carry, for hooks
+    // that narrow reads by them.
+    ...hookInputs,
   });
-  return interpretReadResult(result.success, result.statusCode);
+  if (!interpretReadResult(result.success, result.statusCode)) return false;
+  // The read must be of the document asked about. A `beforeOperation` hook may
+  // rewrite the id a read resolves, and a read that passed on another document
+  // would authorize this one's history by that document's rules.
+  return readIdOf(result.data) === entryId;
+}
+
+/** The id of the entry a read returned, as text, or undefined without one. */
+function readIdOf(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null || !("id" in data)) {
+    return undefined;
+  }
+  const { id } = data;
+  return typeof id === "string" || typeof id === "number"
+    ? String(id)
+    : undefined;
 }
 
 /**
@@ -304,7 +342,8 @@ async function canReadLiveSingle(
   slug: string,
   entryId: string,
   user: UserContext,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope: AuthenticatedScope | undefined,
+  hookInputs: DocumentReadHookInputs
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
   const record = await registry.getSingleBySlug(slug);
@@ -323,6 +362,7 @@ async function canReadLiveSingle(
     // resolving its creator's roles.
     routeAuthorized: true,
     ...(authenticatedScope === undefined ? {} : { actor: authenticatedScope }),
+    ...hookInputs,
   });
 }
 

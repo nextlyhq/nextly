@@ -15,6 +15,10 @@ import {
   withSessionCacheHeaders,
 } from "../../api/response-shapes";
 import {
+  parseSubjectEventsQuery,
+  readSubjectEvents,
+} from "../../api/subject-events";
+import {
   assertComparisonRequest,
   assertVersionDocumentReadable,
   assertDocumentUpdatable,
@@ -34,6 +38,7 @@ import { actorForWrite, type RequestActor } from "../../auth/request-actor";
 import type { FieldConfig } from "../../collections/fields/types";
 import { getService } from "../../di";
 import { container } from "../../di/container";
+import type { ContentEventSubject } from "../../domains/content-events/record";
 import type { FieldGroupDataService } from "../../domains/field-groups/services/field-group-data-service";
 import type { UserContext } from "../../domains/singles/types";
 import {
@@ -62,6 +67,7 @@ import {
   readAuthenticatedActor,
   readAuthenticatedScope,
 } from "../helpers/authenticated-actor";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import type { Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -290,6 +296,27 @@ export async function respondVersionPage(
     limit: p.limit !== undefined ? Number(p.limit) : undefined,
     cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
     locale: p.locale !== undefined ? String(p.locale) : undefined,
+  });
+  return withSessionCacheHeaders(respondList(result.items, result.meta));
+}
+
+/**
+ * A document's events as the dispatcher answers them: the read's query from
+ * the params, the caller the route resolved, and private to that caller, as a
+ * history page is. Collections and Singles answer through this.
+ *
+ * @experimental
+ */
+export async function respondSubjectEvents(
+  subject: Exclude<ContentEventSubject, { kind: "release" }>,
+  p: Params
+): Promise<Response> {
+  // The caller as every REST collection operation reads it, verified claims
+  // included, so a document's hooks judge the same caller here.
+  const user = readAuthenticatedUser(p);
+  const result = await readSubjectEvents(subject, parseSubjectEventsQuery(p), {
+    ...(user === undefined ? {} : { user }),
+    authenticatedScope: readAuthenticatedScope(p),
   });
   return withSessionCacheHeaders(respondList(result.items, result.meta));
 }

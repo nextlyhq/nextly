@@ -756,6 +756,57 @@ function parseCollectionEntryPublishAllRoute(
  * POST /api/collections/{slug}/entries/bulk-delete
  */
 /**
+ * `GET /collections/{slug}/entries/{entryId}/events` and
+ * `GET /singles/{slug}/events`: a document's events, nested under it like its
+ * version history so the document's `read-{slug}` permission guards them with
+ * no separate authorization branch.
+ *
+ * @experimental
+ */
+function parseDocumentEventRoutes(
+  resource: string,
+  id: string | undefined,
+  subresource: string | undefined,
+  subId: string | undefined,
+  additionalParams: string[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  if (httpMethod !== "GET" || !id) return null;
+  if (
+    resource === "collections" &&
+    subresource === "entries" &&
+    subId &&
+    additionalParams.length === 1 &&
+    additionalParams[0] === "events"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    return {
+      service: "collections",
+      operation: "list",
+      method: "listEntryEvents",
+      routeParams,
+    };
+  }
+  if (
+    resource === "singles" &&
+    subresource === "events" &&
+    !subId &&
+    additionalParams.length === 0
+  ) {
+    routeParams.slug = id;
+    return {
+      service: "singles",
+      operation: "list",
+      method: "listSingleEvents",
+      routeParams,
+    };
+  }
+  return null;
+}
+
+/**
  * `/collections/{slug}/entries/{entryId}/versions[/{versionNo}]`
  *
  * Version history nests under its entry so the existing `read-{slug}`
@@ -2856,6 +2907,31 @@ export function parseRestRoute(
       routeParams
     );
     if (result) return result;
+  }
+
+  // A document's events, nested under it; matched before the entry and
+  // version routes, which would otherwise claim the path.
+  const eventResult = parseDocumentEventRoutes(
+    resource,
+    id,
+    subresource,
+    subId,
+    additionalParams,
+    httpMethod,
+    routeParams
+  );
+  if (eventResult) return eventResult;
+
+  // A subject's events by subject (`/content-events?subject=…`): a release's,
+  // or a deleted document's, whose entry route no longer exists. Its handler
+  // owns its authorization.
+  if (resource === "content-events" && !id && httpMethod === "GET") {
+    return {
+      service: "contentEvents",
+      operation: "list",
+      method: "listSubjectEvents",
+      routeParams,
+    };
   }
 
   // Handle Collections endpoints
