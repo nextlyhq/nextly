@@ -189,6 +189,21 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("says what follows and precedes from the offset asked, not a page number", async () => {
+      // An offset that is not a multiple of the limit: the rest of the list
+      // fits, so nothing follows, and something precedes.
+      const page = await list(await session(readerId, [readerRoleId]), 2, 1);
+      expect(page.items).toHaveLength(2);
+      expect(page.meta).toMatchObject({
+        total: 3,
+        hasNext: false,
+        hasPrev: true,
+      });
+      const last = await list(await session(readerId, [readerRoleId]), 2, 3);
+      expect(last.items).toHaveLength(0);
+      expect(last.meta).toMatchObject({ hasNext: false, hasPrev: true });
+    });
+
     it("pages an API key's list by the key's own scope, the same way", async () => {
       const pages = await walk({ authorization: `Bearer ${readerKey}` }, 2);
       expect(pages.map(p => p.items.length)).toEqual([2, 1]);

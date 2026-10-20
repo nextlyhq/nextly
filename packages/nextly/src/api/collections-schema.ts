@@ -232,18 +232,20 @@ export const GET = withErrorHandler(async (request: Request) => {
 function pageOf<T>(all: T[], limit: number, offset: number) {
   const safeLimit = Number.isFinite(limit) ? Math.max(1, limit) : 50;
   const safeOffset = Number.isFinite(offset) ? Math.max(0, offset) : 0;
-  const page = Math.floor(safeOffset / safeLimit) + 1;
   const total = all.length;
-  const totalPages = Math.ceil(total / safeLimit);
+  const items = all.slice(safeOffset, safeOffset + safeLimit);
   return {
-    items: all.slice(safeOffset, safeOffset + safeLimit),
+    items,
     meta: {
       total,
-      page,
+      page: Math.floor(safeOffset / safeLimit) + 1,
       limit: safeLimit,
-      totalPages,
-      hasNext: page < totalPages,
-      hasPrev: page > 1,
+      totalPages: Math.ceil(total / safeLimit),
+      // From the offset asked, not a page number: an offset that is not a
+      // multiple of the limit still says truly whether anything follows it or
+      // comes before it.
+      hasNext: safeOffset + items.length < total,
+      hasPrev: safeOffset > 0,
     },
   };
 }
