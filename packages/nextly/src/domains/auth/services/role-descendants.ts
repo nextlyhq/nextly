@@ -9,6 +9,7 @@
  * @module domains/auth/services/role-descendants
  */
 
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { inArray } from "drizzle-orm";
 
 import { getDialectTables } from "../../../database";
@@ -43,9 +44,11 @@ export const MAX_ROLE_HIERARCHY_DEPTH = 2000;
  */
 export async function walkDescendantRoleIds(
   db: RoleInheritsReader,
+  dialect: SupportedDialect,
   roleId: string
 ): Promise<{ ids: string[]; complete: boolean }> {
-  const { roleInherits } = getDialectTables();
+  // The tables of the database `db` reads, not of the environment's setting.
+  const { roleInherits } = getDialectTables(dialect);
   const visited = new Set<string>();
   const queue: string[] = [roleId];
 
@@ -80,7 +83,8 @@ export async function walkDescendantRoleIds(
  */
 export async function listDescendantRoleIds(
   db: RoleInheritsReader,
+  dialect: SupportedDialect,
   roleId: string
 ): Promise<string[]> {
-  return (await walkDescendantRoleIds(db, roleId)).ids;
+  return (await walkDescendantRoleIds(db, dialect, roleId)).ids;
 }

@@ -215,7 +215,11 @@ export class RoleInheritanceService extends BaseService {
    * @returns Array of descendant role IDs (excluding the starting roleId)
    */
   async listDescendantRoles(roleId: string): Promise<string[]> {
-    return listDescendantRoleIds(this.db as LastSuperAdminTx, roleId);
+    return listDescendantRoleIds(
+      this.db as LastSuperAdminTx,
+      this.dialect,
+      roleId
+    );
   }
 
   private async willCreateCycle(

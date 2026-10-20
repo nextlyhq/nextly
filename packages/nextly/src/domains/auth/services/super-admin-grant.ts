@@ -85,6 +85,7 @@ export function runAsRoleChangeCaller<T>(
  */
 export async function rolesConferSuperAdmin(
   db: LastSuperAdminTx,
+  dialect: SupportedDialect,
   roleIds: readonly string[]
 ): Promise<boolean> {
   if (roleIds.length === 0) return false;
@@ -94,13 +95,15 @@ export async function rolesConferSuperAdmin(
   // ids is what keeps the direct case beside the inherited one.
   const reachable = new Set<string>(roleIds);
   for (const roleId of roleIds) {
-    const { ids, complete } = await walkDescendantRoleIds(db, roleId);
+    const { ids, complete } = await walkDescendantRoleIds(db, dialect, roleId);
     // A walk cut short can't say super-admin is out of reach.
     if (!complete) return true;
     for (const descendant of ids) reachable.add(descendant);
   }
 
-  const { roles } = getDialectTables();
+  // The tables of the database `db` reads, named by its dialect rather than
+  // the environment's setting, which a custom adapter need not match.
+  const { roles } = getDialectTables(dialect);
   const found = await db
     .select({ id: roles.id })
     .from(roles)
@@ -141,8 +144,8 @@ export async function refuseGrantingSuperAdmin(
   logContext: Record<string, unknown>
 ): Promise<void> {
   if (roleIds.length === 0) return;
-  await lockSuperAdminRole(tx, getDialectTables(), dialect);
-  if (!(await rolesConferSuperAdmin(tx, roleIds))) return;
+  await lockSuperAdminRole(tx, getDialectTables(dialect), dialect);
+  if (!(await rolesConferSuperAdmin(tx, dialect, roleIds))) return;
 
   const caller = roleChangeCaller.getStore();
   // No request caller: trusted server code, which decides for itself.

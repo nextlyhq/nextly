@@ -1352,8 +1352,8 @@ export class UserMutationService extends BaseService {
             email,
           });
         } else if (caller === "app") {
-          // Early, before the account exists. Each role is asked again when it
-          // is assigned, under the lock, so a change between the two counts.
+          // Early, before the account exists. Asked again where the roles are
+          // written, under the lock, so a change between the two counts.
           await refuseGrantingSuperAdmin(
             this.db as LastSuperAdminTx,
             this.dialect,
@@ -1547,10 +1547,41 @@ export class UserMutationService extends BaseService {
       // The account's own rows, in the order both inserts below take them: the
       // role row's lock before any write, then the plugin guard, the account,
       // and the first-administrator grant.
+      // The roles asked for, written with the account so that one which fails
+      // to be written fails the account too, rather than leaving it created
+      // without them. Their ids were checked above.
+      const requestedRoleIds = userData.roles?.length
+        ? Array.from(new Set(userData.roles.map(String)))
+        : [];
+      const insertRequestedRoles = async (txDb: DrizzleTransactionLike) => {
+        if (requestedRoleIds.length === 0) return;
+        // Asked again here, under the lock and in the account's transaction,
+        // so the roles are judged as they stand when they are written.
+        if (caller === "app") {
+          await refuseGrantingSuperAdmin(
+            txDb as unknown as LastSuperAdminTx,
+            this.dialect,
+            requestedRoleIds,
+            { email }
+          );
+        }
+        await txDb.insert(this.tables.userRoles).values(
+          requestedRoleIds.map(roleId => ({
+            id: randomUUID(),
+            userId: newUserId,
+            roleId,
+            expiresAt: null,
+          }))
+        );
+      };
+
       const insertAccount = async (txDb: DrizzleTransactionLike) => {
         const superAdminRoleId = await lockForBootstrap(txDb);
         await requireExistingAccount(txDb);
         await txDb.insert(users).values(values);
+        // Before the first-administrator grant, which then finds an account
+        // already a super-admin through them and grants nothing more.
+        await insertRequestedRoles(txDb);
         await bootstrapFirstAdministrator(txDb, superAdminRoleId);
         // Thrown inside the transaction, so the account and its `user.created`
         // outbox row roll back and nothing after the commit runs for it.
@@ -1663,22 +1694,13 @@ export class UserMutationService extends BaseService {
         });
       }
 
-      // The grant was written in the insert's transaction; the role caches
-      // that answered for this account before it existed are flushed now.
-      if (grantedFirstAdministrator) {
+      // The grant and the roles were written in the insert's transaction; the
+      // role caches that answered for this account before it existed are
+      // flushed now.
+      if (grantedFirstAdministrator || requestedRoleIds.length > 0) {
         await new ServiceContainer(this.adapter).userRoles.invalidateRoleCaches(
           String(user.id)
         );
-      }
-
-      // 🔹 Assign roles if provided
-      if (userData.roles && userData.roles.length > 0) {
-        const services = new ServiceContainer(this.adapter);
-        for (const rid of userData.roles) {
-          await services.userRoles
-            .assignRoleToUser(String(user.id), rid)
-            .catch(() => undefined);
-        }
       }
 
       // Hand the invite link back to the admin. The token was committed with
@@ -2427,7 +2449,13 @@ export class UserMutationService extends BaseService {
   ): Promise<void> {
     // The same question every role change asks, answered the same way: the
     // requested roles and everything they inherit.
-    if (await rolesConferSuperAdmin(this.db as LastSuperAdminTx, roleIds)) {
+    if (
+      await rolesConferSuperAdmin(
+        this.db as LastSuperAdminTx,
+        this.dialect,
+        roleIds
+      )
+    ) {
       throw NextlyError.forbidden({ logContext });
     }
   }

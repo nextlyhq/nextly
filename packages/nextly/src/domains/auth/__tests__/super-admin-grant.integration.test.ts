@@ -613,5 +613,54 @@ describe.each(getConfiguredTestDialects())(
       expect(await holds(install.target, install.staffRole)).toBe(false);
       if (dialect !== "sqlite") expect(waited).toBe(true);
     });
+
+    it("creates no account whose role was made to inherit super-admin meanwhile", async () => {
+      const install = await boot(dialect);
+      // The account's request has passed its early check, which holds no
+      // lock, and is held there; the role is then elevated.
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      let paused!: () => void;
+      const isPaused = new Promise<void>(resolve => (paused = resolve));
+      afterGrantCheck.run = async () => {
+        paused();
+        await released;
+      };
+
+      const creation = rest({ session: install.manager }, "POST", ["users"], {
+        email: "late@example.com",
+        password: PASSWORD,
+        name: "Late",
+        roles: [install.staffRole],
+      });
+      await Promise.race([isPaused, creation.then(() => undefined)]);
+      const elevated = await rest(
+        { session: install.first },
+        "POST",
+        ["roles", install.staffRole, "children"],
+        { childRoleId: install.superAdminRole }
+      );
+      expect(elevated.status, await elevated.text()).toBeLessThan(300);
+      release();
+
+      const created = await creation;
+      // Judged again where the roles are written, with the account: refused,
+      // and the account goes with them rather than being left without them.
+      expect(created.status, await created.text()).toBe(403);
+      expect(await userNamed("late@example.com")).toBe(false);
+    });
+
+    it("answers an assignment to an account that doesn't exist as not found", async () => {
+      const install = await boot(dialect);
+
+      const res = await rest(
+        { session: install.first },
+        "POST",
+        ["users", "no-such-user", "roles"],
+        { roleId: install.staffRole }
+      );
+
+      expect(res.status, await res.text()).toBe(404);
+    });
   }
 );

@@ -41,6 +41,31 @@ type RbacContainer = ServiceContainer;
 // Auth methods
 // ============================================================
 
+/**
+ * What an assignment takes from its request: an expiry, as an ISO date and
+ * time, or none. Strict, so `null` or a bare number can't become a moment in
+ * the past that leaves the assignment lapsed as it is made.
+ */
+const assignmentOptions = z.object({
+  expiresAt: z
+    .string()
+    .datetime({ offset: true })
+    .transform(value => new Date(value))
+    .optional(),
+});
+
+/** The refusal for an assignment the service reported as failed. */
+function assignmentRefusal(statusCode: number): NextlyError {
+  if (statusCode === 404) return NextlyError.notFound();
+  if (statusCode === 409) {
+    return NextlyError.conflict({
+      reason: "state",
+      message: "This user already holds that role.",
+    });
+  }
+  return NextlyError.internal({ logContext: { statusCode } });
+}
+
 /** A role made through a request may not be marked as a system role. */
 const notSystemRole = z.object({ isSystem: z.literal(false).optional() });
 
@@ -454,14 +479,29 @@ const RBAC_METHODS: Record<string, MethodHandler<RbacContainer>> = {
       const roleId = b?.roleId ?? p.roleId;
       if (!p.userId || !roleId)
         throw new Error("UserId and roleId parameters are required");
-      // assignRoleToUser may return void or a confirmation row. The
-      // useful info for the client is the user/role ids they just
-      // changed; expose those as the action's result payload.
-      await c.userRoles.assignRoleToUser(
+      // Only the expiry is taken from the body, parsed to a moment here.
+      const options = assignmentOptions.safeParse(body ?? {});
+      if (!options.success) {
+        throw NextlyError.validation({
+          errors: [
+            {
+              path: "expiresAt",
+              code: "INVALID",
+              message: "An expiry must be a date and time.",
+            },
+          ],
+        });
+      }
+      const result = await c.userRoles.assignRoleToUser(
         p.userId,
         roleId,
-        body as Record<string, unknown>
+        options.data.expiresAt === undefined
+          ? {}
+          : { expiresAt: options.data.expiresAt }
       );
+      // A result that says it failed is a refusal, not a success with a
+      // message the caller never reads.
+      if (!result.success) throw assignmentRefusal(result.statusCode);
       return respondAction("Role assigned to user.", {
         userId: p.userId,
         roleId,

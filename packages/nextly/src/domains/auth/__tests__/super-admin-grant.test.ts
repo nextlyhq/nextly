@@ -17,7 +17,7 @@ const lookups = vi.hoisted(() => ({
 }));
 
 vi.mock("../services/role-descendants", () => ({
-  walkDescendantRoleIds: (_db: unknown, roleId: string) =>
+  walkDescendantRoleIds: (_db: unknown, _dialect: unknown, roleId: string) =>
     lookups.descendants(roleId),
 }));
 
@@ -29,9 +29,11 @@ vi.mock("../../../services/lib/permissions", () => ({
   isSuperAdminOrThrow: (userId: string) => lookups.superAdmin(userId),
 }));
 
-vi.mock("../../../database", () => ({
-  getDialectTables: () => ({ roles: { id: "id", slug: "slug" } }),
-}));
+const tablesFor = vi.hoisted(() =>
+  vi.fn((_dialect?: string) => ({ roles: { id: "id", slug: "slug" } }))
+);
+
+vi.mock("../../../database", () => ({ getDialectTables: tablesFor }));
 
 import {
   refuseGrantingSuperAdmin,
@@ -149,6 +151,16 @@ describe("refuseGrantingSuperAdmin", () => {
       await expect(grant(undefined)).resolves.toBeUndefined();
       expect(lookups.superAdmin).not.toHaveBeenCalled();
     });
+  });
+
+  it("reads the tables of the transaction's dialect, not the environment's", async () => {
+    tablesFor.mockClear();
+    lookups.descendants.mockResolvedValue({ ids: [], complete: true });
+
+    await grant({ kind: "key" }, PLAIN);
+
+    expect(tablesFor).toHaveBeenCalled();
+    for (const call of tablesFor.mock.calls) expect(call[0]).toBe("postgresql");
   });
 
   it("refuses when the lock can't be taken", async () => {

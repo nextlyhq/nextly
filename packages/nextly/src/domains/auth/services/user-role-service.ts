@@ -18,7 +18,9 @@ import {
   userRoleAssignmentsInForce,
 } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   refuseRemovingLastSuperAdmin,
@@ -151,14 +153,26 @@ export class UserRoleService extends BaseService {
               not(roleAssignmentInForce(userRoles, now))
             )
           );
-        const insert = txDb.insert(this.tables.userRoles).values(userRoleData);
-
-        if (typeof insert.onConflictDoNothing === "function") {
-          await insert.onConflictDoNothing();
-        } else {
-          await insert;
+        // A grant another request made since the read above is kept, and this
+        // one then wrote nothing: the user holds the role already, answered
+        // the same on every dialect. PostgreSQL and SQLite skip the row;
+        // MySQL, which has no such clause, refuses it on the pair's index.
+        let written: number;
+        try {
+          const insert = txDb
+            .insert(this.tables.userRoles)
+            .values(userRoleData);
+          written = affectedRowCount(
+            typeof insert.onConflictDoNothing === "function"
+              ? await insert.onConflictDoNothing()
+              : await insert,
+            this.dialect
+          );
+        } catch (error) {
+          if (!isUniqueViolation(error)) throw error;
+          written = 0;
         }
-        return false;
+        return written === 0;
       });
 
       if (alreadyHeld) {
@@ -177,17 +191,11 @@ export class UserRoleService extends BaseService {
         message: "Role assigned successfully",
       };
     } catch (error) {
-      // A refused grant refuses the request, rather than reading as a failed
-      // result the caller might report as done.
+      // Thrown, not reported as a failed result: a refused grant, or a read
+      // the decision needed that failed, must refuse the request. A database
+      // failure gets the typed error every other write reports.
       if (NextlyError.is(error)) throw error;
-      return {
-        success: false,
-        statusCode: 500,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to assign role to user",
-      };
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

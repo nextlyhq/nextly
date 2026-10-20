@@ -6,11 +6,13 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../../database", () => ({
-  getDialectTables: () => ({
+const tablesFor = vi.hoisted(() =>
+  vi.fn((_dialect?: string) => ({
     roleInherits: { parentRoleId: "parentRoleId", childRoleId: "childRoleId" },
-  }),
-}));
+  }))
+);
+
+vi.mock("../../../database", () => ({ getDialectTables: tablesFor }));
 
 // The condition carries the batch it names, so the reader below can answer it.
 vi.mock("drizzle-orm", () => ({
@@ -49,17 +51,28 @@ describe("walkDescendantRoleIds", () => {
     };
     const walk = await walkDescendantRoleIds(
       readerOver(role => graph[role] ?? []),
+      "sqlite",
       "r0"
     );
     expect(walk.complete).toBe(true);
     expect(walk.ids.sort()).toEqual(["r1", "r2", "r3"]);
   });
 
+  it("reads the tables of the dialect it is given, not the environment's", async () => {
+    tablesFor.mockClear();
+    await walkDescendantRoleIds(
+      readerOver(() => []),
+      "postgresql",
+      "r0"
+    );
+    expect(tablesFor).toHaveBeenCalledWith("postgresql");
+  });
+
   it("says it is cut short once it passes its limit", async () => {
     // A tree wide enough to pass the limit: each role inherits 60 new ones.
     let next = 1;
     const wide = () => Array.from({ length: 60 }, () => `r${next++}`);
-    const walk = await walkDescendantRoleIds(readerOver(wide), "r0");
+    const walk = await walkDescendantRoleIds(readerOver(wide), "sqlite", "r0");
     expect(walk.ids.length).toBeGreaterThan(MAX_ROLE_HIERARCHY_DEPTH);
     expect(walk.complete).toBe(false);
   });
