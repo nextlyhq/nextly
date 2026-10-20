@@ -243,6 +243,8 @@ describe("the canonical widget set", () => {
       defaultSize: "md",
       defaultHeight: "tall",
       defaultOrder: 20,
+      // As the registration states it: the add panel draws its sketch from it.
+      archetype: "custom",
       // Always stated, as the empty list for a widget with no actions: the
       // reader gate flattens it, and an absent list would be a second way to
       // spell "no gates" beside the empty one.

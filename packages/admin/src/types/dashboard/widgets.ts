@@ -171,6 +171,11 @@ export interface WidgetWidthFacts {
   category?: string;
   /** Which sketch draws its row: the widget's archetype. */
   sketch?: string;
+  /**
+   * The widget's place in the add panel's order, as core ranks it. Present for every widget the
+   * panel lists, a placed one too, so the panel orders its rows without deciding an order itself.
+   */
+  rank?: number;
 }
 
 /**

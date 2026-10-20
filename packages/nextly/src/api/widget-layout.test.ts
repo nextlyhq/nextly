@@ -182,6 +182,7 @@ interface LayoutPayload {
       description?: string;
       category?: string;
       sketch?: string;
+      rank?: number;
     }
   >;
 }
@@ -413,6 +414,29 @@ describe("where the add panel lists each widget", () => {
       "core/team",
       "forms/latest",
     ]);
+  });
+
+  it("ranks every offered widget in that order, a placed one too", async () => {
+    // 🔴 `available` leaves out a placed widget that allows one card, but the panel still lists
+    // it, as on the dashboard, and needs its place. Without a rank it could only guess one.
+    registerWidget(widget({ id: "site/zeta" }));
+    registerWidget(widget({ id: "core/team" }));
+    registerWidget(widget({ id: "core/recently-edited" }));
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        { id: "p-team", widgetId: "core/team", width: "full", removed: false },
+      ]),
+    };
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.available).not.toContain("core/team");
+    const ranked = Object.entries(body.widgets ?? {})
+      .filter(([, facts]) => typeof facts.rank === "number")
+      .sort(([, a], [, b]) => (a.rank ?? 0) - (b.rank ?? 0))
+      .map(([id]) => id);
+    expect(ranked).toEqual(["core/recently-edited", "site/zeta", "core/team"]);
   });
 });
 
@@ -1725,6 +1749,7 @@ describe("the widths a card may take", () => {
         allowsSeveral: false,
         group: "overview",
         sketch: "custom",
+        rank: 0,
       },
       "core/any": {
         allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
@@ -1732,6 +1757,7 @@ describe("the widths a card may take", () => {
         allowsSeveral: false,
         group: "overview",
         sketch: "custom",
+        rank: 1,
       },
     });
   });

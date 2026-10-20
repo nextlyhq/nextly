@@ -207,11 +207,25 @@ function widthsOf(
  * {@link addPanelFacts} is the one place it is decided.
  */
 function widgetFactsOf(widgets: readonly CanonicalWidget[]) {
+  // Each offered widget's place in the panel's order, by the rule that orders
+  // `available`, so the panel can list a placed widget (as "on dashboard")
+  // where it would be offered, without ordering anything itself.
+  const rank = new Map(
+    inAddPanelOrder(widgets).map((widget, index) => [widget.id, index])
+  );
   return Object.fromEntries(
-    widgets.map(widget => [
-      widget.id,
-      { ...widthFacts(widget), ...addPanelFacts(widget) },
-    ])
+    widgets.map(widget => {
+      const facts = addPanelFacts(widget);
+      return [
+        widget.id,
+        {
+          ...widthFacts(widget),
+          ...(facts === undefined
+            ? {}
+            : { ...facts, rank: rank.get(widget.id) }),
+        },
+      ];
+    })
   );
 }
 
