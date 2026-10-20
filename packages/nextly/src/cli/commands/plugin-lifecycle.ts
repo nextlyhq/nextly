@@ -101,7 +101,13 @@ export interface PluginLifecycleDeps {
   runLifecycleHook: (
     plugin: LifecyclePlugin,
     hook: "onInstall" | "onUninstall",
-    opts: { keepData: boolean }
+    opts: { keepData: boolean },
+    /**
+     * Run once the boot that builds the hook's context is done, right before
+     * the hook itself; not run when the plugin declares no such hook, since
+     * nothing then boots. Kept out of `opts`, which the hook is handed.
+     */
+    beforeHook?: () => Promise<void>
   ) => Promise<void>;
   /**
    * Every named module's DOWN, in the order given, each verified against
@@ -581,10 +587,20 @@ async function executeUninstall(
     keepData: opts.keepData,
   });
 
-  await deps.runLifecycleHook(plugin, "onUninstall", {
-    keepData: opts.keepData,
-  });
-  await assertHookLeftTables(plugin, plan, judged, deps);
+  // What the hook is judged against is read again once its boot is done,
+  // right before it runs: the boot syncs code-first schema and can create
+  // tables, which read from before it would be laid at the hook's door. A
+  // plugin without the hook boots nothing, and the first read stands.
+  let beforeHook = judged;
+  await deps.runLifecycleHook(
+    plugin,
+    "onUninstall",
+    { keepData: opts.keepData },
+    async () => {
+      beforeHook = await readTablesAsTheyStand(plan, deps);
+    }
+  );
+  await assertHookLeftTables(plugin, plan, beforeHook, deps);
 
   // `runDown` names a module whose DOWN runs outside a transaction before
   // it runs, as `migrate:down` does, through the same executor.

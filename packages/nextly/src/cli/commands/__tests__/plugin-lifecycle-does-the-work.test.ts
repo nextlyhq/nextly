@@ -642,9 +642,18 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     let hookRan = false;
     return {
       dialect: "sqlite" as const,
-      runLifecycleHook: vi.fn(async () => {
-        hookRan = true;
-      }),
+      // The boot first, then the hook: the baseline is read between them.
+      runLifecycleHook: vi.fn(
+        async (
+          _plugin: unknown,
+          _hook: unknown,
+          _opts: unknown,
+          beforeHook?: () => Promise<void>
+        ) => {
+          await beforeHook?.();
+          hookRan = true;
+        }
+      ),
       tableIdentities: vi.fn(
         async (tables: readonly string[]) =>
           new Map(tables.map(table => [table, "4"]))
@@ -668,6 +677,64 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
       logContext: {
         reason: "tables-changed-by-hook",
         tables: ["fx__notes"],
+        created: ["fx__notes_moved"],
+      },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A SQLite database whose runtime boot, before the hook, creates a table a
+   * hook-less boot makes (code-first sync); the hook itself creates none.
+   */
+  function tableMadeByTheBoot(hookCreates: boolean) {
+    let booted = false;
+    let hookRan = false;
+    return {
+      dialect: "sqlite" as const,
+      runLifecycleHook: vi.fn(
+        async (
+          _plugin: unknown,
+          _hook: unknown,
+          _opts: unknown,
+          beforeHook?: () => Promise<void>
+        ) => {
+          booted = true;
+          await beforeHook?.();
+          hookRan = true;
+        }
+      ),
+      listTables: vi.fn(async () => [
+        "fx__notes",
+        "users",
+        ...(booted ? ["synced_by_boot"] : []),
+        ...(hookRan && hookCreates ? ["fx__notes_moved"] : []),
+      ]),
+    };
+  }
+
+  it("does not count a table the runtime boot created as the hook's", async () => {
+    // The baseline is read after the boot, right before onUninstall: read
+    // before it, a table the boot's sync made read as one the hook created.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      tableMadeByTheBoot(false)
+    );
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
+  it("still refuses a table the hook created after a boot that made one", async () => {
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      tableMadeByTheBoot(true)
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: {
+        reason: "tables-changed-by-hook",
         created: ["fx__notes_moved"],
       },
     });
@@ -905,9 +972,13 @@ describe("plugins uninstall", () => {
       deps({ runLifecycleHook })
     );
 
-    expect(runLifecycleHook).toHaveBeenCalledWith(plugin, "onUninstall", {
-      keepData: true,
-    });
+    // The fourth argument is the read right before the hook, not the hook's.
+    expect(runLifecycleHook).toHaveBeenCalledWith(
+      plugin,
+      "onUninstall",
+      { keepData: true },
+      expect.any(Function)
+    );
   });
 
   it("clears the uninstalled mark BEFORE the hook boots", async () => {

@@ -554,7 +554,8 @@ async function connect(options: RunnerOptions, context: CommandContext) {
   const runLifecycleHook = async (
     plugin: LifecyclePlugin,
     hook: "onInstall" | "onUninstall",
-    opts: { keepData: boolean }
+    opts: { keepData: boolean },
+    beforeHook?: () => Promise<void>
   ): Promise<void> => {
     const definition = definitions.find(d => d.name === plugin.name);
     if (definition?.[hook] === undefined) return;
@@ -631,6 +632,9 @@ async function connect(options: RunnerOptions, context: CommandContext) {
         );
         return;
       }
+      // After the boot, which can change the schema itself, and right before
+      // the hook: what the caller reads here is what the hook started from.
+      await beforeHook?.();
       // Branched rather than called through `definition[hook]`: the two hooks
       // take different arguments, and a union of them accepts neither call.
       // Run under the hook's cause, so every event it sets off, and every one
