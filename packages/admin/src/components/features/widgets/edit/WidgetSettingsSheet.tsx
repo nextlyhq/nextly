@@ -185,9 +185,16 @@ export function WidgetSettingsSheet({
   );
   const defaultValues = useMemo(() => {
     const values = initialValues(settings, config);
-    for (const { name, replacement } of stale) values[name] = replacement;
+    for (const { name, replacement } of stale) {
+      values[name] = replacement;
+      // A collection reset takes the settings over it along: their values
+      // name fields of the collection that is gone.
+      for (const dependent of dependentsOf(settings, name)) {
+        values[dependent.name] = startingValue(dependent, replacement, sources);
+      }
+    }
     return values;
-  }, [settings, config, stale]);
+  }, [settings, config, stale, sources]);
 
   const form = useForm({ defaultValues });
 

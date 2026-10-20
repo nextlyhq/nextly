@@ -64,6 +64,10 @@ export interface WidgetSettingBase {
    *
    * A top-level key the field configs do not have, deliberately: it is read by
    * the card's header, never by `FieldRenderer`, which ignores it.
+   *
+   * @experimental Validated and published now; the card header that draws
+   * the quick setting is not built yet, so until it is, the setting is
+   * changed in the settings sheet like any other.
    */
   quick?: boolean;
 }

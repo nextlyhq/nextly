@@ -77,6 +77,24 @@ describe("a Filter setting's condition", () => {
     expect(whereToCondition("nonsense", typeOf)).toBeUndefined();
   });
 
+  it("reads a boolean comparison the row has no operator for as no condition", () => {
+    // The boolean row offers is true and is not true. Read as a comparison,
+    // these would draw as the row's first operator while the card filtered
+    // for false.
+    expect(
+      whereToCondition({ featured: { equals: false } }, typeOf)
+    ).toBeUndefined();
+    expect(
+      whereToCondition({ featured: { not_equals: false } }, typeOf)
+    ).toBeUndefined();
+    // The control: the same comparison on a text field is one the row shows.
+    expect(whereToCondition({ title: { equals: "x" } }, typeOf)).toEqual({
+      field: "title",
+      operator: "equals",
+      value: "x",
+    });
+  });
+
   it("reads a source field's kind as the row's field type", () => {
     expect(conditionTypeOf({ type: "string" })).toBe("text");
     expect(conditionTypeOf({ type: "string", choices: [{ value: "a" }] })).toBe(

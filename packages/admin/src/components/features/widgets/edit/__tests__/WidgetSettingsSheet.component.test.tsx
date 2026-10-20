@@ -36,6 +36,16 @@ const sources: PublishedContentSource[] = [
       { name: "title", type: "string", label: "Title" },
       { name: "updatedAt", type: "date", label: "Updated" },
       { name: "headline", type: "string", label: "Headline", groupable: false },
+      {
+        name: "state",
+        type: "string",
+        label: "State",
+        // A stored choice with a blank value, which a select cannot draw.
+        choices: [
+          { value: "", label: "None" },
+          { value: "open", label: "Open" },
+        ],
+      },
     ],
   },
   {
@@ -71,7 +81,13 @@ function open(
 
 const withFilter: AnyWidgetSetting[] = [
   { name: "collection", type: "collection", label: "Collection" },
-  { name: "where", type: "filter", of: "collection", label: "Filter" },
+  {
+    name: "where",
+    type: "filter",
+    of: "collection",
+    label: "Filter",
+    admin: { description: "Only these rows are counted." },
+  },
 ];
 
 /** What the last Save handed on. */
@@ -202,6 +218,46 @@ describe("the settings sheet with content settings", () => {
     await userEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
     expect(saved(onSave)).toEqual({ collection: "pages" });
+  });
+
+  it("lets a Group by choice be cleared on its own", async () => {
+    const onSave = open({ collection: "posts", by: "title", items: 9 });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Clear selection" })
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    // Only Group by went; the other preference stayed.
+    expect(saved(onSave)).toEqual({ collection: "posts", items: 9 });
+  });
+
+  it("draws a Filter setting's description", () => {
+    open({ collection: "posts" }, withFilter);
+    expect(screen.getByText("Only these rows are counted.")).toBeTruthy();
+  });
+
+  it("offers a choice field's values without a blank one, and draws them", async () => {
+    open({ collection: "posts" }, withFilter);
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Condition field" })
+    );
+    await userEvent.click(screen.getByRole("option", { name: "State" }));
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Condition value" })
+    );
+    expect(
+      screen.getAllByRole("option").map(option => option.textContent)
+    ).toEqual(["Open"]);
+  });
+
+  it("resets a Collection no longer offered, with the settings over it", async () => {
+    const onSave = open({ collection: "gone", by: "title" });
+    expect(
+      screen.getByText("Collection was reset: gone is no longer available")
+    ).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(onSave).toHaveBeenCalled());
+    expect(saved(onSave)).toEqual({});
   });
 
   it("resets every setting to its default but keeps the card's collection", async () => {

@@ -134,6 +134,24 @@ describe("a stored value naming a field no longer offered", () => {
     ).toEqual(["where"]);
   });
 
+  it("resets a Collection the reader is no longer offered, and leaves a default naming none alone", () => {
+    expect(
+      staleContentValues(settings, { collection: "gone" }, sources)
+    ).toEqual([
+      {
+        name: "collection",
+        notice: "Collection was reset: gone is no longer available",
+        replacement: "",
+      },
+    ]);
+    const anyCollection: AnyWidgetSetting[] = [
+      { name: "collection", type: "collection", defaultValue: "*" },
+    ];
+    expect(
+      staleContentValues(anyCollection, { collection: "*" }, sources)
+    ).toEqual([]);
+  });
+
   it("leaves every value alone while the sources have not arrived", () => {
     expect(
       staleContentValues(

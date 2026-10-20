@@ -127,7 +127,7 @@ export function whereToCondition(
   if (entries.length !== 1) return undefined;
   const [field, test] = entries[0];
   if (!isRecord(test)) return undefined;
-  const read = readBetween(test) ?? readOneTest(test, typeOf(field) === "date");
+  const read = readBetween(test) ?? readOneTest(test, typeOf(field));
   return read === undefined ? undefined : { field, ...read };
 }
 
@@ -151,17 +151,25 @@ function readBetween(test: Record<string, unknown>): ReadTest | undefined {
   };
 }
 
-/** A test holding one operator, read as the row operator that writes it. */
+/**
+ * A test holding one operator, read as the row operator that writes it.
+ *
+ * A boolean field reads back only what the row offers it (is true, is not
+ * true, empty or not): `{ equals: false }` is a valid filter the row has no
+ * operator for, and read as a comparison it would be drawn as the boolean
+ * row's first operator while the card went on filtering for false.
+ */
 function readOneTest(
   test: Record<string, unknown>,
-  isDate: boolean
+  type: string | undefined
 ): ReadTest | undefined {
   const ops = Object.entries(test);
   if (ops.length !== 1) return undefined;
   const [op, value] = ops[0];
+  const valueless = readValueless(op, value);
+  if (valueless !== undefined || type === "boolean") return valueless;
   return (
-    readValueless(op, value) ??
-    (isDate ? readDateBound(op, value) : undefined) ??
+    (type === "date" ? readDateBound(op, value) : undefined) ??
     readComparison(op, value)
   );
 }

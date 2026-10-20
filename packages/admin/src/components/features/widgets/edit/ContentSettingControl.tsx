@@ -15,7 +15,7 @@ import { Button } from "@nextlyhq/ui";
 import type {
   ContentSetting,
   PublishedContentSource,
-  WidgetSetting,
+  SelectFieldConfig,
 } from "nextly/config";
 import { useEffect, useRef, useState } from "react";
 import { useController, useWatch } from "react-hook-form";
@@ -40,16 +40,25 @@ type Field = PublishedContentSource["fields"][number];
 
 const labelOf = (field: Field) => field.label ?? field.name;
 
-/** A select setting with these options, for `FieldRenderer` to draw. */
+/**
+ * A select field with these options, for `FieldRenderer` to draw. Clearable
+ * where no choice at all is a valid answer, so one setting can be emptied
+ * without Reset emptying every other preference in the sheet with it.
+ */
 function selectOf(
   setting: ContentSetting,
-  options: { label: string; value: string }[]
-): WidgetSetting {
+  options: { label: string; value: string }[],
+  clearable = false
+): SelectFieldConfig {
+  const admin = {
+    ...setting.admin,
+    ...(clearable ? { isClearable: true } : {}),
+  };
   return {
     name: setting.name,
     type: "select",
     ...(setting.label === undefined ? {} : { label: setting.label }),
-    ...(setting.admin === undefined ? {} : { admin: setting.admin }),
+    ...(Object.keys(admin).length === 0 ? {} : { admin }),
     options,
   };
 }
@@ -89,7 +98,8 @@ export function ContentSettingControl({
           // sort may still be one it refuses as a group key.
           fields
             .filter(field => fieldFits(setting, field))
-            .map(field => ({ label: labelOf(field), value: field.name }))
+            .map(field => ({ label: labelOf(field), value: field.name })),
+          true
         )}
         mode="edit"
       />
@@ -103,7 +113,8 @@ export function ContentSettingControl({
           fields.flatMap(field => [
             { label: `${labelOf(field)}, ascending`, value: field.name },
             { label: `${labelOf(field)}, descending`, value: `-${field.name}` },
-          ])
+          ]),
+          true
         )}
         mode="edit"
       />
@@ -173,6 +184,13 @@ function FilterControl({
       <span className="text-sm font-medium">
         {setting.label ?? setting.name}
       </span>
+      {/* Drawn here as `FieldRenderer` draws it for the other settings, which
+          this custom control does not go through. */}
+      {setting.admin?.description === undefined ? null : (
+        <p className="text-sm text-muted-foreground">
+          {setting.admin.description}
+        </p>
+      )}
       {unshown ? (
         <div className="flex items-center justify-between gap-2">
           <p role="status" className="text-sm text-muted-foreground">
@@ -197,10 +215,14 @@ function FilterControl({
             ...(source.choices === undefined
               ? {}
               : {
-                  options: source.choices.map(choice => ({
-                    value: choice.value,
-                    label: choice.label,
-                  })),
+                  // A blank value is dropped: the select reserves the empty
+                  // value for clearing, and an item carrying one throws.
+                  options: source.choices
+                    .filter(choice => choice.value.trim() !== "")
+                    .map(choice => ({
+                      value: choice.value,
+                      label: choice.label,
+                    })),
                 }),
           }))}
           operatorsFor={filterOperatorsFor}

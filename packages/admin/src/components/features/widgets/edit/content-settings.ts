@@ -161,24 +161,71 @@ export function staleContentValues(
   if (sources === undefined) return [];
   const stale: StaleContentValue[] = [];
   for (const setting of settings) {
-    if (!isDependentSetting(setting)) continue;
-    const value = values[setting.name];
-    const source = sources.find(
-      candidate => candidate.collection === values[setting.of]
-    );
-    if (source === undefined || valueFits(setting, value, source)) continue;
-    const field = fieldNamedBy(setting, value);
-    const label = setting.label ?? setting.name;
-    const isDefault = sameSettingValue(value, setting.defaultValue);
-    stale.push({
-      name: setting.name,
-      notice: isDefault
-        ? `${label}'s default, ${field}, is not available for ${source.label}`
-        : `${label} was reset: ${field} is no longer available`,
-      replacement: isDefault
-        ? ""
-        : startingValue(setting, values[setting.of], sources),
-    });
+    const found =
+      setting.type === "collection"
+        ? staleCollection(setting, values[setting.name], sources)
+        : isDependentSetting(setting)
+          ? staleDependent(setting, values, sources)
+          : undefined;
+    if (found !== undefined) stale.push(found);
   }
   return stale;
+}
+
+/** A dependent setting whose value names a field it may not use here. */
+function staleDependent(
+  setting: DependentSetting,
+  values: Readonly<Record<string, unknown>>,
+  sources: readonly PublishedContentSource[]
+): StaleContentValue | undefined {
+  const value = values[setting.name];
+  const source = sources.find(
+    candidate => candidate.collection === values[setting.of]
+  );
+  if (source === undefined || valueFits(setting, value, source)) {
+    return undefined;
+  }
+  const field = fieldNamedBy(setting, value);
+  const label = setting.label ?? setting.name;
+  const isDefault = sameSettingValue(value, setting.defaultValue);
+  return {
+    name: setting.name,
+    notice: isDefault
+      ? `${label}'s default, ${field}, is not available for ${source.label}`
+      : `${label} was reset: ${field} is no longer available`,
+    replacement: isDefault
+      ? ""
+      : startingValue(setting, values[setting.of], sources),
+  };
+}
+
+/**
+ * A Collection setting naming a collection this reader is no longer offered:
+ * one removed, or one they lost access to. Its select has no option for it,
+ * and saving it back would leave the card on a query the server refuses. It
+ * goes back to its default where the reader is offered that, and to none
+ * otherwise; the settings over it then have no collection to name fields of.
+ *
+ * Its own default is left alone: a default that names no collection (All
+ * collections) is the widget's to mean, not a collection to look up.
+ */
+function staleCollection(
+  setting: Extract<ContentSetting, { type: "collection" }>,
+  value: unknown,
+  sources: readonly PublishedContentSource[]
+): StaleContentValue | undefined {
+  if (typeof value !== "string" || value === "") return undefined;
+  if (sameSettingValue(value, setting.defaultValue)) return undefined;
+  const offered = (slug: unknown) =>
+    sources.some(source => source.collection === slug);
+  if (offered(value)) return undefined;
+  const label = setting.label ?? setting.name;
+  return {
+    name: setting.name,
+    notice: `${label} was reset: ${value} is no longer available`,
+    replacement:
+      setting.defaultValue !== undefined && offered(setting.defaultValue)
+        ? setting.defaultValue
+        : "",
+  };
 }
