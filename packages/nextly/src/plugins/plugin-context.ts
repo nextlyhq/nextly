@@ -92,6 +92,11 @@ import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
+import {
+  PLUGIN_VERSIONS_READS,
+  pluginVersionWrites,
+  type PluginVersionWrites,
+} from "./plugin-versions";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import {
@@ -401,16 +406,6 @@ const PLUGIN_EMAIL_METHODS = [
   "canSendTemplate",
 ] as const satisfies readonly (keyof EmailService)[];
 
-const PLUGIN_VERSIONS_METHODS = [
-  "list",
-  "get",
-  "setLabel",
-  "deleteWorkingDraft",
-  "autosave",
-  "getAutosave",
-  "pendingEditRows",
-] as const satisfies readonly (keyof VersionsService)[];
-
 /** @experimental `ctx.services.users`: the plugin view of the user service. */
 export type PluginUserService = Pick<
   UserService,
@@ -426,20 +421,21 @@ export type PluginEmailService = Pick<
 /** @experimental `ctx.services.versions`. */
 export type PluginVersionsService = Pick<
   VersionsService,
-  (typeof PLUGIN_VERSIONS_METHODS)[number]
-> & {
-  /**
-   * @experimental A subject's content events (a document's or a release's),
-   * filtered by kind and part, newest first, as `{ items, meta }`; the next
-   * page passes the last item's id as `before`. Runs as the system unless
-   * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
-   */
-  listEvents(
-    subject: ContentEventSubject,
-    query?: SubjectEventsQuery,
-    opts?: ServiceOpts
-  ): ReturnType<typeof readSubjectEvents>;
-};
+  (typeof PLUGIN_VERSIONS_READS)[number]
+> &
+  PluginVersionWrites & {
+    /**
+     * @experimental A subject's content events (a document's or a release's),
+     * filtered by kind and part, newest first, as `{ items, meta }`; the next
+     * page passes the last item's id as `before`. Runs as the system unless
+     * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
+     */
+    listEvents(
+      subject: ContentEventSubject,
+      query?: SubjectEventsQuery,
+      opts?: ServiceOpts
+    ): ReturnType<typeof readSubjectEvents>;
+  };
 
 /**
  * The plugin path to a subject's events: the one read REST and the Direct API
@@ -2091,11 +2087,10 @@ export function createPluginContext(
       // otherwise throw while building the context for callers that never
       // touch version history.
       get versions() {
+        const versions = getServiceFn("versionsService");
         return Object.freeze({
-          ...methodFacade(
-            getServiceFn("versionsService"),
-            PLUGIN_VERSIONS_METHODS
-          ),
+          ...methodFacade(versions, PLUGIN_VERSIONS_READS),
+          ...pluginVersionWrites(() => versions),
           listEvents: readEventsForPlugin,
         });
       },
