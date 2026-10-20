@@ -1,712 +1,91 @@
-import { randomBytes, createHash } from "crypto";
-
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { eq, and, gt, lt, isNull } from "drizzle-orm";
-
-import {
-  verifyPassword as verifyPasswordBcrypt,
-  hashPassword as hashPasswordBcrypt,
-  validatePasswordStrength,
-} from "@nextly/auth/password";
-import { EmailSchema } from "@nextly/schemas/_zod/validation";
-import type { MinimalUser } from "@nextly/types/auth";
-
-// PR 4 migration: switched from ServiceError + mapDbErrorToServiceError result
-// shapes to throw-based NextlyError. Successful methods now return their data
-// directly (or void); failures throw a NextlyError instance the consumer
-// catches via try/catch or lets the unified error handler convert to JSON.
-import { toDbError } from "../../../database/errors";
-import { NextlyError } from "../../../errors/nextly-error";
-import { emitAuthEvent } from "../../../events/domain-events";
-import { env } from "../../../lib/env";
-import { BaseService } from "../../../services/base-service";
-import type { EmailService } from "../../../services/email/email-service";
-import type { Logger } from "../../../services/shared";
-import { affectedRowCount } from "../../../shared/lib/affected-row-count";
-import { requireFilterValue } from "../../../shared/lib/require-filter-value";
-import { auditReason } from "../../audit/audit-reasons";
-import { emailVerificationColumns } from "../../users/services/email-verification-write";
-import {
-  passwordColumns,
-  updateUserEndingSessions,
-  type PasswordWriteTx,
-} from "../../users/services/password-write";
-import { UserAccountService } from "../../users/services/user-account-service";
-import { UserQueryService } from "../../users/services/user-query-service";
-import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
-
-// Re-exported: this module owned `affectedRowCount` before it was shared, and
-// both its unit test and the invite flow import it from here.
-export { affectedRowCount };
-
-interface RegisterUserData {
-  email: string;
-  password: string;
-  name?: string;
-}
-
-/**
- * Result of {@link AuthService.generatePasswordResetToken}.
- * `token` is included only in dev-fallback paths (no email service or send
- * failed) per the existing security contract; in normal operation the token
- * is delivered by email and the response is just `{}`.
- */
-interface ResetPasswordTokenResult {
-  token?: string;
-}
-
-/** Result of {@link AuthService.resetPasswordWithToken} on success. */
-interface ConsumeResetTokenResult {
-  email: string;
-}
-
-/** Result of {@link AuthService.generateInviteToken}. */
-interface InviteTokenResult {
-  /** The raw, single-use token. Returned once and never stored. */
-  token: string;
-  /** When the link stops working. */
-  expiresAt: Date;
-}
-
-/** Result of {@link AuthService.acceptInvite} on success. */
-interface AcceptInviteResult {
-  userId: string;
-}
-
-/**
- * The fluent slice of a Drizzle transaction this service uses.
- *
- * `withTransaction` hands back `unknown` because the concrete transaction type
- * is dialect-specific; narrowing to the methods actually called keeps the body
- * typed without an `any`.
- */
-interface TransactionLike extends PasswordWriteTx {
-  insert(table: unknown): { values(data: unknown): Promise<unknown> };
-  // Only the read-back after a forced change selects: the password version
-  // and the session epoch the write left.
-  select(fields: { passwordUpdatedAt: unknown; sessionEpoch: unknown }): {
-    from(table: unknown): {
-      where(condition: unknown): {
-        limit(
-          count: number
-        ): Promise<
-          { passwordUpdatedAt: Date | null; sessionEpoch: number | null }[]
-        >;
-      };
-    };
-  };
-}
-
-/**
- * Authentication Service
- *
- * Handles user authentication, password management, and email verification.
- *
- * **Token Security**:
- * - Tokens are generated using 32 bytes (256 bits) of cryptographically secure random data
- * - Raw tokens are returned to users as 64-character hex strings
- * - Tokens are hashed using SHA-256 before storage in the database
- * - This prevents token exposure even if the database is compromised
- *
- * **Token Cleanup**:
- * - Call `cleanupExpiredTokens()` periodically to remove expired tokens
- * - Safe to run frequently as it only deletes expired tokens
- * - Prevents token table bloat and maintains database performance
- *
- * @example
- * ```typescript
- * // Periodic cleanup (run in scheduled job)
- * await authService.cleanupExpiredTokens();
- * ```
- */
-/**
- * Whether a stored token has expired: the one expiry test every consume path
- * and every owner lookup applies, so a token is live to both or to neither.
- */
-function tokenExpired(row: { expires: Date }): boolean {
-  return row.expires < new Date();
-}
-
-/** A reset or verification token row, as the consume and the lookup read it. */
-interface StoredTokenRow {
-  id: number;
-  identifier: string;
-  expires: Date;
-}
-
-/** How a reset or verification token is stored: the SHA-256 of the raw token. */
-function storedTokenHash(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-export class AuthService extends BaseService {
-  private readonly TOKEN_EXPIRY_HOURS = 24;
-
-  readonly emailService?: EmailService;
-
-  constructor(
-    adapter: DrizzleAdapter,
-    logger: Logger,
-    emailService?: EmailService
-  ) {
-    super(adapter, logger);
-    this.emailService = emailService;
-  }
-
-  // withTransaction is inherited from BaseService which routes through
-  // Drizzle native on PG/MySQL and the adapter's transaction on SQLite.
-  // Do NOT override it here — the base class's dialect-aware routing
-  // is what makes async transaction callbacks work on all three dialects.
-
-  /**
-   * What to return when a token could not be delivered by email.
-   *
-   * Outside production the raw token comes back, which is what makes a local
-   * install usable before any provider is configured. In production it does
-   * not: a reset or verification token is a credential, and OWASP's guidance
-   * is that it may only travel by the side channel it was minted for. Handing
-   * it to whoever called the endpoint turns a delivery outage into account
-   * takeover for every account an attacker cares to name.
-   *
-   * The gate is what makes detecting more failures safe. Recognising an
-   * unsuccessful send — rather than only a thrown one — necessarily routes
-   * more situations here, and without this that would have widened where a
-   * live token is handed back.
-   */
-  private undeliveredTokenFallback(rawToken: string): { token?: string } {
-    if (env.NODE_ENV === "production") {
-      this.logger.error(
-        "A token could not be delivered and is withheld from the response",
-        { event: "auth.token_delivery_failed", environment: "production" }
-      );
-      return {};
-    }
-    return { token: rawToken };
-  }
-
-  /**
-   * Register a new user with email and password.
-   *
-   * @returns The newly created user (with `passwordHash` redacted).
-   * @throws NextlyError(VALIDATION_ERROR) on weak passwords / invalid input.
-   * @throws NextlyError on DB errors (e.g. a duplicate email surfaces as
-   *   `DUPLICATE` via fromDatabaseError; see PR 5 note below).
-   */
-  async registerUser(userData: RegisterUserData): Promise<MinimalUser> {
-    // Validate password strength up front so we never reach the DB on a
-    // known-bad input. Per spec §13.8 the validation message names the
-    // field but never the value.
-    const passwordStrength = validatePasswordStrength(userData.password);
-    if (!passwordStrength.ok) {
-      throw NextlyError.validation({
-        errors: passwordStrength.errors.map(message => ({
-          path: "password",
-          code: "WEAK_PASSWORD",
-          message,
-        })),
-      });
-    }
-
-    // PR 4 (unified-error-system): UsersService.createLocalUser now
-    // returns MinimalUser directly and throws NextlyError on failure.
-    // Re-throw NextlyError instances unchanged so the caller sees the
-    // proper code (DUPLICATE on email conflict, VALIDATION_ERROR on
-    // bad input). Anything else is a DB error / unknown bug and goes
-    // through fromDatabaseError. PR 5 will replace this entire flow
-    // with the silent-success pattern (§13.8).
-    let newUser;
-    try {
-      // Registration records `user.created`, so this service is built with the
-      // same post-commit hooks the DI-registered and facade-built ones get.
-      // Without them the event a self-registration produces waits for the
-      // scheduled drain, which an install running on Next's `after()` alone
-      // never triggers, and the outbox it lands in is never pruned from here.
-      const { resolveWebhookWritePathInfra } = await import(
-        "../../webhooks/write-path-infra"
-      );
-      const { fastDrainScheduler, retentionRunner } =
-        resolveWebhookWritePathInfra(this.adapter, this.logger);
-      const userService = new (
-        await import("../../../services/users")
-      ).UsersService(
-        this.adapter,
-        this.logger,
-        undefined,
-        undefined,
-        undefined,
-        fastDrainScheduler,
-        retentionRunner
-      );
-      newUser = await userService.createLocalUser(
-        {
-          email: userData.email,
-          name: userData.name ?? "User",
-          password: userData.password,
-          // Self-registration: the person supplied this address and nothing has
-          // established it is theirs. The verification email sent below is what
-          // proves it, and until then the account stays unverified.
-          emailVerification: "pending",
-        },
-        undefined,
-        // A stranger's registration never makes the install's administrator,
-        // whoever was there before it.
-        "self-registration"
-      );
-    } catch (error) {
-      if (NextlyError.is(error)) {
-        throw error;
-      }
-      // Normalise raw driver errors to DbError before mapping so unique
-      // violation on email registration is preserved as 409 DUPLICATE
-      // instead of collapsing to INTERNAL_ERROR / 500.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
-
-    // Trigger the verification email. Swallow errors so a transient
-    // email outage cannot block the registration itself. The user
-    // can request a resend from the login page.
-    try {
-      await this.generateEmailVerificationToken(userData.email);
-    } catch (err) {
-      this.logger.error(
-        "[auth-service] Failed to send verification email on register",
-        { error: err instanceof Error ? err.message : String(err) }
-      );
-    }
-
-    emitAuthEvent("registered", { userId: newUser.id, email: newUser.email });
-
-    return newUser;
-  }
-
-  /**
-   * Verify user credentials for login.
-   *
-   * @returns The authenticated user on success (passwordHash redacted).
-   * @throws NextlyError(AUTH_INVALID_CREDENTIALS) for unknown email,
-   *   missing passwordHash (OAuth-only user), or wrong password — the
-   *   canonical "Invalid email or password." message comes from the
-   *   factory and never reveals which leg failed (§13.8).
-   *
-   * Checks the password only: it neither counts a failed attempt nor decides
-   * whether the account may hold a session (locked, deactivated,
-   * unverified). Anything that issues a session signs in through
-   * `auth/credentials/verify-credentials`, which does all three.
-   */
-  async verifyCredentials(
-    email: string,
-    password: string
-  ): Promise<MinimalUser> {
-    const normalizedEmailResult = EmailSchema.safeParse(email);
-    const normalizedEmail = normalizedEmailResult.success
-      ? normalizedEmailResult.data
-      : String(email).trim().toLowerCase();
-    const user = await this.db.query.users.findFirst({
-      where: { email: requireFilterValue(normalizedEmail, "email") },
-      columns: {
-        id: true,
-        email: true,
-        name: true,
-        image: true,
-        passwordHash: true,
-        emailVerified: true,
-      },
-    });
-
-    if (!user || !user.passwordHash) {
-      // Generic public message ("Invalid email or password.") is provided by
-      // the factory; logContext records *why* internally for operators.
-      throw NextlyError.invalidCredentials({
-        logContext: {
-          reason: auditReason(!user ? "user-not-found" : "no-password-hash"),
-        },
-      });
-    }
-
-    const isValidPassword = await verifyPasswordBcrypt(
-      password,
-      user.passwordHash
-    );
-
-    if (!isValidPassword) {
-      throw NextlyError.invalidCredentials({
-        logContext: {
-          reason: auditReason("password-mismatch"),
-          userId: user.id,
-        },
-      });
-    }
-
-    return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      image: user.image,
-      emailVerified: user.emailVerified,
-      passwordHash: null,
-    };
-  }
-
-  /**
-   * Change user password.
-   *
-   * @throws NextlyError(AUTH_INVALID_CREDENTIALS) when the current password
-   *   is wrong, the user has no password (OAuth-only), or the user does not
-   *   exist — all three legs collapse to the same public message per §13.8
-   *   to avoid leaking account state.
-   * @throws NextlyError on DB errors.
-   */
-  async changePassword(
-    userId: string,
-    currentPassword: string,
-    newPassword: string
-  ): Promise<void> {
-    let user;
-    try {
-      user = await this.db.query.users.findFirst({
-        where: { id: requireFilterValue(userId, "userId") },
-        columns: {
-          passwordHash: true,
-        },
-      });
-    } catch (error) {
-      // Normalise raw driver errors so the DB kind is preserved.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
-
-    if (!user || !user.passwordHash) {
-      // Same generic message as a wrong-password leg. Operator-only context
-      // captures whether the user existed for debug purposes.
-      throw NextlyError.invalidCredentials({
-        logContext: {
-          reason: auditReason(!user ? "user-not-found" : "no-password-hash"),
-          userId,
-        },
-      });
-    }
-
-    const isValidPassword = await verifyPasswordBcrypt(
-      currentPassword,
-      user.passwordHash
-    );
-
-    if (!isValidPassword) {
-      throw NextlyError.invalidCredentials({
-        logContext: {
-          reason: auditReason("current-password-mismatch"),
-          userId,
-        },
-      });
-    }
-
-    const newPasswordHash = await hashPasswordBcrypt(newPassword);
-
-    // The users service's own-password write, so both services that change
-    // a user's own password make the one write: conditional on the account
-    // not being deactivated, in the same statement, and ending every session
-    // the account holds in the same transaction. A deactivated account's
-    // credentials are frozen, as they are for a reset link, an invite and the
-    // forced first-sign-in change: an access token still inside its
-    // lifetime, or a Direct API token, must not set a password for a later
-    // reactivation to switch on. Decided by the write rather than a read
-    // before it, which could not see a deactivation landing while the
-    // password was hashed.
-    const changed = await new UserAccountService(
-      this.adapter,
-      this.logger
-    ).changeOwnPasswordHash(userId, newPasswordHash);
-    if (!changed) {
-      throw NextlyError.invalidCredentials({
-        logContext: { reason: auditReason("inactive"), userId },
-      });
-    }
-
-    emitAuthEvent("passwordChanged", { userId });
-  }
-
-  /**
-   * Generate password reset token
-   *
-   * @param email - User email address
-   * @param options.disableEmail - Skip sending the reset email and always return the token
-   * @param options.expiration - Token lifetime in seconds (defaults to TOKEN_EXPIRY_HOURS)
-   */
-  async generatePasswordResetToken(
-    email: string,
-    options?: {
-      disableEmail?: boolean;
-      expiration?: number;
-      redirectPath?: string;
-    }
-  ): Promise<ResetPasswordTokenResult> {
-    const disableEmail = options?.disableEmail ?? false;
-    const expirationMs =
-      options?.expiration != null
-        ? options.expiration * 1000
-        : this.TOKEN_EXPIRY_HOURS * 60 * 60 * 1000;
-
-    // Normalize email to ensure consistent matching with verifyCredentials
-    const normalizedEmail = email.trim().toLowerCase();
-
-    try {
-      const user = await this.db.query.users.findFirst({
-        where: { email: requireFilterValue(normalizedEmail, "email") },
-        columns: {
-          id: true,
-          email: true,
-          name: true,
-        },
-      });
-
-      if (!user) {
-        // Silent success: don't reveal whether the email exists. Same shape
-        // as a successful run with no token (since email "would have been
-        // sent" in the normal flow).
-        return {};
-      }
-
-      const rawToken = randomBytes(32).toString("hex");
-      const tokenHash = createHash("sha256").update(rawToken).digest("hex");
-
-      await this.db
-        .delete(this.tables.passwordResetTokens)
-        .where(eq(this.tables.passwordResetTokens.identifier, normalizedEmail));
-
-      const expiresAt = new Date(Date.now() + expirationMs);
-
-      await this.db.insert(this.tables.passwordResetTokens).values({
-        identifier: normalizedEmail,
-        tokenHash,
-        expires: expiresAt,
-      });
-
-      if (disableEmail) {
-        return { token: rawToken };
-      }
-
-      if (this.emailService) {
-        let delivered = false;
-        try {
-          // The result matters as much as the absence of a throw: a provider
-          // failure is converted to `{ success: false }` rather than raised, so
-          // awaiting alone would read a failed send as a delivered one and take
-          // the branch below that deliberately withholds the token.
-          const result = await this.emailService.sendPasswordResetEmail(
-            normalizedEmail,
-            { name: user.name, email: user.email },
-            rawToken,
-            { path: options?.redirectPath }
-          );
-          delivered = result.success;
-          if (!delivered) {
-            this.logger.error("Password reset email was not delivered", {
-              event: "auth.password_reset.email_failed",
-              reason: "not-delivered-to-recipient",
-            });
-          }
-        } catch (emailError) {
-          this.logger.error("Failed to send password reset email", {
-            event: "auth.password_reset.email_failed",
-            error:
-              emailError instanceof Error
-                ? emailError.message
-                : String(emailError),
+      // Checked, applied and spent in one transaction, holding the account's
+      // row: an address change or a deletion running at the same time either
+      // commits first, and the link is refused, or waits for the reset.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TokenTransaction;
+        const account = await this.redeemingAccount(tx, resetToken);
+        if (!account) {
+          throw this.invalidResetLinkError({
+            reason: "reset-token-account-changed",
+            tokenId: resetToken.id,
           });
         }
 
-        // Delivered: the token travelled by its side channel and must not also
-        // appear here.
-        if (delivered) return {};
-
-        return this.undeliveredTokenFallback(rawToken);
-      }
-
-      this.logger.warn(
-        "No email provider is configured, so the password reset token could not be delivered",
-        { event: "auth.password_reset.email_unconfigured" }
-      );
-      return this.undeliveredTokenFallback(rawToken);
-    } catch (error) {
-      // DB errors are mapped to NextlyError. Generic public messages keep us
-      // from leaking schema or driver text. Normalise raw driver errors via
-      // toDbError(dialect) so the kind is preserved.
-      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
-    }
-  }
-
-  /**
-   * Consume password reset token and reset password.
-   *
-   * @returns Object containing the email that owned the token.
-   * @throws NextlyError(TOKEN_EXPIRED) if the token was found but is past
-   *   its expiry — surfaces the canonical session-expired message so the
-   *   client can prompt the user to request a new reset email.
-   * @throws NextlyError(VALIDATION_ERROR) if the token is unknown or the
-   *   new password is too weak.
-   */
-  async resetPasswordWithToken(
-    token: string,
-    newPassword: string
-  ): Promise<ConsumeResetTokenResult> {
-    const resetToken = await this.findUnusedResetToken(token);
-
-    if (!resetToken) {
-      // Unknown / already-consumed token. Don't reveal which: a generic
-      // validation error keeps the wire response uniform.
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "token",
-            code: "INVALID",
-            message: "The reset link is invalid or has already been used.",
-          },
-        ],
-        logContext: { reason: "reset-token-not-found-or-used" },
-      });
-    }
-
-    if (tokenExpired(resetToken)) {
-      throw this.resetTokenExpiredError(resetToken);
-    }
-
-    const email = resetToken.identifier;
-
-    const targetUser = await this.db.query.users.findFirst({
-      where: { email: requireFilterValue(email, "email") },
-      columns: { id: true, deactivatedAt: true },
-    });
-
-    if (!targetUser) {
-      // Token claims to belong to an email that no longer maps to a user.
-      // Treat as invalid token rather than 500 — public message stays
-      // generic; the orphan token is logged for operators.
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "token",
-            code: "INVALID",
-            message: "The reset link is invalid.",
-          },
-        ],
-        logContext: { reason: "reset-token-orphan", tokenId: resetToken.id },
-      });
-    }
-
-    if (targetUser.deactivatedAt) {
-      // A deactivated account's credentials are frozen: a link minted
-      // before the deactivation may still arrive, but it can no longer set
-      // a password or clear an admin-set must-change requirement. The wire
-      // stays the generic invalid-link answer, so the account's state is
-      // not confirmed to whoever holds the link.
-      throw NextlyError.validation({
-        errors: [
-          {
-            path: "token",
-            code: "INVALID",
-            message: "The reset link is invalid.",
-          },
-        ],
-        logContext: {
-          reason: "reset-token-deactivated",
-          tokenId: resetToken.id,
-        },
-      });
-    }
-
-    const passwordStrength = validatePasswordStrength(newPassword);
-    if (!passwordStrength.ok) {
-      throw NextlyError.validation({
-        errors: passwordStrength.errors.map(message => ({
-          path: "newPassword",
-          code: "WEAK_PASSWORD",
-          message,
-        })),
-      });
-    }
-
-    try {
-      const passwordHash = await hashPasswordBcrypt(newPassword);
-
-      let consumed = false;
-      await this.withTransaction(async txRaw => {
-        const tx = txRaw as TransactionLike;
-        const now = new Date();
-
-        // Consume the reset token conditionally: only if not yet used and not
-        // expired. Decided at the write so racing resets cannot both succeed.
-        const claim = await tx
-          .update(this.tables.passwordResetTokens)
-          .set({
-            usedAt: now,
-          })
+        // Spent before the password is written, and only by one caller: two
+        // redemptions of one link can both pass the read above, and the
+        // conditional update lets exactly one flip used_at. Zero rows also
+        // means the link was revoked, or expired, since it was read — the
+        // claim's own boundary (expires > now) tells those apart: an
+        // instant-equal or past expiry is the expiration answer, and
+        // anything else is the shared invalid link.
+        const spent = await tx
+          .update(passwordResetTokens)
+          .set({ usedAt: new Date() })
           .where(
             and(
-              eq(this.tables.passwordResetTokens.id, resetToken.id),
-              isNull(this.tables.passwordResetTokens.usedAt),
-              gt(this.tables.passwordResetTokens.expires, now)
+              eq(passwordResetTokens.id, resetToken.id),
+              isNull(passwordResetTokens.usedAt),
+              gt(passwordResetTokens.expires, new Date()),
+              eq(passwordResetTokens.userId, account.id)
             )
           );
-
-        if (affectedRowCount(claim, this.dialect) !== 1) {
-          return;
+        if (affectedRowCount(spent, this.dialect) !== 1) {
+          if (resetToken.expires <= new Date()) {
+            throw this.resetTokenExpiredError(resetToken);
+          }
+          throw this.invalidResetLinkError({
+            reason: "reset-token-spent-or-revoked",
+            tokenId: resetToken.id,
+          });
         }
-        consumed = true;
 
-        // The own-password write: conditional on the account not being
-        // deactivated, in the same statement that sets the password, and
-        // ending every session the account holds. In the same transaction as
-        // the token consumption, so a failing write after consumption commits
-        // neither and leaves no spent token beside an unchanged password.
+        // The own-password write `changePassword` makes: conditional on the
+        // account not being deactivated, in the same statement that sets the
+        // password, and ending every session the account holds. An
+        // administrator may have switched the account off while the new
+        // password was being hashed, and the read above would not have seen
+        // it; the credentials stay frozen in that window too. Whoever asked
+        // for the reset may not be the only one holding a session, so the
+        // reset ends them all on every path that resets. Throwing rolls the
+        // spend back with it.
         const reset = await updateUserEndingSessions(
           tx,
           this.tables,
           this.dialect,
           {
-            userId: targetUser.id,
+            userId: account.id,
+            adapter: this.adapter,
             set: passwordColumns(passwordHash),
             unlessDeactivated: true,
+            when: eq(users.email, email),
           }
         );
         if (reset !== 1) {
-          throw NextlyError.validation({
-            errors: [
-              {
-                path: "token",
-                code: "INVALID",
-                message: "The reset link is invalid.",
-              },
-            ],
-            logContext: {
-              reason: "reset-token-deactivated",
-              tokenId: resetToken.id,
-            },
+          throw this.invalidResetLinkError({
+            reason: "reset-token-deactivated",
+            tokenId: resetToken.id,
           });
         }
       });
-
-      if (!consumed) {
-        // The claim refuses anything not strictly live (`expires > now`), so
-        // this branch mirrors the claim's own boundary: an instant-equal or
-        // past expiry is an expiration. `tokenExpired`'s strict `<` would
-        // call the exact instant live and report a lost race instead.
-        if (resetToken.expires <= new Date()) {
-          throw this.resetTokenExpiredError(resetToken);
-        }
-
-        throw NextlyError.validation({
-          errors: [
-            {
-              path: "token",
-              code: "INVALID",
-              message: "The reset link is invalid or has already been used.",
-            },
-          ],
-          logContext: {
-            reason: "reset-token-not-found-or-used",
+        const reset = await updateUserEndingSessions(
+          tx,
+          this.tables,
+          this.dialect,
+          {
+            userId: account.id,
+            adapter: this.adapter,
+            set: passwordColumns(passwordHash),
+            unlessDeactivated: true,
+            when: eq(users.email, email),
+          }
+        );
+        if (reset !== 1) {
+          throw this.invalidResetLinkError({
+            reason: "reset-token-deactivated",
             tokenId: resetToken.id,
-          },
-        });
-      }
+          });
+        }
+      });
     } catch (error) {
       if (NextlyError.is(error)) throw error;
       // Normalise raw driver errors before mapping.
@@ -772,24 +151,21 @@ export class AuthService extends BaseService {
       const tokenHash = createHash("sha256").update(rawToken).digest("hex");
 
       // The token is keyed to the matched account's STORED spelling:
-      // verifyEmail updates the user by an exact email = identifier match,
-      // so a legacy mixed-case row keyed by its canonical form would verify
-      // zero rows and still report success.
+      // verifyEmail redeems it only while the account holds exactly that
+      // address, so a legacy mixed-case row keyed by its canonical form could
+      // never be verified.
       const identifier = user.email;
+      const expiresAt = new Date(Date.now() + AUTH_TOKEN_LIFETIME_MS);
 
-      await this.db
-        .delete(this.tables.emailVerificationTokens)
-        .where(eq(this.tables.emailVerificationTokens.identifier, identifier));
-
-      const expiresAt = new Date(
-        Date.now() + this.TOKEN_EXPIRY_HOURS * 60 * 60 * 1000
-      );
-
-      await this.db.insert(this.tables.emailVerificationTokens).values({
-        identifier,
+      // Issued for the matched account, holding its row, as a reset link is.
+      // An account that moved or was deleted since the lookup gets nothing.
+      const issued = await this.issueToken("email-verification", {
+        email: identifier,
+        userId: String(user.id),
         tokenHash,
-        expires: expiresAt,
+        expiresAt,
       });
+      if (!issued) return {};
 
       if (options?.disableEmail) {
         return { token: rawToken };
@@ -797,7 +173,7 @@ export class AuthService extends BaseService {
 
       return await this.deliverVerificationEmail(
         email,
-        { name: user.name, email: user.email },
+        { id: String(user.id), name: user.name, email: user.email },
         rawToken,
         options?.redirectPath
       );
@@ -839,7 +215,7 @@ export class AuthService extends BaseService {
    */
   private async deliverVerificationEmail(
     email: string,
-    recipient: { name: string | null; email: string },
+    recipient: { id: string; name: string | null; email: string },
     rawToken: string,
     redirectPath: string | undefined
   ): Promise<{ token?: string }> {
@@ -858,9 +234,10 @@ export class AuthService extends BaseService {
       // the only evidence that nothing reached the user.
       const result = await this.emailService.sendEmailVerificationEmail(
         email,
-        recipient,
+        { name: recipient.name, email: recipient.email },
         rawToken,
-        { path: redirectPath }
+        // Names the staff user on the delivery records.
+        { path: redirectPath, staffUserId: recipient.id }
       );
       delivered = result.success;
       if (!delivered) {
@@ -918,43 +295,60 @@ export class AuthService extends BaseService {
     }
 
     const email = verificationToken.identifier;
+    const { emailVerificationTokens, users } = this.tables;
 
     try {
-      // tx is a Drizzle transaction (NodePgTransaction / MySql2Transaction /
-      // BetterSQLite3Transaction depending on dialect) that exposes the same
-      // fluent query API as this.db.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await this.withTransaction(async (tx: any) => {
+      // Checked, applied and spent in one transaction, holding the account's
+      // row, so an address change or a deletion running at the same time is
+      // ordered against it.
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TokenTransaction;
+        const account = await this.redeemingAccount(tx, verificationToken);
+        if (!account) {
+          throw this.invalidVerificationLinkError({
+            reason: "verification-token-account-changed",
+            tokenId: verificationToken.id,
+          });
+        }
+
+        // Spent first, by exactly one caller; zero rows means another
+        // redemption spent it, or an address change revoked it, since the
+        // read above.
+        const spent = await tx
+          .delete(emailVerificationTokens)
+          .where(
+            and(
+              eq(emailVerificationTokens.id, verificationToken.id),
+              eq(emailVerificationTokens.userId, account.id)
+            )
+          );
+        if (affectedRowCount(spent, this.dialect) !== 1) {
+          throw this.invalidVerificationLinkError({
+            reason: "verification-token-spent-or-revoked",
+            tokenId: verificationToken.id,
+          });
+        }
+
         // Mark the email verified, and activate the account. Self-verification
         // (whether initiated by /auth/register or by an admin invite with
         // sendWelcomeEmail=true) is what activates the account — both
         // paths funnel through here. An admin can still manually activate
         // a user without email verification via the user-mutation path.
         await tx
-          .update(this.tables.users)
+          .update(users)
           .set(emailVerificationColumns(new Date(), "link"))
-          .where(eq(this.tables.users.email, email));
+          .where(eq(users.id, account.id));
         // Activation is conditional in the statement itself: an account an
         // administrator deactivated stays inactive, including when its link
         // was sent before the deactivation. The address is still verified —
         // following the link proved it — so reactivating needs no new link.
         await tx
-          .update(this.tables.users)
+          .update(users)
           .set({ isActive: true })
-          .where(
-            and(
-              eq(this.tables.users.email, email),
-              isNull(this.tables.users.deactivatedAt)
-            )
-          );
-
-        await tx
-          .delete(this.tables.emailVerificationTokens)
-          .where(
-            eq(this.tables.emailVerificationTokens.id, verificationToken.id)
-          );
+          .where(and(eq(users.id, account.id), isNull(users.deactivatedAt)));
       });
     } catch (error) {
+      if (NextlyError.is(error)) throw error;
       // Normalise raw driver errors before mapping.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
@@ -1125,6 +519,7 @@ export class AuthService extends BaseService {
           this.dialect,
           {
             userId: invite.userId,
+            adapter: this.adapter,
             set: {
               ...passwordColumns(passwordHash),
               // Receiving the invite at this address is what proves it.
@@ -1256,6 +651,7 @@ export class AuthService extends BaseService {
             set: passwordColumns(passwordHash),
             unlessDeactivated: true,
             when: eq(this.tables.users.mustChangePassword, true),
+            adapter: this.adapter,
           }
         );
         if (claimed !== 1) return;
@@ -1296,7 +692,11 @@ export class AuthService extends BaseService {
    */
   async resetTokenOwner(token: string): Promise<string | null> {
     const row = await this.findUnusedResetToken(token);
-    return row && !tokenExpired(row) ? row.identifier : null;
+    // Only a token redemption would honour names an owner: one with no
+    // account is refused there until the core reconcile binds it.
+    return row && row.userId !== null && !tokenExpired(row)
+      ? row.identifier
+      : null;
   }
 
   /**
@@ -1305,7 +705,11 @@ export class AuthService extends BaseService {
    */
   async verificationTokenOwner(token: string): Promise<string | null> {
     const row = await this.findVerificationToken(token);
-    return row && !tokenExpired(row) ? row.identifier : null;
+    // Only a token redemption would honour names an owner: one with no
+    // account is refused there until the core reconcile binds it.
+    return row && row.userId !== null && !tokenExpired(row)
+      ? row.identifier
+      : null;
   }
 
   /**
@@ -1346,7 +750,7 @@ export class AuthService extends BaseService {
           tokenHash: requireFilterValue(tokenHash, "tokenHash"),
           usedAt: { isNull: true },
         },
-        columns: { id: true, identifier: true, expires: true },
+        columns: { id: true, identifier: true, userId: true, expires: true },
       });
     } catch (error) {
       // Normalise raw driver errors so the DB kind is preserved.
@@ -1362,7 +766,7 @@ export class AuthService extends BaseService {
     try {
       return await this.db.query.emailVerificationTokens.findFirst({
         where: { tokenHash: requireFilterValue(tokenHash, "tokenHash") },
-        columns: { id: true, identifier: true, expires: true },
+        columns: { id: true, identifier: true, userId: true, expires: true },
       });
     } catch (error) {
       // Normalise raw driver errors so the DB kind is preserved.
@@ -1405,7 +809,7 @@ export class AuthService extends BaseService {
         .delete(this.tables.userInviteTokens)
         .where(lt(this.tables.userInviteTokens.expires, now));
     } catch (error) {
-      console.error("Failed to cleanup expired tokens:", error);
+      this.logger.error("Failed to cleanup expired tokens", { error: error });
     }
   }
 }

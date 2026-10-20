@@ -46,17 +46,34 @@
  * connection blipped, skipping every later action and every unrelated due
  * release. One blip then looked exactly like a quiet night.
  *
+ * ## Why a pass ended part-way is continued rather than replayed
+ *
+ * A component is settled only once every action in it is applied, and a host
+ * may end a pass part-way (a serverless time limit) with some of its writes
+ * committed. Each write therefore marks its member, in the write's own
+ * transaction, with the release revision it was applied for; the next pass
+ * counts a member marked for its release's current revision as applied and
+ * does not write it again. Nothing is inferred from the document: the mark is
+ * the write's receipt, and permissions, field rules, drafts and languages were
+ * judged by that write when it ran. Any move of a release raises its revision,
+ * so the marks of a release rescheduled, cancelled or edited since are stale
+ * and its documents are written again.
+ *
  * @module domains/releases/apply-due-releases
  */
 
 import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
-import { planReleaseMaterialisation } from "./plan-release-materialisation";
+import { asReleaseRun } from "./early-stop";
+import {
+  componentsToStop,
+  planReleaseMaterialisation,
+} from "./plan-release-materialisation";
 import type { MaterialisationAction } from "./plan-release-materialisation";
 import type {
   DocumentRef,
-  ReleaseMemberRow,
+  DrainMemberRow,
   ReleaseRow,
 } from "./releases-repository";
 
@@ -75,44 +92,26 @@ export interface ReleaseMutations {
    * edit lives in a snapshot and the live row is untouched, so publishing
    * without it would set a status the reader already saw and change nothing.
    */
-  publish(input: { ref: DocumentRef; user: UserContext }): Promise<void>;
+  publish(input: ReleaseWrite): Promise<void>;
   /** Withdraw the document from published reads. */
-  unpublish(input: { ref: DocumentRef; user: UserContext }): Promise<void>;
+  unpublish(input: ReleaseWrite): Promise<void>;
+}
+
+/** One member's write, and the mark it leaves when it lands. */
+export interface ReleaseWrite {
+  ref: DocumentRef;
+  user: UserContext;
   /**
-   * Whether the document ALREADY has the effect an action intended.
+   * The member to mark applied, and the release revision to mark it with.
    *
-   * Asked only after a write rejected, and it is what stops a committed write
-   * from being retried forever. `updateEntry` commits the row and its outbox
-   * event before running `afterUpdate` hooks, so a hook that throws rejects the
-   * promise for a write that already persisted. Recording that as a failure
-   * leaves the release scheduled, and every later sweep repeats the update,
-   * appends another event and reruns the hooks — indefinitely.
-   *
-   * Reading the document back is the instrument that can tell the two apart,
-   * because the thrown error cannot: `createErrorFromResult` carries the
-   * service's failure, not whether its transaction committed.
+   * The write marks it in its OWN transaction, and only when it stored the
+   * action's status on the live row (`recordMemberApplied`), so the mark
+   * commits exactly when the write does. That is what lets this pass ask
+   * afterwards whether the write counted: the promise cannot say,
+   * because a write commits before its `afterUpdate` hooks run and one whose
+   * hook threw rejects having landed.
    */
-  applied(input: {
-    ref: DocumentRef;
-    effect: "publish" | "unpublish";
-    user: UserContext;
-  }): Promise<boolean>;
-  /**
-   * Whether the action would change nothing: the document already has the
-   * effect AND holds no working draft the write would promote.
-   *
-   * Asked before a write, which `applied` is not fit for: a document already
-   * published that holds a pending draft is not a no-op for a publish, because
-   * putting that draft live is what the release is for.
-   *
-   * Optional: mutations that cannot answer it leave it out, and every action
-   * handed to them is then written.
-   */
-  settled?(input: {
-    ref: DocumentRef;
-    effect: "publish" | "unpublish";
-    user: UserContext;
-  }): Promise<boolean>;
+  receipt: { memberId: string; revision: number };
 }
 
 export interface ApplyDueReleasesDeps {
@@ -131,9 +130,21 @@ export interface ApplyDueReleasesDeps {
      * creation time, then member id), so no answer depends on the order rows
      * come back in.
      */
-    listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]>;
+    listMembersOf(releaseIds: string[]): Promise<DrainMemberRow[]>;
     isStillDueAt(releaseId: string, scheduledAt: Date): Promise<boolean>;
-    markReleasePublished(id: string, at: Date): Promise<boolean>;
+    /** Whether the member's own write marked it applied for `revision`. */
+    isMemberApplied(memberId: string, revision: number): Promise<boolean>;
+    /**
+     * Settle a COMPONENT of releases, all or none, each fenced on the revision
+     * and instant this pass planned against: a release moved since the plan
+     * (postponed or renamed, say) leaves the whole component unsettled.
+     *
+     * @returns the ids settled: every entry, or none.
+     */
+    markReleasesPublished(
+      entries: readonly { id: string; revision: number; scheduledAt: Date }[],
+      at: Date
+    ): Promise<readonly string[]>;
     /**
      * Stop a COMPONENT of releases nothing about retrying could fix, atomically.
      *
@@ -290,25 +301,15 @@ async function stopHopelessReleases(
   // independent by construction, so a single wide transaction would hold locks
   // across releases that have nothing to do with each other, and one bad
   // component would roll back every good one beside it.
+  //
+  // A release with no planned instant was not part of this pass's plan, so
+  // there is nothing to fence against, and its WHOLE component is left for the
+  // next pass, which re-plans against a set it can fence completely.
   let blocked = 0;
-  for (const group of plan.overlappingReleases) {
-    if (!group.some(id => permanent.has(id))) continue;
-
-    const entries: { id: string; scheduledAt: Date }[] = [];
-    for (const id of group) {
-      const at = plannedInstants.get(id);
-      // A release with no planned instant was not part of this pass's plan, so
-      // there is nothing to fence against. The WHOLE component is then skipped
-      // rather than the one release: blocking the rest is precisely the split
-      // this pass exists to avoid, and the next pass re-plans against a set it
-      // can fence completely.
-      if (at === undefined) {
-        entries.length = 0;
-        break;
-      }
-      entries.push({ id, scheduledAt: at });
-    }
-
+  for (const entries of componentsToStop(plan, permanent, id => {
+    const at = plannedInstants.get(id);
+    return at === undefined ? undefined : { id, scheduledAt: at };
+  })) {
     blocked += (await deps.repository.blockReleases(entries)).length;
   }
   return blocked;
@@ -367,6 +368,15 @@ export interface ApplyDueReleasesResult {
   outcomes: MaterialisationOutcome[];
 }
 
+/**
+ * Apply every release whose instant has arrived; see the module note.
+ *
+ * @experimental Its dependency ports may change while releases settle. A
+ * caller passing its own `repository` provides `isMemberApplied`, returns
+ * `appliedRevision` from `listMembersOf`, and settles a whole component in
+ * `markReleasesPublished`; the built-in drain job (`createReleasesDrainJob`)
+ * needs nothing.
+ */
 export async function applyDueReleases(
   deps: ApplyDueReleasesDeps
 ): Promise<ApplyDueReleasesResult> {
@@ -396,6 +406,7 @@ export async function applyDueReleases(
       // never the epoch in practice; narrowing here rather than asserting keeps
       // a repository that ever changed its mind from publishing 1970.
       scheduledAt: r.scheduledAt ?? at,
+      revision: r.revision,
     })),
     members,
     now: at,
@@ -452,7 +463,16 @@ export async function applyDueReleases(
     plan,
     heldOpen,
     applied,
-    now
+    now,
+    // The revision and instant each release was planned against, so settling
+    // refuses one that moved since.
+    new Map(
+      releases.flatMap(r =>
+        r.scheduledAt
+          ? [[r.id, { revision: r.revision, scheduledAt: r.scheduledAt }]]
+          : []
+      )
+    )
   );
 
   const deferred = plan.actions.length - outcomes.length;
@@ -490,15 +510,30 @@ async function applyOne(
     effect: action.effect,
   };
 
+  // Applied by its own write on an earlier pass, for the release as it now
+  // stands: that write already judged its author, its permissions and the
+  // document, and writing it again would only replay its hooks and events.
+  // The schedule is still asked first: the mark matched the revision this pass
+  // PLANNED against, and a release postponed or cancelled since must not be
+  // reported applied on the strength of it.
+  if (action.applied) {
+    return (
+      (await scheduleRefusal(deps, action, base)) ?? {
+        ...base,
+        failure: null,
+      }
+    );
+  }
+
   // The read seam answers DOCUMENT-WIDE members only. `findDueDecisions`
   // filters `locale IS NULL` because per-locale lifecycle lives on the
   // companion's `_status`, which the main row it filters cannot express — so
   // per-locale release visibility is not built yet.
   //
   // Writing one locale here would therefore apply an effect the read path
-  // refuses to project, and the success check below cannot see it either:
-  // `findByID(locale)` returns the MAIN row's status, so a per-locale unpublish
-  // that COMMITTED reads back as unchanged, reports WRITE_FAILED, and replays
+  // refuses to project, and the mark below cannot record it either: the write
+  // marks a member from the MAIN row's stored status, so a per-locale
+  // unpublish that COMMITTED leaves no mark, reports WRITE_FAILED, and replays
   // its hooks and outbox events on every drain forever.
   //
   // Declined rather than half-performed. Nothing can reach this today — there
@@ -514,17 +549,33 @@ async function applyOne(
     return { ...base, failure: identity.failure, ...identity.detail };
   }
 
-  // Cancelling is the one thing a person does to a release between a drain
-  // reading it and the drain acting on it, and the fence on
-  // `markReleasePublished` comes too late: it stops the row being marked
-  // published and cannot un-publish the documents. Checked per ACTION rather
-  // than once per pass, so a cancel is honoured for every document not yet
-  // written rather than only for releases the pass had not started.
-  //
-  // Wrapped because it is a database read on the ordinary path, and an
-  // unwrapped one here aborted the entire pass: a transient connection failure
-  // on the FIRST action skipped every later action and every unrelated due
-  // release, so one blip looked exactly like a quiet night.
+  const refused = await scheduleRefusal(deps, action, base);
+  if (refused !== null) return refused;
+
+  return writeAndConfirm(deps, action, identity.user, base);
+}
+
+/**
+ * Why this action may no longer go ahead on its release's schedule, or null
+ * while the release is still due at the instant this pass planned against.
+ *
+ * Cancelling or postponing is the one thing a person does to a release between
+ * a drain reading it and the drain acting on it, and the fence on
+ * `markReleasesPublished` comes too late: it stops the row being marked
+ * published and cannot un-publish the documents. Checked per ACTION rather
+ * than once per pass, so a cancel is honoured for every document not yet
+ * written rather than only for releases the pass had not started.
+ *
+ * Never a rejection: it is a database read on the ordinary path, and an
+ * unwrapped one aborted the entire pass, so a transient connection failure on
+ * the FIRST action skipped every later action and every unrelated due release,
+ * and one blip looked exactly like a quiet night.
+ */
+async function scheduleRefusal(
+  deps: ApplyDueReleasesDeps,
+  action: MaterialisationAction,
+  base: Omit<MaterialisationOutcome, "failure">
+): Promise<MaterialisationOutcome | null> {
   let stillDue: boolean;
   try {
     stillDue = await deps.repository.isStillDueAt(
@@ -538,25 +589,11 @@ async function applyOne(
       detail: messageOf(error),
     };
   }
-  if (!stillDue) {
-    return { ...base, failure: "RELEASE_NO_LONGER_SCHEDULED" };
-  }
-
-  // A document already where this action leaves it, with nothing pending to
-  // promote, counts as applied without being written. Writing it again changes
-  // nothing but replays its hooks and outbox events, and it is what kept a
-  // component the host ended part-way through from ever finishing: the next
-  // pass rewrote the prefix before reaching the rest. Asked after the author
-  // and the schedule are confirmed, so neither precondition is skipped.
-  if (await alreadySettled(deps, action, identity.user)) {
-    return { ...base, failure: null, detail: "already settled; not written" };
-  }
-
-  return writeAndConfirm(deps, action, identity.user, base);
+  return stillDue ? null : { ...base, failure: "RELEASE_NO_LONGER_SCHEDULED" };
 }
 
 /**
- * The write, and the read-back that decides whether it counted.
+ * The write, and the read of its mark that decides whether it counted.
  *
  * Extracted from {@link applyOne} because it is a different question: that one
  * decides whether this action may be attempted at all, this one decides what
@@ -574,16 +611,26 @@ async function writeAndConfirm(
     // Called ON the object rather than through an extracted reference: a
     // mutations implementation that is a class method would lose `this` and
     // fail at a point that looks like the write being refused.
-    const input = { ref: action.ref, user };
-    await (action.effect === "publish"
-      ? deps.mutations.publish(input)
-      : deps.mutations.unpublish(input));
+    //
+    // As the release's own run, so the write is not taken for an event that
+    // stops this release between two of its documents (`asReleaseRun`).
+    const input: ReleaseWrite = {
+      ref: action.ref,
+      user,
+      receipt: { memberId: action.memberId, revision: action.revision },
+    };
+    await asReleaseRun(action.ref, () =>
+      action.effect === "publish"
+        ? deps.mutations.publish(input)
+        : deps.mutations.unpublish(input)
+    );
   } catch (error) {
-    // A rejection is not proof the write did not land. Ask the document — and
-    // if THAT cannot be answered, report the failure, which is the safe
-    // direction: a retry of an applied action is a no-op, while treating an
-    // unapplied one as done loses it silently.
-    const landed = await confirmApplied(deps, action, user, false);
+    // A rejection is not proof the write did not land. Ask the member's mark,
+    // which only a committed write leaves — and if THAT cannot be answered,
+    // report the failure, which is the safe direction: a retry of an applied
+    // action rewrites one document, while treating an unapplied one as done
+    // loses it silently.
+    const landed = await confirmApplied(deps, action, false);
     if (landed) return { ...base, failure: null, detail: messageOf(error) };
     return { ...base, failure: "WRITE_FAILED", detail: messageOf(error) };
   }
@@ -593,13 +640,14 @@ async function writeAndConfirm(
   // ordinary mutation then succeeds without performing the publish or the
   // withdrawal. Reporting that as complete discharges the release, removes its
   // read-time projection, and loses the scheduled action permanently — the one
-  // failure here that leaves no trace at all.
+  // failure here that leaves no trace at all. Such a write stored another
+  // status, so it left no mark.
   //
   // So success is confirmed the same way a rejection is. An unanswerable
-  // read-back is treated as applied here, because the write did resolve;
+  // read is treated as applied here, because the write did resolve;
   // inventing a failure for it would be the direction that loses nothing but
   // replays the hooks and outbox events of a write that already happened.
-  if (!(await confirmApplied(deps, action, user, true))) {
+  if (!(await confirmApplied(deps, action, true))) {
     return {
       ...base,
       failure: "WRITE_FAILED",
@@ -611,33 +659,10 @@ async function writeAndConfirm(
 }
 
 /**
- * Whether the action would change nothing, so the write can be left out.
+ * Whether the member's own write marked it applied, for the revision this
+ * pass planned against.
  *
- * Mutations without `settled`, and a read that cannot be answered, say
- * `false`: the write then runs as it always has, which may repeat work but
- * never loses an action.
- */
-async function alreadySettled(
-  deps: ApplyDueReleasesDeps,
-  action: MaterialisationAction,
-  user: UserContext
-): Promise<boolean> {
-  if (deps.mutations.settled === undefined) return false;
-  try {
-    return await deps.mutations.settled({
-      ref: action.ref,
-      effect: action.effect,
-      user,
-    });
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Whether the document now carries the effect the action intended.
- *
- * @param whenUnverifiable what to answer when the read-back ITSELF fails, which
+ * @param whenUnverifiable what to answer when the read of the mark ITSELF fails, which
  *   says nothing either way. Both callers need that answer and they need
  *   opposite ones — a caller whose write rejected must not assume it landed, and
  *   a caller whose write resolved must not invent a failure for it — so it is a
@@ -646,15 +671,13 @@ async function alreadySettled(
 async function confirmApplied(
   deps: ApplyDueReleasesDeps,
   action: MaterialisationAction,
-  user: UserContext,
   whenUnverifiable: boolean
 ): Promise<boolean> {
   try {
-    return await deps.mutations.applied({
-      ref: action.ref,
-      effect: action.effect,
-      user,
-    });
+    return await deps.repository.isMemberApplied(
+      action.memberId,
+      action.revision
+    );
   } catch {
     return whenUnverifiable;
   }
@@ -665,7 +688,7 @@ async function confirmApplied(
  *
  * Separated from the action itself because it is the ACCESS decision, and it
  * has three distinct refusals that a reader should be able to take in without
- * also holding the write, the cancel check and the read-back in mind.
+ * also holding the write, the cancel check and the mark in mind.
  */
 async function resolveActionAuthor(
   deps: ApplyDueReleasesDeps,
@@ -832,7 +855,8 @@ async function dischargeSettledComponents(
   plan: ReturnType<typeof planReleaseMaterialisation>,
   heldOpen: ReadonlySet<string>,
   applied: ReadonlySet<string>,
-  now: () => Date
+  now: () => Date,
+  planned: ReadonlyMap<string, { revision: number; scheduledAt: Date }>
 ): Promise<{ published: number; undischarged: number }> {
   let published = 0;
   // Discharged by COMPONENT, for the reason the planner states: splitting one
@@ -841,8 +865,8 @@ async function dischargeSettledComponents(
   // and the next tick, seeing only the earlier, would make it the winner and
   // republish what was correctly withdrawn.
   //
-  // Counted by ATTEMPT, not by success: `markReleasePublished` answers `false`
-  // for a release an overlapping drain already settled, so gating on successes
+  // Counted by ATTEMPT, not by success: `markReleasesPublished` settles none of
+  // a component an overlapping drain already settled, so gating on successes
   // leaves the counter at zero and every row gets a serial write with the budget
   // long gone.
   let finalizedComponents = 0;
@@ -882,13 +906,38 @@ async function dischargeSettledComponents(
       continue;
     }
     finalizedComponents += 1;
-    for (const id of settleable) {
-      // A FRESH clock, not the pass's start. `publishedAt` is defined as the
-      // moment materialisation completed, and `at` was captured before members
-      // were loaded, identities resolved and every content mutation run — on a
-      // slow pass or a large due set that difference is substantial.
-      if (await deps.repository.markReleasePublished(id, now())) published += 1;
-    }
+    published += await settleComponent(deps, settleable, now, planned);
   }
   return { published, undischarged };
+}
+
+/**
+ * Mark one component's releases published, whole or not at all, each fenced
+ * on the revision and instant this pass planned against, and say how many
+ * moved.
+ *
+ * One call for the component, for the reason the planner gives for settling by
+ * component: a release of it moved since the plan (renamed, say, with its
+ * schedule unchanged) cannot be settled, and settling the rest without it
+ * leaves it the winner on their shared documents, so the next pass would
+ * reverse what the component did.
+ */
+async function settleComponent(
+  deps: ApplyDueReleasesDeps,
+  ids: readonly string[],
+  now: () => Date,
+  planned: ReadonlyMap<string, { revision: number; scheduledAt: Date }>
+): Promise<number> {
+  const entries = ids.flatMap(id => {
+    const fence = planned.get(id);
+    return fence === undefined ? [] : [{ id, ...fence }];
+  });
+  // Every due release has an instant (`findDueReleases`); a component holding
+  // one without is not settled rather than settled in part.
+  if (entries.length !== ids.length) return 0;
+  // A FRESH clock, not the pass's start. `publishedAt` is defined as the
+  // moment materialisation completed, and the pass's start was captured before
+  // members were loaded, identities resolved and every content mutation run —
+  // on a slow pass or a large due set that difference is substantial.
+  return (await deps.repository.markReleasesPublished(entries, now())).length;
 }

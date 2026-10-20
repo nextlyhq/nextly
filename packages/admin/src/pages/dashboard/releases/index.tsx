@@ -16,6 +16,7 @@ import { useState } from "react";
 import { CreateReleaseDialog } from "@admin/components/features/releases/CreateReleaseDialog";
 import { ReleaseCalendar } from "@admin/components/features/releases/ReleaseCalendar";
 import { ReleaseList } from "@admin/components/features/releases/ReleaseList";
+import { Plus } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
@@ -81,7 +82,11 @@ export default function ReleasesPage() {
               ))}
             </div>
             {canAssemble ? (
-              <Button onClick={() => setCreating(true)}>New release</Button>
+              <Button onClick={() => setCreating(true)}>
+                {/* The same affordance as "New" on every other list page. */}
+                <Plus className="size-4" aria-hidden />
+                New release
+              </Button>
             ) : null}
           </div>
         </div>

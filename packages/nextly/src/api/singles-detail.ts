@@ -253,7 +253,7 @@ export const PATCH = withErrorHandler(
       // owner's — the route only authorized `update`. Mirrors the dispatcher.
       //
       // Through `apiKeyScopeFrom`, which carries the caller's roles and the
-      // permission ROWS every rule-facing spelling derives from. The literal
+      // permission ROWS a rule's permission list is built from. The literal
       // this replaces named `actorType` and `permissions` only, so a documented
       // `permissions.includes("site:publish")` was handed the stored slugs and
       // denied a key that held the grant.

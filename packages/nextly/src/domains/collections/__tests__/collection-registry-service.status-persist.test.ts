@@ -60,6 +60,11 @@ function createCtx() {
     tableExists: vi.fn(async () => true),
     executeQuery: vi.fn(async () => undefined),
     getDialect: vi.fn(() => "postgresql"),
+    // Outside any transaction, as every adapter runs an after-commit effect:
+    // now. A status toggle hands the collection's releases to the early stop.
+    afterCommit: vi.fn(async (effect: () => unknown) => {
+      await effect();
+    }),
   };
 
   const logger = {

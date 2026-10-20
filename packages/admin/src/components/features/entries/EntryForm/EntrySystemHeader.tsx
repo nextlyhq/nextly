@@ -7,6 +7,7 @@ import { useFormContext } from "react-hook-form";
 
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import { useHistoryAddress } from "@admin/components/features/versions/history-address";
+import { useVersionActions } from "@admin/components/features/versions/version-actions";
 import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   ChevronLeft,
@@ -20,8 +21,10 @@ import { useCan } from "@admin/hooks/useCan";
 import type { AutosaveStatus } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
+import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { useEntryLocale } from "../EntryLocaleContext";
+import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 import { translationCounts } from "../translation-meta";
 
 import { AutoSaveIndicator } from "./AutoSaveIndicator";
@@ -165,10 +168,12 @@ export interface EntrySystemHeaderProps {
    * Save controls are not gated on it either.
    */
   isLinkAvailable?: boolean;
-  /** Mints a shareable link and copies it. */
-  onCopyLink?: () => void;
-  /** Whether a link is being minted right now. */
-  isCopyingLink?: boolean;
+  /**
+   * The document a shared link names, which the share popover makes links
+   * for and lists the live links of. Absent means nothing can be shared yet:
+   * an unsaved entry has no id to name.
+   */
+  shareDocument?: PreviewLinkDocument;
 
   /** Save Draft handler — routed through useEntryForm.handleSubmit('save-draft').
    *  Used in create mode and when editing a draft entry. */
@@ -313,10 +318,12 @@ export function EntrySystemHeader({
   onTogglePreviewPane,
   previewPaneOpen = false,
   isLinkAvailable = false,
-  onCopyLink,
-  isCopyingLink = false,
+  shareDocument,
 }: EntrySystemHeaderProps) {
   const form = useFormContext();
+  // The share popover, opened by the preview control on a wide screen and by
+  // the document menu's row on a narrow one.
+  const [shareOpen, setShareOpen] = useState(false);
   const entryLocale = useEntryLocale();
   // The default language is edited with `locale === undefined`, and its status
   // can live on the companion, so resolve it to read the right lifecycle.
@@ -349,6 +356,10 @@ export function EntrySystemHeader({
   // live document.
   const { viewing: viewingVersion } = useDocumentHistory();
   const isReadingHistory = viewingVersion !== null;
+  // What the version on screen offers in place of the document's own verbs.
+  // A colleague's claim or a submit in flight withholds restoring, as it
+  // withholds every other write.
+  const versionActions = useVersionActions(documentLocked || isSubmitting);
 
   // Both collections and singles authorize a document write as `update-{slug}`.
   // Read here, inside the guard this header renders under, so a deliberate
@@ -621,8 +632,9 @@ export function EntrySystemHeader({
     ...(onTogglePreviewPane === undefined ? {} : { onTogglePreviewPane }),
     previewPaneOpen,
     isLinkAvailable,
-    ...(onCopyLink === undefined ? {} : { onCopyLink }),
-    isCopyingLink,
+    ...(shareDocument === undefined
+      ? {}
+      : { onShareLink: () => setShareOpen(true) }),
     disabled: isSubmitting,
   };
 
@@ -714,46 +726,78 @@ export function EntrySystemHeader({
                 History
               </Button>
             ) : null}
+            {/* What a feature contributes, such as a takeover's mode switch.
+              It stays while a past version is on screen, showing that
+              version's own mode. */}
             {toolbarSlot}
-            {/* Directly left of the submit cluster, which is where an author looks
-              for it: checking how something reads is part of deciding to publish
-              it, not a document-management action like Duplicate or Delete. The
-              `sm` size is the band's, so it lines up with Save beside it rather
-              than standing a few pixels taller.
+            {/* While a past version is on screen, its own actions take the
+              document's place: Back to current, and Restore… where Publish
+              sits. Save and Publish act on the LIVE document, which is not
+              what is being read, so they are replaced rather than greyed; an
+              editor offered "Save" over a past version has been invited to
+              decide about something they cannot see. On a phone these two sit
+              in the bar at the bottom instead, under the thumb. */}
+            {versionActions ? (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={WIDE_ONLY}
+                  onClick={versionActions.returnToCurrent}
+                >
+                  Back to current
+                </Button>
+                {versionActions.restore ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className={WIDE_ONLY}
+                    disabled={versionActions.restoreDisabled}
+                    onClick={versionActions.restore}
+                  >
+                    Restore…
+                  </Button>
+                ) : null}
+              </>
+            ) : (
+              <>
+                {/* Directly left of the submit cluster, which is where an author looks
+                for it: checking how something reads is part of deciding to publish
+                it, not a document-management action like Duplicate or Delete. The
+                `sm` size is the band's, so it lines up with Save beside it rather
+                than standing a few pixels taller.
 
-              `disabled` follows the submit buttons rather than the whole form:
-              minting a link and opening a preview both act on what is already
-              saved, so a submit in flight is a race with them and not merely a
-              busy form. */}
-            {/* ONE control for the preview, not three. The pane toggle used to
-              sit beside this looking like a second preview button, with opening
-              and copying already sharing a menu of their own — three of the
-              header's controls for one idea. */}
-            <div className={cn("contents", WIDE_ONLY)}>
-              <PreviewActions size="sm" {...previewProps} />
-            </div>
-            {/*
-              Every document verb, drawn where the model said each belongs.
+                `disabled` follows the submit buttons rather than the whole form:
+                minting a link and opening a preview both act on what is already
+                saved, so a submit in flight is a race with them and not merely a
+                busy form. */}
+                {/* ONE control for the preview, not three. The pane toggle used to
+                sit beside this looking like a second preview button, with opening
+                and copying already sharing a menu of their own — three of the
+                header's controls for one idea. */}
+                <div className={cn("contents", WIDE_ONLY)}>
+                  <PreviewActions size="sm" {...previewProps} />
+                </div>
+                {/*
+                Every document verb, drawn where the model said each belongs.
 
-              One control leads and the rest are demoted, which the header could
-              not express while each button decided its own placement in JSX: a
-              published document with a pending draft drew Save, Publish and
-              Unpublish at equal weight, and Unpublish sat one slip from Publish.
+                One control leads and the rest are demoted, which the header could
+                not express while each button decided its own placement in JSX: a
+                published document with a pending draft drew Save, Publish and
+                Unpublish at equal weight, and Unpublish sat one slip from Publish.
 
-              No save affordances survive a historical view. They act on the live
-              document, which is not what is being read — an editor offered "Save"
-              over a past version has been invited to decide about something they
-              cannot see. Restoring is offered instead, from the banner over the
-              version itself. The model states that rule once, for every action,
-              rather than each control testing `isReadingHistory` for itself.
-            */}
-            <DocumentActionBar
-              actions={withContributions.actions}
-              bindings={withContributions.bindings}
-              pending={isSubmitting}
-              narrowItems={narrowItems}
-              narrowPending={isCopyingLink}
-            />
+                While a past version is on screen they give way to its own
+                actions, above.
+              */}
+                <DocumentActionBar
+                  actions={withContributions.actions}
+                  bindings={withContributions.bindings}
+                  pending={isSubmitting}
+                  narrowItems={narrowItems}
+                />
+              </>
+            )}
 
             {/* Rail toggle — far right, separated by a thin divider. Not on a
               narrow screen, where the panel is a page rather than beside, and
@@ -782,6 +826,18 @@ export function EntrySystemHeader({
                 </Button>
               </>
             )}
+            {/* What the share popover hangs from: the end of this row, which
+              stays on screen at every width, unlike the preview control that
+              folds into the document menu on a narrow one. */}
+            {shareDocument === undefined ? null : (
+              <SharePreviewPopover
+                document={shareDocument}
+                open={shareOpen}
+                onOpenChange={setShareOpen}
+              >
+                <span className="h-0 w-0 self-end" aria-hidden="true" />
+              </SharePreviewPopover>
+            )}
           </div>
         </div>
 
@@ -791,7 +847,7 @@ export function EntrySystemHeader({
         <div className="mt-1.5">
           {/* The title is part of the document, so reading a past version
             locks it with everything else. Left editable it would mutate the
-            LIVE document while the banner says the page cannot be edited — and
+            LIVE document while the version on screen cannot be edited — and
             go to autosave as unsaved work nobody typed on purpose. */}
           <EntryTitleInput
             className="text-2xl leading-8 @max-lg/toolbar:text-xl @max-lg/toolbar:leading-[26px]"
@@ -861,8 +917,8 @@ export function EntrySystemHeader({
           non-localized editors keep a single-row header.
 
           While a past version is on screen, switching language or running a
-          language action would act on the live document under a banner saying
-          the page cannot be edited — so both are withheld, and only there. */}
+          language action would act on the live document while the version on
+          screen cannot be edited — so both are withheld, and only there. */}
       {/* Create mode ONLY. A document that does not exist yet has no
           translations to report and no language to switch to, so the one thing
           worth saying is which language this first save will be in.

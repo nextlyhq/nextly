@@ -198,9 +198,9 @@ export class CollectionsHandler {
             };
           }
         } catch (error) {
-          console.error(
-            "[CollectionsHandler] Failed to fetch collection metadata:",
-            error
+          this.logger.error(
+            "[CollectionsHandler] Failed to fetch collection metadata",
+            { error: error }
           );
         }
         return null;
@@ -332,22 +332,6 @@ export class CollectionsHandler {
     collectionName: string;
   }): Promise<boolean> {
     return this.entryService.releaseCompanionLacksStatus(params);
-  }
-
-  /**
-   * One entry's lifecycle as stored, past every read hook: the main row's
-   * status and each translation's. See the mutation service.
-   *
-   * @experimental
-   */
-  async releaseStoredLifecycle(params: {
-    collectionName: string;
-    entryId: string;
-  }): Promise<{
-    status: string | null;
-    languages: Map<string, string | null>;
-  } | null> {
-    return this.entryService.releaseStoredLifecycle(params);
   }
 
   /**
@@ -529,11 +513,14 @@ export class CollectionsHandler {
           }
         }
       } catch (enrichError) {
-        console.error(
-          "[CollectionsHandler.getCollection] Failed to enrich component fields:",
-          enrichError instanceof Error
-            ? enrichError.message
-            : String(enrichError)
+        this.logger.error(
+          "[CollectionsHandler.getCollection] Failed to enrich component fields",
+          {
+            detail:
+              enrichError instanceof Error
+                ? enrichError.message
+                : String(enrichError),
+          }
         );
       }
 

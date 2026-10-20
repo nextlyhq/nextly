@@ -31,6 +31,7 @@ import {
   seedPermissionsAndRolePresets,
 } from "../init/seed-permissions";
 import { ensureHmrListener } from "../runtime/hmr-listener";
+import { consoleLogger } from "../shared/types";
 import { getImageProcessor } from "../storage/image-processor";
 
 // Lazy-initialized shared dispatcher instance
@@ -422,7 +423,7 @@ async function initializeServicesOnce(): Promise<void> {
   // re-registers them with the current config. Gated to development: config
   // modules never hot-change in production.
   if (needsLocalizationReregistration()) {
-    console.log(
+    consoleLogger.info(
       "[Nextly] `localization` config changed — re-registering services to apply it..."
     );
     await shutdownServices();
@@ -459,7 +460,7 @@ async function initializeServicesOnce(): Promise<void> {
       // eslint-disable-next-line turbo/no-undeclared-env-vars
       process.env.NEXTLY_DISABLE_INSTRUMENTATION_WARNING !== "1"
     ) {
-      console.warn(
+      consoleLogger.warn(
         "[nextly] Cold-boot triggered by an incoming request — no " +
           "instrumentation.ts detected. Each Next.js worker will now " +
           "independently run schema introspection and permission seeding " +
@@ -509,10 +510,9 @@ async function initializeServicesOnce(): Promise<void> {
         await userExtSchemaService.ensureUserExtSchema(drizzleDb);
       }
     } catch (err: unknown) {
-      console.error(
-        "[Auth Handler] Error during user_ext schema setup:",
-        err instanceof Error ? err.message : String(err)
-      );
+      consoleLogger.error("[Auth Handler] Error during user_ext schema setup", {
+        detail: err instanceof Error ? err.message : String(err),
+      });
     }
 
     if (nextlyConfig) {
@@ -525,11 +525,13 @@ async function initializeServicesOnce(): Promise<void> {
       const storageCount = Array.isArray(nextlyConfig.storage)
         ? nextlyConfig.storage.length
         : 0;
-      console.log(
+      consoleLogger.info(
         `[Auth Handler] Services auto-initialized with config (${pluginCount} plugin(s), ${collectionCount} collection(s), ${storageCount} storage adapter(s))`
       );
     } else {
-      console.log("[Auth Handler] Services auto-initialized with defaults");
+      consoleLogger.info(
+        "[Auth Handler] Services auto-initialized with defaults"
+      );
     }
 
     // Boot-time auto-apply for code-first schema changes (dev only).
@@ -569,6 +571,20 @@ async function getDispatcherInstance(): Promise<ServiceDispatcher> {
     _dispatcher = new ServiceDispatcher();
   }
   return _dispatcher;
+}
+
+/**
+ * Drop the cached dispatcher, so the next request builds one on whatever
+ * adapter is registered then.
+ *
+ * A server registers one adapter for its life and keeps one dispatcher on it,
+ * and nothing in product code calls this. The test harness does: it boots one
+ * instance after another in one process and disconnects each one's adapter on
+ * teardown, and a dispatcher kept from an earlier instance would answer the
+ * next instance's REST requests from that closed adapter.
+ */
+export function resetDispatcherForTests(): void {
+  _dispatcher = null;
 }
 
 /**

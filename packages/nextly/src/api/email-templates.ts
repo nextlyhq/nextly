@@ -61,6 +61,9 @@ const createTemplateSchema = z.object({
   useLayout: z.boolean().optional(),
   isActive: z.boolean().optional(),
   providerId: z.string().uuid().optional().nullable(),
+  // When the template is sent, in the site's words; stored as given and
+  // returned on every read, as the dispatcher routes and Direct API do.
+  description: z.string().optional().nullable(),
 });
 
 /**

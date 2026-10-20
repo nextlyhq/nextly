@@ -4,6 +4,7 @@ import { NextlyError } from "@nextly/errors";
 import { ServiceContainer } from "@nextly/services/index";
 
 import type { SeederResult } from "./permissions";
+import { seederLog } from "./seeder-log";
 
 /**
  * Type for adapters that support getDrizzle() method
@@ -66,8 +67,7 @@ export async function seedSuperAdmin(
     });
   }
 
-  const log = silent ? () => {} : console.log;
-  const errorLog = silent ? () => {} : console.error;
+  const { log, errorLog } = seederLog(silent);
 
   log(" Starting super admin seeding...\n");
 

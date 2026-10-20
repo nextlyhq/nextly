@@ -264,12 +264,19 @@ export function createMockCollectionService(
  * have to say so.
  */
 export function createMockRbacAccessControlService(): MockRecord {
+  const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {
     checkAccess: vi.fn().mockResolvedValue(true),
     // Answers `undefined`: no code-defined rule governs the operation, so an
     // anonymous caller falls through to the public default.
     checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    getRegisteredAccess,
+    // Derived from `getRegisteredAccess`, as the service derives it, so a rule a test
+    // registers there reaches every caller that asks for the target.
+    getRegisteredTarget: (slug: string) => {
+      const access: unknown = getRegisteredAccess(slug);
+      return access ? { kind: "collection", slug, access } : undefined;
+    },
   };
 }
 
@@ -281,6 +288,11 @@ export function createMockRelationshipService(): MockRecord {
     expandRelationships: vi
       .fn()
       .mockImplementation((entry: unknown) => Promise.resolve(entry)),
+    // A read at depth 0 gives junction fields their stored ids through this,
+    // so a double without it certifies a path that throws for real.
+    withStoredManyToManyIds: vi
+      .fn()
+      .mockImplementation((entries: unknown[]) => Promise.resolve(entries)),
     // The read paths call this once the document is assembled. A double that
     // omits it certifies a path that throws for real.
     applyNestedFieldHooks: vi.fn().mockResolvedValue(undefined),

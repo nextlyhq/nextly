@@ -27,6 +27,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, test } from "@playwright/test";
 
 import {
+  assertBuildDirIgnored,
   cleanUpNextWrites,
   exampleEnv,
   freePort,
@@ -93,6 +94,7 @@ for (const testCase of CASES) {
     const work = mkdtempSync(path.join(tmpdir(), "nextly-dev-reload-"));
     const databaseFile = path.join(work, "dev-reload.db");
     const distDir = `.next-dev-reload-${testCase.bundler.slice(2)}-${testCase.portGivenBy}`;
+    assertBuildDirIgnored(distDir);
     const args = ["dev", testCase.bundler];
     if (testCase.portGivenBy === "flag") args.push("-p", String(port));
 

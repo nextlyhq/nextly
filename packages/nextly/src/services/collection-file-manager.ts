@@ -11,6 +11,7 @@ import { applyMigrationWhole } from "../domains/schema/services/apply-migration-
 import { toSnakeCase } from "../domains/schema/services/field-column-descriptor";
 import { generateRuntimeSchema } from "../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
+import { consoleLogger } from "../shared/types";
 import type { DatabaseInstance } from "../types/database-operations";
 
 export interface FileManagerConfig {
@@ -99,18 +100,16 @@ export class CollectionFileManager {
   }
 
   registerSchemas(schemas: Record<string, unknown>): void {
-    console.log(
-      "[FileManager] registerSchemas called with keys:",
-      Object.keys(schemas)
-    );
+    consoleLogger.info("[FileManager] registerSchemas called with keys", {
+      detail: Object.keys(schemas),
+    });
     Object.entries(schemas).forEach(([key, schema]) => {
       this.schemaRegistry.set(key, schema);
-      console.log("[FileManager] Registered schema:", key);
+      consoleLogger.info("[FileManager] Registered schema", { key });
     });
-    console.log(
-      "[FileManager] Registry now has:",
-      Array.from(this.schemaRegistry.keys())
-    );
+    consoleLogger.info("[FileManager] Registry now has", {
+      detail: Array.from(this.schemaRegistry.keys()),
+    });
   }
 
   // Replace the cached runtime Drizzle schema for one collection with a
@@ -192,27 +191,24 @@ export class CollectionFileManager {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ): Promise<any> {
     const schemaKey = `dc_${collectionName.replace(/-/g, "_")}`;
-    console.log(
-      "[FileManager] loadDynamicSchema called for:",
+    consoleLogger.info("[FileManager] loadDynamicSchema called", {
       collectionName,
-      "looking for key:",
-      schemaKey
-    );
-    console.log(
-      "[FileManager] Registry keys:",
-      Array.from(this.schemaRegistry.keys())
-    );
+      schemaKey,
+    });
+    consoleLogger.info("[FileManager] Registry keys", {
+      detail: Array.from(this.schemaRegistry.keys()),
+    });
 
     // First check registry (for code-first collections with pre-compiled schemas)
     if (this.schemaRegistry.has(schemaKey)) {
-      console.log("[FileManager] Found schema in registry");
+      consoleLogger.info("[FileManager] Found schema in registry");
       return this.schemaRegistry.get(schemaKey);
     }
 
     // If not in registry, try to generate a runtime schema for UI collections
     // This allows UI-created collections to work without pre-compiled TypeScript schemas
     if (this.adapter && this.metadataFetcher) {
-      console.log(
+      consoleLogger.info(
         "[FileManager] Schema not in registry, attempting runtime generation..."
       );
 
@@ -223,14 +219,11 @@ export class CollectionFileManager {
           const tableName =
             metadata.tableName || `dc_${collectionName.replace(/-/g, "_")}`;
 
-          console.log(
-            "[FileManager] Generating runtime schema for:",
+          consoleLogger.info("[FileManager] Generating runtime schema", {
             collectionName,
-            "dialect:",
             dialect,
-            "tableName:",
-            tableName
-          );
+            tableName,
+          });
 
           const runtimeSchema = generateRuntimeSchema(
             tableName,
@@ -254,20 +247,23 @@ export class CollectionFileManager {
           );
 
           this.schemaRegistry.set(schemaKey, runtimeSchema.table);
-          console.log("[FileManager] Runtime schema generated and cached");
+          consoleLogger.info(
+            "[FileManager] Runtime schema generated and cached"
+          );
 
           return runtimeSchema.table;
         }
       } catch (error) {
-        console.error(
-          "[FileManager] Failed to generate runtime schema:",
-          error
-        );
+        consoleLogger.error("[FileManager] Failed to generate runtime schema", {
+          error: error,
+        });
       }
     }
 
     const availableSchemas = Array.from(this.schemaRegistry.keys()).join(", ");
-    console.log("[FileManager] Schema NOT found! Available:", availableSchemas);
+    consoleLogger.info("[FileManager] Schema NOT found! Available", {
+      availableSchemas,
+    });
     // Most common cause when "Available: none" is that getNextly() was
     // called without `{ config: nextlyConfig }`. The cached singleton
     // then bootstraps with an empty collections list, no rows land in

@@ -1011,6 +1011,8 @@ export class SinglePublishAllService extends BaseService {
     // language's status, which this snapshot does not hold, so it would
     // compare equal with the version before.
     const { versionNo } = await captureInTx(tx, this.versionCapture, {
+      // A publish exists only under the Draft/Published lifecycle.
+      lifecycle: true,
       ref: { scopeKind: "single", scopeSlug: slug, entryId },
       contentStatus: "published",
       parts: {

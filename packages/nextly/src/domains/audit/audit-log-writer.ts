@@ -78,7 +78,15 @@ export type AuditEventKind =
    * for anyone holding it until it expires or the generation moves.
    */
   | "preview-link-minted"
-  /** Every preview link ever issued was invalidated, including live sessions. */
+  /**
+   * One preview link was revoked, by id, ending it on its next opening and on
+   * every page of a session it already opened.
+   */
+  | "preview-link-revoked"
+  /**
+   * Preview links were invalidated, including live sessions: every link of
+   * one document when the row names one, otherwise every link ever issued.
+   */
   | "preview-links-revoked"
   | "role-assigned"
   | "role-revoked"

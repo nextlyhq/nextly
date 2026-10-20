@@ -25,7 +25,7 @@
 
 import { DndContext, closestCenter } from "@dnd-kit/core";
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { useMemo, useRef, type ComponentProps } from "react";
+import { useMemo, useRef, type ComponentProps, type ReactNode } from "react";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
@@ -268,6 +268,58 @@ function CustomizePicker({
   );
 }
 
+/**
+ * What the grid's place holds while the first arrangement read is in flight.
+ *
+ * A line of text, not card-shaped placeholders: which cards there will be,
+ * and how wide, is exactly what is not known yet, and a guessed block that
+ * the real dashboard then differs from is itself the jump this avoids.
+ */
+function ArrangementLoading() {
+  return (
+    <p
+      role="status"
+      aria-label="Loading your dashboard"
+      className="text-sm text-muted-foreground"
+      data-testid="widget-grid-loading"
+    >
+      Loading your dashboard…
+    </p>
+  );
+}
+
+/**
+ * What the dashboard's container holds while there are no cards to draw, or `null` once there
+ * are. Drawn inside the measured container either way, by the one return that draws it.
+ *
+ * - **Nothing declared:** the empty grid says so in place, and the recovery chrome outlives
+ *   the rows, so an arrangement can never reach a state it cannot leave.
+ * - **The arrangement still on its way:** no card, no card's data, and one status where the grid
+ *   will be. Nothing sits below the grid, so the cards arriving in its place move nothing that
+ *   was already drawn. Inside the measured container all the same: the dashboard's width is
+ *   observed from the element mounted first, and a card's first query waits for that width, so
+ *   a container drawn only once the arrangement lands would never be measured and no card would
+ *   ever be asked for.
+ */
+function holdingBody({
+  declared,
+  awaitingArrangement,
+  isPending,
+  isUnavailable,
+}: {
+  declared: number;
+  awaitingArrangement: boolean;
+  isPending: boolean;
+  isUnavailable: boolean;
+}): ReactNode | null {
+  if (declared === 0) {
+    return (
+      <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+    );
+  }
+  return awaitingArrangement ? <ArrangementLoading /> : null;
+}
+
 export function WidgetGrid() {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -354,14 +406,20 @@ export function WidgetGrid() {
   // Both returns draw the dashboard's container as their root, ONE element of one type, so
   // React keeps the same node across them and the width observed on it stays attached when
   // the first declarations arrive.
-  if (declared.length === 0) {
+  const holding = holdingBody({
+    declared: declared.length,
+    awaitingArrangement: arrangement.awaitingArrangement,
+    isPending,
+    isUnavailable,
+  });
+  if (holding !== null) {
     return (
       <div
         ref={dashboardRef}
         data-testid="dashboard-container"
         className="@container/dashboard"
       >
-        <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+        {holding}
       </div>
     );
   }

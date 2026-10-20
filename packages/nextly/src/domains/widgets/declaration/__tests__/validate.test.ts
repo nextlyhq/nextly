@@ -12,6 +12,8 @@
 import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
+import { MAX_WIDGET_SETTINGS } from "../../settings";
+import { settings } from "../setting-builders";
 import {
   assertWidgetDeclarations,
   collectWidgetDeclarationFaults,
@@ -25,8 +27,8 @@ function valid(overrides: Record<string, unknown> = {}): unknown {
     title: "Orders by state",
     description: "How many orders sit in each state",
     category: "Shop",
-    widths: ["1/3", "1/2"],
-    width: "1/2",
+    widths: ["third", "half"],
+    width: "half",
     settings: {
       collection: { type: "collection" },
       by: { type: "groupBy", of: "collection", defaultValue: "state" },
@@ -88,14 +90,16 @@ describe("a widget declaration as startup receives it", () => {
   it("refuses widths left out, empty, or holding something that is not a width", () => {
     expect(problemsOf(without("widths"))[0]).toContain("widths");
     expect(problemsOf(valid({ widths: [] }))[0]).toContain("widths");
+    // The retired fraction spelling is not a width: core's words are the only
+    // ones a declaration may use.
     expect(
-      problemsOf(valid({ widths: ["1/2", "half"], width: "1/2" }))[0]
-    ).toContain('"half"');
+      problemsOf(valid({ widths: ["half", "1/2"], width: "half" }))[0]
+    ).toContain('"1/2"');
   });
 
   it("refuses a starting width the widget does not allow", () => {
     expect(problemsOf(valid({ width: "full" }))).toEqual([
-      'width "full" is not one of the widths it allows (1/3, 1/2)',
+      'width "full" is not one of the widths it allows (third, half)',
     ]);
   });
 
@@ -190,6 +194,25 @@ describe("a widget declaration as startup receives it", () => {
     }
   });
 
+  it("refuses an example with a symbol-keyed property, which JSON drops", () => {
+    const tag = Symbol("tag");
+    // The value is safe; the KEY is what JSON throws away, so this is a
+    // different refusal from a symbol held as a value.
+    const [problem] = problemsOf(
+      valid({ display: "list", example: { items: [{ [tag]: "paid" }] } })
+    );
+    expect(problem).toContain(
+      "example.items[0] has a property keyed by Symbol(tag), which JSON drops"
+    );
+    // A non-enumerable symbol key is not data JSON would have carried, as the
+    // array's own iterator above is not, so it is not refused.
+    const hidden = { id: "a" };
+    Object.defineProperty(hidden, tag, { value: "paid", enumerable: false });
+    expect(
+      problemsOf(valid({ display: "list", example: { items: [hidden] } }))
+    ).toEqual([]);
+  });
+
   it("names a value it cannot write out without failing to report it", () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
@@ -231,6 +254,23 @@ describe("a widget declaration as startup receives it", () => {
       ).toContain("tone");
     });
 
+    it("accepts each of the Collection, Filter, Sort and Group by builders", () => {
+      // The control for the refusals around it, and the four content
+      // settings judged by core's own rules rather than a second set.
+      expect(
+        problemsOf(
+          valid({
+            settings: {
+              collection: settings.collection(),
+              where: settings.filter({ of: "collection" }),
+              order: settings.sort({ of: "collection", default: "-updatedAt" }),
+              by: settings.groupBy({ of: "collection" }),
+            },
+          })
+        )
+      ).toEqual([]);
+    });
+
     it("whose dependency names no Collection setting of the widget", () => {
       expect(
         problemsOf(
@@ -244,6 +284,47 @@ describe("a widget declaration as startup receives it", () => {
       ).toEqual([
         'setting "by" depends on "colection", which is not a Collection setting of this widget',
       ]);
+    });
+
+    it("beside one that is not a setting at all, naming every fault", () => {
+      // A malformed entry is named by its key, and does not keep its
+      // well-formed siblings from being judged in the same restart.
+      const problems = problemsOf(
+        valid({
+          settings: {
+            broken: null,
+            limit: { type: "number", defaultValue: "five" },
+            by: { type: "groupBy", of: "missing" },
+          },
+        })
+      );
+      expect(problems).toHaveLength(3);
+      expect(problems[0]).toContain(
+        'setting "broken" must be a setting declaration'
+      );
+      expect(problems[1]).toContain('setting "limit"');
+      expect(problems[2]).toContain(
+        'setting "by" depends on "missing", which is not a Collection setting of this widget'
+      );
+      expect(problems.join("\n")).not.toContain(
+        "every setting must be an object"
+      );
+    });
+
+    it("over the limit, still saying so when one is malformed", () => {
+      const many = Object.fromEntries(
+        Array.from({ length: MAX_WIDGET_SETTINGS }, (_, index) => [
+          `s${index}`,
+          { type: "number" },
+        ])
+      );
+      const problems = problemsOf(valid({ settings: { ...many, broken: 7 } }));
+      expect(problems.join("\n")).toContain(
+        'setting "broken" must be a setting declaration'
+      );
+      expect(problems.join("\n")).toContain(
+        `at most ${MAX_WIDGET_SETTINGS} settings`
+      );
     });
   });
 
@@ -296,7 +377,7 @@ describe("a widget declaration as startup receives it", () => {
       problemsOf(valid({ title: "", width: "full", sketch: "pie" }))
     ).toEqual([
       "title must be a non-empty string",
-      'width "full" is not one of the widths it allows (1/3, 1/2)',
+      'width "full" is not one of the widths it allows (third, half)',
       'sketch must name one of core\'s displays (metric, table, list, bars, timeseries), got "pie"',
     ]);
   });

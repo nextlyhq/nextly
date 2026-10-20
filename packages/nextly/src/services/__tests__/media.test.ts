@@ -421,6 +421,32 @@ describe("MediaService", () => {
       expect(result.data!.thumbnailUrl).toBeNull();
     });
 
+    it("logs a failed thumbnail without the signed URL's credentials", async () => {
+      // A storage error commonly quotes the signed URL it was refused at; the
+      // warning keeps the location and drops the key and signature.
+      const warn = vi.spyOn(testLogger, "warn");
+      mockGenerateThumbnail.mockRejectedValueOnce(
+        new Error(
+          "refused https://key-id:key-secret@bucket.example/t.jpg?X-Amz-Signature=signed-secret"
+        )
+      );
+
+      const result = await mediaService.uploadMedia({
+        file: Buffer.from("image-data"),
+        filename: "photo.jpg",
+        mimeType: "image/jpeg",
+        size: 1024000,
+        uploadedBy: testUserId,
+      });
+
+      expect(result.success).toBe(true);
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).toContain("Thumbnail generation failed");
+      expect(logged).toContain("bucket.example/t.jpg");
+      expect(logged).not.toMatch(/secret/);
+      warn.mockRestore();
+    });
+
     it("should handle storage upload errors", async () => {
       // Fail on second upload (original file, not thumbnail)
       mockStorageUpload

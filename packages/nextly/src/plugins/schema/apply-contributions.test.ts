@@ -186,6 +186,18 @@ describe("applyPluginSchemaContributions (slug collisions — D13)", () => {
       ]);
     });
 
+    it("throws when a plugin named `code` takes an app single's slug", () => {
+      // The app's claims are told apart from a plugin's by what they are, not
+      // by a name a plugin could also take.
+      const err = collisionError(() =>
+        applyPluginSchemaContributions(cfg({ singles: [single("shared")] }), [
+          plugin("code", { collections: [coll("shared")] }),
+        ])
+      );
+      expect(err.logContext?.reason).toBe("slug-collision");
+      expect(err.logContext?.slug).toBe("shared");
+    });
+
     it("throws when one plugin contributes two kinds under one slug", () => {
       collisionError(() =>
         applyPluginSchemaContributions(cfg({}), [

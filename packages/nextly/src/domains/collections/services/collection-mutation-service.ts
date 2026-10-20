@@ -111,6 +111,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { recordWriteReceipt } from "../../../shared/lib/write-receipt";
 import {
   isWriteIntegrityFailure,
   markWriteIntegrityFailure,
@@ -163,6 +164,7 @@ import {
   isCompanionReady,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { mergeComponentPatches } from "../../versions/draft-components";
@@ -171,6 +173,7 @@ import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import { sweepDeletedDocument } from "../../versions/entity-teardown";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
+import { hasLifecycle } from "../../versions/recorded-status";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -1196,6 +1199,8 @@ export class CollectionMutationService extends BaseService {
       localeTag?: string;
       /** An update, whose save may change nothing; a create always records. */
       onlyIfChanged?: boolean;
+      /** Whether the collection has the Draft/Published lifecycle. */
+      lifecycle: boolean;
     }
   ): Promise<number | null> {
     // The version recorded, or null when versioning is off or the save
@@ -1206,6 +1211,7 @@ export class CollectionMutationService extends BaseService {
     try {
       const { versionNo } = await captureInTx(tx, this.versionCapture, {
         onlyIfChanged: args.onlyIfChanged === true,
+        lifecycle: args.lifecycle,
         ref: {
           scopeKind: "collection",
           scopeSlug: args.collectionName,
@@ -1339,6 +1345,7 @@ export class CollectionMutationService extends BaseService {
         needsRelations,
       });
     const createdVersionNo = await this.captureTxVersion(tx, {
+      lifecycle: hasLifecycle(args.collection),
       collectionName: args.collectionName,
       entryId,
       contentStatus: args.entry.status,
@@ -4749,6 +4756,7 @@ export class CollectionMutationService extends BaseService {
         let createdVersionNo: number | null = null;
         if (versionsConfig?.enabled) {
           const captured = await captureInTx(tx, this.versionCapture, {
+            lifecycle: hasLifecycle(collection),
             ref: {
               scopeKind: "collection",
               scopeSlug: params.collectionName,
@@ -5045,9 +5053,9 @@ export class CollectionMutationService extends BaseService {
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
-          console.warn(
-            "Failed to expand relationships in createEntry response:",
-            expansionError
+          this.logger.warn(
+            "Failed to expand relationships in createEntry response",
+            { error: expansionError }
           );
         }
       }
@@ -5732,6 +5740,7 @@ export class CollectionMutationService extends BaseService {
               // language's status, which this snapshot does not hold, so it
               // would compare equal with the version before.
               const capture = await captureInTx(tx, this.versionCapture, {
+                lifecycle: hasLifecycle(publishCollection),
                 ref: {
                   scopeKind: "collection",
                   scopeSlug: params.collectionName,
@@ -6233,48 +6242,6 @@ export class CollectionMutationService extends BaseService {
       return false;
     }
     return this.companionLacksStatus(params.collectionName);
-  }
-
-  /**
-   * One entry's lifecycle as stored, read now from the pool and past every
-   * read hook: the main row's own status, and each stored translation's own,
-   * keyed by locale, which a release's document-wide write moves besides the
-   * main row. The translations are empty for a collection that keeps none.
-   * `null` for an entry that is not there, or whose translations it keeps but
-   * cannot be read here (the translation table is not there yet, or has no
-   * per-language status), so that is never taken for "none to move".
-   *
-   * @experimental
-   */
-  async releaseStoredLifecycle(params: {
-    collectionName: string;
-    entryId: string;
-  }): Promise<{
-    status: string | null;
-    languages: Map<string, string | null>;
-  } | null> {
-    const row = await this.storedEntry(params.collectionName, params.entryId);
-    if (!row) return null;
-    const status = typeof row.status === "string" ? row.status : null;
-    const companion = await this.fileManager.loadCompanionSchema(
-      params.collectionName
-    );
-    if (!companion) return { status, languages: new Map() };
-    if (
-      !companion.hasStatus ||
-      !(await isCompanionReady(this.adapter, companion.companionTableName))
-    ) {
-      return null;
-    }
-    return {
-      status,
-      languages: await readCompanionLocaleStatusAll(
-        this.db as Parameters<typeof readCompanionLocaleStatusAll>[0],
-        companion.table,
-        params.entryId,
-        "ready"
-      ),
-    };
   }
 
   /**
@@ -7607,16 +7574,15 @@ export class CollectionMutationService extends BaseService {
                     : typeof v,
           ])
         );
-        console.log(
-          "[updateEntry debug]",
-          JSON.stringify({
+        this.logger.info("[updateEntry debug]", {
+          detail: JSON.stringify({
             collectionName: params.collectionName,
             entryId: params.entryId,
             finalDataKeys: Object.keys(finalData),
             finalDataKeyTypes: keyTypes,
             schemaColumns: Object.keys(schema as unknown as object),
-          })
-        );
+          }),
+        });
       }
 
       // i18n M5/M6: pull translatable values out of the main update (finalData uses camelCase field
@@ -8088,6 +8054,7 @@ export class CollectionMutationService extends BaseService {
                 await captureInTx(tx, this.versionCapture, {
                   // An update: a save that changes nothing records nothing.
                   onlyIfChanged: true,
+                  lifecycle: hasLifecycle(collection),
                   ref: {
                     scopeKind: "collection",
                     scopeSlug: params.collectionName,
@@ -8841,6 +8808,7 @@ export class CollectionMutationService extends BaseService {
                   {
                     // An update: a save that changes nothing records nothing.
                     onlyIfChanged: true,
+                    lifecycle: hasLifecycle(collection),
                     ref: {
                       scopeKind: "collection",
                       scopeSlug: params.collectionName,
@@ -9217,6 +9185,23 @@ export class CollectionMutationService extends BaseService {
                 localizedStatusRecorded ||
                 sweptRecorded;
 
+              // A receipt a caller pinned for this document is kept here, in
+              // the write's own transaction, so it commits exactly when the
+              // write does. Only a write to the live row: a held working draft
+              // left the live document as it was. `mainTo` is the status this
+              // transaction stored, read back from the row, not a hook's view.
+              if (!storeAsWorkingDraft) {
+                await recordWriteReceipt(
+                  tx,
+                  {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
+                  },
+                  { status: typeof mainTo === "string" ? mainTo : undefined }
+                );
+              }
+
               // Capture the pre-write slug inside the transaction so the
               // post-commit intent can bust the old slug tag after a rename.
               previousSlug = readStringField(previousDocument, "slug");
@@ -9291,6 +9276,9 @@ export class CollectionMutationService extends BaseService {
       // is a durable write — flagged for the retention pass independent of the
       // recording/revalidation opt-outs below.
       committedWrite = true;
+      await this.recheckReleasesHolding(params.collectionName, [
+        params.entryId,
+      ]);
 
       // A pure draft edit leaves the live row untouched, so the re-fetched
       // `updated` is the OLD published content. Everything that reports what this
@@ -9532,9 +9520,9 @@ export class CollectionMutationService extends BaseService {
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
-          console.warn(
-            "Failed to expand relationships in updateEntry response:",
-            expansionError
+          this.logger.warn(
+            "Failed to expand relationships in updateEntry response",
+            { error: expansionError }
           );
         }
       }
@@ -9933,6 +9921,9 @@ export class CollectionMutationService extends BaseService {
       }
 
       const deleted = entry;
+      await this.recheckReleasesHolding(params.collectionName, [
+        params.entryId,
+      ]);
 
       // The tags this delete invalidates: the collection tag and the removed
       // entry's id/slug tags (in its locale), so lists and any cached read of
@@ -10566,6 +10557,30 @@ export class CollectionMutationService extends BaseService {
         revalidationIntent,
       };
     }
+  }
+
+  /**
+   * Hand documents just saved or deleted to the early stop, once the write is
+   * durable: a scheduled release holding one may now have a hard problem (a
+   * pending change its author may not publish, the document gone), and is
+   * stopped then rather than at its instant. Inside an enclosing SQLite
+   * transaction this waits for its commit, and never runs for a write it
+   * rolls back. One call for a whole batch, after its transaction.
+   */
+  recheckReleasesHolding(
+    collectionName: string,
+    entryIds: readonly string[]
+  ): Promise<void> {
+    if (entryIds.length === 0) return Promise.resolve();
+    return this.afterCommit(() =>
+      stopReleasesHolding({
+        documents: entryIds.map(entryId => ({
+          scopeKind: "collection",
+          scopeSlug: collectionName,
+          entryId,
+        })),
+      })
+    );
   }
 
   /**
@@ -11410,6 +11425,7 @@ export class CollectionMutationService extends BaseService {
         const savedStatus = (updated as { status?: unknown }).status;
         const versionNo = await this.captureTxVersion(tx, {
           onlyIfChanged: true,
+          lifecycle: hasLifecycle(collection),
           collectionName: params.collectionName,
           entryId,
           contentStatus: savedStatus,

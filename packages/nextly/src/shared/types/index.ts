@@ -10,6 +10,7 @@
  */
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { maskingServiceLogger } from "../../observability/mask-emails";
 
 /**
  * Type alias for Drizzle database instance.
@@ -299,12 +300,31 @@ export interface Logger {
  * });
  * ```
  */
-export const consoleLogger: Logger = {
-  debug: (msg, meta) => console.debug(`[DEBUG] ${msg}`, meta ?? ""),
-  info: (msg, meta) => console.info(`[INFO] ${msg}`, meta ?? ""),
-  warn: (msg, meta) => console.warn(`[WARN] ${msg}`, meta ?? ""),
-  error: (msg, meta) => console.error(`[ERROR] ${msg}`, meta ?? ""),
-};
+/**
+ * One console level, labelled. A line logged without fields is written
+ * without them, rather than with an empty trailing argument. The console
+ * method is looked up as each line is written, so one replaced later (a test's
+ * spy, say) is the one that receives it.
+ */
+function consoleLevel(
+  level: "debug" | "info" | "warn" | "error",
+  label: string
+): Logger["info"] {
+  return (msg, meta) =>
+    meta === undefined
+      ? console[level](`[${label}] ${msg}`)
+      : console[level](`[${label}] ${msg}`, meta);
+}
+
+export const consoleLogger: Logger = maskingServiceLogger({
+  // Wrapped so that outside development and test every email address in a
+  // message or its fields is masked before it reaches the console: this is
+  // the logger every service falls back to.
+  debug: consoleLevel("debug", "DEBUG"),
+  info: consoleLevel("info", "INFO"),
+  warn: consoleLevel("warn", "WARN"),
+  error: consoleLevel("error", "ERROR"),
+});
 
 // Access control types (shared across collections, singles, auth)
 export * from "./access";

@@ -1,5 +1,6 @@
 /**
- * Preview links — minting one for an entry, and revoking all of them.
+ * Preview links — minting one, listing a document's live links, and revoking
+ * one link, every link of one document, or every link on the site.
  *
  * Both the Preview button and the shareable link mint one, and the difference
  * is who it is for rather than how it works. The site renders on its own
@@ -47,7 +48,47 @@ export type PreviewLinkRequest =
       ttlSeconds?: number;
     };
 
+/**
+ * The ONE document a list or revocation names: the mint request without its
+ * lifetime. Restated from the request rather than declared alongside it, so
+ * the two cannot name a document differently.
+ */
+export type PreviewLinkDocument =
+  | Omit<Extract<PreviewLinkRequest, { collection: string }>, "ttlSeconds">
+  | Omit<Extract<PreviewLinkRequest, { single: string }>, "ttlSeconds">;
+
+/** One live link, as the list shows it. */
+export interface ListedPreviewLink {
+  kind: "link";
+  /** The recorded link's id, which revoking it names. */
+  id: string;
+  /** The translation the link is limited to, or null for every one. */
+  locale: string | null;
+  /** Who made it; null when their account can no longer be read. */
+  createdBy: { id: string; name: string | null } | null;
+  /** ISO timestamps. */
+  createdAt: string;
+  expiresAt: string;
+  /** How many times the link itself was opened. */
+  openCount: number;
+  lastOpenedAt: string | null;
+}
+
+/**
+ * The one row standing for every link made before links were recorded. They
+ * carry no id, so they can only be revoked all together; `latestEnd` is the
+ * last moment any of them can still work.
+ */
+export interface OlderPreviewLinks {
+  kind: "older";
+  latestEnd: string;
+}
+
+export type PreviewLinkListItem = ListedPreviewLink | OlderPreviewLinks;
+
 export interface PreviewLink {
+  /** The recorded link's id, which the list and revoking name it by. */
+  id: string;
   /** The signed token. */
   token: string;
   /**
@@ -110,6 +151,63 @@ export const previewLinkApi = {
       message: string;
       item: PreviewLink;
     }>("/preview-links", request);
+    return result.item;
+  },
+
+  /**
+   * The live links of one document, newest first, and one more item of
+   * `kind: "older"` while links made before links were recorded may still work.
+   *
+   * Requires being able to share a preview of that document. The endpoint is
+   * experimental on the server.
+   */
+  list: async (
+    document: PreviewLinkDocument
+  ): Promise<{ items: PreviewLinkListItem[]; total: number }> => {
+    // An entry is named by collection and id; a Single by slug, in the
+    // translation the editor is on, which is the one its gate is run against.
+    const query = new URLSearchParams(
+      document.single === undefined
+        ? { collection: document.collection, entryId: document.entryId }
+        : {
+            single: document.single,
+            ...(document.locale === undefined
+              ? {}
+              : { locale: document.locale }),
+          }
+    );
+    // The first page, newest first: what the popover shows. `total` counts
+    // every live link, so the popover can say when it shows only some.
+    const result = await protectedApi.get<{
+      items: PreviewLinkListItem[];
+      meta: { total: number };
+    }>(`/preview-links?${query.toString()}`);
+    return { items: result.items, total: result.meta.total };
+  },
+
+  /** Revoke one link of a document, which stops it at once everywhere. */
+  revoke: async (
+    id: string,
+    document: PreviewLinkDocument
+  ): Promise<{ id: string; revokedAt: string }> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: { id: string; revokedAt: string };
+    }>(`/preview-links/${encodeURIComponent(id)}/revoke`, document);
+    return result.item;
+  },
+
+  /**
+   * Revoke every link of one document, including links made before links were
+   * recorded.
+   */
+  revokeDocument: async (
+    document: PreviewLinkDocument
+  ): Promise<{ revoked: number }> => {
+    const result = await protectedApi.post<{
+      message: string;
+      item: { revoked: number };
+    }>("/preview-links/revoke", document);
     return result.item;
   },
 

@@ -77,6 +77,10 @@ import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import {
+  componentsToStop,
+  planReleaseMaterialisation,
+} from "../plan-release-materialisation";
+import {
   type ReleaseCheckReads,
   type ReleaseCheckSource,
 } from "../readiness/check-sources";
@@ -98,6 +102,7 @@ import {
 } from "../release-calendar";
 import { isDueAt } from "../release-due";
 import { releaseMemberKey } from "../release-member-key";
+import type { ReleaseRecheckTarget } from "../release-recheck";
 import {
   RELEASE_ATTENTION_REASONS,
   RELEASE_TABS,
@@ -110,9 +115,11 @@ import {
 } from "../release-targets";
 import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
+  BlockRequest,
   DocumentRef,
   NewRelease,
   ReleaseListOrder,
+  ReleaseMemberCounts,
   ReleaseMemberRow,
   ReleasePageQuery,
   ReleaseRow,
@@ -670,6 +677,59 @@ interface FindReleasesFilters {
 export const DEFAULT_RELEASE_PAGE_SIZE = 50;
 /** @experimental */
 export const MAX_RELEASE_PAGE_SIZE = 200;
+
+/**
+ * The most releases one batch readiness read answers for: the admin list's
+ * largest page. Each release's documents are all checked, so the bound is on
+ * the work one request can ask for, not only on its length.
+ *
+ * @experimental
+ */
+export const MAX_RELEASE_READINESS_BATCH = 50;
+
+/**
+ * One release's readiness, as a batch read answers it.
+ *
+ * `checked: false` for a release holding more documents than a release may
+ * now hold, one made before the limit: checking it would be that whole
+ * release's worth of reads inside a read of a page, so the batch leaves it to
+ * the single read, which checks it in full.
+ *
+ * @experimental
+ */
+export type ReleaseReadinessEntry =
+  | (ReleaseReadiness & { checked: true })
+  | { releaseId: string; checked: false; reason: "over-member-limit" };
+
+/**
+ * The release ids a batch read was asked about: each a string, at most `max`
+ * of them, duplicates read once. Refused rather than trimmed, because a
+ * caller asking for more than it is answered would read the missing ones as
+ * having nothing to report.
+ */
+function releaseIdBatch(
+  releaseIds: readonly unknown[],
+  max: number,
+  name: string
+): string[] {
+  if (
+    !Array.isArray(releaseIds) ||
+    releaseIds.some(id => typeof id !== "string")
+  ) {
+    throw NextlyError.invalidInput({
+      message: `\`releaseIds\` must be a list of release ids.`,
+      logContext: { reason: `${name}-ids-not-strings` },
+    });
+  }
+  const ids = [...new Set(releaseIds as string[])];
+  if (ids.length > max) {
+    throw NextlyError.invalidInput({
+      message: `At most ${max} releases can be read at once; ${ids.length} were asked for.`,
+      logContext: { reason: `${name}-too-many`, asked: ids.length, max },
+    });
+  }
+  return ids;
+}
 
 /**
  * The longest search accepted. Well above any title a person types, and a
@@ -1684,6 +1744,102 @@ export class ReleasesService {
   }
 
   /**
+   * How many documents each of these releases holds, and how many it puts
+   * live and takes down, for a page of the list in one read.
+   *
+   * Every release asked about is answered, one holding nothing (or not
+   * there) with zeros, so a missing entry never has to be read as "none".
+   * Under the same authority as the list it summarises.
+   *
+   * @experimental
+   */
+  async memberCounts(
+    releaseIds: readonly string[],
+    actor: ReleaseActor
+  ): Promise<Record<string, ReleaseMemberCounts>> {
+    await this.authorize(actor, "read");
+    const ids = releaseIdBatch(
+      releaseIds,
+      MAX_RELEASE_PAGE_SIZE,
+      "member-counts"
+    );
+    const counts = await this.deps.repository.memberActionCountsOf(ids);
+    return Object.fromEntries(
+      ids.map(id => [
+        id,
+        counts.get(id) ?? { total: 0, goLive: 0, comeDown: 0 },
+      ])
+    );
+  }
+
+  /**
+   * {@link readiness} for a page of releases at once, in the order asked.
+   *
+   * The single read's own path: the same authorization, the same sources,
+   * the same per-release evaluation over the release's members in the order
+   * the single read takes them, so each entry is exactly what reading that
+   * release alone would answer. Only the reads are shared: the releases,
+   * their member counts and their members come in one query each instead of
+   * one per release, and members are read only for releases within the
+   * limit.
+   *
+   * A release that does not exist is left out, as the single read would have
+   * answered not found for it. One holding more documents than the limit is
+   * returned unchecked (see {@link ReleaseReadinessEntry}).
+   *
+   * @experimental
+   */
+  async readinessOf(
+    releaseIds: readonly string[],
+    actor: ReleaseActor
+  ): Promise<ReleaseReadinessEntry[]> {
+    await this.authorize(actor, "read");
+    const ids = releaseIdBatch(
+      releaseIds,
+      MAX_RELEASE_READINESS_BATCH,
+      "readiness"
+    );
+    if (ids.length === 0) return [];
+    const releases = await this.deps.repository.findReleases({ ids });
+    // Counted before anything is loaded, so a release holding more than the
+    // limit has none of its documents read: the batch is bounded by the
+    // limit, not by what a release made before it happens to hold.
+    const held = await this.deps.repository.memberCountsOf(ids);
+    const checkable = ids.filter(
+      id => (held.get(id) ?? 0) <= RELEASE_MEMBER_LIMIT
+    );
+    const membersByRelease = new Map<string, ReleaseMemberRow[]>();
+    for (const member of await this.deps.repository.listMembersInOrderOf(
+      checkable
+    )) {
+      const held = membersByRelease.get(member.releaseId) ?? [];
+      held.push(member);
+      membersByRelease.set(member.releaseId, held);
+    }
+    const byId = new Map(releases.map(release => [release.id, release]));
+    const entries: ReleaseReadinessEntry[] = [];
+    for (const id of ids) {
+      const release = byId.get(id);
+      if (release === undefined) continue;
+      if ((held.get(id) ?? 0) > RELEASE_MEMBER_LIMIT) {
+        entries.push({
+          releaseId: id,
+          checked: false,
+          reason: "over-member-limit",
+        });
+        continue;
+      }
+      const found = await this.checkMembers(
+        release,
+        membersByRelease.get(id) ?? [],
+        registeredReleaseCheckSources()
+      );
+      entries.push({ releaseId: id, ...found, checked: true });
+    }
+    return entries;
+  }
+
+  /**
    * Run these sources over these members of this release.
    *
    * Private, and reachable only after an authorization: the caller has to have
@@ -1730,10 +1886,7 @@ export class ReleasesService {
     members: readonly ReleaseMemberRow[],
     refusal: { message: string; reason: string }
   ): Promise<void> {
-    const hardSources = registeredReleaseCheckSources().filter(
-      source => source.severity === "hard"
-    );
-    const { hard } = await this.checkMembers(release, members, hardSources);
+    const hard = await this.hardProblems(release, members);
     if (hard.length === 0) return;
     throw NextlyError.conflict({
       message: refusal.message,
@@ -1745,6 +1898,115 @@ export class ReleasesService {
         state: release.state,
       },
     });
+  }
+
+  /** These members' hard problems: the hard sources' findings alone. */
+  private async hardProblems(
+    release: ReleaseRow,
+    members: readonly ReleaseMemberRow[]
+  ): Promise<ReadinessFinding[]> {
+    const hardSources = registeredReleaseCheckSources().filter(
+      source => source.severity === "hard"
+    );
+    return (await this.checkMembers(release, members, hardSources)).hard;
+  }
+
+  /**
+   * Stop each still-scheduled release holding what an event names, as soon
+   * as one of those documents has a hard problem, and answer the ids stopped.
+   *
+   * The early stop. Scheduled includes a release whose instant has passed and
+   * which no drain has run yet, since that one is already in effect for
+   * readers. Only the members the event is about are checked, by the hard
+   * sources, as scheduling checks them; a soft problem never stops a release.
+   *
+   * Stopped through the drain's own transition (`blockReleases`), so the
+   * owner is told once for the stop, and fenced on the revision and instant
+   * the check judged: a release changed since, rescheduled or with a member
+   * removed, is left for its own change's checks rather than stopped on a
+   * verdict about a release that no longer exists. Asked again, a release
+   * already stopped is no longer scheduled and is not named, so a repeated
+   * event stops and tells nothing twice.
+   *
+   * A system act, not a caller's: it answers to no actor, and each document
+   * is still judged as its own author, as the run would judge it. Runs after
+   * the event's own write has committed and opens one transaction per
+   * release it stops, never inside another.
+   *
+   * @experimental
+   */
+  async stopOnHardProblems(target: ReleaseRecheckTarget): Promise<string[]> {
+    const now = new Date();
+    const failing: Array<BlockRequest & { revision: number }> = [];
+    const affected = await this.deps.repository.scheduledMembersFor(target);
+    for (const { release, members } of affected) {
+      if (release.scheduledAt === null) continue;
+      if ((await this.hardProblems(release, members)).length === 0) continue;
+      failing.push({
+        id: release.id,
+        scheduledAt: release.scheduledAt,
+        revision: release.revision,
+      });
+    }
+    const stopped: string[] = [];
+    // One not yet due changes nothing a reader sees, and stops alone: when
+    // its instant comes, the drain plans whatever is still scheduled.
+    for (const entry of failing.filter(f => !isDueAt(f.scheduledAt, now))) {
+      stopped.push(...(await this.deps.repository.blockReleases([entry])));
+    }
+    const due = failing.filter(f => isDueAt(f.scheduledAt, now));
+    if (due.length > 0)
+      stopped.push(...(await this.stopDueComponents(due, now)));
+    return stopped;
+  }
+
+  /**
+   * Stop these due releases with every release they share a component with,
+   * one component per `blockReleases` call: the components the drain would
+   * settle them in, from the drain's own plan of what is due now, so the two
+   * paths cannot come to stop different sets.
+   *
+   * Each failing release is fenced on the revision its check judged; the
+   * rest of its component on the revision read for the plan. A release that
+   * moved since misses its fence, and its component is left whole.
+   */
+  private async stopDueComponents(
+    failing: readonly (BlockRequest & { revision: number })[],
+    now: Date
+  ): Promise<string[]> {
+    const repository = this.deps.repository;
+    const dueReleases = await repository.findDueReleases(now);
+    const plan = planReleaseMaterialisation({
+      releases: dueReleases.flatMap(row =>
+        row.scheduledAt === null
+          ? []
+          : [
+              {
+                id: row.id,
+                scheduledAt: row.scheduledAt,
+                revision: row.revision,
+              },
+            ]
+      ),
+      members: await repository.listMembersOf(dueReleases.map(row => row.id)),
+      now,
+    });
+    const checked = new Map(failing.map(entry => [entry.id, entry]));
+    const read = new Map(dueReleases.map(row => [row.id, row]));
+    const stopped: string[] = [];
+    for (const entries of componentsToStop(
+      plan,
+      new Set(checked.keys()),
+      id => {
+        const row = checked.get(id) ?? read.get(id);
+        return row?.scheduledAt
+          ? { id, scheduledAt: row.scheduledAt, revision: row.revision }
+          : undefined;
+      }
+    )) {
+      stopped.push(...(await repository.blockReleases(entries)));
+    }
+    return stopped;
   }
 
   /**

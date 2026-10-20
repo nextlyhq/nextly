@@ -21,6 +21,13 @@ const SECRET = "content-route-warning-secret-at-least-32ch!!";
 let cookieValue: string | undefined;
 
 vi.mock("../../preview/preview-route-defaults", () => ({
+  // The link's own record. What it decides is covered by the integration
+  // suite against real rows; here it allows, so these cases stay about the
+  // warning.
+  defaultLinkChecks: {
+    opened: () => Promise.resolve(true),
+    live: () => Promise.resolve(true),
+  },
   defaultSecret: () => SECRET,
   defaultGeneration: () => Promise.resolve(1),
   defaultCookies: () =>

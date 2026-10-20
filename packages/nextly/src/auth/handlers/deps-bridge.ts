@@ -56,10 +56,22 @@ import { databaseSpentChallenges } from "../pipeline/spent-challenges";
 import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
 import type { SessionRoles } from "../session/session-roles";
+import { claimFirstSetup, sharedRecordReader } from "../setup-token/setup-gate";
+import {
+  readSetupTokenRecord,
+  spendSetupToken,
+  verifySetupToken,
+  type SetupTokenMeta,
+} from "../setup-token/setup-token";
 
 import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
 import type { SessionRowTransaction } from "./session-row";
+import type { SetupHandlerDeps } from "./setup";
+
+/** The router's dependencies as Nextly builds them: always with a setup token store. */
+export type BridgedAuthRouterDeps = AuthRouterDeps &
+  Required<Pick<AuthRouterDeps, "setupToken">>;
 
 /**
  * Build AuthRouterDeps from the DI container services.
@@ -70,10 +82,10 @@ import type { SessionRowTransaction } from "./session-row";
 export function buildAuthRouterDeps(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
-): AuthRouterDeps {
+): BridgedAuthRouterDeps {
   const credentialDeps = passwordCredentialDeps(() => getService("adapter"));
   const base: Omit<
-    AuthRouterDeps,
+    BridgedAuthRouterDeps,
     | "authStrategies"
     | "authHooks"
     | "challengeRegistry"
@@ -297,6 +309,8 @@ export function buildAuthRouterDeps(
       const adapter = getService("adapter");
       return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
     },
+
+    setupToken: setupTokenDeps(getService, env.NODE_ENV === "production"),
 
     createSuperAdmin: async data => {
       const { seedPermissions } = await import(
@@ -768,6 +782,29 @@ function readServiceConfig(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The production setup token, read and spent through `nextly_meta`, where
+ * every instance of the install sees the same row.
+ */
+function setupTokenDeps(
+  getService: (name: string) => unknown,
+  isProduction: boolean
+): SetupHandlerDeps["setupToken"] {
+  const meta = () => getService("metaService") as SetupTokenMeta;
+  return {
+    required: isProduction,
+    verify: presented =>
+      verifySetupToken({ presented, readRecord: sharedRecordReader(meta()) }),
+    confirm: presented =>
+      verifySetupToken({
+        presented,
+        readRecord: () => readSetupTokenRecord(meta()),
+      }),
+    spend: () => spendSetupToken(meta()),
+    claim: () => claimFirstSetup(meta()),
+  };
 }
 
 /**

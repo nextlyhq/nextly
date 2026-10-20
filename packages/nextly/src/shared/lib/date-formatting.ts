@@ -1,5 +1,6 @@
 import { container } from "../../di/container";
 import type { SupportedDialect } from "../../types/database";
+import { consoleLogger } from "../types";
 
 // ============================================================================
 // Global API Date/Time Formatting Constants
@@ -44,7 +45,7 @@ export function debugTimezone(
   details: Record<string, unknown>
 ): void {
   if (!shouldDebugTimezone()) return;
-  console.debug(`[timezone][${stage}]`, details);
+  consoleLogger.debug(`[timezone][${stage}]`, { details });
 }
 
 export function isTimestampFieldKey(key: string | undefined): boolean {

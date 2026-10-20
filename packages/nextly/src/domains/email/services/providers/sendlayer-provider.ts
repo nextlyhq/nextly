@@ -10,6 +10,7 @@
  */
 
 import type { EmailProviderAdapter } from "../../types";
+import { messageToAddresses } from "../recipients";
 
 /** SendLayer API base URL. */
 const SENDLAYER_API_URL = "https://console.sendlayer.com/api/v1/email";
@@ -21,6 +22,15 @@ const SENDLAYER_API_URL = "https://console.sendlayer.com/api/v1/email";
 interface SendLayerProviderConfig {
   apiKey: string;
 }
+
+/**
+ * The most `to` addresses SendLayer accepts on one message.
+ *
+ * SendLayer's rate-limit reference caps every account at 10 `To` addresses per
+ * request (and 10 `CC`, 5 `BCC`). Declared so a longer list is refused before
+ * the request with the limit named, instead of failing at SendLayer.
+ */
+export const SENDLAYER_MAX_TO = 10;
 
 /**
  * Parse a "from" address string into name and email parts.
@@ -61,12 +71,19 @@ export function createSendLayerProvider(
   config: SendLayerProviderConfig
 ): EmailProviderAdapter {
   return {
+    maxToPerMessage: SENDLAYER_MAX_TO,
     async send(options) {
       const from = parseFromAddress(options.from);
 
       const body: Record<string, unknown> = {
         From: from,
-        To: [{ name: "", email: options.to }],
+        // Every `to` address when there is more than one, else the one. Each
+        // address is split into SendLayer's name and email fields, so a
+        // display-name form (`Name <user@example.com>`) is sent to the mailbox
+        // it names rather than refused as an invalid email.
+        To: messageToAddresses(options).map(address =>
+          parseFromAddress(address)
+        ),
         Subject: options.subject,
         ContentType: "HTML",
         HTMLContent: options.html,
@@ -84,11 +101,11 @@ export function createSendLayerProvider(
       }
 
       if (options.cc && options.cc.length > 0) {
-        body.CC = options.cc.map(email => ({ name: "", email }));
+        body.CC = options.cc.map(address => parseFromAddress(address));
       }
 
       if (options.bcc && options.bcc.length > 0) {
-        body.BCC = options.bcc.map(email => ({ name: "", email }));
+        body.BCC = options.bcc.map(address => parseFromAddress(address));
       }
 
       if (options.attachments && options.attachments.length > 0) {

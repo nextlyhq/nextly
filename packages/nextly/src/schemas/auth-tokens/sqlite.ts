@@ -13,6 +13,7 @@
  * @since v0.0.3-alpha (Plan A — schemas consolidation)
  */
 
+import type { ColumnBuilderBase } from "drizzle-orm";
 import {
   sqliteTable,
   integer,
@@ -23,29 +24,43 @@ import {
 
 import { users } from "../users/sqlite";
 
-// Password reset tokens (custom table)
-export const passwordResetTokens = sqliteTable(
-  "password_reset_tokens",
-  {
+import { accountTokenIndexes } from "./account-token-indexes";
+
+/**
+ * The columns a password-reset and an email-verification token share, with a
+ * kind's own columns (`extra`) placed before `created_at`. One definition, so
+ * the two tables cannot drift apart on what binds a token to its account.
+ */
+function accountTokenColumns<E extends Record<string, ColumnBuilderBase>>(
+  extra: E
+) {
+  return {
     id: integer("id").primaryKey({ autoIncrement: true }),
     identifier: text("identifier").notNull(),
+    // The account the token was issued for. A token is redeemed only for this
+    // account, and only while it still holds `identifier`; deleting the
+    // account deletes the token with it. Null only on a token issued before
+    // the column existed, until the upgrade binds or removes it
+    // (`domains/auth/services/token-account-binding`).
+    userId: text("user_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
     tokenHash: text("token_hash").notNull(),
     expires: integer("expires", { mode: "timestamp" }).notNull(),
-    usedAt: integer("used_at", { mode: "timestamp" }),
+    ...extra,
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
-  },
+  };
+}
+
+// Password reset tokens (custom table)
+export const passwordResetTokens = sqliteTable(
+  "password_reset_tokens",
+  accountTokenColumns({ usedAt: integer("used_at", { mode: "timestamp" }) }),
   t => [
-    uniqueIndex("prt_identifier_token_hash_unique").on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index("prt_expires_idx").on(t.expires),
+    ...accountTokenIndexes({ index, uniqueIndex }, "prt", t),
     index("prt_used_at_idx").on(t.usedAt),
-    // Tokens are looked up by their hash alone. The unique index above leads
-    // with the identifier, so it cannot serve that lookup.
-    index("prt_token_hash_idx").on(t.tokenHash),
   ]
 );
 
@@ -81,24 +96,8 @@ export const userInviteTokens = sqliteTable(
 // Email verification tokens (custom, hashed)
 export const emailVerificationTokens = sqliteTable(
   "email_verification_tokens",
-  {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    identifier: text("identifier").notNull(),
-    tokenHash: text("token_hash").notNull(),
-    expires: integer("expires", { mode: "timestamp" }).notNull(),
-    createdAt: integer("created_at", { mode: "timestamp" })
-      .notNull()
-      .$defaultFn(() => new Date()),
-  },
-  t => [
-    uniqueIndex("evt_identifier_token_hash_unique").on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index("evt_expires_idx").on(t.expires),
-    // Looked up by hash alone, as the reset token is.
-    index("evt_token_hash_idx").on(t.tokenHash),
-  ]
+  accountTokenColumns({}),
+  t => accountTokenIndexes({ index, uniqueIndex }, "evt", t)
 );
 
 // Refresh tokens for custom auth session management

@@ -24,7 +24,6 @@ import {
   mayRecordRecovery,
   useViewedVersion,
   writeActionsHeld,
-  ViewedVersionBanner,
   ViewedVersionBody,
   versionAwareToolbarSlots,
 } from "@admin/components/features/versions/viewed-version-host";
@@ -41,10 +40,10 @@ import {
 import { previewMessage, useEntryPreview } from "@admin/hooks/useEntryPreview";
 import { useEntryFormShortcuts } from "@admin/hooks/useKeyboardShortcuts";
 import { useLocalization } from "@admin/hooks/useLocalization";
-import { usePreviewLink } from "@admin/hooks/usePreviewLink";
 import { useTakeoverLayout } from "@admin/hooks/useTakeoverLayout";
 import { conditionFieldNames } from "@admin/lib/builder/takeoverLayout";
 import { cn } from "@admin/lib/utils";
+import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
 
 import { CopyFromLanguageScope } from "../CopyFromLanguageScope";
 import { collectionSourceFetcher } from "../entry-locale-source";
@@ -221,8 +220,7 @@ export interface EntryFormProps {
  * - Dirty state tracking
  * - **Unsaved changes protection** - prompts before navigation when dirty (standalone only)
  * - **Server error mapping** - maps server validation errors to form fields with summary
- * - **Auto-save to localStorage** - debounced saves with visual indicator (standalone only)
- * - **Draft recovery** - offers to recover unsaved changes on page revisit
+ * - **Autosave** - a debounced server-side recovery point, offered back on return (standalone only)
  *
  * @example Standalone create mode
  * ```tsx
@@ -683,11 +681,20 @@ export function EntryForm({
   // name a host, and the server is the only place that can: `settings` is a
   // system resource the `editor` and `author` presets cannot read, and those
   // are exactly the roles that share preview links.
-  const previewLink = usePreviewLink({
-    collection: collection.name,
-    entryId: savedEntryId,
-    ...(linkLocale.kind === "scoped" ? { locale: linkLocale.locale } : {}),
-  });
+  // The document the share popover makes links for and lists. Absent until
+  // the entry is saved, which is when it has an id to name, and while the
+  // language is unknown: a link minted without a resolvable locale is either
+  // refused or a grant over every translation.
+  const shareDocument: PreviewLinkDocument | undefined =
+    savedEntryId === "" || linkLocale.kind === "unresolved"
+      ? undefined
+      : {
+          collection: collection.name,
+          entryId: savedEntryId,
+          ...(linkLocale.kind === "scoped"
+            ? { locale: linkLocale.locale }
+            : {}),
+        };
 
   /*
    * Opening the preview, which is a different action from minting the link
@@ -1002,14 +1009,9 @@ export function EntryForm({
                                   savedEntryId !== "" &&
                                   linkLocale.kind !== "unresolved"
                                 }
-                                {...(savedEntryId === ""
+                                {...(shareDocument === undefined
                                   ? {}
-                                  : {
-                                      onCopyLink: () => {
-                                        previewLink.mutate();
-                                      },
-                                    })}
-                                isCopyingLink={previewLink.isPending}
+                                  : { shareDocument })}
                                 contributedActions={documentActions}
                                 toolbarSlot={versionAwareToolbarSlots(
                                   viewedVersionHost,
@@ -1058,17 +1060,6 @@ export function EntryForm({
                               <LiveDocumentRecoveryOffer
                                 recovery={recovery}
                                 viewingVersion={viewingVersion}
-                              />
-                              {/* The banner over the version being read: above the
-                      fields it describes, below the header that offered the
-                      panel. Renders nothing while the live document is on
-                      screen. A submit in flight withholds restore too — a
-                      restore racing the ordinary save would let completion
-                      order decide which contents survive. */}
-                              <ViewedVersionBanner
-                                actionsDisabled={
-                                  lock.actionsDisabled || isSubmitting
-                                }
                               />
                               <EntryMetaStrip
                                 slugField={slugField}
@@ -1142,6 +1133,13 @@ export function EntryForm({
                               <ViewedVersionBody
                                 fields={historicalFields ?? mainFields}
                                 values={historicalValues ?? undefined}
+                                // A submit in flight withholds restore too: a
+                                // restore racing the ordinary save would let
+                                // completion order decide which contents
+                                // survive.
+                                actionsDisabled={
+                                  lock.actionsDisabled || isSubmitting
+                                }
                               >
                                 {mainFields.length > 0 && (
                                   <div className="@4xl/content:p-8 pt-6">

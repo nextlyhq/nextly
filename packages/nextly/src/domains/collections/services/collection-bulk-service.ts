@@ -617,7 +617,7 @@ export class CollectionBulkService extends BaseService {
 
       return createResult;
     } catch (error: unknown) {
-      console.error("Error in duplicateEntry:", error);
+      this.logger.error("Error in duplicateEntry", { error: error });
       const errMsg =
         error instanceof Error ? error.message : "Failed to duplicate entry";
       const errStatus =
@@ -1572,6 +1572,7 @@ export class CollectionBulkService extends BaseService {
     // rewrite below can read the partial accounting a mid-batch abort leaves
     // behind.
     const state = newLegacyBatchState();
+    let committed = false;
     try {
       await this.adapter.transaction(async tx => {
         await this.runUpdateBatch(
@@ -1583,6 +1584,7 @@ export class CollectionBulkService extends BaseService {
           state
         );
       });
+      committed = true;
     } catch (error: unknown) {
       // Transaction was rolled back (stopOnError case). Clear the aggregated
       // outbox signal unconditionally — an item can record before the abort even
@@ -1603,6 +1605,17 @@ export class CollectionBulkService extends BaseService {
     // Reached with a committed transaction when the catch was skipped, so the
     // collected intents describe rows that actually persist.
     const result = toBatchResult(state);
+    // The documents this batch was asked to write, handed to the early stop
+    // once, after the batch's own transaction: the per-document writes inside
+    // it never reach the single update's own hand-over. Every one asked, not
+    // only those counted successful, since a write whose after-hook threw has
+    // committed and is counted a failure; checking one unchanged costs a read.
+    if (committed) {
+      await this.mutationService.recheckReleasesHolding(
+        params.collectionName,
+        entries.map(entry => entry.id)
+      );
+    }
 
     this.logger.info("Bulk update completed", {
       collectionName: params.collectionName,
@@ -1808,6 +1821,7 @@ export class CollectionBulkService extends BaseService {
     // behind.
     const state = newLegacyBatchState();
     let callbackThrew = false;
+    let committed = false;
     try {
       await this.adapter.transaction(async tx => {
         try {
@@ -1823,6 +1837,7 @@ export class CollectionBulkService extends BaseService {
           throw innerError;
         }
       });
+      committed = true;
     } catch (error: unknown) {
       // The shared transaction rolled back — either stopOnError tripped on a
       // returned failure, or an unexpected error (e.g. a failed outbox insert
@@ -1868,6 +1883,15 @@ export class CollectionBulkService extends BaseService {
     // rollback (false), never left it absent.
     state.eventRecorded = state.eventRecorded ?? false;
     const result = toBatchResult(state);
+    // The documents this batch was asked to delete, handed to the early stop
+    // once, after the batch's own transaction, as the bulk update hands over
+    // its own and for the same reason every one asked.
+    if (committed) {
+      await this.mutationService.recheckReleasesHolding(
+        params.collectionName,
+        ids
+      );
+    }
 
     this.logger.info("Bulk delete completed", {
       collectionName: params.collectionName,

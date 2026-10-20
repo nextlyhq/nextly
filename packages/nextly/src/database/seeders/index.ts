@@ -1,6 +1,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { seedPermissions, type SeederResult } from "./permissions";
+import { seederLog } from "./seeder-log";
 import { seedSuperAdmin } from "./super-admin";
 
 /**
@@ -49,8 +50,7 @@ export async function seedAll(
     skipSuperAdmin = false,
   } = options || {};
 
-  const log = silent ? () => {} : console.log;
-  const errorLog = silent ? () => {} : console.error;
+  const { log, errorLog } = seederLog(silent);
 
   log("\nRunning system bootstrap seeders...\n");
 
