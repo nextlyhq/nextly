@@ -18,6 +18,7 @@ import {
   upload,
 } from "../../../config";
 import { getDialectTables } from "../../../database/index";
+import { getWidget, registerWidget } from "../../../domains/widgets/registry";
 import type { Principal } from "../../../plugins/principals/types";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
 import { seedAllPermissions } from "../../../init/seed-permissions";
@@ -335,6 +336,17 @@ function probePlugin() {
         action,
       }))
     ),
+    // Resources that are not entries, each gated by a permission alone.
+    ...(["create", "update", "delete"] as const).map(action => ({
+      slug: "users",
+      action,
+    })),
+    ...["roles", "email-providers"].flatMap(slug =>
+      (["read", "create", "update", "delete"] as const).map(action => ({
+        slug,
+        action,
+      }))
+    ),
   ];
   return definePlugin({
     name: "probe",
@@ -473,6 +485,7 @@ async function permissionIds(t: TestNextly, keep: (slug: string) => boolean) {
 function heldByStaff(slug: string): boolean {
   return (
     /^(create|read|update|delete|publish|unpublish)-(c|s)_/.test(slug) ||
+    /^(create|read|update|delete)-(roles|email-providers)$/.test(slug) ||
     slug === "read-refs" ||
     slug === "read-media"
   );
@@ -482,6 +495,7 @@ function heldByStaff(slug: string): boolean {
 function heldByPartial(slug: string): boolean {
   return (
     /^(read|update|publish)-(c|s)_/.test(slug) ||
+    /^(read|update)-(roles|email-providers)$/.test(slug) ||
     slug === "read-refs" ||
     slug === "read-media"
   );
@@ -784,6 +798,60 @@ async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
   return handles;
 }
 
+/**
+ * The dashboard widget that names `<action>-<slug>` as its required
+ * permission. A widget id takes no underscore, so the slug's become hyphens,
+ * which keeps every id distinct.
+ */
+export const widgetFor = (slug: string, action: string) =>
+  `probe/${slug.replace(/_/g, "-")}-${action}`;
+
+/**
+ * One text widget per permission the `widget` door asks about, so whether a
+ * caller is offered it is the answer to whether it holds that permission.
+ * The registry outlives an instance, so one already there is kept.
+ */
+function registerProbeWidgets(): void {
+  const named: [string, string][] = [
+    ...RULES.flatMap(rule =>
+      ENTRY_ACTIONS.map(
+        action => [collectionOf(rule), action] as [string, string]
+      )
+    ),
+    ...RULES.flatMap(rule =>
+      SINGLE_OPERATIONS.map(
+        action => [singleOf(rule), action] as [string, string]
+      )
+    ),
+    ...RULES.flatMap(rule =>
+      (["publish", "unpublish"] as const).map(
+        action => [pubSingleOf(rule), action] as [string, string]
+      )
+    ),
+    ["media", "read"],
+    ...["users", "roles", "email-providers"].flatMap(slug =>
+      ["read", "create", "update", "delete"].map(
+        action => [slug, action] as [string, string]
+      )
+    ),
+  ];
+  for (const [slug, action] of named) {
+    const id = widgetFor(slug, action);
+    if (getWidget(id)) continue;
+    registerWidget(
+      {
+        id,
+        title: id,
+        archetype: "text",
+        defaultSize: "md",
+        content: id,
+        requiredPermission: `${action}-${slug}`,
+      },
+      { source: "probe" }
+    );
+  }
+}
+
 /** What a populated media row and user carry, and a withheld one does not. */
 export const MEDIA_MARKER = "probe-image.png";
 export const USER_MARKER = "root@access.test";
@@ -834,6 +902,7 @@ export async function boot(dialect: TestDialect): Promise<World> {
   // failure takes it down here; otherwise its connections and its PostgreSQL
   // or MySQL database would outlive the failed run.
   try {
+    registerProbeWidgets();
     const callers = await seedCallers(t);
     const seeded = await seedCollections(t, dialect === "sqlite" ? 1 : 16);
     const refId = await seedRefs(t, seeded);

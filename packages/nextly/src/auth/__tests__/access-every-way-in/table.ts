@@ -156,6 +156,12 @@ export const ENTRY_ACTIONS = ACTIONS.filter(
  * a relationship on another collection; `media` and `users` are the system
  * resources, which declare no code rule. A `single-pub` target is a Single
  * with a draft and a published status, asked to publish and unpublish.
+ *
+ * `roles` and `providers` (email providers) are resources that are not
+ * entries at all, gated by a permission alone: the role routes by one
+ * permission (`requirePermission`), the email provider routes by any of
+ * several (`requireAnyPermission`). Their names keep the target column's
+ * width, so the lines already in the answers file are unchanged.
  */
 export const TARGETS = [
   "collection",
@@ -164,6 +170,8 @@ export const TARGETS = [
   "media",
   "users",
   "single-pub",
+  "roles",
+  "providers",
 ] as const;
 export type Target = (typeof TARGETS)[number];
 
@@ -181,6 +189,13 @@ export type Target = (typeof TARGETS)[number];
  * - `schema`: the schema builder's collection list.
  * - `population`: relationship and upload population.
  * - `system`: `canReadSystemResource`, behind media and users reads.
+ * - `widget`: whether a dashboard widget whose `requiredPermission` names the
+ *   permission is offered to the caller (`widgetAudience`).
+ * - `lock`: claiming a document lock on the entry or Single, which is a
+ *   statement that the caller is editing it.
+ *
+ * The last two were added after the others, and come last, so every column
+ * already in the answers file keeps its place.
  */
 export const DOORS = [
   "rest",
@@ -193,6 +208,8 @@ export const DOORS = [
   "schema",
   "population",
   "system",
+  "widget",
+  "lock",
 ] as const;
 export type Door = (typeof DOORS)[number];
 
@@ -222,6 +239,10 @@ interface Reach {
 }
 
 const READ: readonly Action[] = ["read"];
+/** What a resource's own routes do: read, create, update and delete. */
+const CRUD: readonly Action[] = ["read", "create", "update", "delete"];
+/** A user's writes, asked apart from the read the table asked first. */
+const USER_WRITES: readonly Action[] = ["create", "update", "delete"];
 const READ_UPDATE: readonly Action[] = ["read", "update"];
 const PUBLISHING: readonly Action[] = ["publish", "unpublish"];
 const NOT_PRINCIPAL = PRESENTED.filter(caller => !PRINCIPALS.includes(caller));
@@ -251,8 +272,10 @@ const REACH: Record<Door, Reach> = {
       collection: ACTIONS,
       single: READ_UPDATE,
       media: READ,
-      users: READ,
+      users: CRUD,
       "single-pub": PUBLISHING,
+      roles: CRUD,
+      providers: CRUD,
     },
   },
   direct: {
@@ -270,6 +293,9 @@ const REACH: Record<Door, Reach> = {
       collection: ENTRY_ACTIONS,
       single: READ_UPDATE,
       "single-pub": PUBLISHING,
+      users: USER_WRITES,
+      roles: CRUD,
+      providers: CRUD,
     },
   },
   can: {
@@ -278,8 +304,10 @@ const REACH: Record<Door, Reach> = {
       collection: ENTRY_ACTIONS,
       single: READ_UPDATE,
       media: READ,
-      users: READ,
+      users: CRUD,
       "single-pub": PUBLISHING,
+      roles: CRUD,
+      providers: CRUD,
     },
   },
   service: { callers: PRESENTED, targets: { collection: ACTIONS } },
@@ -296,6 +324,24 @@ const REACH: Record<Door, Reach> = {
     callers: [...NOT_PRINCIPAL, "key-without-rows"],
     targets: { media: READ, users: READ },
   },
+  // A widget names one permission, so it is asked whatever `can` is asked.
+  widget: {
+    callers: STAFF,
+    targets: {
+      collection: ENTRY_ACTIONS,
+      single: READ_UPDATE,
+      media: READ,
+      users: CRUD,
+      "single-pub": PUBLISHING,
+      roles: CRUD,
+      providers: CRUD,
+    },
+  },
+  // A lock is claimed by someone about to edit, so it is asked as an update.
+  lock: {
+    callers: NOT_PRINCIPAL,
+    targets: { collection: ["update"], single: ["update"] },
+  },
 };
 
 /** What each door asks without the access-control service. */
@@ -309,6 +355,7 @@ const REACH_WITHOUT_SERVICE: Partial<Record<Door, Reach>> = {
     targets: { related: READ, media: READ, users: READ },
   },
   system: { callers: NOT_PRINCIPAL, targets: { media: READ, users: READ } },
+  widget: { callers: STAFF, targets: { collection: READ, single: READ } },
 };
 
 /**
@@ -375,9 +422,12 @@ function cross(
   );
 }
 
+/** Targets that are not rule collections or Singles, which declare no rule. */
+const RULELESS: readonly Target[] = ["media", "users", "roles", "providers"];
+
 /** The system resources declare no code rule, so they are asked once. */
 const rulesOf = (target: Target): readonly Rule[] =>
-  target === "media" || target === "users" ? ["none"] : RULES;
+  RULELESS.includes(target) ? ["none"] : RULES;
 
 /** The rules asked without the service: one for a system resource. */
 const noServiceRulesOf = (target: Target): readonly Rule[] =>
@@ -484,8 +534,9 @@ function holdsRoleNamedEditor(caller: Caller): boolean {
 const PARTIAL_ACTIONS: readonly Action[] = ["read", "update", "publish"];
 
 /**
- * The actions the role screen grants each caller on the rule targets and
- * media. A caller missing here holds none of them.
+ * The actions the role screen grants each caller on the rule targets, media,
+ * roles and email providers, where the permission exists. A caller missing
+ * here holds none of them.
  */
 const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
   "user-with": () => true,
@@ -499,8 +550,21 @@ const GRANTS: Partial<Record<Caller, (action: Action) => boolean>> = {
   "key-partial": action => PARTIAL_ACTIONS.includes(action),
 };
 
+/**
+ * The permissions an install seeds for each resource that is not an entry.
+ * An action missing here has no permission to tick, so only a super-admin's
+ * own session reaches it: there is no `update-email-providers`, and a key
+ * holds only rows that exist.
+ */
+const SEEDED: Partial<Record<Target, readonly Action[]>> = {
+  users: ["create", "read", "update", "delete"],
+  roles: ["create", "read", "update", "delete"],
+  providers: ["create", "read", "delete"],
+};
+
 /** Whether the role screen grants the caller this action on this target. */
 function holdsPermission(caller: Caller, action: Action, target: Target) {
+  if (!(SEEDED[target]?.includes(action) ?? true)) return false;
   // A full-access key carries its maker's live permissions, and a
   // super-admin's are the whole catalogue, users included.
   if (caller === "key-super-admin") return true;
