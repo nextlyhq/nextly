@@ -74,15 +74,18 @@ function envelopeOf(row: EventRow): WebhookEvent {
 /**
  * The error the registry logged alongside its phase line.
  *
- * `console.error` is called with the phase line AND the normalized exception,
- * so an assertion that reads only the first argument cannot tell a logged
- * failure from a logged label. `normalizeHookError` wraps an untyped throw, so
+ * The console logger writes the phase line, then its fields, the normalized
+ * exception among them as `error`, so an assertion that reads only the first
+ * argument cannot tell a logged failure from a logged label. Read from the
+ * field the logger was handed, so a logger that dropped it renders nothing
+ * here. `normalizeHookError` wraps an untyped throw, so
  * the thrown text arrives as the wrapper's `cause` rather than its message; a
  * typed throw arrives as itself, carrying its `logContext`. All three are
  * rendered so a test can name the original failure whichever way it was thrown.
  */
 function loggedFailure(spy: { mock: { calls: unknown[][] } }): string {
-  const error = spy.mock.calls[0]?.[1];
+  const error = (spy.mock.calls[0]?.[1] as { error?: unknown } | undefined)
+    ?.error;
   const cause = (error as { cause?: unknown } | undefined)?.cause;
   const context = (error as { logContext?: unknown } | undefined)?.logContext;
   return `${String(error)} ${String(cause ?? "")} ${JSON.stringify(context ?? {})}`;
