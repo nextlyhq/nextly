@@ -14,8 +14,27 @@
  * A memo lives as long as the request that made it, and nothing is kept
  * between requests.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import { NextlyError } from "../../errors/nextly-error";
+
 import type { AccessAction, Actor } from "./actor";
 import type { AccessTarget, Decision } from "./decide";
+
+/** A decision being made: the memo entry it will fill, and its key. */
+interface Deciding {
+  readonly decisions: Map<string, Promise<Decision>>;
+  readonly key: string;
+}
+
+/**
+ * The decisions being made in the current call chain. A decision whose work
+ * asks for the same decision again, such as a rule that calls a service that
+ * asks about the same caller and target, would wait on itself; it is refused
+ * instead. Two separate asks at once are not in each other's chain, and share
+ * one decision.
+ */
+const deciding = new AsyncLocalStorage<readonly Deciding[]>();
 
 export class DecisionMemo {
   // Keyed by the actor object itself, so two actors never share an entry.
@@ -38,9 +57,21 @@ export class DecisionMemo {
   ): Promise<Decision> {
     const decisions = this.decisionsOf(actor);
     const key = `${target.kind}\u0000${target.slug}\u0000${action}`;
+    const chain = deciding.getStore() ?? [];
+    if (chain.some(e => e.decisions === decisions && e.key === key)) {
+      return Promise.reject(
+        NextlyError.internal({
+          logContext: {
+            reason: "an access decision asked for itself",
+            action,
+            target: target.slug,
+          },
+        })
+      );
+    }
     const known = decisions.get(key);
     if (known) return known;
-    const made = decide();
+    const made = deciding.run([...chain, { decisions, key }], decide);
     decisions.set(key, made);
     made.catch(() => decisions.delete(key));
     return made;

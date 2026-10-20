@@ -13,6 +13,7 @@
  * so nothing decided for one is ever reused for the other.
  */
 import type { Principal } from "../../plugins/principals/types";
+import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
 import type { AccessOperation } from "../../services/access/types";
 import type { AccessControlContext } from "../../shared/types/access";
 import type { GrantedPermission } from "../authenticated-scope";
@@ -61,7 +62,10 @@ export interface UserActor {
   /** Role slugs, inherited roles included. */
   readonly roles: readonly string[];
   readonly permissions: readonly PermissionGrant[];
-  /** Holds the super-admin role, directly or through inheritance. */
+  /**
+   * Holds the super-admin role, directly or through inheritance: whether
+   * `roles` names it, worked out when the actor is made.
+   */
   readonly superAdmin: boolean;
 }
 
@@ -107,14 +111,15 @@ export function userActor(fields: {
   userId: string;
   roles: readonly string[];
   permissions: readonly PermissionGrant[];
-  superAdmin: boolean;
 }): UserActor {
   return Object.freeze({
     kind: "user",
     userId: fields.userId,
     roles: Object.freeze([...fields.roles]),
     permissions: freezeAll(fields.permissions),
-    superAdmin: fields.superAdmin,
+    // Read from the role set it was resolved with, never handed in apart
+    // from it, so the two cannot disagree.
+    superAdmin: fields.roles.includes(SUPER_ADMIN_SLUG),
   });
 }
 

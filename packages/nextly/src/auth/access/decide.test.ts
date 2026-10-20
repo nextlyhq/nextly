@@ -67,19 +67,16 @@ const callers = {
     userId: "u1",
     roles: ["editor"],
     permissions: every("posts"),
-    superAdmin: false,
   }),
   "user-without": userActor({
     userId: "u2",
     roles: ["viewer"],
     permissions: [],
-    superAdmin: false,
   }),
   "super-admin": userActor({
     userId: "u3",
     roles: ["super-admin"],
     permissions: [],
-    superAdmin: true,
   }),
   // A key whose maker is a super-admin carries that role's NAME, and must
   // still get no super-admin authority from it.
@@ -195,6 +192,21 @@ describe("super-admin authority", () => {
     }
   );
 
+  it("is read from the role set, inherited roles included", () => {
+    const inherited = userActor({
+      userId: "u9",
+      roles: ["chief", "super-admin"],
+      permissions: [],
+    });
+    const editor = userActor({
+      userId: "u10",
+      roles: ["editor"],
+      permissions: [],
+    });
+    expect(inherited.superAdmin).toBe(true);
+    expect(editor.superAdmin).toBe(false);
+  });
+
   it("is never a key's, whatever role names the key carries", async () => {
     // A decision that read super-admin from role names would allow both.
     expect(await allowed("key-without", "read", "true")).toBe(false);
@@ -246,7 +258,6 @@ describe("a Single", () => {
     userId: "u7",
     roles: ["editor"],
     permissions: only("settings", ["read", "update"]),
-    superAdmin: false,
   });
 
   it("is judged by its own permission and its own rules", async () => {
@@ -270,7 +281,6 @@ describe("an actor's permissions", () => {
     permissions: [
       { slug: "manage-api-keys", action: "update", resource: "api-keys" },
     ],
-    superAdmin: false,
   });
 
   it("keep each permission's stored slug as its row stores it", () => {
@@ -342,7 +352,6 @@ describe("a publish or an unpublish", () => {
       userId: "u4",
       roles: ["partial"],
       permissions: only("posts", ["read", "update", "publish"]),
-      superAdmin: false,
     });
     const posts = postsWith("absent");
     expect((await decide(partial, "publish", posts)).allowed).toBe(true);
@@ -388,7 +397,6 @@ describe("a publish or an unpublish", () => {
       userId: "u5",
       roles: ["publisher"],
       permissions: only("posts", ["read", "publish", "unpublish"]),
-      superAdmin: false,
     });
     const posts = postsWith("absent");
     for (const action of ["publish", "unpublish"] as const) {
@@ -401,14 +409,16 @@ describe("a publish or an unpublish", () => {
 });
 
 describe("trusted server work", () => {
-  it("is allowed without asking any rule", async () => {
+  it("is allowed every action without asking any rule", async () => {
     const rule = vi.fn(() => false);
     const target: AccessTarget = {
       kind: "collection",
       slug: "posts",
-      access: { read: rule },
+      access: Object.fromEntries(ACTIONS.map(action => [action, rule])),
     };
-    expect((await decide(systemActor(), "read", target)).allowed).toBe(true);
+    for (const action of ACTIONS) {
+      expect((await decide(systemActor(), action, target)).allowed).toBe(true);
+    }
     expect(rule).not.toHaveBeenCalled();
   });
 });
@@ -434,7 +444,6 @@ describe("what a rule is handed", () => {
       userId: "u6",
       roles: ["editor"],
       permissions: every("pages"),
-      superAdmin: false,
     });
     const ctx = await contextFor(editor, "delete", "pages");
     expect(ctx.operation).toBe("delete");

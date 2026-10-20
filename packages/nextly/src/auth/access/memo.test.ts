@@ -14,7 +14,6 @@ const editor = () =>
     userId: "u1",
     roles: ["editor"],
     permissions: [{ slug: "read-posts", action: "read", resource: "posts" }],
-    superAdmin: false,
   });
 const ALLOW: Decision = { allowed: true };
 
@@ -79,6 +78,20 @@ describe("DecisionMemo", () => {
     const decide = vi.fn(async () => refusal);
     expect(await memo.remember(actor, "update", posts, decide)).toBe(refusal);
     expect(await memo.remember(actor, "update", posts, decide)).toBe(refusal);
+    expect(decide).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a decision that asks for itself rather than recurse or wait", async () => {
+    const memo = new DecisionMemo();
+    const actor = editor();
+    let inner: Promise<Decision> | undefined;
+    const decide = vi.fn((): Promise<Decision> => {
+      // As a rule calling a service that asks the same thing again.
+      inner = memo.remember(actor, "read", posts, decide);
+      return inner.catch(() => ALLOW);
+    });
+    await memo.remember(actor, "read", posts, decide);
+    await expect(inner).rejects.toThrow();
     expect(decide).toHaveBeenCalledTimes(1);
   });
 
