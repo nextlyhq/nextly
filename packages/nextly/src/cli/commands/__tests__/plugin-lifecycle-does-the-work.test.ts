@@ -755,6 +755,58 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     expect(runDown).not.toHaveBeenCalled();
   });
 
+  it("judges the tables against what they were before the hook's boot", async () => {
+    // The boot runs every enabled plugin's init(), which could rename
+    // fx__notes away and create another in its place: judged against the
+    // tables as the boot left them, the replacement would pass for the one
+    // the DOWNs were judged against.
+    let booted = false;
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        runLifecycleHook: afterBoot(
+          () => {
+            booted = true;
+          },
+          () => {}
+        ),
+        tableIdentities: vi.fn(
+          async (tables: readonly string[]) =>
+            new Map(tables.map(table => [table, booted ? "t2" : "t1"]))
+        ),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("refuses on SQLite when the schema version cannot be read after the boot", async () => {
+    let booted = false;
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        dialect: "sqlite",
+        runLifecycleHook: afterBoot(
+          () => {
+            booted = true;
+          },
+          () => {}
+        ),
+        schemaVersion: vi.fn(async () => (booted ? null : 3)),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "schema-changed-by-hook" },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
   it("refuses on SQLite before the hook when the schema version cannot be read", async () => {
     const { run, runDown, runLifecycleHook } = await uninstallWith(
       [["DROP TABLE IF EXISTS fx__notes"], []],

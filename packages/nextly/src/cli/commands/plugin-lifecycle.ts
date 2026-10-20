@@ -589,17 +589,21 @@ async function executeUninstall(
     keepData: opts.keepData,
   });
 
-  // What the hook is judged against is read again once its boot is done,
-  // right before it runs: the boot syncs code-first schema and can create
-  // tables, which read from before it would be laid at the hook's door. A
-  // plugin without the hook boots nothing, and the first read stands.
+  // The tables keep the identities read before anything ran: the boot runs
+  // every enabled plugin's init(), and one could put another table in place
+  // of this plugin's, which a baseline taken after the boot would accept.
+  // Only SQLite's schema version is read again once the boot is done, right
+  // before the hook: the boot syncs code-first schema and can change it,
+  // which read from before it would be laid at the hook's door. A plugin
+  // without the hook boots nothing, and the first read stands.
   let beforeHook = judged;
   await deps.runLifecycleHook(
     plugin,
     "onUninstall",
     { keepData: opts.keepData },
     async () => {
-      beforeHook = await readTablesAsTheyStand(plan, deps);
+      if (judged?.schemaVersion === undefined) return;
+      beforeHook = { ...judged, schemaVersion: await deps.schemaVersion() };
     }
   );
   await assertHookLeftTables(plugin, plan, beforeHook, deps);
@@ -718,33 +722,51 @@ async function assertHookLeftTables(
 ): Promise<void> {
   if (judged === undefined) return;
   const now = await readTablesAsTheyStand(plan, deps);
+  assertIdentitiesKept(plugin, plan, judged, now);
+  assertSchemaVersionKept(plugin, plan, judged, now);
+}
+
+/** Each table the DOWNs drop is the one read before anything ran. */
+function assertIdentitiesKept(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  judged: TablesAsTheyStand,
+  now: TablesAsTheyStand | undefined
+): void {
   const changed = plan.tablesDropped.filter(table => {
     const before = judged.identities.get(table) ?? null;
     return before === null || now?.identities.get(table) !== before;
   });
-  if (changed.length > 0) {
-    const one = changed.length === 1;
-    throw new NextlyError({
-      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
-      publicMessage: `${plugin.name}'s onUninstall dropped, renamed or replaced ${changed.join(", ")}, which its DOWN migrations were to drop, so none of them was run. Put the original ${one ? "table" : "tables"} back under ${one ? "its name" : "their names"}, in place of any table created there, then run the uninstall again.`,
-      logContext: {
-        plugin: plugin.name,
-        reason: "tables-changed-by-hook",
-        tables: changed,
-      },
-    });
-  }
-  // On SQLite an identity can be given to the replacement (a root page the
-  // original moved off in a VACUUM), and the original can be renamed into a
-  // name another table held, so no reading of names and root pages shows a
-  // replacement. Any change to the schema during the hook is refused there
-  // instead.
-  if (
-    judged.schemaVersion === undefined ||
-    now?.schemaVersion === judged.schemaVersion
-  ) {
-    return;
-  }
+  if (changed.length === 0) return;
+  const one = changed.length === 1;
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `${changed.join(", ")} ${one ? "was" : "were"} dropped, renamed or replaced while ${plugin.name}'s onUninstall ran (its boot included), so none of its DOWN migrations, which were to drop ${one ? "it" : "them"}, was run. Put the original ${one ? "table" : "tables"} back under ${one ? "its name" : "their names"}, in place of any table created there, then run the uninstall again.`,
+    logContext: {
+      plugin: plugin.name,
+      reason: "tables-changed-by-hook",
+      tables: changed,
+    },
+  });
+}
+
+/**
+ * On SQLite, the schema is as the hook found it. An identity there can be
+ * given to the replacement (a root page the original moved off in a VACUUM),
+ * and the original can be renamed into a name another table held, so no
+ * reading of names and root pages shows a replacement; any change to the
+ * schema during the hook is refused instead. A version either reading lacks
+ * counts as changed.
+ */
+function assertSchemaVersionKept(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  judged: TablesAsTheyStand,
+  now: TablesAsTheyStand | undefined
+): void {
+  const before = judged.schemaVersion;
+  if (before === undefined) return;
+  if (before !== null && now?.schemaVersion === before) return;
   throw new NextlyError({
     code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
     publicMessage: `${plugin.name}'s onUninstall changed the database schema. On SQLite a table it renamed away or replaced cannot be told from the one its DOWN migrations were judged against, so none of them was run, as they could drop a replacement of ${plan.tablesDropped.join(", ")}. Undo the schema changes the hook made, and have it change rows only, then run the uninstall again.`,
