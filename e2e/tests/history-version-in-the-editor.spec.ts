@@ -42,7 +42,7 @@ async function noteWithTwoVersions(page: Page): Promise<string> {
 /** Open History and choose the newest version, the one with changes. */
 async function showNewestVersion(page: Page, id: string): Promise<void> {
   await gotoAdmin(page, `/collections/history-notes/${id}?history=1`);
-  const rows = page.getByRole("button", { name: /^Version \d+/ });
+  const rows = page.getByRole("button", { name: /Version \d+/ });
   await expect(rows.first()).toBeVisible({ timeout: 30_000 });
   await rows.first().click();
   await expect(page.getByRole("region", { name: "Comparison" })).toBeVisible({

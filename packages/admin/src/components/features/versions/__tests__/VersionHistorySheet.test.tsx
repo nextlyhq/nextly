@@ -14,6 +14,7 @@ import { act, render, screen, waitFor, within } from "@admin/__tests__/utils";
 const {
   useVersionsMock,
   useVersionMock,
+  eventsMock,
   restoreMock,
   setLabelMock,
   mutateMock,
@@ -22,6 +23,13 @@ const {
 } = vi.hoisted(() => ({
   useVersionsMock: vi.fn(),
   useVersionMock: vi.fn(),
+  // No events unless a case gives some: a document's versions alone.
+  eventsMock: vi.fn(() => ({
+    data: { pages: [{ items: [], meta: { total: 0 } }] },
+    hasNextPage: false,
+    isFetchingNextPage: false,
+    fetchNextPage: vi.fn(),
+  })),
   restoreMock: vi.fn(),
   setLabelMock: vi.fn(),
   mutateMock: vi.fn(),
@@ -59,6 +67,8 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   useVersion: (...a: unknown[]) => useVersionMock(...a),
   useRestoreVersion: (...a: unknown[]) => restoreMock(...a),
   useSetVersionLabel: (...a: unknown[]) => setLabelMock(...a),
+  useDocumentEvents: () => eventsMock(),
+  useVersionDiff: () => ({ data: undefined, isLoading: false, isError: false }),
 }));
 
 import {
@@ -202,8 +212,12 @@ describe("VersionHistorySheet", () => {
 
     renderSheet();
 
-    expect(screen.getByText("Version 2")).toBeInTheDocument();
-    expect(screen.getByText("Version 1")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Version 2\b/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Version 1\b/ })
+    ).toBeInTheDocument();
   });
 
   it("says a document with no history has none, rather than erroring", () => {
@@ -253,7 +267,9 @@ describe("VersionHistorySheet", () => {
     renderSheet();
 
     // The loaded rows are kept, not replaced by the full-panel load error.
-    expect(screen.getByText("Version 2")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Version 2\b/ })
+    ).toBeInTheDocument();
     expect(screen.queryByText(/could not be loaded/)).not.toBeInTheDocument();
     expect(
       screen.getByText(/Couldn't refresh this history/)
@@ -533,7 +549,9 @@ describe("VersionHistorySheet", () => {
     // editor reads a version against what is live. A modal surface withdraws
     // everything outside itself from the accessibility tree, so the document
     // being present is not enough — it has to still be reachable.
-    expect(screen.getByText("Version 1")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Version 1\b/ })
+    ).toBeInTheDocument();
     expect(reachable(screen.getByLabelText("Title"))).toBe(true);
   });
 
