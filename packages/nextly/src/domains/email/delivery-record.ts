@@ -305,6 +305,25 @@ export function recipientDigest(address: string): string {
 }
 
 /**
+ * A value's digest under the key a row is written with now: how an
+ * idempotency key and a message are stored, beside the recipient digests and
+ * under the same key.
+ */
+export function keyedDigest(value: string): string {
+  const [writeKey] = readableKeys();
+  return digestWith(writeKey, value);
+}
+
+/**
+ * A value's digest under every key this install can still read with, newest
+ * first and deduplicated, so a key or a message stored before a rotation of
+ * the secret is still recognised after it.
+ */
+export function keyedDigests(value: string): string[] {
+  return [...new Set(readableKeys().map(key => digestWith(key, value)))];
+}
+
+/**
  * Written over `recipient_hash` when a person is erased.
  *
  * `hashRecipient` always emits 64 hex characters, so a value that is not one
@@ -494,4 +513,9 @@ export interface EmailDeliveryInput {
    * no address digest, naming them by the keyed digest of kind and id.
    */
   person?: PrincipalRef | null;
+  /**
+   * The keyed digest of the idempotency key the send carried, the same on
+   * every record of the send, when it carried one.
+   */
+  keyDigest?: string | null;
 }

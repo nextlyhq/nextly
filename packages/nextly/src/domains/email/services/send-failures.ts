@@ -36,6 +36,9 @@ const REFUSED_REASON = "The email provider refused this recipient.";
 /** The reason given when a provider answers that it did not send. */
 const NOT_ACCEPTED_REASON = "The email provider did not accept the message.";
 
+/** The reason given when another send with the same key has not finished. */
+const IN_PROGRESS_REASON = "A send with this idempotency key is in progress.";
+
 /**
  * What the provider's answer says about one refused mailbox: its own
  * classification when it gave one, else retryable, as any unclassified
@@ -185,6 +188,19 @@ export interface EmailSendOutcome {
   failure?: EmailFailure;
   /** @experimental Recipients the provider refused while taking the message. */
   refused?: RefusedRecipient[];
+  /**
+   * @experimental The result came from an earlier send with the same
+   * idempotency key, and nothing was sent this time.
+   */
+  repeat?: true;
+}
+
+/**
+ * The failure for a send whose key another send holds: nothing was sent, and
+ * a retry returns that send's result once it has one.
+ */
+export function inProgressFailure(): EmailFailure {
+  return { retryable: true, reason: IN_PROGRESS_REASON };
 }
 
 /** The failure for a provider that answered that it did not send. */

@@ -56,6 +56,9 @@ export const emailDeliveriesSqlite = sqliteTable(
     // The person a plugin's email went to: see the PostgreSQL definition.
     principalKind: text("principal_kind"),
     principalId: text("principal_id"),
+    // The keyed digest of the idempotency key the send carried, on every
+    // record of that send; cleared on all of them when any one is erased.
+    keyDigest: text("key_digest"),
 
     /**
      * `timestamp_ms`, not `timestamp`.
@@ -82,6 +85,8 @@ export const emailDeliveriesSqlite = sqliteTable(
     index("email_deliveries_retention_idx").on(t.retentionClass, t.createdAt),
     // Erasure finds a person's rows by kind and id.
     index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
+    // Erasure clears a send's key digest from all its records.
+    index("email_deliveries_key_idx").on(t.keyDigest),
   ]
 );
 

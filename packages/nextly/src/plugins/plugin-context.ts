@@ -29,6 +29,11 @@ import {
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
 import type { ContentEventSubject } from "../domains/content-events/record";
+import {
+  pluginKeyScope,
+  scopedSender,
+  SITE_KEY_SCOPE,
+} from "../domains/email/send-claims";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
@@ -2091,7 +2096,15 @@ export function createPluginContext(
         return methodFacade(userService.forPlugins(), PLUGIN_USER_METHODS);
       },
       media: methodFacade(mediaService, PLUGIN_MEDIA_METHODS),
-      email: methodFacade(emailService, PLUGIN_EMAIL_METHODS),
+      // A plugin's keys are its own: scoped to its name, so two plugins, or a
+      // plugin and the site, never name one send with the same key.
+      email: methodFacade(
+        scopedSender(
+          emailService,
+          pluginName ? pluginKeyScope(pluginName) : SITE_KEY_SCOPE
+        ),
+        PLUGIN_EMAIL_METHODS
+      ),
       // Resolved on access, not at construction: `createPluginContext` is
       // exported, and a resolver written before this service existed would
       // otherwise throw while building the context for callers that never

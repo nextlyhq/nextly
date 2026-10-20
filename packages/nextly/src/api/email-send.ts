@@ -25,6 +25,11 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import {
+  MAX_IDEMPOTENCY_KEY_LENGTH,
+  scopedSender,
+  SITE_KEY_SCOPE,
+} from "../domains/email/send-claims";
 import { sendOutcomeMessage } from "../domains/email/send-outcome";
 import {
   isSendableAddress,
@@ -81,6 +86,8 @@ const sendEmailSchema = z.object({
   bcc: z.array(z.string().email()).optional(),
   providerId: z.string().optional(),
   attachments: z.array(attachmentInputSchema).optional(),
+  // Sends this message once for the key; checked again by the service.
+  idempotencyKey: z.string().min(1).max(MAX_IDEMPOTENCY_KEY_LENGTH).optional(),
 });
 
 /**
@@ -139,7 +146,8 @@ export const POST = withErrorHandler(
     }
 
     const service = await getEmailService();
-    const result = await service.send(args);
+    // A key sent here is the site's, as one from the Direct API is.
+    const result = await scopedSender(service, SITE_KEY_SCOPE).send(args);
     // The service constructs its public result explicitly, so this spread
     // carries only `{ success, messageId? }` — never a provider's own extra
     // fields. Spread onto the action

@@ -61,6 +61,16 @@ import {
 } from "../delivery-record";
 import { eraseRecipientDeliveries } from "../erase-recipient";
 import type { ResolvedEmailRetentionConfig } from "../retention-config";
+import {
+  claimSendKey,
+  settleSendClaim,
+  sweepSendClaims,
+  type ClaimDecision,
+  type HeldClaim,
+  type SendKey,
+} from "../send-claims";
+
+import type { EmailSendOutcome } from "./send-failures";
 
 /** The Drizzle surface a write naming a person needs. */
 type PersonRowsDb = PrincipalDigestDb;
@@ -246,6 +256,59 @@ export class EmailDeliveryService extends BaseService {
       warnQuietly(this.logger, "Email retention policy could not be read", {
         error,
       });
+      return false;
+    }
+  }
+
+  /**
+   * Claim a keyed send before any provider is contacted (`send-claims.ts`).
+   *
+   * Throws when the claim cannot be read or written, unlike the recorder: a
+   * send that cannot be claimed cannot promise to go out once, and nothing has
+   * been sent yet.
+   */
+  async claimSend(sendKey: SendKey): Promise<ClaimDecision> {
+    try {
+      return await claimSendKey(this.adapter, sendKey);
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /**
+   * Record a claimed send's outcome, then sweep claims past their lifetime.
+   *
+   * Never throws, as `record` never does: the send has happened. A claim left
+   * without its outcome is taken over once its lease lapses. A successful
+   * claim lives as long as the delivery log keeps its records, so a site that
+   * keeps none keeps no claim either.
+   */
+  async settleSend(claim: HeldClaim, outcome: EmailSendOutcome): Promise<void> {
+    try {
+      await settleSendClaim(this.adapter, claim, outcome, {
+        keep: !this.keepsNothing(),
+      });
+    } catch (error) {
+      warnQuietly(this.logger, "Email send claim could not be recorded", {
+        error,
+      });
+    }
+    try {
+      await sweepSendClaims(this.adapter, this.sentClaimLifetime());
+    } catch (error) {
+      warnQuietly(this.logger, "Email send claims could not be swept", {
+        error,
+      });
+    }
+  }
+
+  /** How long a successful claim is kept: the delivery log's window. */
+  private sentClaimLifetime(): number | false {
+    try {
+      return this.retentionPolicy?.()?.maxAgeMs ?? false;
+    } catch {
+      // Unreadable: kept, as the delivery records it describes are.
       return false;
     }
   }
@@ -560,6 +623,7 @@ export class EmailDeliveryService extends BaseService {
       retentionClass: EMAIL_RETENTION_CLASS,
       error: input.error ? storableError(input.error) : null,
       messageId: input.messageId ?? null,
+      keyDigest: input.keyDigest ?? null,
       // One timestamp for the whole message: the rows describe a single
       // send, and staggering them by microseconds would suggest otherwise.
       createdAt: now,
