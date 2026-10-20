@@ -189,7 +189,7 @@ export class PermissionCacheService extends BaseService {
       const cached = result[0] as { hasPermission: boolean; expiresAt: Date };
 
       if (process.env.DEBUG_CACHE === "1") {
-        console.log("[cache][dbg] getCachedPermission HIT", {
+        this.logger.info("[cache][dbg] getCachedPermission HIT", {
           userId,
           action,
           resource,
@@ -277,7 +277,7 @@ export class PermissionCacheService extends BaseService {
         });
 
       if (process.env.DEBUG_CACHE === "1") {
-        console.log("[cache][dbg] setCachedPermission", {
+        this.logger.info("[cache][dbg] setCachedPermission", {
           userId,
           action,
           resource,
@@ -365,7 +365,7 @@ export class PermissionCacheService extends BaseService {
     const invalidatedCount = affectedRowCount(result, this.dialect);
 
     if (process.env.DEBUG_CACHE === "1") {
-      console.log("[cache][dbg] invalidateByUser", {
+      this.logger.info("[cache][dbg] invalidateByUser", {
         userId,
         invalidatedCount,
         method: "tombstone",
@@ -438,7 +438,7 @@ export class PermissionCacheService extends BaseService {
       const invalidatedCount = affectedRowCount(result, this.dialect);
 
       if (process.env.DEBUG_CACHE === "1") {
-        console.log("[cache][dbg] invalidateByRole", {
+        this.logger.info("[cache][dbg] invalidateByRole", {
           roleId,
           invalidatedCount,
           method: "tombstone",
@@ -470,7 +470,7 @@ export class PermissionCacheService extends BaseService {
       const deletedCount = affectedRowCount(result, this.dialect);
 
       if (process.env.DEBUG_CACHE === "1" || deletedCount > 0) {
-        console.log("[cache][info] cleanupExpired", {
+        this.logger.info("[cache][info] cleanupExpired", {
           deletedCount,
           timestamp: now.toISOString(),
         });

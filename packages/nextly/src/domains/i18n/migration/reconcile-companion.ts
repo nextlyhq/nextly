@@ -701,8 +701,11 @@ export function buildCompanionTransitionStatements(
       status,
       builtBy,
     });
-    // No translatable columns yet (or an already-present companion from a partial apply): fall
-    // back to the plain reconcile, which CREATEs an empty companion or no-ops.
+    // No translatable columns yet, or a companion already there: the schema apply's move creates
+    // it, filled with each entry's default-language row, before the push drops the main columns,
+    // and a save that stopped part-way leaves one. Fall back to the plain reconcile, which CREATEs
+    // an empty companion or adds what is missing, taking the columns the apply moved and the ones
+    // already on the companion as done, so the values move once and are not added twice.
     if (!spec || companionExists) {
       return {
         statements: buildCompanionReconcileStatements({
@@ -715,6 +718,8 @@ export function buildCompanionTransitionStatements(
           dialect,
           status,
           companionExists,
+          joinedBefore: args.joinedBefore,
+          presentOnCompanion: args.presentOnCompanion,
         }),
         needsArchive: false,
         companionDropped: false,

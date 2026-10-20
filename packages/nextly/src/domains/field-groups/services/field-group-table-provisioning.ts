@@ -14,6 +14,7 @@ import {
 } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
+import { consoleLogger } from "../../../shared/types";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import {
   buildCompanionTransitionStatements,
@@ -112,7 +113,7 @@ export function registerComponentRuntimeSchema(
       return { registered: true };
     }
 
-    console.warn(
+    consoleLogger.warn(
       `[registerComponentRuntimeSchema] No SchemaRegistry available for ` +
         `'${tableName}'. Component queries may reference old column names ` +
         `until next server restart.`
@@ -123,7 +124,7 @@ export function registerComponentRuntimeSchema(
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.warn(
+    consoleLogger.warn(
       `[registerComponentRuntimeSchema] In-memory schema refresh failed for ` +
         `'${tableName}': ${msg}. Component queries may reference old ` +
         `column names until next server restart.`

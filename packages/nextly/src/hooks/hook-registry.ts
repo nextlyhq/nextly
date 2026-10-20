@@ -10,6 +10,7 @@
 
 import { withCurrentPrincipal } from "../auth/principal-scope";
 import { NextlyError } from "../errors/nextly-error";
+import { consoleLogger } from "../shared/types";
 
 import { normalizeHookError } from "./normalize-hook-error";
 import { recordSideEffectWarning } from "./side-effect-warnings";
@@ -818,10 +819,11 @@ export class HookRegistry {
         // into several silently skipped ones.
         // Logged here because nothing above this frame will: the operation
         // reports success, so a side effect that vanished without a trace is
-        // exactly the failure this has to avoid.
-        console.error(
-          `Hook "${hookType}" failed for "${context.collection}" after the write committed:`,
-          normalized
+        // exactly the failure this has to avoid. Written through the masked
+        // console logger: a hook's error can quote the address it was handling.
+        consoleLogger.error(
+          `Hook "${hookType}" failed for "${context.collection}" after the write committed`,
+          { error: normalized }
         );
         // `normalizeHookError` rethrows a typed error untouched and wraps an
         // untyped one, so this is a NextlyError in practice; the guard is what

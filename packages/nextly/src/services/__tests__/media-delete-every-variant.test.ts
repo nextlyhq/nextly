@@ -573,8 +573,14 @@ describe("a file the delete cannot remove", () => {
     expect(result.success).toBe(true);
     expect(failed).toBeDefined();
     expect([...bucket.files.keys()]).toEqual([failed]);
+    // Fields arrive as an object beside the message, so they are read as
+    // JSON rather than as `[object Object]`.
     const said = warn.mock.calls
-      .map(args => args.map(String).join(" "))
+      .map(args =>
+        args
+          .map(arg => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+          .join(" ")
+      )
       .join("\n");
     expect(said).toContain(failed);
     expect(said).toContain(id);
@@ -624,8 +630,14 @@ describe("a file the delete cannot remove", () => {
     expect(result.success).toBe(true);
     expect(replaced).toContain(failed);
     expect(replaced.filter(file => bucket.files.has(file))).toEqual([failed]);
+    // Fields arrive as an object beside the message, so they are read as
+    // JSON rather than as `[object Object]`.
     const said = warn.mock.calls
-      .map(args => args.map(String).join(" "))
+      .map(args =>
+        args
+          .map(arg => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+          .join(" ")
+      )
       .join("\n");
     expect(said).toContain(failed);
     expect(said).toContain(id);
@@ -676,8 +688,14 @@ describe("a file the delete cannot remove", () => {
 
     expect(result.success).toBe(true);
     expect(removed.mock.calls.map(([p]) => p)).toEqual(["2026/10/a1-x.png"]);
+    // Fields arrive as an object beside the message, so they are read as
+    // JSON rather than as `[object Object]`.
     const said = warn.mock.calls
-      .map(args => args.map(String).join(" "))
+      .map(args =>
+        args
+          .map(arg => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+          .join(" ")
+      )
       .join("\n");
     expect(said).toContain(located);
     expect(said).toContain("media-1");
@@ -1069,8 +1087,14 @@ describe("deleting a folder with its contents", () => {
     });
 
     expect(result.success).toBe(true);
+    // Fields arrive as an object beside the message, so they are read as
+    // JSON rather than as `[object Object]`.
     const said = warn.mock.calls
-      .map(args => args.map(String).join(" "))
+      .map(args =>
+        args
+          .map(arg => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+          .join(" ")
+      )
       .join("\n");
     expect(said).toContain("https://bucket.example/x.png");
     expect(said).not.toMatch(/secret/);

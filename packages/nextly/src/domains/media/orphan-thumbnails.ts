@@ -22,8 +22,8 @@ const KEYED =
 const NAMED = /^thumb_[^/]+$/;
 
 /**
- * A stored path with each run of slashes written once, and a key without a
- * leading one. The storage puts a collection's files under `<prefix>/<key>`,
+ * A stored path with each run of slashes written once, a key without a
+ * leading one, and a URL without its query and fragment. The storage puts a collection's files under `<prefix>/<key>`,
  * so a prefix written with a slash at its end is stored as `media//...`, and
  * one written with a slash at its start as `/media/...`, where keys are kept
  * as given (S3). Local disk lists its files relative to its folder, with
@@ -34,7 +34,11 @@ const NAMED = /^thumb_[^/]+$/;
 export function canonicalStoredPath(path: string): string {
   const scheme = /^https?:\/\//.exec(path)?.[0];
   if (scheme) {
-    return scheme + path.slice(scheme.length).replace(/\/{2,}/g, "/");
+    // A URL without its query and fragment: a storage can list a file by a
+    // signed URL that a record names without them. A key keeps a `?`,
+    // which S3 allows in one.
+    const located = path.slice(scheme.length).replace(/[?#].*$/, "");
+    return scheme + located.replace(/\/{2,}/g, "/");
   }
   return path.replace(/\/{2,}/g, "/").replace(/^\//, "");
 }
@@ -110,12 +114,35 @@ function overlaps(a: string, b: string): boolean {
  * its keys carry no name, so there a file is judged by the name it was
  * uploaded under.
  */
-export function isMediaThumbnail(entry: StoredFileEntry, prefix = ""): boolean {
+export function isMediaThumbnail(
+  entry: StoredFileEntry,
+  prefix = "",
+  /**
+   * Whether the storage keeps a key as written (S3), where `/media/...` and
+   * `media//...` are other keys than the `media/...` an upload under the
+   * prefix `media` makes, and may be anything's. Elsewhere a filesystem, or
+   * a URL's path, reads every spelling as one.
+   */
+  keysAsWritten = false
+): boolean {
   if (entry.name !== undefined) return NAMED.test(entry.name);
+  if (keysAsWritten) return isKeyedUnder(locationOf(entry.path), prefix);
   const location = canonicalStoredPath(locationOf(entry.path));
   const folder = folderOf(prefix);
   if (folder !== "" && !location.startsWith(`${folder}/`)) return false;
   const below = folder === "" ? location : location.slice(folder.length + 1);
+  return KEYED.test(below) || NAMED.test(below);
+}
+
+/**
+ * Whether `key` is in the form an upload under `prefix` gives a thumbnail,
+ * spelled as the storage writes it: the prefix as configured, then `/`,
+ * then the thumbnail's own key (`MediaStorage.upload`, `generateKey`).
+ */
+function isKeyedUnder(key: string, prefix: string): boolean {
+  if (prefix === "") return KEYED.test(key) || NAMED.test(key);
+  if (!key.startsWith(`${prefix}/`)) return false;
+  const below = key.slice(prefix.length + 1);
   return KEYED.test(below) || NAMED.test(below);
 }
 
@@ -174,11 +201,21 @@ export async function findOrphanThumbnails(
   const orphans: string[] = [];
   const unconfirmed: Array<{ path: string; name?: string }> = [];
   let tooRecent = 0;
+  // Local disk reads every spelling of a path as one, and Vercel Blob
+  // writes a prefix's trailing slash once (`media/` stores `media/...`);
+  // any other storage, a custom one among them, may keep keys as written.
+  const type = adapter.getType();
+  const keysAsWritten = type !== "local" && type !== "vercel-blob";
   for await (const entry of adapter.list()) {
-    if (!isMediaThumbnail(entry, options.prefix)) continue;
+    if (!isMediaThumbnail(entry, options.prefix, keysAsWritten)) continue;
     if (referenced.has(canonicalStoredPath(entry.path))) continue;
     const stored = entry.lastModified?.getTime();
-    if (stored === undefined || now - stored < ORPHAN_MIN_AGE_MS) {
+    // A time that is not a date (`new Date(NaN)`) is no time at all.
+    if (
+      stored === undefined ||
+      !Number.isFinite(stored) ||
+      now - stored < ORPHAN_MIN_AGE_MS
+    ) {
       tooRecent++;
       continue;
     }
@@ -207,29 +244,40 @@ export interface OrphanRemoval {
   removed: string[];
   /** Referred to again by the time it would have been removed. */
   kept: string[];
-  failed: Array<{ path: string; reason: string }>;
+  /** With what the storage threw, which can quote a signed URL. */
+  failed: Array<{ path: string; error: unknown }>;
   /**
-   * Not tried: a recheck found a thumbnail in use whose stored location the
-   * record does not show, which any of these may be.
+   * Not tried: whether an item refers to the first of these could not be
+   * said just before its removal, so none of them was removed.
    */
   stopped: string[];
 }
 
-/** How many listed files are removed per fresh read of what is referenced. */
+/**
+ * Of `paths`, the ones a media item refers to now, or `null` when that
+ * cannot be said, as when the media table cannot be read.
+ */
+export type ReferencedNow = (
+  paths: readonly string[]
+) => Promise<ReadonlySet<string> | null>;
+
+/** How many listed files are asked about at once, just before their removal. */
 const RECHECK_BATCH = 50;
 
 /**
  * Removes each of `orphans` that is still unreferenced just before its
  * removal, asked of `referencedNow` then, not at the listing: an item can
- * come to refer to a listed file in between. Asked once per batch of
- * {@link RECHECK_BATCH} files rather than once per file, since each ask reads
- * the whole media table. Stops, and removes no more, once an ask finds a
- * thumbnail in use it cannot locate.
+ * come to refer to a listed file in between, as an upload or an import
+ * commits. Asked for a batch of {@link RECHECK_BATCH} files at a time, in
+ * one search, rather than once per file. Stops, and removes no more, once an
+ * ask cannot be answered. An item that comes to refer to a file while its
+ * batch is being removed is not seen; nothing short of a lock on references
+ * closes that.
  */
 export async function removeOrphanThumbnails(
   adapter: IStorageAdapter,
   orphans: readonly string[],
-  referencedNow: () => Promise<MediaReferences>
+  referencedNow: ReferencedNow
 ): Promise<OrphanRemoval> {
   const result: OrphanRemoval = {
     removed: [],
@@ -237,28 +285,24 @@ export async function removeOrphanThumbnails(
     failed: [],
     stopped: [],
   };
-  let referenced = new Set<string>();
-  for (const [index, path] of orphans.entries()) {
-    if (index % RECHECK_BATCH === 0) {
-      const now = await referencedNow();
-      if (now.unlocated.length > 0) {
-        result.stopped = orphans.slice(index);
-        break;
+  for (let start = 0; start < orphans.length; start += RECHECK_BATCH) {
+    const batch = orphans.slice(start, start + RECHECK_BATCH);
+    const referenced = await referencedNow(batch);
+    if (referenced === null) {
+      result.stopped = orphans.slice(start);
+      break;
+    }
+    for (const path of batch) {
+      if (referenced.has(path)) {
+        result.kept.push(path);
+        continue;
       }
-      referenced = canonicalSet(now.paths);
-    }
-    if (referenced.has(canonicalStoredPath(path))) {
-      result.kept.push(path);
-      continue;
-    }
-    try {
-      await adapter.delete(path);
-      result.removed.push(path);
-    } catch (error) {
-      result.failed.push({
-        path,
-        reason: error instanceof Error ? error.message : String(error),
-      });
+      try {
+        await adapter.delete(path);
+        result.removed.push(path);
+      } catch (error) {
+        result.failed.push({ path, error });
+      }
     }
   }
   return result;

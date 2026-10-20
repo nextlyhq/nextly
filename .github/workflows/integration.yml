@@ -99,14 +99,14 @@ jobs:
       requested: ${{ steps.requested.outputs.requested }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Both ends of the comparison have to be present, or it falls open
           # and runs everything.
           fetch-depth: 0
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
       - name: Ask
@@ -227,7 +227,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -252,7 +252,7 @@ jobs:
       # leg still builds all three regardless of which suites it runs.
       - name: Run integration tests (postgres)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder
           scripts/run-with-budget.sh "$INTEGRATION_SUITE_BUDGET" \
             "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the PostgreSQL integration suite" \
             pnpm lane:test:integration:postgres -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}
@@ -350,7 +350,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -379,7 +379,7 @@ jobs:
       # process, and its connections and locks with it.
       - name: Run integration tests (mysql)
         run: |
-          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts
+          pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder
           # The watcher sleeps in a child it waits on, and stops that child
           # when it is stopped: otherwise the sleep outlives it holding the
           # step's output open, and the step waits for it.
@@ -475,7 +475,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -485,14 +485,16 @@ jobs:
       # Builds all three adapters for the same reason the database legs do:
       # nextly's database/factory.ts references them as optional peers, and
       # turbo's `^build` does not traverse peerDependencies.
-      # `plugin-seo` and `plugin-form-builder` run on THIS leg only, unlike the
-      # packages beside them. Their suites call `createTestNextly` and name no
-      # dialect, so it boots on in-memory SQLite and the postgres and mysql legs
-      # would run byte-identical work — three times the runtime for one answer.
-      # `plugin-page-builder`, `plugin-commerce` and `plugin-accounts` are in all
-      # three because
-      # their suites DO take a dialect, which is the property that decides this
-      # rather than the kind of package it is. They are here rather than in the unit `Test` step because
+      # `plugin-seo` runs on THIS leg only, unlike the packages beside it. Its
+      # suites call `createTestNextly` and name no dialect, so it boots on
+      # in-memory SQLite and the postgres and mysql legs would run
+      # byte-identical work — three times the runtime for one answer.
+      # `plugin-page-builder`, `plugin-commerce`, `plugin-accounts` and
+      # `plugin-form-builder` are in all three because their suites DO take a
+      # dialect, which is the property that decides this rather than the kind
+      # of package it is. One suite taking a dialect is enough: a package's
+      # suites run together, so the others repeat on each leg, which for Form
+      # Builder costs well under a minute a leg. They are here rather than in the unit `Test` step because
       # each case boots a real instance, and doing that while every other
       # package's suite runs in parallel is what took one past a 30s budget on
       # CI while it finishes in about 1.5s alone.
