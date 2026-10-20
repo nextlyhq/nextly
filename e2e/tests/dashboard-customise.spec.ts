@@ -422,12 +422,21 @@ async function boxOf(locator: Locator) {
 
 /** The drawn rectangles of every card but one, to show they stayed put. */
 async function otherBoxes(page: Page, except: string) {
+  // From the grid's own corner rather than the window's: a drag toward a card below the fold
+  // scrolls the page, which moves every card on screen without moving any within the grid.
   return page
     .locator(`${CELLS}:not([data-placement-id="${except}"])`)
     .evaluateAll(cells =>
       cells.map(cell => {
+        const grid = cell.closest('[aria-label="Dashboard widgets"]');
+        const origin = grid?.getBoundingClientRect() ?? { left: 0, top: 0 };
         const r = cell.getBoundingClientRect();
-        return [r.left, r.top, r.width, r.height].map(Math.round);
+        return [
+          r.left - origin.left,
+          r.top - origin.top,
+          r.width,
+          r.height,
+        ].map(Math.round);
       })
     );
 }
@@ -435,6 +444,10 @@ async function otherBoxes(page: Page, except: string) {
 test("a pointer drag shows a line, moves nothing else, and puts the card down after the one it was over", async ({
   page,
 }) => {
+  // Tall enough that the card dragged to is on screen and clear of the bottom edge: a pointer
+  // held there scrolls the page, as it should, and the card would land wherever the scroll
+  // stopped rather than after the one aimed at.
+  await page.setViewportSize({ width: 1440, height: 2400 });
   await gotoAdmin(page, "/");
   await expect(page.locator(CELLS).nth(2)).toBeVisible();
   await customize(page);
