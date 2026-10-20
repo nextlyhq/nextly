@@ -170,6 +170,11 @@ export const NEXTLY_ERROR_STATUS = {
   DROP_OF_FOREIGN_TABLE: 409,
   // A plugin migration module whose content no longer matches its checksum.
   MIGRATION_CHECKSUM_MISMATCH: 409,
+  // A plugin lists its migration modules in an order other than their names'.
+  PLUGIN_MIGRATIONS_OUT_OF_ORDER: 409,
+  // A plugin's list no longer holds a module the ledger records applied, or
+  // holds a pending module ordered before an applied one.
+  PLUGIN_MIGRATION_HISTORY_CHANGED: 409,
   // Plugin platform (P4) — contributes.routes collection (D25).
   NEXTLY_ROUTE_COLLISION: 409,
   NEXTLY_ROUTE_INVALID_PATH: 400,
