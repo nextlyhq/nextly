@@ -40,6 +40,7 @@ import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
 import { HistoryDividers } from "../domains/versions/history-dividers";
 import { readPartIsLive } from "../domains/versions/part-liveness";
+import { hasLifecycle } from "../domains/versions/recorded-status";
 import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import {
   resolveComponentFieldMap,
@@ -861,9 +862,10 @@ export async function compareDocumentVersions(args: {
       entryId: args.entryId,
     };
 
-    const [partVersions, workingDraftParts] = await Promise.all([
+    const [partVersions, workingDraftParts, entity] = await Promise.all([
       versions.listPartVersions(ref),
       versions.listWorkingDraftParts(ref),
+      registryEntityOf(args.scopeKind, args.slug),
     ]);
     const resolved = await resolveComparisonPair(
       {
@@ -874,7 +876,10 @@ export async function compareDocumentVersions(args: {
         userId: readingPersonId(args.user, args.authenticatedScope),
         workingDraftParts,
         partIsLive: part =>
-          partIsLiveNow(args.scopeKind, args.slug, args.entryId, part),
+          partIsLiveNow(entity, args.scopeKind, args.entryId, part),
+        // Whether a `status` is the lifecycle's or the document's own word:
+        // without the lifecycle every version was served, whatever it says.
+        lifecycle: hasLifecycle(entity),
       },
       partVersions
     );
@@ -896,20 +901,23 @@ export async function compareDocumentVersions(args: {
   return baseline ? { ...diff, baseline } : diff;
 }
 
+/** The collection's or Single's registry record, or null when it is gone. */
+async function registryEntityOf(scopeKind: VersionScopeKind, slug: string) {
+  return scopeKind === "single"
+    ? getService("singleRegistryService").getSingleBySlug(slug)
+    : getService("collectionRegistryService").getCollectionBySlug(slug);
+}
+
 /**
  * Whether a part of the document is served now, read from the document's own
  * rows. A document whose entity is gone is not served at all.
  */
 async function partIsLiveNow(
+  entity: Awaited<ReturnType<typeof registryEntityOf>>,
   scopeKind: VersionScopeKind,
-  slug: string,
   entryId: string,
   part: string | null
 ): Promise<boolean> {
-  const entity =
-    scopeKind === "single"
-      ? await getService("singleRegistryService").getSingleBySlug(slug)
-      : await getService("collectionRegistryService").getCollectionBySlug(slug);
   if (!entity) return false;
   return readPartIsLive({
     adapter: getService("adapter"),

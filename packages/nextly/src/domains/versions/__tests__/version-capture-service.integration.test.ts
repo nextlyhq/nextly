@@ -22,6 +22,7 @@ describe("VersionCaptureService (integration)", () => {
           status: "published",
           snapshot: { title: "one" },
           createdBy: "user-1",
+          lifecycle: true,
         })
       );
       expect(first.versionNo).toBe(1);
@@ -32,6 +33,7 @@ describe("VersionCaptureService (integration)", () => {
           status: "published",
           snapshot: { title: "two" },
           createdBy: "user-1",
+          lifecycle: true,
         })
       );
       expect(second.versionNo).toBe(2);

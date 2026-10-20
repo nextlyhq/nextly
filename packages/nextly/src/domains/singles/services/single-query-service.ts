@@ -128,6 +128,7 @@ import {
   draftDocumentFacts,
   resolveDraftOverlay,
 } from "../../versions/draft-overlay";
+import { hasLifecycle } from "../../versions/recorded-status";
 import type { ComponentSchemas } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import { shapeDraftSnapshot } from "../../versions/shape-draft-snapshot";
@@ -1994,6 +1995,7 @@ export class SingleQueryService extends BaseService {
         }
         applyReadShape(parentRow, singleMeta.fields, singleMeta.tableName);
         const { versionNo } = await captureInTx(tx, this.versionCapture, {
+          lifecycle: hasLifecycle(singleMeta),
           ref: {
             scopeKind: "single",
             scopeSlug: singleMeta.slug,

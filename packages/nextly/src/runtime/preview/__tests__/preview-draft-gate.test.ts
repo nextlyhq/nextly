@@ -32,6 +32,16 @@ vi.mock("../preview-identity", () => ({ resolvePreviewIdentity }));
 const assertEntryPreviewable = vi.hoisted(() => vi.fn());
 vi.mock("../../../api/preview-access", () => ({ assertEntryPreviewable }));
 
+// The link's own record. What it decides is covered by the integration suite
+// against real rows; here it allows, so these cases stay about the token.
+vi.mock("../preview-route-defaults", async importOriginal => ({
+  ...(await importOriginal<typeof import("../preview-route-defaults")>()),
+  defaultLinkChecks: {
+    opened: () => Promise.resolve(true),
+    live: () => Promise.resolve(true),
+  },
+}));
+
 const SECRET = "test-secret-value-long-enough-for-hmac";
 const GENERATION = 1;
 

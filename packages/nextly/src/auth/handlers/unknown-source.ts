@@ -36,6 +36,7 @@ import { verifyPendingToken } from "../pipeline/pending-token";
 import { limitKeyFor } from "../pipeline/strategy-chain";
 import type { AuthStrategy } from "../pipeline/types";
 
+import { boundedBody } from "./handler-utils";
 import type { AuthRouterDeps } from "./router";
 
 /**
@@ -165,42 +166,6 @@ function signInKey(
  * the account-less budget. The handler still reads the whole body.
  */
 const LIMITER_BODY_BYTES = 32 * 1024;
-
-/** The first `limit` bytes of a request's body, or `null` past them. */
-async function boundedBody(
-  request: Request,
-  limit: number
-): Promise<Uint8Array | null> {
-  const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > limit) return null;
-  // A clone, because the handler that runs next reads the body itself.
-  const stream = request.clone().body;
-  if (!stream) return new Uint8Array();
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > limit) {
-      // A declared length can be absent or wrong; stop reading here either
-      // way. Not awaited: cancelling one branch of a cloned body settles only
-      // once the other branch is cancelled too, and the handler is about to
-      // read that one to its end.
-      reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
 
 /** What the limiter made of a request's body. */
 interface LimiterBodyRead {

@@ -18,16 +18,11 @@ import { z } from "zod";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { isValidWidgetId } from "../definition";
-import { MAX_WIDGET_SETTINGS, widgetSettingsProblem } from "../settings";
+import { SETTING_NOT_AN_OBJECT, widgetSettingsProblems } from "../settings";
+import { WIDGET_WIDTHS, type WidgetWidth } from "../widths";
 
-import type { WidgetWidth } from "./define-widget";
 import { CORE_DISPLAYS, displayDataProblem, isCoreDisplay } from "./displays";
 import { quote } from "./quote";
-import {
-  DEPENDENT_SETTING_TYPES,
-  fitsNewSetting,
-  NEW_SETTING_TYPES,
-} from "./setting-builders";
 import { transportableProblem } from "./transportable";
 
 /** One thing wrong with one declaration, said where an author reads it. */
@@ -49,8 +44,8 @@ export interface WidgetDeclarationGroup {
   declarations: unknown;
 }
 
-/** The widths a card may take. */
-const WIDTHS: readonly WidgetWidth[] = ["1/4", "1/3", "1/2", "2/3", "full"];
+/** The widths a card may take: core's own list, narrowest first. */
+const WIDTHS: readonly WidgetWidth[] = WIDGET_WIDTHS;
 
 /**
  * Namespaces core keeps for itself: its own widgets, and the cards it generates
@@ -289,12 +284,12 @@ function isPermissionName(value: unknown): boolean {
 /**
  * Every problem with a declaration's settings.
  *
- * The settings core already has a type for are judged by registration's own
- * reader (`widgetSettingsProblem`), each with its key as its name, so a
- * declaration and a stored definition cannot be judged by two rules. The
- * controls core has no type for yet (`collection`, `filter`, `sort`, `groupBy`)
- * are judged here, and a dependent one must name one of the widget's own
- * Collection settings.
+ * Judged by the registry's own rules (`widgetSettingsProblems`), all eight
+ * types alike, each setting with its key as its name: a declaration and a
+ * stored definition cannot be judged by two rules, the dependency rule (a
+ * filter, sort or grouping names one of the widget's own Collection settings)
+ * included. What only a declaration can get wrong, a setting that is not an
+ * object at all, is named here first.
  */
 function settingsProblems(settings: unknown): string[] {
   if (settings === undefined) return [];
@@ -302,58 +297,21 @@ function settingsProblems(settings: unknown): string[] {
     return ["settings must be an object of setting declarations"];
   }
   const entries = Object.entries(settings);
-  const problems: string[] = [];
-  if (entries.length > MAX_WIDGET_SETTINGS) {
-    problems.push(
-      `settings may hold at most ${MAX_WIDGET_SETTINGS}, holds ${entries.length}`
-    );
-  }
-  const collections = new Set(
-    entries
-      .filter(
-        ([, setting]) => isRecord(setting) && setting.type === "collection"
-      )
-      .map(([name]) => name)
-  );
-  for (const [name, setting] of entries) {
-    problems.push(...optional(settingProblem(name, setting, collections)));
-  }
-  return problems;
-}
-
-/** What is wrong with one setting, if anything. */
-function settingProblem(
-  name: string,
-  setting: unknown,
-  collections: ReadonlySet<string>
-): string | undefined {
-  if (!isRecord(setting))
-    return `setting "${name}" must be a setting declaration`;
-  if (typeof setting.type === "string" && NEW_SETTING_TYPES.has(setting.type)) {
-    return newSettingProblem(name, setting, collections);
-  }
-  const canonical = widgetSettingsProblem([{ ...setting, name }]);
-  return canonical === undefined
-    ? undefined
-    : `setting "${name}": ${canonical}`;
-}
-
-function newSettingProblem(
-  name: string,
-  setting: Record<string, unknown>,
-  collections: ReadonlySet<string>
-): string | undefined {
-  const type = String(setting.type);
-  if (DEPENDENT_SETTING_TYPES.has(type)) {
-    if (typeof setting.of !== "string" || !collections.has(setting.of)) {
-      return `setting "${name}" depends on ${quote(setting.of)}, which is not a Collection setting of this widget`;
-    }
-  }
-  const fallback = setting.defaultValue;
-  if (fallback === undefined) return undefined;
-  return fitsNewSetting(type, fallback)
-    ? undefined
-    : `setting "${name}": its starting value ${quote(fallback)} is not a ${type === "filter" ? "filter" : "string"}`;
+  const malformed = entries
+    .filter(([, setting]) => !isRecord(setting))
+    .map(([name]) => `setting "${name}" must be a setting declaration`);
+  /*
+   * 🔴 Every entry goes to the shared rules, the malformed ones included, so
+   * the limit on how many there are and every well-formed sibling are still
+   * judged in the same restart. Only the shared rules' unnamed fault for a
+   * non-object is dropped: it is named above, by the key the author wrote.
+   */
+  const shared = widgetSettingsProblems(
+    entries.map(([name, setting]) =>
+      isRecord(setting) ? { ...setting, name } : setting
+    )
+  ).filter(problem => problem !== SETTING_NOT_AN_OBJECT);
+  return [...malformed, ...shared];
 }
 
 function dataProblem(data: unknown): string | undefined {

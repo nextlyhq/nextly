@@ -9,7 +9,7 @@
  * @experimental
  */
 
-import { and, desc, eq, inArray, isNull, lt, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, type SQL } from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
@@ -80,6 +80,17 @@ export interface ContentEventQuery {
 
 const MAX_PAGE = 100;
 
+/** The kinds of event that capture a version, and so name who wrote it. */
+const PRODUCING_KINDS = ["created", "saved", "restored", "published"] as const;
+
+/** Who recorded an event, as the record keeps them. */
+export interface ContentEventProducer {
+  actorKind: ContentEventActorKind;
+  actorId: string | null;
+  actorPrincipalKind: string | null;
+  actorName: string | null;
+}
+
 /**
  * The record of content events, read.
  *
@@ -148,6 +159,55 @@ export class ContentEventsRepository extends BaseService {
           .limit(1)) as { id: string }[]
     );
     return rows[0]?.id ?? null;
+  }
+
+  /**
+   * Who produced each of these versions of a subject: the actor of the event
+   * that recorded the version, keyed by its number.
+   *
+   * One read for the whole page of versions. The producing events are a
+   * create, a save, a restore and a publish that captured a version; a naming
+   * is never one, since whoever names a version did not write it. Where a
+   * version has more than one (a create straight to published records both),
+   * the first recorded wins. A version number is never reused within a
+   * document, so no life of the document needs choosing.
+   */
+  async producersOf(
+    subject: ContentEventSubject,
+    versionNos: readonly number[]
+  ): Promise<Map<number, ContentEventProducer>> {
+    const producers = new Map<number, ContentEventProducer>();
+    if (versionNos.length === 0) return producers;
+    const e = this.events;
+    const rows = await withDbErrors(
+      this.dialect,
+      async () =>
+        (await this.db
+          .select({
+            versionNo: e.versionNo,
+            actorKind: e.actorKind,
+            actorId: e.actorId,
+            actorPrincipalKind: e.actorPrincipalKind,
+            actorName: e.actorName,
+          })
+          .from(e)
+          .where(
+            and(
+              this.subjectConditions(subject),
+              inArray(e.versionNo, [...versionNos]),
+              inArray(e.kind, [...PRODUCING_KINDS])
+            )
+          )
+          .orderBy(asc(e.id))) as (ContentEventProducer & {
+          versionNo: number | null;
+        })[]
+    );
+    for (const { versionNo, ...producer } of rows) {
+      if (versionNo !== null && !producers.has(versionNo)) {
+        producers.set(versionNo, producer);
+      }
+    }
+    return producers;
   }
 
   /** The subject an event is about. */

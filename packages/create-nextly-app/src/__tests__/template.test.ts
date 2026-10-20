@@ -139,7 +139,10 @@ describe("generatePackageJson", () => {
 
   it("should omit @nextlyhq packages in yalc mode", async () => {
     const result = JSON.parse(
-      await generatePackageJson("test", pgDatabase, true)
+      await generatePackageJson("test", pgDatabase, {
+        kind: "yalc",
+        cliVersion: "0.0.2-alpha.40",
+      })
     );
     expect(result.dependencies["nextly"]).toBeUndefined();
     expect(result.dependencies["@nextlyhq/admin"]).toBeUndefined();
@@ -149,7 +152,10 @@ describe("generatePackageJson", () => {
 
   it("should not include DB drivers in yalc mode (they are transitive deps)", async () => {
     const result = JSON.parse(
-      await generatePackageJson("test", pgDatabase, true)
+      await generatePackageJson("test", pgDatabase, {
+        kind: "yalc",
+        cliVersion: "0.0.2-alpha.40",
+      })
     );
     expect(result.dependencies["pg"]).toBeUndefined();
     expect(result.dependencies["mysql2"]).toBeUndefined();

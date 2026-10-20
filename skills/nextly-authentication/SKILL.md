@@ -48,9 +48,19 @@ Never commit it, and use a different one per environment.
 
 ## The first admin
 
-Open `/admin/setup` once, on an empty database, and create the first account.
-It gets the **Super Admin** role, which passes every check. After that, setup
-is closed, and people are added in the admin under **Users**.
+Open `/admin/setup` once and create the first account. It gets the **Super
+Admin** role, which passes every check. After that, setup is closed, and people
+are added in the admin under **Users**. Under `next dev` the form needs nothing
+else.
+
+In production (from the release after 0.0.2-alpha.68), the form also asks for a
+one-time setup token: `NEXTLY_SETUP_TOKEN` if you set one (at least 43
+characters, 16 distinct), or the one printed to the server's output on a line
+beginning `[nextly] SETUP TOKEN`. Or skip the browser and run
+`npx nextly users:create-admin --email <email> --name <name>` with the
+production environment, the password in `NEXTLY_ADMIN_PASSWORD` or typed at the
+prompt. Self-registration (`auth.allowRegistration`, off by default) never
+creates an admin.
 
 Built-in roles: `super-admin`, `admin`, `editor`, `author`, `viewer`. Roles and
 their permissions are managed in the admin under **Settings > Roles**.
