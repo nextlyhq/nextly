@@ -141,9 +141,10 @@ export function refusedRecordError(failure: EmailFailure): string {
 }
 
 /**
- * One failure for a send split into several messages: the first one, marked
- * retryable when any of them is, since a retry is what reaches the recipients
- * whose message can still go.
+ * One failure for a send split into several messages: the first retryable
+ * one when any is, since a retry is what reaches the recipients whose message
+ * can still go, and otherwise the first. Taken whole, so its status and reason
+ * describe the same failure its `retryable` does.
  */
 export function combinedFailure(
   failures: ReadonlyArray<EmailFailure | undefined>
@@ -151,11 +152,7 @@ export function combinedFailure(
   const present = failures.filter(
     (failure): failure is EmailFailure => failure !== undefined
   );
-  if (present.length === 0) return undefined;
-  return {
-    ...present[0],
-    retryable: present.some(failure => failure.retryable),
-  };
+  return present.find(failure => failure.retryable) ?? present[0];
 }
 
 /**

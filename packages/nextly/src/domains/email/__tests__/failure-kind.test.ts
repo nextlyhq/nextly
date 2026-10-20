@@ -75,6 +75,11 @@ const TEMPLATE = {
   replyTo: null,
   createdAt: new Date(),
   updatedAt: new Date(),
+  description: null,
+  owner: { kind: "site" },
+  overridden: false,
+  ownerChanged: false,
+  setInCode: false,
 } satisfies EmailTemplateRecord;
 
 /** A service that sends through `adapter`, and every surface over it. */
@@ -98,6 +103,9 @@ function build(
     } as unknown as EmailProviderService,
     {
       getTemplateBySlug: vi.fn().mockResolvedValue(TEMPLATE),
+      resolveForSend: vi
+        .fn()
+        .mockResolvedValue({ template: TEMPLATE, preferCode: false }),
       getLayout: vi.fn(),
     } as unknown as EmailTemplateService,
     undefined,
@@ -259,24 +267,78 @@ describe("what the send path carried over from the recipient work", () => {
     ]);
   });
 
-  it("refuses a Reply-To that is not an address, the caller's or a filter's", async () => {
+  it("refuses a Reply-To with a line break, the caller's or a filter's", async () => {
+    // A Reply-To becomes a header; a line break would let it add another.
     const send = vi
       .fn<EmailProviderAdapter["send"]>()
       .mockResolvedValue({ success: true, messageId: "m-1" });
     const { service } = build({ send });
 
     await expect(
-      service.send({ ...message, replyTo: "not-an-address" })
+      service.send({
+        ...message,
+        replyTo: "help@example.com\r\nBcc: attacker@example.com",
+      })
     ).rejects.toBeInstanceOf(NextlyError);
 
     getFilterRegistry().addFilter(
       FilterSeams.EmailBeforeSend,
-      (payload: object) => ({ ...payload, replyTo: "also not one" })
+      (payload: object) => ({
+        ...payload,
+        replyTo: "help@example.com\nBcc: attacker@example.com",
+      })
     );
     await expect(
       service.send({ ...message, replyTo: "help@example.com" })
     ).rejects.toBeInstanceOf(NextlyError);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("reports a split send's retryable failure whole, status and reason with it", async () => {
+    // The first message is refused for good, the second can be retried: the
+    // send is retryable, and every field of its failure describes the
+    // retryable one.
+    const send = vi
+      .fn<EmailProviderAdapter["send"]>()
+      .mockRejectedValueOnce(
+        withEmailFailure(new Error("550"), {
+          retryable: false,
+          status: 550,
+          reason: "The email provider refused the message (status 550).",
+        })
+      )
+      .mockRejectedValueOnce(
+        withEmailFailure(new Error("421"), {
+          retryable: true,
+          status: 421,
+          reason:
+            "The email provider could not take the message right now (status 421).",
+        })
+      );
+    const { service } = build({ send });
+
+    const result = await service.send({
+      ...message,
+      to: ["a@example.com", "b@example.com"],
+    });
+
+    expect(result.failure).toEqual({
+      retryable: true,
+      status: 421,
+      reason:
+        "The email provider could not take the message right now (status 421).",
+    });
+  });
+
+  it("passes any other Reply-To through to the provider, as before", async () => {
+    const send = vi
+      .fn<EmailProviderAdapter["send"]>()
+      .mockResolvedValue({ success: true, messageId: "m-1" });
+    const { service } = build({ send });
+
+    await service.send({ ...message, replyTo: "not-an-address" });
+
+    expect(send.mock.calls[0][0].replyTo).toBe("not-an-address");
   });
 
   it("still sends with an empty Reply-To, or one naming several", async () => {

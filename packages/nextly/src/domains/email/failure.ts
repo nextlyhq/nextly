@@ -34,11 +34,31 @@ export interface ClassifiedEmailError extends Error {
   emailFailure: EmailFailure;
 }
 
-/** The longest reason kept from an adapter; a longer one is not a sentence. */
-const MAX_REASON_LENGTH = 200;
-
 /** The reason given for a failure nobody classified. */
 export const UNCLASSIFIED_REASON = "The email provider failed.";
+
+/** The reason given when the provider could not be reached. */
+const UNREACHABLE_REASON = "The email provider could not be reached.";
+
+/**
+ * Whether `reason` is one of core's own sentences.
+ *
+ * A reason reaches the caller, and through the REST routes whoever called
+ * them. Text an adapter wrote can hold anything its configuration holds, an
+ * endpoint or an account as much as a credential, and no scrubbing can know
+ * what all of that is. So only core's sentences are passed on; any other
+ * reason is replaced by the sentence its classification gives, and the
+ * adapter's own text stays in the log, where the failure is recorded with it.
+ */
+function isCoreReason(reason: string): boolean {
+  return (
+    reason === UNCLASSIFIED_REASON ||
+    reason === UNREACHABLE_REASON ||
+    /^The email provider (could not take the message right now|refused the message)( \(status \d+\))?\.$/.test(
+      reason
+    )
+  );
+}
 
 /**
  * `error` carrying `failure`, for an adapter to throw.
@@ -67,11 +87,7 @@ export function failureOf(error: unknown): EmailFailure | undefined {
   const { retryable, status, reason } = candidate as Record<string, unknown>;
   if (typeof retryable !== "boolean") return undefined;
   const usableReason =
-    typeof reason === "string" &&
-    reason.trim() !== "" &&
-    reason.length <= MAX_REASON_LENGTH
-      ? reason.trim()
-      : undefined;
+    typeof reason === "string" && isCoreReason(reason) ? reason : undefined;
   return {
     retryable,
     ...(typeof status === "number" && Number.isInteger(status)
@@ -99,10 +115,7 @@ export function unclassifiedFailure(): EmailFailure {
 
 /** The provider could not be reached, or did not answer: worth trying again. */
 export function networkFailure(): EmailFailure {
-  return {
-    retryable: true,
-    reason: "The email provider could not be reached.",
-  };
+  return { retryable: true, reason: UNREACHABLE_REASON };
 }
 
 /**

@@ -239,23 +239,25 @@ export function isSendableAddressList(value: unknown): value is string {
 }
 
 /**
- * Refuse a Reply-To that is not one address or a list of them, before any
- * provider is contacted.
+ * Refuse a Reply-To holding a line break or other control character, before
+ * any provider is contacted.
  *
  * Checked on the envelope that is sent, so a Reply-To an `email.beforeSend`
- * filter set is held to the same rule as the caller's own. An empty one is
- * treated as absent, as every adapter has always treated it.
+ * filter set is held to the same rule as the caller's own. A Reply-To becomes
+ * a header, and a line break in it would let the value add a header of its own
+ * at an adapter that writes it out unescaped. Any other value passes through as
+ * it always has, for the provider to judge, so no send that works today is
+ * refused.
  */
 export function assertSendableReplyTo(replyTo: unknown): void {
-  if (replyTo === undefined || replyTo === null) return;
-  if (typeof replyTo === "string" && replyTo.trim() === "") return;
-  if (isSendableAddressList(replyTo)) return;
+  if (typeof replyTo !== "string" || !hasControlCharacter(replyTo)) return;
   throw NextlyError.validation({
     errors: [
       {
         path: "replyTo",
         code: "INVALID",
-        message: "The Reply-To is not a valid email address.",
+        message:
+          "The Reply-To holds a line break or another control character.",
       },
     ],
     logContext: { operation: "email.send" },

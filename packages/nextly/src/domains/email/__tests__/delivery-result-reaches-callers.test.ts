@@ -251,7 +251,7 @@ describe("a failed send says whether a retry can help", () => {
     });
   });
 
-  it("takes the recipient out of a reason that quotes it", async () => {
+  it("passes on only core's own sentence, never the adapter's text", async () => {
     const adapter: EmailProviderAdapter = {
       send: vi.fn().mockRejectedValue(
         withEmailFailure(new Error("refused"), {
@@ -267,6 +267,12 @@ describe("a failed send says whether a retry can help", () => {
       "tok"
     );
 
-    expect(result.failure?.reason).toBe("No such mailbox: [recipient]");
+    // The adapter's text can hold anything its configuration does; the
+    // caller gets the sentence for the classification instead.
+    expect(result.failure).toEqual({
+      retryable: false,
+      reason: "The email provider refused the message.",
+    });
+    expect(JSON.stringify(result)).not.toContain(USER.email);
   });
 });

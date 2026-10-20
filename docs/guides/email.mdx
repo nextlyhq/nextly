@@ -293,8 +293,10 @@ routes alike:
   provider did not classify counts as retryable, so a retry never drops an email
   that could still be delivered.
 - `failure.status`: the provider's HTTP status or SMTP reply code, when it gave one.
-- `failure.reason`: a short sentence, free of configuration, credentials and
-  addresses, fit for a log line. The Direct API also puts it in `error`.
+- `failure.reason`: a short sentence of Nextly's own, saying which kind of
+  failure it was, with no configuration, credential or address in it. A
+  provider's own explanation goes to the server log, not to the caller. The
+  Direct API also puts the sentence in `error`.
 
 When the provider took the message but refused some recipients, `refused` lists
 each by its line (`to`, `cc` or `bcc`) and its position on that line, with
@@ -303,8 +305,8 @@ every `to` recipient was accepted. The delivery log records each refusal with
 whether a retry can help.
 
 A send refused before anything is sent, such as one with an address that is not
-an email address or a Reply-To that is not, is thrown as a validation error, as
-before: nothing was sent, and the same send would be refused again.
+an email address, or a Reply-To holding a line break, is thrown as a validation
+error: nothing was sent, and the same send would be refused again.
 
 `failure` and `refused` are `@experimental`.
 
@@ -487,9 +489,10 @@ createAdapter: config => ({
 
 A provider that refuses a send throws. To say whether a retry can help, throw an
 error carrying `emailFailure: { retryable, status, reason }`; the built-in
-adapters classify their failures this way. The reason reaches the caller, after
-Nextly takes out the provider's declared credentials and the message's own
-addresses. A failure with no `emailFailure` is treated as retryable. When a
+adapters classify their failures this way. The caller is told `retryable` and
+`status` with a sentence of Nextly's own for that kind of failure; the error's
+own message, with the provider's declared credentials taken out, goes to the
+server log. A failure with no `emailFailure` is treated as retryable. When a
 provider takes a message but refuses some recipients, return `rejected` with
 their bare addresses, and optionally `refusals` with
 `{ address, retryable, status }` for each.
