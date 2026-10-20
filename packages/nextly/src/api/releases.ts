@@ -586,6 +586,24 @@ async function withCapabilities(
 }
 
 /**
+ * Every row of a release list, whichever filter produced it, decorated the
+ * same way: what this caller may do to it, its member counts and its owner.
+ *
+ * ONE path for every branch of the list, a document's own releases included,
+ * so a client reading `row.owner` or `row.memberCounts` never meets a list
+ * that left them off. Whatever the service put on a row (a document's
+ * `memberAction`, say) is kept.
+ */
+async function decorateListPage(
+  rows: ReleaseRow[],
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+) {
+  const decorated = await withCapabilities(rows, caller, releases);
+  return withOwners(await withMemberCounts(decorated, caller, releases));
+}
+
+/**
  * Each listed release with how many documents it holds and what it does with
  * them, read for the whole page in one request rather than one per row.
  *
@@ -781,13 +799,10 @@ const RELEASE_OPERATIONS: Record<
         ? { ...shared, containing }
         : { ...shared, ...listOnly }
     );
-    const items = await withCapabilities(found.items, caller, releases);
     // The service's own page and total, so `meta.total` is every release the
     // query matches, not the rows this page holds.
     return respondList(
-      containing === undefined
-        ? await withOwners(await withMemberCounts(items, caller, releases))
-        : items,
+      await decorateListPage(found.items, caller, releases),
       found.meta
     );
   },

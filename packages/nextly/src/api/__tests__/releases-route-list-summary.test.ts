@@ -143,12 +143,57 @@ describe("the release list's member counts", () => {
     ]);
   });
 
-  it("does not count for a document's own releases, which the list does not show", async () => {
-    await call(
+  // Every way the list can be asked, so the row shape is the same whichever
+  // branch of the route answers.
+  it.each([
+    ["plain", ""],
+    ["a tab", "?tab=upcoming"],
+    ["a tab part", "?tab=attention&reason=overdue"],
+    ["a search", "?search=launch"],
+    ["a state", "?state=draft"],
+    ["a kind", "?kind=release"],
+    ["a window", "?scheduledAfter=2026-01-01T00:00:00Z"],
+    ["a day", "?day=2026-10-20&timezone=UTC"],
+    ["an order", "?order=latest"],
+    [
+      "a document",
+      "?containingScopeKind=collection&containingScopeSlug=posts&containingEntryId=e1",
+    ],
+  ])(
+    "puts counts and an owner on every row when filtered by %s",
+    async (_, query) => {
+      const res = await call("listReleases", query);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        items: Array<Record<string, unknown>>;
+      };
+      expect(body.items).toHaveLength(4);
+      for (const item of body.items) {
+        expect(item).toHaveProperty("memberCounts");
+        expect(item).toHaveProperty("owner");
+      }
+      expect(api.releases.memberCounts).toHaveBeenCalledTimes(1);
+      expect(names).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it("keeps what a document's own release does to it", async () => {
+    api.releases.find.mockResolvedValueOnce({
+      items: [{ id: "r1", createdBy: "u-ada", memberAction: "unpublish" }],
+      meta: PAGE_META,
+    } as never);
+    const res = await call(
       "listReleases",
       "?containingScopeKind=collection&containingScopeSlug=posts&containingEntryId=e1"
     );
-    expect(api.releases.memberCounts).not.toHaveBeenCalled();
+    const body = (await res.json()) as {
+      items: Array<Record<string, unknown>>;
+    };
+    expect(body.items[0]).toMatchObject({
+      memberAction: "unpublish",
+      owner: { id: "u-ada", name: "Ada Lovelace" },
+      memberCounts: { total: 1, goLive: 1, comeDown: 0 },
+    });
   });
 });
 
