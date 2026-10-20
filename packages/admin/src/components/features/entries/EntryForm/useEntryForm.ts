@@ -13,7 +13,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useCallback, useEffect, useRef } from "react";
+import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -24,6 +24,7 @@ import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
+import { withoutPlaceholders } from "@admin/lib/form/stored-references";
 import type { EntryValue } from "@admin/types/collection";
 
 // ============================================================================
@@ -456,6 +457,9 @@ export function useEntryForm({
   // a published entry's working draft keeps the published row's `updatedAt`,
   // so a colleague's later draft is told apart from this editor's own write
   // only by its values, and the untouched fields show it.
+  // Set by a discard and cleared by the next document the page hands over;
+  // see `handleDiscardWorkingDraft`.
+  const [awaitingEntry, setAwaitingEntry] = useState(false);
   const resetKey = useRef<string | null>(null);
   useEffect(() => {
     if (!entry || mode !== "edit") return;
@@ -481,6 +485,7 @@ export function useEntryForm({
           }
         : undefined
     );
+    setAwaitingEntry(false);
   }, [entry, mode, defaultValues, form, locale, readDraft]);
 
   // Mutations - pass setError to enable server error mapping to form fields
@@ -535,7 +540,8 @@ export function useEntryForm({
   const isSubmitting =
     createMutation.isPending ||
     updateMutation.isPending ||
-    discardMutation.isPending;
+    discardMutation.isPending ||
+    awaitingEntry;
 
   //
   // The synchronous half of the same guard. `isSubmitting` is render state:
@@ -561,12 +567,17 @@ export function useEntryForm({
           // extracted to mapIntentToPayload above so the contract is
           // unit-testable without renderHook plumbing.
           const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
+          // What is sent: a link the editor cannot see is held in the form as
+          // a placeholder and written as the reference it stands for. The
+          // form keeps the placeholder, so it is reset to `data`.
+          const payload = withoutPlaceholders(fields, data) as Record<
+            string,
+            EntryValue
+          >;
 
           try {
             if (mode === "create") {
-              const result = await createMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
+              const result = await createMutation.mutateAsync(payload);
               // Reset form to mark as clean after successful create
               form.reset(data);
               // The entry, not the envelope: the mutation now resolves to the
@@ -578,9 +589,7 @@ export function useEntryForm({
                 throw new Error("Entry ID is required for update");
               }
               // entryId is passed to useUpdateEntry hook, so we just pass data here
-              const result = await updateMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
+              const result = await updateMutation.mutateAsync(payload);
               // Reset form to mark as clean after successful update
               form.reset(data);
               onSuccess?.(result.item);
@@ -607,6 +616,7 @@ export function useEntryForm({
       onSuccess,
       onError,
       blankPasswordFields,
+      fields,
     ]
   );
 
@@ -651,6 +661,11 @@ export function useEntryForm({
     try {
       const result = await discardMutation.mutateAsync();
       form.reset(getDefaultValues(fields, result.item));
+      // The discard answers with the live row as the API populates it, which
+      // leaves out a related item the editor may not read, so a save of these
+      // values would delete those links. Saving waits for the page to hand
+      // over the document again, merged with its stored links.
+      setAwaitingEntry(true);
     } catch (error) {
       console.error("Discard working draft error:", error);
       onError?.(error);

@@ -5046,9 +5046,9 @@ export class CollectionMutationService extends BaseService {
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
-          console.warn(
-            "Failed to expand relationships in createEntry response:",
-            expansionError
+          this.logger.warn(
+            "Failed to expand relationships in createEntry response",
+            { error: expansionError }
           );
         }
       }
@@ -7566,16 +7566,15 @@ export class CollectionMutationService extends BaseService {
                     : typeof v,
           ])
         );
-        console.log(
-          "[updateEntry debug]",
-          JSON.stringify({
+        this.logger.info("[updateEntry debug]", {
+          detail: JSON.stringify({
             collectionName: params.collectionName,
             entryId: params.entryId,
             finalDataKeys: Object.keys(finalData),
             finalDataKeyTypes: keyTypes,
             schemaColumns: Object.keys(schema as unknown as object),
-          })
-        );
+          }),
+        });
       }
 
       // i18n M5/M6: pull translatable values out of the main update (finalData uses camelCase field
@@ -9508,9 +9507,9 @@ export class CollectionMutationService extends BaseService {
           );
         } catch (expansionError) {
           // If expansion fails, return the entry without expanded relationships
-          console.warn(
-            "Failed to expand relationships in updateEntry response:",
-            expansionError
+          this.logger.warn(
+            "Failed to expand relationships in updateEntry response",
+            { error: expansionError }
           );
         }
       }

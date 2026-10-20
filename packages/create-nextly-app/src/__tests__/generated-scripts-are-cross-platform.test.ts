@@ -82,7 +82,7 @@ describe("generated package scripts", () => {
     "gives a %s scaffold only scripts cmd.exe can run",
     async (projectType: ProjectType) => {
       const pkg = JSON.parse(
-        await generatePackageJson("app", sqlite, false, projectType)
+        await generatePackageJson("app", sqlite, undefined, projectType)
       );
 
       const found: string[] = [];

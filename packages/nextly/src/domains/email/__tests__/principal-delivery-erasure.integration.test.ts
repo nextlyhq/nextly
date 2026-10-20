@@ -325,6 +325,52 @@ describe.each(getConfiguredTestDialects())(
       expect(byId(before[0].id).principalId).toBe(kept.digest);
     }, 120_000);
 
+    it("erases a reported person's record of an email that copied a staff address, keeping the staff address's", async () => {
+      // The person names the `to` recipient only. A copied staff address on
+      // the same message is someone else, and their record must survive the
+      // person's erasure exactly as written.
+      const t = await boot(dialect);
+      const gone = await person("acc_copied");
+
+      const written = await added(t, () =>
+        plugin().services.email.send({
+          to: "member@example.com",
+          cc: ["staff@example.com"],
+          bcc: ["audit@example.com"],
+          subject: "Order placed",
+          html: "<p>hi</p>",
+          person: gone,
+        })
+      );
+      const copied = written.filter(row => row.recipientKind !== "to");
+      expect(copied).toHaveLength(2);
+      const copiedBefore =
+        await t.adapter.select<DeliveryRow>("email_deliveries");
+
+      await plugin().principals!.reportDeleted(gone);
+
+      const all = await rows(t);
+      const byId = (id: string) => all.find(row => row.id === id)!;
+      const to = written.find(row => row.recipientKind === "to")!;
+      expect(byId(to.id).recipientHash).toBe(ERASED_RECIPIENT_HASH);
+      for (const row of copied) {
+        expect(byId(row.id)).toEqual(
+          copiedBefore.find(before => before.id === row.id)
+        );
+        expect(byId(row.id)).toMatchObject({
+          principalKind: null,
+          principalId: null,
+        });
+      }
+      expect(byId(copied[0].id).recipientHash).toBe(
+        recipientDigest(
+          copied[0].recipientKind === "cc"
+            ? "staff@example.com"
+            : "audit@example.com"
+        )
+      );
+    }, 120_000);
+
     it("writes the deletion email erased when it is sent in the reporting transaction", async () => {
       const t = await boot(dialect);
       const gone = await person("acc_in_tx");
