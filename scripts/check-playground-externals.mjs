@@ -86,15 +86,16 @@ export function externalPackages({ configured, nextExternals, nextlyRuntime }) {
  * no copy of theirs can be bundled.
  */
 export function loadedWorkspace(appManifest, workspace, externals) {
+  const bundled = name => workspace.has(name) && !externals.includes(name);
   const loaded = new Map();
-  const pending = runtimeDependencies(appManifest);
+  const pending = runtimeDependencies(appManifest).filter(bundled);
   while (pending.length > 0) {
     const name = pending.pop();
-    const pkg = workspace.get(name);
-    if (!pkg || loaded.has(name) || externals.includes(name)) continue;
-    const declares = runtimeDependencies(pkg.manifest);
-    loaded.set(name, { name, dir: pkg.dir, declares });
-    pending.push(...declares);
+    if (loaded.has(name)) continue;
+    const { dir, manifest } = workspace.get(name);
+    const declares = runtimeDependencies(manifest);
+    loaded.set(name, { name, dir, declares });
+    pending.push(...declares.filter(bundled));
   }
   return [...loaded.values()];
 }
@@ -105,44 +106,48 @@ export function loadedWorkspace(appManifest, workspace, externals) {
  * different copy from the one that package loads.
  */
 export function bundledExternals({ appDir, packages, loaders }) {
-  const found = [];
-  for (const pkg of packages) {
+  return packages.flatMap(pkg => {
     // Only what bundled code loads can be bundled: a listed external nothing
     // here declares has no importer for webpack to resolve it from.
     const declarers = loaders.filter(loader => loader.declares.includes(pkg));
-    if (declarers.length === 0) continue;
-    const own = packageDirFrom(appDir, pkg);
-    if (own === null) {
-      found.push({
+    return declarers.length === 0 ? [] : copyMismatches(appDir, pkg, declarers);
+  });
+}
+
+/** Why `pkg` would be bundled, for the packages that declare it. */
+function copyMismatches(appDir, pkg, declarers) {
+  const own = packageDirFrom(appDir, pkg);
+  if (own === null) {
+    const names = declarers.map(loader => loader.name).join(", ");
+    return [
+      {
         pkg,
-        reason: `cannot be found from the playground, though ${declarers.map(l => l.name).join(", ")} loads it`,
-      });
-      continue;
-    }
-    for (const loader of declarers) {
-      const theirs = packageDirFrom(loader.dir, pkg);
-      if (theirs !== null && theirs !== own) {
-        found.push({
-          pkg,
-          reason: `is ${relative(root, own)} from the playground but ${relative(root, theirs)} from ${loader.name}`,
-        });
-      }
-    }
+        reason: `cannot be found from the playground, though ${names} loads it`,
+      },
+    ];
   }
-  return found;
+  return declarers
+    .map(loader => ({ loader, theirs: packageDirFrom(loader.dir, pkg) }))
+    .filter(({ theirs }) => theirs !== null && theirs !== own)
+    .map(({ loader, theirs }) => ({
+      pkg,
+      reason: `is ${relative(root, own)} from the playground but ${relative(root, theirs)} from ${loader.name}`,
+    }));
 }
 
 /** Every workspace package by name, with its folder and manifest. */
 function workspacePackages() {
+  const files = ["packages", "apps"]
+    .flatMap(group =>
+      readdirSync(join(root, group)).map(entry =>
+        join(root, group, entry, "package.json")
+      )
+    )
+    .filter(file => existsSync(file));
   const all = new Map();
-  for (const group of ["packages", "apps"]) {
-    for (const entry of readdirSync(join(root, group))) {
-      const file = join(root, group, entry, "package.json");
-      if (!existsSync(file)) continue;
-      const manifest = JSON.parse(readFileSync(file, "utf8"));
-      if (manifest.name)
-        all.set(manifest.name, { dir: dirname(file), manifest });
-    }
+  for (const file of files) {
+    const manifest = JSON.parse(readFileSync(file, "utf8"));
+    if (manifest.name) all.set(manifest.name, { dir: dirname(file), manifest });
   }
   return all;
 }
@@ -161,40 +166,60 @@ async function configuredFor(env) {
   }
 }
 
-async function main() {
+/** What every configuration is checked against, read once. */
+function readWorkspace() {
   const next = dirname(
     createRequire(join(playground, "package.json")).resolve("next/package.json")
   );
   const read = file => JSON.parse(readFileSync(file, "utf8"));
-  const nextExternals = parseNextExternals(
-    readFileSync(join(next, "dist/lib/server-external-packages.jsonc"), "utf8")
-  );
-  const nextlyRuntime = runtimeDependencies(
-    read(join(root, "packages/nextly/package.json"))
-  );
-  const appManifest = read(join(playground, "package.json"));
-  const workspace = workspacePackages();
+  return {
+    nextExternals: parseNextExternals(
+      readFileSync(
+        join(next, "dist/lib/server-external-packages.jsonc"),
+        "utf8"
+      )
+    ),
+    nextlyRuntime: runtimeDependencies(
+      read(join(root, "packages/nextly/package.json"))
+    ),
+    appManifest: read(join(playground, "package.json")),
+    workspace: workspacePackages(),
+  };
+}
 
+/** The packages one configuration keeps external, and which it would bundle. */
+async function checkConfiguration(env, shared) {
+  const packages = externalPackages({
+    configured: await configuredFor(env),
+    nextExternals: shared.nextExternals,
+    nextlyRuntime: shared.nextlyRuntime,
+  });
+  const loaders = loadedWorkspace(
+    shared.appManifest,
+    shared.workspace,
+    packages
+  );
+  const found = bundledExternals({ appDir: playground, packages, loaders });
+  return { packages, found };
+}
+
+async function main() {
+  const shared = readWorkspace();
   // Each configuration on its own: what one keeps external another bundles
   // (nextly itself, transpiled under development), so the importers differ.
   const lines = new Set();
   let checked = 0;
   for (const env of ["development", "production"]) {
-    const packages = externalPackages({
-      configured: await configuredFor(env),
-      nextExternals,
-      nextlyRuntime,
-    });
-    const loaders = loadedWorkspace(appManifest, workspace, packages);
+    const { packages, found } = await checkConfiguration(env, shared);
     checked += packages.length;
-    for (const { pkg, reason } of bundledExternals({
-      appDir: playground,
-      packages,
-      loaders,
-    })) {
+    for (const { pkg, reason } of found)
       lines.add(`  ${pkg} ${reason} (${env})`);
-    }
   }
+  report(lines, checked);
+}
+
+/** Prints what was found, and exits 1 when anything would be bundled. */
+function report(lines, checked) {
   if (lines.size > 0) {
     console.error(
       "next dev --webpack would bundle packages the playground keeps external:"

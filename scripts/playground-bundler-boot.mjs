@@ -70,7 +70,8 @@ async function status(base, path) {
   }
 }
 
-async function main() {
+/** The command line, or exit 2 when the bundler is not one `next dev` takes. */
+function options() {
   const { values } = parseArgs({
     options: {
       bundler: { type: "string" },
@@ -80,15 +81,18 @@ async function main() {
       log: { type: "string" },
     },
   });
-  if (values.bundler !== "webpack" && values.bundler !== "turbopack") {
+  if (!["webpack", "turbopack"].includes(values.bundler)) {
     console.error("--bundler must be webpack or turbopack");
     process.exit(2);
   }
-  const scratch = mkdtempSync(join(tmpdir(), "playground-boot-"));
-  const log = values.log ?? join(scratch, "next-dev.log");
-  const databaseUrl =
-    values["database-url"] ?? `file:${join(scratch, "playground.db")}`;
-  const base = `http://localhost:${values.port}`;
+  return values;
+}
+
+/**
+ * Starts `next dev` in a process group of its own, writing to `log`, and
+ * stops the whole group when this process exits.
+ */
+function startServer(values, { base, log, databaseUrl }) {
   const out = openSync(log, "w");
   const server = spawn(
     join(app, "node_modules/.bin/next"),
@@ -109,43 +113,67 @@ async function main() {
       },
     }
   );
-  const stop = () => {
+  process.on("exit", () => {
     try {
       process.kill(-server.pid, "SIGTERM");
     } catch {
       // Already gone.
     }
-  };
-  process.on("exit", stop);
+  });
+}
 
-  const problems = [];
+/** setup-status's first answer, whatever its status, or the last failure. */
+async function firstAnswer(base) {
   const deadline = Date.now() + BOOT_MS;
   let setup;
   do {
     setup = await status(base, "/admin/api/auth/setup-status");
-    if (typeof setup.status === "number") break;
+    if (typeof setup.status === "number") return setup;
     await new Promise(r => setTimeout(r, 3000));
   } while (Date.now() < deadline);
+  return setup;
+}
+
+/** The problems with the stylesheets and scripts the setup page links. */
+async function assetProblems(base, html) {
+  const assets = linkedAssets(html);
+  if (assets.length === 0) return ["/admin/setup linked no assets"];
+  const problems = [];
+  for (const asset of assets) {
+    const answer = await status(base, asset);
+    if (answer.status !== 200)
+      problems.push(`${asset} answered ${answer.status}`);
+  }
+  return problems;
+}
+
+/** Everything a first visit to the admin asks for that did not answer 200. */
+async function servingProblems(base, setup) {
+  const problems = [];
   if (setup.status !== 200)
     problems.push(`setup-status answered ${setup.status}`);
-
   const admin = await status(base, "/admin");
   if (admin.status !== 200) problems.push(`/admin answered ${admin.status}`);
-
   const page = await status(base, "/admin/setup");
-  if (page.status !== 200) {
-    problems.push(`/admin/setup answered ${page.status}`);
-  } else {
-    const assets = linkedAssets(await page.res.text());
-    if (assets.length === 0) problems.push("/admin/setup linked no assets");
-    for (const asset of assets) {
-      const answer = await status(base, asset);
-      if (answer.status !== 200)
-        problems.push(`${asset} answered ${answer.status}`);
-    }
-  }
+  if (page.status !== 200)
+    return [...problems, `/admin/setup answered ${page.status}`];
+  return [...problems, ...(await assetProblems(base, await page.res.text()))];
+}
 
-  const label = `${values.bundler} on ${values.dialect}`;
+async function main() {
+  const values = options();
+  const scratch = mkdtempSync(join(tmpdir(), "playground-boot-"));
+  const log = values.log ?? join(scratch, "next-dev.log");
+  const databaseUrl =
+    values["database-url"] ?? `file:${join(scratch, "playground.db")}`;
+  const base = `http://localhost:${values.port}`;
+  startServer(values, { base, log, databaseUrl });
+  const problems = await servingProblems(base, await firstAnswer(base));
+  report(`${values.bundler} on ${values.dialect}`, problems, log);
+}
+
+/** Prints the outcome and exits: 1, with the server's first error, on a problem. */
+function report(label, problems, log) {
   if (problems.length > 0) {
     console.error(
       `The playground under ${label} does not serve its admin and API:`
