@@ -24,7 +24,8 @@ import { useCardTier } from "../frame/tier";
 import { GROUPS_DRAWN } from "../tier-query";
 
 import { chartColour, chartSlotFor, orderGroups } from "./chart-colour";
-import { groupsSummary } from "./chart-text";
+import { ChartReachArea, ChartTooltip, useChartReach } from "./chart-reach";
+import { chartName, currentPointText, groupsSummary } from "./chart-text";
 
 /** One group of a chart of groups. */
 export interface GroupsChartGroup extends ChartRow {
@@ -71,6 +72,16 @@ export function GroupsChart({
     format: count => cardNumber(count).label,
   });
   const note = moreGroupsNote(truncated, ordered.length - drawn.length);
+  const reach = useChartReach({ kind: "bars", bars: drawn.length });
+  const keyed = reach.keyed ? drawn[reach.keyed.index] : undefined;
+  // What the live region reads for the bar the keyboard is on: its group and its count, heard as
+  // the table's figure is ("N or more" for a floor).
+  const announcement = keyed
+    ? currentPointText({
+        when: keyed.label,
+        value: cardNumber(keyed.count, { floor: keyed.floor }).label,
+      })
+    : "";
 
   return (
     <ChartFrame
@@ -81,28 +92,37 @@ export function GroupsChart({
       note={note}
     >
       {({ titleId, descId, title: heading, description: text }) => (
-        // A list of labelled values; `role="img"` prunes the children, so the description is
-        // what a screen reader hears, and the table holds the numbers cell by cell.
-        <div
-          role="img"
-          aria-labelledby={titleId}
-          aria-describedby={descId}
-          className="flex flex-col gap-1.5"
+        <ChartReachArea
+          reach={reach}
+          name={chartName({ kind: "bars", what: heading })}
+          describedBy={descId}
+          announcement={announcement}
         >
-          <span id={titleId} className="sr-only">
-            {heading}
-          </span>
-          <span id={descId} className="sr-only">
-            {text}
-          </span>
-          {drawn.map((group, index) => (
-            <GroupBar
-              key={group.key}
-              group={group}
-              fraction={fractions[index] ?? 0}
-            />
-          ))}
-        </div>
+          {/* A list of labelled values; `role="img"` prunes the children, so the description is
+            what a screen reader hears, and the table holds the numbers cell by cell. */}
+          <div
+            role="img"
+            aria-labelledby={titleId}
+            aria-describedby={descId}
+            className="flex flex-col gap-1.5"
+          >
+            <span id={titleId} className="sr-only">
+              {heading}
+            </span>
+            <span id={descId} className="sr-only">
+              {text}
+            </span>
+            {drawn.map((group, index) => (
+              <GroupBar
+                key={group.key}
+                group={group}
+                fraction={fractions[index] ?? 0}
+                onHover={() => reach.hover({ series: 0, index })}
+                tooltip={reach.shown?.index === index}
+              />
+            ))}
+          </div>
+        </ChartReachArea>
       )}
     </ChartFrame>
   );
@@ -122,16 +142,25 @@ function moreGroupsNote(
   return undefined;
 }
 
-/** One group's name and count, over its bar. */
+/** One group's name and count, over its bar, and its tooltip while it is the point in view. */
 function GroupBar({
   group,
   fraction,
+  onHover,
+  tooltip,
 }: {
   group: GroupsChartGroup;
   fraction: number;
+  onHover: () => void;
+  tooltip: boolean;
 }) {
+  const slot = chartSlotFor(group.value);
   return (
-    <div className="flex flex-col gap-0.5" data-testid="chart-group">
+    <div
+      className="relative flex flex-col gap-0.5"
+      data-testid="chart-group"
+      onPointerEnter={onHover}
+    >
       <div className="flex min-w-0 items-baseline justify-between gap-2">
         {/* Wrapped, never cut: a long name takes another line rather than losing its end or
             pushing the count off the card. */}
@@ -158,10 +187,23 @@ function GroupBar({
           // slot by its value, so a category is the same colour on every card.
           style={{
             width: `${fraction * 100}%`,
-            backgroundColor: chartColour(chartSlotFor(group.value)),
+            backgroundColor: chartColour(slot),
           }}
         />
       </div>
+      {tooltip ? (
+        <ChartTooltip
+          title={group.label}
+          lines={[
+            {
+              key: group.key,
+              slot,
+              value: <CardFigure value={group.count} floor={group.floor} />,
+            },
+          ]}
+          className="top-full left-0"
+        />
+      ) : null}
     </div>
   );
 }

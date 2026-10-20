@@ -25,7 +25,13 @@ import { cardNumber } from "../frame/format";
 import { useCardTier } from "../frame/tier";
 
 import { chartColour, type ChartSlot } from "./chart-colour";
-import { latestMarker, overTimeSummary } from "./chart-text";
+import { ChartReachArea, ChartTooltip, useChartReach } from "./chart-reach";
+import {
+  chartName,
+  currentPointText,
+  latestMarker,
+  overTimeSummary,
+} from "./chart-text";
 
 /** One interval of the chart's range: its key, and how it is written, as the table writes it. */
 export interface OverTimeInterval {
@@ -111,6 +117,23 @@ export function OverTimeChart({
       })
     )
     .join(" ");
+  // The keys move through the range interval by interval, and between series where there are
+  // several; an interval a series has no point in is read as such rather than skipped.
+  const reach = useChartReach({
+    kind: "points",
+    series: series.length,
+    points: domain.labels.length,
+  });
+  const keyedLine = reach.keyed ? series[reach.keyed.series] : undefined;
+  const announcement =
+    reach.keyed && keyedLine
+      ? currentPointText({
+          series: series.length > 1 ? keyedLine.name : undefined,
+          when: domain.labels[reach.keyed.index] ?? "",
+          value: valueAt(keyedLine, intervals[reach.keyed.index]?.key),
+        })
+      : "";
+  const shownAt = reach.shown ? intervals[reach.shown.index] : undefined;
 
   return (
     <ChartFrame
@@ -120,49 +143,82 @@ export function OverTimeChart({
       rows={tableRows(series, domain)}
     >
       {({ titleId, descId, title: heading, description: text }) => (
-        <div className="flex flex-col gap-1">
-          {series.length > 1 ? <SeriesLegend series={series} /> : null}
-          {series.length === 1 && first ? (
-            <OverTimeSummary points={first.points} />
-          ) : null}
-          <div className="flex gap-1.5">
-            {tier === "small" ? null : <ValueAxis highest={highest} />}
-            <div className="relative min-w-0 flex-1">
-              <svg
-                role="img"
-                aria-labelledby={titleId}
-                aria-describedby={descId}
-                viewBox={`0 0 ${BOX.width} ${BOX.height}`}
-                preserveAspectRatio="none"
-                className="block h-16 w-full"
-              >
-                <title id={titleId}>{heading}</title>
-                <desc id={descId}>{text}</desc>
-                {tier === "small" ? null : <Gridlines />}
+        <ChartReachArea
+          reach={reach}
+          name={chartName({
+            kind: "points",
+            what: heading,
+            range: rangeOfIntervals(domain),
+          })}
+          describedBy={descId}
+          announcement={announcement}
+        >
+          <div className="flex flex-col gap-1">
+            {series.length > 1 ? <SeriesLegend series={series} /> : null}
+            {series.length === 1 && first ? (
+              <OverTimeSummary points={first.points} />
+            ) : null}
+            <div className="flex gap-1.5">
+              {tier === "small" ? null : <ValueAxis highest={highest} />}
+              <div className="relative min-w-0 flex-1">
+                <svg
+                  role="img"
+                  aria-labelledby={titleId}
+                  aria-describedby={descId}
+                  viewBox={`0 0 ${BOX.width} ${BOX.height}`}
+                  preserveAspectRatio="none"
+                  className="block h-16 w-full"
+                >
+                  <title id={titleId}>{heading}</title>
+                  <desc id={descId}>{text}</desc>
+                  {tier === "small" ? null : <Gridlines />}
+                  {series.map((line, index) => (
+                    <SeriesLine
+                      key={line.key}
+                      plotted={plots[index] ?? []}
+                      slot={seriesSlot(index)}
+                      filled={series.length === 1}
+                    />
+                  ))}
+                </svg>
                 {series.map((line, index) => (
-                  <SeriesLine
+                  <LatestPoint
                     key={line.key}
+                    points={line.points}
                     plotted={plots[index] ?? []}
                     slot={seriesSlot(index)}
-                    filled={series.length === 1}
+                    // One series labels its latest value beside it; several name theirs in the
+                    // legend, where values close together cannot print over each other.
+                    labelled={series.length === 1}
                   />
                 ))}
-              </svg>
-              {series.map((line, index) => (
-                <LatestPoint
-                  key={line.key}
-                  points={line.points}
-                  plotted={plots[index] ?? []}
-                  slot={seriesSlot(index)}
-                  // One series labels its latest value beside it; several name theirs in the
-                  // legend, where values close together cannot print over each other.
-                  labelled={series.length === 1}
+                <IntervalStrips
+                  count={domain.labels.length}
+                  onHover={index => reach.hover({ series: 0, index })}
                 />
-              ))}
+                {reach.shown && shownAt ? (
+                  <IntervalInView
+                    index={reach.shown.index}
+                    size={domain.labels.length}
+                    title={shownAt.label}
+                    marks={series.map((line, index) => ({
+                      key: line.key,
+                      name: series.length > 1 ? line.name : undefined,
+                      slot: seriesSlot(index),
+                      value: valueAt(line, shownAt.key),
+                      y: plots[index]?.[
+                        line.points.findIndex(
+                          point => point.key === shownAt.key
+                        )
+                      ]?.y,
+                    }))}
+                  />
+                ) : null}
+              </div>
             </div>
+            <OverTimeDates labels={domain.labels} />
           </div>
-          <OverTimeDates labels={domain.labels} />
-        </div>
+        </ChartReachArea>
       )}
     </ChartFrame>
   );
@@ -175,6 +231,130 @@ function rangeOf(points: readonly OverTimePoint[], domain: Domain): string {
   if (!start || !end) return "no range";
   const from = domain.labelOf(start.key);
   return start === end ? from : `${from} to ${domain.labelOf(end.key)}`;
+}
+
+/** The whole range the chart is drawn against, first interval to last, for its name. */
+function rangeOfIntervals(domain: Domain): string {
+  const from = domain.labels[0];
+  const to = domain.labels[domain.labels.length - 1];
+  if (from === undefined || to === undefined) return "no range";
+  return from === to ? from : `${from} to ${to}`;
+}
+
+/** A series' value in the interval `key`, as the table writes it, or that it has none there. */
+function valueAt(line: OverTimeSeries, key: string | undefined): string {
+  const point = line.points.find(candidate => candidate.key === key);
+  return point ? cardNumber(point.value).label : "no value";
+}
+
+/** How far across the box the interval at `index` of `size` is drawn, as a percentage. */
+function acrossOf(index: number, size: number): number {
+  const step = size > 1 ? (BOX.width - BOX.padding * 2) / (size - 1) : 0;
+  return ((BOX.padding + step * index) / BOX.width) * 100;
+}
+
+/**
+ * The pointer's targets: one strip per interval, the full height of the lines, reaching halfway
+ * to its neighbours, so every interval is under the pointer somewhere and none overlap. Hidden
+ * from assistive tech and never focused: the keys reach the same intervals.
+ */
+function IntervalStrips({
+  count,
+  onHover,
+}: {
+  count: number;
+  onHover: (index: number) => void;
+}) {
+  const across = Array.from({ length: count }, (_, index) =>
+    acrossOf(index, count)
+  );
+  return (
+    <>
+      {across.map((at, index) => {
+        const before = index === 0 ? 0 : (at + (across[index - 1] ?? at)) / 2;
+        const after =
+          index === count - 1 ? 100 : (at + (across[index + 1] ?? at)) / 2;
+        return (
+          <span
+            // Intervals have no other id here, and a strip's place is its identity.
+            key={index}
+            aria-hidden="true"
+            data-testid="chart-interval"
+            className="absolute inset-y-0"
+            // design-lint-ok: placed by its interval's position on the stretched line.
+            style={{ left: `${before}%`, width: `${after - before}%` }}
+            onPointerEnter={() => onHover(index)}
+          />
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * The interval in view: a rule down through it, each series' point there circled in its
+ * colour, and the tooltip naming every series' value, on the interval's own side of the chart.
+ */
+function IntervalInView({
+  index,
+  size,
+  title,
+  marks,
+}: {
+  index: number;
+  size: number;
+  title: string;
+  marks: ReadonlyArray<{
+    key: string;
+    name?: string;
+    slot: ChartSlot;
+    value: string;
+    y: number | undefined;
+  }>;
+}) {
+  const across = acrossOf(index, size);
+  const left = `${across}%`;
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-0 w-px -translate-x-1/2 bg-border"
+        // design-lint-ok: placed by the interval's position on the stretched line.
+        style={{ left }}
+      />
+      {marks.map(mark =>
+        mark.y === undefined ? null : (
+          <span
+            key={mark.key}
+            aria-hidden="true"
+            data-testid="chart-point-in-view"
+            className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-popover"
+            // design-lint-ok: the position is the datum, and the colour is the series' chart slot.
+            style={{
+              left,
+              top: `${(mark.y / BOX.height) * 100}%`,
+              backgroundColor: chartColour(mark.slot),
+            }}
+          />
+        )
+      )}
+      <ChartTooltip
+        title={title}
+        lines={marks.map(mark => ({
+          key: mark.key,
+          slot: mark.slot,
+          name: mark.name,
+          value: mark.value,
+        }))}
+        // Below the lines, on the interval's own side, so it never runs off the card's edge.
+        style={
+          across <= 50
+            ? { top: "100%", left }
+            : { top: "100%", right: `${100 - across}%` }
+        }
+      />
+    </>
+  );
 }
 
 /** The table's rows: one per point, named by its series where there are several. */
