@@ -60,7 +60,13 @@ export type PaginationMeta = {
    * that silently drops what its reader may not see reads as smaller than it
    * is, while one that names those records shows what it must not.
    */
-  hidden?: Array<{ scopeKind: string; scopeSlug: string; count: number }>;
+  hidden?: Array<{
+    scopeKind: string;
+    scopeSlug: string;
+    count: number;
+    /** The scope's display names, singular and plural, where it has them. */
+    labels?: { singular: string; plural: string };
+  }>;
 };
 
 /**

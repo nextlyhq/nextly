@@ -153,6 +153,11 @@ export interface HiddenReleaseMembers {
   scopeKind: "collection" | "single" | "page";
   scopeSlug: string;
   count: number;
+  /**
+   * The collection's display names, sent because a reader who may not read
+   * it cannot look them up. Absent for one no longer registered.
+   */
+  labels?: { singular: string; plural: string };
 }
 
 /**

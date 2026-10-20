@@ -57,6 +57,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
       defineCollection({
         slug: "secrets",
+        labels: { singular: "Secret", plural: "Secrets" },
         status: true,
         fields: [text({ name: "title" })],
       }),
@@ -282,8 +283,16 @@ describe.each(getConfiguredTestDialects())(
         members[secrets.open],
         members[secrets.blocked],
       ];
+      // Counted by collection, with the collection's display names, which
+      // the reader cannot look up for a collection they may not read.
+      const SECRETS_LABELS = { singular: "Secret", plural: "Secrets" };
       const secretsCounted = (count: number) => [
-        { scopeKind: "collection", scopeSlug: "secrets", count },
+        {
+          scopeKind: "collection",
+          scopeSlug: "secrets",
+          count,
+          labels: SECRETS_LABELS,
+        },
       ];
 
       // The members: the two posts, and the two secrets as a count.
@@ -320,6 +329,7 @@ describe.each(getConfiguredTestDialects())(
           scopeSlug: "secrets",
           count: 2,
           hard: 1,
+          labels: SECRETS_LABELS,
         }),
       ]);
       const readinessOverRest = await rest(key, "GET", [

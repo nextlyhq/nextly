@@ -29,6 +29,7 @@ import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import {
   RELEASES_RESOURCE,
   ReleasesService,
+  scopeKeyOf,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
@@ -167,6 +168,30 @@ export function registerReleaseServices({
         // What the readiness checks ask of a member's document and author,
         // answered as the release's run would answer it.
         checks: releaseDocumentChecks(adapter, logger),
+
+        // The display names of the collections and Singles a reader's hidden
+        // documents are in, read from the registries as the admin reads them.
+        // A collection no longer registered is left out, and its count keeps
+        // the slug alone.
+        scopeLabels: async scopes => {
+          const labels = new Map<
+            string,
+            { singular: string; plural: string }
+          >();
+          const distinct = new Map(
+            scopes.map(scope => [scopeKeyOf(scope), scope])
+          );
+          await Promise.all(
+            [...distinct].map(async ([key, scope]) => {
+              const named = await scopeLabelsOf(
+                scope.scopeKind,
+                scope.scopeSlug
+              );
+              if (named) labels.set(key, named);
+            })
+          );
+          return labels;
+        },
 
         // Which members' documents a reader may read: the list views' own
         // question (`visibleDocuments`), batched for the whole set. The
@@ -354,4 +379,49 @@ async function nullWhenRefused<T>(
     }
     throw error;
   }
+}
+
+/**
+ * A collection's or Single's display names, from its registry: a
+ * collection's own singular and plural, a Single's one label as both. `null`
+ * when it is not registered, or its registry is not.
+ */
+function scopeLabelsOf(
+  scopeKind: string,
+  scopeSlug: string
+): Promise<{ singular: string; plural: string } | null> {
+  return scopeKind === "single"
+    ? singleLabels(scopeSlug)
+    : collectionLabels(scopeSlug);
+}
+
+/** A Single's one label, as both its singular and its plural. */
+async function singleLabels(
+  slug: string
+): Promise<{ singular: string; plural: string } | null> {
+  if (!container.has("singleRegistryService")) return null;
+  const single = await container
+    .get<{
+      getSingleBySlug: (slug: string) => Promise<{ label?: string } | null>;
+    }>("singleRegistryService")
+    .getSingleBySlug(slug);
+  return single?.label
+    ? { singular: single.label, plural: single.label }
+    : null;
+}
+
+/** A collection's own singular and plural. */
+async function collectionLabels(
+  slug: string
+): Promise<{ singular: string; plural: string } | null> {
+  if (!container.has("collectionRegistryService")) return null;
+  const collection = await container
+    .get<{
+      getCollectionBySlug: (
+        slug: string
+      ) => Promise<{ labels?: { singular?: string; plural?: string } } | null>;
+    }>("collectionRegistryService")
+    .getCollectionBySlug(slug);
+  const { singular, plural } = collection?.labels ?? {};
+  return singular && plural ? { singular, plural } : null;
 }

@@ -24,15 +24,25 @@ function documents(count: number): string {
 }
 
 /**
- * "1 document you can't view · posts", "3 documents you can't view · posts,
- * pages". `null` when nothing is hidden, so a caller renders nothing.
+ * Where hidden documents are, as the admin names a collection elsewhere: its
+ * plural for several documents, its singular for one, and its slug only when
+ * it has no names.
+ */
+function scopeName(entry: HiddenReleaseMembers): string {
+  if (!entry.labels) return entry.scopeSlug;
+  return entry.count === 1 ? entry.labels.singular : entry.labels.plural;
+}
+
+/**
+ * "1 document you can't view · Secret", "3 documents you can't view · Posts,
+ * History notes". `null` when nothing is hidden, so a caller renders nothing.
  */
 export function describeHidden(
   hidden: readonly HiddenReleaseMembers[] | undefined
 ): string | null {
   const total = hiddenTotal(hidden);
   if (total === 0) return null;
-  const where = [...new Set((hidden ?? []).map(entry => entry.scopeSlug))];
+  const where = [...new Set((hidden ?? []).map(scopeName))];
   return `${total} ${documents(total)} you can't view · ${where.join(", ")}`;
 }
 

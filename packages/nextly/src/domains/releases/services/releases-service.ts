@@ -272,6 +272,16 @@ export interface ReleasesServiceDeps {
     actor: ReleaseActor
   ) => Promise<ReadonlySet<string>>;
   /**
+   * The display names of these collections and Singles, keyed by
+   * `<scopeKind>\u0000<scopeSlug>`, for the counts of documents a reader may
+   * not read. A name is no more than the slug the count already carries, said
+   * as the admin says it. Optional: without it the counts carry the slug
+   * alone.
+   */
+  scopeLabels?: (
+    scopes: ReadonlyArray<{ scopeKind: VersionScopeKind; scopeSlug: string }>
+  ) => Promise<ReadonlyMap<string, ReleaseScopeLabels>>;
+  /**
    * Where Publish now reports a drain it could not start, and a rename or
    * delete reports an activity entry it could not record. Optional: without
    * one the failure goes unreported, and the operation still answers as it
@@ -655,6 +665,23 @@ export interface HiddenReleaseMembers {
   scopeKind: VersionScopeKind;
   scopeSlug: string;
   count: number;
+  /**
+   * The collection's display names, for a reader who may not read its
+   * schema and so cannot look them up: a Single's one label is both. Absent
+   * when the collection or Single is no longer registered.
+   */
+  labels?: ReleaseScopeLabels;
+}
+
+/**
+ * A collection's or Single's display names, the singular for one document
+ * and the plural for several.
+ *
+ * @experimental
+ */
+export interface ReleaseScopeLabels {
+  singular: string;
+  plural: string;
 }
 
 /**
@@ -1092,8 +1119,11 @@ function blockerOf(
   };
 }
 
-/** The collection or Single a member's document is in, as one key. */
-function scopeKeyOf(member: {
+/**
+ * The collection or Single a member's document is in, as one key: how hidden
+ * counts are grouped, and how their display names are looked up.
+ */
+export function scopeKeyOf(member: {
   scopeKind: VersionScopeKind;
   scopeSlug: string;
 }): string {
@@ -1125,6 +1155,17 @@ function countedByScope(
       a.scopeKind.localeCompare(b.scopeKind) ||
       a.scopeSlug.localeCompare(b.scopeSlug)
   );
+}
+
+/** These counts with the display names found for their collections. */
+function withLabelsFrom<T extends HiddenReleaseMembers>(
+  hidden: readonly T[],
+  labels: ReadonlyMap<string, ReleaseScopeLabels>
+): T[] {
+  return hidden.map(entry => {
+    const found = labels.get(scopeKeyOf(entry));
+    return found ? { ...entry, labels: found } : entry;
+  });
 }
 
 /**
@@ -1920,7 +1961,7 @@ export class ReleasesService {
     );
     return {
       named: findings.filter(finding => view.sees(finding.memberId)),
-      hidden: countedByScope(view.hidden),
+      hidden: await this.labelled(countedByScope(view.hidden)),
     };
   }
 
@@ -1975,7 +2016,13 @@ export class ReleasesService {
       members,
       registeredReleaseCheckSources()
     );
-    return this.readinessFor(actor, release.id, members, found);
+    const readiness = await this.readinessFor(
+      actor,
+      release.id,
+      members,
+      found
+    );
+    return { ...readiness, hidden: await this.labelled(readiness.hidden) };
   }
 
   /**
@@ -2081,7 +2128,28 @@ export class ReleasesService {
         checked: true,
       });
     }
-    return entries;
+    return this.labelledEntries(entries);
+  }
+
+  /**
+   * A page of readiness entries with their hidden counts' collections named,
+   * the names read once for the whole page rather than once per release.
+   */
+  private async labelledEntries(
+    entries: ReleaseReadinessEntry[]
+  ): Promise<ReleaseReadinessEntry[]> {
+    const hidden = entries.flatMap(entry =>
+      entry.checked ? entry.hidden : []
+    );
+    if (hidden.length === 0 || this.deps.scopeLabels === undefined) {
+      return entries;
+    }
+    const labels = await this.deps.scopeLabels(hidden);
+    return entries.map(entry =>
+      entry.checked
+        ? { ...entry, hidden: withLabelsFrom(entry.hidden, labels) }
+        : entry
+    );
   }
 
   /**
@@ -2215,6 +2283,19 @@ export class ReleasesService {
   }
 
   /**
+   * These counts with their collections' display names, resolved in one call.
+   * A count whose collection is no longer registered keeps its slug alone.
+   */
+  private async labelled<T extends HiddenReleaseMembers>(
+    hidden: T[]
+  ): Promise<T[]> {
+    if (hidden.length === 0 || this.deps.scopeLabels === undefined) {
+      return hidden;
+    }
+    return withLabelsFrom(hidden, await this.deps.scopeLabels(hidden));
+  }
+
+  /**
    * A release's documents as this actor sees them: those they may read, in
    * the order they were added, and the rest counted by collection.
    *
@@ -2230,7 +2311,10 @@ export class ReleasesService {
       actor,
       await this.deps.repository.listMembers(releaseId)
     );
-    return { items: view.visible, hidden: countedByScope(view.hidden) };
+    return {
+      items: view.visible,
+      hidden: await this.labelled(countedByScope(view.hidden)),
+    };
   }
 
   /**
