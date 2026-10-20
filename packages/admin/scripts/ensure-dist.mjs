@@ -24,6 +24,13 @@ if (existsSync(DIST_ENTRY)) {
 }
 
 console.error(
-  "[ensure-dist] dist/index.mjs not found — building @nextlyhq/admin before the tests that measure it..."
+  "[ensure-dist] dist/index.mjs not found — building @nextlyhq/admin (with its workspace dependencies) before the tests that measure it..."
 );
-execSync("pnpm build", { cwd: PACKAGE_ROOT, stdio: "inherit" });
+// The `pkg...` filter form builds THIS package AND its dependencies: a fresh
+// checkout has no workspace dists, and admin's build resolves subpaths such
+// as `nextly/config` through nextly's dist — a package-local `pnpm build`
+// would fail there before vitest even starts.
+execSync("pnpm --filter @nextlyhq/admin... build", {
+  cwd: PACKAGE_ROOT,
+  stdio: "inherit",
+});

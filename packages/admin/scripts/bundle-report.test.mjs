@@ -212,10 +212,13 @@ describe("bundle-report", () => {
       );
     });
 
-    it("classifies an independent entrypoint as other-entry, not route-later", () => {
-      // plugin-components.mjs is a separate entry the build emits for a
-      // different consumer: reachable from index.mjs by neither edge, so it
-      // is not a lazy route and must not pad the route-later subtotal.
+    it("classifies a declared independent entrypoint as other-entry, an unimported chunk as unreachable", () => {
+      // lib/plugins/plugin-components.mjs is a separate entry the build
+      // declares for a different consumer: reachable from index.mjs by
+      // neither edge, so it is not a lazy route and must not pad the
+      // route-later subtotal. chunk-devtools.mjs is reachable by nothing at
+      // all — an orphan the build retained, which no consumer can load —
+      // and the report must not dress it up as an entrypoint either.
       const dist = createFixtureDist({
         "index.mjs": `
           import { shell } from "./chunk-shell.mjs";
@@ -232,9 +235,12 @@ describe("bundle-report", () => {
           import { util } from "./chunk-shared.mjs";
           export default "page";
         `,
-        "plugin-components.mjs": `
+        "lib/plugins/plugin-components.mjs": `
           import { util } from "./chunk-shared.mjs";
           export const components = { util };
+        `,
+        "chunk-devtools.mjs": `
+          export const devtools = { render() {} };
         `,
         "cli.cjs": `
           console.log("cli tool");
@@ -246,10 +252,16 @@ describe("bundle-report", () => {
       const otherEntryFiles = report.categories.otherEntry.chunks.map(
         c => c.rel
       );
-      expect(otherEntryFiles).toEqual(["plugin-components.mjs"]);
+      expect(otherEntryFiles).toEqual(["lib/plugins/plugin-components.mjs"]);
       expect(report.totals.otherEntry.count).toBe(1);
 
-      // The lazy route stays route-later even though plugin-components.mjs
+      const unreachableFiles = report.categories.unreachable.chunks.map(
+        c => c.rel
+      );
+      expect(unreachableFiles).toEqual(["chunk-devtools.mjs"]);
+      expect(report.totals.unreachable.count).toBe(1);
+
+      // The lazy route stays route-later even though the other entry
       // shares its imports.
       expect(
         report.categories.routeLater.chunks.map(c => c.rel)
@@ -257,19 +269,32 @@ describe("bundle-report", () => {
       // First-screen is untouched by the other entry.
       expect(report.totals.firstScreen.count).toBe(3);
 
-      // Browser = first-screen + route-later + other entries; all four
-      // categories reassemble into the emitted total.
-      expect(report.totals.browser.count).toBe(5);
-      expect(report.totals.totalEmitted.count).toBe(6);
+      // Browser = first-screen + route-later + other entries + unreachable;
+      // all five categories reassemble into the emitted total.
+      expect(report.totals.browser.count).toBe(6);
+      expect(report.totals.totalEmitted.count).toBe(7);
       expect(report.totals.totalEmitted.count).toBe(
         report.totals.firstScreen.count +
           report.totals.routeLater.count +
           report.totals.otherEntry.count +
+          report.totals.unreachable.count +
           report.totals.cli.count
       );
 
+      // The CLI build does not minify: the report says so, on the category
+      // and per chunk, instead of labelling raw bytes as minified.
+      expect(report.categories.cli.minified).toBe(false);
+      expect(report.chunks.find(c => c.file === "cli.cjs").minified).toBe(
+        false
+      );
+      expect(
+        report.chunks.find(c => c.file === "index.mjs").minified
+      ).toBe(true);
+
       const text = formatReport(report, { json: false });
       expect(text).toContain("Other entry chunks (1 chunks");
+      expect(text).toContain("Unreachable chunks (1 chunks");
+      expect(text).toContain("raw sizes: the CLI build does not minify");
     });
   });
 
@@ -291,11 +316,12 @@ describe("bundle-report", () => {
         expect(report.builtAt).toBeDefined();
 
         // Invariant 1: Total emitted chunks equals first-screen + route-later
-        // + other entries + cli
+        // + other entries + unreachable + cli
         const {
           firstScreen,
           routeLater,
           otherEntry,
+          unreachable,
           cli,
           totalEmitted,
           browser,
@@ -304,21 +330,27 @@ describe("bundle-report", () => {
           firstScreen.count +
             routeLater.count +
             otherEntry.count +
+            unreachable.count +
             cli.count
         );
         expect(totalEmitted.minifiedBytes).toBe(
           firstScreen.minifiedBytes +
             routeLater.minifiedBytes +
             otherEntry.minifiedBytes +
+            unreachable.minifiedBytes +
             cli.minifiedBytes
         );
         expect(browser.count).toBe(
-          firstScreen.count + routeLater.count + otherEntry.count
+          firstScreen.count +
+            routeLater.count +
+            otherEntry.count +
+            unreachable.count
         );
         expect(browser.minifiedBytes).toBe(
           firstScreen.minifiedBytes +
             routeLater.minifiedBytes +
-            otherEntry.minifiedBytes
+            otherEntry.minifiedBytes +
+            unreachable.minifiedBytes
         );
 
         // Invariant 2: index.mjs must be in first-screen

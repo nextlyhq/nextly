@@ -206,12 +206,28 @@ function reachableClosure(graph, entryChunk) {
 }
 
 /**
+ * The browser entrypoints the build declares (tsup.config.ts `entry`), as
+ * their emitted dist paths. A chunk reachable by neither edge from the
+ * entry is one of these — an entrypoint for a different consumer — or it
+ * is an ORPHAN: bytes the build retained that nothing imports, which a
+ * consumer cannot load either. The two must not share a category, or the
+ * report misstates why the bytes ship.
+ */
+const DECLARED_BROWSER_ENTRIES = new Set([
+  "index.mjs",
+  "lib/plugins/component-registry.mjs",
+  "lib/plugins/plugin-components.mjs",
+]);
+
+/**
  * The category one chunk belongs to, by the report's definitions:
  * - cli: the CLI tools, not loaded by any browser.
  * - first-screen: in the entry's static pre-render closure.
  * - route-later: reachable from the entry, but only through dynamic imports.
- * - other-entry: reachable by neither edge — another entrypoint the build
- *   emits for a different consumer, not a lazy route.
+ * - other-entry: reachable by neither edge, but a declared entrypoint — the
+ *   build emits it for a different consumer.
+ * - unreachable: reachable by neither edge and not declared: an orphan the
+ *   build retained that no consumer can load.
  */
 function categoryOf(rel, firstScreenSet, reachableSet) {
   if (rel.startsWith("cli.") || rel.includes("/cli.")) {
@@ -223,7 +239,10 @@ function categoryOf(rel, firstScreenSet, reachableSet) {
   if (reachableSet.has(rel)) {
     return "route-later";
   }
-  return "other-entry";
+  if (DECLARED_BROWSER_ENTRIES.has(rel)) {
+    return "other-entry";
+  }
+  return "unreachable";
 }
 
 /**
@@ -277,6 +296,7 @@ export function measureBundle({
     "first-screen": [],
     "route-later": [],
     "other-entry": [],
+    unreachable: [],
     cli: [],
   };
   const chunks = [];
@@ -287,6 +307,9 @@ export function measureBundle({
     chunks.push({
       file: rel,
       category,
+      // The CLI build does not minify: its on-disk size is its raw size,
+      // and labelling it minified would overstate what the report measures.
+      minified: category !== "cli",
       minifiedBytes: node.minifiedBytes,
       gzippedBytes: node.gzippedBytes,
       staticImports: node.staticImports,
@@ -309,12 +332,14 @@ export function measureBundle({
   const firstScreenTotal = sumBytes(buckets["first-screen"]);
   const routeLaterTotal = sumBytes(buckets["route-later"]);
   const otherEntryTotal = sumBytes(buckets["other-entry"]);
+  const unreachableTotal = sumBytes(buckets.unreachable);
   const cliTotal = sumBytes(buckets.cli);
 
   const browserChunks = [
     ...buckets["first-screen"],
     ...buckets["route-later"],
     ...buckets["other-entry"],
+    ...buckets.unreachable,
   ];
   const browserTotal = sumBytes(browserChunks);
   const totalEmitted = sumBytes(chunks);
@@ -326,6 +351,7 @@ export function measureBundle({
     firstScreenTotal.count +
       routeLaterTotal.count +
       otherEntryTotal.count +
+      unreachableTotal.count +
       cliTotal.count
   ) {
     throw new Error("Accounting error: total chunks count mismatch");
@@ -342,14 +368,16 @@ export function measureBundle({
       firstScreen: { chunks: buckets["first-screen"], ...firstScreenTotal },
       routeLater: { chunks: buckets["route-later"], ...routeLaterTotal },
       otherEntry: { chunks: buckets["other-entry"], ...otherEntryTotal },
-      cli: { chunks: buckets.cli, ...cliTotal },
+      unreachable: { chunks: buckets.unreachable, ...unreachableTotal },
+      cli: { chunks: buckets.cli, ...cliTotal, minified: false },
     },
     totals: {
       firstScreen: firstScreenTotal,
       routeLater: routeLaterTotal,
       otherEntry: otherEntryTotal,
+      unreachable: unreachableTotal,
       browser: browserTotal,
-      cli: cliTotal,
+      cli: { ...cliTotal, minified: false },
       totalEmitted,
     },
   };
@@ -416,9 +444,18 @@ export function formatReport(result, { json = false } = {}) {
     });
   }
 
+  if (result.categories.unreachable.count > 0) {
+    pushChunkSection(lines, {
+      heading: `🗑️  Unreachable chunks (${result.categories.unreachable.count} chunks — retained by the build but imported by nothing; no consumer can load them):`,
+      chunks: result.categories.unreachable.chunks,
+      subtotalLabel: "Subtotal Unreachable:",
+      total: result.totals.unreachable,
+    });
+  }
+
   if (result.categories.cli.count > 0) {
     pushChunkSection(lines, {
-      heading: `⚙️  Non-browser chunks (${result.categories.cli.count} chunks — CLI tools):`,
+      heading: `⚙️  Non-browser chunks (${result.categories.cli.count} chunks — CLI tools, raw sizes: the CLI build does not minify):`,
       chunks: result.categories.cli.chunks,
       subtotalLabel: "Subtotal CLI:",
       total: result.totals.cli,
@@ -483,6 +520,9 @@ function commitTimeMs(commit) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+  // Exit by exitCode rather than process.exit: exit() can cut off a pipe
+  // before the queued report bytes are written, leaving a truncated JSON.
+  process.exitCode = 1;
   try {
     const flags = parseArgs(process.argv.slice(2));
     const distDir = flags.dist ? resolve(flags.dist) : resolve(PACKAGE_ROOT, "dist");
@@ -497,9 +537,8 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
       );
     }
     console.log(formatReport(result, { json: flags.json }));
-    process.exit(0);
+    process.exitCode = 0;
   } catch (err) {
     console.error(`bundle-report error: ${err.message}`);
-    process.exit(1);
   }
 }
