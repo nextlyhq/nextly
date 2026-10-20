@@ -110,7 +110,9 @@ describe("Direct API - Email namespace", () => {
       );
     });
 
-    it("uses the first recipient when given an array of addresses", async () => {
+    it("passes every recipient on when given an array of addresses", async () => {
+      // Keeping only the first address sent the email to one person and
+      // reported success for all of them.
       const { email, sendWithTemplate } = build();
 
       await email.sendWithTemplate({
@@ -121,9 +123,30 @@ describe("Direct API - Email namespace", () => {
 
       expect(sendWithTemplate).toHaveBeenCalledWith(
         "welcome",
-        "first@example.com",
+        ["first@example.com", "second@example.com"],
         {},
         expect.objectContaining({ cc: ["cc@example.com"] })
+      );
+    });
+
+    it("passes the send's from and replyTo on", async () => {
+      const { email, sendWithTemplate } = build();
+
+      await email.sendWithTemplate({
+        to: "user@example.com",
+        template: "welcome",
+        from: "Shop <shop@example.com>",
+        replyTo: "help@example.com",
+      });
+
+      expect(sendWithTemplate).toHaveBeenCalledWith(
+        "welcome",
+        "user@example.com",
+        {},
+        expect.objectContaining({
+          from: "Shop <shop@example.com>",
+          replyTo: "help@example.com",
+        })
       );
     });
   });
@@ -144,6 +167,28 @@ describe("Direct API - Email namespace", () => {
         expect.objectContaining({
           cc: ["cc@example.com"],
           bcc: ["bcc@example.com"],
+        })
+      );
+    });
+
+    it("passes every recipient, from and replyTo on", async () => {
+      // `from` was declared on the arguments and dropped before the service,
+      // and the first address was the only one kept.
+      const { email, send } = build();
+
+      await email.send({
+        to: ["first@example.com", "second@example.com"],
+        subject: "Hi",
+        html: "<p>Hi</p>",
+        from: "Shop <shop@example.com>",
+        replyTo: "help@example.com",
+      });
+
+      expect(send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: ["first@example.com", "second@example.com"],
+          from: "Shop <shop@example.com>",
+          replyTo: "help@example.com",
         })
       );
     });

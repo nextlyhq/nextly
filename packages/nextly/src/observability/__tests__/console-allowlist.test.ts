@@ -95,6 +95,14 @@ export function __consoleGuardProbe(): void {
 }
 `;
 
+/**
+ * The console handed over as a value, as a logger argument is: it writes as directly as a call,
+ * and `no-console` does not see it.
+ */
+const VALUE_PROBE_SOURCE = `
+export const __consoleValueProbe: unknown = console;
+`;
+
 /** The rule ids ESLint reports for `source` at `relativePath`, through the config at `cwd` as committed. */
 async function ruleIds(
   cwd: string,
@@ -144,6 +152,17 @@ describe("the console guard", () => {
     expect(
       await ruleIds(packageRoot, UNEXEMPTED_FILE, withProbe(UNEXEMPTED_FILE))
     ).toContain("no-console");
+  }, 60_000);
+
+  it("refuses the console handed over as a value, outside the exempt files", async () => {
+    const source = (file: string) =>
+      readFileSync(join(packageRoot, file), "utf8") + VALUE_PROBE_SOURCE;
+    expect(
+      await ruleIds(packageRoot, UNEXEMPTED_FILE, source(UNEXEMPTED_FILE))
+    ).toContain("no-restricted-globals");
+    expect(
+      await ruleIds(packageRoot, TERMINAL_FILE, source(TERMINAL_FILE))
+    ).not.toContain("no-restricted-globals");
   }, 60_000);
 
   it("refuses it through the repository-root config too", async () => {

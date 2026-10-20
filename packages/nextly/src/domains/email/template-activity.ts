@@ -51,8 +51,21 @@ export interface EmailTemplateActivityInput {
   templateKind: string;
   /** Field NAMES the action touched. Never values. */
   changedFields?: ReadonlyArray<string>;
+  /**
+   * Which ownership step an update was, when it was one: taking over an owned
+   * template, returning it to its owner, or applying (or undoing) a review of
+   * the owner's update. Read beside the action, which stays `update`.
+   */
+  operation?: EmailTemplateOperation;
   actor?: RequestActor | null;
 }
+
+/** The ownership steps recorded on a template's activity entry. */
+export type EmailTemplateOperation =
+  | "override"
+  | "reset"
+  | "apply-owner-update"
+  | "undo-owner-update";
 
 /**
  * Record one template mutation.
@@ -70,7 +83,10 @@ export async function recordTemplateActivity(
     entityId: input.templateId,
     entityTitle: input.templateName,
     changedFields: input.changedFields,
-    metadata: { templateKind: input.templateKind },
+    metadata: {
+      templateKind: input.templateKind,
+      ...(input.operation ? { operation: input.operation } : {}),
+    },
     actor: input.actor,
   });
 }

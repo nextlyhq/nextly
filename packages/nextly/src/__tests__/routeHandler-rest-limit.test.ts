@@ -263,6 +263,15 @@ describe("the REST entry point's limit, before work", () => {
     );
   }
 
+  it("leaves setup to its own limit once the unresolved ceiling is spent", async () => {
+    await spendReadCeiling();
+    await refusals(10, () => send("POST", ["collections"], {}, {}));
+    // Setup counts a wrong token against the auth limit itself, and a valid
+    // one must complete whatever any budget holds, so the ceiling stays out.
+    const setup = await send("POST", ["auth", "setup"], {}, {});
+    expect(await refusedByRestLimit(setup)).toBe(false);
+  });
+
   it("holds an auth path the auth limit does not judge to the ceiling", async () => {
     await spendReadCeiling();
     expect(

@@ -51,6 +51,7 @@ describe("comparison baselines", () => {
         part: "en",
         target: 9,
         userId: null,
+        lifecycle: true,
         live: true,
         versions: versions(
           [9, "draft", "en"],
@@ -82,7 +83,13 @@ describe("comparison baselines", () => {
   it("has nothing currently published in a part that is not live", async () => {
     // A withdrawn part keeps its last published version in its history.
     const history = versions([9, "draft", "en"], [5, "published", "en"]);
-    const context = { ref, part: "en", target: 9, userId: null };
+    const context = {
+      ref,
+      part: "en",
+      target: 9,
+      userId: null,
+      lifecycle: true,
+    };
     await expect(
       resolveComparisonBaseline("published", {
         ...context,
@@ -99,6 +106,41 @@ describe("comparison baselines", () => {
     ).resolves.toBeNull();
   });
 
+  it("finds the published version of a document without the lifecycle, whatever its own status says", async () => {
+    // Without the lifecycle a version records the document's own status, and
+    // what was saved is what readers were served.
+    // A word the lifecycle also uses means nothing to it here.
+    for (const word of ["draft", "unpublished"]) {
+      const history: PartVersion[] = [
+        { versionNo: 9, status: word, locale: "en" },
+        { versionNo: 5, status: word, locale: "en" },
+      ];
+      await expect(
+        resolveComparisonBaseline("published", {
+          ref,
+          part: "en",
+          target: 5,
+          userId: null,
+          live: true,
+          lifecycle: false,
+          versions: history,
+        })
+      ).resolves.toBe(9);
+      // And none is a draft.
+      await expect(
+        resolveComparisonBaseline("draft", {
+          ref,
+          part: "en",
+          target: 5,
+          userId: null,
+          live: true,
+          lifecycle: false,
+          versions: history,
+        })
+      ).resolves.toBeNull();
+    }
+  });
+
   it("only offers versions of the part being compared", async () => {
     // A German version is never another language's "previous".
     await expect(
@@ -107,6 +149,7 @@ describe("comparison baselines", () => {
         part: "en",
         target: 9,
         userId: null,
+        lifecycle: true,
         live: true,
         versions: versions(
           [9, "draft", "en"],

@@ -50,6 +50,13 @@ export interface ColumnSpec {
   // (MySQL), and the diff must not read this field for the same reason it
   // must not read `typeModifier`.
   autoIncrement?: boolean;
+  // `true` when the column holds a JSON list of references that a scalar
+  // column may have held before: a component's many-to-many, `hasMany` or
+  // polymorphic relation. Recorded only on the desired side, and read only to
+  // mark a type change INTO this column as a reference-list conversion (see
+  // ChangeColumnTypeOp.conversion), because a plain cast cannot read a bare id
+  // or a PostgreSQL array literal as a list.
+  holdsReferenceList?: boolean;
   // `true` when the live default is a `nextval()` over the sequence this
   // column OWNS — what PostgreSQL materialises for a `serial` declaration.
   // Recorded only when true, and only by PostgreSQL introspection: no other
@@ -264,6 +271,21 @@ export interface ChangeColumnTypeOp {
   fromType: string;
   toType: string;
   /**
+   * How the stored values are carried into the new type, when a plain cast cannot carry them.
+   *
+   * `referenceList`: the column becomes the JSON list of references a relation keeps on its row,
+   * from a scalar column that held a bare id, a PostgreSQL array literal or a JSON list. Rendered by
+   * `pipeline/reference-list-conversion.ts`, and run by the pre-resolution executor before either
+   * apply route, so neither the fast-path emitter nor drizzle-kit casts the column itself.
+   *
+   * `referenceScalar`: the generated DOWN of that conversion, the list column back to the scalar type
+   * it was. A one-item list becomes its id; a longer list cannot fit in one id, so the DOWN refuses
+   * rather than drop references. Only ever written into a migration file: an apply converts forward.
+   *
+   * Absent for every other type change.
+   */
+  conversion?: "referenceList" | "referenceScalar";
+  /**
    * The nullability and default the column must still have afterwards, when the caller knows them.
    *
    * 🔴 Only MySQL needs these, and it needs them absolutely. Its type change is spelled
@@ -429,7 +451,19 @@ export const PRE_RESOLUTION_OP_TYPES: ReadonlyArray<Operation["type"]> = [
 ] as const;
 
 export function isPreResolutionOp(op: Operation): boolean {
-  return (PRE_RESOLUTION_OP_TYPES as readonly string[]).includes(op.type);
+  // A reference-list conversion runs here too, before the apply chooses a route: drizzle-kit would
+  // otherwise cast the column itself, and a plain cast refuses the values it holds.
+  return (
+    (PRE_RESOLUTION_OP_TYPES as readonly string[]).includes(op.type) ||
+    isReferenceListConversion(op)
+  );
+}
+
+/** Whether `op` converts a scalar column into the JSON list of references a relation keeps. */
+export function isReferenceListConversion(
+  op: Operation
+): op is ChangeColumnTypeOp & { conversion: "referenceList" } {
+  return op.type === "change_column_type" && op.conversion === "referenceList";
 }
 
 // True when a (drop_column, add_column) pair could plausibly be a rename

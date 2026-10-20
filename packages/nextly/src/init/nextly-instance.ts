@@ -109,6 +109,17 @@ import type {
   UserContext,
   VerifyEmailArgs,
 } from "../direct-api/types";
+import type {
+  ApplyEmailTemplateUpdateArgs,
+  CompareEmailTemplateArgs,
+  OverrideEmailTemplateArgs,
+  ResetEmailTemplateArgs,
+  UndoEmailTemplateUpdateArgs,
+} from "../direct-api/types/email";
+import type {
+  EmailTemplateComparison,
+  OwnerUpdateUndo,
+} from "../domains/email/services/email-template-service";
 import type { NextlyPrincipals } from "../plugins/principals/types";
 import type { EmailProviderRecord } from "../schemas/email-providers/types";
 import type { EmailTemplateRecord } from "../schemas/email-templates/types";
@@ -817,6 +828,28 @@ export interface Nextly {
     preview: (
       args: PreviewEmailTemplateArgs
     ) => Promise<{ subject: string; html: string }>;
+    /** @experimental Override a core or plugin template with the site's version. */
+    override: (
+      args: OverrideEmailTemplateArgs
+    ) => Promise<MutationResult<EmailTemplateRecord>>;
+    /** @experimental Return an overridden template to its owner's version. */
+    reset: (
+      args: ResetEmailTemplateArgs
+    ) => Promise<MutationResult<EmailTemplateRecord>>;
+    /** @experimental An overridden template beside its owner's current version, change by change. */
+    compare: (
+      args: CompareEmailTemplateArgs
+    ) => Promise<EmailTemplateComparison>;
+    /** @experimental Apply a review of the owner's update. */
+    applyUpdate: (
+      args: ApplyEmailTemplateUpdateArgs
+    ) => Promise<
+      MutationResult<EmailTemplateRecord> & { undo: OwnerUpdateUndo }
+    >;
+    /** @experimental Undo an applied review. */
+    undoUpdate: (
+      args: UndoEmailTemplateUpdateArgs
+    ) => Promise<MutationResult<EmailTemplateRecord>>;
   };
 
   // ==========================================================================
