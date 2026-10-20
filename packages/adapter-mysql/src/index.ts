@@ -82,6 +82,8 @@ import type {
   ResultSetHeader,
 } from "mysql2/promise";
 
+import { boundPoolWait, type QueueingPool } from "./pool-wait";
+
 // mysql2 type definitions use mixin patterns that TypeScript struggles with.
 // We define explicit interfaces for the methods we need.
 
@@ -226,7 +228,9 @@ const DEFAULT_POOL_CONFIG = {
   min: 2,
   max: 10,
   idleTimeoutMs: 30000,
-  connectionTimeoutMs: 10000,
+  // How long a request waits for a connection, in the queue or opening one:
+  // the same bound, and the same default, as the PostgreSQL adapter's.
+  connectionTimeoutMs: 15000,
 };
 
 /**
@@ -374,8 +378,15 @@ export class MySqlAdapter extends DrizzleAdapter {
 
     try {
       const poolConfig = this.buildPoolConfig();
+      const pool = mysql.createPool(poolConfig);
+      // mysql2 queues a request for a connection without limit; it fails as
+      // busy past the same bound a new connection gets to open.
+      boundPoolWait(
+        pool.pool as unknown as QueueingPool,
+        poolConfig.connectTimeout ?? 0
+      );
       // Cast to our Pool interface - mysql2's mixin types don't resolve properly
-      this.pool = mysql.createPool(poolConfig) as unknown as Pool;
+      this.pool = pool as unknown as Pool;
 
       // Verify connection with smoke test, then check dialect version.
       // Why: F17 hard-fails at connect on real MySQL <8.0 (no variant
@@ -808,9 +819,10 @@ export class MySqlAdapter extends DrizzleAdapter {
       this.config.pool?.connectionTimeoutMs ??
       DEFAULT_POOL_CONFIG.connectionTimeoutMs;
 
-    // Enable waiting for connections when pool is full
+    // A request waits for a connection when the pool is full. The queue has
+    // no length limit; each wait in it is bounded instead (`boundPoolWait`).
     config.waitForConnections = true;
-    config.queueLimit = 0; // Unlimited queue
+    config.queueLimit = 0;
 
     // SSL configuration
     if (this.config.ssl) {

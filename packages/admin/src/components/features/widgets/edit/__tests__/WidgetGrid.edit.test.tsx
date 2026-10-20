@@ -75,12 +75,16 @@ function branding(
   } as unknown as AdminBranding;
 }
 
-/** Facts for a widget that allows every width, unless told otherwise. */
+/**
+ * Facts for a widget that allows every width, unless told otherwise. Listed in the add panel's
+ * Overview group, as core lists every widget a reader may see under one of its groups.
+ */
 function facts(patch: Partial<WidgetWidthFacts> = {}): WidgetWidthFacts {
   return {
     allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
     defaultWidth: "full",
     allowsSeveral: false,
+    group: "overview",
     ...patch,
   };
 }
@@ -205,6 +209,20 @@ async function openWidths(
 
 function live(): HTMLElement {
   return screen.getByTestId("widget-grid-live");
+}
+
+/** Opens the add panel from the bar and returns it. */
+async function openAddPanel(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Add widget" }));
+  return screen.findByTestId("add-widget-panel");
+}
+
+/** Closes the add panel by Escape, as a reader leaves it, and waits for it to go. */
+async function closeAddPanel(user: ReturnType<typeof userEvent.setup>) {
+  await user.keyboard("{Escape}");
+  await waitFor(() =>
+    expect(screen.queryByTestId("add-widget-panel")).toBeNull()
+  );
 }
 
 function putBody() {
@@ -613,7 +631,7 @@ describe("removing a card", () => {
     );
   });
 
-  it("sends focus to the add picker when no card is left", async () => {
+  it("sends focus to Add widget when no card is left", async () => {
     mockBranding = branding(["core/a"]);
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }]);
     renderGrid();
@@ -621,7 +639,7 @@ describe("removing a card", () => {
     await choose(user, "Widget core/a", "Remove");
     await waitFor(() =>
       expect(document.activeElement).toBe(
-        screen.getByTestId("add-widget-picker")
+        screen.getByRole("button", { name: "Add widget" })
       )
     );
   });
@@ -675,21 +693,27 @@ describe("removing a card", () => {
     ]);
   });
 
-  it("lists removed cards first in the picker, and putting one back restores it in place", async () => {
+  it("lists removed cards first in the panel, and Add back restores one in place", async () => {
     renderGrid();
     const user = await beginEditing();
     await choose(user, "Widget core/a", "Remove");
 
-    const picker = screen.getByTestId("add-widget-picker");
-    expect(picker.textContent?.indexOf("Removed from your dashboard")).toBe(0);
+    const panel = await openAddPanel(user);
+    const headings = within(panel)
+      .getAllByRole("heading", { level: 3 })
+      .map(heading => heading.textContent);
+    expect(headings[0]).toBe("Removed from your dashboard 1");
     await user.click(
-      within(picker).getByRole("button", {
-        name: "Put back Widget core/a where it was",
-      })
+      within(panel).getByRole("button", { name: "Add back Widget core/a" })
     );
 
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
-    expect(live()).toHaveTextContent("Widget core/a restored.");
+    // The panel says it, since a modal sheet hides the grid's own region.
+    expect(within(panel).getByTestId("add-panel-live")).toHaveTextContent(
+      "Added back Widget core/a at position 1 of 3."
+    );
+    // Putting back the card the notice offered to undo answers the notice.
+    expect(screen.queryByTestId("removal-notice")).toBeNull();
   });
 });
 
@@ -702,11 +726,19 @@ describe("adding a widget", () => {
         { id: "p2", widgetId: "core/b" },
         { id: "p3", widgetId: "core/c" },
       ],
-      { available: ["core/d"] }
+      {
+        available: ["core/d"],
+        widgets: Object.fromEntries(
+          ["core/a", "core/b", "core/c", "core/d"].map(id => [id, facts()])
+        ),
+      }
     );
     renderGrid();
-    await beginEditing();
-    expect(screen.getByTestId("add-widget-core/d")).toBeInTheDocument();
+    const user = await beginEditing();
+    const panel = await openAddPanel(user);
+    expect(
+      within(panel).getByRole("button", { name: "Add Widget core/d" })
+    ).toBeInTheDocument();
   });
 
   it("appends the card at the widget's default width", async () => {
@@ -721,12 +753,17 @@ describe("adding a widget", () => {
     renderGrid();
     const user = await beginEditing();
 
-    await user.click(screen.getByTestId("add-widget-core/d"));
+    await openAddPanel(user);
+    await user.click(screen.getByTestId("add-panel-add-core/d"));
     expect(drawnOrder()).toEqual(["core/a", "core/d"]);
     expect(screen.getByTestId("widget-cell-core/d")).toHaveClass(
       "@min-[1024px]/dashboard:col-span-4"
     );
+    expect(screen.getByTestId("add-panel-live")).toHaveTextContent(
+      "Added Widget core/d at position 2 of 2."
+    );
 
+    await closeAddPanel(user);
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     expect(putBody().placements[1]).toEqual({
@@ -737,16 +774,25 @@ describe("adding a widget", () => {
     });
   });
 
-  it("stops offering one that has been added", async () => {
+  it("shows a one-card widget as on the dashboard once it is added, and keeps focus in the panel", async () => {
     mockBranding = branding(["core/a", "core/d"]);
     layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
       available: ["core/d"],
+      widgets: { "core/a": facts(), "core/d": facts() },
     });
     renderGrid();
     const user = await beginEditing();
 
-    await user.click(screen.getByTestId("add-widget-core/d"));
-    expect(screen.queryByTestId("add-widget-core/d")).toBeNull();
+    await openAddPanel(user);
+    await user.click(screen.getByTestId("add-panel-add-core/d"));
+    expect(screen.queryByTestId("add-panel-add-core/d")).toBeNull();
+    expect(
+      screen.getByTestId("add-panel-on-dashboard-core/d")
+    ).toBeInTheDocument();
+    // The pressed button is gone with the row's change, so focus goes back to the search.
+    await waitFor(() =>
+      expect(screen.getByTestId("add-panel-search")).toHaveFocus()
+    );
   });
 
   it("keeps offering a widget that allows several cards", async () => {
@@ -761,20 +807,124 @@ describe("adding a widget", () => {
     renderGrid();
     const user = await beginEditing();
 
-    await user.click(screen.getByTestId("add-widget-core/d"));
-    await user.click(screen.getByTestId("add-widget-core/d"));
+    await openAddPanel(user);
+    await user.click(screen.getByRole("button", { name: "Add Widget core/d" }));
+    await user.click(
+      screen.getByRole("button", { name: "Add another Widget core/d" })
+    );
     expect(screen.getAllByTestId("widget-cell-core/d")).toHaveLength(2);
+    expect(screen.getByTestId("add-panel-row-core/d")).toHaveTextContent(
+      "2 on your dashboard"
+    );
 
+    await closeAddPanel(user);
     await user.click(screen.getByTestId("dashboard-edit-save"));
     await waitFor(() => expect(api.put).toHaveBeenCalledTimes(1));
     const ids = putBody().placements.map(p => p.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("says so when everything is already placed", async () => {
+  it("shows every placed one-card widget as on the dashboard, with nothing to add", async () => {
     renderGrid();
-    await beginEditing();
-    expect(screen.getByTestId("add-widget-empty")).toBeInTheDocument();
+    const user = await beginEditing();
+    const panel = await openAddPanel(user);
+    for (const id of ["core/a", "core/b", "core/c"]) {
+      expect(
+        within(panel).getByTestId(`add-panel-on-dashboard-${id}`)
+      ).toBeInTheDocument();
+    }
+    expect(within(panel).queryAllByRole("button", { name: /^Add / })).toEqual(
+      []
+    );
+  });
+
+  it("rings the card just added, and closing sends focus to its menu", async () => {
+    mockBranding = branding(["core/a", "core/d"]);
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
+      available: ["core/d"],
+      widgets: { "core/a": facts(), "core/d": facts() },
+    });
+    renderGrid();
+    const user = await beginEditing();
+
+    await openAddPanel(user);
+    await user.click(screen.getByTestId("add-panel-add-core/d"));
+    expect(screen.getByTestId("widget-cell-core/d")).toHaveAttribute(
+      "data-highlighted"
+    );
+    expect(screen.getByTestId("widget-cell-core/a")).not.toHaveAttribute(
+      "data-highlighted"
+    );
+
+    await closeAddPanel(user);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(menuButton("Widget core/d"))
+    );
+  });
+
+  it("forgets the last visit's card: a later visit closed with nothing added goes to Add widget", async () => {
+    // 🔴 The bar opens the panel by setting its state, so a reset kept in the sheet's own open
+    // callback never ran, and the later visit sent focus to the card the earlier one added.
+    mockBranding = branding(["core/a", "core/d"]);
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
+      available: ["core/d"],
+      widgets: { "core/a": facts(), "core/d": facts() },
+    });
+    renderGrid();
+    const user = await beginEditing();
+    await openAddPanel(user);
+    await user.click(screen.getByTestId("add-panel-add-core/d"));
+    await closeAddPanel(user);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(menuButton("Widget core/d"))
+    );
+
+    await openAddPanel(user);
+    await closeAddPanel(user);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Add widget" })
+      )
+    );
+  });
+
+  it("closing with nothing added sends focus back to Add widget", async () => {
+    renderGrid();
+    const user = await beginEditing();
+    await openAddPanel(user);
+    await closeAddPanel(user);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Add widget" })
+      )
+    );
+  });
+
+  it("drops the ring once customise mode ends", async () => {
+    mockBranding = branding(["core/a", "core/d"]);
+    layoutResponse = layout([{ id: "p1", widgetId: "core/a" }], {
+      available: ["core/d"],
+      widgets: { "core/a": facts(), "core/d": facts() },
+    });
+    renderGrid();
+    const user = await beginEditing();
+    await openAddPanel(user);
+    await user.click(screen.getByTestId("add-panel-add-core/d"));
+    await closeAddPanel(user);
+
+    // The read after the save answers with the card, so it is still drawn to be looked at.
+    layoutResponse = layout(
+      [
+        { id: "p1", widgetId: "core/a" },
+        { id: "core/d", widgetId: "core/d" },
+      ],
+      { widgets: { "core/a": facts(), "core/d": facts() } }
+    );
+    await user.click(screen.getByTestId("dashboard-edit-save"));
+    await screen.findByTestId("dashboard-edit-begin");
+    expect(screen.getByTestId("widget-cell-core/d")).not.toHaveAttribute(
+      "data-highlighted"
+    );
   });
 });
 
@@ -784,14 +934,20 @@ describe("an arrangement that already holds as many cards as a write may carry",
     mockBranding = branding([...ids, "core/surplus"]);
     layoutResponse = layout(
       ids.map((id, i) => ({ id: `p${i}`, widgetId: id })),
-      { available: ["core/surplus"] }
+      {
+        available: ["core/surplus"],
+        widgets: Object.fromEntries(
+          [...ids, "core/surplus"].map(id => [id, facts()])
+        ),
+      }
     );
     renderGrid();
-    await beginEditing();
+    const user = await beginEditing();
+    await openAddPanel(user);
 
-    const add = await screen.findByTestId("add-widget-core/surplus");
+    const add = await screen.findByTestId("add-panel-add-core/surplus");
     expect(add).toBeDisabled();
-    expect(screen.getByTestId("add-widget-at-capacity")).toBeInTheDocument();
+    expect(screen.getByTestId("add-panel-at-capacity")).toBeInTheDocument();
   });
 
   // The REFUSAL itself is asserted against `addPlacement` in
@@ -1225,7 +1381,7 @@ describe("a widget that draws nothing", () => {
 });
 
 describe("when the schema changes underneath an open dashboard", () => {
-  it("re-reads the arrangement, so the picker knows what exists now", () => {
+  it("re-reads the arrangement, so the add panel knows what exists now", () => {
     renderGrid();
 
     return waitFor(() => expect(api.get).toHaveBeenCalledTimes(1)).then(() => {
@@ -1297,13 +1453,15 @@ describe("an arrangement with nothing left on it", () => {
     expect(screen.getByTestId("widget-grid-empty")).toBeInTheDocument();
     expect(screen.queryAllByTestId(/^widget-cell-/)).toHaveLength(0);
 
-    // And the way back WORKS: the picker offers both cards to put back.
+    // And the way back WORKS: the add panel offers both cards to put back.
     const user = userEvent.setup();
     await user.click(screen.getByTestId("dashboard-edit-begin"));
+    const panel = await openAddPanel(user);
+    expect(
+      within(panel).getByRole("button", { name: "Add back Widget core/a" })
+    ).toBeInTheDocument();
     await user.click(
-      screen.getByRole("button", {
-        name: "Put back Widget core/b where it was",
-      })
+      within(panel).getByRole("button", { name: "Add back Widget core/b" })
     );
     expect(drawnOrder()).toEqual(["core/b"]);
   });

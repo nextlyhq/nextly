@@ -75,6 +75,44 @@ describe("contributed widget summaries", () => {
   });
 });
 
+describe("what the add panel reads from a contributed summary", () => {
+  it("names the plugin it came from", () => {
+    expect(contributedWidgetSummaries([plugin({})])[0]?.plugin).toBe(
+      "@acme/plugin"
+    );
+  });
+
+  it("carries the row's description, category and sketch kind, and nothing unstated", () => {
+    const [stated] = contributedWidgetSummaries([
+      plugin({
+        contributes: {
+          admin: {
+            widgets: [
+              {
+                id: "acme/latest",
+                title: "Latest",
+                description: "The newest submissions.",
+                category: "Forms",
+                archetype: "metric",
+                query: { source: "collection:posts", op: "count" },
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+    expect(stated).toMatchObject({
+      description: "The newest submissions.",
+      category: "Forms",
+      archetype: "metric",
+    });
+    // The fixture states no description or category.
+    const [bare] = contributedWidgetSummaries([plugin({})]);
+    expect(bare).not.toHaveProperty("description");
+    expect(bare).not.toHaveProperty("category");
+  });
+});
+
 describe("the size a contributed summary carries", () => {
   /** One contribution, with whatever size fields the case is about. */
   function sized(widget: Record<string, unknown>): PluginDefinition {

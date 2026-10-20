@@ -49,7 +49,8 @@ link: a reset link may have been given any lifetime, and its stored times
 cannot show reliably when it was issued. It ties each outstanding email
 verification link to the account holding its address when that account was
 created and last changed before the link was issued, so those links keep
-working. A verification link whose account was created or changed after it was
-issued, or in the same second, is removed, since it may have been sent to an
+working. A verification link whose account was created or changed at or after the
+time it was issued (on MySQL and SQLite, which store whole seconds, also in the
+same second) is removed, since it may have been sent to an
 earlier holder of the address, and so are expired links and links to an
 address no account holds. Their owners request a new link.

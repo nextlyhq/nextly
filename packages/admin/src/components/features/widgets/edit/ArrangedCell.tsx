@@ -41,6 +41,8 @@ import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
 export interface ArrangedCellProps {
   row: ArrangedWidget;
   isEditing: boolean;
+  /** The card just added from the add panel. */
+  highlighted?: boolean;
   /**
    * Whether a layout write is in flight anywhere on this dashboard.
    *
@@ -330,6 +332,7 @@ export function ArrangedCell(props: ArrangedCellProps) {
       id={row.placementId}
       title={widget.title}
       isEditing={isEditing}
+      highlighted={props.highlighted}
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(row, unframed, isEditing)}
     >

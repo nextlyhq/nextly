@@ -618,8 +618,19 @@ function toSummary(widget: PluginAdminWidget): CanonicalWidget | undefined {
     | undefined;
   const defaultOrder = declaration.defaultOrder;
 
+  // What the add panel shows on the widget's row: its line of description,
+  // its category as a label, and the sketch its archetype picks. Text only,
+  // and absent rather than empty when the declaration states none.
+  const panelText = Object.fromEntries(
+    (["description", "category", "archetype"] as const).flatMap(field => {
+      const value = contributedText(declaration, field);
+      return value === undefined ? [] : [[field, value]];
+    })
+  ) as Pick<CanonicalWidget, "description" | "category" | "archetype">;
+
   return {
     id,
+    ...panelText,
     ...(requiredPermission === undefined ? {} : { requiredPermission }),
     // The gates inside an `actions` declaration, verbatim, for the same
     // reason the card's own gate is.
@@ -666,5 +677,9 @@ export function contributedWidgetSummaries(
           .filter(
             (summary): summary is CanonicalWidget => summary !== undefined
           )
+          // Which plugin it came from, so the add panel lists it under that
+          // plugin: core assigns a contributed widget's group, and the
+          // summary is the only place the plugin is still known.
+          .map(summary => ({ ...summary, plugin: plugin.name }))
   );
 }

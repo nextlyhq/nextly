@@ -344,6 +344,7 @@
     "file-type": "^21",
     "isomorphic-dompurify": "^2",
     "jose": "^6.2.2",
+    "liquidjs": "^10.30.0",
     "picocolors": "^1.1.1",
     "safe-regex2": "^5.1.1",
     "semver": "^7.6.0",

@@ -47,8 +47,10 @@ export interface DashboardEditBarProps {
   onSave: () => void;
   onCancel: () => void;
   onReset: () => void;
-  /** Take the reader to the widgets they can add. */
+  /** Open the add panel. */
   onAddWidget: () => void;
+  /** Registers Add widget, where focus returns when the add panel closes with nothing added. */
+  addWidgetRef?: Register;
   /** Registers the bar, where focus lands as customise mode opens. */
   barRef: Register;
   /** Registers the Customize button, where focus returns as it closes. */
@@ -81,6 +83,24 @@ function BarTitle({ hasUnsavedChanges }: { hasUnsavedChanges: boolean }) {
   );
 }
 
+/**
+ * What the reader is looking at, said in words. A staged reset draws the default and writes
+ * nothing, so the bar says how to keep it and how to go back; otherwise it says how this mode
+ * works.
+ */
+function BarHint({ isResetStaged }: { isResetStaged: boolean }) {
+  return (
+    <p
+      className="text-xs text-muted-foreground"
+      data-testid="dashboard-edit-status"
+    >
+      {isResetStaged
+        ? "Showing the default dashboard. Save to keep it, or Cancel to go back to yours."
+        : "Drag a card by its handle, or use its menu. Only you see this layout."}
+    </p>
+  );
+}
+
 export function DashboardEditBar({
   isEditing,
   hasUnsavedChanges,
@@ -93,6 +113,7 @@ export function DashboardEditBar({
   onCancel,
   onReset,
   onAddWidget,
+  addWidgetRef,
   barRef,
   customizeRef,
   children,
@@ -156,28 +177,19 @@ export function DashboardEditBar({
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div className="mr-auto min-w-0">
           <BarTitle hasUnsavedChanges={hasUnsavedChanges} />
-          {/* What the reader is looking at, said in words. A staged reset
-              draws the default and writes nothing, so the bar says how to
-              keep it and how to go back; otherwise it says how this mode
-              works. */}
-          <p
-            className="text-xs text-muted-foreground"
-            data-testid="dashboard-edit-status"
-          >
-            {isResetStaged
-              ? "Showing the default dashboard. Save to keep it, or Cancel to go back to yours."
-              : "Drag a card by its handle, or use its menu. Only you see this layout."}
-          </p>
+          <BarHint isResetStaged={isResetStaged} />
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Only moves focus to the widgets on offer, so it waits for no
-              write. */}
+          {/* Opens the add panel, which only stages cards in the draft, so it
+              waits for no write. */}
           <Button
+            ref={addWidgetRef}
             type="button"
             variant="outline"
             size="sm"
             onClick={onAddWidget}
+            aria-haspopup="dialog"
             data-testid="dashboard-edit-add"
           >
             <Icons.Plus aria-hidden className="mr-2 size-4" />
