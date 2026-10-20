@@ -22,7 +22,7 @@
  */
 
 import type {
-  WidgetSetting,
+  AnyWidgetSetting,
   WidgetAction,
   WidgetArchetype,
   WidgetHeight,
@@ -88,9 +88,9 @@ export interface DashboardWidget {
    * The OFFER, not one reader's answer: the stored values live on the
    * placement, and `applyWidgetSettings` reads one against the other. Carried
    * here because the declaration is what says whether a stored key means
-   * anything at all.
+   * anything at all. Field settings and the four content settings alike.
    */
-  settings?: WidgetSetting[];
+  settings?: AnyWidgetSetting[];
   /**
    * Present for `stats`: one entry per number the card draws.
    *

@@ -20,18 +20,26 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@nextlyhq/ui";
-import type { AnyWidgetSetting, WidgetSetting } from "nextly/config";
-import { useCallback, useMemo } from "react";
+import type { AnyWidgetSetting } from "nextly/config";
+import { useCallback, useEffect, useMemo } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
+import { useBranding } from "@admin/context/providers/BrandingProvider";
+
+import {
+  dependentsOf,
+  isContentSetting,
+  staleContentValues,
+} from "./content-settings";
+import { ContentSettingControl } from "./ContentSettingControl";
 
 export interface WidgetSettingsSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The card being configured, for the heading a reader reads. */
   title: string;
-  settings: WidgetSetting[];
+  settings: AnyWidgetSetting[];
   /** What this placement has stored, if anything. */
   config: Record<string, unknown> | undefined;
   onSave: (config: Record<string, unknown>) => void;
@@ -47,7 +55,7 @@ export interface WidgetSettingsSheetProps {
  * shows is what the card is actually using.
  */
 export function initialValues(
-  settings: readonly WidgetSetting[],
+  settings: readonly AnyWidgetSetting[],
   config: Record<string, unknown> | undefined
 ): Record<string, unknown> {
   /*
@@ -75,7 +83,7 @@ export function initialValues(
  * to open the panel.
  */
 export function toStoredConfig(
-  settings: readonly WidgetSetting[],
+  settings: readonly AnyWidgetSetting[],
   values: Record<string, unknown>,
   existing: Record<string, unknown> | undefined
 ): Record<string, unknown> {
@@ -149,12 +157,42 @@ export function WidgetSettingsSheet({
   config,
   onSave,
 }: WidgetSettingsSheetProps) {
-  const defaultValues = useMemo(
-    () => initialValues(settings, config),
-    [settings, config]
+  // The collections and fields this reader may be offered, decided on the
+  // server; absent until the session-gated half of the payload arrives.
+  const sources = useBranding().widgetSources;
+
+  // A stored value naming a field the reader is no longer offered opens at
+  // its default, and the sheet says so in one line, rather than drawing a
+  // choice the reader cannot make again.
+  const stale = useMemo(
+    () =>
+      staleContentValues(settings, initialValues(settings, config), sources),
+    [settings, config, sources]
   );
+  const defaultValues = useMemo(() => {
+    const values = initialValues(settings, config);
+    for (const { name } of stale) {
+      const setting = settings.find(candidate => candidate.name === name);
+      values[name] = setting?.defaultValue ?? "";
+    }
+    return values;
+  }, [settings, config, stale]);
 
   const form = useForm({ defaultValues });
+
+  // A filter, sort or grouping names fields of ONE collection: when a person
+  // picks another collection, the settings over it go back to their defaults
+  // rather than name fields the new collection may not have. Only a person's
+  // change does this; a reset or the form opening names no field.
+  useEffect(() => {
+    const subscription = form.watch((_values, { name }) => {
+      if (name === undefined) return;
+      for (const dependent of dependentsOf(settings, name)) {
+        form.setValue(dependent.name, dependent.defaultValue ?? "");
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [form, settings]);
 
   const submit = useCallback(
     (values: Record<string, unknown>) => {
@@ -185,13 +223,40 @@ export function WidgetSettingsSheet({
             }}
             className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
           >
-            {settings.map(setting => (
-              // No cast: `WidgetSetting` is assignable to `FieldConfig`, and
-              // `settings.compat.test-d.ts` is what keeps that true.
-              <FieldRenderer key={setting.name} field={setting} mode="edit" />
+            {stale.map(({ name, notice }) => (
+              <p
+                key={name}
+                role="status"
+                className="text-sm text-muted-foreground"
+              >
+                {notice}
+              </p>
             ))}
+            {settings.map(setting =>
+              isContentSetting(setting) ? (
+                <ContentSettingControl
+                  key={setting.name}
+                  setting={setting}
+                  sources={sources ?? []}
+                />
+              ) : (
+                // No cast: `WidgetSetting` is assignable to `FieldConfig`,
+                // and `settings.compat.test-d.ts` is what keeps that true.
+                <FieldRenderer key={setting.name} field={setting} mode="edit" />
+              )
+            )}
 
             <SheetFooter className="mt-auto flex-row justify-end gap-2 px-0">
+              <Button
+                type="button"
+                variant="ghost"
+                className="mr-auto"
+                onClick={() =>
+                  form.reset(resetToDefaults(settings, form.getValues()))
+                }
+              >
+                Reset to defaults
+              </Button>
               <Button
                 type="button"
                 variant="outline"
