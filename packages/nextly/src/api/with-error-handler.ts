@@ -150,7 +150,8 @@ export function withErrorHandler<TArgs extends unknown[]>(
         });
         nextlyErr = NextlyError.fromDatabaseError(err);
       } else {
-        nextlyErr = NextlyError.internal({ cause: err as Error });
+        // Internal, unless the database was only busy.
+        nextlyErr = NextlyError.fromUnexpected(err);
       }
 
       // (3) Log.
