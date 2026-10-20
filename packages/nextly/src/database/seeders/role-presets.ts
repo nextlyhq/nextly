@@ -25,6 +25,8 @@ import {
 } from "../../auth/role-presets";
 import type { Logger } from "../../services/shared";
 
+import { createSeededRole } from "./create-seeded-role";
+
 export {
   ROLE_PRESETS,
   resolvePreset,
@@ -79,14 +81,18 @@ export async function seedRolePresets(
       const existing = await roleService.findRoleIdBySlug(preset.slug);
 
       if (!existing) {
-        await roleService.createRole({
-          name: preset.name,
-          slug: preset.slug,
-          description: preset.description,
-          level: preset.level,
-          isSystem: true,
-          permissionIds,
-        });
+        await createSeededRole(
+          roleService,
+          {
+            name: preset.name,
+            slug: preset.slug,
+            description: preset.description,
+            level: preset.level,
+            isSystem: true,
+            permissionIds,
+          },
+          logger
+        );
         continue;
       }
 

@@ -74,6 +74,73 @@ describe("NextlyLogger seam", () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
+  describe("email addresses outside development and test", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("masks them in what the default logger writes", () => {
+      vi.stubEnv("NODE_ENV", "production");
+      getNextlyLogger().error({
+        kind: "email.failed",
+        detail: { cause: "550 <john@example.com>: user unknown" },
+      });
+      const written = (console.error as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as string;
+      expect(written).not.toContain("john@example.com");
+      expect(written).toContain("j***@example.com");
+    });
+
+    it("masks them before an installed logger receives the payload", () => {
+      // The app's own logger is where the line ends up, so the payload is
+      // masked before it is handed over, not only in the default writer.
+      vi.stubEnv("NODE_ENV", undefined);
+      const custom: NextlyLogger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+      };
+      setNextlyLogger(custom);
+      getNextlyLogger().warn({ to: ["jane@example.com"] });
+      expect(custom.warn).toHaveBeenCalledWith({ to: ["j***@example.com"] });
+    });
+
+    it("restores a logger saved from the getter, still masking once", () => {
+      // What the getter hands out is the masking wrapper, so saving it and
+      // installing it again must put back the logger behind it: installing
+      // the wrapper itself would make it call itself.
+      vi.stubEnv("NODE_ENV", "production");
+      const saved: NextlyLogger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+      };
+      setNextlyLogger(saved);
+      const held = getNextlyLogger();
+      setNextlyLogger({
+        error: vi.fn(),
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+      });
+      setNextlyLogger(held);
+      expect(getNextlyLogger()).toBe(held);
+      getNextlyLogger().error({ to: "jane@example.com" });
+      expect(saved.error).toHaveBeenCalledTimes(1);
+      expect(saved.error).toHaveBeenCalledWith({ to: "j***@example.com" });
+    });
+
+    it("leaves them whole in development", () => {
+      vi.stubEnv("NODE_ENV", "development");
+      getNextlyLogger().info({ to: "jane@example.com" });
+      const written = (console.info as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as string;
+      expect(written).toContain("jane@example.com");
+    });
+  });
+
   it("setNextlyLogger(undefined) restores the default", () => {
     const custom: NextlyLogger = {
       error: vi.fn(),

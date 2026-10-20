@@ -52,6 +52,7 @@ import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
+import { StoredFileSearchReader } from "../domains/media/stored-file-search";
 import {
   storedFilesOf,
   type MediaFilesRecord,
@@ -221,21 +222,7 @@ export class MediaFolderService extends BaseService {
 
   /** How this service reads the media rows that may share a file (filesKeptByOthers). */
   private get storedFileSearch(): StoredFileSearch {
-    const { media } = this.tables;
-    return {
-      columns: media,
-      dialect: this.dialect,
-      read: where =>
-        this.db
-          .select({
-            filename: media.filename,
-            url: media.url,
-            thumbnailUrl: media.thumbnailUrl,
-            sizes: media.sizes,
-          })
-          .from(media)
-          .where(where),
-    };
+    return new StoredFileSearchReader(this.adapter, this.logger).search;
   }
 
   private hasFolderSchema(): boolean {

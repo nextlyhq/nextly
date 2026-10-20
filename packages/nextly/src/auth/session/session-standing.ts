@@ -13,7 +13,7 @@
  *
  * A number on the user row that rises whenever the account's sessions are
  * ended (`updateUserEndingSessions`), and that every access token carries as
- * its `sev` claim. A token signed before the change carries the old number and
+ * its `nx_sev` claim. A token signed before the change carries the old number and
  * is refused; one signed after carries the new number. Comparing numbers
  * rather than times means no clock is involved: a token issued in the same
  * second as the change, or on an instance whose clock runs ahead, is judged
@@ -51,6 +51,7 @@ import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
 import { awaitBootMigrations } from "../../init/boot-migrations-gate";
+import { serializeOnSqlite } from "../../shared/lib/run-adapter-transaction";
 import { SESSION_EPOCH_CLAIM } from "../jwt/claims";
 
 /** What the user row says about the sessions the account may hold. */
@@ -121,14 +122,28 @@ interface Reading {
  * share it. A {@link SessionStandingCache.forget} while a read is running
  * marks that read superseded, because it may have queried before the change:
  * its answer goes to the callers already waiting and is not kept. The mark
- * lives on the read and goes with it, so nothing is held for an account once
- * its reads are done.
+ * lives on the read and goes with it.
+ *
+ * A read that BEGINS after a forget can still be early: the writer forgets
+ * inside its transaction, and until that commits another connection reads the
+ * row as it was. So for one lifetime after a forget nothing read for the
+ * account is kept, and each request reads the row, which is what lets the
+ * instance that made the change refuse at once on every dialect.
+ *
+ * A caller for whom `shared` answers false reads alone. It may take a held
+ * answer, which was read and committed before it, but it neither joins a read
+ * that is running nor lets another caller join or keep its own. On SQLite that
+ * is a caller inside an open transaction: a read started elsewhere is queued
+ * behind that transaction, so joining it would wait on the transaction that is
+ * waiting for it, and its own read runs inside the transaction, where the row
+ * may hold a change that has not committed.
  */
 export function createSessionStandingCache(options: {
   read: ReadSessionStanding;
   ttlMs?: number;
   maxEntries?: number;
   now?: () => number;
+  shared?: () => boolean;
 }): SessionStandingCache {
   const ttlMs = options.ttlMs ?? SESSION_STANDING_TTL_MS;
   const maxEntries = options.maxEntries ?? MAX_ENTRIES;
@@ -137,6 +152,25 @@ export function createSessionStandingCache(options: {
   const now = options.now ?? (() => performance.now());
   const held = new Map<string, { standing: SessionStanding; readAt: number }>();
   const reading = new Map<string, Reading>();
+  // When each account was last forgotten. A writer forgets inside its
+  // transaction, and on PostgreSQL and MySQL a read on another connection
+  // before the commit still sees the old row, so no read that began within a
+  // lifetime of the forget is kept: it is answered, and the next request
+  // reads again. Past that lifetime the mark goes, and so does the cost.
+  const forgottenAt = new Map<string, number>();
+
+  function recentlyForgotten(userId: string, readAt: number): boolean {
+    const at = forgottenAt.get(userId);
+    if (at === undefined) return false;
+    // A negative age is a clock that moved backward, which proves nothing
+    // about the change having committed, so it still counts as recent.
+    const age = readAt - at;
+    if (age >= 0 && age >= ttlMs) {
+      forgottenAt.delete(userId);
+      return false;
+    }
+    return true;
+  }
 
   function keep(
     userId: string,
@@ -176,7 +210,11 @@ export function createSessionStandingCache(options: {
                 "standing cache's lifetime, so its answer was not used",
             });
           }
-          if (!entry.superseded && standing?.isActive === true) {
+          if (
+            !entry.superseded &&
+            standing?.isActive === true &&
+            !recentlyForgotten(userId, startedAt)
+          ) {
             keep(userId, standing, startedAt);
           }
           return standing;
@@ -203,11 +241,31 @@ export function createSessionStandingCache(options: {
       ) {
         return Promise.resolve(entry.standing);
       }
-      return readRow(userId);
+      if (options.shared?.() === false) return options.read(userId);
+      const joined = reading.has(userId);
+      const read = readRow(userId);
+      if (!joined) return read;
+      // The read this caller joined may have queried before a change made on
+      // another instance: the one that signed this token's epoch, or the
+      // account's reactivation, which leaves the epoch where it was. An answer
+      // that is not active, or is older than the token, proves that, so it
+      // reads once more for itself.
+      return read.then(standing =>
+        standing?.isActive !== true || standing.sessionEpoch < tokenEpoch
+          ? readRow(userId)
+          : standing
+      );
     },
 
     forget(userId) {
       held.delete(userId);
+      forgottenAt.delete(userId);
+      if (forgottenAt.size >= maxEntries) {
+        // Insertion order again: the oldest mark is the nearest to lapsing.
+        const oldest = forgottenAt.keys().next();
+        if (!oldest.done) forgottenAt.delete(oldest.value);
+      }
+      forgottenAt.set(userId, now());
       const running = reading.get(userId);
       if (running) {
         running.superseded = true;
@@ -237,18 +295,32 @@ function tokenEpoch(claims: Record<string, unknown>): number | undefined {
   return signed < 0 ? undefined : signed;
 }
 
+/** How a token is judged against its account's standing. */
+export interface StandingCheckOptions {
+  /**
+   * Whether an account that is not active refuses the token. True everywhere
+   * a session grants something. The account-state route alone asks with
+   * false, because reporting an inactive account as `disabled` is what it is
+   * for; a deactivation through core still refuses there, since it ends the
+   * account's sessions and so moves the epoch.
+   */
+  activeOnly?: boolean;
+}
+
 /**
  * Whether `standing` admits a token carrying `claims`.
  *
- * Refused when the account no longer exists, is not active, or has had its
- * sessions ended since the token was signed, and when the token's epoch claim
- * is malformed.
+ * Refused when the account no longer exists, is not active (unless
+ * `activeOnly` is false), or has had its sessions ended since the token was
+ * signed, and when the token's epoch claim is malformed.
  */
 export function standingAdmits(
   standing: SessionStanding | null,
-  claims: Record<string, unknown>
+  claims: Record<string, unknown>,
+  options?: StandingCheckOptions
 ): boolean {
-  if (!standing || !standing.isActive) return false;
+  if (!standing) return false;
+  if (options?.activeOnly !== false && !standing.isActive) return false;
   const signed = tokenEpoch(claims);
   return signed !== undefined && signed === standing.sessionEpoch;
 }
@@ -347,11 +419,17 @@ export async function readSessionStanding(
   const { users } = getDialectTables(adapter.getCapabilities().dialect);
   // Typed by the narrow view it is used through, as the RBAC epoch's read is.
   const db: StandingSelect = adapter.getDrizzle();
-  const rows = await db
-    .select({ isActive: users.isActive, sessionEpoch: users.sessionEpoch })
-    .from(users)
-    .where(eq(users.id, userId))
-    .limit(1);
+  // Through `serializeOnSqlite`, so on SQLite, where every request shares one
+  // connection, the read queues behind another request's open transaction
+  // rather than running inside it: an epoch raised by a write that then rolls
+  // back would otherwise be cached, and refuse the account's live session.
+  const rows = await serializeOnSqlite(adapter, () =>
+    db
+      .select({ isActive: users.isActive, sessionEpoch: users.sessionEpoch })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1)
+  );
   const row = rows[0];
   if (!row) return null;
   // Null on a row written before the column existed, which is epoch zero.
@@ -378,6 +456,9 @@ function cacheFor(adapter: DrizzleAdapter): SessionStandingCache {
     held = {
       cache: createSessionStandingCache({
         read: userId => readSessionStanding(userId, adapter),
+        // Inside an open transaction a read nests in it rather than queueing,
+        // so it must not be shared across that boundary in either direction.
+        shared: () => !adapter.inTransaction(),
         ...(cacheClock ? { now: cacheClock } : {}),
       }),
       adapter,
@@ -393,7 +474,8 @@ function cacheFor(adapter: DrizzleAdapter): SessionStandingCache {
  * after the signature has verified.
  */
 export async function sessionTokenIsCurrent(
-  claims: Record<string, unknown>
+  claims: Record<string, unknown>,
+  options?: StandingCheckOptions
 ): Promise<boolean> {
   const userId = claims.sub;
   if (typeof userId !== "string" || userId === "") return false;
@@ -403,7 +485,22 @@ export async function sessionTokenIsCurrent(
     userId,
     signed
   );
-  return standingAdmits(standing, claims);
+  return standingAdmits(standing, claims, options);
+}
+
+/**
+ * Whether the account is active, read through the same cache as a session's
+ * standing, so the bound and the local refusal on deactivation are the ones
+ * sessions have.
+ *
+ * Asked at epoch zero, which every held answer is at least as new as: only
+ * the active flag matters here, and ending an account's sessions, as a new
+ * password does, does not make it inactive. A failed read throws, as it does
+ * for a session.
+ */
+export async function accountIsActive(userId: string): Promise<boolean> {
+  const standing = await cacheFor(await standingAdapter()).standing(userId, 0);
+  return standing?.isActive === true;
 }
 
 /**

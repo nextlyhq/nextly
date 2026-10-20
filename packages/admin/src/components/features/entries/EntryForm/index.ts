@@ -59,12 +59,6 @@ export {
   type FormErrorSummaryProps,
 } from "./FormErrorSummary";
 
-// Auto-save & Draft Recovery components
-export {
-  DraftRecoveryDialog,
-  type DraftRecoveryDialogProps,
-} from "./DraftRecoveryDialog";
-
 export {
   SaveStateIndicator,
   saveIndicatorView,

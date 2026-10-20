@@ -21,6 +21,7 @@
  */
 import type { SupportedDialect } from "../../../database/schema-registry";
 import { NextlyError } from "../../../errors/nextly-error";
+import { RETIRED_AUTH_TABLES } from "../../../init/retired-auth-table-names";
 import { MANAGED_TABLE_PREFIXES_REGEX } from "../pipeline/managed-tables";
 import { identifierQuote } from "../pipeline/sql-templates/identifier-quoting";
 import {
@@ -270,6 +271,16 @@ export function assertUsableAppTableName(
   assertUsableTableName(name, `app table "${name}"`);
   if (coreTableNames.includes(name)) {
     refuse(`app table "${name}"`, `"${name}" is a core table.`);
+  }
+  // Retired tables are no longer core, so the core list above does not name
+  // them. An operator's database may still hold one, and an app table with
+  // the same name would be read as that table at boot. Compared lowercased:
+  // MySQL with lower_case_table_names resolves other casings to the same table.
+  if (RETIRED_AUTH_TABLES.includes(name.toLowerCase())) {
+    refuse(
+      `app table "${name}"`,
+      `"${name}" is a retired auth table, and its name is reserved.`
+    );
   }
   for (const prefix of pluginPrefixes) {
     if (name.startsWith(`${prefix}${PREFIX_SEPARATOR}`)) {
