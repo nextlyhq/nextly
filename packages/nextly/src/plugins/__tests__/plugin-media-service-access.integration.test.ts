@@ -292,6 +292,16 @@ describe.each(getConfiguredTestDialects())(
         expect(await exists(uploaded.id)).toBe(true);
       });
 
+      it("takes a checked write whose actor names only the caller's kind", async () => {
+        // `{ type: "user" }` names no one else; it is recorded as the caller.
+        const uploaded = await media.upload(
+          input("kind-only-actor.pdf"),
+          asUser(holderId),
+          { type: "user" }
+        );
+        expect(await exists(uploaded.id)).toBe(true);
+      });
+
       it("lets a person with the permission write", async () => {
         const uploaded = await media.upload(
           input("permitted.pdf"),

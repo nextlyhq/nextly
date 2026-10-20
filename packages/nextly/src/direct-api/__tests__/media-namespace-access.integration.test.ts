@@ -264,6 +264,24 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
+      it("records a call that names its own user, on a keyed instance, as that user", async () => {
+        // The check judges such a call as the person it names, so the record
+        // names that person too, not the instance's key.
+        const keyed = new Nextly({
+          overrideAccess: false,
+          user: { id: lackerId },
+          actor: { actorType: "apiKey", permissions: ["read-media"] },
+        });
+        const uploaded = await keyed.media.upload({
+          file: file("named-person.pdf"),
+          user: { id: holderId },
+        });
+        expect(await recordedActor("media.uploaded", uploaded.id)).toEqual([
+          "user",
+          holderId,
+        ]);
+      });
+
       it("records a write made as a person as that person", async () => {
         const uploaded = await checkedAs(holderId).media.upload({
           file: file("personal.pdf"),
