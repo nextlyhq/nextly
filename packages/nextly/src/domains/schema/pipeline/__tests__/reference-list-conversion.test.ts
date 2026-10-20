@@ -194,7 +194,11 @@ describe("the generated DOWN of a reference-list conversion", () => {
     expect(statement).toContain(
       `WHEN jsonb_array_length("tags") = 1 THEN ("tags" ->> 0)::uuid`
     );
-    expect(statement).toContain(`ELSE "tags"::text::uuid END`);
+    // A longer list is refused on every target type, a text one included: the cast of a message
+    // to integer raises, naming the row's list, before the column changes.
+    expect(statement).toMatch(
+      /ELSE \(\('.*more than one id.*' \|\| "tags"::text\)::integer\)::text::uuid END$/
+    );
   });
 
   it("refuses on MySQL before anything changes when a row holds more than one id", () => {

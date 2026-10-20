@@ -296,6 +296,24 @@ describe.skipIf(!PG.url)(
       expect(await storedValues()).toEqual({ r1: A, r2: null });
     });
 
+    it("refuses the DOWN to a text column too when a row holds more than one id", async () => {
+      await oldTable("text", [["r1", A]]);
+      expect((await apply(desiredFor(tableName))).error).toBeUndefined();
+      await pool.query(
+        `UPDATE "${tableName}" SET "tags" = '["${A}","${B}"]'::jsonb`
+      );
+
+      const [statement] = downStatements(
+        "postgresql",
+        tableName,
+        "text",
+        "jsonb"
+      );
+      await expect(pool.query(statement)).rejects.toThrow(/more than one id/);
+      expect(await columnType()).toBe("jsonb");
+      expect(await storedValues()).toEqual({ r1: [A, B] });
+    });
+
     it("refuses the DOWN when a row holds more than one id, changing nothing", async () => {
       await oldTable("uuid", [["r1", A]]);
       expect((await apply(desiredFor(tableName))).error).toBeUndefined();

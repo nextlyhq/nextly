@@ -858,6 +858,25 @@ describe("buildDesiredTableFromComponentFields - which columns hold a reference 
     ).toBe(true);
   });
 
+  it("does not mark a column on SQLite, which converts no type into it", () => {
+    // SQLite keeps the list as text and has no form of the conversion, so a type change into the
+    // column there (an integer field becoming a many-to-many) stays with SQLite's own route.
+    expect(
+      buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [
+          {
+            name: "ref",
+            type: "relationship",
+            options: { target: "tags", relationType: "manyToMany" },
+          },
+        ] as never,
+        "sqlite",
+        { builtBy: "codeFirst" }
+      ).columns.find(c => c.name === "ref")?.holdsReferenceList
+    ).toBeUndefined();
+  });
+
   it("does not mark a single polymorphic or a single relationship", () => {
     expect(
       hint({ type: "relationship", relationTo: ["tags", "posts"] })

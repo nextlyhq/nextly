@@ -63,9 +63,11 @@ export function postgresReferenceListExpression(columnName: string): string {
  * The PostgreSQL expression reading a `jsonb` list back as the scalar `toType` held it, for the
  * generated DOWN.
  *
- * A one-item list becomes its id and an empty list NULL. A longer list is cast whole, as its JSON
- * text: a `text` column keeps it, and a `uuid` column refuses it, failing the single statement so
- * no reference is dropped.
+ * A one-item list becomes its id and an empty list NULL. A longer list cannot be one id on any
+ * target type, a `text` one included, so it is refused: a message naming the list is cast to
+ * `integer`, which raises with that message and fails the single statement before the column
+ * changes. Cast on through `text` so the expression has a type PostgreSQL can carry to every target
+ * type; the cast is never reached.
  */
 function postgresReferenceScalarExpression(
   columnName: string,
@@ -77,7 +79,7 @@ function postgresReferenceScalarExpression(
     `WHEN jsonb_typeof(${c}) <> 'array' THEN (${c} #>> '{}')::${toType} ` +
     `WHEN jsonb_array_length(${c}) = 0 THEN NULL ` +
     `WHEN jsonb_array_length(${c}) = 1 THEN (${c} ->> 0)::${toType} ` +
-    `ELSE ${c}::text::${toType} END`
+    `ELSE (('a reference list holding more than one id cannot be rolled back: ' || ${c}::text)::integer)::text::${toType} END`
   );
 }
 

@@ -532,6 +532,23 @@ export function buildDesiredTableFromFields(
 }
 
 /**
+ * Whether a component column is marked as holding a list of references, which makes a type change
+ * into it a reference-list conversion.
+ *
+ * A relation keeping a list on the component row (a many-to-many or a `hasMany` relation), which an
+ * older table may hold in a scalar column. A single polymorphic reference is JSON but not a list, so
+ * it keeps the ordinary conversion. Not on SQLite, which keeps the list as text and has no form of
+ * the conversion: a type change into the column there (an integer field becoming a many-to-many)
+ * stays with SQLite's own route.
+ */
+function holdsReferenceListOn(
+  field: Parameters<typeof componentRelationshipHoldsReferenceList>[0],
+  dialect: SupportedDialect
+): boolean {
+  return dialect !== "sqlite" && componentRelationshipHoldsReferenceList(field);
+}
+
+/**
  * Build a TableSpec for the diff engine from a component's user fields.
  * Injects component system columns (_parent_id, _parent_table, _parent_field,
  * _order, _component_type) instead of collection system columns (title, slug).
@@ -708,10 +725,7 @@ export function buildDesiredTableFromComponentFields(
       type: desc.dialectType,
       nullable: desc.nullable,
       default: undefined,
-      // A relation keeping a list of references on the component row, which an older table may hold
-      // in a scalar column; a type change into it is then a reference-list conversion. A single
-      // polymorphic reference is JSON but not a list, so it keeps the ordinary conversion.
-      ...(componentRelationshipHoldsReferenceList(field)
+      ...(holdsReferenceListOn(field, dialect)
         ? { holdsReferenceList: true }
         : {}),
     });
