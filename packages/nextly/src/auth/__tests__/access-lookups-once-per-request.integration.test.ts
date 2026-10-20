@@ -8,18 +8,23 @@
  * looked up once, so a list of fifty rows costs what a list of one does.
  *
  * Counted: every statement read from a role, permission, role-assignment,
- * permission-cache, role-epoch or API-key table, with every cache emptied
- * before the request, so the count is what the request itself asked.
+ * permission-cache or API-key table, with every cache emptied before the
+ * request, so the count is what the request itself asked.
+ *
+ * Also here: what the request keeps ends where the answers would, when a role
+ * assignment expires or a role or permission is written anywhere, and a check
+ * that failed or ran through a transaction is never served from it.
  */
 // Set before the harness boots (env validation reads it once).
 process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { getTableName, isTable } from "drizzle-orm";
+import { eq, getTableName, isTable } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, text } from "../../config";
+import { getDialectTables } from "../../database/index";
 import { seedAllPermissions } from "../../init/seed-permissions";
 import {
   createTestNextly,
@@ -27,22 +32,30 @@ import {
   type TestNextly,
 } from "../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../routeHandler";
-import { RBAC_EPOCH_TABLE } from "../../schemas/rbac-epoch";
 import { ServiceContainer } from "../../services/index";
 import {
   hasPermission,
   invalidateAllPermissionCaches,
   isSuperAdmin,
+  listEffectivePermissions,
   listRoleSlugsForUser,
+  resolveUserRoles,
 } from "../../services/lib/permissions";
 import { runWithAccessMemo } from "../access/request-memo";
 import { buildClaims } from "../jwt/claims";
 import { signAccessToken } from "../jwt/sign";
 
 const ORIGIN = "http://localhost";
-const HOUR = 60 * 60 * 1000;
+// A role held for less than the caches' 60-second life, so only the role's
+// own expiry can end what was kept from it.
+const LAPSE_MS = 30_000;
 
-/** The tables every question about a caller's access is answered from. */
+/**
+ * The tables every question about a caller's access is answered from. The
+ * role-epoch row is not counted: it is read on a clock, at most once a second
+ * however much is asked, so its count says how long a request ran, not how
+ * often it asked.
+ */
 const ACCESS_TABLES = new Set([
   "roles",
   "permissions",
@@ -50,7 +63,6 @@ const ACCESS_TABLES = new Set([
   "user_roles",
   "role_inherits",
   "user_permission_cache",
-  RBAC_EPOCH_TABLE,
   "api_keys",
 ]);
 
@@ -68,6 +80,11 @@ const notes = defineCollection({
 });
 
 type Select = (...args: unknown[]) => { from: (...args: unknown[]) => unknown };
+
+/** The one statement a transaction's executor is asked for here. */
+type RowDeleter = {
+  delete: (table: unknown) => { where: (filter: unknown) => Promise<unknown> };
+};
 
 /**
  * Records the table of every statement read through the instance's Drizzle
@@ -129,10 +146,10 @@ async function failingFirstRead<T>(
   return { result, failed };
 }
 
-/** Runs `work` two hours on, when a role assigned for one hour has lapsed. */
-async function twoHoursOn<T>(work: () => Promise<T>): Promise<T> {
+/** Runs `work` once a role held for `LAPSE_MS` from now has lapsed. */
+async function pastTheLapse<T>(work: () => Promise<T>): Promise<T> {
   vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(Date.now() + 2 * HOUR);
+  vi.setSystemTime(Date.now() + LAPSE_MS + 15_000);
   try {
     return await work();
   } finally {
@@ -163,9 +180,7 @@ describe.each(getConfiguredTestDialects())(
     let readerId: string;
     let newcomerId: string;
     let userId: string;
-    // Each holds one role for the next hour only: reader, and super-admin.
-    let lapsingReaderId: string;
-    let lapsingAdminId: string;
+    let superAdminId: string;
 
     beforeAll(async () => {
       t = await createTestNextly({ dialect, collections: [notes] });
@@ -221,26 +236,7 @@ describe.each(getConfiguredTestDialects())(
         role => role.slug === "super-admin"
       );
       if (!superAdmin) throw new Error("no super-admin role was seeded");
-      const inAnHour = new Date(Date.now() + HOUR);
-      [lapsingReaderId, lapsingAdminId] = await Promise.all(
-        [
-          ["lapsing-reader", readerId],
-          ["lapsing-admin", String(superAdmin.id)],
-        ].map(async ([name, roleId]) => {
-          const lapsing = await t.nextly.users.create({
-            email: `${name}@lookups.test`,
-            password: "Password123!",
-            data: { name, isActive: true },
-          });
-          const id = String((lapsing.item as { id: string | number }).id);
-          await new ServiceContainer(t.adapter).userRoles.assignRoleToUser(
-            id,
-            roleId,
-            { expiresAt: inAnHour }
-          );
-          return id;
-        })
-      );
+      superAdminId = String(superAdmin.id);
       for (let i = 0; i < 50; i++) {
         await t.nextly.create({
           collection: "notes",
@@ -252,6 +248,26 @@ describe.each(getConfiguredTestDialects())(
     afterAll(async () => {
       await t?.destroy();
     });
+
+    /**
+     * A user never asked about before, so no cache holds an answer about
+     * them, holding `roleId` until `expiresAt` when one is given.
+     */
+    async function newHolder(name: string, roleId: string, expiresAt?: Date) {
+      const made = await t.nextly.users.create({
+        email: `${name}@lookups.test`,
+        password: "Password123!",
+        data: { name, isActive: true },
+      });
+      const id = String((made.item as { id: string | number }).id);
+      const assigned = await new ServiceContainer(
+        t.adapter
+      ).userRoles.assignRoleToUser(id, roleId, expiresAt && { expiresAt });
+      if (!assigned.success) throw new Error(assigned.message);
+      return id;
+    }
+
+    const lapsing = () => new Date(Date.now() + LAPSE_MS);
 
     async function listOf(limit: number) {
       await invalidateAllPermissionCaches();
@@ -307,20 +323,8 @@ describe.each(getConfiguredTestDialects())(
       // A read that fails answers no, but only for that ask: the failure is
       // not the request's answer, so a later ask reads again.
       for (const table of ["user_roles", "role_permissions"]) {
-        // A reader never asked about before, so no cache tier holds an answer
-        // and the first ask has to read.
-        const reader = await t.nextly.users.create({
-          email: `failed-${table}@lookups.test`,
-          password: "Password123!",
-          data: { name: table, isActive: true },
-        });
-        const readerUserId = String(
-          (reader.item as { id: string | number }).id
-        );
-        await new ServiceContainer(t.adapter).userRoles.assignRoleToUser(
-          readerUserId,
-          readerId
-        );
+        // Never asked about before, so the first ask has to read.
+        const readerUserId = await newHolder(`failed-${table}`, readerId);
         await invalidateAllPermissionCaches();
         await runWithAccessMemo(async () => {
           const first = await failingFirstRead(t, table, () =>
@@ -335,29 +339,41 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("drops what it kept when a role it came from expires", async () => {
+      const reader = await newHolder("lapsing-reader", readerId, lapsing());
+      const admin = await newHolder("lapsing-admin", superAdminId, lapsing());
       await invalidateAllPermissionCaches();
       await runWithAccessMemo(async () => {
-        expect(await hasPermission(lapsingReaderId, "read", "notes")).toBe(
-          true
-        );
-        expect(await listRoleSlugsForUser(lapsingReaderId)).toEqual(["reader"]);
-        expect(await isSuperAdmin(lapsingAdminId)).toBe(true);
-        await twoHoursOn(async () => {
-          expect(await hasPermission(lapsingReaderId, "read", "notes")).toBe(
-            false
-          );
-          expect(await listRoleSlugsForUser(lapsingReaderId)).toEqual([]);
-          expect(await isSuperAdmin(lapsingAdminId)).toBe(false);
+        expect(await hasPermission(reader, "read", "notes")).toBe(true);
+        expect(await listRoleSlugsForUser(reader)).toEqual(["reader"]);
+        expect(await isSuperAdmin(admin)).toBe(true);
+        await pastTheLapse(async () => {
+          expect(await hasPermission(reader, "read", "notes")).toBe(false);
+          expect(await listRoleSlugsForUser(reader)).toEqual([]);
+          expect(await isSuperAdmin(admin)).toBe(false);
         });
       });
     });
 
     it.each([
-      ["a permission", () => hasPermission(lapsingReaderId, "read", "notes")],
-      ["super-admin authority", () => isSuperAdmin(lapsingAdminId)],
+      [
+        "a permission",
+        "reader",
+        (id: string) => hasPermission(id, "read", "notes"),
+      ],
+      [
+        "super-admin authority",
+        "super-admin",
+        (id: string) => isSuperAdmin(id),
+      ],
     ] as const)(
       "drops %s it took from the process cache when the role behind it expires",
-      async (_answer, ask) => {
+      async (_answer, role, asks) => {
+        const holder = await newHolder(
+          `cached-${role}`,
+          role === "reader" ? readerId : superAdminId,
+          lapsing()
+        );
+        const ask = () => asks(holder);
         await invalidateAllPermissionCaches();
         // Asked outside the request, so the process cache holds the answer.
         expect(await ask()).toBe(true);
@@ -366,10 +382,94 @@ describe.each(getConfiguredTestDialects())(
           // POPULATION CONTROL: served from the cache, not by a role walk.
           expect(cached.result).toBe(true);
           expect(cached.tables).not.toContain("user_roles");
-          expect(await twoHoursOn(ask)).toBe(false);
+          expect(await pastTheLapse(ask)).toBe(false);
         });
       }
     );
+
+    it("drops what it kept when another request takes the role away", async () => {
+      const holder = await newHolder("revoked", readerId);
+      await invalidateAllPermissionCaches();
+      let askedOnce!: () => void;
+      const asked = new Promise<void>(resolve => {
+        askedOnce = resolve;
+      });
+      let revoked!: () => void;
+      const revocation = new Promise<void>(resolve => {
+        revoked = resolve;
+      });
+      // One request asks, waits while another takes the role away, and asks
+      // again.
+      const answers = runWithAccessMemo(async () => {
+        const before = await hasPermission(holder, "read", "notes");
+        askedOnce();
+        await revocation;
+        return { before, after: await hasPermission(holder, "read", "notes") };
+      });
+      await asked;
+      // The other request, with a memo of its own.
+      const removal = await runWithAccessMemo(() =>
+        new ServiceContainer(t.adapter).userRoles.unassignRoleFromUser(
+          holder,
+          readerId
+        )
+      );
+      revoked();
+      // POPULATION CONTROL: the role was taken away.
+      expect(removal.success).toBe(true);
+      expect(await answers).toEqual({ before: true, after: false });
+    });
+
+    it("hands each caller lists of its own", async () => {
+      // A rule that changes the list it is handed changes no other rule's.
+      await invalidateAllPermissionCaches();
+      await runWithAccessMemo(async () => {
+        const permissions = await listEffectivePermissions(userId);
+        const slugs = await listRoleSlugsForUser(userId);
+        const { roleIds } = await resolveUserRoles(userId);
+        // POPULATION CONTROL: each held something to take away.
+        expect(permissions).toContain("notes:read");
+        expect(slugs).toContain("writer");
+        expect(roleIds.size).toBeGreaterThan(0);
+        permissions.length = 0;
+        slugs.length = 0;
+        roleIds.clear();
+        expect(await listEffectivePermissions(userId)).toContain("notes:read");
+        expect(await listRoleSlugsForUser(userId)).toContain("writer");
+        expect((await resolveUserRoles(userId)).roleIds.size).toBeGreaterThan(
+          0
+        );
+      });
+    });
+
+    it("never answers a check made through a transaction from the memo", async () => {
+      const holder = await newHolder("in-a-transaction", readerId);
+      const { userRoles } = getDialectTables(dialect);
+      await invalidateAllPermissionCaches();
+      await runWithAccessMemo(async () => {
+        // The pooled answer, kept for the request.
+        expect(await hasPermission(holder, "read", "notes")).toBe(true);
+        expect(await listEffectivePermissions(holder)).toContain("notes:read");
+        await expect(
+          t.adapter.transaction(async tx => {
+            const executor = tx.getDrizzle() as unknown as RowDeleter;
+            await executor
+              .delete(userRoles)
+              .where(eq(userRoles.userId, holder));
+            // The transaction's own rows, in which the role is gone.
+            expect(await hasPermission(holder, "read", "notes", executor)).toBe(
+              false
+            );
+            expect(await listEffectivePermissions(holder, executor)).toEqual(
+              []
+            );
+            throw new Error("roll back");
+          })
+        ).rejects.toThrow("roll back");
+        // POPULATION CONTROL: rolled back, the pool still holds the role.
+        expect(await hasPermission(holder, "read", "notes")).toBe(true);
+      });
+    });
 
     it("walks the caller's roles once", async () => {
       const fifty = await listOf(50);

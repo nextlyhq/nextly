@@ -556,12 +556,14 @@ class PermissionChecker {
     if (executor !== undefined || this.ownDatabase) {
       return this.walkRoles(userId, executor);
     }
-    return rememberForRequest(userId, "roles", async () => {
+    const kept = await keptForRequest(userId, "roles", async () => {
       const resolved = await this.walkRoles(userId);
       // Nothing the request keeps about this user outlives these roles.
       answersHoldUntil(userId, resolved.validUntil);
       return resolved;
     });
+    // A set of its own for each caller, as a walk gave before.
+    return { roleIds: new Set(kept.roleIds), validUntil: kept.validUntil };
   }
 
   private async walkRoles(
@@ -770,6 +772,25 @@ function setCacheEntry(
   userIdToKeys.get(userId)!.add(key);
 }
 
+/**
+ * `load`, kept for the request (see `auth/access/request-memo`) under the
+ * revision of the role and permission rows it was read under, the same
+ * revision every cache here is filed under. A write anywhere moves it: in this
+ * request, in another request of this process, or on another instance, which
+ * the refresh below reads at most once per epoch interval, as every pooled
+ * check does. So what one request kept is retired by a revocation made in
+ * another, as each cache is. While no revision can be trusted, nothing is kept.
+ */
+async function keptForRequest<T>(
+  userId: string,
+  question: string,
+  load: () => Promise<T>
+): Promise<T> {
+  const revision = await refreshEpoch();
+  if (!stampIsCurrent(revision)) return load();
+  return rememberForRequest(userId, question, revision, load);
+}
+
 export async function hasPermission(
   userId: string,
   action: string,
@@ -789,7 +810,7 @@ export async function hasPermission(
     const ask = () =>
       checker.answerPermission(userId, action, resource, executor);
     if (executor !== undefined || dialect !== undefined) return await ask();
-    return await rememberForRequest(
+    return await keptForRequest(
       userId,
       `permission\u0000${action}\u0000${resource}`,
       ask
@@ -871,9 +892,12 @@ export async function listEffectivePermissions(
     if (executor !== undefined) {
       return await loadEffectivePermissions(userId, executor);
     }
-    return await rememberForRequest(userId, "permissions", () =>
-      loadEffectivePermissions(userId)
-    );
+    // A list of its own for each caller: a rule handed it may change it.
+    return [
+      ...(await keptForRequest(userId, "permissions", () =>
+        loadEffectivePermissions(userId)
+      )),
+    ];
   } catch (error) {
     getAuthLogger()?.log?.("error", {
       category: "auth",
@@ -1333,7 +1357,7 @@ export async function isSuperAdmin(
   // answers `false` as before.
   if (executor === undefined) {
     try {
-      return await rememberForRequest(userId, "super-admin", () =>
+      return await keptForRequest(userId, "super-admin", () =>
         superAdminOnPool(userId)
       );
     } catch (error) {
@@ -1657,7 +1681,12 @@ export async function listRoleSlugsForUserStrict(
   if (!userId) return [];
   // Looked up once per request on the pool; see `listEffectivePermissions`.
   if (executor !== undefined) return loadRoleSlugs(userId, executor);
-  return rememberForRequest(userId, "role-slugs", () => loadRoleSlugs(userId));
+  // A list of its own for each caller; see `listEffectivePermissions`.
+  return [
+    ...(await keptForRequest(userId, "role-slugs", () =>
+      loadRoleSlugs(userId)
+    )),
+  ];
 }
 
 /** The lookup behind {@link listRoleSlugsForUserStrict}; throws on failure. */
