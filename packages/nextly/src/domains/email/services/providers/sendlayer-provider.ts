@@ -9,8 +9,15 @@
  * @since 1.0.0
  */
 
+import {
+  failureOf,
+  httpFailure,
+  networkFailure,
+  unclassifiedFailure,
+  withEmailFailure,
+} from "../../failure";
 import type { EmailProviderAdapter } from "../../types";
-import { messageToAddresses } from "../recipients";
+import { displayNameAndMailbox, messageToAddresses } from "../recipients";
 
 /** SendLayer API base URL. */
 const SENDLAYER_API_URL = "https://console.sendlayer.com/api/v1/email";
@@ -40,11 +47,9 @@ export const SENDLAYER_MAX_TO = 10;
  * - `"noreply@example.com"` → `{ name: "", email: "noreply@example.com" }`
  */
 function parseFromAddress(from: string): { name: string; email: string } {
-  const match = from.match(/^(.+?)\s*<([^>]+)>$/);
-  if (match) {
-    return { name: match[1].trim(), email: match[2].trim() };
-  }
-  return { name: "", email: from.trim() };
+  // Quote-aware, as the address was checked: a `<` inside a quoted display
+  // name is text, not the start of the mailbox.
+  return displayNameAndMailbox(from);
 }
 
 /**
@@ -116,6 +121,9 @@ export function createSendLayerProvider(
         }));
       }
 
+      // Whether SendLayer answered at all: a throw before it did is a network
+      // failure, and a throw after it a classified or unreadable answer.
+      let answered = false;
       try {
         const response = await fetch(SENDLAYER_API_URL, {
           method: "POST",
@@ -125,11 +133,17 @@ export function createSendLayerProvider(
           },
           body: JSON.stringify(body),
         });
+        answered = true;
 
         if (!response.ok) {
           const errorBody = await response.text();
-          throw new Error(
-            `HTTP ${response.status}: ${errorBody || response.statusText}`
+          // Classified by status alone: SendLayer's error body names a code,
+          // not whether the request can succeed later.
+          throw withEmailFailure(
+            new Error(
+              `HTTP ${response.status}: ${errorBody || response.statusText}`
+            ),
+            httpFailure(response.status)
           );
         }
 
@@ -142,7 +156,11 @@ export function createSendLayerProvider(
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "SendLayer send failed";
-        throw new Error(`SendLayer provider error: ${message}`);
+        throw withEmailFailure(
+          new Error(`SendLayer provider error: ${message}`),
+          failureOf(error) ??
+            (answered ? unclassifiedFailure() : networkFailure())
+        );
       }
     },
   };

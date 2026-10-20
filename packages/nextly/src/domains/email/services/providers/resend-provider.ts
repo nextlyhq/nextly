@@ -12,6 +12,13 @@
  * @since 1.0.0
  */
 
+import {
+  failureOf,
+  httpFailure,
+  networkFailure,
+  unclassifiedFailure,
+  withEmailFailure,
+} from "../../failure";
 import type { EmailProviderAdapter } from "../../types";
 import { messageToAddresses } from "../recipients";
 
@@ -63,6 +70,17 @@ interface ResendProviderConfig {
  * with the limit named, instead of failing at Resend.
  */
 export const RESEND_MAX_TO = 50;
+
+/**
+ * Resend's named 409 reasons, which decide whether a retry can help where the
+ * status alone cannot. A concurrent request with the same idempotency key is
+ * still being processed, so a later retry can succeed; a key reused with a
+ * different body never can.
+ */
+const RESEND_RETRYABLE_BY_NAME: Readonly<Record<string, boolean>> = {
+  concurrent_idempotent_requests: true,
+  invalid_idempotent_request: false,
+};
 
 /**
  * Error body Resend returns for a rejected send. Every field is optional
@@ -148,24 +166,33 @@ export function createResendProvider(
       const userAgent = resendUserAgent();
       if (userAgent) headers["User-Agent"] = userAgent;
 
+      // Whether Resend answered at all: a throw before it did is a network
+      // failure, and a throw after it a classified or unreadable answer.
+      let answered = false;
       try {
         const response = await fetch(resendEndpoint(), {
           method: "POST",
           headers,
           body: JSON.stringify(body),
         });
+        answered = true;
 
         if (!response.ok) {
           // Prefer Resend's own message; fall back to the status line when the
           // body is absent or not JSON (a proxy or gateway failure).
           let detail = response.statusText;
+          let name: string | undefined;
           try {
             const errorBody = (await response.json()) as ResendErrorBody;
             if (errorBody.message) detail = errorBody.message;
+            if (typeof errorBody.name === "string") name = errorBody.name;
           } catch {
             // Body was not JSON — the status line is all there is to report.
           }
-          throw new Error(`HTTP ${response.status}: ${detail}`);
+          throw withEmailFailure(
+            new Error(`HTTP ${response.status}: ${detail}`),
+            httpFailure(response.status, name, RESEND_RETRYABLE_BY_NAME)
+          );
         }
 
         const data = (await response.json()) as { id?: string };
@@ -177,7 +204,11 @@ export function createResendProvider(
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Resend send failed";
-        throw new Error(`Resend provider error: ${message}`);
+        throw withEmailFailure(
+          new Error(`Resend provider error: ${message}`),
+          failureOf(error) ??
+            (answered ? unclassifiedFailure() : networkFailure())
+        );
       }
     },
   };

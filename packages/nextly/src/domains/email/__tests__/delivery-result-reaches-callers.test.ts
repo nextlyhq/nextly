@@ -15,6 +15,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+import { withEmailFailure } from "../failure";
 import type { EmailProviderAdapter } from "../types";
 
 import { EmailService } from "../services/email-service";
@@ -181,5 +182,91 @@ describe("delivery failure reaches the caller", () => {
     await expect(
       makeService(adapter).sendWelcomeEmail(USER.email, USER)
     ).resolves.toBeDefined();
+  });
+});
+
+describe("a failed send says whether a retry can help", () => {
+  beforeEach(() => {
+    logger.warn.mockReset();
+    logger.error.mockReset();
+  });
+
+  it("passes a classified failure to the caller", async () => {
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockRejectedValue(
+        withEmailFailure(new Error("SMTP 550 mailbox unavailable"), {
+          retryable: false,
+          status: 550,
+          reason: "The email provider refused the message (status 550).",
+        })
+      ),
+    };
+
+    const result = await makeService(adapter).sendPasswordResetEmail(
+      USER.email,
+      USER,
+      "tok"
+    );
+
+    expect(result).toEqual({
+      success: false,
+      failure: {
+        retryable: false,
+        status: 550,
+        reason: "The email provider refused the message (status 550).",
+      },
+    });
+  });
+
+  it("reports a failure nobody classified as retryable", async () => {
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockRejectedValue(new Error("SMTP 535 auth failed")),
+    };
+
+    const result = await makeService(adapter).sendWelcomeEmail(
+      USER.email,
+      USER
+    );
+
+    expect(result.failure).toEqual({
+      retryable: true,
+      reason: "The email provider failed.",
+    });
+  });
+
+  it("reports an unsuccessful answer as retryable", async () => {
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockResolvedValue({ success: false }),
+    };
+
+    const result = await makeService(adapter).sendEmailVerificationEmail(
+      USER.email,
+      USER,
+      "tok"
+    );
+
+    expect(result.failure).toEqual({
+      retryable: true,
+      reason: "The email provider did not accept the message.",
+    });
+  });
+
+  it("takes the recipient out of a reason that quotes it", async () => {
+    const adapter: EmailProviderAdapter = {
+      send: vi.fn().mockRejectedValue(
+        withEmailFailure(new Error("refused"), {
+          retryable: false,
+          reason: `No such mailbox: ${USER.email.toUpperCase()}`,
+        })
+      ),
+    };
+
+    const result = await makeService(adapter).sendPasswordResetEmail(
+      USER.email,
+      USER,
+      "tok"
+    );
+
+    expect(result.failure?.reason).toBe("No such mailbox: [recipient]");
   });
 });

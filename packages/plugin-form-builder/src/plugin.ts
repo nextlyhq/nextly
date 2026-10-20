@@ -14,6 +14,7 @@ import {
   definePlugin,
   NextlyError,
   type PluginDefinition,
+  type PluginEmailService,
 } from "@nextlyhq/plugin-sdk";
 import type { CollectionConfig } from "nextly";
 // Author against the SDK — the stable, experimental plugin boundary.
@@ -1228,9 +1229,41 @@ async function handleSubmissionCreated(
   >("form-builder.beforeEmail", emails, { form, submission });
 
   // -- Send phase: send the (possibly transformed) outgoing notifications.
-  for (const email of finalEmails) {
+  await sendNotificationEmails({
+    emails: finalEmails,
+    emailService,
+    logger: nextly.logger,
+    formSlug: form.slug,
+    fileAttachments,
+  });
+}
+
+/**
+ * Send each notification, and log what happened to it.
+ *
+ * The email service reports a provider's failure in its result rather than by
+ * throwing, so the result is read: a notification the provider did not take is
+ * logged as failed, with whether a retry can help, and never as sent. No log
+ * line names a recipient: an address in a log outlives the submission it came
+ * from, and the notification's id is enough to find it.
+ */
+export async function sendNotificationEmails(input: {
+  emails: FormEmailNotification[];
+  emailService: Pick<PluginEmailService, "sendWithTemplate">;
+  logger: Pick<NextlyInstance["logger"], "info" | "error">;
+  /** The form's slug as stored, for the log lines only. */
+  formSlug: unknown;
+  fileAttachments: Array<{ mediaId: string; filename?: string }>;
+}): Promise<void> {
+  const { emails, emailService, logger, formSlug, fileAttachments } = input;
+  for (const email of emails) {
+    const identity = {
+      formSlug,
+      templateSlug: email.templateSlug,
+      notificationId: email.notificationId,
+    };
     try {
-      await emailService.sendWithTemplate(
+      const result = await emailService.sendWithTemplate(
         email.templateSlug,
         email.to,
         email.variables,
@@ -1244,18 +1277,28 @@ async function handleSubmissionCreated(
         }
       );
 
-      nextly.logger.info?.("Form Builder: notification sent", {
-        formSlug: form.slug,
-        to: email.to,
-        templateSlug: email.templateSlug,
-        notificationId: email.notificationId,
-        attachmentCount: fileAttachments.length,
-      });
+      if (result.success) {
+        logger.info?.("Form Builder: notification sent", {
+          ...identity,
+          attachmentCount: fileAttachments.length,
+        });
+      } else {
+        logger.error?.("Form Builder: notification failed", {
+          ...identity,
+          retryable: result.failure?.retryable ?? true,
+          ...(result.failure?.status !== undefined
+            ? { status: result.failure.status }
+            : {}),
+          reason: result.failure?.reason ?? "The email was not sent.",
+        });
+      }
     } catch (err) {
-      nextly.logger.error?.("Form Builder: notification failed", {
-        to: email.to,
-        templateSlug: email.templateSlug,
-        notificationId: email.notificationId,
+      // A refusal before sending (an invalid address, a missing template) is
+      // thrown rather than returned; nothing was sent, and a retry with the
+      // same notification would be refused again.
+      logger.error?.("Form Builder: notification failed", {
+        ...identity,
+        retryable: false,
         error: err instanceof Error ? err.message : String(err),
       });
     }
