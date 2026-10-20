@@ -77,15 +77,23 @@ function layoutSuite(
 ) {
   describe(`widget layout row (${label})`, () => {
     let service: WidgetLayoutService;
+    // The table's rows before the first case, so the teardown can show it left them as it found
+    // them: a server database keeps whatever an earlier run, or another suite, wrote.
+    let startingRows: number | undefined;
 
     beforeAll(async () => {
       service = await makeService();
+      startingRows = await countRows(service);
     });
 
-    // Server databases outlive the run, so the rows it wrote go with it rather than piling up.
-    // A setup that never reached the database wrote nothing, and has no service to delete with.
+    // Server databases outlive the run, so the rows it wrote go with it rather than piling up,
+    // and the suite fails if any of them stayed. A setup that never reached the database wrote
+    // nothing, and has no service to count or delete with.
     afterAll(async () => {
-      if (service !== undefined) await deleteRunRows(service);
+      if (service === undefined || startingRows === undefined) return;
+      await deleteRunRows(service);
+      expect(await countRows(service, RUN)).toBe(0);
+      expect(await countRows(service)).toBe(startingRows);
     });
 
     it("round-trips an arrangement", async () => {
@@ -414,7 +422,7 @@ function internalsOf(service: WidgetLayoutService) {
         set: (v: unknown) => { where: (w: unknown) => Promise<unknown> };
       };
       select: (fields: unknown) => {
-        from: (t: unknown) => {
+        from: (t: unknown) => Promise<Array<Record<string, unknown>>> & {
           where: (w: unknown) => Promise<Array<Record<string, unknown>>>;
         };
       };
@@ -465,6 +473,21 @@ async function deleteRunRows(service: WidgetLayoutService): Promise<void> {
   await internals.db
     .delete(internals.table)
     .where(like(internals.table.scopeId as never, `%${RUN}%`));
+}
+
+/** How many rows the table holds: all of them, or those whose scope id carries `run`. */
+async function countRows(
+  service: WidgetLayoutService,
+  run?: string
+): Promise<number> {
+  const internals = internalsOf(service);
+  const { count, like } = await import("drizzle-orm");
+  const all = internals.db.select({ rows: count() }).from(internals.table);
+  const rows =
+    run === undefined
+      ? await all
+      : await all.where(like(internals.table.scopeId as never, `%${run}%`));
+  return Number(rows[0]?.rows ?? 0);
 }
 
 /** Writes a payload the decoder must refuse, bypassing the service's own guard. */
