@@ -46,6 +46,19 @@ export interface AccessTarget {
 }
 
 /**
+ * A system resource (`media`, `users`, `roles`, `permissions`): a table of
+ * Nextly's own rather than a configured collection. It declares no code rule,
+ * so the decision about it is the permission alone.
+ */
+export interface SystemTarget {
+  readonly kind: "system";
+  readonly slug: string;
+}
+
+/** What the decision judges: a collection or a Single, or a system resource. */
+export type DecisionTarget = AccessTarget | SystemTarget;
+
+/**
  * What a target's rule answered, as it answered it.
  *
  * Kept raw, so a caller that must reproduce how a door judges the answer
@@ -76,6 +89,8 @@ export type Decision =
   | { readonly allowed: false; readonly reason: RefusalReason };
 
 const ALLOW: Decision = Object.freeze({ allowed: true });
+
+const NO_RULE: RuleOutcome = Object.freeze({ declared: false });
 
 function refuse(reason: RefusalReason): Decision {
   return { allowed: false, reason };
@@ -170,7 +185,7 @@ export interface RuleOutcomes {
 function beforeRules(
   actor: Actor,
   action: AccessAction,
-  target: AccessTarget
+  target: DecisionTarget
 ): Decision | null {
   if (actor.kind === "system") return ALLOW;
   if (actor.kind === "principal") {
@@ -187,7 +202,7 @@ function beforeRules(
 function permissionRefusal(
   actor: Actor,
   action: AccessAction,
-  target: AccessTarget
+  target: DecisionTarget
 ): Decision | null {
   if (!holdsPermission(actor, action, target.slug)) {
     return refuse("no-permission");
@@ -209,11 +224,13 @@ function permissionRefusal(
 export async function askRules(
   actor: Actor,
   action: AccessAction,
-  target: AccessTarget
+  target: DecisionTarget
 ): Promise<RuleOutcomes | null> {
   if (actor.kind === "system" || beforeRules(actor, action, target)) {
     return null;
   }
+  // A system resource declares no rule, so there is none to ask.
+  if (target.kind === "system") return { action: NO_RULE };
   const outcome = await askRule(actor, action, target);
   if (actor.kind === "principal" || !isLifecycle(action)) {
     return { action: outcome };
@@ -230,7 +247,7 @@ export async function askRules(
 export function judge(
   actor: Actor,
   action: AccessAction,
-  target: AccessTarget,
+  target: DecisionTarget,
   outcomes: RuleOutcomes | null
 ): Decision {
   const early = beforeRules(actor, action, target);
@@ -273,7 +290,7 @@ export function judge(
 export async function decide(
   actor: Actor,
   action: AccessAction,
-  target: AccessTarget
+  target: DecisionTarget
 ): Promise<Decision> {
   return judge(actor, action, target, await askRules(actor, action, target));
 }

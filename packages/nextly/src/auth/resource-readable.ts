@@ -12,27 +12,36 @@
  */
 
 import { container } from "../di/container";
-import type { RBACAccessControlService } from "../domains/auth/services/rbac-access-control-service";
 
+import { deviate } from "./access/deviations";
+import {
+  actorForKey,
+  actorForScope,
+  actorForUser,
+  actorForVisitor,
+} from "./access/resolve-actor";
+import { readsSystemResource } from "./access/system-resource-read";
 import {
   apiKeyScopeAllows,
+  scopeRowsAgree,
   type AuthenticatedScope,
 } from "./authenticated-scope";
 
 /**
- * Whether a caller may read a system resource such as `media` or `users`.
+ * Whether a caller may read a system resource such as `media` or `users`,
+ * answered by the one access decision.
  *
- * A scoped API key is judged on its OWN `read-<resource>` grant and never on
- * its owner's roles, so a narrowly scoped key belonging to a super-admin cannot
- * read a resource its scope excludes. A session or system caller (`null` scope)
- * falls through to the role-based RBAC check.
+ * The caller becomes an actor: a scoped API key from its OWN scope, never its
+ * owner's roles, so a narrowly scoped key belonging to a super-admin cannot
+ * read a resource its scope excludes; a caller with no id a visitor, who holds
+ * no grant; anyone else the signed-in user, whose grant decides and whose
+ * super-admin authority passes. A system resource declares no code rule, so
+ * the permission is the whole decision.
  *
- * Answers `false` when there is no caller to hold a grant, and when the RBAC
- * service is not registered to answer at all. A boot may legitimately omit it,
- * and a grant that cannot be checked is not a grant that was given: the callers
- * above use this to decide whether to WIDEN what they return, so the
- * unauthorized answer is the one that keeps an unanswerable question from
- * widening anything.
+ * Without the RBAC service a signed-in user is refused, as before: a boot may
+ * legitimately omit it, and the callers above use this to decide whether to
+ * WIDEN what they return, so the unauthorized answer is the one that keeps an
+ * unanswerable question from widening anything.
  *
  * @param resource - Resource name as it appears in a permission slug (`media`).
  * @param userId - Caller's user id, or undefined for an anonymous read.
@@ -43,20 +52,34 @@ export async function canReadSystemResource(
   userId: string | undefined,
   authenticatedScope?: AuthenticatedScope
 ): Promise<boolean> {
-  const scopeAllows = apiKeyScopeAllows(authenticatedScope, "read", resource);
-  if (scopeAllows !== null) return scopeAllows;
-  if (userId === undefined) return false;
-
   // Resolved from the container rather than through `getService`, which lives
   // in the module that registers every service: importing it from here would
   // pull the whole service graph into anything that reads a media row.
-  if (!container.has("rbacAccessControlService")) return false;
-  const rbac = container.get<RBACAccessControlService>(
-    "rbacAccessControlService"
-  );
-  return rbac.checkAccess({
-    userId,
-    operation: "read",
+  const read = {
     resource,
-  });
+    serviceRegistered: container.has("rbacAccessControlService"),
+  };
+  if (authenticatedScope?.actorType === "apiKey") {
+    const user = { id: userId ?? "" };
+    if (scopeRowsAgree(authenticatedScope)) {
+      return readsSystemResource(actorForScope(authenticatedScope, user), read);
+    }
+    // Judged on the stored slugs, as before: a scope without the rows its
+    // slugs came from holds no grant the decision can read.
+    const today =
+      apiKeyScopeAllows(authenticatedScope, "read", resource) === true;
+    return deviate("key-slug-string-match", today, () =>
+      readsSystemResource(
+        actorForKey({
+          keyId: "",
+          userId: user.id,
+          grants: authenticatedScope.grants ?? [],
+          roles: authenticatedScope.roles ?? [],
+        }),
+        read
+      )
+    );
+  }
+  if (userId === undefined) return readsSystemResource(actorForVisitor(), read);
+  return readsSystemResource(await actorForUser(userId), read);
 }
