@@ -28,7 +28,7 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import { releaseMemberKey } from "../release-member-key";
 import { ReleasesRepository } from "../releases-repository";
 
-import { displayNamesById } from "../../versions/author-hydration";
+import { peopleById } from "../../versions/author-hydration";
 
 import { seedLiveAuthor, seedPlainAuthor } from "./helpers/live-author";
 
@@ -303,14 +303,10 @@ describe.each(getConfiguredTestDialects())(
         }
       ).delete("users", { and: [{ column: "id", op: "=", value: removed }] });
 
-      const names = await displayNamesById([named, erased, removed, named]);
+      // The lookup version history names people by: one read, a name only.
+      const names = await peopleById([named, erased, removed, named]);
       expect([...names.values()]).toEqual([
-        { id: named, name: expect.any(String) },
-      ]);
-      // A name and nothing else: no email, image or roles reach a display.
-      expect(Object.keys(names.get(named) ?? {}).sort()).toEqual([
-        "id",
-        "name",
+        { kind: "person", id: named, name: expect.any(String) },
       ]);
       expect(names.has(erased)).toBe(false);
       expect(names.has(removed)).toBe(false);

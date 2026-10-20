@@ -16,7 +16,7 @@
  * @module domains/versions/capture-in-tx
  */
 
-import { isVersionStatus } from "../../schemas/versions/types";
+import { getService } from "../../di";
 
 import {
   assembleDocument,
@@ -24,6 +24,7 @@ import {
 } from "./assemble-document";
 import type { VersionsDbApi } from "./db-api";
 import { sameContent } from "./draft-save";
+import { recordedStatus } from "./recorded-status";
 import type { VersionCaptureService } from "./version-capture-service";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
@@ -32,8 +33,8 @@ export interface CaptureInTxArgs {
   /** Which document this version belongs to (scope kind/slug + entry id). */
   ref: VersionRef;
   /**
-   * The content document's own status value (e.g. `entry.status`). Normalized
-   * to a VersionStatus; anything absent or unrecognized captures as "published".
+   * The content document's own status value (e.g. `entry.status`). Recorded
+   * as it is; absent records "published" (see `recorded-status`).
    */
   contentStatus?: unknown;
   /** The in-memory pieces of the just-written document (assembled once here). */
@@ -42,6 +43,12 @@ export interface CaptureInTxArgs {
   createdBy?: string | null;
   /** Retention cap for this document, from the resolved versions config. */
   maxPerDoc?: number | false;
+  /**
+   * Whether the document's collection or Single has the Draft/Published
+   * lifecycle. Without it every version was served, whatever its own
+   * `status` field says, and retention keeps each language's latest.
+   */
+  lifecycle: boolean;
   /**
    * The locale this snapshot holds.
    *
@@ -143,9 +150,14 @@ export async function captureInTx(
   capture: VersionCaptureService,
   args: CaptureInTxArgs
 ): Promise<{ versionNo: number | null }> {
-  const status = isVersionStatus(args.contentStatus)
-    ? args.contentStatus
-    : "published";
+  const status = recordedStatus(args.contentStatus, args.ref, detail =>
+    // Once per collection or Single per process: the whole value stays in the
+    // snapshot, and the log says why the recorded status was shortened.
+    getService("logger").error(
+      "A document's status is longer than a version can record; the version records it shortened, and its snapshot keeps it whole.",
+      detail
+    )
+  );
   const snapshot = assembleDocument(args.parts);
   if (await changesNothing(tx, args, status, snapshot)) {
     return { versionNo: null };
@@ -159,5 +171,6 @@ export async function captureInTx(
     sourceVersionNo: args.sourceVersionNo ?? null,
     label: args.label ?? null,
     maxPerDoc: args.maxPerDoc,
+    lifecycle: args.lifecycle,
   });
 }

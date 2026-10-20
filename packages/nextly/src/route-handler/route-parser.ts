@@ -1855,24 +1855,54 @@ function parseUserFieldRoutes(
 }
 
 /**
- * `POST /api/nextly/preview-links` mints a link for one entry, and
- * `POST /api/nextly/preview-links/revoke` invalidates every link ever issued.
+ * Preview links:
  *
- * Both are POSTs because both change something: minting issues a bearer
- * credential and revoking moves the site's generation. Neither is safe to
- * repeat from a browser's history or to prefetch, which is what a GET invites.
+ * - `POST /api/nextly/preview-links` mints a link for one document;
+ * - `GET /api/nextly/preview-links?…` lists one document's live links;
+ * - `POST /api/nextly/preview-links/:id/revoke` revokes one link;
+ * - `POST /api/nextly/preview-links/revoke` revokes one document's links, or,
+ *   with no document in the body, every link ever issued.
+ *
+ * Every change is a POST: minting issues a bearer credential and revoking ends
+ * them. Neither is safe to repeat from a browser's history or to prefetch,
+ * which is what a GET invites. The list is the one read.
  */
 function parsePreviewLinkRoutes(
   id: string | undefined,
   subresource: string | undefined,
+  subId: string | undefined,
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  if (httpMethod === "GET") {
+    // Only the collection itself is listed; a path naming more is refused.
+    if (id !== undefined) return null;
+    return {
+      service: "previewLinks",
+      operation: "list",
+      method: "listPreviewLinks",
+      routeParams,
+    };
+  }
+
   if (httpMethod !== "POST") return null;
-  // Anything deeper than the two known paths is refused rather than falling
+  // Anything deeper than the known paths is refused rather than falling
   // through to the nearest match. Ignoring the extra segments would make
   // `/preview-links/revoke/anything` revoke every link on the site, which is
-  // the most destructive thing either of these endpoints does.
+  // the most destructive thing these endpoints do.
+  if (subId !== undefined) return null;
+
+  // One link: `/:id/revoke`. `revoke` itself is never a link's id, so the
+  // revoke-all path cannot be read as revoking a link named "revoke".
+  if (id !== undefined && id !== "revoke" && subresource === "revoke") {
+    return {
+      service: "previewLinks",
+      operation: "update",
+      method: "revokePreviewLink",
+      routeParams: { ...routeParams, linkId: id },
+    };
+  }
+
   if (subresource !== undefined) return null;
 
   if (id === "revoke") {
@@ -2980,6 +3010,7 @@ export function parseRestRoute(
     const result = parsePreviewLinkRoutes(
       id,
       subresource,
+      subId,
       httpMethod,
       routeParams
     );

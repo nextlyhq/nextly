@@ -53,10 +53,7 @@ import {
   type ReleaseAuthority,
   type ReleaseDayFilter,
 } from "../domains/releases/services/releases-service";
-import {
-  displayNamesById,
-  type VersionAuthor,
-} from "../domains/versions/author-hydration";
+import { peopleById } from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
@@ -629,12 +626,23 @@ async function withMemberCounts<Row extends { id: string }>(
  */
 async function withOwners<Row extends { createdBy: string | null }>(
   rows: Row[]
-): Promise<Array<Row & { owner: VersionAuthor | null }>> {
-  const names = await displayNamesById(rows.map(row => row.createdBy));
-  return rows.map(row => ({
-    ...row,
-    owner: row.createdBy ? (names.get(row.createdBy) ?? null) : null,
-  }));
+): Promise<Array<Row & { owner: ReleaseOwner | null }>> {
+  const people = await peopleById(rows.map(row => row.createdBy));
+  return rows.map(row => ({ ...row, owner: ownerOf(row.createdBy, people) }));
+}
+
+/** A release's owner, by id and name only. @experimental */
+interface ReleaseOwner {
+  id: string;
+  name: string | null;
+}
+
+function ownerOf(
+  createdBy: string | null,
+  people: Awaited<ReturnType<typeof peopleById>>
+): ReleaseOwner | null {
+  const person = createdBy ? people.get(createdBy) : undefined;
+  return person?.id ? { id: person.id, name: person.name } : null;
 }
 
 /**

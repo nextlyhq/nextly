@@ -27,7 +27,7 @@ vi.mock("../../auth/middleware/to-nextly-error", () => ({
 }));
 vi.mock("../../init", () => ({ getCachedNextly }));
 vi.mock("../../domains/versions/author-hydration", () => ({
-  displayNamesById: names,
+  peopleById: names,
 }));
 
 const { handleReleaseRequest } = await import("../releases");
@@ -83,7 +83,7 @@ let api: ReturnType<typeof namespace>;
 
 beforeEach(() => {
   names.mockResolvedValue(
-    new Map([["u-ada", { id: "u-ada", name: "Ada Lovelace" }]])
+    new Map([["u-ada", { kind: "person", id: "u-ada", name: "Ada Lovelace" }]])
   );
   api = namespace();
   getCachedNextly.mockResolvedValue(api);

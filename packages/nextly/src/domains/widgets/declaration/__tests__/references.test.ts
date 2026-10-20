@@ -50,6 +50,9 @@ function listing(id: string, collection: string | undefined, sort: string) {
       query: ({ settings }) => ({
         collection: settings.collection,
         op: "list",
+        // The field its rows show, which is the field it sorts by: a row
+        // display's query selects at least one.
+        select: [sort],
         sort,
       }),
     },
@@ -278,6 +281,37 @@ describe("a declared widget's starting query, once content is synced", () => {
       checkDeclaredWidgetReferences({ ...CODE, databaseNotSetUp: true })
     ).resolves.toBe(undefined);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("refuses a starting query for a row display that selects no fields", async () => {
+    // Plain JavaScript: the types require a list's query to select a field.
+    const selectsNothing = {
+      ...listing("acme/a", "orders", "state"),
+      data: { query: () => ({ collection: "orders", op: "list" }) },
+    };
+    registerWidgetDeclarations([
+      { owner: SHOP, declarations: [selectsNothing] },
+    ]);
+    let refused: unknown;
+    try {
+      await checkDeclaredWidgetReferences(CODE);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect((refused as NextlyError).logMessage).toContain(
+      `${SHOP}, widget "acme/a": its query selects no fields, so the "list" display has nothing to show in each row`
+    );
+    // An empty selection selects nothing as well.
+    clearDeclaredWidgets();
+    const selectsEmpty = {
+      ...listing("acme/a", "orders", "state"),
+      data: { query: () => ({ collection: "orders", op: "list", select: [] }) },
+    };
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [selectsEmpty] }]);
+    await expect(checkDeclaredWidgetReferences(CODE)).rejects.toThrow(
+      NextlyError
+    );
   });
 
   it("still refuses an operation a code-defined source cannot answer as unreadable", async () => {
