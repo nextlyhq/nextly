@@ -935,14 +935,20 @@ export function readAuthRateLimit(getService: (name: string) => unknown): {
       "authRateLimit"
     );
 
+    const counted = countsIn(getService, store);
     return {
       requestsPerHour: numberOr(
         limits?.["requestsPerHour"],
         fallback.requestsPerHour
       ),
       windowMs: numberOr(limits?.["windowMs"], fallback.windowMs),
-      ...(store === undefined ? {} : { store }),
-      ...countsIn(getService, store),
+      // The app's own store as core's limits use it: where the container
+      // registered core's store, that is the same store held to the limit
+      // store's time and watched for an outage, under the keys core always
+      // gave it. The second-factor fallback reads `store`, so a store that
+      // stops answering is answered there within that time too.
+      ...(store === undefined ? {} : { store: counted.counts ?? store }),
+      ...counted,
     };
   } catch {
     return fallback;

@@ -6,7 +6,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { RateLimitStore } from "../../../middleware/rate-limit";
-import { withCallDeadline, withRateLimitStoreDeadline } from "../call-deadline";
+import {
+  LIMIT_STORE_HARD_CAP_MULTIPLE,
+  withCallDeadline,
+  withRateLimitStoreDeadline,
+} from "../call-deadline";
 import { limitStoreUnavailableReason, type LimitStore } from "../limit-store";
 import { createMemoryLimitStore } from "../memory-limit-store";
 
@@ -150,5 +154,34 @@ describe("withRateLimitStoreDeadline after calls that never settle", () => {
     await expect(guarded.increment("d", 1_000)).resolves.toMatchObject({
       count: 1,
     });
+  });
+});
+
+describe("withRateLimitStoreDeadline against a store that never answers", () => {
+  it("never has more calls under way in the store than its hard cap, however long it runs", async () => {
+    // Calls past their deadline stop holding a place so the store can be
+    // asked again once it answers, but each still runs in the store; the
+    // hard cap bounds how many of those it ever holds at once.
+    let started = 0;
+    const store: RateLimitStore = {
+      increment: () => {
+        started += 1;
+        return new Promise(() => {});
+      },
+      reset: () => Promise.resolve(),
+    };
+    const guarded = withRateLimitStoreDeadline(store, 5, 2);
+
+    for (let round = 0; round < 12; round += 1) {
+      await Promise.allSettled([
+        guarded.increment("a", 1_000),
+        guarded.increment("b", 1_000),
+        guarded.increment("c", 1_000),
+      ]);
+      await new Promise(resolve => setTimeout(resolve, 60));
+    }
+
+    expect(started).toBeLessThanOrEqual(2 * LIMIT_STORE_HARD_CAP_MULTIPLE);
+    expect(started).toBeGreaterThan(2);
   });
 });

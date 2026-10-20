@@ -507,6 +507,19 @@ describe("REST limit: where it counts", () => {
     ).toBe(1);
   });
 
+  it("lets requests through when starting the services fails", async () => {
+    // The REST limit only needs the services to find its store; a route that
+    // never starts them must not fail because they could not start, so the
+    // limit counts in this process's memory instead.
+    const check = limiter({
+      store: restLimitCounts({ limitStore: "database" }, async () => {
+        throw new Error("database unreachable");
+      }),
+    });
+
+    expect(await admitted(check, { address: "203.0.113.9" }, 3)).toBe(2);
+  });
+
   it("starts the services on a cold worker so it counts in the shared store", async () => {
     // A worker serving only requests that never start the services would
     // otherwise count in its own memory for good, a budget per worker.

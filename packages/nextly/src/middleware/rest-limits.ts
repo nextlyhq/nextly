@@ -544,7 +544,15 @@ export function coreCountsOr(
     const store = registered();
     if (store !== undefined) return store;
     if (options.startServices === undefined) return fallback;
-    await options.startServices();
+    try {
+      await options.startServices();
+    } catch {
+      // The REST limit needs the services only to find its store. A route
+      // that never starts them must not fail because they could not start:
+      // this request counts in this process's memory instead, as the general
+      // limit lets requests through while its store is away.
+      return fallback;
+    }
     return registered() ?? fallback;
   };
   const counts: RateLimitStore = {

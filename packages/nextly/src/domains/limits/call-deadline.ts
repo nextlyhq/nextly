@@ -40,6 +40,15 @@ export const LIMIT_STORE_MAX_IN_FLIGHT = 64;
 const ABANDON_AFTER_TIMEOUTS = 10;
 
 /**
+ * The most calls ever under way in the store at once, as a multiple of the
+ * in-flight cap, abandoned ones included. An abandoned call may still be
+ * running in the store, holding a connection or a lock, so while calls past
+ * their deadline stop holding a place under the cap, they never stop counting
+ * here: against a store that never answers, the work behind it stays bounded.
+ */
+export const LIMIT_STORE_HARD_CAP_MULTIPLE = 4;
+
+/**
  * The same store, its every call answered within `timeoutMs`, and its own
  * failures answered as unavailable. What a caller's `apply` throws reaches the
  * caller unchanged.
@@ -128,6 +137,9 @@ function deadlineAnswer(
    */
   const running = new Map<symbol, number>();
   const abandonAfterMs = timeoutMs * ABANDON_AFTER_TIMEOUTS;
+  /** Every call the store has not settled, abandoned or not. */
+  let unsettled = 0;
+  const hardCap = maxInFlight * LIMIT_STORE_HARD_CAP_MULTIPLE;
   /** The calls still holding a place, dropping the abandoned ones. */
   const held = (): number => {
     const now = Date.now();
@@ -146,8 +158,10 @@ function deadlineAnswer(
     applyFailure: { failed?: { error: unknown } } = {}
   ): Promise<T> => {
     const inFlight = held();
-    if (inFlight >= maxInFlight) {
-      throw limitStoreUnavailable("timeout", { logContext: { inFlight } });
+    if (inFlight >= maxInFlight || unsettled >= hardCap) {
+      throw limitStoreUnavailable("timeout", {
+        logContext: { inFlight, unsettled },
+      });
     }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
@@ -157,12 +171,14 @@ function deadlineAnswer(
     });
     const id = Symbol("limit store call");
     running.set(id, Date.now());
+    unsettled += 1;
     const pending = Promise.resolve().then(call);
     // Counted until the store settles it, not until its caller is answered,
     // or until it is abandoned. A call that fails after its deadline has
     // nobody waiting for it.
     const settle = () => {
       running.delete(id);
+      unsettled -= 1;
     };
     pending.then(settle, settle);
     try {
