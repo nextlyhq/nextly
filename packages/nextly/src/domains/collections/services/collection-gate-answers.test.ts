@@ -60,23 +60,20 @@ const grant = (action: string): GrantedPermission => ({
 const ALL_GRANTS = OPERATIONS.map(grant);
 
 /** Who holds what, as the database would answer it. */
-const STORED: Record<
-  string,
-  { roles: string[]; grants: GrantedPermission[] }
-> = {
-  editor: { roles: ["editor"], grants: ALL_GRANTS },
-  viewer: { roles: ["viewer"], grants: [] },
-  publisher: {
-    roles: ["publisher"],
-    grants: [grant("read"), grant("publish"), grant("unpublish")],
-  },
-  admin: { roles: ["super-admin"], grants: [] },
-  "admin-inherited": { roles: ["chief", "super-admin"], grants: [] },
-  owner: { roles: ["editor"], grants: ALL_GRANTS },
-};
+const STORED: Record<string, { roles: string[]; grants: GrantedPermission[] }> =
+  {
+    editor: { roles: ["editor"], grants: ALL_GRANTS },
+    viewer: { roles: ["viewer"], grants: [] },
+    publisher: {
+      roles: ["publisher"],
+      grants: [grant("read"), grant("publish"), grant("unpublish")],
+    },
+    admin: { roles: ["super-admin"], grants: [] },
+    "admin-inherited": { roles: ["chief", "super-admin"], grants: [] },
+    owner: { roles: ["editor"], grants: ALL_GRANTS },
+  };
 
-const stored = (userId: string) =>
-  STORED[userId] ?? { roles: [], grants: [] };
+const stored = (userId: string) => STORED[userId] ?? { roles: [], grants: [] };
 
 vi.mock("../../../services/lib/permissions", async importOriginal => {
   const real =
@@ -105,6 +102,9 @@ vi.mock("../../../services/lib/permissions", async importOriginal => {
         .grants.map(g => `${g.resource}:${g.action}`)
         .sort()
     ),
+    listEffectiveGrants: vi.fn(async (userId: string) => [
+      ...stored(userId).grants,
+    ]),
   };
 });
 
@@ -143,6 +143,11 @@ const CALLERS: Record<string, Caller> = {
       permissions: OPERATIONS.map(op => `${op}-${SLUG}`),
       roles: ["editor"],
     }),
+  },
+  // A key made by a super-admin carries that role's name, and no authority.
+  "key-made-by-super-admin": {
+    user: { id: "admin" },
+    scope: apiKeyScope([grant("read")], ["super-admin"]),
   },
   "key-own-roles": {
     user: { id: "owner", roles: ["owner-role"] },
@@ -195,9 +200,35 @@ function gateFor(setup: (typeof SETUPS)[number], rule: Rule | undefined) {
   );
 }
 
-describe("the collection gate's answers", () => {
+/** Each caller's answers for one setup and rule, one line per action. */
+async function answersFor(
+  setup: (typeof SETUPS)[number],
+  ruleName: string,
+  rule: Rule | undefined
+): Promise<string[]> {
+  const gate = gateFor(setup, rule);
   const lines: string[] = [];
+  for (const [callerName, caller] of Object.entries(CALLERS)) {
+    lines.push(`${setup} ${ruleName} ${callerName}`);
+    for (const operation of OPERATIONS) {
+      const refused = await gate.checkCollectionAccess({
+        collectionName: SLUG,
+        operation,
+        user: caller.user,
+        authenticatedScope: caller.scope,
+        routeAuthorized: setup === "route-authorized",
+      });
+      lines.push(
+        refused === null
+          ? `  ${operation}:A`
+          : `  ${operation}:${refused.statusCode} ${refused.message}`
+      );
+    }
+  }
+  return lines;
+}
 
+describe("the collection gate's answers", () => {
   afterAll(() => {
     vi.restoreAllMocks();
   });
@@ -205,30 +236,12 @@ describe("the collection gate's answers", () => {
   it("are the answers the file records, for every case", async () => {
     // A rule that throws is reported by the gate that catches it.
     vi.spyOn(console, "error").mockImplementation(() => {});
+    const lines: string[] = [];
     for (const setup of SETUPS) {
       for (const [ruleName, rule] of Object.entries(RULES)) {
         // Without the service no rule is registered, so one row says it all.
         if (setup === "no-service" && ruleName !== "none") continue;
-        const gate = gateFor(setup, rule);
-        for (const [callerName, caller] of Object.entries(CALLERS)) {
-          const cells: string[] = [];
-          for (const operation of OPERATIONS) {
-            const refused = await gate.checkCollectionAccess({
-              collectionName: SLUG,
-              operation,
-              user: caller.user,
-              authenticatedScope: caller.scope,
-              routeAuthorized: setup === "route-authorized",
-            });
-            cells.push(
-              refused === null
-                ? `${operation}:A`
-                : `${operation}:${refused.statusCode} ${refused.message}`
-            );
-          }
-          lines.push(`${setup} ${ruleName} ${callerName}`);
-          for (const cell of cells) lines.push(`  ${cell}`);
-        }
+        lines.push(...(await answersFor(setup, ruleName, rule)));
       }
     }
     // POPULATION CONTROL: every kind of answer was reached.

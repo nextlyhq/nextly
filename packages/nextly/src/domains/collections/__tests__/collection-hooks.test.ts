@@ -32,9 +32,19 @@ import {
   createMockComponentDataService,
   createMockCollection,
   createSampleEntry,
+  callerMay,
+  fakeActorForUser,
+  resetCallerAccess,
 } from "./collection-test-helpers";
 
 // ── Module mocks ──────────────────────────────────────────────────────────
+
+// The caller the collection gate decides for: a signed-in user's actions are
+// set per test (`callerMay`), and every test starts from one holding all.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  actorForUser: (await import("./collection-test-helpers")).fakeActorForUser,
+}));
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -124,6 +134,8 @@ describe("CollectionEntryService — Hook Contracts", () => {
   let mockHookRegistry: ReturnType<typeof createMockHookRegistry>;
 
   beforeEach(() => {
+    resetCallerAccess();
+    fakeActorForUser.mockClear();
     vi.clearAllMocks();
 
     schema = createMockSchema();

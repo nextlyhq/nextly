@@ -33,9 +33,19 @@ import {
   createMockCollection,
   createSampleEntry,
   createSampleEntries,
+  callerMay,
+  fakeActorForUser,
+  resetCallerAccess,
 } from "./collection-test-helpers";
 
 // ── Module mocks ──────────────────────────────────────────────────────────
+
+// The caller the collection gate decides for: a signed-in user's actions are
+// set per test (`callerMay`), and every test starts from one holding all.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  actorForUser: (await import("./collection-test-helpers")).fakeActorForUser,
+}));
 
 vi.mock("../../../di/container", () => ({
   container: {
@@ -145,6 +155,8 @@ describe("CollectionEntryService — Query Contracts", () => {
   >;
 
   beforeEach(() => {
+    resetCallerAccess();
+    fakeActorForUser.mockClear();
     vi.clearAllMocks();
 
     schema = createMockSchema();
@@ -658,11 +670,11 @@ describe("CollectionEntryService — Query Contracts", () => {
         user: { id: "user-1", role: "viewer" },
       });
 
-      expect(mockRbac.checkAccess).toHaveBeenCalled();
+      expect(fakeActorForUser).toHaveBeenCalled();
     });
 
     it("should return 403 when access is denied", async () => {
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       const result = await service.countEntries({
         collectionName: "posts",
@@ -685,7 +697,7 @@ describe("CollectionEntryService — Query Contracts", () => {
       expect(result.success).toBe(true);
       // checkCollectionAccess returns null under overrideAccess, so the gate is
       // skipped entirely.
-      expect(mockRbac.checkAccess).not.toHaveBeenCalled();
+      expect(fakeActorForUser).not.toHaveBeenCalled();
     });
 
     it("should return 500 when collection not found (no 404 distinction)", async () => {
@@ -776,7 +788,7 @@ describe("CollectionEntryService — Query Contracts", () => {
     });
 
     it("should return 403 when collection access is denied", async () => {
-      mockRbac.checkAccess.mockResolvedValueOnce(false);
+      callerMay();
 
       const result = await service.getEntry({
         collectionName: "posts",

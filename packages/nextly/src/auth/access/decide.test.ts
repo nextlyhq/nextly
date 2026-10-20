@@ -28,7 +28,7 @@ import {
   type Actor,
   type PermissionGrant,
 } from "./actor";
-import { askRule, decide, type AccessTarget } from "./decide";
+import { askRule, askRules, decide, judge, type AccessTarget } from "./decide";
 
 const ACTIONS: AccessAction[] = [
   "create",
@@ -508,5 +508,63 @@ describe("askRule", () => {
         access: { read: () => true },
       })
     ).toEqual({ declared: false });
+  });
+});
+
+describe("the judge seam", () => {
+  it("judges from the outcomes it is handed exactly as the decision does", async () => {
+    for (const caller of Object.keys(callers) as CallerName[]) {
+      for (const action of ACTIONS) {
+        for (const rule of Object.keys(RULES) as RuleName[]) {
+          const target = postsWith(rule);
+          const actor = callers[caller];
+          const outcomes = await askRules(actor, action, target);
+          expect(
+            judge(actor, action, target, outcomes),
+            `${caller} ${action} ${rule}`
+          ).toEqual(await decide(actor, action, target));
+        }
+      }
+    }
+  });
+
+  it("asks no rule where the answer is reached without one", async () => {
+    const rule = vi.fn(() => true);
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { read: rule, publish: rule, update: rule },
+    };
+    expect(await askRules(systemActor(), "read", target)).toBeNull();
+    expect(await askRules(callers["super-admin"], "read", target)).toBeNull();
+    expect(await askRules(callers["user-without"], "read", target)).toBeNull();
+    expect(await askRules(callers.visitor, "publish", target)).toBeNull();
+    expect(rule).not.toHaveBeenCalled();
+  });
+
+  it("asks each rule once, and the update rule only after the action's own allows", async () => {
+    const publish = vi.fn(() => false);
+    const update = vi.fn(() => true);
+    const target: AccessTarget = {
+      kind: "collection",
+      slug: "posts",
+      access: { publish, update },
+    };
+    const refused = await askRules(callers["user-with"], "publish", target);
+    expect(refused).toEqual({ action: { declared: true, value: false } });
+    expect(update).not.toHaveBeenCalled();
+    publish.mockReturnValue(true);
+    expect(await askRules(callers["user-with"], "publish", target)).toEqual({
+      action: { declared: true, value: true },
+      update: { declared: true, value: true },
+    });
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to judge a question whose rules were not asked", () => {
+    expect(() =>
+      judge(callers["user-with"], "read", postsWith("true"), null)
+    ).toThrow();
   });
 });

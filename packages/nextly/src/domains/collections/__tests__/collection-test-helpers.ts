@@ -8,6 +8,9 @@
 
 import { vi } from "vitest";
 
+import { userActor, type UserActor } from "../../../auth/access/actor";
+import type { AccessOperation } from "../../../services/access";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MockRecord = Record<string, any>;
 
@@ -263,6 +266,80 @@ export function createMockCollectionService(
  * one. Allowing by default so a test that does not care about access does not
  * have to say so.
  */
+// ── The caller the collection gate reads ────────────────────────────────
+
+const EVERY_ACTION: readonly AccessOperation[] = [
+  "create",
+  "read",
+  "update",
+  "delete",
+  "publish",
+  "unpublish",
+];
+
+/**
+ * What the faked caller lookup answers (`auth/access/resolve-actor`
+ * `actorForUser`): the actions a signed-in user holds on these suites'
+ * collections, or a lookup that fails. Every test starts from a user holding
+ * every action, which {@link resetCallerAccess} restores.
+ */
+const callerAccess = {
+  actions: new Set<AccessOperation>(EVERY_ACTION),
+  failure: undefined as Error | undefined,
+};
+
+const SUITE_COLLECTIONS = ["posts"];
+
+/** A signed-in user holds only these actions on the suites' collections. */
+export function callerMay(...actions: AccessOperation[]): void {
+  callerAccess.actions = new Set(actions);
+}
+
+/** A signed-in user holds every action but these. */
+export function callerMayNot(...actions: AccessOperation[]): void {
+  callerAccess.actions = new Set(
+    EVERY_ACTION.filter(action => !actions.includes(action))
+  );
+}
+
+/** Looking a signed-in user up fails with `error`. */
+export function callerLookupFails(error: Error): void {
+  callerAccess.failure = error;
+}
+
+export function resetCallerAccess(): void {
+  callerAccess.actions = new Set(EVERY_ACTION);
+  callerAccess.failure = undefined;
+}
+
+/**
+ * Stands in for `actorForUser`: the user's actor from the faked lookup. Mock
+ * the module with it in each suite that drives the gate:
+ *
+ * ```ts
+ * vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+ *   ...(await importOriginal<object>()),
+ *   actorForUser: (await import("./collection-test-helpers")).fakeActorForUser,
+ * }));
+ * ```
+ */
+export const fakeActorForUser = vi.fn(
+  async (userId: string): Promise<UserActor> => {
+    if (callerAccess.failure) throw callerAccess.failure;
+    return userActor({
+      userId,
+      roles: [],
+      permissions: SUITE_COLLECTIONS.flatMap(resource =>
+        [...callerAccess.actions].map(action => ({
+          slug: `${action}-${resource}`,
+          action,
+          resource,
+        }))
+      ),
+    });
+  }
+);
+
 export function createMockRbacAccessControlService(): MockRecord {
   const getRegisteredAccess = vi.fn().mockReturnValue(undefined);
   return {

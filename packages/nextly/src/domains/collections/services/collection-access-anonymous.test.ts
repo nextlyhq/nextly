@@ -17,24 +17,49 @@
  * Both directions are asserted here, and each is the other's control.
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+import type { AccessControlFunction } from "../../../shared/types/access";
 
 import { CollectionAccessService } from "./collection-access-service";
 
 import {
   createMockDb,
   createMockAdapter,
+  fakeActorForUser,
   silentLogger,
 } from "../__tests__/collection-test-helpers";
 
-function buildService() {
-  // Spied rather than stubbed away: "was this consulted" is half of what these
-  // tests assert.
+// Spied rather than stubbed away: "was the caller looked up" is half of what
+// these tests assert.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  actorForUser: (await import("../__tests__/collection-test-helpers"))
+    .fakeActorForUser,
+}));
+
+beforeEach(() => {
+  fakeActorForUser.mockClear();
+});
+
+/** A gate whose collection declares `rule` for every action, or no rule. */
+function buildService(rule?: AccessControlFunction) {
+  const access = rule
+    ? {
+        create: rule,
+        read: rule,
+        update: rule,
+        delete: rule,
+        publish: rule,
+        unpublish: rule,
+      }
+    : undefined;
   const rbac = {
-    checkAccess: vi.fn().mockResolvedValue(true),
-    // Answers `undefined`: no code-defined rule governs the operation.
-    checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-    getRegisteredAccess: vi.fn().mockReturnValue(undefined),
+    getRegisteredTarget: vi
+      .fn()
+      .mockReturnValue(
+        access ? { kind: "collection", slug: "posts", access } : undefined
+      ),
   };
   const service = new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
@@ -45,8 +70,8 @@ function buildService() {
 }
 
 describe("checkCollectionAccess with no user", () => {
-  it("allows an ordinary operation and never asks the permission check", async () => {
-    const { service, rbac } = buildService();
+  it("allows an ordinary operation and never looks a caller up", async () => {
+    const { service } = buildService();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -55,18 +80,17 @@ describe("checkCollectionAccess with no user", () => {
     });
 
     expect(result).toBeNull();
-    // What a missing user skips is the permission check: there are no
+    // What a missing user skips is the permission lookup: there are no
     // permissions to look up for a caller with no identity.
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
   });
 
   it("applies the collection's inline code rule, which needs no user", async () => {
     // A code rule reads what it is given, and an anonymous caller is a thing
     // it can be given: `user: null`, no roles. So it is consulted, and its
-    // refusal is the answer, even though the permission check beside it never
-    // runs.
-    const { service, rbac } = buildService();
-    rbac.checkAnonymousCodeAccess.mockResolvedValue(false);
+    // refusal is the answer, even though the permission lookup never runs.
+    const rule = vi.fn(() => false);
+    const { service } = buildService(rule);
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -74,21 +98,25 @@ describe("checkCollectionAccess with no user", () => {
       user: undefined,
     });
 
-    expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalledWith({
-      operation: "read",
-      resource: "posts",
-    });
+    expect(rule).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user: null,
+        roles: [],
+        permissions: [],
+        operation: "read",
+        target: { kind: "collection", slug: "posts" },
+      })
+    );
     expect(result?.success).toBe(false);
     expect(result?.statusCode).toBe(403);
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    expect(fakeActorForUser).not.toHaveBeenCalled();
   });
 
   it("falls through to the public default when no inline rule governs the operation", async () => {
     // The control that keeps the case above from meaning "anonymous is denied".
-    // `undefined` is no opinion, not a refusal, so a collection with no inline
-    // rule for this operation still reads as it always did.
+    // No rule is no opinion, not a refusal, so a collection with no inline rule
+    // for this operation still reads as it always did.
     const { service, rbac } = buildService();
-    rbac.checkAnonymousCodeAccess.mockResolvedValue(undefined);
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -96,12 +124,12 @@ describe("checkCollectionAccess with no user", () => {
       user: undefined,
     });
 
-    expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalled();
+    expect(rbac.getRegisteredTarget).toHaveBeenCalledWith("posts");
     expect(result).toBeNull();
   });
 
   it("refuses publish with no user", async () => {
-    const { service, rbac } = buildService();
+    const { service } = buildService();
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -111,16 +139,15 @@ describe("checkCollectionAccess with no user", () => {
 
     expect(result?.success).toBe(false);
     expect(result?.statusCode).toBe(403);
-    // Decided in this service rather than by the permission check, which was
-    // never reached.
-    expect(rbac.checkAccess).not.toHaveBeenCalled();
+    // Decided without looking any caller up.
+    expect(fakeActorForUser).not.toHaveBeenCalled();
   });
 
   it("refuses publish with no user even when the inline rule would admit", async () => {
     // Publishing has no identity to stamp, so a rule that admits the anonymous
     // caller does not lift the refusal: the rule is asked, and then overruled.
-    const { service, rbac } = buildService();
-    rbac.checkAnonymousCodeAccess.mockResolvedValue(true);
+    const rule = vi.fn(() => true);
+    const { service } = buildService(rule);
 
     const result = await service.checkCollectionAccess({
       collectionName: "posts",
@@ -128,6 +155,7 @@ describe("checkCollectionAccess with no user", () => {
       user: undefined,
     });
 
+    expect(rule).toHaveBeenCalled();
     expect(result?.success).toBe(false);
     expect(result?.statusCode).toBe(403);
   });
