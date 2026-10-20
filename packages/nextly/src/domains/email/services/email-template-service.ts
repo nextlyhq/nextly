@@ -674,7 +674,9 @@ export class EmailTemplateService extends BaseService {
       await this.db
         .update(this.emailTemplates)
         .set(updateData)
-        .where(eq(this.emailTemplates.id, id));
+        // Conditioned on the row as read: an override's base comes from it,
+        // and a save in between must not be overwritten.
+        .where(this.unchanged(existing));
     } catch (error) {
       // Default Pattern A: drizzle hands us the raw driver error, so normalise
       // through toDbError(dialect) first to get a DbError; fromDatabaseError
@@ -683,6 +685,7 @@ export class EmailTemplateService extends BaseService {
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
 
+    await this.assertUpdated(id, updateData, record.slug);
     const updated = await this.getTemplate(id);
     // Compared against the row as it was, so an update that submitted every
     // field but moved none produces no entry. `updatedAt` is excluded: it moves
@@ -876,7 +879,11 @@ export class EmailTemplateService extends BaseService {
     // Nothing to reset, unless the row still holds an earlier owner version
     // the background reconciliation hasn't reached: Reset brings it up to the
     // owner's current one now.
-    if (!record.overridden && sameVersion(versionOf(row), entry.version)) {
+    if (
+      !record.overridden &&
+      row.ownerKind !== null &&
+      sameVersion(versionOf(row), entry.version)
+    ) {
       return record;
     }
 
@@ -1102,6 +1109,24 @@ export class EmailTemplateService extends BaseService {
     return eq(column, variables);
   }
 
+  /**
+   * Refuse (CONFLICT) when an update's conditioned write did not land: every
+   * column it wrote must now hold what it wrote.
+   */
+  private async assertUpdated(
+    id: string,
+    written: Record<string, unknown>,
+    slug: string
+  ): Promise<void> {
+    const after = (await this.getRow(id)) as unknown as Record<string, unknown>;
+    const landed = Object.entries(written).every(
+      ([column, value]) =>
+        column === "updatedAt" ||
+        sameStoredValue(after[column] ?? null, value ?? null)
+    );
+    if (!landed) throw changedSince("saved", id, slug);
+  }
+
   /** Refuse (CONFLICT) when a conditioned write did not land: something saved the template first. */
   private async assertWritten(
     id: string,
@@ -1306,6 +1331,10 @@ export class EmailTemplateService extends BaseService {
         this.logger.debug(
           `Email template "${t.slug}" was created by another process`
         );
+        // That process may run another version of its owner: the row it
+        // wrote is reconciled against this one's, as any stored row is.
+        const row = await this.getRowBySlug(t.slug);
+        if (row) await this.reconcileOwnedRow(row, entry);
         return;
       }
       this.logger.warn(`Failed to create email template "${t.slug}"`, {

@@ -176,6 +176,62 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         });
       });
 
+      it("refuses a save whose row changed after it was read", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        const other = store.newService();
+        other.configureOwnership({
+          plugins: [{ name: ORDERS, templates: [shipped(V1)] }],
+        });
+        const internals = first as unknown as {
+          getRow(id: string): Promise<unknown>;
+        };
+        const read = internals.getRow.bind(first);
+        // Another editor saves between this save's read and its write.
+        vi.spyOn(internals, "getRow").mockImplementationOnce(async rowId => {
+          const row = await read(rowId);
+          await other.updateTemplate(rowId, { subject: "Theirs" }, ACTOR);
+          return row;
+        });
+        await expect(
+          first.updateTemplate(id, { htmlContent: "<p>mine</p>" }, ACTOR)
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        const template = await shippedTemplate(first);
+        expect(template).toMatchObject({ subject: "Theirs", htmlContent: V1 });
+      });
+
+      it("writes the owner on a reset of a row already at the owner's version", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await store.exec(
+          `UPDATE ${store.q("email_templates")} SET ${store.q("owner_kind")} = NULL, ${store.q("owner_name")} = NULL WHERE ${store.q("id")} = ?`,
+          [id]
+        );
+        await first.resetTemplate(id, ACTOR);
+        const [row] = await store.query<{ owner_kind: string }>(
+          `SELECT ${store.q("owner_kind")} FROM ${store.q("email_templates")} WHERE ${store.q("id")} = ?`,
+          [id]
+        );
+        expect(row).toMatchObject({ owner_kind: "plugin" });
+      });
+
+      it("reconciles the row another process inserted with an older owner version", async () => {
+        await boot(V1);
+        const newer = store.newService();
+        newer.configureOwnership({
+          plugins: [{ name: ORDERS, templates: [shipped(V2)] }],
+        });
+        const internals = newer as unknown as {
+          insertOwned(entry: unknown): Promise<void>;
+          registry: { owned: Map<string, unknown> };
+        };
+        // This process's insert loses to the row the older one wrote.
+        await internals.insertOwned(
+          internals.registry.owned.get("orders-shipped")
+        );
+        expect((await shippedTemplate(newer)).htmlContent).toBe(V2);
+      });
+
       it("resets a row the boot hasn't brought up to its owner's version yet", async () => {
         const first = await boot(V1);
         const id = (await shippedTemplate(first)).id;
