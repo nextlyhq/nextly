@@ -6,6 +6,7 @@ import { Command } from "commander";
 import { config as loadEnvFile } from "dotenv";
 
 import {
+  canonicalStoredPath,
   collectionsSharingMediaPlace,
   findOrphanThumbnails,
   mediaPlaceIsExclusive,
@@ -17,15 +18,12 @@ import {
 } from "../../domains/media/orphan-thumbnails";
 import {
   errorForLog,
-  filesKeptByOthers,
   storedPathForLog,
 } from "../../domains/media/remove-stored-files";
-import { StoredFileSearchReader } from "../../domains/media/stored-file-search";
 import {
   storedFilesOf,
   type MediaFilesRecord,
 } from "../../domains/media/stored-files";
-import { consoleLogger } from "../../shared/types";
 import {
   initializeMediaStorage,
   type MediaStorage,
@@ -81,13 +79,31 @@ export async function referencedStoredPaths(
 }
 
 /**
- * Which of a batch of files a media item refers to now, asked of the media
- * table for those files, by the search every delete keeps files by
- * (`filesKeptByOthers`), and `null` when the table cannot be read.
+ * Which of a batch of files a media item refers to now, read afresh from
+ * the whole media table, as the listing reads it (`referencedStoredPaths`),
+ * once per batch rather than once per file. `null`, so nothing more is
+ * removed, when the table cannot be read, or when an item has come to have
+ * a thumbnail whose stored location its record does not show: by a URL
+ * under any name, it may refer to any listed file.
  */
-function referencedNowIn(adapter: DrizzleAdapter): ReferencedNow {
-  const { search } = new StoredFileSearchReader(adapter, consoleLogger);
-  return paths => filesKeptByOthers(search, paths, []);
+export function referencedNowIn(adapter: DrizzleAdapter): ReferencedNow {
+  return async paths => {
+    let now: MediaReferences;
+    try {
+      now = await referencedStoredPaths(adapter);
+    } catch (error) {
+      console.warn(
+        "[media orphans] Could not read what media items refer to:",
+        errorForLog(error)
+      );
+      return null;
+    }
+    if (now.unlocated.length > 0) return null;
+    const referenced = new Set([...now.paths].map(canonicalStoredPath));
+    return new Set(
+      paths.filter(path => referenced.has(canonicalStoredPath(path)))
+    );
+  };
 }
 
 /**

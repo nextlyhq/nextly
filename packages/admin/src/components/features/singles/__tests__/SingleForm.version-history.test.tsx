@@ -5,7 +5,7 @@
  * alike, and it hands the chosen version to the document area through shared
  * context. The entry editor answers by swapping the document for the version;
  * these tests establish that the Single editor consumes the same publication —
- * the banner over a read-only snapshot — rather than leaving the live document
+ * a comparison bar over a read-only snapshot — rather than leaving the live document
  * on screen while the panel reports a selection nothing answers.
  *
  * The arrival states share one file on purpose, mirroring the entry editor's
@@ -24,6 +24,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@admin/__tests__/utils";
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
@@ -186,7 +187,7 @@ function renderViewing(version: ViewedVersion) {
 }
 
 describe("SingleForm — a published version replaces the document", () => {
-  it("shows the banner and the snapshot once the read has returned", () => {
+  it("frames the snapshot with its comparison bar once the read has returned", () => {
     // The positive control. Without it the assertions below are satisfied by a
     // document area that renders nothing under any circumstances.
     renderViewing({
@@ -195,15 +196,18 @@ describe("SingleForm — a published version replaces the document", () => {
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
 
     expect(
-      screen.getByText(/you are reading a past version/i)
+      within(screen.getByRole("region", { name: "Comparison" })).getByText(
+        "Version 7"
+      )
     ).toBeInTheDocument();
     expect(screen.getByTestId("snapshot-form")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /restore this version/i })
-    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Restore…" })).toBeEnabled();
     // The live editor's own fields stay mounted behind the version so their
     // rich state (undo, selection) survives the round trip — but they are
     // inert: removed from the accessibility tree and from every pointer.
@@ -221,14 +225,15 @@ describe("SingleForm — a published version replaces the document", () => {
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
 
     // An absent snapshot must not render as an empty version.
     expect(screen.queryByTestId("snapshot-form")).toBeNull();
     expect(screen.getByText(/loading version 7/i)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /restore this version/i })
-    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Restore…" })).toBeDisabled();
   });
 
   it("reports a failed read instead of rendering it as the version", () => {
@@ -238,6 +243,9 @@ describe("SingleForm — a published version replaces the document", () => {
       locale: null,
       isLoading: false,
       error: new Error("boom"),
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
 
     expect(
@@ -264,6 +272,9 @@ describe("SingleForm — a published version replaces the document", () => {
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
 
     expect(useDocumentAutosave).toHaveBeenLastCalledWith(
@@ -282,6 +293,9 @@ describe("SingleForm — a published version replaces the document", () => {
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
     expect(sidebarProps.current?.actionsDisabled).toBe(true);
   });
@@ -302,6 +316,9 @@ describe("SingleForm — a published version replaces the document", () => {
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
     expect(languagePanelProps.current?.actionsDisabled).toBe(true);
   });
@@ -326,6 +343,9 @@ describe("SingleForm — a published version replaces the document", () => {
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     };
     render(
       <SingleForm schema={schema} document={document} onSubmit={onSubmit} />
@@ -414,7 +434,7 @@ describe("SingleForm — a published version replaces the document", () => {
   it("withholds the recovery offer while a version is on screen", () => {
     // The recovery offer restores work into the LIVE form. Doing that while
     // the author is looking at a past version changes values nobody can see,
-    // under a banner saying the page cannot be edited.
+    // over a version the page says cannot be edited.
     useAutosaveRecovery.mockReturnValue({
       offer: { savedAt: new Date("2026-01-01T00:00:00.000Z") },
       restore: vi.fn(),
@@ -428,7 +448,7 @@ describe("SingleForm — a published version replaces the document", () => {
     ).toBeInTheDocument();
 
     // The live editor is unmounted so the only restore on screen during the
-    // reading is the banner's — the recovery offer must be gone with the
+    // reading is the version's own — the recovery offer must be gone with the
     // live document it would act on.
     live.unmount();
     renderViewing({
@@ -437,19 +457,25 @@ describe("SingleForm — a published version replaces the document", () => {
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     });
     expect(screen.getAllByRole("button", { name: /restore/i })).toHaveLength(1);
   });
 
-  it("withholds restore from the banner while a submit is in flight", () => {
+  it("withholds the version's restore while a submit is in flight", () => {
     // A restore racing the ordinary save would let completion order decide
-    // which contents survive, so the banner offers no restore mid-submit.
+    // which contents survive, so no restore is offered mid-submit.
     viewed.current = {
       versionNo: 7,
       snapshot: { heroTitle: "as it was" },
       locale: null,
       isLoading: false,
       error: null,
+      scope: { kind: "single", slug: "homepage", documentId: "d1" },
+      comparedWith: { kind: "first" },
+      about: null,
     };
     render(
       <SingleForm
@@ -461,7 +487,7 @@ describe("SingleForm — a published version replaces the document", () => {
     );
 
     expect(
-      screen.queryByRole("button", { name: /restore this version/i })
+      screen.queryByRole("button", { name: "Restore…" })
     ).not.toBeInTheDocument();
   });
 });
