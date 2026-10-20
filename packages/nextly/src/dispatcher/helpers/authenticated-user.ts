@@ -1,64 +1,46 @@
+import { currentRequestCaller } from "../../auth/caller-scope";
 import { buildUserContext } from "../../auth/user-context";
 import type { UserContext } from "../../domains/collections/services/collection-types";
-import type { Params } from "../types";
+import { NextlyError } from "../../errors/nextly-error";
 
 import { readAuthenticatedRoles } from "./authenticated-roles";
 
 /**
- * The caller's verified non-canonical token claims, as stamped by the route
- * handler. Server-authored: the handler deletes any client-supplied copy of the
- * reserved key before writing its own, so what is read here was authenticated.
- *
- * A malformed value yields no claims rather than throwing — a rule then decides
- * on the canonical identity alone, which is the fail-closed direction for the
- * absence-tolerant rules this exists to serve.
- */
-function readAuthenticatedClaims(p: Params): Record<string, unknown> {
-  const raw = p._authenticatedClaims;
-  if (typeof raw !== "string" || raw.length === 0) return {};
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
-  }
-}
-
-/**
- * Build the caller's `UserContext` from the reserved `_authenticated*` route
- * params the route handler stamps after authenticating a request.
+ * The caller's `UserContext`, built from the request caller the route handler
+ * authenticated.
  *
  * Returns `undefined` for an unauthenticated caller, which the services read as
  * "anonymous" — so an absent user is never mistaken for a trusted one.
  *
- * Access rules are evaluated against this object: `roles` drives role-based
- * rules and field-level `access.read` callbacks. `role` repeats the first role
- * because rules and field callbacks
- * written against a single-role model read `user.role`; without it a
- * legitimately authorized caller would have fields stripped.
- *
- * Shared, and in two directions. Every REST collection and single operation
- * reaches its access check through this one function, so a field added or
- * dropped here changes what every access rule and field callback is judged on.
- * And the object itself is built by `buildUserContext`, which the preview-link
- * mint probe also calls — that shared constructor is what makes the probe reach
- * the same verdict the bearer's own read will, rather than a near-miss that
- * admits a caller the rule was written to refuse.
+ * The ONE builder of the dispatcher's user. Access rules are evaluated against
+ * this object: `roles` drives role-based rules and field-level `access.read`
+ * callbacks, and the token's verified claims let a rule decide on a tenant or a
+ * plan exactly as it does through the Direct API. Every REST collection, single
+ * and version operation reaches its access check through it, so a field added
+ * or dropped here changes what every rule is judged on, everywhere at once.
+ * The object itself is built by `buildUserContext`, which the preview-link mint
+ * probe also calls, so the probe reaches the verdict the bearer's read will.
  */
-export function readAuthenticatedUser(p: Params): UserContext | undefined {
-  if (!p._authenticatedUserId) return undefined;
-
+export function readAuthenticatedUser(): UserContext | undefined {
+  const caller = currentRequestCaller();
+  if (!caller) return undefined;
   return buildUserContext({
-    claims: readAuthenticatedClaims(p),
-    id: String(p._authenticatedUserId),
-    name: p._authenticatedUserName
-      ? String(p._authenticatedUserName)
-      : undefined,
-    email: p._authenticatedUserEmail
-      ? String(p._authenticatedUserEmail)
-      : undefined,
-    roles: readAuthenticatedRoles(p),
+    claims: caller.claims ? { ...caller.claims } : undefined,
+    id: caller.userId,
+    name: caller.name,
+    email: caller.email,
+    roles: readAuthenticatedRoles(),
   });
+}
+
+/**
+ * {@link readAuthenticatedUser} for a handler that cannot run without one.
+ *
+ * Every such route is authenticated before it is dispatched, so this refuses
+ * only a dispatch that skipped that, rather than acting for an empty id.
+ */
+export function requireAuthenticatedUser(): UserContext {
+  const user = readAuthenticatedUser();
+  if (!user) throw NextlyError.authRequired();
+  return user;
 }

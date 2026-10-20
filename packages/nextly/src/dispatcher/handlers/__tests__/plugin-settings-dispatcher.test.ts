@@ -87,17 +87,20 @@ describe("a settings update's record", () => {
     const { dispatchPluginSettings: dispatch } = await import(
       "../plugin-settings-dispatcher"
     );
+    // Imported after the reset as well, so the caller is set in the same
+    // request-context module the re-imported dispatcher reads it from.
+    const { asCaller, sessionCaller } = await import(
+      "../../__tests__/request-caller"
+    );
 
-    await dispatch(
-      container,
-      config,
-      "updatePluginSettings",
-      {
-        plugin: "acme-auth",
-        _authenticatedActorType: "user",
-        _authenticatedActorId: "user-7",
-      },
-      { since: "2026-01-01" }
+    await asCaller(sessionCaller({ userId: "user-7" }), () =>
+      dispatch(
+        container,
+        config,
+        "updatePluginSettings",
+        { plugin: "acme-auth" },
+        { since: "2026-01-01" }
+      )
     );
 
     expect(announced).toEqual([
