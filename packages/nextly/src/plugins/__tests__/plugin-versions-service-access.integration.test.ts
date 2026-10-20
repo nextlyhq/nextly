@@ -6,10 +6,13 @@
  * write made as a signed-in person is judged as the REST history routes judge
  * that person: `update-<collection>` to write at all, then the document must
  * be one they can read (refused as not found when it is not) and one they may
- * update, and an autosave needs the collection's autosave to be on. A write as
- * `{ as: "public" }` is refused as REST refuses an anonymous caller. A write as
- * the plugin itself, `{ as: "system" }` or no options, stays trusted. Every
- * refusal leaves the history as it was.
+ * update, and an autosave needs the collection's autosave to be on. The caller
+ * is the author, as on REST: a write that names no namer or author is recorded
+ * as the caller's, and one that names someone else is refused. A page's history
+ * has no REST write to be judged as, so a checked write to it is refused. A
+ * write as `{ as: "public" }` is refused as REST refuses an anonymous caller. A
+ * write as the plugin itself, `{ as: "system" }` or no options, stays trusted.
+ * Every refusal leaves the history as it was.
  */
 
 // Set before the harness boots (env validation reads it once).
@@ -67,6 +70,10 @@ interface PluginVersions {
   ): Promise<unknown>;
   get(ref: VersionRef, versionNo: number): Promise<{ label?: string | null }>;
   getAutosave(ref: VersionRef, createdBy: string | null): Promise<unknown>;
+  listEvents(
+    subject: { kind: "collection"; slug: string; id: string },
+    query?: { kinds?: string[] }
+  ): Promise<{ items: { actorKind: string; actorId: string | null }[] }>;
 }
 
 interface Handler {
@@ -113,6 +120,13 @@ describe.each(getConfiguredTestDialects())(
     function draftParts(ref: VersionRef): Promise<(string | null)[]> {
       return t.getService("versionsService").listWorkingDraftParts(ref);
     }
+
+    /** A page's history, which no REST route writes to. */
+    const pageRef = (entryId: string): VersionRef => ({
+      scopeKind: "page",
+      scopeSlug: "plugin_history_page",
+      entryId,
+    });
 
     function handler(): Handler {
       return t.getService("collectionsHandler") as unknown as Handler;
@@ -228,6 +242,38 @@ describe.each(getConfiguredTestDialects())(
         expect((await versions.get(ref, 1)).label).toBe("named");
       });
 
+      it("is recorded as the caller's when the call names no namer", async () => {
+        const id = await published(NOTES, "j");
+        await versions.setLabel(
+          refOf(NOTES, id),
+          1,
+          "mine",
+          undefined,
+          asUser(editorId)
+        );
+        const { items } = await versions.listEvents(
+          { kind: "collection", slug: NOTES, id },
+          { kinds: ["named"] }
+        );
+        expect(items.map(e => [e.actorKind, e.actorId])).toEqual([
+          ["user", editorId],
+        ]);
+      });
+
+      it("is refused when it names someone else as the namer, and the name stays", async () => {
+        const ref = refOf(NOTES, await published(NOTES, "k"));
+        await expect(
+          versions.setLabel(
+            ref,
+            1,
+            "theirs",
+            { actor: { type: "user", id: ownerId } },
+            asUser(editorId)
+          )
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect((await versions.get(ref, 1)).label ?? null).toBeNull();
+      });
+
       it("stays trusted for the plugin acting as itself", async () => {
         const ref = refOf(NOTES, await published(NOTES, "e"));
         await versions.setLabel(ref, 1, "by the plugin");
@@ -293,8 +339,60 @@ describe.each(getConfiguredTestDialects())(
         expect(await versions.getAutosave(ref, editorId)).toBeDefined();
       });
 
+      it("is filed under the caller when the call names no author", async () => {
+        const ref = refOf(NOTES, await published(NOTES, "l"));
+        await versions.autosave(
+          { ref, status: "draft", snapshot },
+          asUser(editorId)
+        );
+        expect(await versions.getAutosave(ref, editorId)).toBeDefined();
+      });
+
+      it("is refused when it names someone else as the author, and nothing is kept", async () => {
+        const ref = refOf(NOTES, await published(NOTES, "m"));
+        await expect(
+          versions.autosave(
+            { ref, status: "draft", snapshot, createdBy: ownerId },
+            asUser(editorId)
+          )
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect(await versions.getAutosave(ref, ownerId)).toBeUndefined();
+      });
+
       it("stays trusted for the plugin acting as itself", async () => {
         const ref = refOf(NOTES, await published(NOTES, "i"));
+        await versions.autosave({
+          ref,
+          status: "draft",
+          snapshot,
+          createdBy: ownerId,
+        });
+        expect(await versions.getAutosave(ref, ownerId)).toBeDefined();
+      });
+    });
+
+    describe("a page's history", () => {
+      const snapshot = { blocks: [] };
+
+      it("refuses a checked autosave, even to an editor, and keeps nothing", async () => {
+        const ref = pageRef("page-a");
+        await expect(
+          versions.autosave(
+            { ref, status: "draft", snapshot, createdBy: editorId },
+            asUser(editorId)
+          )
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect(await versions.getAutosave(ref, editorId)).toBeUndefined();
+      });
+
+      it("refuses a checked discard, even to an editor", async () => {
+        await expect(
+          versions.deleteWorkingDraft(pageRef("page-b"), null, asUser(editorId))
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+      });
+
+      it("stays trusted for the plugin acting as itself", async () => {
+        const ref = pageRef("page-c");
         await versions.autosave({
           ref,
           status: "draft",
