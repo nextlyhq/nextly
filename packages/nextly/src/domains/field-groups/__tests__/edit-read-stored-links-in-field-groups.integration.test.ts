@@ -73,7 +73,7 @@ interface Fixture {
 }
 
 /** The fields of a `card`: every kind of link a field group can hold. */
-const CARD_LINKS = ["notes", "mixed", "image"] as const;
+const CARD_LINKS = ["cardNotes", "mixedLinks", "cardImage"] as const;
 
 /**
  * `card` holds a to-many relationship to `notes`, a multi-collection one with
@@ -90,18 +90,22 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
         slug: "card",
         fields: [
           text({ name: "heading" }),
-          relationship({ name: "notes", relationTo: "notes", hasMany: true }),
           relationship({
-            name: "mixed",
+            name: "cardNotes",
+            relationTo: "notes",
+            hasMany: true,
+          }),
+          relationship({
+            name: "mixedLinks",
             relationTo: ["pages", "notes"],
             hasMany: true,
           }),
-          upload({ name: "image", relationTo: "media" }),
+          upload({ name: "cardImage", relationTo: "media" }),
         ],
       }),
       defineFieldGroup({
         slug: "quote",
-        fields: [relationship({ name: "note", relationTo: "notes" })],
+        fields: [relationship({ name: "quoteNote", relationTo: "notes" })],
       }),
     ],
     collections: [
@@ -213,17 +217,17 @@ async function boot(dialect: TestDialect): Promise<Fixture> {
 
   const card = (heading: string): Doc => ({
     heading,
-    notes: [notes[1], notes[0], deletedNote],
-    mixed: [
+    cardNotes: [notes[1], notes[0], deletedNote],
+    mixedLinks: [
       { relationTo: "pages", value: pages[0] },
       { relationTo: "notes", value: notes[0] },
       { relationTo: "pages", value: pages[1] },
     ],
-    image: media,
+    cardImage: media,
   });
   const blocks = [
     typed("card", card("In a zone")),
-    typed("quote", { note: notes[0] }),
+    typed("quote", { quoteNote: notes[0] }),
   ];
   const refId = await make("refs", {
     name: "parent",
@@ -269,7 +273,7 @@ function allLinks(doc: Doc): Doc {
     cards: rows(doc.cards).map(row => linksOf(row)),
     blocks: rows(doc.blocks).map(row =>
       readFieldGroupType(row) === "quote"
-        ? { quote: linksOf(row, ["note"]) }
+        ? { quote: linksOf(row, ["quoteNote"]) }
         : { card: linksOf(row) }
     ),
   };
@@ -341,8 +345,12 @@ describe.each(getConfiguredTestDialects())(
     it("names a hidden link exactly as a link to a deleted row, inside a field group", async () => {
       const fx = await boot(dialect);
       const card = instance((await readRef(fx, asEditor(fx), 0)).card);
-      expect(card.notes).toEqual([fx.notes[1], fx.notes[0], fx.deletedNote]);
-      expect(card.image).toBe(fx.media);
+      expect(card.cardNotes).toEqual([
+        fx.notes[1],
+        fx.notes[0],
+        fx.deletedNote,
+      ]);
+      expect(card.cardImage).toBe(fx.media);
     });
 
     it("keeps an entry's hidden links in a field group, a repeatable one and a dynamic zone, in order, on a save", async () => {
@@ -358,7 +366,7 @@ describe.each(getConfiguredTestDialects())(
       const after = await readRef(fx, asSystem, 0);
       expect(after.name).toBe("renamed");
       expect(allLinks(after)).toEqual(before);
-      expect(instance(after.card).mixed).toEqual([
+      expect(instance(after.card).mixedLinks).toEqual([
         { relationTo: "pages", value: fx.pages[0] },
         { relationTo: "notes", value: fx.notes[0] },
         { relationTo: "pages", value: fx.pages[1] },
@@ -380,8 +388,8 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (after.blocks as Doc[]).map(row => readFieldGroupType(row))
       ).toEqual(["card", "quote"]);
-      expect(linksOf((after.blocks as Doc[])[1], ["note"])).toEqual({
-        note: fx.notes[0],
+      expect(linksOf((after.blocks as Doc[])[1], ["quoteNote"])).toEqual({
+        quoteNote: fx.notes[0],
       });
     });
 
@@ -390,15 +398,15 @@ describe.each(getConfiguredTestDialects())(
       const read = await readRef(fx, asEditor(fx), 0);
       const card = instance(read.card);
       await saveRef(fx, {
-        card: { ...card, notes: [fx.notes[1]], image: null },
+        card: { ...card, cardNotes: [fx.notes[1]], cardImage: null },
         // The quote, whose only link is hidden, is removed from the zone.
         blocks: (read.blocks as Doc[]).filter(
           row => readFieldGroupType(row) !== "quote"
         ),
       });
       const after = await readRef(fx, asSystem, 0);
-      expect(instance(after.card).notes).toEqual([fx.notes[1]]);
-      expect(instance(after.card).image ?? null).toBeNull();
+      expect(instance(after.card).cardNotes).toEqual([fx.notes[1]]);
+      expect(instance(after.card).cardImage ?? null).toBeNull();
       expect(
         (after.blocks as Doc[]).map(row => readFieldGroupType(row))
       ).toEqual(["card"]);
