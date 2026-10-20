@@ -71,6 +71,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { BaseService } from "../../../services/base-service";
 import { consoleLogger } from "../../../services/shared";
+import { UserMutationService } from "../../users/services/user-mutation-service";
 import type { AuthService } from "../services/auth-service";
 
 /** The slice of the Drizzle instance and of a transaction this suite drives. */
@@ -246,12 +247,13 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
    * Run `write` in a transaction of the test's own and keep it open while
    * `during` starts, then commit it. Returns what `during` started, which
    * is still waiting on the account when the write commits. Wrapped, so
-   * awaiting this does not also await the flow.
+   * awaiting this does not also await the flow. With `until`, PostgreSQL
+   * and MySQL release the write once it settles, in place of the lock.
    */
   async function holdWrite<T>(
     write: (tx: TestDb) => Promise<unknown>,
     during: () => Promise<T>,
-    options: { atLock?: boolean } = {}
+    options: { until?: () => Promise<unknown> } = {}
   ): Promise<{ flow: Promise<T> }> {
     let release!: () => void;
     const released = new Promise<void>(resolve => (release = resolve));
@@ -280,8 +282,10 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
     // Rejections are read by the caller; this keeps one from going unhandled
     // while the write is still open.
     started.catch(() => undefined);
-    if (dialect === "sqlite" || options.atLock === false) {
+    if (dialect === "sqlite") {
       await new Promise(resolve => setTimeout(resolve, 300));
+    } else if (options.until) {
+      await options.until();
     } else {
       await Promise.race([
         atLock,
@@ -486,6 +490,15 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
         const id = await account(a);
         const raw = randomBytes(32).toString("hex");
         const table = kind.table(tables);
+        // The second change has read the account at a once it asks which
+        // token tables to revoke in: after its read, before its transaction,
+        // which then waits behind the first.
+        const asked = vi.spyOn(
+          UserMutationService.prototype as unknown as {
+            presentTokenTables: () => Promise<unknown>;
+          },
+          "presentTokenTables"
+        );
 
         const { flow: second } = await holdWrite(
           async tx => {
@@ -501,9 +514,15 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
             });
           },
           () => moveTo(id, b),
-          { atLock: false }
+          {
+            until: () =>
+              vi.waitFor(() => expect(asked).toHaveBeenCalled(), {
+                timeout: 20_000,
+              }),
+          }
         );
         await second;
+        asked.mockRestore();
 
         expect(await tokensFor(kind, raw)).toHaveLength(1);
         await kind.redeem(auth, raw);
