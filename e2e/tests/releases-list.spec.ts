@@ -103,31 +103,53 @@ async function schedule(
   );
 }
 
-/** The titles the open tab lists, page by page until the last. */
-async function titlesInTab(page: Page): Promise<string[]> {
-  const table = page.getByRole("table");
+/** Rows per page: the list starts at 25. */
+const PAGE_SIZE = 25;
+
+/**
+ * The titles the open tab lists, page by page, for a tab holding `total`.
+ *
+ * Each page is read once the pager says it is showing that page of that
+ * total, and the table holds that many rows, so a page is never read while
+ * the one before it is still on screen.
+ */
+async function titlesInTab(page: Page, total: number): Promise<string[]> {
+  const links = page.getByRole("table").locator("tbody tr td:first-child a");
   const titles: string[] = [];
-  for (;;) {
-    await expect(table.locator("tbody tr").first()).toBeVisible();
-    titles.push(
-      ...(await table.locator("tbody tr td:first-child a").allTextContents())
-    );
-    const next = page.getByRole("button", { name: "Go to next page" });
-    if (!(await next.isVisible()) || (await next.isDisabled())) break;
-    const first = await table
-      .locator("tbody tr td:first-child a")
-      .first()
-      .textContent();
-    await next.click();
+  for (let from = 1; from <= total; from += PAGE_SIZE) {
+    const to = Math.min(total, from + PAGE_SIZE - 1);
     await expect(
-      table.locator("tbody tr td:first-child a").first()
-    ).not.toHaveText(first ?? "");
+      page.getByText(new RegExp(`Showing ${from}.${to} of ${total} releases?$`))
+    ).toBeVisible();
+    await expect(links).toHaveCount(to - from + 1);
+    titles.push(...(await links.allTextContents()));
+    if (to < total) {
+      await page.getByRole("button", { name: "Go to next page" }).click();
+    }
   }
   return titles.map(title => title.trim());
 }
 
+/**
+ * Search the list, and wait until the open tab's page is the searched one.
+ *
+ * Waited for by its response, not by what the screen shows: the search box
+ * waits a moment before it searches, and on a database holding only this
+ * run's releases the unsearched list already reads the same. A page turned
+ * in that moment is rightly sent back to the first page when the search
+ * lands, as any new search is.
+ */
 async function searchFor(page: Page, text: string): Promise<void> {
+  const searched = page.waitForResponse(
+    response =>
+      response.url().includes("/admin/api/releases?") &&
+      response.url().includes(`search=${encodeURIComponent(text)}`) &&
+      // The tab's page, not one of the tab counts, which ask for no page.
+      new URL(response.url()).searchParams.has("page") &&
+      response.ok()
+  );
   await page.getByPlaceholder("Search by title or description").fill(text);
+  await searched;
 }
 
 test.describe("the Releases list", () => {
@@ -194,18 +216,18 @@ test.describe("the Releases list", () => {
     await expect(tab("Done (2)")).toBeVisible();
 
     // Upcoming pages like the other tables: 25, then the rest, soonest first.
-    await expect(page.getByText(/Showing 1.25 of 27 releases/)).toBeVisible();
-    const inUpcoming = await titlesInTab(page);
+    const inUpcoming = await titlesInTab(page, 27);
     expect(inUpcoming).toEqual(upcoming);
 
     const seen: Record<string, string[]> = { upcoming: inUpcoming };
-    for (const [key, label] of [
-      ["attention", "Needs attention (2)"],
-      ["drafts", "Drafts (1)"],
-      ["done", "Done (2)"],
+    for (const [key, label, total] of [
+      ["attention", "Needs attention (2)", 2],
+      ["drafts", "Drafts (1)", 1],
+      ["done", "Done (2)", 2],
     ] as const) {
       await tab(label).click();
-      seen[key] = await titlesInTab(page);
+      await expect(tab(label)).toHaveAttribute("aria-selected", "true");
+      seen[key] = await titlesInTab(page, total);
     }
     // Stopped first: it will not run until somebody acts.
     expect(seen.attention).toEqual([stopped, overdue]);
