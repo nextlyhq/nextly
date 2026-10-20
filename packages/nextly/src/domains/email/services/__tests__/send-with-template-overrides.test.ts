@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { EmailProviderService } from "../email-provider-service";
 import { EmailService } from "../email-service";
+import { renderTemplate } from "../render-template";
 import type { EmailTemplateService } from "../email-template-service";
 
 const logger = {
@@ -50,6 +51,14 @@ function buildService() {
     resolveForSend: vi
       .fn()
       .mockResolvedValue({ template: dbTemplate, preferCode: false }),
+    // Sends render through the template service, as the real one does.
+    renderStored: (
+      template: Parameters<typeof renderTemplate>[0],
+      data: Record<string, unknown>
+    ) =>
+      Promise.resolve(
+        renderTemplate(template, null, data, { appName: "Nextly" })
+      ),
   } as unknown as EmailTemplateService;
 
   const service = new EmailService(

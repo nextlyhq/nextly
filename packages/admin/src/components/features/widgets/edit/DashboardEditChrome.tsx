@@ -56,7 +56,7 @@ export interface DashboardEditChromeProps {
   /** Saving, which over an unreadable stored layout asks first. */
   saveRequest: SaveRequest;
   /** Where the bar and the Customize button register for focus. */
-  focus: Pick<DashboardFocus, "barRef" | "customizeRef">;
+  focus: Pick<DashboardFocus, "barRef" | "customizeRef" | "addWidgetRef">;
 }
 
 /** One of the two questions this chrome asks before acting. */
@@ -229,6 +229,7 @@ export function DashboardEditChrome({
           onCancel={on.cancel}
           onReset={() => setAskingReset(true)}
           onAddWidget={on.addWidget}
+          addWidgetRef={focus.addWidgetRef}
           barRef={focus.barRef}
           customizeRef={focus.customizeRef}
         >

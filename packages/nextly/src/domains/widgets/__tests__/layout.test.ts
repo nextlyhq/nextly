@@ -449,17 +449,27 @@ describe("retired widgets", () => {
   });
 
   it("keeps the widest carried width when the successor allows none of them", () => {
-    // Count allows no full width. The merged card keeps the reader's widest
-    // choice, as every stored card keeps a width its widget stops allowing:
-    // the admin draws it at the nearest width Count allows, and the choice
-    // returns if Count allows it again. Picking an allowed width here would
-    // be a second nearest-width rule beside the admin's.
+    // A successor allowing only a quarter, and two cards of other widths, the
+    // narrower FIRST: keeping the first card's width, or any one card's,
+    // gives half, and only the widest-carried rule gives full. The merged card
+    // keeps the reader's widest choice, as every stored card keeps a width its
+    // widget stops allowing: the admin draws it at the nearest allowed width,
+    // and the choice returns if the successor allows it again. Picking an
+    // allowed width here would be a second nearest-width rule beside the
+    // admin's.
+    const quarterOnly: WidgetRetirement = {
+      ...count,
+      allowedWidths: ["quarter"],
+    };
     const merged = applyRetirements(
       [
-        card("first", "gen/count", { width: "full", config: of("posts") }),
+        card("first", "gen/count", { width: "half", config: of("posts") }),
         card("second", "gen/health", { width: "full", config: of("posts") }),
       ],
-      retirements
+      new Map<string, WidgetRetirement>([
+        ["gen/count", quarterOnly],
+        ["gen/health", quarterOnly],
+      ])
     );
     expect(merged.map(p => [p.id, p.widgetId, p.width])).toEqual([
       ["first", "core/count", "full"],

@@ -12,6 +12,7 @@ import { UserService } from "../user-service";
 function serviceWith(passwordHasher?: {
   hash: typeof hashPassword;
   verify: typeof verifyPassword;
+  reach?: number | "unbounded";
 }) {
   const updateUser = vi.fn().mockResolvedValue({
     id: "user-1",
@@ -39,6 +40,7 @@ describe("UserService.update and the app's password hasher", () => {
     const { service, updateUser } = serviceWith({
       hash: hashPassword,
       verify: verifyPassword,
+      reach: "unbounded",
     });
 
     await service.forPlugins().update("user-1", { name: "Renamed" }, {});
@@ -62,5 +64,32 @@ describe("UserService.update and the app's password hasher", () => {
       "plugin",
       { customPasswordHasher: false }
     );
+  });
+});
+
+describe("UserService.changePassword and the R-5 rule", () => {
+  it("refuses a new password the rule refuses, and hashes nothing", async () => {
+    const hash = vi.fn(async () => "new-hash");
+    const changeOwnPasswordHash = vi.fn().mockResolvedValue(true);
+    const accountService = {
+      getUserPasswordHashById: vi
+        .fn()
+        .mockResolvedValue(await hashPassword("Current-Password-9", 4)),
+      changeOwnPasswordHash,
+    };
+    const service = new UserService(
+      {} as never,
+      { updateUser: vi.fn() } as never,
+      accountService as never,
+      { hash, verify: verifyPassword, reach: "unbounded" },
+      silentLogger as never
+    );
+
+    await expect(
+      service.changePassword("user-1", "Current-Password-9", "password")
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(hash).not.toHaveBeenCalled();
+    expect(changeOwnPasswordHash).not.toHaveBeenCalled();
   });
 });
