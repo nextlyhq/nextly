@@ -42,6 +42,11 @@
 // PR 4 of unified-error-system migration: ServiceError → NextlyError. The
 // inner services now throw NextlyError directly and return data without an
 // envelope, so this façade just propagates errors and shapes the response.
+import {
+  assertPasswordHasherContract,
+  validatePasswordStrength,
+  type PasswordHasher,
+} from "../../../auth/password";
 import { actorForWrite } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
 import type {
@@ -130,12 +135,11 @@ export interface ListUsersQueryOptions {
 }
 
 /**
- * Password hasher interface for authentication
+ * The digester contract lives in the policy module — the leaf the password
+ * checks read — and is re-exported here for the import paths this service's
+ * consumers already hold.
  */
-export interface PasswordHasher {
-  hash(password: string): Promise<string>;
-  verify(password: string, hash: string): Promise<boolean>;
-}
+export type { PasswordHasher } from "../../../auth/password/policy";
 
 // ============================================================
 // UserService
@@ -167,7 +171,14 @@ export class UserService {
     private readonly passwordHasher?: PasswordHasher,
     private readonly logger: Logger = consoleLogger,
     private readonly caller: UserWriteCaller = "app"
-  ) {}
+  ) {
+    // The configured digester must declare its reach contract before anything
+    // consults it. This instance passes it explicitly to the checks its own
+    // custom-hasher flow runs (changePassword), so it is never published as a
+    // process-wide default — a check defaults to the digester its own flow
+    // hashes with, which for every core flow is bcrypt.
+    if (passwordHasher) assertPasswordHasherContract(passwordHasher);
+  }
 
   /**
    * @internal The same service as plugins receive it in `ctx.services.users`.
@@ -580,6 +591,22 @@ export class UserService {
           userId,
           reason: auditReason("current-password-mismatch"),
         },
+      });
+    }
+
+    // R-5: the rule binds whenever a password is set, a change included. The
+    // digester in hand answers the reach too — a custom digester's own
+    // contract, not the default 72 bytes.
+    const passwordStrength = validatePasswordStrength(newPassword, {
+      hasher: this.passwordHasher,
+    });
+    if (!passwordStrength.ok) {
+      throw NextlyError.validation({
+        errors: passwordStrength.errors.map(message => ({
+          path: "newPassword",
+          code: "WEAK_PASSWORD",
+          message,
+        })),
       });
     }
 

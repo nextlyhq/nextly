@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { consoleLogger } from "../types";
+
 // Zod v4 schema for environment variables with conditional validation
 // for production and database dialects.
 /** The dialects this package supports. One list; the enum and the type both come from it. */
@@ -167,7 +169,7 @@ const _envObject = z
     // `!== undefined` (not truthiness) so an explicit empty string — which also
     // fails the auth-boundary length gate — still produces the warning.
     if (val.CRON_SECRET !== undefined && val.CRON_SECRET.length < 32) {
-      console.warn(
+      consoleLogger.warn(
         "⚠️  CRON_SECRET is shorter than 32 characters and will NOT be accepted " +
           "as a webhook drain secret. Use a >= 32-char value (or NEXTLY_DRAIN_SECRET) " +
           "if you rely on the webhooks drain route to authorize scheduled runs."
@@ -241,7 +243,7 @@ const _envObject = z
     if (dialect === "sqlite" && !val.DATABASE_URL && !val.SQLITE_PATH) {
       // Only warn in development, don't error (factory has default)
       if (!isProd) {
-        console.warn(
+        consoleLogger.warn(
           "⚠️  Neither DATABASE_URL nor SQLITE_PATH set for SQLite. " +
             "Defaulting to file:./data/nextly.db"
         );
@@ -268,9 +270,9 @@ export type Env = BaseEnv & {
 function validateEnv(): Env {
   const parsed = _envSchema.safeParse(process.env);
   if (!parsed.success) {
-    console.error("Environment validation failed:");
+    consoleLogger.error("Environment validation failed");
     parsed.error.issues.forEach(issue => {
-      console.error(`  ${issue.path.join(".")}: ${issue.message}`);
+      consoleLogger.error(`  ${issue.path.join(".")}: ${issue.message}`);
     });
     throw new Error("Invalid environment configuration");
   }

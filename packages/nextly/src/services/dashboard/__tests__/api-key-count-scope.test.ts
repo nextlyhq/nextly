@@ -85,8 +85,8 @@ describe("the key count covers the keys the key list shows", () => {
     caller.userId = userId;
     if (isSuper) superAdmins.add(userId);
     const listsAs = await listScope();
-    // The control: the two callers really are listed differently.
-    expect(listsAs.kind).toBe(isSuper ? "all" : "owner");
+    // Anyone who may read keys is listed every key, a super-admin or not.
+    expect(listsAs.kind).toBe("all");
     expect(await apiKeyCountScope(auth(userId))).toEqual(listsAs);
   });
 });

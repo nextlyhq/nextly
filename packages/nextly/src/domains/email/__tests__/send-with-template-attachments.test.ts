@@ -13,6 +13,7 @@ import type { Logger } from "../../../shared/types";
 import type { EmailProviderService } from "../services/email-provider-service";
 import type { EmailAttachmentSource } from "../services/email-service";
 import { EmailService } from "../services/email-service";
+import { renderTemplate } from "../services/render-template";
 import type { EmailTemplateService } from "../services/email-template-service";
 import type { EmailProviderAdapter } from "../types";
 
@@ -80,6 +81,18 @@ function build(templateAttachments: EmailTemplateRecord["attachments"]) {
 
   const templateService = {
     getTemplateBySlug: vi.fn().mockResolvedValue(templateRecord),
+    // The send path asks which version to render; the stored row comes first.
+    resolveForSend: vi
+      .fn()
+      .mockResolvedValue({ template: templateRecord, preferCode: false }),
+    // Sends render through the template service, as the real one does.
+    renderStored: (
+      template: Parameters<typeof renderTemplate>[0],
+      data: Record<string, unknown>
+    ) =>
+      Promise.resolve(
+        renderTemplate(template, null, data, { appName: "Nextly" })
+      ),
     getLayout: vi.fn(),
   } as unknown as EmailTemplateService;
 
@@ -189,6 +202,9 @@ describe("EmailService.sendWithTemplate — code-first template attachments", ()
     // the code-first template.
     const templateService = {
       getTemplateBySlug: vi.fn().mockResolvedValue(null),
+      resolveForSend: vi
+        .fn()
+        .mockResolvedValue({ template: null, preferCode: true }),
       getLayout: vi.fn(),
     } as unknown as EmailTemplateService;
 

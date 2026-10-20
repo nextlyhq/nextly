@@ -653,6 +653,8 @@ result.email; // address whose password was reset
 
 **Returns:** `{ success: true, email? }`. Throws `NextlyError` (`VALIDATION_ERROR` / `NOT_FOUND`) when the token is invalid or expired.
 
+A token works only for the account it was issued for, while that account still holds the address it was sent to: changing the account's address or deleting the account revokes it ([Authentication](/docs/guides/authentication#reset-and-verification-links-belong-to-one-account)).
+
 ### verifyEmail
 
 ```typescript
@@ -678,6 +680,24 @@ The Direct API also exposes typed namespaces for users, media, forms, field grou
 | `nextly.permissions` | RBAC permissions | `find`, `findByID`, `create`, `delete` |
 | `nextly.access` | Permission checks | `check`, `checkApiKey` |
 | `nextly.apiKeys` | API keys | `list`, `findByID`, `create`, `update`, `revoke` |
+
+`nextly.apiKeys`, on the module-level `nextly` and on `await getNextly()` alike, honours `overrideAccess: false`, set on the call or on the instance (`new Nextly({ overrideAccess: false, user })`), and judges the `user` the way the admin's API key routes judge them:
+
+- Each operation needs the matching `api-keys` permission, which then reaches every key: reading, updating and revoking anyone's.
+- `create` makes a key only for that user.
+- A key's owner is shown only to a `user` who may read users, or on their own keys.
+- Making or changing keys as an API key (`actor`) is refused.
+- A call that names no `user` is refused with `AUTH_REQUIRED`.
+
+Trusted calls, the default, are unchanged.
+
+The writes of `nextly.roles` (`create`, `update`, `delete`, `setPermissions`), `nextly.permissions` (`create`, `delete`) and `nextly.fieldGroups` (`create`, `update`, `delete`) honour `overrideAccess: false` the same way. Each asks of its `user` the permission the matching REST route asks:
+
+- roles: `create-roles`, `update-roles` (for `setPermissions` too) or `delete-roles`;
+- permissions: `create-permissions` or `delete-permissions`, or `manage-permissions` for either;
+- field groups: `create-settings`, `update-settings` or `delete-settings`, or `manage-settings` for any.
+
+A super-admin passes. An API key (`actor`) is judged by its own grants. A checked call that names no `user` is refused with `AUTH_REQUIRED`, and every refusal comes before anything is written.
 
 The full TypeScript surface is generated from [`packages/nextly/src/direct-api/namespaces/`](https://github.com/nextlyhq/nextly/tree/main/packages/nextly/src/direct-api/namespaces).
 

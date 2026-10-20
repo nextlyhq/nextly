@@ -22,6 +22,8 @@ import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 
+import { afterGrantsChanged } from "./role-grants-changed";
+
 interface PermissionsTableLike {
   resource: unknown;
   action: unknown;
@@ -762,6 +764,17 @@ export class PermissionService extends BaseService {
           .set(updateData)
           .where(eq(table.id, permissionId))
       );
+      // A new action, resource or slug changes what every role holding this
+      // permission grants, so scheduled releases are checked again against
+      // it, once the write has landed and the cached answers are retired.
+      if (
+        (["action", "resource", "slug"] as const).some(
+          field =>
+            changes[field] !== undefined && changes[field] !== permission[field]
+        )
+      ) {
+        await afterGrantsChanged();
+      }
     } catch (err) {
       // Re-throw NextlyError instances unchanged (e.g. our notFound above);
       // map raw DB errors via fromDatabaseError. The legacy override message

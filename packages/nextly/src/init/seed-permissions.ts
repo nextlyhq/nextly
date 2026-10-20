@@ -21,6 +21,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { collectCustomPermissions } from "../plugins/permissions/collect-permissions";
 import { collectRoles } from "../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../plugins/roles/seed-roles";
+import { consoleLogger } from "../shared/types";
 
 /**
  * Seed system, collection, single and plugin-declared permissions, then grant
@@ -236,7 +237,7 @@ async function seedingStep(
       getService("logger").error(message);
     } catch {
       // No logger registered: the boot that failed this early still says so.
-      console.error(message);
+      consoleLogger.error(message);
     }
     return false;
   }

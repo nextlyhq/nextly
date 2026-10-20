@@ -17,7 +17,7 @@ import { NextlyError } from "../errors/nextly-error";
 import { parsePermissionSlug } from "../plugins/routes/permission-slug";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
 
-import { ruleFacingPermissions } from "./authenticated-scope";
+import { scopeGrants } from "./authenticated-scope";
 import {
   codeAccessAllows,
   getRBACService,
@@ -57,12 +57,10 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
       userId: caller.user.id,
       authMethod: "api-key",
       permissions: [...scope.permissions],
-      // Only a scope that carried the ROWS can spell a grant the way a rule
-      // reads it; one that held slugs alone is left without, and the rule
-      // gets the stored spelling as it always did.
-      ...(scope.grants
-        ? { rulePermissions: ruleFacingPermissions(scope) }
-        : {}),
+      // The rows behind those slugs, where the scope carried them: what gives
+      // a rule each grant's earlier spelling for its deprecation release. A
+      // scope that held slugs alone hands a rule the slugs.
+      ...(scope.grants ? { grants: scopeGrants(scope) } : {}),
       // The key's OWN roles when authentication resolved them; a key judged
       // on its owner's roles is the same defect as one judged on its owner's
       // permissions, in the direction that denies.
@@ -94,7 +92,7 @@ export function readAccessCaller(caller: ReadCaller): ReadAccessCaller {
  *   an administrator equivalent to their full account.
  * - Code-defined `access.read` is consulted on both paths.
  *
- * `slug` is entity-generic — `getRegisteredAccess` reads the collection and
+ * `slug` is entity-generic — `getRegisteredTarget` reads the collection and
  * single maps alike, so a Single resolves its own rules with no branch here.
  */
 export async function canReadEntity(
@@ -108,9 +106,9 @@ export async function canReadEntity(
   if (caller.authMethod === "api-key") {
     if (!caller.permissions.includes(`read-${slug}`)) return false;
 
-    const codeAccess = rbac?.getRegisteredAccess(slug);
-    if (!codeAccess) return true;
-    return codeAccessAllows(codeAccess, "read", slug, caller);
+    const target = rbac?.getRegisteredTarget(slug);
+    if (!target) return true;
+    return codeAccessAllows(target, "read", caller);
   }
 
   // Session: `checkAccess` already composes super-admin, code-defined access

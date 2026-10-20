@@ -49,8 +49,22 @@ interface Direct {
     create(a: { data: Record<string, unknown> }): Promise<{
       item: { id: string };
     }>;
+    setPermissions(a: {
+      roleId: string;
+      permissionIds: string[];
+    }): Promise<unknown>;
   };
 }
+
+/** A refusal as the error envelope carries it. */
+interface Refusal {
+  status: number;
+  code: string;
+  message: string;
+}
+
+/** The sentence every refusal for want of permission reads, whatever its code. */
+const CANONICAL_FORBIDDEN = "You don't have permission to perform this action.";
 
 interface Grant {
   slug: string;
@@ -128,6 +142,51 @@ describe.each(getConfiguredTestDialects())(
         }),
         { params: Promise.resolve({ params: path }) }
       );
+    }
+
+    function post(
+      path: string[],
+      headers: Record<string, string>,
+      body: unknown
+    ) {
+      return createDynamicHandlers().POST(
+        new Request(`http://localhost/api/${path.join("/")}`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        { params: Promise.resolve({ params: path }) }
+      );
+    }
+
+    /** A write to a key route, as the admin sends one with the session cookie. */
+    function write(
+      method: "PATCH" | "DELETE",
+      path: string[],
+      headers: Record<string, string>,
+      body?: unknown
+    ) {
+      const handlers = createDynamicHandlers();
+      const request = new Request(`http://localhost/api/${path.join("/")}`, {
+        method,
+        headers: { ...headers, "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const context = { params: Promise.resolve({ params: path }) };
+      return method === "PATCH"
+        ? handlers.PATCH(request, context)
+        : handlers.DELETE(request, context);
+    }
+
+    async function refusal(res: Response): Promise<Refusal> {
+      const body = (await res.json()) as {
+        error: { code: string; message: string };
+      };
+      return {
+        status: res.status,
+        code: body.error.code,
+        message: body.error.message,
+      };
     }
 
     /** The summary the form asks for, as sorted slugs. */
@@ -262,17 +321,36 @@ describe.each(getConfiguredTestDialects())(
         );
       });
 
-      it("refuses a role above its creator, as creating the key would", async () => {
+      it("refuses a role above its creator with a code of its own, as creating the key would", async () => {
         const headers = await session(editorId, [editorRoleId]);
+        // The code says which refusal this is, so the form can tell it from
+        // a person who may not create keys at all; the sentence stays the one
+        // every refusal for want of permission reads, naming no permission.
+        const aboveCreator: Refusal = {
+          status: 403,
+          code: "API_KEY_ROLE_ABOVE_CREATOR",
+          message: CANONICAL_FORBIDDEN,
+        };
 
         expect(
-          (
-            await abilities(
+          await refusal(
+            await get(
+              ["api-keys", "abilities"],
               headers,
               `?tokenType=role-based&roleId=${widerRoleId}`
             )
-          ).status
-        ).toBe(403);
+          )
+        ).toEqual(aboveCreator);
+        expect(
+          await refusal(
+            await post(["api-keys"], headers, {
+              name: "too wide",
+              tokenType: "role-based",
+              roleId: widerRoleId,
+              expiresIn: "unlimited",
+            })
+          )
+        ).toEqual(aboveCreator);
         await expect(
           keys.createApiKey(editorId, {
             name: "too wide",
@@ -280,7 +358,57 @@ describe.each(getConfiguredTestDialects())(
             roleId: widerRoleId,
             expiresIn: "unlimited",
           })
-        ).rejects.toMatchObject({ statusCode: 403 });
+        ).rejects.toMatchObject({
+          statusCode: 403,
+          code: "API_KEY_ROLE_ABOVE_CREATOR",
+        });
+      });
+
+      it("refuses a person who loses the permission to create keys while the form is open, as plainly FORBIDDEN", async () => {
+        const makersRoleId = await role("key-makers", [
+          `read-${POSTS}`,
+          "create-api-keys",
+        ]);
+        const makerId = await account("maker@example.com", [makersRoleId]);
+        const headers = await session(makerId, [makersRoleId]);
+        expect((await abilities(headers, "?tokenType=read-only")).status).toBe(
+          200
+        );
+
+        // Taken away while the form is open: the same session asks again.
+        const seeded = await direct.permissions.find({ limit: 1000 });
+        await direct.roles.setPermissions({
+          roleId: makersRoleId,
+          permissionIds: seeded.items
+            .filter(p => p.slug === `read-${POSTS}`)
+            .map(p => p.id),
+        });
+
+        const lost: Refusal = {
+          status: 403,
+          code: "FORBIDDEN",
+          message: CANONICAL_FORBIDDEN,
+        };
+        expect(
+          await refusal(
+            await get(
+              ["api-keys", "abilities"],
+              headers,
+              "?tokenType=read-only"
+            )
+          )
+        ).toEqual(lost);
+        // Asked about a role above them too, they are told they may not
+        // create keys: that is checked first, so the ceiling never answers.
+        expect(
+          await refusal(
+            await get(
+              ["api-keys", "abilities"],
+              headers,
+              `?tokenType=role-based&roleId=${widerRoleId}`
+            )
+          )
+        ).toEqual(lost);
       });
 
       it("refuses a role-based summary without a role, and a role for another type", async () => {
@@ -426,6 +554,88 @@ describe.each(getConfiguredTestDialects())(
           authorization: `Bearer ${peopleReader.key}`,
         });
         expect(withUsers.some(item => item.owner?.id === editorId)).toBe(true);
+      });
+
+      it("lists every key to a person who may read keys, naming owners only if they may read users", async () => {
+        const theirs = await keys.createApiKey(superAdminId, {
+          name: "someone else's",
+          tokenType: "read-only",
+          expiresIn: "unlimited",
+        });
+        const mine = await keys.createApiKey(editorId, {
+          name: "the editor's own",
+          tokenType: "read-only",
+          expiresIn: "unlimited",
+        });
+        // The editor may read keys but not users.
+        const editor = await session(editorId, [editorRoleId]);
+        const items = await listed(editor);
+        const row = (id: string) => items.find(item => item.id === id);
+
+        expect(row(theirs.meta.id)).toBeDefined();
+        expect(row(theirs.meta.id)?.owner).toBeNull();
+        expect(row(mine.meta.id)?.owner?.id).toBe(editorId);
+        const single = await get(["api-keys", theirs.meta.id], editor);
+        expect(single.status).toBe(200);
+        expect(((await single.json()) as ListedKey).owner).toBeNull();
+
+        const auditorRoleId = await role("key-and-people-auditors", [
+          "read-api-keys",
+          "read-users",
+        ]);
+        const auditorId = await account("auditor@example.com", [auditorRoleId]);
+        const seen = await listed(await session(auditorId, [auditorRoleId]));
+        expect(seen.find(item => item.id === theirs.meta.id)?.owner?.id).toBe(
+          superAdminId
+        );
+      });
+
+      it("lets the holder of the permission edit or revoke anyone's key, and a reader neither", async () => {
+        const target = await keys.createApiKey(superAdminId, {
+          name: "anyone's key",
+          tokenType: "read-only",
+          expiresIn: "unlimited",
+        });
+        const stored = () =>
+          keys.getApiKeyById(target.meta.id, "", { allUsers: true });
+
+        // May read keys, not change them.
+        const editor = await session(editorId, [editorRoleId]);
+        expect(
+          (
+            await write("PATCH", ["api-keys", target.meta.id], editor, {
+              name: "by a reader",
+            })
+          ).status
+        ).toBe(403);
+        expect(
+          (await write("DELETE", ["api-keys", target.meta.id], editor)).status
+        ).toBe(403);
+        expect(await stored()).toMatchObject({
+          name: "anyone's key",
+          isActive: true,
+        });
+
+        const updaterRoleId = await role("key-updaters", ["update-api-keys"]);
+        const updaterId = await account("updater@example.com", [updaterRoleId]);
+        const renamed = await write(
+          "PATCH",
+          ["api-keys", target.meta.id],
+          await session(updaterId, [updaterRoleId]),
+          { name: "renamed by a key updater" }
+        );
+        expect(renamed.status).toBe(200);
+        expect((await stored())?.name).toBe("renamed by a key updater");
+
+        const revokerRoleId = await role("key-revokers", ["delete-api-keys"]);
+        const revokerId = await account("revoker@example.com", [revokerRoleId]);
+        const revoked = await write(
+          "DELETE",
+          ["api-keys", target.meta.id],
+          await session(revokerId, [revokerRoleId])
+        );
+        expect(revoked.status).toBe(200);
+        expect((await stored())?.isActive).toBe(false);
       });
 
       it("keeps the list private to the session that asked", async () => {

@@ -43,6 +43,13 @@ export interface ApiKeyTableProps {
    */
   canEdit: boolean;
   canRevoke: boolean;
+  /**
+   * Whether this reader may read users, and so is told who owns each key.
+   *
+   * Without it the server withholds the owner of every key but the reader's
+   * own, so a missing owner means "hidden", not a deleted account.
+   */
+  ownersVisible: boolean;
 }
 
 // ============================================================
@@ -122,6 +129,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
   onRevoke,
   canEdit,
   canRevoke,
+  ownersVisible,
 }) => {
   const [search, setSearch] = useState("");
   const { page, pageSize, setPage, setPageSize, resetPage } = usePagination();
@@ -169,14 +177,19 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
       },
       {
         // Whose key it is: a read-only or full-access key follows this
-        // person's permissions, so the list says who that is. A super-admin
-        // sees every person's keys here.
+        // person's permissions, so the list says who that is. Everyone who
+        // may read keys sees every key here; the owner's name only if they
+        // may also read users.
         name: "owner",
         header: "Owner",
         hideOnMobile: true,
         cell: ({ row }) => (
           <span className="text-sm text-muted-foreground">
-            {row.owner ? (row.owner.name ?? row.owner.email) : "Deleted user"}
+            {row.owner
+              ? (row.owner.name ?? row.owner.email)
+              : ownersVisible
+                ? "Deleted user"
+                : "Hidden"}
           </span>
         ),
       },
@@ -229,7 +242,7 @@ export const ApiKeyTable: React.FC<ApiKeyTableProps> = ({
         },
       },
     ];
-  }, []);
+  }, [ownersVisible]);
 
   // Resolves persisted column visibility while ensuring pinned API key names remain visible.
   const { columns, columnsControl } = useTableColumns({

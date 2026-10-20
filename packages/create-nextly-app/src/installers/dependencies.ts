@@ -21,6 +21,7 @@ import {
 } from "../utils/template";
 
 import { approveNativeBuilds } from "./native-build-approvals";
+import { recordLaunchingPackageManager } from "./package-manager-field";
 
 const INSTALL_COMMANDS: Record<PackageManager, string[]> = {
   npm: ["npm", "install"],
@@ -211,11 +212,21 @@ async function installIntoExistingApp(
   source: NextlySource,
   pluginPackages: string[]
 ): Promise<string[]> {
-  const notes = await approveNativeBuilds(
-    cwd,
-    pm,
-    pm === "pnpm" ? await readPnpmVersion(cwd) : undefined
-  );
+  // First, so the pnpm version the approvals read and the version that
+  // installs are the one recorded.
+  const recorded = await recordLaunchingPackageManager(cwd, pm);
+  const notes = [
+    ...(recorded
+      ? [
+          `Set packageManager to ${recorded} in package.json, the version that ran this, so Corepack installs with it.`,
+        ]
+      : []),
+    ...(await approveNativeBuilds(
+      cwd,
+      pm,
+      pm === "pnpm" ? await readPnpmVersion(cwd) : undefined
+    )),
+  ];
   try {
     await installPackages(cwd, pm, database, source, pluginPackages);
   } catch (error) {

@@ -10,7 +10,7 @@ import {
   apiKeyScope,
   apiKeyScopeAllows,
   narrowScope,
-  ruleFacingPermissions,
+  scopeGrants,
 } from "./authenticated-scope";
 
 describe("apiKeyScopeAllows", () => {
@@ -92,17 +92,14 @@ describe("narrowScope on a caller with no scope", () => {
   });
 });
 
-describe("ruleFacingPermissions", () => {
+describe("scopeGrants", () => {
   const grants = [
     { slug: "read-posts", action: "read", resource: "posts" },
     { slug: "create-posts", action: "create", resource: "posts" },
   ];
 
-  it("answers in the rule spelling, from the rows", () => {
-    expect(ruleFacingPermissions(apiKeyScope(grants))).toEqual([
-      "posts:read",
-      "posts:create",
-    ]);
+  it("answers with the rows behind the slugs", () => {
+    expect(scopeGrants(apiKeyScope(grants))).toEqual(grants);
   });
 
   it("refuses a scope whose rows and slugs disagree", () => {
@@ -114,7 +111,7 @@ describe("ruleFacingPermissions", () => {
       ...apiKeyScope(grants),
       permissions: ["read-posts"],
     };
-    expect(() => ruleFacingPermissions(narrowedBySpread)).toThrow();
+    expect(() => scopeGrants(narrowedBySpread)).toThrow();
     // And the answer it would have given is the one that makes this worth
     // refusing rather than tolerating: the surrendered grant, still named.
     // Narrowed rather than asserted — rows the spread failed to carry would
@@ -132,17 +129,17 @@ describe("ruleFacingPermissions", () => {
     // assertion above while making each real caller unusable, and both
     // constructors are the callers that matter.
     const full = apiKeyScope(grants);
-    expect(() => ruleFacingPermissions(full)).not.toThrow();
+    expect(() => scopeGrants(full)).not.toThrow();
     const narrowed = narrowScope(full, grant => grant.action === "read");
-    expect(ruleFacingPermissions(narrowed)).toEqual(["posts:read"]);
+    expect(scopeGrants(narrowed)).toEqual([grants[0]]);
   });
 
-  it("returns the stored slugs when the scope carries no rows", () => {
+  it("answers no rows when the scope carries none", () => {
     expect(
-      ruleFacingPermissions({
+      scopeGrants({
         actorType: "apiKey",
         permissions: ["read-posts"],
       })
-    ).toEqual(["read-posts"]);
+    ).toBeUndefined();
   });
 });

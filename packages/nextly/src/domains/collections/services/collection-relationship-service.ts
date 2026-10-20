@@ -38,6 +38,7 @@ import {
   boundRefuses,
   callerId,
   identifiedCallerMayRead,
+  judgedFor,
 } from "../../../services/collections/trust-bound";
 import type { TrustBound } from "../../../services/collections/trust-grant";
 import {
@@ -1652,7 +1653,9 @@ export class CollectionRelationshipService extends BaseService {
 
     const accessService = this.resolveAccessService();
 
-    const user = access.user as UserContext | undefined;
+    // The redaction basis when the read names one, as a preview does, so a
+    // link never shows a row its sharer could not read.
+    const user = judgedFor(access) as UserContext | undefined;
     // Super-admins bypass the read gate on every other transport. A scoped API
     // key is authoritative on its OWN grant and never on its owner's roles, so
     // the bypass does not extend to one — the same carve-out the direct read
@@ -1881,18 +1884,18 @@ export class CollectionRelationshipService extends BaseService {
         ? true
         : hasPermission(user.id, "read", targetCollection);
     }
-    const codeAccess = rbac.getRegisteredAccess(targetCollection);
+    const target = rbac.getRegisteredTarget(targetCollection);
+    const codeAccess = target?.access;
 
     if (authenticatedScope?.actorType === "apiKey") {
       // Judged on the operation rather than the object, because a collection
       // that declares `access.create` alone has still said nothing about
       // reading. With no read rule, the grant above is the whole answer, as it
       // is on the direct read's key branch.
-      if (codeAccess?.read === undefined) return true;
+      if (!target || codeAccess?.read === undefined) return true;
       return codeAccessAllows(
-        codeAccess,
+        target,
         "read",
-        targetCollection,
         readAccessCaller({ user, authenticatedScope })
       );
     }

@@ -116,6 +116,8 @@ export {
   isDatabaseError,
   createDatabaseError,
   isApplicationError,
+  POOL_WAIT_TIMEOUT_CODE,
+  poolWaitTimeoutError,
 } from "./error";
 
 // ============================================================

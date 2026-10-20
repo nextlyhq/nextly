@@ -34,14 +34,10 @@ import {
 } from "@admin/context/providers/BrandingProvider";
 import { useDashboardLayout } from "@admin/hooks/queries/useDashboardLayout";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
-import type { DashboardWidget } from "@admin/types/dashboard/widgets";
 
 import { registerCoreWidgetComponents } from "./core-components";
-import {
-  AddWidgetPicker,
-  type RemovedCardOption,
-} from "./edit/AddWidgetPicker";
 import { ArrangedGrid } from "./edit/ArrangedGrid";
+import { DashboardAddPanel, useAddPanelState } from "./edit/DashboardAddPanel";
 import { DashboardEditChrome } from "./edit/DashboardEditChrome";
 import { RemovalNotice } from "./edit/RemovalNotice";
 import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
@@ -163,9 +159,9 @@ function askedWith(
 const NO_CARDS: [] = [];
 
 /**
- * The element the dashboard's width is measured from, and the cards to ask, each sized for the
- * tier it will be drawn at. The width is measured before the first paint, and no card is asked
- * before it is known, so every first query is sized for its card's tier.
+ * The element the dashboard's width is measured from, and the one batch of the cards' queries,
+ * each sized for the tier it will be drawn at. The width is measured before the first paint, and
+ * no card is asked before it is known, so every first query is sized for its card's tier.
  */
 function useCardsAtDashboardWidth(visible: ArrangedWidget[]) {
   const dashboardRef = useRef<HTMLDivElement>(null);
@@ -177,42 +173,7 @@ function useCardsAtDashboardWidth(visible: ArrangedWidget[]) {
         : askedWith(visible, dashboardWidth),
     [visible, dashboardWidth]
   );
-  return { dashboardRef, cards };
-}
-
-/**
- * The widgets the picker offers, each under the name a reader will recognise.
- *
- * The declaration's own title where the admin can resolve it. The id is a poor
- * label and it is TRUE, which an invented one would not be — a widget whose
- * client bundle is absent still has to be addable by name.
- */
-function offerable(
-  available: readonly string[],
-  byId: ReadonlyMap<string, DashboardWidget>
-): Array<{ widgetId: string; title: string }> {
-  return available.map(widgetId => ({
-    widgetId,
-    title: byId.get(widgetId)?.title ?? widgetId,
-  }));
-}
-
-/**
- * The cards the reader removed in this draft, each under its widget's title.
- *
- * Only ones this admin can draw: putting back a card whose widget has no
- * declaration here would restore a card the grid then skips.
- */
-function removedCards(
-  editor: LayoutEditor,
-  byId: ReadonlyMap<string, DashboardWidget>
-): RemovedCardOption[] {
-  return editor.placements.flatMap(placement => {
-    const widget = byId.get(placement.widgetId);
-    return placement.removed && widget
-      ? [{ placementId: placement.id, title: widget.title }]
-      : [];
-  });
+  return { dashboardRef, ...useWidgetBatch(cards) };
 }
 
 /** Why a single-card write is unavailable while the stored layout is unreadable. */
@@ -241,31 +202,6 @@ function cardActions(
     ...(removal.dismiss ? { dismiss: removal.dismiss } : {}),
     saveSettings: editor.setConfig,
   };
-}
-
-/** The add picker, which exists only in customise mode. */
-function CustomizePicker({
-  editor,
-  byId,
-  onRestore,
-  sectionRef,
-}: {
-  editor: LayoutEditor;
-  byId: ReadonlyMap<string, DashboardWidget>;
-  onRestore: ComponentProps<typeof AddWidgetPicker>["onRestore"];
-  sectionRef: ComponentProps<typeof AddWidgetPicker>["sectionRef"];
-}) {
-  if (!editor.isEditing) return null;
-  return (
-    <AddWidgetPicker
-      options={offerable(editor.available, byId)}
-      onAdd={editor.add}
-      removed={removedCards(editor, byId)}
-      onRestore={onRestore}
-      sectionRef={sectionRef}
-      atCapacity={editor.atCapacity}
-    />
-  );
 }
 
 /**
@@ -363,10 +299,13 @@ export function WidgetGrid() {
     [declared]
   );
 
-  // The dashboard's own width, and the cards asked at it.
-  const { dashboardRef, cards } = useCardsAtDashboardWidth(visible);
+  // The add panel, open or not, and the one card it last placed, which the grid rings.
+  const addPanel = useAddPanelState(editor.isEditing);
+  const { ring } = addPanel;
 
+  // The dashboard's own width, and the cards asked at it.
   const {
+    dashboardRef,
     slots,
     cellSlots,
     fetchingPlacementIds,
@@ -377,7 +316,7 @@ export function WidgetGrid() {
     failed,
     settling,
     retry,
-  } = useWidgetBatch(cards);
+  } = useCardsAtDashboardWidth(visible);
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
   const { announcement } = gridAnnouncer;
@@ -398,7 +337,7 @@ export function WidgetGrid() {
   // 🔴 Asked of the DECLARATIONS, not of the arranged rows. `visible` is empty
   // in a fourth case that is none of these three: a reader who has put every
   // card away, or removed every card and saved. Returning here for that unmounted
-  // the edit bar, the Reset control and the add picker along with the grid --
+  // the edit bar, the Reset control and Add widget along with the grid --
   // the whole page blank, with no way back to the one control that could undo
   // it. An arrangement must never be able to reach a state it cannot leave, so
   // the recovery chrome outlives the rows and the empty grid says so in place.
@@ -456,7 +395,7 @@ export function WidgetGrid() {
             on={{
               begin: arrangement.begin,
               cancel: arrangement.cancel,
-              addWidget: () => focus.request({ kind: "add" }),
+              addWidget: () => addPanel.setOpen(true),
             }}
             saveRequest={saveRequest}
             focus={focus}
@@ -489,15 +428,21 @@ export function WidgetGrid() {
               announcement={announcement}
               focus={focus}
               gridRef={focus.gridRef}
+              highlightedId={ring.highlightedId}
               on={cardActions(arrangement, removal, editor)}
             />
           </DndContext>
 
-          <CustomizePicker
+          <DashboardAddPanel
+            open={addPanel.open}
+            onOpenChange={addPanel.setOpen}
             editor={editor}
+            layout={layout}
             byId={byId}
-            onRestore={removal.restore}
-            sectionRef={focus.addRef}
+            isDrawn={arrangement.isDrawn}
+            restore={removal.restore}
+            highlight={ring.highlight}
+            focus={focus}
           />
 
           <RemovalNotice

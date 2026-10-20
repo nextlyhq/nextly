@@ -3,15 +3,13 @@
  * from that may only be the ones `eslint-console-allowlist.json` names.
  *
  * Outside development and test, every email address Nextly logs is masked, but only on the way
- * through a logger: a bare `console.*` call writes whatever it is handed. `no-console` refuses
- * one anywhere in `src/`, apart from the `terminal` writers (the sinks the loggers end in, and
- * output for a person at a terminal) and the `pending` files not yet routed through a logger.
+ * through a logger: a bare `console.*` call writes whatever it is handed, and so does `console`
+ * itself handed over as a logger. `no-console` and `no-restricted-globals` refuse both anywhere
+ * in `src/`, apart from the `terminal` writers: the sinks the loggers end in, and output for a
+ * person at a terminal. Each says why it may.
  *
- * As with the bare-`Error` allowlist, calls are counted by ESLINT rather than by a text search:
- * the rule also refuses a reference such as `const log = console.log`, which a search for calls
- * would miss, and one question gets one answer. The controls lint through the configurations as
- * committed, so a deleted rule block or a `files` pattern that stopped matching fails here rather
- * than reading as clean.
+ * The controls lint through the configurations as committed, so a deleted rule block or a
+ * `files` pattern that stopped matching fails here rather than reading as clean.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -29,27 +27,30 @@ const repoRoot = resolve(packageRoot, "../..");
 
 const ALLOWLIST_FILE = "eslint-console-allowlist.json";
 
-interface ConsoleAllowlist {
-  terminal: ReadonlyMap<string, string>;
-  pending: ReadonlyMap<string, number>;
-}
-
-/** An object section of the allowlist, or a TypeError naming it. */
-function section(parsed: unknown, name: "terminal" | "pending"): object {
-  const value: unknown =
-    typeof parsed === "object" && parsed !== null
-      ? (parsed as Record<string, unknown>)[name]
+/**
+ * The allowlist's one section, read as JSON as the ESLint config reads it, and narrowed rather
+ * than asserted. Any other section would be an exemption nothing here checks, so it is refused.
+ */
+function terminalSection(): object {
+  const parsed: unknown = JSON.parse(
+    readFileSync(join(packageRoot, ALLOWLIST_FILE), "utf8")
+  );
+  const sections =
+    typeof parsed === "object" && parsed !== null ? Object.keys(parsed) : [];
+  const section: unknown =
+    sections.length === 1 && sections[0] === "terminal"
+      ? (parsed as Record<string, unknown>).terminal
       : undefined;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new TypeError(`${ALLOWLIST_FILE} must hold a "${name}" object`);
+  if (typeof section !== "object" || section === null) {
+    throw new TypeError(`${ALLOWLIST_FILE} must hold only a "terminal" object`);
   }
-  return value;
+  return section;
 }
 
-/** Terminal entries are permanent, so each one says why. */
-function readTerminal(parsed: unknown): ReadonlyMap<string, string> {
+/** The terminal entries. Every one is permanent, so each says why. */
+function readTerminal(): ReadonlyMap<string, string> {
   const terminal = new Map<string, string>();
-  for (const [path, reason] of Object.entries(section(parsed, "terminal"))) {
+  for (const [path, reason] of Object.entries(terminalSection())) {
     if (typeof reason !== "string" || reason.trim() === "") {
       throw new TypeError(`${ALLOWLIST_FILE}: ${path} must give its reason`);
     }
@@ -58,29 +59,7 @@ function readTerminal(parsed: unknown): ReadonlyMap<string, string> {
   return terminal;
 }
 
-/** A converted file leaves the list rather than sitting at zero. */
-function readPending(parsed: unknown): ReadonlyMap<string, number> {
-  const pending = new Map<string, number>();
-  for (const [path, count] of Object.entries(section(parsed, "pending"))) {
-    if (typeof count !== "number" || !Number.isInteger(count) || count < 1) {
-      throw new TypeError(
-        `${ALLOWLIST_FILE}: ${path} must map to a positive integer, got ${String(count)}`
-      );
-    }
-    pending.set(path, count);
-  }
-  return pending;
-}
-
-/** Read as JSON, as the ESLint config reads it, and narrowed rather than asserted. */
-function readAllowlist(): ConsoleAllowlist {
-  const parsed: unknown = JSON.parse(
-    readFileSync(join(packageRoot, ALLOWLIST_FILE), "utf8")
-  );
-  return { terminal: readTerminal(parsed), pending: readPending(parsed) };
-}
-
-const ALLOWLIST = readAllowlist();
+const TERMINAL = readTerminal();
 
 /** A production file the allowlist does not cover: the subject of the positive control. */
 const UNEXEMPTED_FILE = "src/errors/error-codes.ts";
@@ -123,45 +102,36 @@ async function ruleIds(
     .filter((ruleId): ruleId is string => ruleId !== null);
 }
 
-function withProbe(relativePath: string): string {
-  return readFileSync(join(packageRoot, relativePath), "utf8") + PROBE_SOURCE;
-}
-
-/** Console writes in a file the rule exempts, counted by re-enabling the rule for that path. */
-async function consoleCount(relativePath: string): Promise<number> {
-  const eslint = new ESLint({
-    cwd: packageRoot,
-    // The package config is kept, not replaced: it supplies the TypeScript parser.
-    overrideConfig: {
-      files: ["**/*.ts", "**/*.tsx"],
-      rules: { "no-console": "error" },
-    },
-    ignore: false,
-  });
-  const results = await eslint.lintText(
-    readFileSync(join(packageRoot, relativePath), "utf8"),
-    { filePath: join(packageRoot, relativePath) }
-  );
-  const messages = results[0]?.messages ?? [];
-  return messages.filter(m => m.ruleId === "no-console").length;
+function withSource(relativePath: string, probe: string): string {
+  return readFileSync(join(packageRoot, relativePath), "utf8") + probe;
 }
 
 describe("the console guard", () => {
   it("refuses a console write in a file the allowlist does not cover", async () => {
     // The positive control. Every other check here is a form of "nothing was reported".
     expect(
-      await ruleIds(packageRoot, UNEXEMPTED_FILE, withProbe(UNEXEMPTED_FILE))
+      await ruleIds(
+        packageRoot,
+        UNEXEMPTED_FILE,
+        withSource(UNEXEMPTED_FILE, PROBE_SOURCE)
+      )
     ).toContain("no-console");
   }, 60_000);
 
   it("refuses the console handed over as a value, outside the exempt files", async () => {
-    const source = (file: string) =>
-      readFileSync(join(packageRoot, file), "utf8") + VALUE_PROBE_SOURCE;
     expect(
-      await ruleIds(packageRoot, UNEXEMPTED_FILE, source(UNEXEMPTED_FILE))
+      await ruleIds(
+        packageRoot,
+        UNEXEMPTED_FILE,
+        withSource(UNEXEMPTED_FILE, VALUE_PROBE_SOURCE)
+      )
     ).toContain("no-restricted-globals");
     expect(
-      await ruleIds(packageRoot, TERMINAL_FILE, source(TERMINAL_FILE))
+      await ruleIds(
+        packageRoot,
+        TERMINAL_FILE,
+        withSource(TERMINAL_FILE, VALUE_PROBE_SOURCE)
+      )
     ).not.toContain("no-restricted-globals");
   }, 60_000);
 
@@ -171,46 +141,27 @@ describe("the console guard", () => {
       await ruleIds(
         repoRoot,
         `packages/nextly/${UNEXEMPTED_FILE}`,
-        withProbe(UNEXEMPTED_FILE)
+        withSource(UNEXEMPTED_FILE, PROBE_SOURCE)
       )
     ).toContain("no-console");
   }, 60_000);
 
-  it("does not refuse it in a terminal file or a pending one", async () => {
-    // The complement: the exemptions are what suppress the rule. A pending
-    // file is checked while there is one; an empty list is where it ends.
-    const pendingFile = [...ALLOWLIST.pending.keys()][0];
-    const exempt =
-      pendingFile === undefined
-        ? [TERMINAL_FILE]
-        : [TERMINAL_FILE, pendingFile];
-    for (const file of exempt) {
-      expect(await ruleIds(packageRoot, file, withProbe(file))).not.toContain(
-        "no-console"
-      );
-    }
+  it("does not refuse it in a terminal file", async () => {
+    // The complement: the exemption is what suppresses the rule.
+    expect(
+      await ruleIds(
+        packageRoot,
+        TERMINAL_FILE,
+        withSource(TERMINAL_FILE, PROBE_SOURCE)
+      )
+    ).not.toContain("no-console");
   }, 60_000);
 
   it("names only paths that exist", () => {
     // A stale entry would exempt whatever later appears at that path.
-    const missing = [
-      ...ALLOWLIST.terminal.keys(),
-      ...ALLOWLIST.pending.keys(),
-    ].filter(
+    const missing = [...TERMINAL.keys()].filter(
       entry => !existsSync(join(packageRoot, entry.replace(/\/\*\*$/, "")))
     );
     expect(missing).toEqual([]);
   });
-
-  it("holds exactly the console writes it pins for each pending file", async () => {
-    // A write added to a pending file fails here, and so does one removed without lowering its
-    // number: the list only shrinks, and only on purpose.
-    const drift: string[] = [];
-    for (const [file, pinned] of ALLOWLIST.pending) {
-      const actual = await consoleCount(file);
-      if (actual !== pinned)
-        drift.push(`${file}: pinned ${pinned}, has ${actual}`);
-    }
-    expect(drift).toEqual([]);
-  }, 300_000);
 });

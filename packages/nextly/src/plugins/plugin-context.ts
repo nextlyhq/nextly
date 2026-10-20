@@ -15,13 +15,20 @@ import type {
 } from "@nextlyhq/adapter-drizzle/types";
 import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
+import {
+  readSubjectEvents,
+  type SubjectEventsQuery,
+} from "../api/subject-events";
+import { runWithCallerScope } from "../auth/caller-scope";
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
+import { runAsPrincipal } from "../auth/principal-scope";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type { NextlyServiceConfig } from "../di/register";
 import {
   createJobsNamespace,
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
+import type { ContentEventSubject } from "../domains/content-events/record";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
@@ -101,8 +108,10 @@ import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
 import {
+  resolveServiceOpts,
   wrapCollectionsForPlugin,
   type PluginCollectionService,
+  type ServiceOpts,
 } from "./service-opts";
 import { buildPluginServicesNamespace } from "./services/plugin-services-registry";
 import { recordPluginSubscription } from "./subscription-tracker";
@@ -441,7 +450,60 @@ export type PluginEmailService = Pick<
 export type PluginVersionsService = Pick<
   VersionsService,
   (typeof PLUGIN_VERSIONS_METHODS)[number]
->;
+> & {
+  /**
+   * @experimental A subject's content events (a document's or a release's),
+   * filtered by kind and part, newest first, as `{ items, meta }`; the next
+   * page passes the last item's id as `before`. Runs as the system unless
+   * `opts` names a user (`as: "user"`), who is then judged as REST judges them.
+   */
+  listEvents(
+    subject: ContentEventSubject,
+    query?: SubjectEventsQuery,
+    opts?: ServiceOpts
+  ): ReturnType<typeof readSubjectEvents>;
+};
+
+/**
+ * The plugin path to a subject's events: the one read REST and the Direct API
+ * use, with the caller translated from {@link ServiceOpts} by the rule every
+ * plugin service uses. A plugin-defined person resolves to no user here, so
+ * reads nothing: events have no rule a principal can be judged by yet.
+ */
+async function readEventsForPlugin(
+  subject: ContentEventSubject,
+  query: SubjectEventsQuery = {},
+  opts: ServiceOpts = {}
+): ReturnType<typeof readSubjectEvents> {
+  const caller = await resolveServiceOpts(opts);
+  // Pinned as `services.collections` pins its calls: the person the call names,
+  // or none, and the scope it resolved, so the document's hooks judge this
+  // caller rather than whichever frame the plugin was running in.
+  return runAsPrincipal(opts.principal ?? null, () =>
+    runWithCallerScope(caller.authenticatedScope, () =>
+      readEventsAs(subject, query, caller)
+    )
+  );
+}
+
+/** The read itself, as the caller resolved from the plugin's options. */
+function readEventsAs(
+  subject: ContentEventSubject,
+  query: SubjectEventsQuery,
+  caller: Awaited<ReturnType<typeof resolveServiceOpts>>
+): ReturnType<typeof readSubjectEvents> {
+  return readSubjectEvents(subject, query, {
+    overrideAccess: caller.overrideAccess,
+    ...(caller.user === undefined ? {} : { user: caller.user }),
+    ...(caller.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: caller.authenticatedScope }),
+    // What the plugin handed its hooks, so a hook that narrows reads by them
+    // answers here as it would through `services.collections`.
+    ...(caller.request === undefined ? {} : { request: caller.request }),
+    ...(caller.context === undefined ? {} : { context: caller.context }),
+  });
+}
 
 export interface PluginContext {
   /**
@@ -481,8 +543,9 @@ export interface PluginContext {
     /** Email service for sending emails via templates and providers */
     email: PluginEmailService;
     /**
-     * @experimental Read-only content version history (list/get). Restore and
-     * diff arrive in later stages.
+     * @experimental Read-only content version history (list/get), and a
+     * subject's content events (`listEvents`). Restore and diff arrive in
+     * later stages.
      */
     versions: PluginVersionsService;
     /**
@@ -2034,10 +2097,13 @@ export function createPluginContext(
       // otherwise throw while building the context for callers that never
       // touch version history.
       get versions() {
-        return methodFacade(
-          getServiceFn("versionsService"),
-          PLUGIN_VERSIONS_METHODS
-        );
+        return Object.freeze({
+          ...methodFacade(
+            getServiceFn("versionsService"),
+            PLUGIN_VERSIONS_METHODS
+          ),
+          listEvents: readEventsForPlugin,
+        });
       },
       // Lazy for the same reason as `versions` directly above: this module is
       // exported, so a context built by a caller that never asks about Singles

@@ -120,7 +120,7 @@ The adapter uses `mysql2`'s built-in pool. Defaults:
 | -------------------------- | ------- | ----------------------------------------------------------------------- |
 | `pool.max`                 | `10`    | Maps to `mysql2`'s `connectionLimit`. Maximum simultaneous connections. |
 | `pool.idleTimeoutMs`       | `30000` | Idle connection timeout (`mysql2` `idleTimeout`).                       |
-| `pool.connectionTimeoutMs` | `10000` | Time to establish a new connection (`mysql2` `connectTimeout`).         |
+| `pool.connectionTimeoutMs` | `15000` | How long a request waits in the queue while every connection is in use. Past it the request fails as `DATABASE_BUSY` (503, `Retry-After: 5`); `0` leaves that wait unbounded. Also the time a new connection gets to open (`mysql2` `connectTimeout`): one that cannot open in time fails as a connection error, not as busy. |
 
 ```typescript
 const adapter = createMySqlAdapter({
@@ -133,7 +133,7 @@ const adapter = createMySqlAdapter({
 });
 ```
 
-The pool is configured with `waitForConnections: true` and an unlimited queue (`queueLimit: 0`) -- callers wait for a free connection rather than failing fast.
+The pool is configured with `waitForConnections: true`: a request that finds every connection in use waits in the queue for a free one, for at most `pool.connectionTimeoutMs`. The queue has no length limit (`queueLimit: 0`); each wait in it is bounded instead. A connection that frees up after its request gave up goes straight back to the pool.
 
 ## SSL / TLS
 

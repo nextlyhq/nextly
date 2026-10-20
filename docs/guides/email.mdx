@@ -122,7 +122,7 @@ The log transport writes the full message, body included, only when `NODE_ENV` i
 
 ## Email addresses in logs
 
-Outside development and test (an unset `NODE_ENV` included), Nextly masks every email address it writes to the logs down to its first character and its domain: `john@example.com` becomes `j***@example.com`. That covers the log transport, a failed send whose provider error quotes the recipient, and every line written through Nextly's structured logger (including a logger you install with `setNextlyLogger`), and every line its services write, to the `logger` you pass Nextly or to its fallback console logger. To find a message in production logs, search by the domain and first character. Output that Nextly writes to the console directly, outside these loggers, isn't masked yet. Logs your own code writes outside Nextly's loggers are yours to handle.
+Outside development and test (an unset `NODE_ENV` included), Nextly masks every email address it writes to the logs down to its first character and its domain: `john@example.com` becomes `j***@example.com`. That covers the log transport, a failed send whose provider error quotes the recipient, and every line written through Nextly's structured logger (including a logger you install with `setNextlyLogger`), and every line its services write, to the `logger` you pass Nextly or to its fallback console logger. To find a message in production logs, search by the domain and first character. Nextly writes to the console only through these loggers, apart from its command-line output, which is written for the person at the terminal. Logs your own code writes outside Nextly's loggers are yours to handle.
 
 ## Built-in email templates
 
@@ -235,7 +235,8 @@ await nextly.email.send({
 });
 ```
 
-Both calls return `{ success: boolean; messageId?: string }`.
+Both calls return `{ success: boolean; messageId?: string }`, and on a failed send
+also `failure` and `error` (see [When a send fails](#when-a-send-fails)).
 
 ### Sending to several people
 
@@ -279,6 +280,36 @@ The REST send routes answer `Email sent.` when the provider accepted the message
 and `Email could not be sent.` when it did not, beside the `success` and
 `messageId` fields they have always returned.
 
+### When a send fails
+
+A provider's refusal is returned, not thrown: `success` is `false`, and `failure`
+says what happened, on the Direct API, `ctx.services.email` and both REST send
+routes alike:
+
+- `failure.retryable`: whether sending again later can succeed. A refusal of the
+  message itself (an HTTP 4xx other than 408 and 429, or an SMTP 5xx reply) is
+  not retryable; a timeout, a rate limit, a server error (408, 429, 5xx, or an
+  SMTP 4xx reply) or a provider that could not be reached is. A failure the
+  provider did not classify counts as retryable, so a retry never drops an email
+  that could still be delivered.
+- `failure.status`: the provider's HTTP status or SMTP reply code, when it gave one.
+- `failure.reason`: a short sentence of Nextly's own, saying which kind of
+  failure it was, with no configuration, credential or address in it. A
+  provider's own explanation goes to the server log, not to the caller. The
+  Direct API also puts the sentence in `error`.
+
+When the provider took the message but refused some recipients, `refused` lists
+each by its line (`to`, `cc` or `bcc`) and its position on that line, with
+`retryable` and `status`, never the address. The send is successful only when
+every `to` recipient was accepted. The delivery log records each refusal with
+whether a retry can help.
+
+A send refused before anything is sent, such as one with an address that is not
+an email address, or a Reply-To holding a line break, is thrown as a validation
+error: nothing was sent, and the same send would be refused again.
+
+`failure` and `refused` are `@experimental`.
+
 ### Changing a send before it goes out
 
 An `email.beforeSend` filter receives the whole envelope: `to`, `recipients`,
@@ -305,6 +336,48 @@ A plugin emailing one of its own [signed-in people](/docs/plugins/signed-in-peop
 passes `person` to `ctx.services.email.send` or `sendWithTemplate`. The delivery
 record then names the person, so the plugin's report that they were deleted erases
 it, and leaves alone the records of anyone else at the same address.
+
+### Email to a staff user
+
+A send can name a staff user the same way, as `{ kind: "staff", id }`, on
+`nextly.email.send`, `nextly.email.sendWithTemplate` and a plugin's
+`ctx.services.email`. The delivery record then names that user by kind and id
+beside the address it went to. A send naming a staff user who does not exist is
+refused before anything is sent. `person` is `@experimental`.
+
+```typescript
+await nextly.email.sendWithTemplate({
+  to: user.email,
+  template: "account-notice",
+  person: { kind: "staff", id: user.id },
+});
+```
+
+Core's own emails to a staff user name them this way: the welcome email, the
+password reset and the email verification.
+
+### When a staff user is deleted
+
+Deleting a staff user erases their email delivery records:
+
+- **Every record that names them,** whatever address it went to, including
+  an address they used before an address change. The record keeps its row,
+  so the install's send counts stay right, but loses its address digest, and
+  names the user by a keyed digest in place of their id.
+- **Records that name nobody,** sent to the address the user holds when
+  deleted. These are records written before sends named their person, so an
+  earlier address's unnamed records are pruned only by the delivery log's
+  retention.
+- **Records written after the deletion,** for a send that was in flight, a
+  retry or a provider's later report, are written already erased. Nextly keeps
+  a keyed digest of each deleted staff user, never their id or an address, for
+  this.
+
+A record that names someone else is never touched, even when that person holds,
+or once held, the same address.
+
+An email the provider had already accepted before the deletion may still be
+delivered: erasing its record cannot recall the message.
 
 ### Auth flow auto-sends
 
@@ -414,7 +487,17 @@ createAdapter: config => ({
   alone, so an adapter written before `maxToPerMessage` keeps working unchanged:
   Nextly sends it one message per `to` address.
 
-`maxToPerMessage` and `toList` are `@experimental`.
+A provider that refuses a send throws. To say whether a retry can help, throw an
+error carrying `emailFailure: { retryable, status, reason }`; the built-in
+adapters classify their failures this way. The caller is told `retryable` and
+`status` with a sentence of Nextly's own for that kind of failure; the error's
+own message, with the provider's declared credentials taken out, goes to the
+server log. A failure with no `emailFailure` is treated as retryable. When a
+provider takes a message but refuses some recipients, return `rejected` with
+their bare addresses, and optionally `refusals` with
+`{ address, retryable, status }` for each.
+
+`maxToPerMessage`, `toList`, `emailFailure` and `refusals` are `@experimental`.
 
 ## Next steps
 

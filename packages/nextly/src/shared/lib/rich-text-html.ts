@@ -20,6 +20,7 @@ import {
   sanitizeCssColor,
   sanitizeInlineStyle,
 } from "../../services/security/css-validator";
+import { consoleLogger } from "../types";
 
 // ============================================================
 // Types
@@ -826,9 +827,9 @@ export function convertRichTextToHtml(
   try {
     return serializeNode(value.root);
   } catch (error) {
-    console.error(
-      "[RichTextHtmlConverter] Failed to convert rich text to HTML:",
-      error
+    consoleLogger.error(
+      "[RichTextHtmlConverter] Failed to convert rich text to HTML",
+      { error: error }
     );
     return null;
   }

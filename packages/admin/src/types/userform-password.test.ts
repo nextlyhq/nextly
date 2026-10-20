@@ -19,22 +19,55 @@ import { createUserFormSchema, editUserFormSchema } from "./userform";
 const ofLength = (length: number) => "Aa1!".padEnd(length, "a");
 
 // Each case names what it exercises, and what the server decides about it,
-// so a case that stopped exercising anything would show.
+// so a case that stopped exercising anything would show. The server's rule
+// is length (code points), the common list and the digester's 72-byte reach
+// — no character class is required — so the class-mix cases decide true.
 const CASES: { name: string; password: string; server: boolean }[] = [
   { name: "a hyphen as the symbol", password: "Passw0rd-x", server: true },
   { name: "a space as the symbol", password: "Pass w0rd", server: true },
   { name: "a non-Latin symbol", password: "Passw0rd€", server: true },
   { name: "a letter outside A-Z", password: "Passw0rdé", server: true },
-  { name: "no lowercase letter", password: "PASSW0RD!", server: false },
-  { name: "no uppercase letter", password: "passw0rd!", server: false },
-  { name: "no number", password: "Password!", server: false },
-  { name: "no symbol", password: "Passw0rdX", server: false },
+  { name: "every letter uppercase", password: "PASSW0RD!", server: true },
+  { name: "no uppercase letter", password: "passw0rd!", server: true },
+  { name: "no symbol", password: "Passw0rdX", server: true },
+  {
+    name: "a near-miss of a listed password",
+    password: "Password!",
+    server: false,
+  },
+  { name: "the head of the common list", password: "password", server: false },
+  {
+    name: "lowercase only at the minimum length, no class needed",
+    password: "xyzwvuts",
+    server: true,
+  },
   { name: "7 characters", password: ofLength(7), server: false },
   { name: "8 characters", password: ofLength(8), server: true },
-  { name: "9 characters", password: ofLength(9), server: true },
-  { name: "127 characters", password: ofLength(127), server: true },
-  { name: "128 characters", password: ofLength(128), server: true },
-  { name: "129 characters", password: ofLength(129), server: false },
+  {
+    name: "72 ASCII characters, exactly at the digester's reach",
+    password: "a".repeat(72),
+    server: true,
+  },
+  {
+    name: "73 ASCII characters, one byte past the reach",
+    password: "a".repeat(73),
+    server: false,
+  },
+  {
+    name: "18 emoji, 18 characters and exactly 72 bytes",
+    password: "😀".repeat(18),
+    server: true,
+  },
+  {
+    name: "19 emoji, 76 bytes — past the reach",
+    password: "😀".repeat(19),
+    server: false,
+  },
+  {
+    name: "129 emoji — past the 128-character cap as well",
+    password: "😀".repeat(129),
+    server: false,
+  },
 ];
 
 const account = {
