@@ -14,6 +14,7 @@ import type { BlockDocument } from "@nextlyhq/blocks-engine";
 import { documentAfter, type InlineEditOutcome } from "@nextlyhq/builder/shell";
 import {
   useBeforeDocumentAction,
+  useDocumentActions,
   useDocumentCheckpoint,
   useReportUnsavedWork,
   useSuppressAdminChrome,
@@ -24,6 +25,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import {
   useFormState,
@@ -99,13 +101,61 @@ function useCheckpoints<TFieldValues extends FieldValues>({
  */
 export function hasUnsavedWork(
   editor: { undoDepth: number },
-  inline: { editing: unknown; editingRich: unknown }
+  inline: { editing: unknown; editingRich: unknown },
+  savedAt: SavedAt = 0
 ): boolean {
   return (
-    editor.undoDepth > 0 ||
+    savedAt === "unreachable" ||
+    editor.undoDepth !== savedAt ||
     inline.editing !== null ||
     inline.editingRich !== null
   );
+}
+
+/**
+ * Where the editor's history stood when its document was last stored: an undo
+ * depth, or `"unreachable"` once an undo went below it. The document the editor
+ * opened with is the stored one, so it starts at 0.
+ */
+export type SavedAt = number | "unreachable";
+
+/**
+ * The editor's save point, moved by every store of the document it holds.
+ *
+ * The editor's history is its own, and a save does not touch it: measured
+ * from the opening document alone, an author who saved was still told the
+ * page held unsaved work, Save stayed offered, and leaving still warned. So
+ * the depth the history stood at when its document was stored is kept, and
+ * work is what lies away from it. An undo below that point takes the history
+ * somewhere no store has been, so the point is lost until the next store,
+ * and the work counts as unsaved meanwhile: a redo back to it reads as work
+ * that is in fact stored, which costs a prompt and never a page.
+ *
+ * A store counts only when the document committed to it is still the one on
+ * screen. An edit made while it was in flight is not in what it stored.
+ */
+export function useSavePoint(editor: {
+  document: BlockDocument;
+  undoDepth: number;
+}): { savedAt: SavedAt; committing: (document: BlockDocument) => void } {
+  const [savedAt, setSavedAt] = useState<SavedAt>(0);
+  if (typeof savedAt === "number" && editor.undoDepth < savedAt) {
+    setSavedAt("unreachable");
+  }
+  const committed = useRef<BlockDocument | null>(null);
+  const storedAt = useDocumentActions()?.storedAt ?? null;
+  const seen = useRef(storedAt);
+  useEffect(() => {
+    if (storedAt === seen.current) return;
+    seen.current = storedAt;
+    if (storedAt !== null && committed.current === editor.document) {
+      setSavedAt(editor.undoDepth);
+    }
+  }, [storedAt, editor.document, editor.undoDepth]);
+  const committing = useCallback((document: BlockDocument) => {
+    committed.current = document;
+  }, []);
+  return { savedAt, committing };
 }
 
 /**
@@ -202,15 +252,19 @@ function useCommitOnUnmount(
     editing: unknown;
     editingRich: unknown;
   },
-  onCommit: (value: BlockDocument) => void
+  onCommit: (value: BlockDocument) => void,
+  savedAt: SavedAt
 ): () => void {
-  const latest = useRef({ editor, inline, onCommit });
-  latest.current = { editor, inline, onCommit };
+  const latest = useRef({ editor, inline, onCommit, savedAt });
+  latest.current = { editor, inline, onCommit, savedAt };
   const committed = useRef(false);
   useLayoutEffect(
     () => () => {
       const held = latest.current;
-      if (committed.current || !hasUnsavedWork(held.editor, held.inline)) {
+      if (
+        committed.current ||
+        !hasUnsavedWork(held.editor, held.inline, held.savedAt)
+      ) {
         return;
       }
       committed.current = true;
@@ -242,6 +296,7 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   inline,
   onCommit,
   onClose,
+  savePoint,
 }: {
   name: Path<TFieldValues>;
   control: Control<TFieldValues>;
@@ -253,6 +308,8 @@ export function useHostCommit<TFieldValues extends FieldValues>({
   };
   onCommit: (value: BlockDocument) => void;
   onClose: () => void;
+  /** Where the history stood at the last store; see `useSavePoint`. */
+  savePoint: ReturnType<typeof useSavePoint>;
 }): { done: () => void } {
   useCheckpoints({ name, control, document: editor.document });
 
@@ -266,7 +323,10 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    * Retracted when this component unmounts, which is the same moment `done`
    * commits the document and makes the form dirty for real.
    */
-  useReportUnsavedWork(`blocks:${name}`, hasUnsavedWork(editor, inline));
+  useReportUnsavedWork(
+    `blocks:${name}`,
+    hasUnsavedWork(editor, inline, savePoint.savedAt)
+  );
 
   /*
    * Finish an open passage before the document is stored.
@@ -285,7 +345,9 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    * and the message is what tells them it is still there.
    */
   useBeforeDocumentAction(() => {
-    onCommit(finishInlineEdit(inline, editor.document).document);
+    const committing = finishInlineEdit(inline, editor.document).document;
+    savePoint.committing(committing);
+    onCommit(committing);
   });
 
   /*
@@ -296,7 +358,12 @@ export function useHostCommit<TFieldValues extends FieldValues>({
    * an edit the author then undoes, and would make the form's undo and the
    * editor's undo two answers to one question.
    */
-  const markCommitted = useCommitOnUnmount(editor, inline, onCommit);
+  const markCommitted = useCommitOnUnmount(
+    editor,
+    inline,
+    onCommit,
+    savePoint.savedAt
+  );
   const done = useCallback(() => {
     /*
      * The open inline edit is finished FIRST, and the document it produced is

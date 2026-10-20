@@ -21,6 +21,7 @@ import {
 import type {
   DocumentActionBindings,
   DocumentActionBindingsInput,
+  DocumentSaveState as DocumentBindingsSaveState,
 } from "../useDocumentActionBindings";
 
 const { canFor } = vi.hoisted(() => ({
@@ -227,6 +228,183 @@ describe("running a document action through the host", () => {
     await user.click(screen.getByRole("button", { name: "Discard draft" }));
     await expect(pending).resolves.toEqual({ ok: true });
     expect(onDiscardWorkingDraft).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers a delete once it is answered, with what it came to", async () => {
+    let answer: (outcome: {
+      ok: false;
+      reason: "failed";
+      message: string;
+    }) => void = () => {};
+    const onDelete = vi.fn(
+      () =>
+        new Promise<{ ok: false; reason: "failed"; message: string }>(
+          resolve => {
+            answer = resolve;
+          }
+        )
+    );
+    const runner = renderHost({ entry: published, onDelete });
+
+    let settled = false;
+    let pending: Promise<unknown> = Promise.resolve();
+    act(() => {
+      pending = runner.run("delete").then(outcome => {
+        settled = true;
+        return outcome;
+      });
+    });
+    await waitFor(() => expect(onDelete).toHaveBeenCalledTimes(1));
+    // Still deleting: nothing may say it is gone yet.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      answer({ ok: false, reason: "failed", message: "offline" });
+    });
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      reason: "failed",
+      message: "offline",
+    });
+  });
+
+  it("cannot be dismissed while the discard runs, and answers what it came to", async () => {
+    const user = userEvent.setup();
+    let finish: () => void = () => {};
+    const onDiscardWorkingDraft = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          finish = resolve;
+        })
+    );
+    const runner = renderHost({
+      entry: { ...published, _isWorkingDraft: true },
+      draftsEnabled: true,
+      onDiscardWorkingDraft,
+    });
+
+    let settled = false;
+    let pending: Promise<unknown> = Promise.resolve();
+    act(() => {
+      pending = runner.run("discard-draft").then(outcome => {
+        settled = true;
+        return outcome;
+      });
+    });
+    await screen.findByRole("alertdialog");
+    await user.click(screen.getByRole("button", { name: "Discard draft" }));
+    await waitFor(() => expect(onDiscardWorkingDraft).toHaveBeenCalledTimes(1));
+
+    // Escape mid-discard: the write goes on, so nothing may say "cancelled".
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      finish();
+    });
+    await expect(pending).resolves.toEqual({ ok: true });
+  });
+});
+
+/*
+ * What a failed store offers belongs to the document and language it failed
+ * in. The host stays mounted while the editor switches languages, and a Retry
+ * carried across would run the action against the translation now on screen.
+ */
+describe("a failed store's Retry", () => {
+  function renderInLocale(onPublish: DocumentActionBindingsInput["onPublish"]) {
+    const seen: { saveState: DocumentBindingsSaveState } = {
+      saveState: { kind: "saved", at: null },
+    };
+    const runner: { run: DocumentActionBindings["run"] } = {
+      run: () => Promise.reject(new Error("not rendered")),
+    };
+    function Surface(): ReactElement | null {
+      const hosted = useHostedDocumentActions();
+      runner.run = hosted.run;
+      seen.saveState = hosted.saveState;
+      return null;
+    }
+    const host = (locale: string) => (
+      <DocumentActionsHost
+        input={{
+          mode: "edit",
+          hasStatus: true,
+          entry: draft,
+          collectionSlug: "posts",
+          locale,
+          onPublish,
+        }}
+      >
+        <Surface />
+      </DocumentActionsHost>
+    );
+    const view = render(host("en"));
+    return {
+      runner,
+      seen,
+      switchTo: (locale: string) => view.rerender(host(locale)),
+    };
+  }
+
+  it("is offered only in the language it failed in, and not again on return", async () => {
+    // The publish the server refused, as the editor's handler answers it.
+    const onPublish = vi.fn(() =>
+      Promise.resolve({
+        ok: false as const,
+        reason: "failed" as const,
+        message: "offline",
+      })
+    );
+    const { runner, seen, switchTo } = renderInLocale(onPublish);
+
+    await act(async () => {
+      await runner.run("publish");
+    });
+    expect(seen.saveState.kind).toBe("failed");
+
+    act(() => {
+      switchTo("fr");
+    });
+    expect(seen.saveState.kind).not.toBe("failed");
+
+    act(() => {
+      switchTo("en");
+    });
+    expect(seen.saveState.kind).not.toBe("failed");
+  });
+
+  it("is not offered for a store that fails after the language changed", async () => {
+    let refuse: () => void = () => {};
+    const onPublish = vi.fn(
+      () =>
+        new Promise<{ ok: false; reason: "failed"; message: string }>(
+          resolve => {
+            refuse = () =>
+              resolve({ ok: false, reason: "failed", message: "offline" });
+          }
+        )
+    );
+    const { runner, seen, switchTo } = renderInLocale(onPublish);
+
+    let pending: Promise<unknown> = Promise.resolve();
+    act(() => {
+      pending = runner.run("publish");
+    });
+    await waitFor(() => expect(onPublish).toHaveBeenCalledTimes(1));
+    act(() => {
+      switchTo("fr");
+    });
+    await act(async () => {
+      refuse();
+      await pending;
+    });
+
+    expect(seen.saveState.kind).not.toBe("failed");
   });
 });
 

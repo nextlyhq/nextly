@@ -1,7 +1,8 @@
 /**
  * How long ago something happened, in words: "just now", "2 minutes ago",
  * "3 days ago". The editor's one phrasing for it, shared by the recovery
- * dialog and the save indicator so the same moment reads the same in both.
+ * offer and the save indicator so the same recovery point reads the same age
+ * in both.
  *
  * @module components/features/entries/EntryForm/time-ago
  */

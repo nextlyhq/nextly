@@ -49,6 +49,7 @@ import {
   hasUnsavedWork,
   useDocumentDirty,
   useHostCommit,
+  useSavePoint,
 } from "./use-host-commit";
 import {
   useCanvasInputs,
@@ -551,9 +552,10 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
    * work the form's own values do not contain; this composes that half with the
    * form's own dirtiness, which is what a reading of the whole document needs.
    */
+  const savePoint = useSavePoint(editor);
   const documentDirty = useDocumentDirty(
     control,
-    hasUnsavedWork(editor, inline)
+    hasUnsavedWork(editor, inline, savePoint.savedAt)
   );
 
   const style = useSiteStyleInputs(mount.clientConfig);
@@ -566,6 +568,7 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
     inline,
     onCommit,
     onClose,
+    savePoint,
   });
 
   const view: EditorView = {

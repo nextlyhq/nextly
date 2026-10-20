@@ -323,7 +323,7 @@ describe("the Save control", () => {
 describe("an action that stores none of the editor's work", () => {
   it("neither commits the editor nor waits for, or is refused by, a tracked write", async () => {
     const before = vi.fn();
-    const onDelete = vi.fn();
+    const onDelete = vi.fn(() => Promise.resolve({ ok: true as const }));
     const probe = renderHost({ entry: published, onDelete }, before);
     const write = deferred();
     act(() => {

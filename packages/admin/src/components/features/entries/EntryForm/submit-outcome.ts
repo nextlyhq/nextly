@@ -57,3 +57,28 @@ export function submitFailed(error: unknown): SubmitOutcome {
     message: apiErrorMessage(error, "The document couldn't be saved."),
   };
 }
+
+/**
+ * What one delete came to: the document is gone, or why it is not. A caller
+ * that acts on a delete (a plugin view that leaves the document) has to hear
+ * the answer the request gave, not that the request was started.
+ */
+export type DeleteOutcome =
+  | { ok: true }
+  | { ok: false; reason: SubmitRefusal; message: string };
+
+export const deleteHeld: DeleteOutcome = {
+  ok: false,
+  reason: "refused",
+  message:
+    "This document can't be deleted right now: someone else is editing it, or a past version is on screen.",
+};
+
+/** A delete the server or the network refused, in the words the toast uses. */
+export function deleteFailed(error: unknown): DeleteOutcome {
+  return {
+    ok: false,
+    reason: "failed",
+    message: apiErrorMessage(error, "The document couldn't be deleted."),
+  };
+}

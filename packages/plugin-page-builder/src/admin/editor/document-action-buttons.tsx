@@ -33,13 +33,16 @@ function shownActions(actions: readonly DocumentAction[]): DocumentAction[] {
 export function DocumentActionButtons(): React.JSX.Element | null {
   const document = useDocumentActions();
   if (document === null) return null;
-  const saving = document.saveState.kind === "saving";
   return (
     <div className="flex shrink-0 items-center gap-1.5">
       {shownActions(document.actions).map(action => {
         // Kept focusable and named when it cannot run, so its reason is
-        // read and hovered rather than lost with a disabled control.
-        const blocked = saving || action.disabledReason !== undefined;
+        // read and hovered rather than lost with a disabled control. Only the
+        // action's own reason holds it back, as in the header: a save state of
+        // "saving" includes a write the page depends on, and Save and Publish
+        // wait for that write and then store, which `run` does for both
+        // surfaces. A save already in flight is answered as busy by `run`.
+        const blocked = action.disabledReason !== undefined;
         return (
           <Button
             key={action.id}

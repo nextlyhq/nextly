@@ -77,6 +77,25 @@ describe("DocumentActionButtons", () => {
     expect(run).toHaveBeenCalledWith("publish");
   });
 
+  it("runs Save while a write the page depends on is still saving, as the header does", () => {
+    // "saving" here is a tracked write in flight, not a save: the runner waits
+    // for it and then stores, so the bar must not refuse on its own.
+    offered = {
+      ...actions(publish, saveDraft),
+      saveState: { kind: "saving" } as DocumentSaveState,
+    };
+    render(<DocumentActionButtons />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+
+    expect(run).toHaveBeenCalledWith("save");
+    expect(
+      screen
+        .getByRole("button", { name: "Save draft" })
+        .getAttribute("aria-disabled")
+    ).toBeNull();
+  });
+
   it("keeps a refused action named, says why, and does not run it", () => {
     offered = actions({ ...publish, disabledReason: "Reading a past version" });
     render(<DocumentActionButtons />);
@@ -85,17 +104,6 @@ describe("DocumentActionButtons", () => {
     expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.getAttribute("title")).toBe("Reading a past version");
     fireEvent.click(button);
-    expect(run).not.toHaveBeenCalled();
-  });
-
-  it("holds every action while a save is running", () => {
-    offered = {
-      ...actions(publish, saveDraft),
-      saveState: { kind: "saving" } as DocumentSaveState,
-    };
-    render(<DocumentActionButtons />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
     expect(run).not.toHaveBeenCalled();
   });
 

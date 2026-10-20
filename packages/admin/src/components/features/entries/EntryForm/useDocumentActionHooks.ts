@@ -34,6 +34,14 @@ export interface DocumentActions {
   run: DocumentActionBindings["run"];
   /** Whether the document's work is stored. */
   saveState: DocumentSaveState;
+  /**
+   * When this document was last stored in this session, whatever the save
+   * state now says, or null before the first store. A new value means a store
+   * succeeded: a surface that holds the work it committed to it can count that
+   * work as stored, while the save state still reads "unsaved" for work it
+   * holds beyond it.
+   */
+  storedAt: Date | null;
 }
 
 /**
@@ -60,6 +68,7 @@ export function useDocumentActions(): DocumentActions | null {
     primary: offered.find(action => action.placement === "primary"),
     run: hosted.run,
     saveState: hosted.saveState,
+    storedAt: hosted.lastStoredAt,
   };
 }
 

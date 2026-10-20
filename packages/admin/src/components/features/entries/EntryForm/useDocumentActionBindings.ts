@@ -29,7 +29,11 @@ import {
   type ContributedAction,
 } from "./DocumentActionBar";
 import { effectiveEntryStatus } from "./entry-address";
-import type { SubmitOutcome, SubmitRefusal } from "./submit-outcome";
+import type {
+  DeleteOutcome,
+  SubmitOutcome,
+  SubmitRefusal,
+} from "./submit-outcome";
 import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { EntryData, EntryFormIntent, EntryFormMode } from "./useEntryForm";
 import { useStoringGate, type StoringGate } from "./useStoringGate";
@@ -147,8 +151,8 @@ export interface DocumentActionBindingsInput {
   onDiscardWorkingDraft?: () => void | Promise<void>;
   /** Discard / Cancel. */
   onCancel?: () => void;
-  /** Delete (edit mode only). */
-  onDelete?: () => void;
+  /** Delete (edit mode only). Resolves to what the delete came to. */
+  onDelete?: () => Promise<DeleteOutcome>;
   /** Duplicate (edit mode only). When provided, the action is offered. */
   onDuplicate?: () => void;
   /** Opens the API response view. */
@@ -195,6 +199,8 @@ export interface DocumentActionBindings {
    * it a second time.
    */
   effectiveStatus: ReturnType<typeof effectiveEntryStatus>;
+  /** When the work was last stored in this session, or null before that. */
+  lastStoredAt: Date | null;
   /** The confirmations Unpublish and Discard draft ask. */
   confirmations: {
     unpublish: ActionConfirmation;
@@ -292,6 +298,11 @@ function useActionConfirmation(
     promise: Promise<DocumentActionOutcome>;
     answer: (outcome: DocumentActionOutcome) => void;
   } | null>(null);
+  // Set while a confirmed action that keeps the question open is running. A
+  // dismissal then (Escape, or a click outside) is ignored: the action cannot
+  // be called back, so answering "cancelled" would tell the caller nothing
+  // happened while the write goes on and may succeed.
+  const confirming = useRef(false);
 
   return {
     open,
@@ -317,6 +328,7 @@ function useActionConfirmation(
         asked?.answer(await act());
         return;
       }
+      confirming.current = true;
       try {
         const outcome = await act();
         pending.current = null;
@@ -325,9 +337,12 @@ function useActionConfirmation(
       } catch {
         // Stay open for a retry; its error was already surfaced by the
         // mutation's own toast, and the question is still being asked.
+      } finally {
+        confirming.current = false;
       }
     },
     dismiss: () => {
+      if (confirming.current) return;
       const asked = pending.current;
       pending.current = null;
       setOpen(false);
@@ -376,8 +391,9 @@ export function useDocumentActionBindings({
   const isReadingHistory = viewingVersion !== null;
   const leaveWithoutWarning = useLeaveWithoutWarning();
 
-  // What a storing action waits for, and what the last one came to.
-  const gate = useStoringGate();
+  // What a storing action waits for, and what the last one came to, for this
+  // document in this language.
+  const gate = useStoringGate(storingScope(collectionSlug, entry, locale));
   const { storing } = gate;
 
   const unpublishConfirmation = useActionConfirmation(
@@ -541,6 +557,7 @@ export function useDocumentActionBindings({
     registerBeforeAction: gate.registerBeforeAction,
     trackWrite: gate.trackWrite,
     saveState,
+    lastStoredAt: storedAt(gate.lastStore),
   };
 }
 
@@ -657,6 +674,20 @@ function leavingDeliberately(
   };
 }
 
+/** Which document, in which language, a store is for. */
+function storingScope(
+  collectionSlug: string,
+  entry: EntryData | null | undefined,
+  locale: string | undefined
+): string {
+  return JSON.stringify([collectionSlug, entry?.id ?? null, locale ?? null]);
+}
+
+/** When the last store succeeded, or null when it has not. */
+function storedAt(lastStore: StoringGate["lastStore"]): Date | null {
+  return lastStore.kind === "stored" ? lastStore.at : null;
+}
+
 /** An effect an action runs, answered as done once it has run. */
 function doneAfter(
   effect: (() => void) | undefined
@@ -685,7 +716,7 @@ function builtInPerformers(host: {
   discardDraft: (() => Promise<DocumentActionOutcome>) | undefined;
   onCancel: (() => void) | undefined;
   unpublish: (() => Promise<DocumentActionOutcome>) | undefined;
-  onDelete: (() => void) | undefined;
+  onDelete: (() => Promise<DeleteOutcome>) | undefined;
 }): Partial<Record<BuiltInActionId, () => Promise<DocumentActionOutcome>>> {
   const { runSave, onPublish, storing } = host;
   /*
@@ -718,7 +749,10 @@ function builtInPerformers(host: {
     ["discard-draft", host.discardDraft],
     ["discard-changes", doneAfter(host.onCancel)],
     ["unpublish", host.unpublish],
-    ["delete", doneAfter(host.onDelete)],
+    // Answered with the delete's own outcome, once the request is answered:
+    // a caller that leaves the document on "done" must not leave one that
+    // still exists.
+    ["delete", host.onDelete],
   ];
   return Object.fromEntries(
     entries.filter(([, perform]) => perform !== undefined)

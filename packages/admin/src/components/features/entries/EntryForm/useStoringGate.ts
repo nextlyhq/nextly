@@ -43,7 +43,13 @@ export interface StoringGate {
   trackedFailure: { label: string; message: string } | null;
 }
 
-export function useStoringGate(): StoringGate {
+/**
+ * @param scope Which document, in which language, the gate stores for. What
+ *   the last store came to belongs to that scope alone: a failed Publish of one
+ *   translation offers its Retry only while that translation is on screen, and
+ *   a Retry that ran in another would store, or publish, the wrong one.
+ */
+export function useStoringGate(scope: string): StoringGate {
   const beforeActions = useRef(new Set<BeforeDocumentAction>());
   const registerBeforeAction = useCallback((handler: BeforeDocumentAction) => {
     beforeActions.current.add(handler);
@@ -123,7 +129,25 @@ export function useStoringGate(): StoringGate {
    */
   const [lastStore, setLastStore] = useState<LastStore>({ kind: "none" });
   const [readying, setReadying] = useState(0);
-  const record = (action: string, outcome: DocumentActionOutcome) => {
+  // Another document or language clears it, and coming back does not bring it
+  // back: the answer was about the work as it stood, and that work has since
+  // been replaced on screen. Cleared while rendering, so no render offers a
+  // stale Retry in the new scope.
+  const [scopeShown, setScopeShown] = useState(scope);
+  if (scopeShown !== scope) {
+    setScopeShown(scope);
+    setLastStore({ kind: "none" });
+  }
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const record = (
+    startedIn: string,
+    action: string,
+    outcome: DocumentActionOutcome
+  ) => {
+    // A store that settles after the scope changed answers for a document no
+    // longer on screen.
+    if (startedIn !== currentScope.current) return;
     if (outcome.ok) {
       setLastStore({ kind: "stored", at: new Date() });
     } else if (outcome.reason !== "busy" && outcome.reason !== "cancelled") {
@@ -138,10 +162,11 @@ export function useStoringGate(): StoringGate {
   const storing =
     (action: string, perform: () => Promise<DocumentActionOutcome>) =>
     async (): Promise<DocumentActionOutcome> => {
+      const startedIn = currentScope.current;
       setReadying(n => n + 1);
       try {
         const outcome = (await readyToStore(action)) ?? (await perform());
-        record(action, outcome);
+        record(startedIn, action, outcome);
         return outcome;
       } finally {
         setReadying(n => n - 1);

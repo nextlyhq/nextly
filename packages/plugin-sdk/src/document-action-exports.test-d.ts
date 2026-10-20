@@ -46,3 +46,5 @@ expectTypeOf(useBeforeDocumentAction)
 expectTypeOf(useTrackedWrite).returns.toEqualTypeOf<
   (label: string, write: Promise<unknown>) => void
 >();
+
+expectTypeOf<DocumentActions["storedAt"]>().toEqualTypeOf<Date | null>();
