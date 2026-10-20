@@ -65,9 +65,13 @@ export interface WidgetSettingBase {
    * A top-level key the field configs do not have, deliberately: it is read by
    * the card's header, never by `FieldRenderer`, which ignores it.
    *
-   * @experimental Validated and published now; the card header that draws
-   * the quick setting is not built yet, so until it is, the setting is
-   * changed in the settings sheet like any other.
+   * Drawn by the card's header at the medium and large tiers, and offered in
+   * the card's menu at every size, when the setting is a `select` or a
+   * `checkbox`; a change there is saved at once for the reader. A quick
+   * setting of any other type stays in the settings sheet.
+   *
+   * @experimental The shape may still change while the quick setting's
+   * controls settle.
    */
   quick?: boolean;
 }

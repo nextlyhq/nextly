@@ -53,6 +53,23 @@ export interface ArrangedGridProps {
   isWriting: boolean;
   /** Why a single-card write is unavailable right now, when it is. */
   singleCardWriteBlocked?: string;
+  /**
+   * How a card's settings are saved at once, outside customise mode. ABSENT while customising and
+   * before an arrangement has been read; see `ArrangedCell`'s `settingsWrite`.
+   */
+  settingsWrite?:
+    | {
+        write: (
+          placementId: string,
+          title: string,
+          config: Record<string, unknown>,
+          callbacks: { onLanded: () => void; onFailed: () => void }
+        ) => void;
+        isWriting: boolean;
+        unavailable?: string;
+        announce: (title: string, setting: string, value: string) => void;
+      }
+    | undefined;
   slots: Record<string, WidgetSlot>;
   cellSlots: CellSlots;
   requested: ReadonlySet<string>;
@@ -122,6 +139,7 @@ export function ArrangedGrid({
   highlightedId = null,
   isWriting,
   singleCardWriteBlocked,
+  settingsWrite,
   slots,
   cellSlots,
   requested,
@@ -172,6 +190,29 @@ export function ArrangedGrid({
               highlighted={highlightedId === row.placementId}
               isWriting={isWriting}
               singleCardWriteBlocked={singleCardWriteBlocked}
+              {...(settingsWrite
+                ? {
+                    settingsWrite: {
+                      write: (config, callbacks) =>
+                        settingsWrite.write(
+                          row.placementId,
+                          row.widget.title,
+                          config,
+                          callbacks
+                        ),
+                      isWriting: settingsWrite.isWriting,
+                      ...(settingsWrite.unavailable === undefined
+                        ? {}
+                        : { unavailable: settingsWrite.unavailable }),
+                      announce: (setting, value) =>
+                        settingsWrite.announce(
+                          row.widget.title,
+                          setting,
+                          value
+                        ),
+                    },
+                  }
+                : {})}
               // The same rule the move applies, so an item is enabled exactly
               // when choosing it would move the card.
               can={moveAvailability(placements, row.placementId, isDrawn)}
