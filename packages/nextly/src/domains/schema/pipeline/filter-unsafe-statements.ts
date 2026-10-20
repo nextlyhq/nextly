@@ -14,6 +14,7 @@
 // not SQL names (dynamic_collections), and include non-table exports.
 
 import type { SupportedDialect } from "../../../database/schema-registry";
+import { consoleLogger } from "../../../shared/types";
 import { dropsPluginMigratedTable } from "../ownership/drop-guard";
 
 import { isCompanionTable, isManagedTable } from "./managed-tables";
@@ -189,7 +190,7 @@ type Verdict = boolean | undefined;
 /** DROP SCHEMA: first and unconditional, since no desired set makes it intended. */
 function dropSchemaVerdict(stmt: string): Verdict {
   if (!isDropSchemaStatement(stmt)) return undefined;
-  console.warn(
+  consoleLogger.warn(
     `[Nextly schema] Blocked a statement that drops a schema, emitted by drizzle-kit pushSchema: ${stmt}. Nextly never drops a schema; if one should go, drop it manually.`
   );
   return false;
@@ -208,7 +209,7 @@ function pluginTableVerdict(
   ) {
     return undefined;
   }
-  console.warn(
+  consoleLogger.warn(
     `[Nextly schema] Blocked a statement that drops a table whose owner row names a plugin migration stream, or that the drop reader cannot read: ${stmt}. Plugin tables are removed by the plugin's migrations or \`nextly plugins uninstall\`, never by dev push.`
   );
   return false;
@@ -248,7 +249,7 @@ function dropTableVerdict(
 
   // Accidental drop — table not in desired schema. Block and log so
   // operators see the protection.
-  console.warn(
+  consoleLogger.warn(
     `[Nextly schema] Blocked DROP TABLE "${tableName}" emitted by ` +
       `drizzle-kit pushSchema (table not in current desired schema). ` +
       `If this drop was intentional, route it through the ` +
@@ -273,7 +274,7 @@ function orphanDropVerdict(
     if (inferOwnerTableFromObjectName(objectName, desiredSet) !== null) {
       return true;
     }
-    console.warn(
+    consoleLogger.warn(
       `[Nextly schema] Blocked DROP ${kind} "${objectName}" emitted by ` +
         `drizzle-kit pushSchema (owner table not in current desired ` +
         `schema or name is non-conventional). If this drop was ` +

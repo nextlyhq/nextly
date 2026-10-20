@@ -114,6 +114,7 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   draftComponentValues,
@@ -122,6 +123,7 @@ import {
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
+import { hasLifecycle } from "../../versions/recorded-status";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -2759,6 +2761,7 @@ export class SingleMutationService extends BaseService {
                 await captureInTx(tx, this.versionCapture, {
                   // An update: a save that changes nothing records nothing.
                   onlyIfChanged: true,
+                  lifecycle: hasLifecycle(singleMeta),
                   ref: {
                     scopeKind: "single",
                     scopeSlug: slug,
@@ -2831,6 +2834,7 @@ export class SingleMutationService extends BaseService {
               const { versionNo } = await captureInTx(tx, this.versionCapture, {
                 // An update: a save that changes nothing records nothing.
                 onlyIfChanged: true,
+                lifecycle: hasLifecycle(singleMeta),
                 ref: {
                   scopeKind: "single",
                   scopeSlug: slug,
@@ -3194,6 +3198,20 @@ export class SingleMutationService extends BaseService {
       }
 
       let updatedDoc = updatedRows[0];
+
+      // A saved Single, its pending work included, can give a scheduled
+      // release holding it a hard problem: handed to the early stop once the
+      // write is durable, so that release stops now rather than at its
+      // instant. Inside an enclosing SQLite transaction this waits for its
+      // commit, and never runs for a write it rolls back.
+      const savedId = String(updatedDoc.id);
+      await this.afterCommit(() =>
+        stopReleasesHolding({
+          documents: [
+            { scopeKind: "single", scopeSlug: slug, entryId: savedId },
+          ],
+        })
+      );
 
       // 10. Deserialize JSON fields for response
       updatedDoc = this.queryService.deserializeJsonFields(

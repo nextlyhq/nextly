@@ -34,6 +34,13 @@ export type {
   TemplateValidationResult,
 } from "../../domains/email/services/template-engine";
 
+// Pre-rendered HTML that server code vouches for, written into a template
+// unescaped. Never for a value from a request, a form or a stored row.
+export {
+  markHtml,
+  TrustedHtml,
+} from "../../domains/email/services/liquid-engine";
+
 export { createSmtpProvider } from "../../domains/email/services/providers/smtp-provider";
 export { createResendProvider } from "../../domains/email/services/providers/resend-provider";
 export { createSendLayerProvider } from "../../domains/email/services/providers/sendlayer-provider";

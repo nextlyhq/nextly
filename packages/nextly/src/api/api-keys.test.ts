@@ -27,6 +27,8 @@ vi.mock("../di", () => ({
 
 vi.mock("../services/lib/permissions", () => ({
   isSuperAdmin: vi.fn().mockResolvedValue(false),
+  // Whether the caller may read users, which decides if owners are shown.
+  hasPermission: vi.fn().mockResolvedValue(true),
 }));
 
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";

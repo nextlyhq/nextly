@@ -39,7 +39,7 @@ import { handleResetPassword } from "./reset-password";
 import { handleSession } from "./session";
 import type { WithSessionRowTransaction } from "./session-row";
 import { handleSetInitialPassword } from "./set-initial-password";
-import { handleSetupStatus, handleSetup } from "./setup";
+import { handleSetupStatus, handleSetup, type SetupHandlerDeps } from "./setup";
 import {
   admitUnknownSource,
   countsOf,
@@ -76,7 +76,40 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
 ]);
 
 /**
- * Whether a request to `authPath` is judged by the auth rate limit.
+ * POST paths under `/auth/*` whose handler counts a request against the same
+ * auth rate limit itself, once it has judged it: setup, which counts only a
+ * wrong setup token, so a valid one completes setup whatever the budget holds.
+ * The router does not limit these before they are handled.
+ */
+const HANDLER_LIMITED_AUTH_PATHS = new Set(["setup"]);
+
+/**
+ * The setup dependencies with a token store in place. Absent, setup in
+ * production stays closed (no token is valid) and outside production needs
+ * none: the safe answer for code that built its dependencies before setup had
+ * a token.
+ */
+function withSetupToken<T extends { isProduction: boolean }>(
+  deps: T & { setupToken?: SetupHandlerDeps["setupToken"] }
+): T & { setupToken: SetupHandlerDeps["setupToken"] } {
+  if (deps.setupToken) {
+    return deps as T & { setupToken: SetupHandlerDeps["setupToken"] };
+  }
+  return {
+    ...deps,
+    setupToken: {
+      required: deps.isProduction,
+      verify: () => Promise.resolve("invalid"),
+      confirm: () => Promise.resolve("invalid"),
+      spend: () => Promise.resolve(),
+      claim: () => Promise.resolve({ release: () => Promise.resolve() }),
+    },
+  };
+}
+
+/**
+ * Whether a request to `authPath` is judged by the auth rate limit, before it
+ * is handled or by its handler.
  *
  * Exported because the REST limit leaves exactly these requests to the auth
  * limit when their client address cannot be resolved, and one answer keeps
@@ -85,7 +118,9 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
  */
 export function hasAuthRateLimit(method: string, authPath: string): boolean {
   return (
-    method.toUpperCase() === "POST" && RATE_LIMITED_AUTH_PATHS.has(authPath)
+    method.toUpperCase() === "POST" &&
+    (RATE_LIMITED_AUTH_PATHS.has(authPath) ||
+      HANDLER_LIMITED_AUTH_PATHS.has(authPath))
   );
 }
 
@@ -268,7 +303,15 @@ export interface AuthRouterDeps {
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
 
+  /** Whether anyone holds the `super-admin` role: setup's gate. */
   hasAdministrator: () => Promise<boolean>;
+  /**
+   * The production setup token, and the claim one setup holds at a time.
+   * Optional for code that builds these dependencies itself: without it,
+   * setup in production refuses every token, and outside production needs
+   * none, as before.
+   */
+  setupToken?: SetupHandlerDeps["setupToken"];
   createSuperAdmin: (data: {
     email: string;
     name: string;
@@ -350,7 +393,7 @@ async function dispatchAuthRequest(
   if (method === "GET") {
     switch (authPath) {
       case "setup-status":
-        return handleSetupStatus(request, deps);
+        return handleSetupStatus(request, withSetupToken(deps));
       case "session":
         return handleSession(request, deps);
       case "csrf":
@@ -370,7 +413,8 @@ async function dispatchAuthRequest(
 
   if (method === "POST") {
     let place: ReadingPlace | undefined;
-    if (hasAuthRateLimit(method, authPath)) {
+    // Only the paths limited before handling; setup limits itself.
+    if (RATE_LIMITED_AUTH_PATHS.has(authPath)) {
       const limited = await checkAuthIpRateLimit(request, authPath, deps);
       if (limited.refused) return limited.refused;
       place = limited.place;
@@ -416,7 +460,18 @@ function handleAuthPost(
       case "refresh":
         return handleRefresh(request, deps);
       case "setup":
-        return handleSetup(request, deps);
+        // Setup is not on the limited paths: a valid token must open it
+        // whatever the budgets hold. Only a wrong token is counted.
+        return handleSetup(request, withSetupToken(deps), {
+          limitWithoutValidToken: async wrong => {
+            const limited = await checkAuthIpRateLimit(wrong, "setup", deps);
+            // Setup has already read its whole body and hands the limiter
+            // those bytes, so nothing is left to read from the client: a
+            // place the limiter held for the rest is given back at once.
+            limited.place?.release();
+            return limited.refused;
+          },
+        });
       case "register":
         return handleRegister(request, deps);
       case "forgot-password":

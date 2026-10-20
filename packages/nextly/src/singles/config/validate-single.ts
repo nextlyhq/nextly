@@ -21,7 +21,10 @@
  * ```
  */
 
-import { RESERVED_SLUGS } from "../../collections/config/validate-config";
+import {
+  RESERVED_SLUGS,
+  statusOptionError,
+} from "../../collections/config/validate-config";
 import { isPluginFieldTypeOnSurface } from "../../domains/schema/field-types/field-type-registry";
 import {
   fieldProducesColumn,
@@ -93,6 +96,8 @@ export type SingleValidationErrorCode =
   | "FIELD_NAME_SYSTEM_ALIAS"
   // A name that reaches a column the Draft/Published lifecycle owns, while it is enabled.
   | "FIELD_NAME_LIFECYCLE_RESERVED"
+  // A `status` choice longer than a version's status can record.
+  | "FIELD_STATUS_OPTION_TOO_LONG"
   | "FIELD_TYPE_REQUIRED"
   | "FIELD_TYPE_INVALID"
   // A declared default the field's own rules reject.
@@ -385,6 +390,17 @@ function validateFields(
         message: `Field name '${name}' becomes the column '${column}', which the Draft/Published lifecycle owns. Rename the field, or turn the lifecycle off`,
         code: "FIELD_NAME_LIFECYCLE_RESERVED",
       });
+      return;
+    }
+    // Without the lifecycle a `status` field is what each version records as its status, which
+    // holds 32 characters: the collection validator's rule, shared.
+    const statusError = statusOptionError(
+      column,
+      candidate,
+      `${path}[${index}].options`
+    );
+    if (statusError !== null) {
+      errors.push(statusError);
       return;
     }
     // Two names that reach one column cannot both be emitted, so the table could never be

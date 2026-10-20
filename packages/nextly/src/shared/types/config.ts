@@ -10,6 +10,10 @@
  * @since 1.0.0
  */
 
+import {
+  DEFAULT_MIN_PASSWORD_LENGTH,
+  MAX_MIN_PASSWORD_LENGTH,
+} from "../../auth/password/policy";
 import type { AuthStrategy } from "../../auth/pipeline/types";
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import { resolveAuditRetentionConfig } from "../../domains/audit/retention-config";
@@ -78,7 +82,8 @@ export interface TypeScriptConfig {
    * Can be absolute or relative to the project root.
    *
    * Left unset, an existing `payload-types.ts` beside the default, the name
-   * earlier versions used, is turned into a re-export of the new file.
+   * earlier versions used, is left as it is, and generating types says what
+   * to do with it: delete it once imports name `nextly-types`.
    *
    * @default './src/types/generated/nextly-types.ts'
    */
@@ -749,6 +754,14 @@ export interface AuthConfig {
   allowRegistration?: boolean;
 
   /**
+   * Minimum password length for staff accounts.
+   * Default is 8 characters. Apps can raise this to 15 (NIST SP 800-63B-4).
+   *
+   * @default 8
+   */
+  minPasswordLength?: number;
+
+  /**
    * @experimental Opt-in auth strategies (D71). A plugin may *provide* a
    * strategy, but it only authenticates anyone once listed here. Strategies run
    * in order; the built-in `password` strategy always runs last.
@@ -764,6 +777,8 @@ export interface SanitizedAuthConfig {
   revealRegistrationConflict: boolean;
   /** Whether strangers may register. Defaults to false. */
   allowRegistration: boolean;
+  /** Minimum password length for staff accounts. Defaults to 8. */
+  minPasswordLength: number;
   /** @experimental Opt-in auth strategies (D71); built-in password runs last. */
   strategies?: AuthStrategy[];
 }
@@ -774,6 +789,7 @@ export interface SanitizedAuthConfig {
 export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
   allowRegistration: false,
+  minPasswordLength: 8,
 };
 
 // ============================================================
@@ -1135,6 +1151,36 @@ function rateLimitMaxEntries(value: number | undefined): number | undefined {
   });
 }
 
+/**
+ * `auth.minPasswordLength`, checked: a whole number from the policy's floor
+ * (8) through its documented ceiling (15, NIST SP 800-63B-4), or absent.
+ * Anything else is a contract the policy does not implement: a smaller value
+ * would weaken the staff minimum, a non-integer or `NaN` bypasses the
+ * comparison entirely, and a value past the digester's reach would make every
+ * password impossible to set — refused at boot rather than at submission.
+ *
+ * @throws {NextlyError} `VALIDATION_ERROR` naming the setting otherwise
+ */
+function authMinPasswordLength(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_AUTH_CONFIG.minPasswordLength;
+  if (
+    Number.isSafeInteger(value) &&
+    value >= DEFAULT_MIN_PASSWORD_LENGTH &&
+    value <= MAX_MIN_PASSWORD_LENGTH
+  ) {
+    return value;
+  }
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "auth.minPasswordLength",
+        code: "INVALID_VALUE",
+        message: `Must be a whole number from ${DEFAULT_MIN_PASSWORD_LENGTH} to ${MAX_MIN_PASSWORD_LENGTH}.`,
+      },
+    ],
+  });
+}
+
 export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
   // Validate apiKeys.rateLimit bounds — these are runtime-critical.
   if (config.apiKeys?.rateLimit?.requestsPerHour !== undefined) {
@@ -1249,6 +1295,7 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       allowRegistration:
         config.auth?.allowRegistration === true ||
         DEFAULT_AUTH_CONFIG.allowRegistration,
+      minPasswordLength: authMinPasswordLength(config.auth?.minPasswordLength),
       // Pass opt-in auth strategies through unchanged (D71).
       strategies: config.auth?.strategies,
     },

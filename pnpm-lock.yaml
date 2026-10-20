@@ -1359,6 +1359,9 @@ importers:
       jose:
         specifier: ^6.2.2
         version: 6.2.2
+      liquidjs:
+        specifier: ^10.30.0
+        version: 10.30.0
       next:
         specifier: ^16.3.4
         version: 16.3.5(@babel/core@7.29.7(supports-color@7.2.0))(@playwright/test@1.61.1)(@types/node@20.19.17)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
@@ -7801,6 +7804,11 @@ packages:
   lint-staged@16.2.6:
     resolution: {integrity: sha512-s1gphtDbV4bmW1eylXpVMk2u7is7YsrLl8hzrtvC70h4ByhcMLZFY01Fx05ZUDNuv1H8HO4E+e2zgejV1jVwNw==}
     engines: {node: '>=20.17'}
+    hasBin: true
+
+  liquidjs@10.30.0:
+    resolution: {integrity: sha512-Fw4wA+8CZsJkaeLEIlPE3AoponfjEZhj7FQvYNcAEcg7jNRik7mEMoaco382FBdrYlykVf6w4vClPNctz2OYjg==}
+    engines: {node: '>=16'}
     hasBin: true
 
   listr2@9.0.5:
@@ -15602,6 +15610,10 @@ snapshots:
       pidtree: 0.6.0
       string-argv: 0.3.2
       yaml: 2.8.3
+
+  liquidjs@10.30.0:
+    dependencies:
+      commander: 10.0.1
 
   listr2@9.0.5:
     dependencies:

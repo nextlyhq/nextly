@@ -20,6 +20,13 @@ const generationReads = vi.fn();
 const defaultRedirectTo = vi.fn().mockResolvedValue("/about");
 
 vi.mock("../preview-route-defaults", () => ({
+  // The link's own record. What it decides is covered by the integration
+  // suite against real rows; here it allows, so these cases stay about the
+  // token.
+  defaultLinkChecks: {
+    opened: () => Promise.resolve(true),
+    live: () => Promise.resolve(true),
+  },
   defaultSecret: () => TEST_SECRET,
   defaultGeneration: () => {
     generationReads();

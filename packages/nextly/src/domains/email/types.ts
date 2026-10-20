@@ -389,8 +389,27 @@ export interface ResolvedAttachment {
  * Each email provider (SMTP, Resend, SendLayer) implements this
  * interface. The `EmailService` resolves the active provider and
  * delegates to its `send()` method.
+ *
+ * A failed send is reported by throwing. To say whether a retry can help,
+ * throw an error carrying `emailFailure: { retryable, status?, reason }`
+ * (`ClassifiedEmailError` in `domains/email/failure`); a failure without one
+ * counts as retryable.
  */
 export interface EmailProviderAdapter {
+  /**
+   * @experimental The most `to` addresses this adapter sends in one message.
+   *
+   * Declared by an adapter whose provider addresses one message to several
+   * people. Such an adapter receives every `to` address of the message in
+   * `toList`, and a send with more `to` addresses than this is refused before
+   * any provider is contacted, naming the limit, rather than cut short.
+   *
+   * Absent, or 1, means the adapter takes one `to` per message, as every
+   * adapter written before this field did: a send to several people then
+   * reaches it as one message per `to` address, with `cc` and `bcc` on the
+   * first message only, so each copied address receives the email once.
+   */
+  maxToPerMessage?: number;
   /**
    * Send an email through this provider.
    *
@@ -398,8 +417,17 @@ export interface EmailProviderAdapter {
    * @returns Result with success status and optional message ID
    */
   send(options: {
-    /** Recipient email address. */
+    /** Recipient email address: the only one, or the first of `toList`. */
     to: string;
+    /**
+     * @experimental Every `to` address of this message, in order, `to` first.
+     *
+     * Present only when the message has more than one `to` address, which
+     * happens only for an adapter that declares `maxToPerMessage` above 1. A
+     * one-recipient message reaches every adapter exactly as before, with
+     * `to` alone, so read it as `toList ?? [to]`.
+     */
+    toList?: string[];
     /** Sender email address (e.g., 'App <noreply@example.com>'). */
     from: string;
     /** Email subject line. */
@@ -451,5 +479,18 @@ export interface EmailProviderAdapter {
      * writes against.
      */
     rejected?: string[];
+    /**
+     * @experimental What each refused recipient's refusal says about trying
+     * again, by the same bare mailbox as `rejected`.
+     *
+     * Optional: a refusal with no entry here counts as retryable, as any
+     * failure an adapter did not classify does.
+     */
+    refusals?: Array<{
+      address: string;
+      retryable: boolean;
+      status?: number;
+      reason?: string;
+    }>;
   }>;
 }

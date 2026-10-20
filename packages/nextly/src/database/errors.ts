@@ -1,3 +1,5 @@
+import { POOL_WAIT_TIMEOUT_CODE } from "@nextlyhq/adapter-drizzle/types";
+
 import type { SupportedDialect } from "../types/database";
 
 // 🌟 Big Picture
@@ -15,6 +17,10 @@ import type { SupportedDialect } from "../types/database";
 export type DbErrorKind =
   | "deadlock"
   | "serialization-failure"
+  // A request waited its bound for a connection and was given none, or for a
+  // SQLite database file another process holds. The statement or transaction
+  // that waited never ran; work committed before it stays committed.
+  | "busy"
   | "timeout"
   | "connection-lost"
   | "unique-violation"
@@ -93,6 +99,16 @@ export function toDbError(
   const message = typeof rawMsg === "string" ? rawMsg : "Database error";
 
   let kind: DbErrorKind = "internal";
+  if (isBusyCode(code)) {
+    return new DbError({
+      message,
+      kind: "busy",
+      dialect,
+      code,
+      meta,
+      cause: error,
+    });
+  }
   switch (dialect) {
     case "postgresql":
       kind = mapPostgresCodeToKind(code);
@@ -148,6 +164,35 @@ export function toDbError(
  * driver and per version, and a plugin re-deriving it would be a second
  * implementation of a question this module already answers.
  */
+/**
+ * Whether a driver code says the database was busy: the adapters' own code
+ * for a request that waited out `pool.connectionTimeoutMs`, the same on
+ * every dialect, or SQLITE_BUSY and its extended codes, another process
+ * holding the SQLite file past `busyTimeout`. Neither depends on the dialect,
+ * which is what lets {@link isDatabaseBusy} answer without one.
+ */
+function isBusyCode(code: string | undefined): boolean {
+  if (code === undefined) return false;
+  return (
+    code === POOL_WAIT_TIMEOUT_CODE ||
+    code.toUpperCase().startsWith("SQLITE_BUSY")
+  );
+}
+
+/**
+ * Whether an error is the database being busy, however it arrives: a DbError
+ * of kind "busy", or the raw error an adapter or driver threw.
+ *
+ * For the boundaries that answer a request with whatever its work threw.
+ * `withDbErrors` converts only DbErrors, so a raw driver error reaches them
+ * unconverted, and without this it would read as an internal fault rather
+ * than a request worth retrying.
+ */
+export function isDatabaseBusy(error: unknown): boolean {
+  if (isDbError(error)) return error.kind === "busy";
+  return isBusyCode(safeCode(error));
+}
+
 export function isUniqueViolation(
   dialect: SupportedDialect,
   error: unknown
@@ -209,7 +254,9 @@ function mapMySqlCodeToKind(code?: string): DbErrorKind {
 function mapSqliteCodeToKind(code?: string): DbErrorKind {
   if (!code) return "internal";
   const c = code.toUpperCase();
-  if (c === "SQLITE_BUSY" || c === "SQLITE_LOCKED") return "deadlock";
+  // SQLITE_BUSY is "busy", read before this by `isBusyCode`. SQLITE_LOCKED is
+  // a conflict inside this one connection rather than a wait for the file.
+  if (c === "SQLITE_LOCKED") return "deadlock";
   if (c === "SQLITE_CONSTRAINT_UNIQUE") return "unique-violation";
   if (c === "SQLITE_CONSTRAINT_PRIMARYKEY") return "unique-violation";
   if (c === "SQLITE_CONSTRAINT_FOREIGNKEY") return "fk-violation";

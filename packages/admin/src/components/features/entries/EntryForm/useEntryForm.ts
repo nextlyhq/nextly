@@ -13,7 +13,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldConfig } from "nextly/config";
-import { useMemo, useCallback, useEffect, useRef } from "react";
+import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { z } from "zod";
 
@@ -24,6 +24,7 @@ import { useUpdateEntry } from "@admin/hooks/queries/useUpdateEntry";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 import { generateClientSchema } from "@admin/lib/field-validation";
 import { getDefaultValues } from "@admin/lib/form/default-values";
+import { withoutPlaceholders } from "@admin/lib/form/stored-references";
 import type { EntryValue } from "@admin/types/collection";
 
 // ============================================================================
@@ -433,19 +434,59 @@ export function useEntryForm({
     mode: "onSubmit",
   });
 
-  // Reset form only when the actual entry changes (different ID or new version).
-  // Reason: defaultValues and form.reset are intentionally excluded — React Query
-  // refetches produce new object references even for identical data, and including
-  // the full object would reset the form mid-edit, discarding unsaved changes.
-  // Reset the form when the user opens a different entry. defaultValues is
-  // useMemo'd on (fields, entry), so it only changes when entry's identity
-  // changes — keeps this effect from firing on every keystroke. `form` is
+  // Reset the form to the entry when the entry changes. defaultValues is
+  // useMemo'd on (fields, entry), and the query cache's structural sharing
+  // hands back the same object for a refetch of identical data, so this runs
+  // for changed content rather than on every keystroke or refetch. `form` is
   // a stable RHF ref.
+  //
+  // How far it resets depends on the entry's identity: its id, its stored
+  // version, the language and the read it was loaded for, and whether a
+  // working draft is overlaid — the key the Single editor resets on too.
+  // Another entry, another language, a version saved elsewhere, or a working
+  // draft appearing or going, each starts the form again from the entry.
+  //
+  // A new object with the same identity takes the new values only in the
+  // fields the author has not changed, and keeps the author's state: what is
+  // unsaved, the errors shown, what was touched and submitted. A save rewrites
+  // the cache twice this way — its payload over the cached entry before the
+  // request goes (an optimistic update), then the stored entry back, as a new
+  // object, when the request fails; a full reset to either wiped what the
+  // author had typed, and the field errors the failure had just set. Newer
+  // stored content with the same identity arrives the same way: every save of
+  // a published entry's working draft keeps the published row's `updatedAt`,
+  // so a colleague's later draft is told apart from this editor's own write
+  // only by its values, and the untouched fields show it.
+  // Set by a discard and cleared by the next document the page hands over;
+  // see `handleDiscardWorkingDraft`.
+  const [awaitingEntry, setAwaitingEntry] = useState(false);
+  const resetKey = useRef<string | null>(null);
   useEffect(() => {
-    if (entry && mode === "edit") {
-      form.reset(defaultValues);
-    }
-  }, [entry, mode, defaultValues, form]);
+    if (!entry || mode !== "edit") return;
+    const key = JSON.stringify([
+      entry.id,
+      typeof entry.updatedAt === "string" ? entry.updatedAt : null,
+      locale ?? null,
+      readDraft ?? null,
+      entry._isWorkingDraft === true,
+    ]);
+    const sameEntry = resetKey.current === key;
+    resetKey.current = key;
+    form.reset(
+      defaultValues,
+      sameEntry
+        ? {
+            keepDirtyValues: true,
+            keepDirty: true,
+            keepErrors: true,
+            keepTouched: true,
+            keepIsSubmitted: true,
+            keepSubmitCount: true,
+          }
+        : undefined
+    );
+    setAwaitingEntry(false);
+  }, [entry, mode, defaultValues, form, locale, readDraft]);
 
   // Mutations - pass setError to enable server error mapping to form fields
   const createMutation = useCreateEntry({
@@ -499,7 +540,8 @@ export function useEntryForm({
   const isSubmitting =
     createMutation.isPending ||
     updateMutation.isPending ||
-    discardMutation.isPending;
+    discardMutation.isPending ||
+    awaitingEntry;
 
   //
   // The synchronous half of the same guard. `isSubmitting` is render state:
@@ -525,12 +567,17 @@ export function useEntryForm({
           // extracted to mapIntentToPayload above so the contract is
           // unit-testable without renderHook plumbing.
           const data = mapIntentToPayload(rawData, intent, blankPasswordFields);
+          // What is sent: a link the editor cannot see is held in the form as
+          // a placeholder and written as the reference it stands for. The
+          // form keeps the placeholder, so it is reset to `data`.
+          const payload = withoutPlaceholders(fields, data) as Record<
+            string,
+            EntryValue
+          >;
 
           try {
             if (mode === "create") {
-              const result = await createMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
+              const result = await createMutation.mutateAsync(payload);
               // Reset form to mark as clean after successful create
               form.reset(data);
               // The entry, not the envelope: the mutation now resolves to the
@@ -542,9 +589,7 @@ export function useEntryForm({
                 throw new Error("Entry ID is required for update");
               }
               // entryId is passed to useUpdateEntry hook, so we just pass data here
-              const result = await updateMutation.mutateAsync(
-                data as Record<string, EntryValue>
-              );
+              const result = await updateMutation.mutateAsync(payload);
               // Reset form to mark as clean after successful update
               form.reset(data);
               onSuccess?.(result.item);
@@ -571,6 +616,7 @@ export function useEntryForm({
       onSuccess,
       onError,
       blankPasswordFields,
+      fields,
     ]
   );
 
@@ -615,6 +661,11 @@ export function useEntryForm({
     try {
       const result = await discardMutation.mutateAsync();
       form.reset(getDefaultValues(fields, result.item));
+      // The discard answers with the live row as the API populates it, which
+      // leaves out a related item the editor may not read, so a save of these
+      // values would delete those links. Saving waits for the page to hand
+      // over the document again, merged with its stored links.
+      setAwaitingEntry(true);
     } catch (error) {
       console.error("Discard working draft error:", error);
       onError?.(error);

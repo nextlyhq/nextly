@@ -52,6 +52,8 @@ describe("version methods are registered", () => {
       "getEntryAutosave",
       "getEntryVersion",
       "getEntryVersionDiff",
+      // The entry's content events, read through the same document gate.
+      "listEntryEvents",
       "listEntryVersions",
       "markEntryVersionSeen",
       "restoreEntryVersion",
@@ -67,6 +69,7 @@ describe("version methods are registered", () => {
       "getSingleAutosave",
       "getSingleVersion",
       "getSingleVersionDiff",
+      "listSingleEvents",
       "listSingleVersions",
       "markSingleVersionSeen",
       "restoreSingleVersion",

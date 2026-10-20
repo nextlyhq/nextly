@@ -24,9 +24,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { render } from "@admin/__tests__/utils";
 
-const { headerProps, mintArgs, localization } = vi.hoisted(() => ({
+const { headerProps, localization } = vi.hoisted(() => ({
   headerProps: vi.fn(),
-  mintArgs: vi.fn(),
   localization: { current: { defaultLocale: "en" } },
 }));
 
@@ -48,13 +47,6 @@ vi.mock("@admin/hooks/useLocalization", () => ({
     fallback: true,
     getLocale: () => undefined,
   }),
-}));
-
-vi.mock("@admin/hooks/usePreviewLink", () => ({
-  usePreviewLink: (args: unknown) => {
-    mintArgs(args);
-    return { mutate: vi.fn(), isPending: false };
-  },
 }));
 
 import { SingleForm } from "../SingleForm";
@@ -110,9 +102,10 @@ describe("SingleForm wires the shareable link into its header", () => {
   it("mints against the resolved language, never the editor's sentinel", () => {
     renderForm();
 
-    expect(mintArgs).toHaveBeenCalledWith(
-      expect.objectContaining({ single: "landing-page", locale: "en" })
-    );
+    expect(lastHeaderProps().shareDocument).toEqual({
+      single: "landing-page",
+      locale: "en",
+    });
   });
 
   it("withholds the link while the default locale is still blank", () => {
@@ -123,14 +116,16 @@ describe("SingleForm wires the shareable link into its header", () => {
     renderForm();
 
     expect(lastHeaderProps().isLinkAvailable).toBe(false);
+    expect(lastHeaderProps().shareDocument).toBeUndefined();
   });
 
   it("scopes to the language being edited, not the default one", () => {
     renderForm({ locale: "fr" });
 
-    expect(mintArgs).toHaveBeenCalledWith(
-      expect.objectContaining({ single: "landing-page", locale: "fr" })
-    );
+    expect(lastHeaderProps().shareDocument).toEqual({
+      single: "landing-page",
+      locale: "fr",
+    });
   });
 
   // The negative control for the claim above: absent IS correct here, and a
@@ -144,8 +139,8 @@ describe("SingleForm wires the shareable link into its header", () => {
       />
     );
 
-    expect(mintArgs).toHaveBeenCalledWith(
-      expect.not.objectContaining({ locale: expect.anything() })
-    );
+    expect(lastHeaderProps().shareDocument).toEqual({
+      single: "landing-page",
+    });
   });
 });

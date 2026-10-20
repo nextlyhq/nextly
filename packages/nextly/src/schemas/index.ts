@@ -67,6 +67,7 @@ import {
   oneTimeSecretsTables,
 } from "./one-time-secrets";
 import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
+import { previewLinksTables } from "./preview-links";
 import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
 import { releasesTables } from "./releases";
@@ -254,6 +255,10 @@ export function getCoreSchema(
     // records into them before they exist, so core-reconcile creating them is
     // sufficient, as for `nextly_versions`.
     ...Object.values(contentEventsTables(dialect)),
+    // Recorded preview links. Nothing records into it before it exists: a
+    // mint finding it missing refuses with the migrate remedy, so
+    // core-reconcile creating it is sufficient, as for `nextly_versions`.
+    ...Object.values(previewLinksTables(dialect)),
     // The release tables are first-class managed system tables, declared here
     // for the same reason `nextly_versions` is: nothing records into them
     // before they exist, so core-reconcile creating them on fresh and existing
@@ -384,6 +389,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_version_views",
   "nextly_content_events",
   "nextly_content_event_parts",
+  "nextly_preview_links",
   "nextly_releases",
   "nextly_release_members",
   "nextly_version_pins",

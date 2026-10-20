@@ -18,6 +18,7 @@ import {
   upload,
 } from "../../../config";
 import { getDialectTables } from "../../../database/index";
+import { getWidget, registerWidget } from "../../../domains/widgets/registry";
 import type { Principal } from "../../../plugins/principals/types";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
 import { seedAllPermissions } from "../../../init/seed-permissions";
@@ -33,7 +34,7 @@ import { apiKeyScopeFrom } from "../../authenticated-scope";
 import { requireAuthentication } from "../../middleware/index";
 
 import {
-  ACTIONS,
+  ENTRY_ACTIONS,
   CALLERS,
   RULES,
   type Action,
@@ -46,6 +47,15 @@ export const ORIGIN = "http://localhost";
 /** The slug of the collection, and of the Single, declaring `rule`. */
 export const collectionOf = (rule: Rule) => `c_${rule.replace(/-/g, "_")}`;
 export const singleOf = (rule: Rule) => `s_${rule.replace(/-/g, "_")}`;
+/** The slug of the Single with a status that declares `rule`. */
+export const pubSingleOf = (rule: Rule) => `s_pub_${rule.replace(/-/g, "_")}`;
+
+/**
+ * The filter a `list` and a `count` ask with: it matches the one published
+ * row of a rule collection every read asks for, so the answer says whether
+ * that row was returned.
+ */
+export const PROBE_WHERE = { slug: { equals: "probe" } };
 /** The relationship on `refs` that points at `rule`'s collection. */
 export const relationOf = (rule: Rule) => `to_${rule.replace(/-/g, "_")}`;
 
@@ -70,6 +80,7 @@ const PEOPLE = {
 const MEMBER_KIND = PEOPLE.principal.kind;
 
 type RuleContext = {
+  user?: { id?: unknown } | null;
   roles?: readonly string[];
   permissions?: readonly string[];
   principal?: { kind?: string } | null;
@@ -99,8 +110,19 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "role-name": ({ roles }) => (roles ?? []).includes("editor"),
   "permission-spelling": ({ permissions, collection, operation }) =>
     (permissions ?? []).includes(`${collection}:${operation}`),
+  "role-screen-spelling": ({ permissions, collection, operation }) =>
+    (permissions ?? []).includes(`${operation}-${collection}`),
   "principal-kind": ({ principal }) => principal?.kind === MEMBER_KIND,
+  "user-is-key-maker": ({ user }) =>
+    keyMaker.id !== undefined && user?.id === keyMaker.id,
+  "publish-false": () => false,
 };
+
+/**
+ * The id of `user-with`, who made every key but the super-admin's, set once
+ * the users are seeded. Rules run per request, after it is set.
+ */
+const keyMaker: { id?: string } = {};
 
 const ruleBody = (rule: Rule) => RULE_BODIES[rule];
 
@@ -119,6 +141,9 @@ function accessFor(
 ): Record<string, unknown> | undefined {
   if (rule === "none") return undefined;
   if (rule === "other-operation") return { update: () => false };
+  if (rule === "publish-false") {
+    return { publish: () => false, unpublish: () => false };
+  }
   const body = ruleBody(rule);
   return Object.fromEntries(
     operations.map(operation => [
@@ -147,6 +172,12 @@ const COLLECTION_OPERATIONS = [
   "unpublish",
 ] as const;
 const SINGLE_OPERATIONS = ["read", "update"] as const;
+const PUB_SINGLE_OPERATIONS = [
+  "read",
+  "update",
+  "publish",
+  "unpublish",
+] as const;
 
 function ruleCollections() {
   return RULES.map(rule => {
@@ -162,7 +193,7 @@ function ruleCollections() {
 }
 
 function ruleSingles() {
-  return RULES.map(rule => {
+  const plain = RULES.map(rule => {
     const config = defineSingle({
       slug: singleOf(rule),
       access: accessFor(rule, SINGLE_OPERATIONS) as never,
@@ -171,6 +202,19 @@ function ruleSingles() {
     restoreBooleans(config, rule, SINGLE_OPERATIONS);
     return config;
   });
+  // The same rules on Singles with a draft and a published status, so a
+  // publish and an unpublish each meet the rule for its own operation.
+  const publishing = RULES.map(rule => {
+    const config = defineSingle({
+      slug: pubSingleOf(rule),
+      status: true,
+      access: accessFor(rule, PUB_SINGLE_OPERATIONS) as never,
+      fields: [text({ name: "headline" })],
+    });
+    restoreBooleans(config, rule, PUB_SINGLE_OPERATIONS);
+    return config;
+  });
+  return [...plain, ...publishing];
 }
 
 /** Points at one row of every rule collection, one media row and one user. */
@@ -192,8 +236,11 @@ function refsCollection() {
 /** What a probe route returns, so the outcome survives the HTTP round trip. */
 async function outcome(work: () => Promise<unknown>): Promise<Response> {
   try {
-    await work();
-    return Response.json({ ok: true });
+    const result = await work();
+    // A list or a count answers whether the probe row was among what it read.
+    return Response.json(
+      typeof result === "boolean" ? { ok: true, found: result } : { ok: true }
+    );
   } catch (error) {
     const status = (error as { statusCode?: unknown }).statusCode;
     return Response.json({
@@ -242,6 +289,12 @@ const SERVICE_CALLS: Record<
     c.updateEntry(slug, id, { status: "published" }, opts),
   unpublish: (c, slug, id, opts) =>
     c.updateEntry(slug, id, { status: "draft" }, opts),
+  list: async (c, slug, _id, opts) =>
+    (await c.listEntries(slug, { where: PROBE_WHERE }, opts)).data.some(
+      entry => entry.slug === "probe"
+    ),
+  count: async (c, slug, _id, opts) =>
+    (await c.count(slug, { where: PROBE_WHERE }, opts)) > 0,
 };
 
 /**
@@ -268,11 +321,29 @@ function serviceCall(
 function probePlugin() {
   const gates = [
     ...RULES.flatMap(rule =>
-      ACTIONS.map(action => ({ slug: collectionOf(rule), action }))
+      // A gate names one permission on one entry, so none is a list or a count.
+      ENTRY_ACTIONS.map(action => ({ slug: collectionOf(rule), action }))
     ),
     ...RULES.flatMap(rule =>
       (["read", "update"] as const).map(action => ({
         slug: singleOf(rule),
+        action,
+      }))
+    ),
+    ...RULES.flatMap(rule =>
+      (["publish", "unpublish"] as const).map(action => ({
+        slug: pubSingleOf(rule),
+        action,
+      }))
+    ),
+    // Resources that are not entries, each gated by a permission alone.
+    ...(["create", "update", "delete"] as const).map(action => ({
+      slug: "users",
+      action,
+    })),
+    ...["roles", "email-providers"].flatMap(slug =>
+      (["read", "create", "update", "delete"] as const).map(action => ({
+        slug,
         action,
       }))
     ),
@@ -378,8 +449,11 @@ export function personRoute(caller: Caller): string | undefined {
 export interface CallerHandle {
   /** REST and plugin route headers: a session cookie, a key, or nothing. */
   headers: Record<string, string>;
-  /** The user a Direct API or service call names. */
-  user?: { id: string };
+  /**
+   * The user a Direct API or service call names, and the role it names, which
+   * only `user-naming-super-admin` does.
+   */
+  user?: { id: string; role?: string };
   /** An API key's own scope, as REST authentication resolves it. */
   actor?: AuthenticatedScope;
   /** A plugin-defined person. */
@@ -411,6 +485,7 @@ async function permissionIds(t: TestNextly, keep: (slug: string) => boolean) {
 function heldByStaff(slug: string): boolean {
   return (
     /^(create|read|update|delete|publish|unpublish)-(c|s)_/.test(slug) ||
+    /^(create|read|update|delete)-(roles|email-providers)$/.test(slug) ||
     slug === "read-refs" ||
     slug === "read-media"
   );
@@ -420,6 +495,7 @@ function heldByStaff(slug: string): boolean {
 function heldByPartial(slug: string): boolean {
   return (
     /^(read|update|publish)-(c|s)_/.test(slug) ||
+    /^(read|update)-(roles|email-providers)$/.test(slug) ||
     slug === "read-refs" ||
     slug === "read-media"
   );
@@ -542,6 +618,11 @@ async function seedCollections(
       slug: singleOf(rule),
       data: { headline: "probe" },
     });
+    // Its status is set before each publish or unpublish is asked.
+    await t.nextly.updateSingle({
+      slug: pubSingleOf(rule),
+      data: { headline: "probe", status: "draft" },
+    });
   }
   return seeded;
 }
@@ -610,6 +691,7 @@ const SESSIONS: [Caller, string][] = [
 /** The headers each caller sends: a session cookie, a key, or neither. */
 async function callerHeaders(t: TestNextly) {
   const { users, reviewerRole, partialRole } = await seedUsers(t);
+  keyMaker.id = users.with.id;
   const keys = t.getService("apiKeyService");
   const mint = async (
     owner: string,
@@ -671,13 +753,103 @@ async function handleFor(
   };
 }
 
+/**
+ * The callers only a call hands over, made from the callers they stand for.
+ * They send no headers, since no request presents them.
+ */
+function handedOnly(
+  handles: Map<Caller, CallerHandle>
+): [Caller, CallerHandle][] {
+  const key = handles.get("key-role-based");
+  const without = handles.get("user-without");
+  if (!key?.actor || !without?.user) {
+    throw new Error("the callers a call hands over have nothing to stand for");
+  }
+  return [
+    [
+      "key-without-rows",
+      {
+        headers: {},
+        user: key.user,
+        // Rebuilt from the slugs alone, as a scope that never had the rows is.
+        actor: apiKeyScopeFrom({
+          permissions: key.actor.permissions,
+          ...(key.actor.roles ? { roles: key.actor.roles } : {}),
+        }),
+      },
+    ],
+    [
+      "user-naming-super-admin",
+      { headers: {}, user: { id: without.user.id, role: "super-admin" } },
+    ],
+  ];
+}
+
 async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
   const headers = await callerHeaders(t);
   const handles = new Map<Caller, CallerHandle>();
   for (const caller of CALLERS) {
-    handles.set(caller, await handleFor(t, caller, headers.get(caller) ?? {}));
+    const sent = headers.get(caller);
+    if (sent) handles.set(caller, await handleFor(t, caller, sent));
+  }
+  for (const [caller, handle] of handedOnly(handles)) {
+    handles.set(caller, handle);
   }
   return handles;
+}
+
+/**
+ * The dashboard widget that names `<action>-<slug>` as its required
+ * permission. A widget id takes no underscore, so the slug's become hyphens,
+ * which keeps every id distinct.
+ */
+export const widgetFor = (slug: string, action: string) =>
+  `probe/${slug.replace(/_/g, "-")}-${action}`;
+
+/**
+ * One text widget per permission the `widget` door asks about, so whether a
+ * caller is offered it is the answer to whether it holds that permission.
+ * The registry outlives an instance, so one already there is kept.
+ */
+function registerProbeWidgets(): void {
+  const named: [string, string][] = [
+    ...RULES.flatMap(rule =>
+      ENTRY_ACTIONS.map(
+        action => [collectionOf(rule), action] as [string, string]
+      )
+    ),
+    ...RULES.flatMap(rule =>
+      SINGLE_OPERATIONS.map(
+        action => [singleOf(rule), action] as [string, string]
+      )
+    ),
+    ...RULES.flatMap(rule =>
+      (["publish", "unpublish"] as const).map(
+        action => [pubSingleOf(rule), action] as [string, string]
+      )
+    ),
+    ["media", "read"],
+    ...["users", "roles", "email-providers"].flatMap(slug =>
+      ["read", "create", "update", "delete"].map(
+        action => [slug, action] as [string, string]
+      )
+    ),
+  ];
+  for (const [slug, action] of named) {
+    const id = widgetFor(slug, action);
+    if (getWidget(id)) continue;
+    registerWidget(
+      {
+        id,
+        title: id,
+        archetype: "text",
+        defaultSize: "md",
+        content: id,
+        requiredPermission: `${action}-${slug}`,
+      },
+      { source: "probe" }
+    );
+  }
 }
 
 /** What a populated media row and user carry, and a withheld one does not. */
@@ -686,6 +858,9 @@ export const USER_MARKER = "root@access.test";
 
 async function seedRefs(t: TestNextly, seeded: Map<string, Seeded>) {
   const db = t.adapter.getDrizzle() as unknown as Db;
+  const owner = (
+    await t.adapter.select<{ id: string; email: string }>("users", {})
+  ).find(user => user.email === USER_MARKER)?.id;
   await db.insert(getDialectTables().media).values({
     id: "media-probe",
     filename: MEDIA_MARKER,
@@ -693,12 +868,12 @@ async function seedRefs(t: TestNextly, seeded: Map<string, Seeded>) {
     mimeType: "image/png",
     size: 1,
     url: `/uploads/${MEDIA_MARKER}`,
+    // Who filed it: a column a read refused media populates without, so a
+    // whole row can be told from one with its internal columns taken off.
+    uploadedBy: owner,
     uploadedAt: new Date(),
     updatedAt: new Date(),
   });
-  const owner = (
-    await t.adapter.select<{ id: string; email: string }>("users", {})
-  ).find(user => user.email === USER_MARKER)?.id;
   const made = await t.nextly.create({
     collection: "refs",
     data: {
@@ -727,6 +902,7 @@ export async function boot(dialect: TestDialect): Promise<World> {
   // failure takes it down here; otherwise its connections and its PostgreSQL
   // or MySQL database would outlive the failed run.
   try {
+    registerProbeWidgets();
     const callers = await seedCallers(t);
     const seeded = await seedCollections(t, dialect === "sqlite" ? 1 : 16);
     const refId = await seedRefs(t, seeded);
