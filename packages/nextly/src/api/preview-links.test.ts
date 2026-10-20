@@ -116,6 +116,7 @@ vi.mock("../domains/audit/audit-log-writer", () => ({
  */
 const records = vi.hoisted(() => ({
   recordPreviewLink: vi.fn(),
+  documentRevocationMark: vi.fn(),
   revokeDocumentLinks: vi.fn(),
   revokeAllRecordedLinks: vi.fn(),
 }));
@@ -124,6 +125,7 @@ vi.mock("../auth/preview/preview-link-records", async importOriginal => ({
     typeof import("../auth/preview/preview-link-records")
   >()),
   recordPreviewLink: records.recordPreviewLink,
+  documentRevocationMark: records.documentRevocationMark,
   revokeDocumentLinks: records.revokeDocumentLinks,
   revokeAllRecordedLinks: records.revokeAllRecordedLinks,
 }));
@@ -201,6 +203,7 @@ beforeEach(() => {
   getGeneration.mockResolvedValue(0);
   revokeAll.mockResolvedValue(1);
   records.recordPreviewLink.mockResolvedValue(undefined);
+  records.documentRevocationMark.mockResolvedValue("mark-1");
   records.revokeDocumentLinks.mockResolvedValue(2);
   records.revokeAllRecordedLinks.mockResolvedValue(undefined);
   getSettings.mockResolvedValue({ siteUrl: "https://site.example" });
@@ -1694,16 +1697,15 @@ describe("mintPreviewLink records the link it hands out", () => {
       createdAt: verified.issuedAt,
       expiresAt: verified.expiresAt,
       generation: 0,
-      // Taken before signing, so a revoke-all that starts after it can stop
-      // the link.
-      mintStartedAt: expect.any(Date),
+      // The document's mark as it stood before signing, so a revoke-all that
+      // replaces it afterwards can stop the link.
+      revocationMark: "mark-1",
     });
-    const { mintStartedAt } = records.recordPreviewLink.mock.calls[0]![0] as {
-      mintStartedAt: Date;
-    };
-    expect(mintStartedAt.getTime()).toBeLessThanOrEqual(
-      verified.issuedAt!.getTime() + 1000
-    );
+    expect(records.documentRevocationMark).toHaveBeenCalledWith({
+      kind: "entry",
+      collection: "pages",
+      entryId: "7",
+    });
   });
 
   it("hands out no token when the link cannot be recorded", async () => {

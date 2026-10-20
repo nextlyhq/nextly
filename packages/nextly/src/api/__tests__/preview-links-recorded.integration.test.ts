@@ -28,6 +28,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildClaims } from "../../auth/jwt/claims";
 import { signAccessToken } from "../../auth/jwt/sign";
 import {
+  documentRevocationMark,
   prunePreviewLinks,
   recordPreviewLink,
   revokeDocumentLinks,
@@ -689,6 +690,34 @@ describe.each(getConfiguredTestDialects())(
         expect(await opens(link.token)).toBe(true);
       });
 
+      it("refuses a key with edit grants on the entry a link, and records none", async () => {
+        const install = await boot(dialect);
+        const keys = install.t.getService("apiKeyService") as unknown as {
+          createApiKey: (
+            userId: string,
+            input: { name: string; tokenType: string; expiresIn: string }
+          ) => Promise<{ key: string }>;
+        };
+        // The editor's own full-access key: it holds every grant the editor
+        // does, edit of this entry included.
+        const { key } = await keys.createApiKey(install.editor, {
+          name: "automation",
+          tokenType: "full-access",
+          expiresIn: "never",
+        });
+
+        const res = await call({ key }, "POST", ["preview-links"], {
+          body: install.post,
+        });
+
+        expect(res.status).toBe(403);
+        expect(await storedRows(install)).toHaveLength(0);
+        expect(await auditRows(install, "preview-link-minted")).toHaveLength(0);
+        // The control: the same person, signed in, is given one.
+        await mint(install.editor, install.post);
+        expect(await storedRows(install)).toHaveLength(1);
+      });
+
       it("answers a link of another document as not found", async () => {
         const install = await boot(dialect);
         const elsewhere = await mint(install.editor, install.otherPost);
@@ -723,6 +752,26 @@ describe.each(getConfiguredTestDialects())(
           }
           expect(await opens(other.token)).toBe(true);
           expect(links(await listed(install.editor, doc))).toHaveLength(0);
+        });
+
+        it("counts and marks only the links that were still live", async () => {
+          vi.useFakeTimers({ toFake: ["Date"] });
+          const start = new Date("2030-07-01T09:00:00Z");
+          vi.setSystemTime(start);
+          const install = await boot(dialect);
+          const doc = which === "entry" ? install.post : install.single;
+          const ended = await mint(install.editor, doc, DAY);
+          vi.setSystemTime(new Date(start.getTime() + 2 * DAY * 1000));
+          const live = await mint(install.editor, doc, DAY);
+
+          const res = await revokeDocument({ session: install.editor }, doc);
+          const { item } = (await res.json()) as { item: { revoked: number } };
+
+          expect(item.revoked).toBe(1);
+          const rows = await storedRows(install);
+          const rowOf = (id: string) => rows.find(r => r.id === id);
+          expect(rowOf(live.id)?.revokedAt).not.toBeNull();
+          expect(rowOf(ended.id)?.revokedAt).toBeNull();
         });
       }
     );
@@ -822,33 +871,79 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("a link made while its document's links are revoked", () => {
+      const entryOf = (install: Install) => ({
+        kind: "entry" as const,
+        ...(install.post as { collection: string; entryId: string }),
+      });
+
+      /** The row a mint writes after signing, with the mark it read first. */
+      const lateRow = (
+        install: Install,
+        revocationMark: string | null,
+        id = "0123456789abcdef0123456789abcdef"
+      ) =>
+        recordPreviewLink({
+          id,
+          scope: install.post as { collection: string; entryId: string },
+          createdBy: install.editor,
+          createdAt: new Date(Math.floor(Date.now() / 1000) * 1000),
+          expiresAt: new Date(Date.now() + DAY * 1000),
+          generation: 0,
+          revocationMark,
+        });
+
       it("is not recorded, so it never opens, when the revoke-all lands mid-mint", async () => {
         const install = await boot(dialect);
-        // The mint began, and signed, just before the revoke-all; its row
-        // would land just after the revoke-all had already revoked the rest.
-        const mintStartedAt = new Date(Date.now() - 1000);
+        // The mint read the mark and signed just before the revoke-all; its
+        // row would land just after the revoke-all had revoked the rest.
+        const mark = await documentRevocationMark(entryOf(install));
+        await revokeDocumentLinks(entryOf(install), install.editor, new Date());
+
+        await expect(lateRow(install, mark)).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        expect(await storedRows(install)).toHaveLength(0);
+      });
+
+      it("is not recorded when the revoke-all ran on an instance whose clock is behind", async () => {
+        const install = await boot(dialect);
+        const mark = await documentRevocationMark(entryOf(install));
+        // The revoke-all ran after the mint began, but its instance's clock
+        // reads an hour earlier than the minting instance's.
         await revokeDocumentLinks(
-          {
-            kind: "entry",
-            ...(install.post as { collection: string; entryId: string }),
-          },
+          entryOf(install),
           install.editor,
-          new Date()
+          new Date(Date.now() - 60 * 60 * 1000)
         );
 
-        await expect(
-          recordPreviewLink({
-            id: "0123456789abcdef0123456789abcdef",
-            scope: install.post as { collection: string; entryId: string },
-            createdBy: install.editor,
-            createdAt: new Date(
-              Math.floor(mintStartedAt.getTime() / 1000) * 1000
-            ),
-            expiresAt: new Date(Date.now() + DAY * 1000),
-            generation: 0,
-            mintStartedAt,
-          })
-        ).rejects.toMatchObject({ statusCode: 409 });
+        await expect(lateRow(install, mark)).rejects.toMatchObject({
+          statusCode: 409,
+        });
+        expect(await storedRows(install)).toHaveLength(0);
+      });
+
+      it("keeps no row when a check after writing it fails", async () => {
+        const install = await boot(dialect);
+        const mark = await documentRevocationMark(entryOf(install));
+        const meta = install.t.getService("metaService") as unknown as {
+          get: (key: string) => Promise<unknown>;
+        };
+        const realGet = meta.get.bind(meta);
+        // The mark's re-read after the insert fails, as a dropped connection
+        // would make it.
+        const spy = vi.spyOn(meta, "get").mockImplementation(async key => {
+          if (key.startsWith("previewLinks.revocationMark.")) {
+            throw new Error("connection reset");
+          }
+          return realGet(key);
+        });
+        try {
+          await expect(lateRow(install, mark)).rejects.toThrow(
+            "connection reset"
+          );
+        } finally {
+          spy.mockRestore();
+        }
         expect(await storedRows(install)).toHaveLength(0);
       });
 
@@ -867,7 +962,7 @@ describe.each(getConfiguredTestDialects())(
             createdAt: new Date(Math.floor(Date.now() / 1000) * 1000),
             expiresAt: new Date(Date.now() + DAY * 1000),
             generation: 0,
-            mintStartedAt: new Date(Date.now() - 1000),
+            revocationMark: null,
           })
         ).rejects.toMatchObject({ statusCode: 409 });
         expect(await storedRows(install)).toHaveLength(0);

@@ -32,6 +32,7 @@
 import { z } from "zod";
 
 import {
+  documentRevocationMark,
   listLiveLinks,
   olderLinksEnd,
   previewLinkDocument,
@@ -511,9 +512,11 @@ async function respondWithPreviewLink(
   const settings = await (await settingsService()).getSettings();
   const viewports = await resolvePreviewViewports(declaration?.breakpoints);
 
-  // Before signing: a revoke-all of this document that begins after this
-  // moment has to be able to stop the link.
-  const mintStartedAt = new Date();
+  // Before signing: a revoke-all of this document that replaces the mark
+  // after this read stops the link, even if it ran before the row existed.
+  const revocationMark = await documentRevocationMark(
+    previewLinkDocument(scope)
+  );
   const { token, expiresAt, issuedAt, linkId } = await signPreviewToken(
     scope,
     previewSigningSecret(),
@@ -542,7 +545,7 @@ async function respondWithPreviewLink(
     createdAt: issuedAt,
     expiresAt,
     generation,
-    mintStartedAt,
+    revocationMark,
   });
 
   const url = previewLinkUrl({

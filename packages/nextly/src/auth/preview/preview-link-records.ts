@@ -20,7 +20,7 @@
  * @module auth/preview/preview-link-records
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
@@ -79,6 +79,12 @@ const RECORDED_SINCE_KEY = "previewLinks.recordedSince";
 
 /** The prefix of each document's cutoff for links made before then. */
 const CUTOFF_KEY_PREFIX = "previewLinks.revokedBefore.";
+
+/**
+ * The prefix of each document's revocation mark: a value every revoke-all of
+ * the document replaces, so a mint can tell whether one ran while it worked.
+ */
+const REVOCATION_MARK_KEY_PREFIX = "previewLinks.revocationMark.";
 
 /** How long the window of links made before recording can stay open. */
 const OLDER_LINKS_WINDOW_MS = MAX_PREVIEW_TTL_SECONDS * 1000;
@@ -206,8 +212,11 @@ export async function recordPreviewLink(input: {
   createdAt: Date;
   expiresAt: Date;
   generation: number;
-  /** When the mint began, before its token was signed. */
-  mintStartedAt: Date;
+  /**
+   * The document's revocation mark, read by {@link documentRevocationMark}
+   * before the token was signed.
+   */
+  revocationMark: string | null;
 }): Promise<void> {
   const db = adapter();
   const table = linksTable(dialectOf(db));
@@ -230,38 +239,59 @@ export async function recordPreviewLink(input: {
         openCount: 0,
       })
   );
-  // A revoke-all of this document that began after this mint did may have
-  // revoked the document's rows before this one existed, leaving it working
-  // after the editor was told every link had stopped. The mint is the side
-  // that can still back out, since its token has not left the process: the
-  // row goes and no link is handed out.
-  const cutoff = await getService("metaService").get<string>(
-    cutoffKey(document)
-  );
-  // A site-wide revoke that moved the generation after this mint read it
-  // ends every token signed under the old one, this one included, before it
-  // was handed out: the row would be a live record of a dead link.
+  // The token has not left the process, so the mint is the side that can
+  // still back out. Any failure from here on removes the row as well: a row
+  // whose token nobody received would be listed as live until it ended.
+  try {
+    if (await crossedRevocation(document, input)) {
+      throw NextlyError.conflict({
+        reason: "state",
+        message:
+          "Links were revoked while this one was being made, so it was not created. Make it again.",
+        logContext: { reason: "preview-link-mint-crossed-revoke-all" },
+      });
+    }
+    // After the row, so a mint that failed to record never starts the window.
+    await recordedSince(input.createdAt, input.generation);
+  } catch (error) {
+    await linkDb(db).delete(table).where(eq(table.id, input.id));
+    throw error;
+  }
+}
+
+/**
+ * Whether a revoke-all ran between a mint reading its marks and its row being
+ * written, so the row may have been missed by it.
+ *
+ * Told by values the database orders, never by clocks: a revoke-all replaces
+ * the document's mark before it revokes rows, and a site-wide revoke moves the
+ * generation. One that revoked rows before this row existed changed one of
+ * them before this read, whatever each instance's clock says.
+ */
+async function crossedRevocation(
+  document: PreviewLinkDocument,
+  input: { generation: number; revocationMark: string | null }
+): Promise<boolean> {
   const currentGeneration = await container
     .get<{
       getPreviewTokenGeneration(): Promise<number>;
     }>("generalSettingsService")
     .getPreviewTokenGeneration();
-  if (
-    currentGeneration !== input.generation ||
-    (typeof cutoff === "string" &&
-      new Date(cutoff).getTime() >= input.mintStartedAt.getTime())
-  ) {
-    await linkDb(db).delete(table).where(eq(table.id, input.id));
-    throw NextlyError.conflict({
-      reason: "state",
-      message:
-        "Links were revoked while this one was being made, so it was not created. Make it again.",
-      logContext: { reason: "preview-link-mint-crossed-revoke-all" },
-    });
-  }
+  if (currentGeneration !== input.generation) return true;
+  return (await documentRevocationMark(document)) !== input.revocationMark;
+}
 
-  // After the row, so a mint that failed to record never starts the window.
-  await recordedSince(input.createdAt, input.generation);
+/**
+ * A document's revocation mark, read by a mint before it signs. `null` until
+ * the document's links are first revoked.
+ */
+export async function documentRevocationMark(
+  document: PreviewLinkDocument
+): Promise<string | null> {
+  const mark = await getService("metaService").get<string>(
+    documentKey(REVOCATION_MARK_KEY_PREFIX, document)
+  );
+  return typeof mark === "string" ? mark : null;
 }
 
 /**
@@ -492,15 +522,27 @@ export async function revokeDocumentLinks(
   const dialect = dialectOf(db);
   const table = linksTable(dialect);
 
+  // Before any row is revoked: a mint whose row lands after the update below
+  // sees the new mark and backs out.
+  await getService("metaService").set(
+    documentKey(REVOCATION_MARK_KEY_PREFIX, document),
+    randomUUID()
+  );
   await advanceCutoff(cutoffKey(document), now);
 
   try {
+    // Only links still live: one already ended was not revoked by this, and
+    // keeps its natural end, which its retention is measured from.
     return affectedRowCount(
       await linkDb(db)
         .update(table)
         .set({ revokedAt: now, revokedBy })
         .where(
-          and(documentIs(table, document), isNull(table.revokedAt)) as SQL
+          and(
+            documentIs(table, document),
+            isNull(table.revokedAt),
+            gt(table.expiresAt, now)
+          ) as SQL
         ),
       dialect
     );
@@ -623,13 +665,18 @@ export async function olderLinksEnd(
   return typeof cutoff === "string" ? null : end;
 }
 
-/** The `nextly_meta` key of one document's cutoff, bounded in length. */
+/** The `nextly_meta` key of one document's cutoff. */
 function cutoffKey(document: PreviewLinkDocument): string {
+  return documentKey(CUTOFF_KEY_PREFIX, document);
+}
+
+/** A per-document `nextly_meta` key, bounded in length whatever the ids. */
+function documentKey(prefix: string, document: PreviewLinkDocument): string {
   const identity =
     document.kind === "single"
       ? `single\u0000${document.single}`
       : `entry\u0000${document.collection}\u0000${document.entryId}`;
-  return `${CUTOFF_KEY_PREFIX}${createHash("sha256").update(identity).digest("hex")}`;
+  return `${prefix}${createHash("sha256").update(identity).digest("hex")}`;
 }
 
 /**
