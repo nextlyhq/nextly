@@ -654,16 +654,20 @@ describe("@nextly/adapter-mysql", () => {
       mockConnection.release.mockClear();
       mockConnection.destroy.mockClear();
 
-      await adapter
-        .transaction(async () => "done", {
+      // The setup must reach the strict-mode read and fail on it: a transaction that ignored the
+      // option would commit, and restoring the timeout alone would prove nothing about this path.
+      await expect(
+        adapter.transaction(async () => "done", {
           timeoutMs: 5000,
           strictSqlMode: true,
         })
-        .catch(() => {});
+      ).rejects.toThrow(/lost the read/);
 
       const statements = mockConnection.query.mock.calls.map(
         call => call[0] as string
       );
+      expect(statements).toContain("SELECT @@SESSION.sql_mode AS mode");
+      expect(statements).not.toContain("COMMIT");
       expect(statements).toContain("SET SESSION innodb_lock_wait_timeout = 50");
       expect(mockConnection.release).toHaveBeenCalledTimes(1);
       mockConnection.query.mockImplementation(answer);

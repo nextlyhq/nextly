@@ -26,6 +26,11 @@ import { generateSQL } from "./sql-templates";
 export interface KitRouteConstraintStatements {
   before: string[];
   after: string[];
+  /**
+   * The statements in `after` that add back a key `before` lifted on MySQL: what an apply failing
+   * between the two batches owes the database, since MySQL commits the drop as it runs.
+   */
+  liftRestores: string[];
 }
 
 /**
@@ -47,7 +52,7 @@ export function kitRouteConstraintStatements(
   liveTables: readonly TableSpec[],
   dialect: SupportedDialect
 ): KitRouteConstraintStatements {
-  if (dialect === "sqlite") return { before: [], after: [] };
+  if (dialect === "sqlite") return { before: [], after: [], liftRestores: [] };
 
   const before: Operation[] = [];
   const after: Operation[] = [];
@@ -70,13 +75,13 @@ export function kitRouteConstraintStatements(
         break;
     }
   }
-  if (dialect === "mysql") {
-    const suspended = foreignKeysBlockingTypeChanges(ops, liveTables);
-    before.push(...suspended.map(lift => lift.drop));
-    after.push(...suspended.map(lift => lift.restore));
-  }
+  const suspended =
+    dialect === "mysql" ? foreignKeysBlockingTypeChanges(ops, liveTables) : [];
+  before.push(...suspended.map(lift => lift.drop));
+  after.push(...suspended.map(lift => lift.restore));
   return {
     before: before.map(op => generateSQL(op, dialect)),
     after: after.map(op => generateSQL(op, dialect)),
+    liftRestores: suspended.map(lift => generateSQL(lift.restore, dialect)),
   };
 }
