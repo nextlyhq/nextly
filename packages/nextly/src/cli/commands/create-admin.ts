@@ -40,7 +40,11 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 
 import { normalizeAccountEmail } from "../../auth/credentials/account-email";
-import { validatePasswordStrength } from "../../auth/password";
+import {
+  DEFAULT_MIN_PASSWORD_LENGTH,
+  setMinPasswordLength,
+  validatePasswordStrength,
+} from "../../auth/password";
 import { claimFirstSetup } from "../../auth/setup-token/setup-gate";
 import {
   spendSetupToken,
@@ -326,14 +330,18 @@ export async function runCreateAdmin(
     logger.error(details.problem);
     return 1;
   }
-  const strength = validatePasswordStrength(details.password);
-  if (!strength.ok) {
-    logger.error("That password is too weak:");
-    for (const rule of strength.errors) logger.error(`  - ${rule}`);
-    return 1;
-  }
   const connection = await io.connect();
   try {
+    // The connect loads the install's config, which publishes the configured
+    // minimum the password rule judges against — so the check runs after it,
+    // not before, or an install that raised its minimum would be judged by
+    // the default.
+    const strength = validatePasswordStrength(details.password);
+    if (!strength.ok) {
+      logger.error("That password is too weak:");
+      for (const rule of strength.errors) logger.error(`  - ${rule}`);
+      return 1;
+    }
     const outcome = await createFirstAdministrator(connection.setup, details);
     const { message, code } = OUTCOMES[outcome];
     if (code === 0) logger.success(`${message} Sign in as ${details.email}.`);
@@ -356,10 +364,17 @@ export async function connectToInstall(context: CommandContext): Promise<{
   // The config first, as every command that reads the database loads it: it
   // publishes the configured PostgreSQL schema the connection resolves in, so
   // an install in `cms` gets its administrator there, not in `public`.
-  await loadConfig({
+  const loadConfigResult = await loadConfig({
     configPath: context.options.config,
     cwd: context.options.cwd,
   });
+  // Publish the configured minimum before any password is judged: the rule
+  // reads process state, and the CLI is the one place that judges a password
+  // without the app's service registration having set it.
+  setMinPasswordLength(
+    loadConfigResult.config.auth?.minPasswordLength ??
+      DEFAULT_MIN_PASSWORD_LENGTH
+  );
   const database = validateDatabaseEnv();
   if (!database.valid) {
     // The settings it names are the operator's own, so each is reported, and

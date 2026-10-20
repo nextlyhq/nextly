@@ -22,6 +22,7 @@ import { defineEmailProvider } from "../provider-definition";
 import type { EmailProviderService } from "../services/email-provider-service";
 import { EmailService } from "../services/email-service";
 import type { EmailTemplateService } from "../services/email-template-service";
+import { renderTemplate } from "../services/render-template";
 import { createSendLayerProvider } from "../services/providers/sendlayer-provider";
 import type { EmailProviderAdapter } from "../types";
 
@@ -106,6 +107,13 @@ function build(
       resolveForSend: vi
         .fn()
         .mockResolvedValue({ template: TEMPLATE, preferCode: false }),
+      renderStored: (
+        template: Parameters<typeof renderTemplate>[0],
+        data: Record<string, unknown>
+      ) =>
+        Promise.resolve(
+          renderTemplate(template, null, data, { appName: "Nextly" })
+        ),
       getLayout: vi.fn(),
     } as unknown as EmailTemplateService,
     undefined,

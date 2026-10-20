@@ -107,6 +107,8 @@ const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
   "schema",
   "population",
   "system",
+  "widget",
+  "lock",
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");

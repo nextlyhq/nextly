@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 
-import { PasswordSchema } from "@nextly/schemas/_zod/validation";
+import { checkPasswordPolicyRules, type PasswordPolicyOptions } from "./policy";
 
 /**
  * Password hashing/verification utilities for credentials authentication.
@@ -50,22 +50,23 @@ export async function verifyPassword(
   }
 }
 
+export * from "./policy";
+
 export type PasswordStrengthResult =
   | { ok: true; errors?: undefined }
   | { ok: false; errors: string[] };
 
 export function validatePasswordStrength(
-  password: string
+  password: string,
+  options?: PasswordPolicyOptions
 ): PasswordStrengthResult {
-  const result = PasswordSchema.safeParse(password);
-  if (result.success) {
+  const errors = checkPasswordPolicyRules(password, options);
+  if (errors.length === 0) {
     return { ok: true };
   } else {
     return {
       ok: false,
-      errors: result.error.issues.map(
-        (issue: { message: string }) => issue.message
-      ),
+      errors,
     };
   }
 }

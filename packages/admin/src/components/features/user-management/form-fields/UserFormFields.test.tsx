@@ -59,13 +59,17 @@ describe("the create-user form's set-a-password choice", () => {
     render(<CreateForm />);
 
     await userEvent.click(screen.getByLabelText(/Set a password now/));
-    await userEvent.type(screen.getByPlaceholderText(/a symbol$/), "password");
+    // 130 characters: inside no ceiling it breaks, and past the digester's
+    // reach too — two rules, and the form names both.
+    await userEvent.type(
+      screen.getByPlaceholderText(/a symbol$/),
+      "a".repeat(130)
+    );
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
     for (const rule of [
-      "Password must contain at least one uppercase letter",
-      "Password must contain at least one number",
-      "Password must contain at least one special character",
+      "Password must be at most 128 characters",
+      "Password exceeds the 72-byte limit of the password digester.",
     ]) {
       expect(await screen.findByText(rule)).toBeTruthy();
     }
