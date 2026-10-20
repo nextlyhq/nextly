@@ -346,6 +346,35 @@ export function measureBundle({
   const reachableSet = reachableClosure(graph, entryChunk);
   const otherEntrySet = otherEntryClosure(graph, entryChunk);
 
+  // What a DIRECT visit to each lazily loaded route must fetch before that
+  // route renders: the route root's static closure, shared shell included.
+  // The entry's eager graph alone understates that visit, which fetches the
+  // route's closure too before it can show anything.
+  const routeRoots = (graph.get(entryChunk)?.dynamicImports ?? []).filter(
+    root => graph.has(root)
+  );
+  const routes = routeRoots
+    .map(root => {
+      const closure = closureFrom(graph, root, ["staticImports"]);
+      const chunks = [...closure];
+      const minifiedBytes = chunks.reduce(
+        (sum, rel) => sum + graph.get(rel).minifiedBytes,
+        0
+      );
+      const gzippedBytes = chunks.reduce(
+        (sum, rel) => sum + graph.get(rel).gzippedBytes,
+        0
+      );
+      return {
+        root,
+        chunks: chunks.length,
+        minifiedBytes,
+        gzippedBytes,
+        beyondFirstScreen: [...closure].filter(rel => !firstScreenSet.has(rel)),
+      };
+    })
+    .sort((a, b) => b.minifiedBytes - a.minifiedBytes);
+
   const buckets = {
     "first-screen": [],
     "route-later": [],
@@ -423,6 +452,7 @@ export function measureBundle({
     distDir,
     entryChunk,
     chunks,
+    routes,
     categories: {
       firstScreen: { chunks: buckets["first-screen"], ...firstScreenTotal },
       routeLater: { chunks: buckets["route-later"], ...routeLaterTotal },
@@ -477,6 +507,9 @@ export function formatReport(result, { json = false } = {}) {
   lines.push(`Date:    ${result.date}`);
   lines.push(`Commit:  ${result.commit}`);
   lines.push(`Built:   ${result.builtAt}`);
+  if (result.stale) {
+    lines.push("Stale:   YES — these bytes predate the commit above; rebuild.");
+  }
   lines.push(`Entry:   ${result.entryChunk}`);
   lines.push("=".repeat(72));
 
@@ -519,6 +552,24 @@ export function formatReport(result, { json = false } = {}) {
       subtotalLabel: "Subtotal CLI:",
       total: result.totals.cli,
     });
+  }
+
+  if (result.routes.length > 0) {
+    lines.push("");
+    lines.push(
+      `🛣️  Route first loads (${result.routes.length} lazy routes — what a DIRECT visit to each must fetch before it renders, shared shell included):`
+    );
+    lines.push("-".repeat(72));
+    for (const route of result.routes) {
+      const min = `${formatKB(route.minifiedBytes)} KB`.padStart(11);
+      const gz = `${formatKB(route.gzippedBytes)} KB gzip`.padStart(16);
+      const beyond = route.beyondFirstScreen.length;
+      lines.push(
+        `  ${route.root.padEnd(42)} ${min}  (${gz})` +
+          `  +${beyond} beyond the shell`
+      );
+    }
+    lines.push("-".repeat(72));
   }
 
   lines.push("");
@@ -620,9 +671,13 @@ if (invokedAsScript()) {
     const result = measureBundle({ distDir });
     // The report labels the bytes with the current revision; say so loudly
     // when the bytes predate it, so a stale dist cannot wear a fresh commit
-    // unnoticed.
+    // unnoticed — in the text, in the JSON, and on stderr where automation
+    // looks.
     const builtMs = Date.parse(result.builtAt);
-    if (Number.isFinite(builtMs) && builtMs < commitTimeMs(result.commit)) {
+    const stale =
+      Number.isFinite(builtMs) && builtMs < commitTimeMs(result.commit);
+    result.stale = stale;
+    if (stale) {
       console.error(
         `bundle-report warning: the dist was built at ${result.builtAt}, before commit ${result.commit.slice(0, 12)} — the report's commit labels older bytes. Rebuild for a fresh attribution.`
       );

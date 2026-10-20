@@ -333,6 +333,58 @@ describe("bundle-report", () => {
       expect(text).toContain("Unreachable chunks (1 chunks");
       expect(text).toContain("raw sizes: the CLI build does not minify");
     });
+
+    it("profiles what a direct visit to each lazy route must fetch", () => {
+      const dist = createFixtureDist({
+        "index.mjs": `
+          import { shell } from "./chunk-shell.mjs";
+          const Home = () => import("./chunk-home.mjs");
+          const Docs = () => import("./chunk-docs.mjs");
+        `,
+        "chunk-shell.mjs": `
+          export const shell = "shell";
+        `,
+        "chunk-home.mjs": `
+          import { shell } from "./chunk-shell.mjs";
+          export default "home";
+        `,
+        "chunk-docs.mjs": `
+          import { shell } from "./chunk-shell.mjs";
+          import { heavy } from "./chunk-heavy.mjs";
+          export default "docs";
+        `,
+        "chunk-heavy.mjs": `
+          export const heavy = "x".repeat(5000);
+        `,
+        "cli.cjs": `
+          console.log("cli tool");
+        `,
+      });
+
+      const report = measureBundle({ distDir: dist });
+
+      // Sorted most expensive first: docs pulls its own heavy chunk, home
+      // reuses the shell only. Both totals include the shared shell, which a
+      // direct visit fetches too.
+      expect(report.routes.map(r => r.root)).toEqual([
+        "chunk-docs.mjs",
+        "chunk-home.mjs",
+      ]);
+      const docs = report.routes[0];
+      expect(docs.chunks).toBe(3);
+      expect(docs.beyondFirstScreen).toEqual([
+        "chunk-docs.mjs",
+        "chunk-heavy.mjs",
+      ]);
+      expect(docs.minifiedBytes).toBeGreaterThan(
+        report.routes[1].minifiedBytes
+      );
+
+      const text = formatReport(report, { json: false });
+      expect(text).toContain("Route first loads (2 lazy routes");
+      expect(text).toContain("chunk-docs.mjs");
+      expect(text).toContain("+2 beyond the shell");
+    });
   });
 
   describe("measureBundle on actual admin build dist", () => {
@@ -403,6 +455,16 @@ describe("bundle-report", () => {
           c => c.rel
         );
         expect(firstScreenFiles).toContain("index.mjs");
+
+        // Invariant 2b: the declared entrypoints the build emits for other
+        // consumers sit in other-entry, and at least one orphan is exposed —
+        // the assertions a wrong classification would fail.
+        const otherEntryFiles = report.categories.otherEntry.chunks.map(
+          c => c.rel
+        );
+        expect(otherEntryFiles).toContain("lib/plugins/component-registry.mjs");
+        expect(otherEntryFiles).toContain("lib/plugins/plugin-components.mjs");
+        expect(report.totals.unreachable.count).toBeGreaterThan(0);
 
         // Invariant 3: CLI files must not be in browser categories
         expect(firstScreenFiles).not.toContain("cli.cjs");
