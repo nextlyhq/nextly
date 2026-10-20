@@ -280,21 +280,29 @@ export async function resolveServiceOpts(
     }
     return {
       overrideAccess: false,
-      user: await callerFor(user, authenticatedScope, deps),
+      user: callerFor(
+        user,
+        // Copied: the scope's arrays are frozen, and the caller object is the
+        // mutable shape every consumer of it is typed against.
+        authenticatedScope?.roles
+          ? [...authenticatedScope.roles]
+          : await deps.listRoleSlugs(user.id)
+      ),
       ...carried,
       ...(authenticatedScope ? { authenticatedScope } : {}),
     };
   }
   // The plugin acting as itself, beside a person it names: still trusted, and
   // the person is the one the write is attributed to, so a folder records its
-  // creator and a hook sees who the change was made for. Built as the user
-  // branch builds a caller, so a hook reading that person's roles sees the
-  // same person on either branch. No scope travels: a scope narrows an access
-  // check, and a trusted call runs none.
+  // creator and a hook sees who the change was made for. Nothing is asked
+  // about them, so no role lookup runs: a trusted call never needed one, and
+  // a lookup that failed would refuse a call that does not depend on it. No
+  // scope travels either: a scope narrows an access check, and a trusted call
+  // runs none.
   if (user !== undefined) {
     return {
       overrideAccess: true,
-      user: await callerFor(user, undefined, deps),
+      user: callerFor(user, []),
       ...carried,
     };
   }
@@ -303,13 +311,12 @@ export async function resolveServiceOpts(
 
 /**
  * The caller a plugin's `ServiceOpts.user` is, as every service receives one:
- * built by `buildUserContext`, with the roles it holds resolved.
+ * built by `buildUserContext`, carrying `roles`.
  */
-async function callerFor(
+function callerFor(
   user: AuthUser,
-  authenticatedScope: AuthenticatedScope | undefined,
-  deps: ServiceOptsDeps
-): Promise<NonNullable<RequestContext["user"]>> {
+  roles: string[]
+): NonNullable<RequestContext["user"]> {
   // 🔴 The verified CLAIMS travel with the identity, and dropping them is a
   // security defect rather than a tidiness one. `readCaller` spreads
   // `auth.claims` onto the user it builds, so a caller handed to a plugin
@@ -338,11 +345,7 @@ async function callerFor(
     id: user.id,
     name: user.name ?? undefined,
     email: user.email,
-    // Copied: the scope's arrays are frozen, and the caller object is the
-    // mutable shape every consumer of it is typed against.
-    roles: authenticatedScope?.roles
-      ? [...authenticatedScope.roles]
-      : await deps.listRoleSlugs(user.id),
+    roles,
   });
   return {
     ...identity,
