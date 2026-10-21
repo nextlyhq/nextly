@@ -40,6 +40,11 @@ interface ActivityLogEntry {
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
+  /**
+   * What the row is about. Optional because a server older than this admin
+   * does not send it; absent or null, the row is a collection's.
+   */
+  subjectKind?: "collection" | "single" | "settings" | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
   /** When this row's identity was erased; null while the actor exists. */
@@ -68,12 +73,35 @@ const ACTION_CATEGORIES: Record<string, ActivityCategory> = {
 };
 
 function mapEntry(entry: ActivityLogEntry): Activity {
-  const collectionLabel = entry.collection;
   const entryTitle = entry.entryTitle ?? undefined;
+  // A Single's row is headed by the Single's label alone. Its `collection` is
+  // the Single's slug, not a collection, so showing it as the collection the
+  // entry belongs to would print a slug no reader chose and name a collection
+  // that does not exist.
+  if (entry.subjectKind === "single") {
+    return {
+      ...shared(entry),
+      target: entryTitle ?? "a Single",
+      entryTitle,
+    };
+  }
+  const collectionLabel = entry.collection;
   const target = entryTitle
     ? `${entryTitle} in ${collectionLabel}`
     : collectionLabel;
 
+  return {
+    ...shared(entry),
+    target,
+    entryTitle,
+    collectionLabel,
+  };
+}
+
+/** What every row carries whatever it is about: who, what they did, when. */
+function shared(
+  entry: ActivityLogEntry
+): Omit<Activity, "target" | "entryTitle" | "collectionLabel"> {
   return {
     id: entry.id,
     // Delegated rather than mapped here. Whether an entry's author still
@@ -83,9 +111,6 @@ function mapEntry(entry: ActivityLogEntry): Activity {
     user: describeActivityActor(entry),
     type: entry.action,
     action: ACTION_LABELS[entry.action] ?? entry.action,
-    target,
-    entryTitle,
-    collectionLabel,
     category: ACTION_CATEGORIES[entry.action] ?? "info",
     timestamp: entry.createdAt,
   };

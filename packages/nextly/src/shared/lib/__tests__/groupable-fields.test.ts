@@ -10,7 +10,17 @@
  * Selecting the field is not required for that, which is why guarding `select`
  * would not help — the answer is the grouping, not the row.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// A field rule is handed the caller's roles and grants; with no database
+// behind this suite the real lookups refuse, so they answer here.
+vi.mock("../../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../services/lib/permissions")
+  >()),
+  listRoleSlugsForUser: vi.fn(async () => []),
+  listEffectiveGrants: vi.fn(async () => []),
+}));
 
 import {
   clearFieldFunctions,

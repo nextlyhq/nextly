@@ -8832,6 +8832,8 @@ export class CollectionMutationService extends BaseService {
                 // locale-specific too — the singles path counts it the same way.
                 Object.keys(snapshotComponents ?? {}).length > 0;
 
+              // The version this update produced, which its status moves name below.
+              let producedVersionNo: number | null = null;
               if (versionsConfig?.enabled && !storeAsWorkingDraft) {
                 const savedStatus =
                   (updatePayload as { status?: unknown }).status ??
@@ -8885,6 +8887,7 @@ export class CollectionMutationService extends BaseService {
                     maxPerDoc: versionsConfig.maxPerDoc,
                   }
                 );
+                producedVersionNo = versionNo;
                 await this.recordSaveHistory(
                   tx,
                   params.collectionName,
@@ -9196,16 +9199,35 @@ export class CollectionMutationService extends BaseService {
                   tx,
                   params.collectionName,
                   params.entryId,
-                  { actor, personName: params.user?.name ?? null },
+                  {
+                    actor,
+                    personName: params.user?.name ?? null,
+                    versionNo: producedVersionNo,
+                  },
+                  // Publishing a held draft is a publish though the live row
+                  // was published before and after: the move history records
+                  // is the draft's, from draft to published, so it names the
+                  // publish and who made it.
                   [
                     ...(companionEncodesMainTransition
                       ? []
-                      : [{ from: mainFrom, to: mainTo }]),
+                      : [
+                          {
+                            from:
+                              promotedDraft && mainTo === "published"
+                                ? "draft"
+                                : mainFrom,
+                            to: mainTo,
+                          },
+                        ]),
                     ...(companionStatusWritten
                       ? [
                           {
                             locale: localizedUpdate?.writeLocale,
-                            from: localizedPreviousStatus,
+                            from:
+                              promotedDraft && companionNext === "published"
+                                ? "draft"
+                                : localizedPreviousStatus,
                             to: companionNext,
                           },
                         ]
@@ -11456,6 +11478,8 @@ export class CollectionMutationService extends BaseService {
           manyToManyFields,
           needsRelations,
         });
+      // The version this update produced, which its status moves name below.
+      let producedVersionNo: number | null = null;
       // A held edit records no durable version: nothing was published.
       if (!storeAsWorkingDraft) {
         const localeTag = capturedLocaleState
@@ -11478,6 +11502,7 @@ export class CollectionMutationService extends BaseService {
           // on a collection where they all are.
           localeTag,
         });
+        producedVersionNo = versionNo;
         await this.recordSaveHistory(tx, params.collectionName, entryId, {
           actor: actorForWrite(params.actor, params.user),
           personName: params.user?.name ?? null,
@@ -11580,7 +11605,11 @@ export class CollectionMutationService extends BaseService {
           tx,
           params.collectionName,
           entryId,
-          { actor: eventActor, personName: params.user?.name ?? null },
+          {
+            actor: eventActor,
+            personName: params.user?.name ?? null,
+            versionNo: producedVersionNo,
+          },
           [
             ...(companionEncodesMainTransition
               ? []

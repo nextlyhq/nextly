@@ -160,7 +160,7 @@ describe("the bars archetype", () => {
         { value: "Draft", count: 57 },
       ])
     );
-    const graphic = screen.getByRole("img");
+    const graphic = screen.getByRole("group", { name: /Use the arrow keys/ });
     expect(graphic).toHaveAccessibleName(/Entries by status/);
     expect(graphic).toHaveAccessibleDescription(/Most: Published, 128/);
   });

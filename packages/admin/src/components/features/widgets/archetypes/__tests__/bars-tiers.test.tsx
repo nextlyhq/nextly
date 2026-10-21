@@ -53,7 +53,7 @@ function drawAt(tier: SizeTier, result: WidgetResult) {
 
 /** The groups the chart draws, read inside the picture: the frame's table repeats them. */
 const drawnGroups = () =>
-  within(screen.getByRole("img"))
+  within(screen.getByRole("group", { name: /Use the arrow keys/ }))
     .getAllByText(/^Author \d+$/)
     .map(node => node.textContent);
 
@@ -92,7 +92,9 @@ describe("a breakdown card's groups at each tier", () => {
   it("counts every group the answer holds in its words, and the ones left out under the bars", () => {
     drawAt("small", groups(6));
     expect(
-      within(screen.getByRole("img")).getByText(/^Entries by author: 6 groups,/)
+      within(
+        screen.getByRole("group", { name: /Use the arrow keys/ })
+      ).getByText(/^Entries by author: 6 groups,/)
     ).toBeInTheDocument();
     expect(screen.getByText("3 more groups")).toBeInTheDocument();
   });

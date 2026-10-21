@@ -99,6 +99,9 @@ export function useChartReach(shape: ChartShape): ChartReach {
   }, []);
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
+    // A key held with Alt, Ctrl or Meta is the browser's or the platform's (Alt+Left is back,
+    // Ctrl+End the end of the page), never the chart's.
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
     if (event.key === "Escape") {
       if (shown) {
         event.preventDefault();

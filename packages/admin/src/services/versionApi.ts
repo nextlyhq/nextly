@@ -71,9 +71,26 @@ export type VersionScope =
       documentId: string;
     };
 
-/** Display identity of whoever wrote a version. */
+/**
+ * Who or what history credits a version or an event to: a person, an API key
+ * (by its own name), a plugin's own kind of person, a release, the system, or
+ * an agent.
+ */
+export type HistoryActorKind =
+  | "person"
+  | "apiKey"
+  | "principal"
+  | "release"
+  | "system"
+  | "agent";
+
+/**
+ * Display identity of whoever wrote a version. The system has no id, and a
+ * version recorded before actors were recorded carries no kind.
+ */
 export interface VersionAuthor {
-  id: string;
+  kind?: HistoryActorKind;
+  id: string | null;
   name: string | null;
 }
 
@@ -105,6 +122,38 @@ export type VersionDetail = VersionMeta & {
 
 export type VersionListResponse = ListResponse<VersionMeta>;
 
+/**
+ * One thing that happened to a document, from its record of events: a save, a
+ * publish or a withdrawal, a restore, a naming, older versions removed.
+ *
+ * `parts` names what it applied to: language codes, and `~shared` for the
+ * fields every language shares. `versionNo` is the version it produced, when
+ * it produced one.
+ */
+export interface DocumentEvent {
+  id: string;
+  kind: string;
+  actorKind: HistoryActorKind;
+  actorId: string | null;
+  actorName: string | null;
+  occurredAt: string;
+  fromState: string | null;
+  toState: string | null;
+  note: string | null;
+  versionNo: number | null;
+  payload: Record<string, unknown> | null;
+  parts: string[];
+}
+
+export type DocumentEventListResponse = ListResponse<DocumentEvent>;
+
+export interface ListDocumentEventsParams {
+  /** At most this many, 1 to 100. */
+  limit?: number;
+  /** Only events older than this one: the last item's id, for the next page. */
+  before?: string;
+}
+
 export interface ListVersionsParams {
   limit?: number;
   /**
@@ -123,10 +172,15 @@ export interface MarkVersionSeenResponse {
 }
 
 /** Base path for a scope's history. */
-function basePath(scope: VersionScope): string {
+/** The document a scope names, which its history and events sit under. */
+function documentPath(scope: VersionScope): string {
   return scope.kind === "single"
-    ? `/singles/${scope.slug}/versions`
-    : `/collections/${scope.slug}/entries/${scope.entryId}/versions`;
+    ? `/singles/${scope.slug}`
+    : `/collections/${scope.slug}/entries/${scope.entryId}`;
+}
+
+function basePath(scope: VersionScope): string {
+  return `${documentPath(scope)}/versions`;
 }
 
 /**
@@ -180,6 +234,24 @@ export interface DiscardWorkingDraftResponse {
 }
 
 export const versionApi = {
+  /**
+   * A page of the document's events, newest first. The next page passes the
+   * last item's id as `before`.
+   *
+   * @experimental
+   */
+  events: (
+    scope: VersionScope,
+    params: ListDocumentEventsParams = {}
+  ): Promise<DocumentEventListResponse> => {
+    const search = new URLSearchParams();
+    if (params.limit !== undefined) search.set("limit", String(params.limit));
+    if (params.before !== undefined) search.set("before", params.before);
+    const query = search.toString();
+    return protectedApi.get<DocumentEventListResponse>(
+      `${documentPath(scope)}/events${query ? `?${query}` : ""}`
+    );
+  },
   list: (
     scope: VersionScope,
     params: ListVersionsParams = {}

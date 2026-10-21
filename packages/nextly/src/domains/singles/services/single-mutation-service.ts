@@ -137,7 +137,10 @@ import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
-import { recordMutationEvent } from "../../webhooks/record-mutation-event";
+import {
+  recordMutationEvent,
+  recordSingleSaveActivity,
+} from "../../webhooks/record-mutation-event";
 import { isOutboxRecordingActive } from "../../webhooks/recording-activation";
 import type { WebhookResource } from "../../webhooks/types";
 import type {
@@ -3102,6 +3105,20 @@ export class SingleMutationService extends BaseService {
               id: existingDoc.id,
               ...(eventLocale != null ? { locale: eventLocale } : {}),
             };
+            // The save's row in the activity trail, ahead of the outbox gate
+            // below: the trail records who changed what on every install,
+            // whether or not webhooks or audit are on, so it cannot wait on a
+            // gate that is closed on an install with neither. One row per save,
+            // however many events the save appends below. A held draft edit is
+            // filed under the draft's language, as its history is; any other
+            // save under the language it stored, or none.
+            await recordSingleSaveActivity(tx, {
+              slug,
+              entryId: existingDoc.id,
+              label: singleMeta.label,
+              locale: holdEdit ? (singleDraftLocale ?? null) : eventLocale,
+              actor,
+            });
             // Record only when the same opt-out decision that gated the payload
             // assembly still holds. `recordMutationEvent` re-derives the policy
             // internally, but a dev HMR reload can flip `webhooks` mid-write: if

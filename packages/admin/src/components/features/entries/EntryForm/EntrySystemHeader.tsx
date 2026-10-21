@@ -202,6 +202,15 @@ export interface EntrySystemHeaderProps {
    * which case the control is still offered and the panel reports honestly.
    */
   historyEnabled?: boolean;
+
+  /** How many versions the entity keeps, which the history states. */
+  historyRetention?: number | false;
+
+  /**
+   * Whether the entity has the Draft/Published lifecycle, which decides what
+   * the history pins as published and as the current draft.
+   */
+  historyLifecycle?: boolean;
 }
 
 export function EntrySystemHeader({
@@ -217,6 +226,8 @@ export function EntrySystemHeader({
   scope = "collection",
   historyFields,
   historyEnabled,
+  historyRetention,
+  historyLifecycle = false,
   lockIdentity = false,
   documentLocked = false,
   isRailCollapsed = false,
@@ -672,6 +683,14 @@ export function EntrySystemHeader({
           // The live document's status, which is what a restore changes — the
           // selected version's own status describes the past.
           liveStatus={effectiveStatus}
+          // What the story list needs of the editor: whether the document
+          // has the Draft/Published lifecycle, the language being edited, and
+          // what retention keeps.
+          lifecycle={historyLifecycle}
+          editingLocale={entryLocale.locale ?? defaultLocale ?? null}
+          {...(historyRetention !== undefined
+            ? { retention: historyRetention }
+            : {})}
         />
       ) : null}
     </div>
