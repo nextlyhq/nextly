@@ -2606,6 +2606,17 @@ export class SingleMutationService extends BaseService {
                 {
                   ref: draftRef,
                   locale: singleDraftLocale,
+                  // A Single without languages whose snapshot carries a
+                  // component records the save under the language that
+                  // component was read in, as its other saves are.
+                  versionLocale:
+                    singleDraftLocale ??
+                    (fieldConfigs.some(
+                      field =>
+                        isFieldGroupField(field) && pending[field.name] != null
+                    )
+                      ? (snapshotLocale ?? null)
+                      : null),
                   snapshot: pending,
                   replaces,
                   createdBy: options.user?.id ?? null,

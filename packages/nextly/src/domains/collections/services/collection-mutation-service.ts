@@ -7090,8 +7090,18 @@ export class CollectionMutationService extends BaseService {
     const { versionNo } = await storeDraftSave(tx, this.versionCapture, {
       ref: draftRef,
       // The key the read overlay, the promote and the discard look under,
-      // from `workingDraftLocale`; the version is keyed the same way.
+      // from `workingDraftLocale`.
       locale: draftLocale,
+      // The version is keyed the same way, except where the document has no
+      // languages and the snapshot carries a component: that was read in the
+      // default language, and is recorded under it as every other save is.
+      versionLocale:
+        draftLocale ??
+        ((fields as unknown as FieldConfig[]).some(
+          field => isFieldGroupField(field) && draftDocument[field.name] != null
+        )
+          ? this.componentSnapshotLocale(undefined)
+          : null),
       snapshot: draftDocument,
       replaces,
       createdBy: params.user?.id ?? null,
