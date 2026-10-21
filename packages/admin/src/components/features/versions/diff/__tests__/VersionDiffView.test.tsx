@@ -194,6 +194,9 @@ describe("VersionDiffView", () => {
     );
     expect(screen.getByText("Title")).toBeInTheDocument();
     expect(screen.getByText("Slug")).toBeInTheDocument();
+    // Each unfolded field shows its value, read-only, as a changed one does.
+    expect(screen.getByText("same")).toBeInTheDocument();
+    expect(screen.getByText("s")).toBeInTheDocument();
   });
 
   it("says two versions are identical, with their fields folded", async () => {

@@ -229,9 +229,20 @@ const MANY_FIELDS = {
       type: "textarea",
       status: "unchanged",
     },
-    ...["Slug", "Author", "Category", "Tags", "Published on", "Region"].map(
-      label => value(label.toLowerCase().replace(/ /g, ""), label, "x", "x")
+    // Unchanged fields as a real document holds them: each shows its value,
+    // read-only, once unfolded, and an empty one says so.
+    value("slug", "Slug", "spring-launch", "spring-launch"),
+    value("author", "Author", "Ana Ruiz", "Ana Ruiz"),
+    value("category", "Category", "News", "News"),
+    value("tags", "Tags", "launch, spring", "launch, spring"),
+    value(
+      "publishedOn",
+      "Published on",
+      "2026-10-01T09:00:00.000Z",
+      "2026-10-01T09:00:00.000Z",
+      "date"
     ),
+    value("region", "Region", null, null),
     {
       kind: "unknown",
       name: "legacyKeyword",
