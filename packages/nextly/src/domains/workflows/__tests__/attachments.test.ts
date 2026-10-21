@@ -124,6 +124,36 @@ describe("workflowAttachmentsOf", () => {
     ]);
   });
 
+  it("checks a hand-built workflow as fully as a declared one, whatever its marker says", () => {
+    const review = reviewWorkflow();
+    const forged = {
+      ...review,
+      steps: review.steps.map(step =>
+        step.name === "approve" ? { ...step, to: "nowhere" } : step
+      ),
+    } as unknown as Workflow;
+    expect(
+      refusalOf(() =>
+        workflowAttachmentsOf({ collections: [target("posts", forged)] })
+      )
+    ).toContain(
+      "collections.posts.workflow.steps[1].to: `nowhere` is not a stage. Known stages: drafting, inReview, approved."
+    );
+
+    // Sound as a definition, but not what `defineWorkflow` answers for it.
+    const misresolved = {
+      ...review,
+      firstStage: "approved",
+    } as unknown as Workflow;
+    expect(
+      refusalOf(() =>
+        workflowAttachmentsOf({ collections: [target("posts", misresolved)] })
+      )
+    ).toEqual([
+      "collections.posts.workflow: It is not the workflow `defineWorkflow` answers for its own definition: pass the value `defineWorkflow` or `reviewWorkflow` returned.",
+    ]);
+  });
+
   it("refuses two different definitions under one slug", () => {
     const other = defineWorkflow({
       slug: "review",
@@ -183,12 +213,51 @@ describe("the workflow registry", () => {
             ],
           },
           null,
-          { judgeComponents: false }
+          { componentsFrom: [] }
         )
       )
     ).toEqual([
       "collections.accounts.workflow: `review` cannot be attached to `accounts`: it has a password field, so it cannot keep a draft beside the live version.",
     ]);
+  });
+
+  it("judges a component the configuration defines, as a build does: a password field inside it is refused", async () => {
+    const login = {
+      name: "login",
+      type: "component",
+      component: "credentials",
+    } as unknown as FieldConfig;
+    const credentials = {
+      slug: "credentials",
+      fields: [{ name: "secret", type: "password" } as FieldConfig],
+    };
+    expect(
+      await asyncRefusalOf(() =>
+        buildWorkflowRegistry(
+          {
+            collections: [
+              target("accounts", reviewWorkflow(), { fields: [TITLE, login] }),
+            ],
+          },
+          null,
+          { componentsFrom: [credentials] }
+        )
+      )
+    ).toEqual([
+      "collections.accounts.workflow: `review` cannot be attached to `accounts`: its component `credentials` has a password field, so it cannot keep a draft beside the live version.",
+    ]);
+    // The control: the same component without a password field is accepted.
+    await expect(
+      buildWorkflowRegistry(
+        {
+          collections: [
+            target("accounts", reviewWorkflow(), { fields: [TITLE, login] }),
+          ],
+        },
+        null,
+        { componentsFrom: [{ slug: "credentials", fields: [TITLE] }] }
+      )
+    ).resolves.toHaveProperty("size", 1);
   });
 
   it("answers the workflow a collection or Single is attached to once published", async () => {

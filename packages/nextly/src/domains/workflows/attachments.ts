@@ -20,6 +20,7 @@ import type { VersionsConfig } from "../../schemas/versions/types";
 import { canonicalJson } from "../../shared/lib/canonical-json";
 import { resolveVersionsConfig } from "../versions/resolve-config";
 
+import { workflowProblems } from "./define-workflow";
 import type { Workflow } from "./types";
 
 /**
@@ -71,33 +72,57 @@ function draftsProblem(target: WorkflowTarget): string | null {
   return null;
 }
 
+/**
+ * The problems with one attachment, at `path`: a value not from
+ * `defineWorkflow`, a definition that does not pass its checks, or a target
+ * that cannot keep drafts.
+ */
+function attachmentProblems(
+  target: WorkflowTarget & { workflow: Workflow },
+  path: string
+): AttachmentProblem[] {
+  if (target.workflow.kind !== "nextly-workflow") {
+    return [
+      {
+        path,
+        code: "workflow_not_defined",
+        message: "Pass a workflow from `defineWorkflow` or `reviewWorkflow`.",
+      },
+    ];
+  }
+  // Checked again here, whatever its marker says: a value built by hand
+  // carries the same marker without having been through `defineWorkflow`.
+  const unsound = workflowProblems(target.workflow);
+  if (unsound.length > 0) {
+    return unsound.map(problem => ({
+      ...problem,
+      path: problem.path === "" ? path : `${path}.${problem.path}`,
+    }));
+  }
+  const why = draftsProblem(target);
+  if (why === null) return [];
+  return [
+    {
+      path,
+      code: "workflow_needs_drafts",
+      message: `\`${target.workflow.slug}\` cannot be attached to \`${target.slug}\`: ${why}`,
+    },
+  ];
+}
+
 /** The problems with each attachment of one kind of target. */
 function targetProblems(
   targets: readonly WorkflowTarget[],
   root: "collections" | "singles"
 ): AttachmentProblem[] {
-  const problems: AttachmentProblem[] = [];
-  for (const target of targets) {
-    if (target.workflow === undefined) continue;
-    const path = `${root}.${target.slug}.workflow`;
-    if (target.workflow.kind !== "nextly-workflow") {
-      problems.push({
-        path,
-        code: "workflow_not_defined",
-        message: "Pass a workflow from `defineWorkflow` or `reviewWorkflow`.",
-      });
-      continue;
-    }
-    const why = draftsProblem(target);
-    if (why !== null) {
-      problems.push({
-        path,
-        code: "workflow_needs_drafts",
-        message: `\`${target.workflow.slug}\` cannot be attached to \`${target.slug}\`: ${why}`,
-      });
-    }
-  }
-  return problems;
+  return targets.flatMap(target =>
+    target.workflow === undefined
+      ? []
+      : attachmentProblems(
+          { ...target, workflow: target.workflow },
+          `${root}.${target.slug}.workflow`
+        )
+  );
 }
 
 /**

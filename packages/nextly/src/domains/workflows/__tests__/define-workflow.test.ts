@@ -87,6 +87,22 @@ describe("defineWorkflow", () => {
     expect(Object.isFrozen(workflow)).toBe(true);
   });
 
+  it("cannot be changed after it is validated, down to its steps", () => {
+    const workflow = defineWorkflow(base());
+    expect(() => {
+      (workflow.steps[1] as { to: string }).to = "drafting";
+    }).toThrow(TypeError);
+    expect(() => {
+      (workflow.stages as unknown as { name: string }[]).push({
+        name: "extra",
+      });
+    }).toThrow(TypeError);
+    expect(() => {
+      (workflow.steps[2]!.from as unknown as string[]).push("approved");
+    }).toThrow(TypeError);
+    expect(workflow.steps[1]?.to).toBe("approved");
+  });
+
   describe("kind rules", () => {
     it("refuses a step into a publishable stage that is not of kind approve", () => {
       const input = base();
@@ -309,6 +325,27 @@ describe("defineWorkflow", () => {
       expect(problemsOf(input)).toEqual([
         "stages[3]: `parked` can be reached (from the first stage), but no path of steps leads from it to a stage that allows publishing.",
       ]);
+    });
+
+    it("refuses a first stage that allows publishing, whatever afterPublish says", () => {
+      const input = base();
+      input.stages = [
+        { name: "open", label: "Open", allowsPublish: true },
+        ...input.stages,
+      ];
+      input.steps = [
+        ...input.steps,
+        {
+          name: "start",
+          label: "Start",
+          kind: "move",
+          from: "open",
+          to: "drafting",
+        },
+      ];
+      expect(problemsOf({ ...input, afterPublish: "drafting" })).toContain(
+        "stages[0]: `open` is where every part starts, so it cannot allow publishing; content would be publishable before any approval."
+      );
     });
 
     it("refuses an after-publish stage that itself allows publishing", () => {

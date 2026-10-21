@@ -12,6 +12,7 @@
  */
 
 import { NextlyError } from "../../errors";
+import { canonicalJson } from "../../shared/lib/canonical-json";
 
 import {
   WORKFLOW_STEP_KINDS,
@@ -494,6 +495,15 @@ function startsOf(workflow: Workflow): Array<{ stage: string; why: string }> {
 
 /** Every rule that reads the definition whole, once its parts are sound. */
 function checkWhole(problems: Problems, workflow: Workflow): void {
+  // Every part starts in the first stage: one that allowed publishing would
+  // let content go live without any step of kind approve.
+  if (workflow.stages[0]?.allowsPublish === true) {
+    problems.add(
+      "stages[0]",
+      "workflow_first_stage_publishable",
+      `\`${workflow.firstStage}\` is where every part starts, so it cannot allow publishing; content would be publishable before any approval.`
+    );
+  }
   const after = workflow.stages.find(
     stage => stage.name === workflow.afterPublish
   );
@@ -546,9 +556,21 @@ function checkWhole(problems: Problems, workflow: Workflow): void {
 export function defineWorkflow<const S extends string, const T extends string>(
   input: WorkflowInput<S, T>
 ): Workflow<S, T> {
+  const problems = problemsOf(input);
+  if (problems.list.length > 0) {
+    throw NextlyError.validation({
+      errors: problems.list,
+      logContext: { workflow: input.slug },
+    });
+  }
+  return deepFreeze(resolve(input)) as Workflow<S, T>;
+}
+
+/** Every problem with a definition, in the order it reads. */
+function problemsOf(input: WorkflowInput): Problems {
   const problems = new Problems();
   checkStages(problems, input);
-  const names = input.stages.map(stage => stage.name as string);
+  const names = input.stages.map(stage => stage.name);
   input.steps.forEach((step, index) =>
     checkStep(problems, step, index, input.stages)
   );
@@ -563,13 +585,70 @@ export function defineWorkflow<const S extends string, const T extends string>(
   // The graph is read only once every name in it resolves; otherwise its
   // errors would describe a workflow nobody declared.
   if (problems.list.length === 0) checkWhole(problems, resolve(input));
-  if (problems.list.length > 0) {
-    throw NextlyError.validation({
-      errors: problems.list,
-      logContext: { workflow: input.slug },
-    });
+  return problems;
+}
+
+/**
+ * Freeze a resolved workflow throughout, its stages and steps and their lists
+ * included, so nothing validated can be changed after `defineWorkflow`
+ * answered it, and its hash keeps describing it.
+ */
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const member of Object.values(value)) deepFreeze(member);
+    Object.freeze(value);
   }
-  return Object.freeze(resolve(input)) as Workflow<S, T>;
+  return value;
+}
+
+/**
+ * The definition a resolved workflow states: what `defineWorkflow` would take
+ * to answer it again.
+ */
+function inputOf(workflow: Workflow): WorkflowInput {
+  return {
+    slug: workflow.slug,
+    label: workflow.label,
+    stages: workflow.stages,
+    steps: workflow.steps.map(step => ({
+      ...step,
+      permission: step.permission ?? undefined,
+    })),
+    onEdit: workflow.onEdit,
+    afterPublish: workflow.afterPublish,
+    approvalsWithdrawnTo: workflow.approvalsWithdrawnTo,
+    removedStages: workflow.removedStages,
+    keepApprovals: workflow.keepApprovals,
+  };
+}
+
+/**
+ * What is wrong with `workflow` as an attachment receives it: every problem
+ * `defineWorkflow` would report for the definition it states, or, for one
+ * that states a sound definition, that it is not what `defineWorkflow`
+ * answers for it. A value marked as a workflow but built by hand is therefore
+ * checked as fully as one declared, and one whose resolved parts disagree
+ * with its definition (a first stage that is not the first, a default not
+ * decided as `defineWorkflow` decides it) is refused.
+ *
+ * @experimental
+ */
+export function workflowProblems(
+  workflow: Workflow
+): Array<{ path: string; code: string; message: string }> {
+  const input = inputOf(workflow);
+  const problems = problemsOf(input).list;
+  if (problems.length > 0) return problems;
+  return canonicalJson(resolve(input)) === canonicalJson(workflow)
+    ? []
+    : [
+        {
+          path: "",
+          code: "workflow_not_as_defined",
+          message:
+            "It is not the workflow `defineWorkflow` answers for its own definition: pass the value `defineWorkflow` or `reviewWorkflow` returned.",
+        },
+      ];
 }
 
 /**

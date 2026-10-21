@@ -3166,7 +3166,11 @@ async function registerWorkflows(
 ): Promise<void> {
   publishWorkflows(
     await buildWorkflowRegistry(transformedConfig, await bootConfigPath(), {
-      judgeComponents: !databaseNotSetUp,
+      // The registry once it can be read; until then, the components the
+      // configuration defines.
+      componentsFrom: databaseNotSetUp
+        ? (transformedConfig.fieldGroups ?? [])
+        : "registry",
     })
   );
 }

@@ -312,7 +312,9 @@ export async function publishConfiguredWorkflows(
       await buildWorkflowRegistry(
         configResult.config,
         configResult.configPath ?? null,
-        { judgeComponents: false }
+        // A command reads no database: the components the configuration
+        // defines are judged from their definitions.
+        { componentsFrom: configResult.config.fieldGroups ?? [] }
       )
     );
   } catch (error) {

@@ -12,7 +12,9 @@
  * @experimental
  */
 
+import type { FieldConfig } from "../../collections/fields/types";
 import { NextlyError } from "../../errors";
+import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import {
   evaluateDraftSplitEligibility,
   schemaDraftSplit,
@@ -20,6 +22,7 @@ import {
   type DraftSplitEligibility,
 } from "../versions/draft-split-eligibility";
 import { resolveVersionsConfig } from "../versions/resolve-config";
+import type { ComponentSchemas } from "../versions/restore-snapshot";
 
 import { workflowAttachmentsOf, type WorkflowTarget } from "./attachments";
 import { workflowDefinitionHash } from "./hash";
@@ -58,23 +61,83 @@ const NOT_ELIGIBLE: Record<
 };
 
 /**
- * Whether `target` can keep drafts, by the draft split's own rules. Its
- * components are judged only when `judgeComponents`: on a database not set up
- * yet the component registry cannot be read, so every component would read
- * as unregistered.
+ * A component as the configuration defines it: what the draft split reads of
+ * one when the registry is not the source.
+ *
+ * @experimental
+ */
+export interface ConfiguredComponent {
+  slug: string;
+  fields: readonly FieldConfig[];
+  localized?: boolean;
+}
+
+/**
+ * Where an attachment's components are read from: the live component
+ * registry, or the components the configuration itself defines.
+ *
+ * @experimental
+ */
+export type WorkflowComponentSource =
+  | "registry"
+  | readonly ConfiguredComponent[];
+
+/**
+ * The components `fields` reach, read from the configuration's own
+ * definitions, nested ones included. A component the configuration does not
+ * define is left out rather than marked unresolved: it may have been made in
+ * the admin, and boot judges it from the registry.
+ */
+function configuredComponentSchemas(
+  fields: readonly FieldConfig[],
+  components: readonly ConfiguredComponent[]
+): ComponentSchemas {
+  const bySlug = new Map(
+    components.map(component => [component.slug, component])
+  );
+  const schemas: ComponentSchemas = new Map();
+  const visit = (list: readonly FieldConfig[]): void => {
+    for (const field of list) {
+      const { single, many } = extractFieldGroupReferences(field);
+      for (const slug of [
+        ...(single === undefined ? [] : [single]),
+        ...(many ?? []),
+      ]) {
+        const component = bySlug.get(slug);
+        if (component === undefined || schemas.has(slug)) continue;
+        schemas.set(slug, {
+          fields: [...component.fields],
+          localized: component.localized === true,
+          resolved: true,
+        });
+        visit(component.fields);
+      }
+      const nested = (field as { fields?: unknown }).fields;
+      if (Array.isArray(nested)) visit(nested as FieldConfig[]);
+    }
+  };
+  visit(fields);
+  return schemas;
+}
+
+/**
+ * Whether `target` can keep drafts, by the draft split's own rules, with its
+ * components read from `source`: the live registry at boot, and the
+ * configuration's own definitions where the registry is not the answer (a
+ * build, a hot reload of a changed component, a database not set up yet).
  */
 async function draftSplitOf(
   target: WorkflowTarget,
   kind: "collection" | "single",
-  judgeComponents: boolean
+  source: WorkflowComponentSource
 ): Promise<DraftSplitEligibility> {
   const versions = resolveVersionsConfig(target.versions, target.status);
-  if (!judgeComponents) {
+  if (source !== "registry") {
     return evaluateDraftSplitEligibility({
       collectionHasStatus: target.status === true,
       draftsVersioningEnabled: versions?.drafts.enabled === true,
       fields: [...target.fields],
-      componentSchemas: null,
+      componentSchemas: configuredComponentSchemas(target.fields, source),
       entityKind: kind,
       documentLocalized: target.localized === true,
     });
@@ -93,9 +156,9 @@ async function draftSplitOf(
 async function eligibilityProblem(
   target: WorkflowTarget,
   kind: "collection" | "single",
-  judgeComponents: boolean
+  source: WorkflowComponentSource
 ): Promise<string | null> {
-  const result = await draftSplitOf(target, kind, judgeComponents);
+  const result = await draftSplitOf(target, kind, source);
   if (result.eligible || result.reason === null) return null;
   return NOT_ELIGIBLE[result.reason](result.componentSlug);
 }
@@ -106,7 +169,7 @@ async function serverProblems(
     collections?: readonly WorkflowTarget[];
     singles?: readonly WorkflowTarget[];
   },
-  judgeComponents: boolean
+  source: WorkflowComponentSource
 ): Promise<Array<{ path: string; code: string; message: string }>> {
   const problems: Array<{ path: string; code: string; message: string }> = [];
   const lists = [
@@ -116,7 +179,7 @@ async function serverProblems(
   for (const [root, kind, targets] of lists) {
     for (const target of targets) {
       if (target.workflow === undefined) continue;
-      const why = await eligibilityProblem(target, kind, judgeComponents);
+      const why = await eligibilityProblem(target, kind, source);
       if (why !== null) {
         problems.push({
           path: `${root}.${target.slug}.workflow`,
@@ -142,14 +205,14 @@ export async function buildWorkflowRegistry(
     singles?: readonly WorkflowTarget[];
   },
   configPath: string | null,
-  options: { judgeComponents?: boolean } = {}
+  options: { componentsFrom?: WorkflowComponentSource } = {}
 ): Promise<ReadonlyMap<string, RegisteredWorkflow>> {
   // The configuration's own checks first: plugins' collections never passed
   // through `defineConfig`.
   const attached = workflowAttachmentsOf(config);
   const problems = await serverProblems(
     config,
-    options.judgeComponents !== false
+    options.componentsFrom ?? "registry"
   );
   if (problems.length > 0) {
     throw NextlyError.validation({ errors: problems });
