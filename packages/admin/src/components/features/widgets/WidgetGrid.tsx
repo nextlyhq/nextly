@@ -170,7 +170,10 @@ const NO_CARDS: [] = [];
  */
 function useCardsAtDashboardWidth(
   visible: ArrangedWidget[],
-  carry: Pick<Parameters<typeof useCardDrag>[0], "gridRef" | "say" | "drop">
+  carry: Pick<
+    Parameters<typeof useCardDrag>[0],
+    "gridRef" | "say" | "drop" | "requestFocus"
+  >
 ) {
   const dashboardRef = useRef<HTMLDivElement>(null);
   const dashboardWidth = useDashboardWidth(dashboardRef);
@@ -346,6 +349,7 @@ export function WidgetGrid() {
     gridRef: focus.gridRef,
     say: announce.drag,
     drop: arrangement.dropCard,
+    requestFocus: focus.request,
   });
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);

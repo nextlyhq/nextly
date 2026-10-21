@@ -1212,6 +1212,42 @@ describe("resetting to the default dashboard", () => {
     );
   });
 
+  it("rings no card once the reset is staged, even one the default reuses", async () => {
+    // 🔴 The ring outlived the reset: a layout saved from the defaults reuses their placement
+    // ids, so the card ringed for the last move came back ringed, as if Reset had placed it.
+    layoutResponse = layout(
+      [
+        { id: "core/a", widgetId: "core/a" },
+        { id: "core/b", widgetId: "core/b" },
+      ],
+      {
+        defaultPlacements: [
+          { id: "core/a", widgetId: "core/a", width: "half", removed: false },
+          { id: "core/b", widgetId: "core/b", width: "half", removed: false },
+          { id: "core/c", widgetId: "core/c", width: "full", removed: false },
+        ],
+      }
+    );
+    renderGrid();
+    const user = await beginEditing();
+    await choose(user, "Widget core/b", "Move to start");
+    expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
+      "data-highlighted"
+    );
+
+    await user.click(screen.getByTestId("dashboard-edit-reset"));
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Reset dashboard",
+      })
+    );
+
+    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
+    expect(screen.getByTestId("widget-cell-core/b")).not.toHaveAttribute(
+      "data-highlighted"
+    );
+  });
+
   it("asks first, and keeping the layout changes nothing", async () => {
     renderGrid();
     const user = await beginEditing();
@@ -1537,6 +1573,11 @@ describe("at one column", () => {
       expect(live()).toHaveTextContent(
         "The dashboard is one column now, so the move was cancelled. Nothing moved. Use the card's menu to move it."
       )
+    );
+    // 🔴 The handle that had focus is gone at one column; focus goes to the card's menu, where
+    // the move goes on, rather than falling to the page.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(menuButton("Widget core/b"))
     );
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     expect(screen.queryAllByTestId("widget-drag-handle")).toEqual([]);
