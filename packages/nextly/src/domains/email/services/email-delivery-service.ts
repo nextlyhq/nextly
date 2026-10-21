@@ -377,6 +377,10 @@ export class EmailDeliveryService extends BaseService {
       // rewrites the rows it was given, and reusing the ids is what makes it a
       // REPLACEMENT of the refused rows rather than a second set of them.
       const ids = inputs.map(() => randomUUID());
+      // The key digests a chunk found to belong to a person already reported
+      // deleted. Only the chunk carrying the person can tell; every chunk of
+      // the send carries the digest, so it is cleared from all of them below.
+      const erasedKeys = new Set<string>();
 
       // Written in bounded chunks. One `values()` over an unbounded recipient
       // list exceeds a dialect's bind-parameter or statement-size limit, and
@@ -389,9 +393,11 @@ export class EmailDeliveryService extends BaseService {
         await this.insertChunk(
           inputs.slice(start, end),
           ids.slice(start, end),
-          now
+          now,
+          erasedKeys
         );
       }
+      await this.clearErasedKeys(erasedKeys);
     }
 
     // Offered after the rows exist, never before: a pass that ran first would
@@ -442,10 +448,11 @@ export class EmailDeliveryService extends BaseService {
   private async insertChunk(
     inputs: EmailDeliveryInput[],
     ids: string[],
-    now: Date
+    now: Date,
+    erasedKeys: Set<string>
   ): Promise<void> {
     try {
-      await this.insertRows(inputs, ids, now, true);
+      await this.insertRows(inputs, ids, now, true, erasedKeys);
     } catch (error) {
       // The one recoverable failure: PostgreSQL and SQLite carry a foreign key
       // to `email_providers`, and an administrator deleting a provider while
@@ -468,7 +475,7 @@ export class EmailDeliveryService extends BaseService {
       try {
         // `provider_type` beside it keeps every row meaningful without the
         // join, which is the same reason MySQL carries no key here at all.
-        await this.insertRows(inputs, ids, now, false);
+        await this.insertRows(inputs, ids, now, false, erasedKeys);
         this.reportProviderReferenceDropped(inputs);
         return;
       } catch (retryError) {
@@ -559,7 +566,8 @@ export class EmailDeliveryService extends BaseService {
     inputs: EmailDeliveryInput[],
     ids: string[],
     now: Date,
-    withProvider: boolean
+    withProvider: boolean,
+    erasedKeys: Set<string>
   ): Promise<void> {
     const rows = this.rowsFor(inputs, ids, now, withProvider);
     const people = inputs.map(input => input.person ?? null);
@@ -574,7 +582,7 @@ export class EmailDeliveryService extends BaseService {
       this.adapter,
       this.db,
       this.dialect,
-      executor => this.insertNamingPeople(executor, rows, people),
+      executor => this.insertNamingPeople(executor, rows, people, erasedKeys),
       { namesPerson: true, needsLock: false },
       "email delivery record"
     );
@@ -590,7 +598,8 @@ export class EmailDeliveryService extends BaseService {
   private async insertNamingPeople(
     db: PersonRowsDb,
     rows: Record<string, unknown>[],
-    people: (PrincipalRef | null)[]
+    people: (PrincipalRef | null)[],
+    erasedKeys: Set<string>
   ): Promise<void> {
     const digests = await readPrincipalDigests(
       db,
@@ -601,8 +610,8 @@ export class EmailDeliveryService extends BaseService {
     );
     const decided: Record<string, unknown>[] = [];
     // The key digests of sends to someone already reported deleted, which
-    // their erasure ran too early to find: cleared here, as it would have.
-    const erasedKeys = new Set<unknown>();
+    // their erasure ran too early to find: cleared here, as it would have,
+    // and from the send's other chunks once they are written.
     for (const [index, row] of rows.entries()) {
       const person = people[index];
       if (!person) {
@@ -610,7 +619,9 @@ export class EmailDeliveryService extends BaseService {
         continue;
       }
       const gone = await digests.isDeleted(person);
-      if (gone && row.keyDigest) erasedKeys.add(row.keyDigest);
+      if (gone && typeof row.keyDigest === "string") {
+        erasedKeys.add(row.keyDigest);
+      }
       decided.push({
         ...row,
         principalKind: person.kind,
@@ -622,7 +633,9 @@ export class EmailDeliveryService extends BaseService {
       .insert(this.deliveries)
       .values(
         decided.map(row =>
-          erasedKeys.has(row.keyDigest) ? { ...row, keyDigest: null } : row
+          erasedKeys.has(row.keyDigest as string)
+            ? { ...row, keyDigest: null }
+            : row
         )
       );
     if (erasedKeys.size > 0) {
@@ -631,6 +644,27 @@ export class EmailDeliveryService extends BaseService {
         .update(claims)
         .set({ keyDigest: null, messageDigest: null })
         .where(inArray(claims.keyDigest, [...erasedKeys] as string[]));
+    }
+  }
+
+  /**
+   * Clear the key digests a chunk found erased from every record of the send,
+   * the chunks written after it included. Never throws, as `recordAll` never
+   * does: the send has happened.
+   */
+  private async clearErasedKeys(
+    erasedKeys: ReadonlySet<string>
+  ): Promise<void> {
+    if (erasedKeys.size === 0) return;
+    try {
+      await this.db
+        .update(this.deliveries)
+        .set({ keyDigest: null })
+        .where(inArray(this.deliveries.keyDigest, [...erasedKeys]));
+    } catch (error) {
+      warnQuietly(this.logger, "Erased key digests could not be cleared", {
+        error,
+      });
     }
   }
 
