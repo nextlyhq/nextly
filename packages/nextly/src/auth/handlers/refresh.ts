@@ -242,10 +242,12 @@ export async function handleRefresh(
     const requestId = readOrGenerateRequestId(request);
     const nextlyErr = NextlyError.is(err)
       ? err
-      : NextlyError.serviceUnavailable({
-          logMessage: "refresh: rotation failed",
-          cause: err as Error,
-        });
+      : NextlyError.busyOr(err, () =>
+          NextlyError.serviceUnavailable({
+            logMessage: "refresh: rotation failed",
+            cause: err as Error,
+          })
+        );
     getNextlyLogger().error({
       kind: "refresh-failed",
       ...nextlyErr.toLogJSON(requestId),

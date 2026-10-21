@@ -45,6 +45,11 @@ export interface DueMember {
   scheduledAt: Date;
   /** When the member was added, the first tie-break. */
   createdAt: Date;
+  /**
+   * Who the member is performed as, where the reader of memberships needs to
+   * judge the winner's author ({@link winnerAuthorCanAct}).
+   */
+  createdBy?: string | null;
 }
 
 /** `none` leaves the document exactly as the ordinary read would return it. */
@@ -100,4 +105,19 @@ function isLater(a: DueMember, b: DueMember): boolean {
   const byCreated = a.createdAt.getTime() - b.createdAt.getTime();
   if (byCreated !== 0) return byCreated > 0;
   return a.memberId > b.memberId;
+}
+
+/**
+ * Whether a winning member's effect stands: it has an author, and that author
+ * can still act (`live` holds the authors who can).
+ *
+ * The winner is chosen over every member first and judged afterwards, as the
+ * drain chooses and then performs it as its author: a winner nobody can be
+ * performed as has no effect, and an earlier member does not stand in for it.
+ */
+export function winnerAuthorCanAct(
+  author: string | null | undefined,
+  live: ReadonlySet<string>
+): boolean {
+  return typeof author === "string" && author !== "" && live.has(author);
 }

@@ -18,7 +18,9 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "./support/test";
 
 const DIST = resolve(
   dirname(fileURLToPath(import.meta.url)),

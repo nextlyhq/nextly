@@ -1,34 +1,37 @@
 "use client";
 
 /**
- * DocumentStatusLive — the entry editor's single spoken status region.
+ * DocumentStatusLive — the entry editor's spoken status.
  *
  * The header reports two kinds of ambient state about the document being
- * edited: whether the work is stored (autosave) and how far its translations
- * have got. Both were visible and NEITHER was announced — `AutoSaveIndicator`
- * cycles through "Saving…", "Saved", "Unsaved changes" and "Not saved" with no
- * live region anywhere in the header, so the control whose entire purpose is
- * reassuring an author their work is safe did that for sighted users only.
+ * edited: whether the work is stored and how far its translations have got.
+ * Both are visible, and both have to be announced too, or the control whose
+ * whole purpose is reassuring an author their work is safe does that for
+ * sighted users only.
  *
- * There is ONE region rather than one per concern. Two live regions in the same
- * header interrupt each other, and a reader cannot tell which of two competing
- * announcements belongs to what they just did. Since both are the same kind of
- * information about the same document, they share a region and take turns.
+ * Settled status shares ONE polite region rather than one per concern. Two
+ * polite regions in the same header interrupt each other, and a reader cannot
+ * tell which of two competing announcements belongs to what they just did.
+ *
+ * A failed save is the one exception, and has a region of its own that is
+ * assertive: work the author believes is stored is not, and that must reach
+ * them now rather than after whatever is being read.
  *
  * @module components/features/entries/EntryForm/DocumentStatusLive
  */
 
 import { useEffect, useRef, useState } from "react";
 
+import type { DocumentSaveState } from "./useDocumentActionBindings";
+
 export interface DocumentStatusLiveProps {
-  /** Whether a save is in flight right now. */
-  isSaving?: boolean;
-  /** Whether the form holds edits that are not stored. */
-  isDirty?: boolean;
-  /** When a recovery point was last written, if ever. */
-  lastSavedAt?: Date | null;
-  /** Whether autosave is even possible for this entry. */
-  autosaveEnabled?: boolean;
+  /** Whether the document's work is stored. */
+  saveState?: DocumentSaveState;
+  /**
+   * Whether a recovery point newer than the stored document is on offer. Its
+   * edits live in the recovery point only, so the work is not stored.
+   */
+  pendingRecovery?: boolean;
   /** How many configured languages carry a translation. */
   translatedCount?: number;
   /** How many languages are configured. Zero or one means not worth announcing. */
@@ -36,57 +39,51 @@ export interface DocumentStatusLiveProps {
 }
 
 /**
- * The settled description of where the document stands, or `null` while it is
- * in a state not worth interrupting the reader for.
+ * The settled description of whether the work is stored, or `null` while it
+ * is in a state not worth interrupting the reader for.
  *
- * The wording is a full sentence rather than the terse chip beside it
- * ("Saved", "Not saved"). A live-region announcement arrives with no visual
- * context — nothing tells the listener that the word belongs to a save
- * indicator — so it has to carry its own subject. Keeping the two wordings
- * distinct also stops the same text existing twice in the accessibility tree,
- * once on the visible chip and once here.
+ * A full sentence rather than the terse chip beside it ("Saved", "Unsaved
+ * changes"). A live-region announcement arrives with no visual context —
+ * nothing tells the listener the word belongs to a save indicator — so it has
+ * to carry its own subject.
  *
- * "Saving…" deliberately returns `null`. Autosave debounces, so announcing the
- * transient state speaks over the reader every few seconds WHILE THEY TYPE,
- * which is worse than silence — the useful information is where it came to
- * rest, not that it is in motion.
+ * Saving says nothing: the useful information is where it comes to rest, not
+ * that it is in motion. A failure is announced by the assertive region instead.
  */
 function settledStatus(
-  isSaving: boolean,
-  isDirty: boolean,
-  lastSavedAt: Date | null
+  saveState: DocumentSaveState | undefined,
+  pendingRecovery: boolean
 ): string | null {
-  if (isSaving) return null;
-  if (isDirty)
-    return lastSavedAt
-      ? "You have edits that are not yet stored"
-      : "Your work is not yet stored";
-  return lastSavedAt ? "Your work is stored" : null;
+  if (saveState === undefined) return null;
+  switch (saveState.kind) {
+    case "saving":
+    case "failed":
+      return null;
+    case "unsaved":
+      return "You have edits that are not yet stored";
+    case "saved":
+      if (pendingRecovery) return "You have edits that are not yet stored";
+      return saveState.at === null ? null : "Your work is stored";
+  }
 }
 
 /**
- * Announces document status once per settled change, in a single polite region.
- *
- * `polite` rather than `assertive`: none of this is urgent enough to cut across
- * whatever the reader is doing, and `assertive` on a status that changes as
- * often as this one would make the editor unusable with a screen reader.
+ * Announces settled status once per change in a polite region, and a failed
+ * save at once in an assertive one.
  */
 export function DocumentStatusLive({
-  isSaving = false,
-  isDirty = false,
-  lastSavedAt = null,
-  autosaveEnabled = false,
+  saveState,
+  pendingRecovery = false,
   translatedCount,
   localeCount,
 }: DocumentStatusLiveProps) {
   const [message, setMessage] = useState("");
+  const [failure, setFailure] = useState("");
   // What was last announced, so an unchanged status does not re-fire. Held in a
   // ref rather than state because it must not itself cause a render.
   const spoken = useRef<string>("");
 
-  const saveStatus = autosaveEnabled
-    ? settledStatus(isSaving, isDirty, lastSavedAt)
-    : null;
+  const saveStatus = settledStatus(saveState, pendingRecovery);
 
   // Only meaningful in a multilingual collection: "1 of 1 languages translated"
   // is noise, and a collection with no locales configured has nothing to say.
@@ -108,17 +105,34 @@ export function DocumentStatusLive({
     setMessage(next);
   }, [next]);
 
+  const failed =
+    saveState?.kind === "failed" ? `Not saved. ${saveState.message}` : "";
+  useEffect(() => {
+    // Cleared once the failure is over, so the same failure happening again
+    // changes the region and is announced again rather than heard once.
+    setFailure(failed);
+  }, [failed]);
+
   return (
-    <span
-      role="status"
-      aria-live="polite"
-      // Not `aria-atomic`: only the changed sentence needs reading, and reading
-      // the whole region again on every autosave repeats the translation count
-      // the reader already has.
-      className="sr-only"
-      data-testid="document-status-live"
-    >
-      {message}
-    </span>
+    <>
+      <span
+        role="status"
+        aria-live="polite"
+        // Not `aria-atomic`: only the changed sentence needs reading, and
+        // reading the whole region again on every save repeats the
+        // translation count the reader already has.
+        className="sr-only"
+        data-testid="document-status-live"
+      >
+        {message}
+      </span>
+      <span
+        aria-live="assertive"
+        className="sr-only"
+        data-testid="document-status-failure"
+      >
+        {failure}
+      </span>
+    </>
   );
 }

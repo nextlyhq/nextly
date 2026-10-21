@@ -22,6 +22,7 @@ import {
 import { entryKeys } from "@admin/services/entryApi";
 import {
   versionApi,
+  type DocumentEventListResponse,
   type RestoreVersionResponse,
   type SetVersionLabelResponse,
   type VersionDetail,
@@ -34,6 +35,13 @@ import { singleDocumentKeys, singleKeys } from "./useSingles";
 
 /** Page size for the history list. */
 const PAGE_SIZE = 25;
+
+/**
+ * Page size for a document's events. A version usually brings one or two
+ * events with it, so a page of them reaches back about as far as a page of
+ * versions does.
+ */
+const EVENTS_PAGE_SIZE = 50;
 
 /**
  * Stable cache identity for a scope, so two documents never share a page.
@@ -77,6 +85,10 @@ export const versionKeys = {
       ...scopeKey(scope),
       ...(locale !== undefined ? [locale] : []),
     ] as const,
+  // Under `all()`, so every mutation that clears history clears the events
+  // beside it too: a restore or a rename writes an event as well as a version.
+  events: (scope: VersionScope) =>
+    [...versionKeys.all(), "events", ...scopeKey(scope)] as const,
   details: () => [...versionKeys.all(), "detail"] as const,
   detail: (scope: VersionScope, versionNo: number) =>
     [...versionKeys.details(), ...scopeKey(scope), versionNo] as const,
@@ -153,6 +165,40 @@ export function useVersions({
     staleTime: 0,
     // The provider disables focus refetch app-wide; re-enable it here so a save
     // made in another tab is reflected when this panel regains focus (see above).
+    refetchOnWindowFocus: true,
+  });
+}
+
+export interface UseDocumentEventsOptions {
+  scope: VersionScope;
+  enabled?: boolean;
+}
+
+/**
+ * One document's events, newest first, paged by the last event's id.
+ *
+ * Fresh on every open and on focus, as the version list is: a save or a
+ * publish in another tab adds an event the history must show beside its
+ * version.
+ *
+ * @experimental
+ */
+export function useDocumentEvents({
+  scope,
+  enabled = true,
+}: UseDocumentEventsOptions) {
+  return useInfiniteQuery<DocumentEventListResponse, Error>({
+    queryKey: versionKeys.events(scope),
+    queryFn: ({ pageParam }) =>
+      versionApi.events(scope, {
+        limit: EVENTS_PAGE_SIZE,
+        ...(typeof pageParam === "string" ? { before: pageParam } : {}),
+      }),
+    initialPageParam: undefined,
+    getNextPageParam: lastPage =>
+      lastPage.meta?.hasNext ? lastPage.items.at(-1)?.id : undefined,
+    enabled: enabled && isAddressable(scope),
+    staleTime: 0,
     refetchOnWindowFocus: true,
   });
 }

@@ -57,10 +57,21 @@ type NumberField = Extract<FieldConfig, { type: "number" }>;
 type CheckboxField = Extract<FieldConfig, { type: "checkbox" }>;
 type SelectField = Extract<FieldConfig, { type: "select" }>;
 
-expectTypeOf<Exclude<keyof TextSetting, keyof TextField>>().toBeNever();
-expectTypeOf<Exclude<keyof NumberSetting, keyof NumberField>>().toBeNever();
-expectTypeOf<Exclude<keyof CheckboxSetting, keyof CheckboxField>>().toBeNever();
-expectTypeOf<Exclude<keyof SelectSetting, keyof SelectField>>().toBeNever();
+// `quick` is the one key allowed beyond the field's: the card's header reads
+// it, never `FieldRenderer`, so a renderer that ignores it loses nothing.
+type CardOnly = "quick";
+expectTypeOf<
+  Exclude<keyof TextSetting, keyof TextField | CardOnly>
+>().toBeNever();
+expectTypeOf<
+  Exclude<keyof NumberSetting, keyof NumberField | CardOnly>
+>().toBeNever();
+expectTypeOf<
+  Exclude<keyof CheckboxSetting, keyof CheckboxField | CardOnly>
+>().toBeNever();
+expectTypeOf<
+  Exclude<keyof SelectSetting, keyof SelectField | CardOnly>
+>().toBeNever();
 
 /*
  * The control for the four above, and it is a different one from the control

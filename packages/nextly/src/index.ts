@@ -286,6 +286,18 @@ export type {
   UpdateEmailTemplateArgs,
   DeleteEmailTemplateArgs,
   PreviewEmailTemplateArgs,
+  // @experimental Template ownership: what `override`, `reset`, `compare`,
+  // `applyUpdate` and `undoUpdate` take and return.
+  OverrideEmailTemplateArgs,
+  ResetEmailTemplateArgs,
+  CompareEmailTemplateArgs,
+  ApplyEmailTemplateUpdateArgs,
+  UndoEmailTemplateUpdateArgs,
+  EmailTemplateComparison,
+  EmailTemplateVersion,
+  OwnerChange,
+  OwnerChangeChoice,
+  OwnerUpdateUndo,
   // User Field types
   FindUserFieldsArgs,
   FindUserFieldByIDArgs,
@@ -707,7 +719,9 @@ export {
   callerReadOptions,
   type WidgetSourceResolver,
   type PluginSourceResolver,
+  type PluginManySourceResolver,
   type ResolverOptions,
+  type WidgetScope,
   type PluginWidgetSource,
   type ReadCaller,
 } from "./domains/widgets";

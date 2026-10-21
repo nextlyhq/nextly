@@ -28,7 +28,10 @@ import type {
   CollectionServiceResult,
 } from "../services/collection-types";
 import { markWriteIntegrityFailure } from "../../../shared/write-integrity";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
+import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "../../../errors/retry-after";
+import { CollectionAccessService } from "../services/collection-access-service";
 
 import {
   createMockSchema,
@@ -559,6 +562,60 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
           user: { id: "user-1" },
         })
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
+  });
+
+  // ── a busy database at the bulk gate ──────────────────────────────────
+
+  describe("a bulk write whose access check found the database busy", () => {
+    // What the collection gate returns when its access check is refused as
+    // DATABASE_BUSY: the refusal's own fields spread over the gate's 500.
+    const busyGate = {
+      success: false,
+      statusCode: 500,
+      message: "Failed to verify RBAC permissions",
+      data: null,
+      ...errorEnvelopeFields(NextlyError.databaseBusy()),
+    };
+    afterEach(() => vi.restoreAllMocks());
+
+    it("answers bulkUpdateByQuery as DATABASE_BUSY 503, not a 403", async () => {
+      vi.spyOn(
+        CollectionAccessService.prototype,
+        "checkCollectionAccess"
+      ).mockResolvedValue(busyGate as never);
+
+      await expect(
+        service.bulkUpdateByQuery({
+          collectionName: "posts",
+          where: { status: { equals: "draft" } },
+          data: { status: "published" },
+          user: { id: "user-1" },
+        })
+      ).rejects.toMatchObject({
+        code: "DATABASE_BUSY",
+        statusCode: 503,
+        publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
+      });
+    });
+
+    it("answers bulkDeleteByQuery as DATABASE_BUSY 503, not a 403", async () => {
+      vi.spyOn(
+        CollectionAccessService.prototype,
+        "checkCollectionAccess"
+      ).mockResolvedValue(busyGate as never);
+
+      await expect(
+        service.bulkDeleteByQuery({
+          collectionName: "posts",
+          where: { status: { equals: "draft" } },
+          user: { id: "user-1" },
+        })
+      ).rejects.toMatchObject({
+        code: "DATABASE_BUSY",
+        statusCode: 503,
+        publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
+      });
     });
   });
 

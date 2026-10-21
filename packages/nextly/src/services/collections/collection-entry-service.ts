@@ -618,6 +618,19 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Each of these entries as a release would put it live, read as stored. See
+   * the mutation service.
+   *
+   * @experimental
+   */
+  async releaseGoingLiveDocuments(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+  }): Promise<Map<string, Record<string, unknown>>> {
+    return this.mutationService.releaseGoingLiveDocuments(params);
+  }
+
+  /**
    * Whether a release's document-wide write of this collection would meet a
    * translation table without its per-language status. See the mutation
    * service.

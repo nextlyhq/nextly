@@ -286,20 +286,32 @@ function Group({
   );
 }
 
-/** The count, and the one sentence the panel is saying now, for its live region. */
-function usePanelVoice(found: number, query: string) {
+/**
+ * The count, and the one sentence the panel is saying now, for its live region. Each visit starts
+ * silent: the panel stays mounted while closed, so a sentence from the last visit, or a count
+ * still waiting when it closed, would otherwise be said again on opening.
+ */
+function usePanelVoice(found: number, query: string, open: boolean) {
   const [spoken, setSpoken] = useState("");
+  // Cleared as the panel opens or closes, during render (React's pattern for state that follows
+  // a prop), so no frame of a new visit draws the old sentence.
+  const [visit, setVisit] = useState(open);
+  if (visit !== open) {
+    setVisit(open);
+    setSpoken("");
+  }
   const count = addPanelCount(found, query);
   const pending = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Announced once typing pauses, so each keystroke does not interrupt the last.
+  // Announced once typing pauses, so each keystroke does not interrupt the last. Never while
+  // closed: closing clears a count still waiting, and none starts until the panel opens again.
   useEffect(() => {
-    if (query.trim() === "") return undefined;
+    if (!open || query.trim() === "") return undefined;
     pending.current = setTimeout(
       () => setSpoken(`${count}.`),
       COUNT_ANNOUNCE_DELAY_MS
     );
     return () => clearTimeout(pending.current);
-  }, [count, query]);
+  }, [count, query, open]);
   // A sentence said on purpose (an add, a cleared search) cancels a count still waiting, which
   // would otherwise land on top of it: after an add the query and its count often stay the
   // same, so nothing else would clear that timer first.
@@ -326,7 +338,7 @@ export function AddWidgetPanel({
 
   const found = useMemo(() => searchAddPanel(rows, query), [rows, query]);
   const groups = useMemo(() => addPanelGroups(found), [found]);
-  const voice = usePanelVoice(found.length, query);
+  const voice = usePanelVoice(found.length, query, open);
   const searching = query.trim() !== "";
 
   // A fresh panel each time it opens: an old search would hide widgets the reader came to find.

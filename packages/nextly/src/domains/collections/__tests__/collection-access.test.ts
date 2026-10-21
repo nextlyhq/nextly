@@ -16,6 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
+import { CollectionAccessService } from "../services/collection-access-service";
 import { normalizeLocalization } from "../../i18n/config/normalize";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
 
@@ -32,9 +33,36 @@ import {
   createMockComponentDataService,
   createMockCollection,
   createSampleEntry,
+  callerMay,
+  callerMayNot,
+  callerLookupFails,
+  fakeActorForUser,
+  fakeUserHoldsPermission,
+  fakeUserIsSuperAdmin,
+  resetCallerAccess,
 } from "./collection-test-helpers";
 
 // ── Module mocks ──────────────────────────────────────────────────────────
+
+// The caller the collection gate decides for: a signed-in user's actions are
+// set per test (`callerMay`), and every test starts from one holding all.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => ({
+  ...(await importOriginal<object>()),
+  ...(await (async () => {
+    const fake = await import("./collection-test-helpers");
+    return {
+      actorForUser: fake.fakeActorForUser,
+      userHoldsPermission: fake.fakeUserHoldsPermission,
+      userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+    };
+  })()),
+}));
+
+beforeEach(() => {
+  resetCallerAccess();
+  fakeActorForUser.mockClear();
+  fakeUserHoldsPermission.mockClear();
+});
 
 // `get` THROWS for an unregistered name, exactly as the real container does
 // (di/container.ts). That is not a detail: `recordMutationActivity` treats an
@@ -161,7 +189,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
   describe("read access control", () => {
     it("should deny listEntries when access evaluation returns denied", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service } = buildService({ rbacAccessControlService: rbac });
 
       const result = await service.listEntries({
@@ -176,7 +204,6 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
     it("should allow listEntries when access is granted", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(true);
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -192,7 +219,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
     it("should deny getEntry when access is denied", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service } = buildService({ rbacAccessControlService: rbac });
 
       const result = await service.getEntry({
@@ -207,7 +234,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
     it("should deny countEntries when access is denied", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service } = buildService({ rbacAccessControlService: rbac });
 
       const result = await service.countEntries({
@@ -225,7 +252,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
   describe("create access control", () => {
     it("should deny createEntry when access is denied", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service } = buildService({ rbacAccessControlService: rbac });
 
       const result = await service.createEntry(
@@ -239,7 +266,6 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
     it("should allow createEntry when access is granted", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(true);
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -261,7 +287,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       const rbac = createMockRbacAccessControlService();
       // First call: for the getEntry check pass (we need the entry to exist)
       // The service fetches the entry first, then checks access
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -286,7 +312,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
   describe("delete access control", () => {
     it("should deny deleteEntry when access is denied", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -309,7 +335,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
     it("should bypass access control on listEntries when overrideAccess is true", async () => {
       const rbac = createMockRbacAccessControlService();
       // Even with denied access, overrideAccess should bypass
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -326,7 +352,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
     it("should bypass access control on createEntry when overrideAccess is true", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -342,7 +368,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
     it("should bypass access control on getEntry when overrideAccess is true", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -359,7 +385,7 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
     it("should bypass access control on deleteEntry when overrideAccess is true", async () => {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockResolvedValue(false);
+      callerMay();
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -377,16 +403,10 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
   // ── RBAC integration ──────────────────────────────────────────────────
 
-  describe("RBAC access control", () => {
-    it("should deny when RBAC service denies access", async () => {
-      const rbac = {
-        checkAccess: vi.fn().mockResolvedValue(false),
-        // Answers `undefined`: no code-defined rule governs the operation.
-        checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-      };
-      const { service } = buildService({
-        rbacAccessControlService: rbac,
-      });
+  describe("the caller's access", () => {
+    it("denies a signed-in user who does not hold the action, having looked them up", async () => {
+      callerMay();
+      const { service } = buildService({});
 
       const result = await service.listEntries({
         collectionName: "posts",
@@ -395,24 +415,62 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 
       expect(result.success).toBe(false);
       expect(result.statusCode).toBe(403);
-      expect(rbac.checkAccess).toHaveBeenCalledWith(
-        expect.objectContaining({
-          userId: "user-1",
-          operation: "read",
-          resource: "posts",
-        })
+      expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+        "user-1",
+        "read",
+        "posts",
+        { executor: undefined }
       );
     });
 
-    it("should allow when RBAC service allows access", async () => {
-      const rbac = {
-        checkAccess: vi.fn().mockResolvedValue(true),
-        // Answers `undefined`: no code-defined rule governs the operation.
-        checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-      };
+    it("reads a rule-less action through the permission check, not the caller's whole access", async () => {
+      // With no rule for the read, the decision is the permission alone: the
+      // targeted, cached check answers it, and the caller's every role and
+      // grant is not loaded for it.
+      const { service, selectData } = buildService({});
+      selectData.rows = [];
+
+      const result = await service.listEntries({
+        collectionName: "posts",
+        user: { id: "user-1" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(fakeUserHoldsPermission).toHaveBeenCalledWith(
+        "user-1",
+        "read",
+        "posts",
+        { executor: undefined }
+      );
+      expect(fakeActorForUser).not.toHaveBeenCalled();
+    });
+
+    it("reads only super-admin authority for a rule that is a plain yes or no", async () => {
+      // `read: true` reads nothing of the caller, so neither its roles nor its
+      // grants are loaded: super-admin authority is the one thing asked, and
+      // the rule answers.
+      const rbac = createMockRbacAccessControlService();
+      rbac.getRegisteredAccess.mockReturnValue({ read: true });
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
+      selectData.rows = [];
+
+      const result = await service.listEntries({
+        collectionName: "posts",
+        user: { id: "user-1" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(fakeUserIsSuperAdmin).toHaveBeenCalledWith("user-1", {
+        executor: undefined,
+      });
+      expect(fakeActorForUser).not.toHaveBeenCalled();
+    });
+
+    it("allows a signed-in user who holds the action", async () => {
+      callerMay("read");
+      const { service, selectData } = buildService({});
       selectData.rows = [];
 
       const result = await service.listEntries({
@@ -423,15 +481,9 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       expect(result.success).toBe(true);
     });
 
-    it("should fail-secure (deny) when RBAC throws an error", async () => {
-      const rbac = {
-        checkAccess: vi
-          .fn()
-          .mockRejectedValue(new Error("RBAC service unavailable")),
-      };
-      const { service } = buildService({
-        rbacAccessControlService: rbac,
-      });
+    it("fails secure (500) when the caller cannot be looked up", async () => {
+      callerLookupFails(new Error("RBAC service unavailable"));
+      const { service } = buildService({});
 
       const result = await service.listEntries({
         collectionName: "posts",
@@ -443,12 +495,9 @@ describe("CollectionEntryService — Access Control Contracts", () => {
       expect(result.message).toContain("RBAC");
     });
 
-    it("should skip RBAC when no user is provided", async () => {
-      const rbac = {
-        checkAccess: vi.fn().mockResolvedValue(false),
-        // Answers `undefined`: no code-defined rule governs the operation.
-        checkAnonymousCodeAccess: vi.fn().mockResolvedValue(undefined),
-      };
+    it("asks the collection's rule, and looks up no user, when no user is provided", async () => {
+      callerMay();
+      const rbac = createMockRbacAccessControlService();
       const { service, selectData } = buildService({
         rbacAccessControlService: rbac,
       });
@@ -459,12 +508,13 @@ describe("CollectionEntryService — Access Control Contracts", () => {
         // No user provided
       });
 
-      // The DB permission check needs a user to have permissions for, so it
-      // still does not run. The code-defined rule does: it reads nothing off
+      // The permission lookup needs a user to have permissions for, so it
+      // still does not run. The code-defined rule is read: it reads nothing off
       // the caller, and skipping it left a collection's own `access` inert for
       // exactly the caller it describes.
-      expect(rbac.checkAccess).not.toHaveBeenCalled();
-      expect(rbac.checkAnonymousCodeAccess).toHaveBeenCalled();
+      expect(fakeActorForUser).not.toHaveBeenCalled();
+      expect(fakeUserHoldsPermission).not.toHaveBeenCalled();
+      expect(rbac.getRegisteredAccess).toHaveBeenCalledWith("posts");
       expect(result.success).toBe(true);
     });
   });
@@ -476,15 +526,20 @@ describe("CollectionEntryService — Access Control Contracts", () => {
 // gate does not distinguish it. A write that moves a document into or out of
 // published needs the publish/unpublish permission ON TOP of update.
 describe("publish-transition access control", () => {
-  // The RBAC gate is what this harness controls; allow update, deny the named
-  // lifecycle op, so only the transition check can fail.
+  // The caller is what this harness controls: holding update but not the
+  // named lifecycle op, so only the transition check can fail.
   const allowUpdateDeny = (op: "publish" | "unpublish") => {
-    const rbac = createMockRbacAccessControlService();
-    rbac.checkAccess.mockImplementation(
-      ({ operation }: { operation: string }) =>
-        Promise.resolve(operation !== op)
+    callerMayNot(op);
+    return createMockRbacAccessControlService();
+  };
+
+  /** Every action the collection gate was asked about, in order. */
+  const gateAsked = () => {
+    const asked = vi.spyOn(
+      CollectionAccessService.prototype,
+      "checkCollectionAccess"
     );
-    return rbac;
+    return () => asked.mock.calls.map(([params]) => params.operation);
   };
 
   // The transition gate only runs when the collection has the draft/published
@@ -607,17 +662,17 @@ describe("publish-transition access control", () => {
       rbacAccessControlService: rbac,
     });
     selectData.rows = [createSampleEntry({ status: "draft" })];
+    const asked = gateAsked();
 
     await service.updateEntry(
       { collectionName: "posts", entryId: "entry-1", user: { id: "user-1" } },
       { status: "published" }
     );
 
-    // The publish permission is never consulted when there is no lifecycle.
-    const publishConsulted = rbac.checkAccess.mock.calls.some(
-      ([, operation]: [unknown, string]) => operation === "publish"
-    );
-    expect(publishConsulted).toBe(false);
+    // The gate was asked about the update, and never about publishing, when
+    // there is no lifecycle.
+    expect(asked()).toContain("update");
+    expect(asked()).not.toContain("publish");
   });
 
   it("gates a publish derived by a beforeUpdate hook, not just the body", async () => {
@@ -889,6 +944,7 @@ describe("publish-transition access control", () => {
       collectionService: lifecycle(),
     });
     selectData.rows = [createSampleEntry({ status: "draft" })];
+    const asked = gateAsked();
 
     const result = await service.updateEntry(
       {
@@ -902,9 +958,7 @@ describe("publish-transition access control", () => {
 
     expect(result.success).toBe(false);
     expect(result.statusCode).toBe(403);
-    expect(rbac.checkAccess).toHaveBeenCalledWith(
-      expect.objectContaining({ operation: "publish", resource: "posts" })
-    );
+    expect(asked()).toContain("publish");
   });
 
   it("does not let a super-admin-owned key bypass the gate on a plain update", async () => {

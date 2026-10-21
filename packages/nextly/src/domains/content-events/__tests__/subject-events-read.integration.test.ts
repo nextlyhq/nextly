@@ -638,17 +638,9 @@ describe.each(getConfiguredTestDialects())(
 
     it("reads a release's events with release read authority, live and deleted", async () => {
       const t = await boot(dialect);
+      // Releases record their own events, in each operation's transaction.
       const release = await t.nextly.releases.create({ title: "Autumn" });
       const releaseId = release.id;
-      // Releases record their own events; written here as they would be.
-      ensureCoreContentEventKinds();
-      await t.adapter.transaction(tx =>
-        recordContentEvent(tx, {
-          subject: { kind: "release", id: releaseId },
-          kind: "created",
-          actor: { kind: "system" },
-        })
-      );
       const reader = await keyHolding(t, ["read-content-releases"]);
       const outsider = await keyHolding(t, ["read-posts"]);
       const query = { subject: "release", id: releaseId };
@@ -657,14 +649,15 @@ describe.each(getConfiguredTestDialects())(
         (
           await pageOf(await restGet(reader, ["content-events"], query))
         ).items.map(e => e.kind);
-      expect(await read()).toEqual(["created"]);
+      expect(await read()).toEqual(["release-created"]);
       expect((await restGet(outsider, ["content-events"], query)).status).toBe(
         404
       );
 
       await t.nextly.releases.delete({ id: releaseId });
 
-      expect(await read()).toEqual(["created"]);
+      // Newest first: the deletion, then the creation it ended.
+      expect(await read()).toEqual(["release-deleted", "release-created"]);
       expect((await restGet(outsider, ["content-events"], query)).status).toBe(
         404
       );

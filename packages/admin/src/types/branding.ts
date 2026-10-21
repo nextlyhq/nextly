@@ -1,4 +1,8 @@
-import type { PluginAdminWidget, WidgetDefinition } from "nextly/config";
+import type {
+  PluginAdminWidget,
+  PublishedContentSource,
+  WidgetDefinition,
+} from "nextly/config";
 import type {
   FieldStoragePrimitive,
   FieldSurface,
@@ -333,6 +337,14 @@ export interface AdminBranding {
    * was built for a different reader state than the layout being drawn.
    */
   widgetAudience?: string;
+
+  /**
+   * The collections a card's content settings (Collection, Filter, Sort,
+   * Group by) may offer this reader, each with the fields they may offer:
+   * only fields no read rule can refuse and no read hook transforms. Decided
+   * on the server for this reader, from the same answer as `widgets`.
+   */
+  widgetSources?: PublishedContentSource[];
 
   /** Custom sidebar groups created by the user for organizing collections/singles. */
   customGroups?: Array<{ slug: string; name: string; icon?: string }>;

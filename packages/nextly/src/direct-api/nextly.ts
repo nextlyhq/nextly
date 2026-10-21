@@ -954,6 +954,7 @@ export const nextly = {
     findByID: args => requireNextly().releases.findByID(args),
     capabilities: args => requireNextly().releases.capabilities(args),
     blockingReasons: args => requireNextly().releases.blockingReasons(args),
+    blockersOf: args => requireNextly().releases.blockersOf(args),
     readiness: args => requireNextly().releases.readiness(args),
     readinessOf: args => requireNextly().releases.readinessOf(args),
     memberCounts: args => requireNextly().releases.memberCounts(args),
@@ -962,6 +963,7 @@ export const nextly = {
     changeMemberAction: args =>
       requireNextly().releases.changeMemberAction(args),
     listMembers: args => requireNextly().releases.listMembers(args),
+    membersOf: args => requireNextly().releases.membersOf(args),
     schedule: args => requireNextly().releases.schedule(args),
     cancel: args => requireNextly().releases.cancel(args),
     publishNow: args => requireNextly().releases.publishNow(args),

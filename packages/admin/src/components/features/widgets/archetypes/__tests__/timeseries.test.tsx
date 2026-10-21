@@ -104,7 +104,7 @@ describe("the timeseries archetype", () => {
         { start: "2026-03-05T00:00:00.000Z", count: 9 },
       ])
     );
-    const graphic = screen.getByRole("img");
+    const graphic = screen.getByRole("group", { name: /Use the arrow keys/ });
     expect(graphic).toHaveAccessibleName(/Entries over time/);
     expect(graphic).toHaveAccessibleDescription(/11 in total/);
     expect(graphic).toHaveAccessibleDescription(/Latest 9 on .*; highest 9 on/);

@@ -30,14 +30,9 @@
  * @module tests/dashboard-heading.spec
  */
 import AxeBuilder from "@axe-core/playwright";
-import {
-  expect,
-  test,
-  type Page,
-  type Request,
-  type Route,
-} from "@playwright/test";
+import { expect, type Page, type Request, type Route } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 
 /** The sample-content card's widget id, as core registers it. */

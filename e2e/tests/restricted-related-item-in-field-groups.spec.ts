@@ -13,12 +13,12 @@
  */
 import {
   expect,
-  test,
   type APIRequestContext,
   type Locator,
   type Page,
 } from "@playwright/test";
 
+import { test } from "./support/test";
 import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";

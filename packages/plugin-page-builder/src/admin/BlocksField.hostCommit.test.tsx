@@ -65,6 +65,31 @@ let passage: BlockDocument | null = null;
 /** Replaces the open editor's document, as one undoable edit would. */
 let edit: ((next: BlockDocument) => void) | undefined;
 
+/** Takes the open editor's last edit back, one step down its history. */
+let undoEdit: (() => void) | undefined;
+
+/**
+ * What runs before a store, as the editor that hosts the field calls it, and
+ * when the document was last stored, as the host reports it. A store is the
+ * one followed by the other.
+ */
+let beforeStore: (() => void) | undefined;
+let storedAt: Date | null = null;
+const storeListeners = new Set<() => void>();
+let documentActions: { storedAt: Date | null } | null = null;
+/** The host announcing a store that succeeded: a new `storedAt`. */
+function announceStore(): void {
+  act(() => {
+    storedAt = new Date();
+    documentActions = { storedAt };
+    for (const listener of storeListeners) listener();
+  });
+}
+function store(): void {
+  act(() => beforeStore?.());
+  announceStore();
+}
+
 /**
  * What the form held for the field each time the view was asked to leave, read
  * at that moment rather than after the render that follows it.
@@ -139,6 +164,9 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
         setDocument(next);
         setUndoDepth(depth => depth + 1);
       };
+      undoEdit = () => {
+        setUndoDepth(depth => depth - 1);
+      };
       return {
         document,
         selectedId: null,
@@ -206,6 +234,17 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   }) => {
     chromeRequests.push(request);
   },
+  useBeforeDocumentAction: (handler: () => void) => {
+    beforeStore = handler;
+  },
+  useDocumentActions: () =>
+    React.useSyncExternalStore(
+      listener => {
+        storeListeners.add(listener);
+        return () => storeListeners.delete(listener);
+      },
+      () => documentActions
+    ),
   useDocumentStatus: () => null,
   useSingleDocument: () => ({
     data: undefined,
@@ -313,6 +352,11 @@ beforeEach(() => {
   edit = undefined;
   passage = null;
   heldAtExit.length = 0;
+  undoEdit = undefined;
+  beforeStore = undefined;
+  storedAt = null;
+  documentActions = null;
+  storeListeners.clear();
 });
 
 afterEach(() => {
@@ -347,6 +391,48 @@ describe("the unsaved-work report", () => {
 
     // The control for the case above: a report pinned to `false` passes it.
     expect(reports.at(-1)).toEqual({ key: "blocks:body", hasWork: true });
+  });
+
+  it("reports no work once the edited document is stored", () => {
+    openEditor();
+    editDocument();
+    store();
+
+    // Saved: the page says so, Save is not offered for it, leaving does not warn.
+    expect(reports.at(-1)).toEqual({ key: "blocks:body", hasWork: false });
+  });
+
+  it("reports work again for an edit made after the store", () => {
+    openEditor();
+    editDocument();
+    store();
+    act(() => edit?.({ ...EDITED }));
+
+    expect(reports.at(-1)?.hasWork).toBe(true);
+  });
+
+  it("reports work after an undo below what was stored and a new edit", () => {
+    openEditor();
+    editDocument();
+    store();
+    // Back below the stored page and on along another path: the history is as
+    // deep as it was when stored, and the page is not the stored one.
+    act(() => undoEdit?.());
+    act(() => edit?.({ ...EDITED }));
+
+    expect(reports.at(-1)?.hasWork).toBe(true);
+  });
+
+  it("still reports work an edit made during the store added", () => {
+    openEditor();
+    editDocument();
+    // The store commits the edited page, and the author edits again before
+    // it is answered: the second edit is not in what was stored.
+    act(() => beforeStore?.());
+    act(() => edit?.({ ...EDITED }));
+    announceStore();
+
+    expect(reports.at(-1)?.hasWork).toBe(true);
   });
 });
 

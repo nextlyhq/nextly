@@ -880,6 +880,53 @@ export async function introspectIndexTables(
 }
 
 /**
+ * Every descendant of each named PostgreSQL table, for the drop guard: the
+ * tables inheriting from it and its partitions, at any depth, from the
+ * catalog's inheritance records (`pg_inherits`), which hold both. Keyed by
+ * the lower-cased table name, each with its descendants' lower-cased names;
+ * a table with none is absent.
+ *
+ * Matched by name in every schema rather than through the search path, as
+ * the guard compares names without their schema: a statement naming the
+ * table with a qualifier reaches that schema's table, and matching more can
+ * only judge more.
+ */
+export async function introspectDescendants(
+  db: unknown,
+  tableNames: readonly string[]
+): Promise<Map<string, string[]>> {
+  const found = new Map<string, string[]>();
+  if (tableNames.length === 0) return found;
+  const namesIn = sql.join(
+    tableNames.map(name => sql`${name.toLowerCase()}`),
+    sql`, `
+  );
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`WITH RECURSIVE tree(root, child) AS (
+          SELECT lower(p.relname), i.inhrelid
+          FROM pg_inherits i
+          JOIN pg_class p ON p.oid = i.inhparent
+          JOIN pg_namespace n ON n.oid = p.relnamespace
+          WHERE lower(p.relname) IN (${namesIn})
+            AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          UNION
+          SELECT tree.root, i.inhrelid
+          FROM tree
+          JOIN pg_inherits i ON i.inhparent = tree.child
+        )
+        SELECT tree.root AS table, lower(c.relname) AS descendant
+        FROM tree
+        JOIN pg_class c ON c.oid = tree.child`
+  )) as { rows: Array<{ table: string; descendant: string }> };
+  for (const row of result.rows) {
+    const below = found.get(row.table) ?? [];
+    if (!below.includes(row.descendant)) below.push(row.descendant);
+    found.set(row.table, below);
+  }
+  return found;
+}
+
+/**
  * What a SQLite rebuild of each named table could lose that the snapshot
  * leaves out, for the drop guard: the columns of each unique constraint the
  * table's CREATE statement declares — backed by an index SQLite names
