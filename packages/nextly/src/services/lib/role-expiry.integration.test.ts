@@ -27,11 +27,16 @@ import { buildAuthRouterDeps } from "../../auth/handlers/deps-bridge";
 import { handleLogin } from "../../auth/handlers/login";
 import { handleRefresh } from "../../auth/handlers/refresh";
 import { getDialectTables } from "../../database/index";
+import { resolveRelations } from "../../database/resolve-relations";
 import { ApiKeyService } from "../../domains/auth/services/api-key-service";
 import {
   cacheRowId,
   PermissionCacheService,
 } from "../../domains/auth/services/permission-cache-service";
+import {
+  lockSuperAdminRole,
+  type LastSuperAdminTx,
+} from "../../domains/users/services/last-super-admin";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -566,6 +571,45 @@ describe.each(getConfiguredTestDialects())(
       expect(rows).toEqual([
         { id: `${userId}-${ROLES.lapsed.id}`, expiresAt: null },
       ]);
+    });
+
+    it("judges a role that lapsed while its assignment waited for the lock as lapsed", async () => {
+      // An assignment waits for the lock every change to who is a super-admin
+      // takes. A role that lapses during that wait grants nothing by the time
+      // the assignment decides, so giving it again is carried out rather than
+      // answered as already held.
+      const t = await boot(dialect);
+      const userId = await makeUser(t, "waiting@example.com");
+      const lapsesAt = wholeSecondsAhead(3);
+      await assign(t, userId, ROLES.brief.id, lapsesAt);
+      const service = new ServiceContainer(t.adapter).userRoles;
+
+      // Another change holds the lock until the role has lapsed.
+      let release!: () => void;
+      const released = new Promise<void>(resolve => (release = resolve));
+      let locked!: () => void;
+      const isLocked = new Promise<void>(resolve => (locked = resolve));
+      const holding = t.adapter.transaction(async tx => {
+        await lockSuperAdminRole(
+          tx.drizzleWithRelations<LastSuperAdminTx>(resolveRelations(dialect)),
+          getDialectTables(),
+          dialect
+        );
+        locked();
+        await released;
+      });
+      await isLocked;
+
+      const assigning = service.assignRoleToUser(userId, ROLES.brief.id);
+      await waitUntilPast(lapsesAt.getTime());
+      release();
+      await holding;
+
+      const assigned = await assigning;
+      expect(assigned.statusCode).toBe(201);
+      expect(await hasPermission(userId, "read", ROLES.brief.resource)).toBe(
+        true
+      );
     });
 
     it("serves no cached answer an earlier release wrote", async () => {
