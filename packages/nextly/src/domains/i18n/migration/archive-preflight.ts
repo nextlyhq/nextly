@@ -219,21 +219,26 @@ function refuseTranslatedFieldsRemovedBesideAdded(
   oldFields: readonly LeavingFieldLike[]
 ): void {
   if (args.renamed === null) return;
-  const dialect = args.adapter.getCapabilities().dialect;
-  const hasCompanionColumn = (f: LeavingFieldLike) =>
-    isFieldLocalized(f, true) &&
-    fieldToLocalizedColumnSpec(f, dialect, args.builtBy) !== null;
   const before = new Set(oldFields.map(f => f.name));
   const after = new Set(args.newFields.map(f => f.name));
+  // Any new field with a column, translated or shared: a translated field renamed to a type
+  // that is shared by default reads as one removed and one shared field added.
+  const added = args.newFields
+    .filter(f => !before.has(f.name) && fieldProducesColumn(f))
+    .map(f => f.name);
+  const removed = oldFields.filter(
+    f => !after.has(f.name) && isFieldLocalized(f, true)
+  );
+  // Judged by name first, so a change that does not both remove and add asks the adapter nothing.
+  if (added.length === 0 || removed.length === 0) return;
+  const dialect = args.adapter.getCapabilities().dialect;
   const refusals = refusalsForTranslatedFieldsRemovedBesideAdded({
-    removed: oldFields
-      .filter(f => !after.has(f.name) && hasCompanionColumn(f))
+    removed: removed
+      .filter(
+        f => fieldToLocalizedColumnSpec(f, dialect, args.builtBy) !== null
+      )
       .map(f => f.name),
-    // Any new field with a column, translated or shared: a translated field renamed to a type
-    // that is shared by default reads as one removed and one shared field added.
-    added: args.newFields
-      .filter(f => !before.has(f.name) && fieldProducesColumn(f))
-      .map(f => f.name),
+    added,
   });
   if (refusals.length === 0) return;
   throw NextlyError.validation({
