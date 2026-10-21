@@ -77,6 +77,8 @@ import type {
   PoolStats,
   TransactionContext,
   TransactionOptions,
+  SessionOptions,
+  StatementSession,
   SqlParam,
   InsertOptions,
   DatabaseError,
@@ -545,6 +547,54 @@ export class PostgresAdapter extends DrizzleAdapter {
    *
    * @throws {DatabaseError} If query execution fails
    */
+  /**
+   * Runs `work` on one pooled client outside a transaction, each statement
+   * committing as it runs, so connection-scoped state a statement sets — a
+   * temporary table, a session setting, an advisory lock — is still there
+   * for the next. The client goes back to the pool once `work` has finished
+   * or thrown. No `SessionOptions` field changes anything on PostgreSQL:
+   * strict mode is MySQL's, and PostgreSQL refuses an overlong value already.
+   */
+  override async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    _options?: SessionOptions
+  ): Promise<T> {
+    const pool = this.ensurePool();
+    // A checkout, taken from the pool like `executeQuery`'s queries are.
+    this.notePoolAccess();
+    let client: PoolClient;
+    try {
+      client = await pool.connect();
+    } catch (error) {
+      throw this.classifyError(error);
+    }
+    try {
+      return await work({
+        execute: async <R = unknown>(
+          statement: string,
+          params: SqlParam[] = []
+        ): Promise<R[]> => {
+          const startTime = Date.now();
+          try {
+            const result = await client.query(statement, params as unknown[]);
+            if (this.config.logger?.query) {
+              this.config.logger.query(
+                statement,
+                params,
+                Date.now() - startTime
+              );
+            }
+            return result.rows as R[];
+          } catch (error) {
+            throw this.classifyError(error, statement);
+          }
+        },
+      });
+    } finally {
+      client.release();
+    }
+  }
+
   async executeQuery<T = unknown>(
     sql: string,
     params: SqlParam[] = []

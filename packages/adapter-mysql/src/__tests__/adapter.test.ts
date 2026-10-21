@@ -740,6 +740,80 @@ describe("@nextly/adapter-mysql", () => {
   });
 
   // ============================================================
+  // Sessions outside a transaction
+  // ============================================================
+
+  describe("withSession", () => {
+    it("puts the session's mode back when the strict SET fails after reaching the server", async () => {
+      // A SET the server applied but whose reply was lost leaves the connection strict; the
+      // mode read before it must still be put back, or the pool hands strict mode to later work.
+      const answer = mockConnection.query.getMockImplementation();
+      mockConnection.query.mockImplementation((statement: string) => {
+        if (statement === "SELECT @@SESSION.sql_mode AS mode") {
+          return Promise.resolve([[{ mode: "" }], []]);
+        }
+        // A server answers this read; on, as most servers start sessions.
+        if (statement === "SELECT @@SESSION.autocommit AS autocommit") {
+          return Promise.resolve([[{ autocommit: 1 }], []]);
+        }
+        if (statement.startsWith("SET SESSION sql_mode = TRIM")) {
+          return Promise.reject(new Error("connection lost"));
+        }
+        return answer?.(statement);
+      });
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      mockConnection.release.mockClear();
+      mockConnection.destroy.mockClear();
+
+      await expect(
+        adapter.withSession(async () => undefined, { strictSqlMode: true })
+      ).rejects.toThrow();
+
+      const restores = mockConnection.query.mock.calls.filter(
+        ([statement]) => statement === "SET SESSION sql_mode = ?"
+      );
+      expect(restores).toEqual([["SET SESSION sql_mode = ?", [""]]]);
+      expect(mockConnection.release).toHaveBeenCalledTimes(1);
+      expect(mockConnection.destroy).not.toHaveBeenCalled();
+      mockConnection.query.mockImplementation(answer);
+    });
+
+    it("commits each statement when the server starts sessions with autocommit off, and puts it back", async () => {
+      // With autocommit off a statement waits for a COMMIT nobody sends, and the connection would
+      // return to the pool with an open transaction for later work to commit or roll back.
+      const answer = mockConnection.query.getMockImplementation();
+      mockConnection.query.mockImplementation((statement: string) =>
+        statement === "SELECT @@SESSION.autocommit AS autocommit"
+          ? Promise.resolve([[{ autocommit: 0 }], []])
+          : answer?.(statement)
+      );
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      mockConnection.query.mockClear();
+
+      await adapter.withSession(async session => {
+        await session.execute("INSERT INTO t (v) VALUES (1)");
+      });
+
+      const statements = mockConnection.query.mock.calls.map(
+        ([statement]) => statement as string
+      );
+      const on = statements.indexOf("SET SESSION autocommit = 1");
+      const insert = statements.indexOf("INSERT INTO t (v) VALUES (1)");
+      const back = statements.indexOf("SET SESSION autocommit = 0");
+      expect(on).toBeGreaterThanOrEqual(0);
+      expect(insert).toBeGreaterThan(on);
+      expect(back).toBeGreaterThan(insert);
+      mockConnection.query.mockImplementation(answer);
+    });
+  });
+
+  // ============================================================
   // Transaction Retry Logic
   // ============================================================
 

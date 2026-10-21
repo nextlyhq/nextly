@@ -174,6 +174,34 @@ describe("MySQL transaction strictSqlMode", async () => {
     expect(await sessionMode()).toBe("NO_ZERO_DATE");
   });
 
+  it("commits a session's statements on a server whose sessions start with autocommit off, and puts it back", async () => {
+    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    await adapter.executeQuery("SET SESSION autocommit = 0");
+    try {
+      await adapter.withSession(async session => {
+        await session.execute(`INSERT INTO ${TABLE} (v) VALUES ('committed')`);
+      });
+      // Read from a connection of its own: a row left in the session's open transaction is
+      // invisible there.
+      const other = await mysql.createConnection(TEST_DB_URL as string);
+      try {
+        const [rows] = await other.query<mysql.RowDataPacket[]>(
+          `SELECT v FROM ${TABLE}`
+        );
+        expect(rows.map(r => r.v as string)).toEqual(["committed"]);
+      } finally {
+        await other.end();
+      }
+      const [row] = await adapter.executeQuery<{ autocommit: number }>(
+        "SELECT @@SESSION.autocommit AS autocommit"
+      );
+      expect(Number(row.autocommit)).toBe(0);
+    } finally {
+      await adapter.executeQuery("ROLLBACK");
+      await adapter.executeQuery("SET SESSION autocommit = 1");
+    }
+  });
+
   it("commits each statement of a session outside a transaction as it runs", async () => {
     await adapter.executeQuery(`DELETE FROM ${TABLE}`);
     await adapter.executeQuery(`ALTER TABLE ${TABLE} MODIFY COLUMN v TEXT`);

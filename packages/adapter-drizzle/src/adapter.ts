@@ -477,12 +477,12 @@ export abstract class DrizzleAdapter {
    *
    * @remarks
    * A unit that must not run in a transaction, such as PostgreSQL's
-   * `CREATE INDEX CONCURRENTLY`, still needs the session settings a
-   * transaction would give it. One connection is what lets a session setting
-   * cover every statement. This base runs each statement through
-   * `executeQuery`: PostgreSQL and SQLite change no session setting for any
-   * `SessionOptions` field, so they need no connection held. An adapter whose
-   * options change the session overrides it, and restores what it changed
+   * `CREATE INDEX CONCURRENTLY`, still needs what a session gives its
+   * statements: one connection is what lets a session setting, or a
+   * temporary table, reach every statement. This base runs each statement
+   * through `executeQuery`, which is one connection only on an adapter that
+   * has one (SQLite). A pooled adapter overrides it to hold one connection
+   * for the whole of `work`, and puts back whatever the session changed
    * before the connection returns to the pool, whether `work` finished or
    * threw.
    *
