@@ -6992,6 +6992,8 @@ export class CollectionMutationService extends BaseService {
      * document's edit rather than key it under the wrong slot.
      */
     requestLocale?: string | null;
+    /** The caller's transaction, whose connection the schemas are read on. */
+    executor?: unknown;
   }): Promise<{
     hold: boolean;
     componentSchemas: ComponentSchemas | null;
@@ -7009,7 +7011,10 @@ export class CollectionMutationService extends BaseService {
       collectionHasStatus &&
       versionsConfig?.drafts?.enabled === true &&
       !hasPasswordField(args.fields)
-        ? await resolveComponentSchemas(args.fields as unknown as FieldConfig[])
+        ? await resolveComponentSchemas(
+            args.fields as unknown as FieldConfig[],
+            args.executor
+          )
         : null;
     const { hold, draftLocale } = resolveDraftHold({
       collectionHasStatus,
@@ -11208,6 +11213,8 @@ export class CollectionMutationService extends BaseService {
         fields,
         namedStatus: finalData.status,
         liveStatus: existingEntry.status,
+        // Inside the caller-owned transaction.
+        executor: tx.getDrizzle(),
       });
 
       // The same split the single-entry update performs, for the same reason
