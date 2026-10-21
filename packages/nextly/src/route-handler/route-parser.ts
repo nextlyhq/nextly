@@ -2108,8 +2108,12 @@ interface ReleaseRoute {
   id: boolean | string;
   /** The segment after the id, or `null` for none. */
   subresource: string | null;
-  /** Whether the path carries a fourth segment, such as a member id. */
-  subId: boolean;
+  /**
+   * Whether the path carries a fourth segment, such as a member id, or the
+   * word a step over several members is named by in that place. Member ids
+   * are UUIDs, so a word never names a member.
+   */
+  subId: boolean | string;
   verb: string;
   operation: OperationType;
   method: string;
@@ -2141,6 +2145,17 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "GET",
     operation: "list",
     method: "releaseCalendar",
+  },
+  // Scheduling a document in one step: on its own, with an existing release
+  // or in a new one, the path chosen by the body. A word in the id's place,
+  // before the route that reads one release by id, as the calendar is.
+  {
+    id: "schedule-document",
+    subresource: null,
+    subId: false,
+    verb: "POST",
+    operation: "create",
+    method: "scheduleDocument",
   },
   // The readiness of a page of releases at once, named by `?ids=`. Before the
   // route that reads one release by id, like the calendar, for the same
@@ -2195,6 +2210,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "POST",
     operation: "create",
     method: "addReleaseMember",
+  },
+  // Several documents added in one step, all or none. A word in the member
+  // id's place, so it is matched before any route taking a member id.
+  {
+    id: true,
+    subresource: "members",
+    subId: "batch",
+    verb: "POST",
+    operation: "create",
+    method: "addReleaseMembers",
   },
   {
     id: true,
@@ -2298,14 +2323,17 @@ function parseReleaseRoutes(
         ? candidate.id === id
         : candidate.id === Boolean(id)) &&
       candidate.subresource === (subresource ?? null) &&
-      candidate.subId === Boolean(subId) &&
+      (typeof candidate.subId === "string"
+        ? candidate.subId === subId
+        : candidate.subId === Boolean(subId)) &&
       candidate.verb === httpMethod
   );
   if (!route) return null;
 
   // A word in the id's place names the route, not a release.
   if (id && route.id === true) routeParams.releaseId = id;
-  if (subId) routeParams.memberId = subId;
+  // A word in the member id's place names the route, not a member.
+  if (subId && route.subId === true) routeParams.memberId = subId;
 
   return {
     service: "releases",
