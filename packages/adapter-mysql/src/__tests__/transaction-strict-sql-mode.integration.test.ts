@@ -125,4 +125,67 @@ describe("MySQL transaction strictSqlMode", async () => {
     // option's doing, not the server's.
     expect(await stored()).toEqual(["abcde"]);
   });
+
+  // A migration file marked to run outside a transaction runs statement by statement, each
+  // committing as it runs; `withSession` keeps them on one connection so its session's mode
+  // can be set for all of them and put back afterwards.
+  it("runs a session outside a transaction in strict mode, refusing a narrowing that would cut a value, and restores the mode", async () => {
+    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    await adapter.executeQuery(`ALTER TABLE ${TABLE} MODIFY COLUMN v TEXT`);
+    await adapter.executeQuery(`INSERT INTO ${TABLE} (v) VALUES ('abcdefgh')`);
+    await adapter.executeQuery("SET SESSION sql_mode = ''");
+
+    let inside = "";
+    await expect(
+      adapter.withSession(
+        async session => {
+          const [row] = await session.execute<{ mode: string }>(
+            "SELECT @@SESSION.sql_mode AS mode"
+          );
+          inside = row.mode;
+          await session.execute(
+            `ALTER TABLE ${TABLE} MODIFY COLUMN v varchar(5)`
+          );
+        },
+        { strictSqlMode: true }
+      )
+    ).rejects.toThrow(/Data too long/);
+
+    expect(inside).toBe("STRICT_ALL_TABLES");
+    expect(await stored()).toEqual(["abcdefgh"]);
+    expect(await sessionMode()).toBe("");
+  });
+
+  it("keeps every flag the session had in a session outside a transaction, and puts the mode back", async () => {
+    await adapter.executeQuery("SET SESSION sql_mode = 'NO_ZERO_DATE'");
+    let inside = "";
+    await adapter.withSession(
+      async session => {
+        const [row] = await session.execute<{ mode: string }>(
+          "SELECT @@SESSION.sql_mode AS mode"
+        );
+        inside = row.mode;
+      },
+      { strictSqlMode: true }
+    );
+    expect(inside.split(",").sort()).toEqual(
+      ["NO_ZERO_DATE", "STRICT_ALL_TABLES"].sort()
+    );
+    expect(await sessionMode()).toBe("NO_ZERO_DATE");
+  });
+
+  it("commits each statement of a session outside a transaction as it runs", async () => {
+    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    await adapter.executeQuery(`ALTER TABLE ${TABLE} MODIFY COLUMN v TEXT`);
+    await expect(
+      adapter.withSession(async session => {
+        await session.execute(`INSERT INTO ${TABLE} (v) VALUES ('kept')`);
+        await session.execute(
+          "INSERT INTO int_txmysql_missing (v) VALUES ('x')"
+        );
+      })
+    ).rejects.toThrow();
+    // No transaction to roll back: the first statement stayed.
+    expect(await stored()).toEqual(["kept"]);
+  });
 });

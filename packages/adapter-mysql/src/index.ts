@@ -44,6 +44,8 @@ import {
   type PoolStats,
   type TransactionContext,
   type TransactionOptions,
+  type SessionOptions,
+  type StatementSession,
   type SqlParam,
   type WhereClause,
   type WhereCondition,
@@ -572,6 +574,74 @@ export class MySqlAdapter extends DrizzleAdapter {
     );
   }
 
+  /**
+   * Runs `work` on one pooled connection outside a transaction, each
+   * statement committing as it runs.
+   *
+   * @remarks
+   * With `strictSqlMode` the session runs in strict mode, as a transaction
+   * given the same option does, so a statement that would cut a value short
+   * fails and changes nothing. The session's own mode is put back before the
+   * connection returns to the pool, whether `work` finished or threw; a
+   * connection whose mode could not be put back is closed instead, so no
+   * later query inherits it.
+   */
+  override async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    options?: SessionOptions
+  ): Promise<T> {
+    const pool = this.ensurePool();
+    // A checkout, taken from the pool like `executeQuery`'s queries are.
+    this.notePoolAccess();
+    let connection: PoolConnection;
+    try {
+      connection = await pool.getConnection();
+    } catch (error) {
+      throw this.classifyError(error);
+    }
+    const changed: NonNullable<SessionRestore> = {};
+    try {
+      if (options?.strictSqlMode) {
+        try {
+          await this.enterStrictMode(connection, changed);
+        } catch (error) {
+          throw this.classifyError(error);
+        }
+      }
+      return await work({
+        execute: async <R = unknown>(
+          statement: string,
+          params: SqlParam[] = []
+        ): Promise<R[]> => {
+          const startTime = Date.now();
+          try {
+            const [rows] = await connection.query<RowDataPacket[]>(
+              statement,
+              params as unknown[]
+            );
+            if (this.config.logger?.query) {
+              this.config.logger.query(
+                statement,
+                params,
+                Date.now() - startTime
+              );
+            }
+            return rows as R[];
+          } catch (error) {
+            throw this.classifyError(error, statement);
+          }
+        },
+      });
+    } finally {
+      const restore = Object.keys(changed).length > 0 ? changed : null;
+      if (await restoreSession(connection, restore)) {
+        connection.release();
+      } else {
+        connection.destroy();
+      }
+    }
+  }
+
   /** The attempts `transaction` makes, each on a connection of its own. */
   private async runTransactionAttempts<T>(
     work: (tx: TransactionContext) => Promise<T>,
@@ -915,20 +985,30 @@ export class MySqlAdapter extends DrizzleAdapter {
       changed.lockWaitTimeout = Number.isInteger(previous) ? previous : null;
     }
 
-    // Strict mode for this transaction: an INSERT, UPDATE or ALTER that would
-    // cut a string to its column's length, or clamp a number to its range,
-    // fails instead of applying with a warning. Added to the session's own
-    // mode, so every other flag it had still holds, and put back afterwards.
     if (options?.strictSqlMode) {
-      const [rows] = await connection.query<RowDataPacket[]>(
-        "SELECT @@SESSION.sql_mode AS mode"
-      );
-      const previous: unknown = rows[0]?.mode;
-      await connection.query(
-        "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))"
-      );
-      changed.sqlMode = typeof previous === "string" ? previous : null;
+      await this.enterStrictMode(connection, changed);
     }
+  }
+
+  /**
+   * Strict mode for the rest of this connection's session: an INSERT, UPDATE
+   * or ALTER that would cut a string to its column's length, or clamp a
+   * number to its range, fails instead of applying with a warning. Added to
+   * the session's own mode, so every other flag it had still holds, and
+   * recorded in `changed` for `restoreSession` to put back.
+   */
+  private async enterStrictMode(
+    connection: PoolConnection,
+    changed: NonNullable<SessionRestore>
+  ): Promise<void> {
+    const [rows] = await connection.query<RowDataPacket[]>(
+      "SELECT @@SESSION.sql_mode AS mode"
+    );
+    const previous: unknown = rows[0]?.mode;
+    await connection.query(
+      "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))"
+    );
+    changed.sqlMode = typeof previous === "string" ? previous : null;
   }
 
   /**

@@ -46,6 +46,8 @@ import type {
   UpsertOptions,
   TransactionContext,
   TransactionOptions,
+  SessionOptions,
+  StatementSession,
   DatabaseCapabilities,
   PoolStats,
   DatabaseError,
@@ -468,6 +470,35 @@ export abstract class DrizzleAdapter {
     callback: (ctx: TransactionContext) => Promise<T>,
     options?: TransactionOptions
   ): Promise<T>;
+
+  /**
+   * Runs `work` with statements that commit one by one, outside any
+   * transaction, on one connection held for the whole of `work`.
+   *
+   * @remarks
+   * A unit that must not run in a transaction, such as PostgreSQL's
+   * `CREATE INDEX CONCURRENTLY`, still needs the session settings a
+   * transaction would give it. One connection is what lets a session setting
+   * cover every statement. This base runs each statement through
+   * `executeQuery`: PostgreSQL and SQLite change no session setting for any
+   * `SessionOptions` field, so they need no connection held. An adapter whose
+   * options change the session overrides it, and restores what it changed
+   * before the connection returns to the pool, whether `work` finished or
+   * threw.
+   *
+   * @param work - Runs the statements through the session it is handed
+   * @param options - Session options
+   * @returns Result of `work`
+   */
+  async withSession<T>(
+    work: (session: StatementSession) => Promise<T>,
+    _options?: SessionOptions
+  ): Promise<T> {
+    return work({
+      execute: <R = unknown>(statement: string, params?: SqlParam[]) =>
+        this.executeQuery<R>(statement, params),
+    });
+  }
 
   /**
    * Whether a `transaction()` call made from the current async context would
