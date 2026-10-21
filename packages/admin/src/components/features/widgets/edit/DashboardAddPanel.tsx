@@ -22,7 +22,6 @@ import type { IsDrawn } from "../layout-editor";
 
 import { addPanelRows } from "./add-panel-model";
 import { AddWidgetPanel, type AddedCard } from "./AddWidgetPanel";
-import { useCardHighlight, type CardHighlight } from "./useCardHighlight";
 import type { DashboardFocus } from "./useDashboardFocus";
 import type { LayoutEditor } from "./useLayoutEditor";
 
@@ -65,15 +64,13 @@ function placeAmongDrawn(
 export interface AddPanelState {
   open: boolean;
   setOpen: (open: boolean) => void;
-  /** The card the panel last placed, which the grid rings. */
-  ring: CardHighlight;
 }
 
 /**
- * The add panel's open state and the ring on the card it last placed. Both follow the mode:
- * leaving customise mode closes the panel, adjusted during render (React's pattern for state
- * that follows a prop), so no frame after Save or Cancel still holds the sheet open; the ring
- * drops with it (`useCardHighlight`).
+ * The add panel's open state, which follows the mode: leaving customise mode closes the panel,
+ * adjusted during render (React's pattern for state that follows a prop), so no frame after Save
+ * or Cancel still holds the sheet open. The card an add places is ringed by the arrangement's
+ * ring, the one every placing gesture moves.
  */
 export function useAddPanelState(isEditing: boolean): AddPanelState {
   const [open, setOpen] = useState(false);
@@ -82,8 +79,7 @@ export function useAddPanelState(isEditing: boolean): AddPanelState {
     setMode(isEditing);
     setOpen(false);
   }
-  const ring = useCardHighlight(isEditing);
-  return { open, setOpen, ring };
+  return { open, setOpen };
 }
 
 /** No widget described yet: the panel's facts before the layout read has answered. */

@@ -72,6 +72,12 @@ export interface AddPanelRow {
   /** How many of this widget's cards are on the dashboard now. */
   placed: number;
   action: AddPanelAction;
+  /**
+   * Text search reads and the panel does not draw. A removed card's row is the only way back to
+   * a one-card widget, so it carries what that widget's own row would be found by (its
+   * description, category, group and plugin) while showing the put-back line.
+   */
+  searchAlso?: readonly string[];
 }
 
 /** What the widths a widget allows read as: its one width's name, or the range. */
@@ -84,7 +90,7 @@ function widthsLabel(facts: WidgetWidthFacts | undefined): string | undefined {
   return `${first} to ${last} wide`;
 }
 
-/** The line a removed card's row says, which is also what search reads for it. */
+/** The line a removed card's row says. Search reads it too, beside the widget's own facts. */
 export const REMOVED_ROW_DESCRIPTION =
   "Comes back where it was, with its width and settings.";
 
@@ -114,6 +120,20 @@ function widgetAction(
 }
 
 /**
+ * What a widget's own row is found by, beyond its name: the facts core states for it, and its
+ * group's heading. Empty for a widget core says nothing about.
+ */
+function searchableFacts(facts: WidgetWidthFacts | undefined): string[] {
+  if (facts === undefined) return [];
+  return [
+    facts.description,
+    facts.category,
+    facts.group === undefined ? undefined : sectionLabel(facts.group),
+    facts.subgroup,
+  ].filter((text): text is string => text !== undefined);
+}
+
+/**
  * Every row the panel could show, before any search: the reader's removed cards first, then each
  * widget core groups, in core's rank.
  *
@@ -140,6 +160,7 @@ export function addPanelRows(input: {
         description: REMOVED_ROW_DESCRIPTION,
         placed: 0,
         action: { kind: "add-back" as const, placementId: placement.id },
+        searchAlso: searchableFacts(widgets[placement.widgetId]),
       },
     ];
   });
@@ -195,7 +216,7 @@ function sectionLabel(section: AddPanelSection): string {
 
 /**
  * The rows a search keeps: those whose name, description, category, group or sub-group contains
- * the query, ignoring case. An empty query keeps them all.
+ * the query, ignoring case, or whose `searchAlso` does. An empty query keeps them all.
  */
 export function searchAddPanel(
   rows: readonly AddPanelRow[],
@@ -210,6 +231,7 @@ export function searchAddPanel(
       row.category,
       sectionLabel(row.section),
       row.subgroup,
+      ...(row.searchAlso ?? []),
     ].some(text => text?.toLowerCase().includes(needle))
   );
 }

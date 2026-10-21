@@ -37,6 +37,8 @@ export interface ArrangementAnnouncer {
   refused: () => void;
   /** A save failed; the draft is kept. */
   saveFailed: () => void;
+  /** One step of a drag, in the drag's own words. */
+  drag: (sentence: string) => void;
 }
 
 export interface AnnouncerRelay {
@@ -76,6 +78,7 @@ export function useAnnouncerRelay(): AnnouncerRelay {
       saved: () => announcer.current?.announceSaved(),
       refused: () => announcer.current?.announceRefused(),
       saveFailed: () => announcer.current?.announceSaveFailed(),
+      drag: sentence => announcer.current?.announceDrag(sentence),
     }),
     []
   );

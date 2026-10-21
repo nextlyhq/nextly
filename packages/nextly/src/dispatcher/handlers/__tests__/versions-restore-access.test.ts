@@ -21,7 +21,13 @@ vi.mock("../../../domains/versions/restore-version", () => ({
 
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: readableSpy,
+  assertHistoryLocalesReadable: () => Promise.resolve(),
   resolveSingleDocumentId: vi.fn(),
+}));
+
+// A version in no language, so the language half of the gate asks nothing.
+vi.mock("../../../di", () => ({
+  getService: vi.fn(() => ({ partOfVersion: () => Promise.resolve(null) })),
 }));
 
 // DERIVED from the real module rather than a closed literal: the handler

@@ -20,6 +20,8 @@ import type { ViewedVersion } from "@admin/components/features/versions/document
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
 import { cn } from "@admin/lib/utils";
 
+import { formatTimeAgo } from "./time-ago";
+
 export interface AutosaveRecoveryBannerProps {
   /** When the offered recovery point was stored. */
   savedAt: Date;
@@ -28,23 +30,6 @@ export interface AutosaveRecoveryBannerProps {
   /** Stop offering for this session, without deleting anything. */
   onDismiss: () => void;
   className?: string;
-}
-
-/** "10 minutes ago", in the coarsest unit that still reads precisely. */
-function formatTimeAgo(date: Date): string {
-  const diffSec = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (diffSec < 60) return "moments ago";
-
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60)
-    return diffMin === 1 ? "1 minute ago" : `${diffMin} minutes ago`;
-
-  const diffHours = Math.floor(diffMin / 60);
-  if (diffHours < 24)
-    return diffHours === 1 ? "1 hour ago" : `${diffHours} hours ago`;
-
-  const diffDays = Math.floor(diffHours / 24);
-  return diffDays === 1 ? "1 day ago" : `${diffDays} days ago`;
 }
 
 export function AutosaveRecoveryBanner({

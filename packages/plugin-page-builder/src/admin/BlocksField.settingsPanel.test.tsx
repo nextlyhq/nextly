@@ -108,6 +108,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   },
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  useBeforeDocumentAction: () => {},
+  useDocumentActions: () => null,
   useDocumentStatus: () => null,
   validationIssues: () => [],
   useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),

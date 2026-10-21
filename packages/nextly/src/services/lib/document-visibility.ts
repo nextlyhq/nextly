@@ -25,8 +25,7 @@
  */
 
 import { authorizationGroups } from "../../auth/entity-read-access";
-import { container } from "../../di/container";
-import type { NextlyServiceConfig } from "../../di/register";
+import { configuredLocales } from "../../domains/i18n/configured-locales";
 import type { ReadCaller } from "../dashboard/readable-resources";
 
 import { readableDocumentIds } from "./readable-documents";
@@ -67,31 +66,6 @@ export interface DocumentVisibilityScope {
   locales: ReadonlySet<string> | null;
   /** True when a registry could not be enumerated, so `kinds` is a floor. */
   degraded: boolean;
-}
-
-/**
- * The languages a read can actually be performed in, or `null` when the install
- * configures none.
- *
- * 🔴 Needed because forwarding an unconfigured locale does NOT authorize it:
- * `resolveRequestedLocale` substitutes the configured DEFAULT for any code it
- * does not recognise. A row written under a language later removed from the
- * configuration would be judged by the default language's verdict — a row
- * exposed on a predicate never evaluated for it, which is the same defect as
- * passing no locale at all.
- */
-function configuredLocales(): ReadonlySet<string> | null {
-  try {
-    if (!container.has("config")) return null;
-    const localization =
-      container.get<NextlyServiceConfig>("config").localization;
-    if (!localization) return null;
-    return new Set(localization.locales.map(locale => locale.code));
-  } catch {
-    // A container that cannot answer leaves every localized row undecidable,
-    // which `subjectOf` turns into "dropped" rather than "allowed".
-    return null;
-  }
 }
 
 /** One resolution of the registry and the configured languages. */
