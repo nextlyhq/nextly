@@ -3,8 +3,10 @@
  * public read and write of that table's records, and the core's own writes
  * keep working once it is added. The five tables a hook may extend are each
  * covered: `users` and `media` through REST, the Direct API (media uploads
- * included), and a relationship or upload field that populates them; `nextly_jobs` and
- * `activity_log` through the one route each that lists their rows; and
+ * and the top-level account methods included), and a relationship or upload
+ * field that populates them; `nextly_jobs` and
+ * `activity_log` through the one route each that lists their rows (and,
+ * for jobs, the route that runs them); and
  * `audit_log`, which no public route reads, through its writer alone.
  *
  * The column is declared by a plugin's hook and then added to the live table,
@@ -61,6 +63,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { defineJob } from "../../jobs/job-registry";
 import { pdfDocument } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { buildAuditLogWriter } from "../../audit/audit-log-writer";
 
@@ -75,11 +78,22 @@ const ATTEMPT = "written-through-api-9c1e";
 
 const hiddenColumns = { leakProbe: col.text({ nullable: true }) };
 
+/** The ids of the jobs the contributed handler ran, so a run is observable. */
+const ranJobs: string[] = [];
+
 const contributor = definePlugin({
   name: "@test/leak-probe",
   version: "1.0.0",
   nextly: ">=0.0.0",
   contributes: {
+    jobs: [
+      defineJob({
+        slug: "leak-probe.sweep",
+        handler: async (_input, context) => {
+          ranJobs.push(context.jobId);
+        },
+      }),
+    ],
     schema: {
       extend: [
         ({ schema }) => {
@@ -112,6 +126,11 @@ interface Direct {
   jobs: {
     queue(a: Record<string, unknown>): Promise<{ id: string }>;
   };
+  login(a: Record<string, unknown>): Promise<unknown>;
+  me(a: Record<string, unknown>): Promise<unknown>;
+  updateMe(a: Record<string, unknown>): Promise<unknown>;
+  register(a: Record<string, unknown>): Promise<{ user: { id: string } }>;
+  changePassword(a: Record<string, unknown>): Promise<unknown>;
   create(a: Record<string, unknown>): Promise<{ item: { id: string } }>;
   find(a: Record<string, unknown>): Promise<unknown>;
   findByID(a: Record<string, unknown>): Promise<unknown>;
@@ -242,6 +261,9 @@ describe.each(getConfiguredTestDialects())(
           method,
           headers: {
             ...headers,
+            // Same-origin, as the browser sends it: a session-authenticated
+            // trigger route refuses a POST without it.
+            origin: "http://localhost",
             ...(body === undefined
               ? {}
               : { "content-type": "application/json" }),
@@ -457,6 +479,75 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(viaRest).toContain("member@example.com");
         expectNoHiddenColumn(viaRest);
+      });
+
+      it("Direct API login, me and updateMe return no hidden column, and updateMe cannot set it", async () => {
+        // The top-level account methods read and write `users` through the
+        // auth and account services, apart from the `users` namespace.
+        const loggedIn = serialised(
+          await direct.login({
+            email: "member@example.com",
+            password: "Password123!",
+          })
+        );
+        expect(loggedIn).toContain("member@example.com");
+        expectNoHiddenColumn(loggedIn);
+
+        const me = serialised(await direct.me({ user: { id: memberId } }));
+        expect(me).toContain("member@example.com");
+        expectNoHiddenColumn(me);
+
+        const updated = serialised(
+          await direct.updateMe({
+            user: { id: memberId },
+            data: {
+              name: "Member Me",
+              leakProbe: ATTEMPT,
+              leak_probe: ATTEMPT,
+            },
+          })
+        );
+        expect(updated).toContain("Member Me");
+        expectNoHiddenColumn(updated);
+        expect(await stored("users", memberId)).toBe(SENTINEL);
+      });
+
+      it("Direct API register and changePassword succeed, return no hidden column, and cannot set it", async () => {
+        const registered = await direct.register({
+          email: "registered@example.com",
+          password: "Password123!",
+          name: "Registered",
+          leakProbe: ATTEMPT,
+          leak_probe: ATTEMPT,
+        });
+        const registeredOut = serialised(registered);
+        expect(registeredOut).toContain("registered@example.com");
+        expectNoHiddenColumn(registeredOut);
+        const id = registered.user.id;
+        expect(await stored("users", id)).toBeNull();
+
+        await sql(
+          `UPDATE users SET leak_probe = '${SENTINEL}' WHERE id = '${id}'`
+        );
+        const hashOf = async () =>
+          (await sql(`SELECT password_hash FROM users WHERE id = '${id}'`))[0]
+            ?.password_hash;
+        const before = await hashOf();
+        expect(before).toBeTruthy();
+        expectNoHiddenColumn(
+          serialised(
+            await direct.changePassword({
+              user: { id },
+              currentPassword: "Password123!",
+              newPassword: "Password456!",
+            })
+          )
+        );
+        // The change took (a self-registered account cannot sign in before
+        // verifying its address, so the stored hash is what shows it), and
+        // the column kept its value through the account write.
+        expect(await hashOf()).not.toBe(before);
+        expect(await stored("users", id)).toBe(SENTINEL);
       });
 
       it("Direct API and REST delete succeed and return no hidden column", async () => {
@@ -729,11 +820,17 @@ describe.each(getConfiguredTestDialects())(
     });
 
     section("nextly_jobs", () => {
-      it("the queue's own write succeeds, and the jobs list never returns it", async () => {
+      it("the queue's own write succeeds, cannot set it, and the jobs list never returns it", async () => {
         const queued = await direct.jobs.queue({
           task: "leak-probe.sweep",
           input: { pass: 1 },
+          // The column named beside the queue's own arguments, in both
+          // spellings.
+          leakProbe: ATTEMPT,
+          leak_probe: ATTEMPT,
         });
+        expect(typeof queued.id).toBe("string");
+        expectNoHiddenColumn(serialised(queued));
         // The core's write, after the column was added: one row, the hidden
         // column untouched.
         expect(await storedBy("nextly_jobs", "id", queued.id)).toEqual([null]);
@@ -745,6 +842,25 @@ describe.each(getConfiguredTestDialects())(
         const out = await bodyOf(await rest("GET", ["jobs"]));
         expect(out).toContain("leak-probe.sweep");
         expectNoHiddenColumn(out);
+      });
+
+      it("the runner claims and completes a job, keeping the column and returning none of it", async () => {
+        // `POST /api/jobs/run` claims the row, runs it and records the
+        // outcome: three writes of its own to `nextly_jobs`.
+        const queued = await direct.jobs.queue({
+          task: "leak-probe.sweep",
+          input: { pass: 2 },
+        });
+        await sql(
+          `UPDATE nextly_jobs SET leak_probe = '${SENTINEL}' WHERE id = '${queued.id}'`
+        );
+        const out = await bodyOf(await rest("POST", ["jobs", "run"], {}));
+        expectNoHiddenColumn(out);
+        expect(ranJobs).toContain(queued.id);
+        const [row] = await sql(
+          `SELECT state, leak_probe FROM nextly_jobs WHERE id = '${queued.id}'`
+        );
+        expect(row).toEqual({ state: "done", leak_probe: SENTINEL });
       });
     });
 
