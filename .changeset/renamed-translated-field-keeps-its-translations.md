@@ -31,10 +31,10 @@
 
 A translated field renamed in the Schema Builder keeps every language's value, for a collection, a Single or a field group.
 
-- Renamed while it stays translated, its values move with it: the translations table renames its column, where it used to drop the old column and add an empty one.
+- Renamed while it stays translated, its values move with it when it is the only field removed and the only field added in the save, with a compatible type: the translations table renames its column, where it used to drop the old column and add an empty one.
 - Renamed and made shared in the same change, the default language's value becomes the shared value and the other languages are written to the localization archive under the new name, restorable with `nextly i18n:restore`.
 - The schema dialog lists the rename as one, on the translations table, and keeps the values when it is chosen.
-- A rename that also changes how the field is stored (its length, its precision, or its type to a compatible one) is refused before anything runs, naming the two saves that work: rename it and save, then change its storage. A change to an incompatible type is not a rename: the dialog lists it as removing one field and adding another, which deletes the old field's values once confirmed.
+- A rename that also changes how the field is stored (its length, its precision, or its type to a compatible one) is refused before anything runs, naming the two saves that work: rename it and save, then change its storage. A change to an incompatible type is not a rename, and neither are several translated fields renamed in one save or a rename saved with another field added: the old field's translations column is dropped, with every language's value, without being listed for confirmation.
 - A translated field renamed in the same change that turns translation off is refused before anything runs: rename it and save, then turn translation off.
 - Renamed and made shared, the field is judged under its new name before anything runs: a Required or Unique setting is refused, and an archive that cannot take the other languages stops the change with nothing altered.
 - A save that stopped after renaming the column finishes when it is saved again, rather than failing on the column it already renamed, whether the field stays translated or becomes shared, and so does a save that moved a field to shared and stopped before it was recorded.
