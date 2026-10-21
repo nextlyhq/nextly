@@ -178,6 +178,7 @@ import { rehydrateSnapshotDates } from "../../versions/tag-component-types";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import {
+  isPlainObject,
   refuseFilterProblems,
   unknownFieldProblem,
 } from "../query/filter-shape";
@@ -1230,6 +1231,20 @@ export class CollectionQueryService extends BaseService {
     fieldAccessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<void> {
+    // A caller's release condition is judged first, before any read hook
+    // runs: a hook may write an audit entry or spend a rate-limit budget, and
+    // a refusal after it would come after those effects. The condition is
+    // judged again where it is built, for one a trusted hook adds.
+    if (
+      isPlainObject(params.where) &&
+      Object.prototype.hasOwnProperty.call(params.where, IN_RELEASE_KEY)
+    ) {
+      await this.refuseReleaseFilterUnlessReadable({
+        overrideAccess: params.overrideAccess,
+        accessUser: params.overrideAccess ? undefined : params.user,
+        authenticatedScope: params.authenticatedScope,
+      });
+    }
     // The settled filter a list forwards to its own count already passed this
     // check as the caller's, and what a read hook added to it is trusted
     // server code, which may scope by the column its own plugin contributed.
@@ -2153,10 +2168,8 @@ export class CollectionQueryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<SQL[]> {
     const { filter, idColumn } = params;
-    if (filter.inRelease !== null && !(await this.mayReadReleases(params))) {
-      refuseFilterProblems([
-        unknownFieldProblem(`where.${IN_RELEASE_KEY}`, IN_RELEASE_KEY),
-      ]);
+    if (filter.inRelease !== null) {
+      await this.refuseReleaseFilterUnlessReadable(params);
     }
     if (idColumn === undefined) {
       // Every collection table has an id; one without could not be correlated
@@ -2191,6 +2204,21 @@ export class CollectionQueryService extends BaseService {
       );
     }
     return conditions;
+  }
+
+  /**
+   * Refuse a release condition, in exactly the words an unknown condition
+   * gets, unless this read's caller may read releases.
+   */
+  private async refuseReleaseFilterUnlessReadable(caller: {
+    overrideAccess?: boolean;
+    accessUser?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<void> {
+    if (await this.mayReadReleases(caller)) return;
+    refuseFilterProblems([
+      unknownFieldProblem(`where.${IN_RELEASE_KEY}`, IN_RELEASE_KEY),
+    ]);
   }
 
   /**

@@ -1,3 +1,7 @@
+// The server's own list of the keys a filter may carry only at its top level,
+// so a key added there is kept at the top level here without a second edit.
+import { isReservedTopLevelKey } from "nextly/reserved-filter-keys";
+
 /** Translation-status list filter: keep entries in a given state for a locale. */
 export interface TranslationListFilter {
   locale: string;
@@ -15,15 +19,6 @@ export interface EntryFilterState {
   translated?: TranslationListFilter | null;
 }
 
-/**
- * The keys the server reads only at the TOP level of a filter, each a
- * condition on another table: the language filter and the two workflow keys
- * (`_pendingChange`, `_inRelease`) the dashboard's counts link with. The
- * server refuses any of them nested inside `and`, so a link carrying one must
- * keep it at the top level when this list adds its own filters beside it.
- */
-const TOP_LEVEL_KEYS = ["_translated", "_pendingChange", "_inRelease"] as const;
-
 /** A filter split into its top-level-only keys and everything else. */
 function splitTopLevelKeys(filter: Record<string, unknown>): {
   topLevel: Record<string, unknown>;
@@ -32,11 +27,16 @@ function splitTopLevelKeys(filter: Record<string, unknown>): {
   const topLevel: Record<string, unknown> = {};
   const rest: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(filter)) {
-    if ((TOP_LEVEL_KEYS as readonly string[]).includes(key)) {
-      topLevel[key] = value;
-    } else {
-      rest[key] = value;
-    }
+    // Defined, not assigned: `JSON.parse` makes `__proto__` an own key, and
+    // assigning it would set the object's prototype instead, dropping the
+    // condition so the list asked for MORE entries than the link named. Kept
+    // as a key, it reaches the server, which refuses it.
+    Object.defineProperty(isReservedTopLevelKey(key) ? topLevel : rest, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return {
     topLevel,

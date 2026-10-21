@@ -23,12 +23,10 @@
  */
 
 import type { FilterProblem } from "./filter-shape";
+import { IN_RELEASE_KEY, PENDING_CHANGE_KEY } from "./reserved-filter-keys";
 
-/** The reserved key keeping entries with unpublished changes. @experimental */
-export const PENDING_CHANGE_KEY = "_pendingChange";
-
-/** The reserved key keeping entries a scheduled release will publish. @experimental */
-export const IN_RELEASE_KEY = "_inRelease";
+// Declared with the other reserved keys, so the admin reads the same names.
+export { IN_RELEASE_KEY, PENDING_CHANGE_KEY };
 
 /**
  * Which scheduled releases an entry must be in to be kept.
@@ -63,14 +61,49 @@ export interface WorkflowFilter {
  * mean different moments on different servers.
  */
 const ZONED_INSTANT =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(?:Z|[+-](\d{2}):(\d{2}))$/;
+
+/** Whether `value` is an integer from `min` to `max`, both included. */
+function within(value: string | undefined, min: number, max: number): boolean {
+  if (value === undefined) return true;
+  const n = Number(value);
+  return n >= min && n <= max;
+}
+
+/**
+ * Whether every part of a zoned instant names a real moment: a month of the
+ * year, a day of that month, an hour, a minute and a second, and an offset.
+ *
+ * Checked part by part because `Date` does not refuse an impossible one: it
+ * rolls `2026-02-30` over to March 2, and the filter would then answer for a
+ * bound the caller never wrote.
+ */
+function realParts(match: RegExpExecArray): boolean {
+  const [, year, month, day, hour, minute, second, offsetHour, offsetMinute] =
+    match;
+  if (!within(month, 1, 12)) return false;
+  // Day 0 of the next month is the last day of this one.
+  const daysInMonth = new Date(
+    Date.UTC(Number(year), Number(month), 0)
+  ).getUTCDate();
+  return (
+    within(day, 1, daysInMonth) &&
+    within(hour, 0, 23) &&
+    within(minute, 0, 59) &&
+    within(second, 0, 59) &&
+    within(offsetHour, 0, 23) &&
+    within(offsetMinute, 0, 59)
+  );
+}
 
 /** A valid instant from a `Date` or a zoned ISO 8601 string, or `undefined`. */
 function readInstant(value: unknown): Date | undefined {
   if (value instanceof Date) {
     return Number.isFinite(value.getTime()) ? value : undefined;
   }
-  if (typeof value !== "string" || !ZONED_INSTANT.test(value)) return undefined;
+  if (typeof value !== "string") return undefined;
+  const match = ZONED_INSTANT.exec(value);
+  if (match === null || !realParts(match)) return undefined;
   const parsed = new Date(value);
   return Number.isFinite(parsed.getTime()) ? parsed : undefined;
 }

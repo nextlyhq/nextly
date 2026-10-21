@@ -21,6 +21,7 @@ process.env.NEXTLY_SECRET =
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection, text } from "../../../config";
+import { resetHookRegistry } from "../../../hooks/hook-registry";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -39,9 +40,16 @@ import { releaseMemberKey } from "../../releases/release-member-key";
 
 let current: TestNextly | undefined;
 
+/** Each run of the posts' read hook, so a case can see whether one ran. */
+const readHookRuns: string[] = [];
+
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  // Hooks register into the process-wide registry; cleared so one boot's
+  // handler cannot answer for the next.
+  resetHookRegistry();
+  readHookRuns.length = 0;
 });
 
 const MINUTE = 60 * 1000;
@@ -55,6 +63,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         slug,
         status: true,
         versions: { drafts: true },
+        // A read hook that only records that it ran: a refusal that comes
+        // after the hooks would come after whatever they do.
+        hooks: {
+          beforeRead: [
+            async () => {
+              readHookRuns.push(slug);
+            },
+          ],
+        },
         fields: [text({ name: "title" })],
       })
     ),
@@ -400,6 +417,18 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(asInRelease.status).toBe(400);
       expect(asUnknown.status).toBe(400);
+      // Refused before any read hook ran, the precondition before the work.
+      readHookRuns.length = 0;
+      await refusedWith(
+        keys.postsOnly,
+        "posts",
+        `status=all&where=${encodeURIComponent(JSON.stringify({ _inRelease: true }))}`
+      );
+      expect(readHookRuns).toEqual([]);
+      // The control: the same caller's read the hook does run for, so the
+      // empty record above is the refusal's doing, not a hook that never runs.
+      await listed(keys.postsOnly, "posts", { _pendingChange: true });
+      expect(readHookRuns).toContain("posts");
       // Word for word once the name is the same.
       expect(
         JSON.stringify(asInRelease.errors).replaceAll(

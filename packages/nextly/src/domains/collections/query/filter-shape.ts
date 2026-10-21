@@ -22,6 +22,7 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { TRANSLATION_FILTER_STATES } from "../../i18n/translation-filter-states";
 
 import { parseNearQuery, parseWithinQuery } from "./geo-utils";
+import { TRANSLATED_KEY } from "./reserved-filter-keys";
 import {
   isWorkflowKey,
   WORKFLOW_KEY_PURPOSE,
@@ -53,8 +54,9 @@ export function unknownFieldProblem(path: string, key: string): FilterProblem {
   };
 }
 
-/** The reserved key carrying the language filter. */
-export const TRANSLATED_KEY = "_translated";
+// The language filter's key, declared with the other reserved keys so the
+// admin reads the same list; re-exported for every server caller.
+export { TRANSLATED_KEY } from "./reserved-filter-keys";
 
 /**
  * The one key no filter may carry. JSON makes `__proto__` an own key, and

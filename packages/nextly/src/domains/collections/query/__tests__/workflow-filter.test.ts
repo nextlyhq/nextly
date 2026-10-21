@@ -15,6 +15,7 @@ import { NextlyError } from "../../../../errors/nextly-error";
 import { buildDrizzleCondition } from "../../../../services/collections/drizzle-condition";
 import { unknownFieldProblem } from "../filter-shape";
 import { buildWhereClause } from "../query-operators";
+import { RESERVED_TOP_LEVEL_KEYS } from "../reserved-filter-keys";
 import {
   extractWorkflowFilter,
   IN_RELEASE_KEY,
@@ -50,6 +51,10 @@ describe("the workflow keys at the top level of a REST filter", () => {
     [
       "_inRelease with a bound",
       { _inRelease: { scheduledBefore: "2026-10-28T09:00:00Z" } },
+    ],
+    [
+      "_inRelease with a bound on a leap day",
+      { _inRelease: { scheduledBefore: "2028-02-29T23:59:59Z" } },
     ],
     [
       "_inRelease with an offset bound and fractional seconds",
@@ -103,6 +108,20 @@ describe("the workflow keys at the top level of a REST filter", () => {
       { _inRelease: { scheduledBefore: "2026-13-45T09:00:00Z" } },
       IN_RELEASE_KEY,
     ],
+    // `Date` rolls each of these over to another moment rather than refusing it.
+    ...[
+      "2026-02-30T09:00:00Z",
+      "2026-04-31T09:00:00Z",
+      "2027-02-29T09:00:00Z",
+      "2026-10-28T24:00:00Z",
+      "2026-10-28T09:60:00Z",
+      "2026-10-28T09:00:60Z",
+      "2026-10-28T09:00:00+24:00",
+    ].map((instant): [string, Record<string, unknown>, string] => [
+      `_inRelease with the impossible instant ${instant}`,
+      { _inRelease: { scheduledBefore: instant } },
+      IN_RELEASE_KEY,
+    ]),
     [
       "_inRelease with a number of milliseconds",
       { _inRelease: { scheduledBefore: 1792400000000 } },
@@ -166,6 +185,19 @@ describe("the workflow keys below the top level", () => {
       expect.objectContaining({ code: "FILTER_MISPLACED_KEY", path }),
     ]);
   });
+});
+
+describe("every reserved top-level key", () => {
+  it.each(RESERVED_TOP_LEVEL_KEYS)(
+    "refuses %s inside and, as the admin's list relies on",
+    key => {
+      // The admin keeps exactly these keys at the top level; this pins the
+      // server's refusal to the same list, so the two cannot disagree.
+      expect(
+        refusal(fromJson({ and: [{ [key]: true }] })).map(p => p.code)
+      ).toEqual(["FILTER_MISPLACED_KEY"]);
+    }
+  );
 });
 
 describe("extractWorkflowFilter", () => {
