@@ -31,4 +31,12 @@
 
 Every access rule may be `true`, `false` or a function: a collection's `create`, `read`, `update`, `delete`, `publish` and `unpublish`; a Single's `read`, `update`, `publish` and `unpublish`; and a field's `create`, `read` and `update`, in a collection, a Single or a field group. A field rule written as `false` now withholds the field from every read, and keeps it from being written, like a function returning `false`.
 
-Changed behaviour: an access key the config validator doesn't know, such as a misspelt `reed`, is refused when the collection, Single or field group is defined, naming the key. Before, it was accepted in silence, and the operation it meant to govern fell back to stored permissions. A config with such a key now fails to load until the key is corrected.
+**Breaking at startup:** an `access` key that its kind doesn't have now stops the app from starting. Before, such a key was accepted in silence and governed nothing: the operation it meant to rule fell back to stored permissions.
+
+The keys each kind accepts:
+
+- A collection: `create`, `read`, `update`, `delete`, `publish`, `unpublish`.
+- A Single: `read`, `update`, `publish`, `unpublish`. A Single has no `create` or `delete`, so a Single carrying either now fails.
+- A field, in a collection, a Single or a field group: `create`, `read`, `update`.
+
+Any other key, such as a misspelt `reed` or a Single's `delete`, is refused when the collection, Single or field group is defined, with `ACCESS_KEY_UNKNOWN` naming the key, where it sits, and the keys that kind accepts. To fix it, remove the key, or correct its spelling if it was meant to be one of the keys above.
