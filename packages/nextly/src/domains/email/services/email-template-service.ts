@@ -644,12 +644,20 @@ export class EmailTemplateService extends BaseService {
   // Liquid, and templates kept on the old engine
   // ============================================================
 
-  /** The engine state to answer from, inside an open transaction only. */
+  /**
+   * The engine state to answer from, inside an open transaction only. An
+   * adapter that can't say whether one is open (a hand-built one; the check
+   * is experimental) reads the table, as before.
+   */
   private engineSnapshot(): {
     adopted: boolean | null;
     keys: Set<string>;
   } | null {
-    return this.adapter.transactionOpenInFlow() ? this.engineState : null;
+    const adapter = this.adapter as {
+      transactionOpenInFlow?: () => boolean;
+    };
+    if (typeof adapter.transactionOpenInFlow !== "function") return null;
+    return adapter.transactionOpenInFlow() ? this.engineState : null;
   }
 
   /** Whether an engine-state key is recorded (see engineState). */
