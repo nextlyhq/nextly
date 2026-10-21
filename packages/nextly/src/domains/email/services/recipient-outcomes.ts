@@ -95,8 +95,6 @@ export interface CallOutcome {
   outcome: EmailSendOutcome;
   /** The provider took the message: every recipient it did not refuse. */
   accepted: boolean;
-  /** The provider answered, whether it took the message or not. */
-  answered: boolean;
 }
 
 /** Each mailbox of one call, with what became of it. */
@@ -131,15 +129,11 @@ function outcomeOf(
     };
   }
   if (call.accepted) return { outcome: "accepted" };
-  // A provider that answered it did not send refused it; a call that threw is
-  // refused only when its failure says so definitely, by a status or as not
-  // retryable. Anything else may have reached the provider: unknown.
+  // Unknown only where the failure says delivery cannot be known: the request
+  // may have reached the provider and its answer was lost. Anything else was
+  // not delivered, by the provider's refusal or a call that never reached it.
   const failure = call.outcome.failure;
-  const definite =
-    call.answered ||
-    failure?.status !== undefined ||
-    failure?.retryable === false;
-  return { outcome: definite ? "refused" : "unknown", failure };
+  return { outcome: failure?.unknown ? "unknown" : "refused", failure };
 }
 
 function mailboxKey(address: string): string {

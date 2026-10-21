@@ -953,7 +953,7 @@ export class EmailService extends BaseService {
         state,
         startedAt
       );
-      return { message, outcome, accepted: state.verdict, answered: true };
+      return { message, outcome, accepted: state.verdict };
     } catch (error) {
       // The message was already accepted, so this is not a provider failure
       // however it reached here. Reporting one would contradict the rows and
@@ -964,7 +964,7 @@ export class EmailService extends BaseService {
           verdict: state.verdict,
           dispatched: state.dispatched,
         });
-        return { message, outcome, accepted: state.verdict, answered: true };
+        return { message, outcome, accepted: state.verdict };
       }
       const outcome = await this.recordFailed(
         message,
@@ -972,7 +972,7 @@ export class EmailService extends BaseService {
         context,
         startedAt
       );
-      return { message, outcome, accepted: false, answered: false };
+      return { message, outcome, accepted: false };
     }
   }
 

@@ -38,7 +38,6 @@ function call(
   return {
     message: { ...ENVELOPE, to: [to], cc: copies.cc },
     accepted: answer.accepted ?? answer.outcome.success,
-    answered: answer.answered ?? true,
     outcome: answer.outcome,
   };
 }
@@ -86,7 +85,6 @@ describe("a send's result", () => {
       {
         message: { ...ENVELOPE, to: ["a@example.com"], cc: undefined },
         accepted: true,
-        answered: true,
         outcome: refused,
       },
     ];
@@ -110,9 +108,12 @@ describe("a send's result", () => {
       call("b@example.com", {
         outcome: {
           success: false,
-          failure: { retryable: true, reason: "The email provider failed." },
+          failure: {
+            retryable: true,
+            reason: "The email provider did not answer in time.",
+            unknown: true,
+          },
         },
-        answered: false,
       }),
     ];
 
@@ -142,7 +143,6 @@ describe("a send's result", () => {
           success: false,
           failure: { retryable: false, status: 422, reason: "refused" },
         },
-        answered: false,
       }),
     ];
 

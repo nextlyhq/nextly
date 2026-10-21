@@ -406,7 +406,8 @@ describe.each(getConfiguredTestDialects())(
         partlyDelivered: true,
         recipients: [
           { kind: "to", position: 0, outcome: "accepted" },
-          { kind: "to", position: 1, outcome: "unknown", retryable: true },
+          // A plain error is a failed call, not a lost answer.
+          { kind: "to", position: 1, outcome: "refused", retryable: true },
         ],
       });
       // Exactly as a send of two was before: nothing added.
