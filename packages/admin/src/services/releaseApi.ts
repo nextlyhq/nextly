@@ -15,6 +15,7 @@ import { fetcher } from "../lib/api/fetcher";
 import type {
   AddReleaseMemberPayload,
   CreateReleasePayload,
+  HiddenReleaseMembers,
   Release,
   ReleaseBlocker,
   ReleaseListParams,
@@ -45,13 +46,15 @@ export interface ReleaseListResponse {
 
 export interface MemberListResponse {
   items: ReleaseMember[];
-  meta: { total: number; hasNext: boolean };
+  /** `hidden`: the documents the reader may not read, counted by collection. */
+  meta: { total: number; hasNext: boolean; hidden?: HiddenReleaseMembers[] };
 }
 
 /** The blockers standing between one release and its instant. */
 export interface BlockerListResponse {
   items: ReleaseBlocker[];
-  meta: { total: number; hasNext: boolean };
+  /** `hidden`: blocked documents the reader may not read, by collection. */
+  meta: { total: number; hasNext: boolean; hidden?: HiddenReleaseMembers[] };
 }
 
 /** The canonical mutation envelope. */

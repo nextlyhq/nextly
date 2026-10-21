@@ -258,6 +258,10 @@ export type {
   WidgetSize,
   WidgetChrome,
 } from "./domains/widgets/definition";
+// The workspace payload's `widgetSources`, read off the wire as it is
+// serialized, for the same reason. A type only, so it carries nothing of the
+// module that builds it into a `nextly.config.ts`.
+export type { PublishedContentSource } from "./domains/widgets/publish";
 // The lifecycle pair `WidgetDefinition` and `PluginAdminWidget` both name. A
 // leaf with no imports of its own, so it costs a `nextly.config.ts` nothing,
 // and without it the two fields have types no config author can write down.
@@ -292,6 +296,13 @@ export { legacySizeToWidgetSize } from "./domains/widgets/definition";
 export {
   applyWidgetSettings,
   resolveWidgetSettings,
+} from "./domains/widgets/settings";
+// The settings the sheet draws beyond field configs (a collection, and a
+// filter, sort or grouping over it), and the union every rule reads, so the
+// admin's controls and reset are typed by core's vocabulary, not a copy of it.
+export type {
+  AnyWidgetSetting,
+  ContentSetting,
 } from "./domains/widgets/settings";
 // Which field NAMES an entry. The admin draws a column with it, the activity
 // feed labels a row with it, and the dashboard's generated list widgets pick a

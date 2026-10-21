@@ -7,7 +7,13 @@
 import { TooltipProvider } from "@nextlyhq/ui";
 import { describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen, waitFor } from "@admin/__tests__/utils";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@admin/__tests__/utils";
 import { RESTRICTED_REFERENCE } from "@admin/lib/form/stored-references";
 
 import {
@@ -73,6 +79,41 @@ describe("SingleForm — links the editor cannot see", () => {
         brand: { logo: "m1" },
       })
     );
+    expect(
+      screen.getByRole("group", { name: "Restricted or missing item p2" })
+    ).toBeTruthy();
+  });
+
+  it("stay placeholders after the save, which the stored document leaves out", async () => {
+    // The stored document the host hands back is read as the page's populated
+    // read is: the link the editor may not read is not in it.
+    const onSubmit = vi.fn(async () => ({
+      ...document,
+      headline: "Hello again",
+      updatedAt: "2026-01-01T00:05:00.000Z",
+      featured: [{ id: "p1", title: "Page one" }],
+      brand: { logo: null },
+    }));
+    render(
+      <TooltipProvider>
+        <SingleForm
+          schema={schema}
+          document={document}
+          onSubmit={onSubmit as never}
+        />
+      </TooltipProvider>
+    );
+    fireEvent.change(screen.getByLabelText("Headline"), {
+      target: { value: "Hello again" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Save/ }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    // The save lands, and the form takes in what it stored.
+    await act(async () => {
+      await onSubmit.mock.results[0]?.value;
+      await new Promise(resolve => setTimeout(resolve, 0));
+    });
     expect(
       screen.getByRole("group", { name: "Restricted or missing item p2" })
     ).toBeTruthy();

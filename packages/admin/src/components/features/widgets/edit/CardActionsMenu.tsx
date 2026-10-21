@@ -64,6 +64,8 @@ export interface CardActionsMenuProps {
   disabled: boolean;
   /** Registers the menu button, so focus can be sent back to it. */
   triggerRef: (element: HTMLElement | null) => void;
+  /** Lists the widths in the menu itself rather than in a submenu: where it draws one column. */
+  widthsInPlace?: boolean;
   on: {
     move: (direction: MoveDirection) => void;
     setWidth: (width: WidgetWidth) => void;
@@ -104,55 +106,72 @@ export function CardWidthLabel({ width }: { width: WidgetWidth }) {
   );
 }
 
-/** The Width submenu: the widget's allowed widths, the drawn one checked. */
-function WidthSubmenu({
-  width,
-  allowedWidths,
-  onChoose,
-}: {
+interface WidthChoicesProps {
   width: WidgetWidth;
   allowedWidths: readonly WidgetWidth[];
   onChoose: (width: WidgetWidth) => void;
-}) {
+}
+
+/** The widget's allowed widths under a Width label, the drawn one checked. */
+function WidthChoices({ width, allowedWidths, onChoose }: WidthChoicesProps) {
+  return (
+    <>
+      <DropdownMenuLabel className="text-xs text-muted-foreground">
+        Width
+      </DropdownMenuLabel>
+      <DropdownMenuRadioGroup
+        value={width}
+        // Narrowed rather than asserted: the value comes back from the DOM.
+        onValueChange={value => {
+          if (isWidgetWidth(value)) onChoose(value);
+        }}
+      >
+        {allowedWidths.map(option => (
+          <DropdownMenuRadioItem
+            key={option}
+            value={option}
+            data-testid={`card-width-${option}`}
+          >
+            {WIDTH_NAMES[option].name}
+            {/* Full needs no fraction: its name already says it. */}
+            {option === "full" ? null : (
+              <span
+                aria-hidden
+                className="ml-auto pl-4 text-xs text-muted-foreground"
+              >
+                {WIDTH_NAMES[option].fraction}
+              </span>
+            )}
+          </DropdownMenuRadioItem>
+        ))}
+      </DropdownMenuRadioGroup>
+    </>
+  );
+}
+
+/**
+ * The widths, as a Width submenu, or in place in the card menu itself.
+ *
+ * In place where the dashboard draws one column: on a phone the card menu sits mid-screen, and
+ * a submenu beside it has room on neither side, so it was drawn partly off the screen. In place,
+ * the widths share the menu's own box, which already fits.
+ */
+function WidthSection({
+  inPlace,
+  ...choices
+}: WidthChoicesProps & { inPlace: boolean }) {
+  if (inPlace) return <WidthChoices {...choices} />;
   return (
     <DropdownMenuSub>
       <DropdownMenuSubTrigger data-testid="card-width-menu">
         <MoveHorizontal aria-hidden />
         Width
         <span aria-hidden className="ml-auto text-xs text-muted-foreground">
-          {WIDTH_NAMES[width].fraction}
+          {WIDTH_NAMES[choices.width].fraction}
         </span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
-        <DropdownMenuLabel className="text-xs text-muted-foreground">
-          Width
-        </DropdownMenuLabel>
-        <DropdownMenuRadioGroup
-          value={width}
-          // Narrowed rather than asserted: the value comes back from the DOM.
-          onValueChange={value => {
-            if (isWidgetWidth(value)) onChoose(value);
-          }}
-        >
-          {allowedWidths.map(option => (
-            <DropdownMenuRadioItem
-              key={option}
-              value={option}
-              data-testid={`card-width-${option}`}
-            >
-              {WIDTH_NAMES[option].name}
-              {/* Full needs no fraction: its name already says it. */}
-              {option === "full" ? null : (
-                <span
-                  aria-hidden
-                  className="ml-auto pl-4 text-xs text-muted-foreground"
-                >
-                  {WIDTH_NAMES[option].fraction}
-                </span>
-              )}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+        <WidthChoices {...choices} />
       </DropdownMenuSubContent>
     </DropdownMenuSub>
   );
@@ -165,6 +184,7 @@ export function CardActionsMenu({
   can,
   disabled,
   triggerRef,
+  widthsInPlace = false,
   on,
 }: CardActionsMenuProps) {
   // 🔴 Set by the actions that send focus somewhere themselves -- a move back
@@ -222,7 +242,8 @@ export function CardActionsMenu({
         ))}
         <DropdownMenuSeparator />
         {allowedWidths && allowedWidths.length > 0 ? (
-          <WidthSubmenu
+          <WidthSection
+            inPlace={widthsInPlace}
             width={width}
             allowedWidths={allowedWidths}
             onChoose={on.setWidth}

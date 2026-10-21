@@ -183,6 +183,7 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
+  stripSingleComponentTags,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -7104,6 +7105,31 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
+    // The held component values are judged as the publish would judge them:
+    // merged into the draft, since a save carries only the sub-fields it
+    // changed, and without the type tags the draft holds, which no ordinary
+    // write shows a validator. Judged by the pass the component write runs, so
+    // a value the publish would refuse is refused now, with the same issues,
+    // before any draft or version is recorded.
+    const heldComponentNames = Object.keys(ctx.componentFieldData ?? {});
+    if (this.fieldGroupDataService && heldComponentNames.length > 0) {
+      await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
+        parentId: params.entryId,
+        parentTable: collectionTableName(collection, params.collectionName),
+        fields: fields as unknown as FieldConfig[],
+        data: stripSingleComponentTags(
+          Object.fromEntries(
+            heldComponentNames.map(name => [name, draftDocument[name]])
+          ),
+          fields as unknown as FieldConfig[],
+          componentSlug => splitComponentSchemas?.get(componentSlug)?.fields
+        ),
+        // The language this held write is keyed under: the request's, or the
+        // companion's write locale when the patch touched localized columns.
+        locale: draftLocale ?? undefined,
+        req: params.user ? { user: params.user } : {},
+      });
+    }
     // The response and hooks see the draft as an ordinary read, so
     // shape the accumulated snapshot through the current schema the
     // same way the read overlay does. The persisted `draftDocument`
@@ -8680,7 +8706,9 @@ export class CollectionMutationService extends BaseService {
           // this same post-save copy (ids populated) rather than the raw input.
           const attemptComponentData = structuredClone(componentFieldData);
 
-          // Save component field data to separate comp_{slug} tables
+          // Save component field data to separate comp_{slug} tables. A held
+          // edit writes no component rows; its values are judged with the
+          // working draft they are merged into (see storeWorkingDraftInTx).
           if (
             !storeAsWorkingDraft &&
             this.fieldGroupDataService &&

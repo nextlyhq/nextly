@@ -151,6 +151,37 @@ describe("SingleForm with a document view", () => {
     );
   });
 
+  it("saves on Mod+S as its Save button does: a draft, for a Single with drafts", async () => {
+    // The shortcut runs the Save action. A Single's used to submit with no
+    // intent while its button saved a draft, so the two stored different
+    // things for one author's one intention.
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderView(onSubmit, {
+      schema: { ...schema, status: true } as unknown as SingleSchema,
+      document: {
+        ...singleDocument,
+        status: "draft",
+      } as unknown as SingleDocumentData,
+    });
+
+    const heading = screen.getByLabelText("Hero heading");
+    await user.type(heading, "!");
+    heading.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "s",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({ heroTitle: "Welcome!", status: "draft" })
+    );
+  });
+
   it("leaves Escape to the view", () => {
     const onCancel = vi.fn();
     renderView(vi.fn().mockResolvedValue(undefined), { onCancel });

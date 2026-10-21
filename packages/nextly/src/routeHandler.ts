@@ -123,7 +123,10 @@ import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
-import { publishableWidgets } from "./domains/widgets/publish";
+import {
+  publishableContentSources,
+  publishableWidgets,
+} from "./domains/widgets/publish";
 import {
   widgetAudience,
   type WidgetAudience,
@@ -148,7 +151,7 @@ import {
   runWithRestLimitGate,
   type RestLimitTarget,
 } from "./middleware/rest-limit-gate";
-import { createRestLimits } from "./middleware/rest-limits";
+import { createRestLimits, restLimitCounts } from "./middleware/rest-limits";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import type { PluginAdminWidget } from "./plugins/admin-contributions";
 import {
@@ -2030,6 +2033,12 @@ async function buildAdminMeta(
   if (widgets.length > 0) {
     workspace.widgets = widgets;
   }
+  // What a card's content settings may offer this reader, derived from the
+  // cards above: a collection is offered exactly when its own card is.
+  const widgetSources = publishableContentSources(audience.visible);
+  if (widgetSources.length > 0) {
+    workspace.widgetSources = widgetSources;
+  }
   // The audience both widget channels above were filtered for, as the layout
   // read also reports it: the admin compares the two to learn that a payload
   // it has held for minutes was built for a different reader than the layout
@@ -2431,6 +2440,9 @@ export function createDynamicHandlers(options?: {
     {
       enabled: true,
       ...(rateLimitConfig ?? {}),
+      // Where core's own limits count, read per call: the services may not
+      // be registered yet when the handler is built.
+      store: restLimitCounts(rateLimitConfig, ensureServicesInitialized),
       trustProxy:
         rateLimitConfig?.trustProxy ?? securityConfig?.trustProxy ?? false,
       trustedProxyIps:

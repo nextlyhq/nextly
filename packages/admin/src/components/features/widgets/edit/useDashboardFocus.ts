@@ -35,6 +35,8 @@ import { DASHBOARD_HEADING_ID } from "../../dashboard/WelcomeHeader";
 export type FocusTarget =
   /** A card's actions menu button, while customising. */
   | { kind: "menu"; placementId: string }
+  /** A card's drag handle, while customising with more than one column. */
+  | { kind: "handle"; placementId: string }
   /** A card's own dismiss control, outside customising. */
   | { kind: "dismiss"; placementId: string }
   /** The Undo button on the removal notice. */
@@ -56,6 +58,8 @@ type Register = (element: HTMLElement | null) => void;
 export interface DashboardFocus {
   /** Registers a card's menu button. */
   menuRef: (placementId: string) => Register;
+  /** Registers a card's drag handle. */
+  handleRef: (placementId: string) => Register;
   /** Registers a card's dismiss control. */
   dismissRef: (placementId: string) => Register;
   /** Registers the notice's Undo button. */
@@ -143,6 +147,7 @@ export function useDashboardFocus(): DashboardFocus {
   return useMemo(
     () => ({
       menuRef: (placementId: string) => register(`menu:${placementId}`),
+      handleRef: (placementId: string) => register(`handle:${placementId}`),
       dismissRef: (placementId: string) => register(`dismiss:${placementId}`),
       undoRef: register("undo"),
       barRef: register("bar"),
