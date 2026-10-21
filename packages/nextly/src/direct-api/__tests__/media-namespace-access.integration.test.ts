@@ -18,6 +18,11 @@ process.env.NEXTLY_SECRET =
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import {
+  currentCallerScope,
+  runWithCallerScope,
+} from "../../auth/caller-scope";
+import { getEventBus } from "../../events/event-bus";
 import { resetSessionStandingForTests } from "../../auth/session/session-standing";
 import {
   createTestNextly,
@@ -293,6 +298,37 @@ describe.each(getConfiguredTestDialects())(
           "user",
           holderId,
         ]);
+      });
+
+      it("runs what a keyed write sets going under the key it was checked as", async () => {
+        // Inside a request made with a broad key, a call naming a narrower one
+        // is checked as the narrower key; what the write sets going (an event
+        // handler here) runs under it too, not under the grants it gave up.
+        const broad: AuthenticatedScope = {
+          actorType: "apiKey",
+          permissions: ["read-media", "create-media", "delete-media"],
+        };
+        const narrow: AuthenticatedScope = {
+          actorType: "apiKey",
+          permissions: ["read-media", "create-media"],
+        };
+        let seen: readonly string[] | undefined;
+        const handler = () => {
+          seen = currentCallerScope()?.permissions;
+        };
+        getEventBus().on("media.uploaded", handler);
+        try {
+          await runWithCallerScope(broad, () =>
+            new Nextly({
+              overrideAccess: false,
+              user: { id: holderId },
+              actor: narrow,
+            }).media.upload({ file: file("narrowed.pdf") })
+          );
+        } finally {
+          getEventBus().off("media.uploaded", handler);
+        }
+        expect(seen).toEqual(narrow.permissions);
       });
 
       it("records a write made as a person as that person", async () => {
