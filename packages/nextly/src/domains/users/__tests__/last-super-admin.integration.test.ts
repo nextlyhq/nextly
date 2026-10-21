@@ -27,7 +27,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /** Run once, when the next guard has decided to let a removal through. */
@@ -82,6 +82,8 @@ async function loadModules() {
   const permissions = await import("../../../services/lib/permissions");
   const epoch = await import("../../../services/lib/rbac-epoch");
   const config = await import("../../../shared/types/config");
+  const claims = await import("../../../auth/jwt/claims");
+  const sign = await import("../../../auth/jwt/sign");
   return {
     createTestNextly: harness.createTestNextly,
     createDynamicHandlers: routes.createDynamicHandlers,
@@ -90,6 +92,8 @@ async function loadModules() {
     isSuperAdminOrThrow: permissions.isSuperAdminOrThrow,
     resetEpochForTests: epoch.resetEpochForTests,
     sanitizeConfig: config.sanitizeConfig,
+    buildClaims: claims.buildClaims,
+    signAccessToken: sign.signAccessToken,
   };
 }
 
@@ -109,6 +113,7 @@ afterEach(async () => {
 
 interface RawDb {
   insert: (table: unknown) => { values: (row: unknown) => Promise<unknown> };
+  delete: (table: unknown) => { where: (cond: unknown) => Promise<unknown> };
   select: (fields: unknown) => {
     from: (table: unknown) => {
       where: (cond: unknown) => Promise<Array<Record<string, unknown>>>;
@@ -164,17 +169,37 @@ async function makeUser(email: string): Promise<string> {
   return String(created.item.id);
 }
 
-async function grant(userId: string, roleId: string): Promise<void> {
+async function grant(
+  userId: string,
+  roleId: string,
+  opts: { expiresAt?: Date } = {}
+): Promise<void> {
   await raw()
     .insert(m.getDialectTables().userRoles)
     .values({
       id: `${userId}-${roleId}`,
       userId,
       roleId,
-      expiresAt: null,
+      expiresAt: opts.expiresAt ?? null,
       createdAt: new Date(),
     });
 }
+
+/** The expiry of `userId`'s assignment of `roleId`, read fresh. */
+async function expiryOf(userId: string, roleId: string): Promise<unknown> {
+  const { userRoles } = m.getDialectTables();
+  const [row] = await raw()
+    .select({ expiresAt: userRoles.expiresAt })
+    .from(userRoles)
+    .where(and(eq(userRoles.userId, userId), eq(userRoles.roleId, roleId)));
+  expect(row, "the assignment must exist").toBeDefined();
+  return row.expiresAt;
+}
+
+const IN_AN_HOUR = () => new Date(Date.now() + 60 * 60 * 1000);
+
+/** How many times each race is run. */
+const ROUNDS = 3;
 
 async function boot(on: TestDialect): Promise<Install> {
   m = await loadModules();
@@ -196,7 +221,14 @@ async function boot(on: TestDialect): Promise<Install> {
   // The core permissions are seeded by first-run setup, which this instance
   // never ran, so they are seeded here as setup seeds them.
   await m.seedPermissions(handle.adapter, { silent: true });
-  const slugs = ["read-users", "update-users", "delete-users"];
+  const slugs = [
+    "read-users",
+    "update-users",
+    "delete-users",
+    "read-roles",
+    "update-roles",
+    "delete-roles",
+  ];
   const seeded = await raw()
     .select({ id: tables.permissions.id, slug: tables.permissions.slug })
     .from(tables.permissions)
@@ -254,9 +286,11 @@ async function secondSuperAdmin(
 
 async function rest(
   install: Install,
-  method: "PATCH" | "DELETE",
+  method: "POST" | "PATCH" | "DELETE",
   path: string[],
-  body?: Record<string, unknown>
+  body?: Record<string, unknown>,
+  /** Sign in as this user, rather than with the operator's key. */
+  as?: string
 ): Promise<Response> {
   const handlers = m.createDynamicHandlers({
     config: m.sanitizeConfig({ collections: [] }),
@@ -264,15 +298,56 @@ async function rest(
   const req = new Request(`http://localhost/api/${path.join("/")}`, {
     method,
     headers: {
-      authorization: `Bearer ${install.operatorKey}`,
+      ...(as === undefined
+        ? { authorization: `Bearer ${install.operatorKey}` }
+        : { cookie: await sessionCookie(as) }),
       ...(body ? { "content-type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   const ctx = { params: Promise.resolve({ params: path }) };
-  return method === "PATCH"
-    ? handlers.PATCH(req, ctx)
-    : handlers.DELETE(req, ctx);
+  return method === "POST"
+    ? handlers.POST(req, ctx)
+    : method === "PATCH"
+      ? handlers.PATCH(req, ctx)
+      : handlers.DELETE(req, ctx);
+}
+
+async function sessionCookie(userId: string): Promise<string> {
+  const token = await m.signAccessToken(
+    m.buildClaims({
+      userId,
+      email: `${userId}@example.com`,
+      name: userId,
+      image: null,
+      roleIds: [],
+      sessionEpoch: 0,
+    }),
+    process.env.NEXTLY_SECRET!
+  );
+  return `nextly_session=${token}`;
+}
+
+/**
+ * A REST call that rejects as the Direct API does when it is refused, so a
+ * race can pit a REST-only removal against another.
+ */
+async function restOrThrow(
+  install: Install,
+  method: "PATCH" | "DELETE",
+  path: string[],
+  body?: Record<string, unknown>
+): Promise<void> {
+  const res = await rest(install, method, path, body);
+  if (res.status < 300) return;
+  const text = await res.text();
+  const parsed = JSON.parse(text) as {
+    error?: { code?: string; message?: string };
+  };
+  throw Object.assign(new Error(text), {
+    code: parsed.error?.code,
+    publicMessage: parsed.error?.message,
+  });
 }
 
 async function expectRestRefused(res: Response): Promise<void> {
@@ -549,44 +624,170 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe("a super-admin only through a role built on it", () => {
+    describe("a super-admin through a role that inherits the role", () => {
       /** A role built on `super-admin`, as creating a role with a base role writes it. */
-      async function ownerRole(install: Install): Promise<string> {
+      async function ownerRole(
+        install: Install,
+        slug = "owner"
+      ): Promise<string> {
         const owner = await direct().roles.create({
-          data: {
-            name: "Owner",
-            slug: "owner",
-            permissionIds: [install.readUsers],
-          },
+          data: { name: slug, slug, permissionIds: [install.readUsers] },
         });
-        await raw().insert(m.getDialectTables().roleInherits).values({
-          id: `owner-inherits-super-admin`,
-          parentRoleId: owner.item.id,
-          childRoleId: install.superAdminRole,
-        });
+        await raw()
+          .insert(m.getDialectTables().roleInherits)
+          .values({
+            id: `${slug}-inherits-super-admin`,
+            parentRoleId: owner.item.id,
+            childRoleId: install.superAdminRole,
+          });
         return owner.item.id;
       }
 
-      // Such a role's inheritance can be edited away and the role deleted,
-      // neither a write to an account, so it cannot be what keeps the install
-      // administrable: the last holder of `super-admin` itself stays.
-      it("does not stand in for the last holder of the role itself", async () => {
-        const install = await boot(on);
-        const heir = await makeUser("heir@example.com");
-        await grant(heir, await ownerRole(install));
+      /** An heir holding a role built on `super-admin`. */
+      async function heir(
+        install: Install,
+        slug = "owner"
+      ): Promise<{ heir: string; owner: string }> {
+        const owner = await ownerRole(install, slug);
+        const id = await makeUser(`${slug}-heir@example.com`);
+        await grant(id, owner);
+        return { heir: id, owner };
+      }
+
+      /** The heir is the only super-admin: the first account no longer holds the role. */
+      async function heirOnly(
+        install: Install
+      ): Promise<{ heir: string; owner: string }> {
+        const h = await heir(install);
+        const { userRoles } = m.getDialectTables();
+        await raw()
+          .delete(userRoles)
+          .where(
+            and(
+              eq(userRoles.userId, install.first),
+              eq(userRoles.roleId, install.superAdminRole)
+            )
+          );
         // The premise: the request-time check makes the heir a super-admin.
-        expect(await activeSuperAdmin(heir)).toBe(true);
+        expect(await activeSuperAdmin(h.heir)).toBe(true);
+        return h;
+      }
+
+      it("stands in for the last holder of the role itself", async () => {
+        const install = await boot(on);
+        const h = await heir(install);
+        await direct().users.delete({ id: install.first });
+        expect(await activeSuperAdmin(h.heir)).toBe(true);
+      });
+
+      const removals: Array<{
+        name: string;
+        remove: (
+          install: Install,
+          h: { heir: string; owner: string }
+        ) => Promise<Response>;
+      }> = [
+        {
+          name: "removing the role's inheritance",
+          remove: (i, h) =>
+            rest(i, "DELETE", ["roles", h.owner, "children", i.superAdminRole]),
+        },
+        {
+          name: "replacing the role's childRoleIds",
+          remove: (i, h) =>
+            rest(i, "PATCH", ["roles", h.owner], { childRoleIds: [] }),
+        },
+        {
+          name: "deleting the role",
+          remove: (i, h) => rest(i, "DELETE", ["roles", h.owner]),
+        },
+        {
+          name: "taking the role from its holder",
+          remove: (i, h) =>
+            rest(i, "DELETE", ["users", h.heir, "roles", h.owner]),
+        },
+        {
+          name: "replacing its holder's roles",
+          remove: (i, h) =>
+            rest(i, "PATCH", ["users", h.heir], { roles: [i.editorRole] }),
+        },
+        {
+          name: "deleting its holder",
+          remove: (i, h) => rest(i, "DELETE", ["users", h.heir]),
+        },
+        {
+          name: "deactivating its holder",
+          remove: (i, h) =>
+            rest(i, "PATCH", ["users", h.heir], { isActive: false }),
+        },
+      ];
+
+      describe.each(removals)("$name", removal => {
+        it("is refused while its holder is the last super-admin", async () => {
+          const install = await boot(on);
+          const h = await heirOnly(install);
+          await expectRestRefused(await removal.remove(install, h));
+          expect(await activeSuperAdmin(h.heir)).toBe(true);
+        });
+
+        it("is allowed while another super-admin remains", async () => {
+          const install = await boot(on);
+          const h = await heir(install);
+          await expectRestAllowed(await removal.remove(install, h));
+          expect(await activeSuperAdmin(install.first)).toBe(true);
+        });
+      });
+    });
+
+    describe("a super-admin whose role expires", () => {
+      it("does not stand in for the last permanent super-admin", async () => {
+        const install = await boot(on);
+        const temporary = await makeUser("temporary@example.com");
+        await grant(temporary, install.superAdminRole, {
+          expiresAt: IN_AN_HOUR(),
+        });
+        // The premise: until it lapses, the temporary one is a super-admin.
+        expect(await activeSuperAdmin(temporary)).toBe(true);
         await expectDirectRefused(direct().users.delete({ id: install.first }));
         expect(await activeSuperAdmin(install.first)).toBe(true);
       });
 
-      it("can be removed while a holder of the role itself remains", async () => {
+      it("is refused an expiry on the last super-admin's role, which stays permanent", async () => {
         const install = await boot(on);
-        const heir = await makeUser("heir@example.com");
-        await grant(heir, await ownerRole(install));
-        await direct().users.delete({ id: heir });
-        expect(await activeSuperAdmin(heir)).toBe(false);
-        expect(await activeSuperAdmin(install.first)).toBe(true);
+        const res = await rest(
+          install,
+          "POST",
+          ["users", install.first, "roles"],
+          {
+            roleId: install.superAdminRole,
+            expiresAt: IN_AN_HOUR().toISOString(),
+          },
+          install.first
+        );
+        const text = await res.text();
+        expect(res.status, text).toBe(409);
+        expect(
+          await expiryOf(install.first, install.superAdminRole)
+        ).toBeNull();
+      });
+
+      it("may be given the role with an expiry beside a permanent one", async () => {
+        const install = await boot(on);
+        const temporary = await makeUser("temporary@example.com");
+        const res = await rest(
+          install,
+          "POST",
+          ["users", temporary, "roles"],
+          {
+            roleId: install.superAdminRole,
+            expiresAt: IN_AN_HOUR().toISOString(),
+          },
+          install.first
+        );
+        expect(res.status, await res.text()).toBeLessThan(300);
+        expect(
+          await expiryOf(temporary, install.superAdminRole)
+        ).not.toBeNull();
       });
     });
 
@@ -644,6 +845,156 @@ describe.each(getConfiguredTestDialects())(
             await activeSuperAdmin(second),
           ].filter(Boolean)
         ).toHaveLength(1);
+      });
+
+      /**
+       * `pair` raced on a fresh install, `ROUNDS` times: one interleaving
+       * passing proves little, and the lock is what has to hold every time.
+       */
+      async function everyRound(
+        pair: (install: Install) => Promise<{
+          a: () => Promise<unknown>;
+          b: () => Promise<unknown>;
+          left: () => Promise<boolean[]>;
+        }>
+      ): Promise<void> {
+        for (let round = 0; round < ROUNDS; round++) {
+          const install = await boot(on);
+          const { a, b, left } = await pair(install);
+          const { outcomes, secondWaited } = await race(a, b);
+          expectOneRefused(outcomes);
+          if (on !== "sqlite") expect(secondWaited).toBe(true);
+          expect((await left()).filter(Boolean)).toHaveLength(1);
+          await handle?.destroy();
+          handle = undefined;
+        }
+      }
+
+      it("two role replacements leave one super-admin, every round", async () => {
+        await everyRound(async install => {
+          const second = await secondSuperAdmin(install);
+          const demote = (id: string) => () =>
+            direct().users.update({
+              id,
+              data: { roles: [install.editorRole] },
+            });
+          return {
+            a: demote(install.first),
+            b: demote(second),
+            left: async () => [
+              await activeSuperAdmin(install.first),
+              await activeSuperAdmin(second),
+            ],
+          };
+        });
+      });
+
+      it("two unassignments leave one super-admin, every round", async () => {
+        await everyRound(async install => {
+          const second = await secondSuperAdmin(install);
+          const unassign = (id: string) => () =>
+            restOrThrow(install, "DELETE", [
+              "users",
+              id,
+              "roles",
+              install.superAdminRole,
+            ]);
+          return {
+            a: unassign(install.first),
+            b: unassign(second),
+            left: async () => [
+              await activeSuperAdmin(install.first),
+              await activeSuperAdmin(second),
+            ],
+          };
+        });
+      });
+
+      it("two inheritance removals leave one super-admin, every round", async () => {
+        await everyRound(async install => {
+          const { roleInherits, userRoles } = m.getDialectTables();
+          const heirs: Array<{ id: string; role: string }> = [];
+          for (const slug of ["owner-a", "owner-b"]) {
+            const role = await direct().roles.create({
+              data: { name: slug, slug, permissionIds: [install.readUsers] },
+            });
+            await raw()
+              .insert(roleInherits)
+              .values({
+                id: `${slug}-inherits-super-admin`,
+                parentRoleId: role.item.id,
+                childRoleId: install.superAdminRole,
+              });
+            const id = await makeUser(`${slug}@example.com`);
+            await grant(id, role.item.id);
+            heirs.push({ id, role: role.item.id });
+          }
+          // The two heirs are the only super-admins.
+          await raw()
+            .delete(userRoles)
+            .where(
+              and(
+                eq(userRoles.userId, install.first),
+                eq(userRoles.roleId, install.superAdminRole)
+              )
+            );
+          const disinherit = (role: string) => () =>
+            restOrThrow(install, "DELETE", [
+              "roles",
+              role,
+              "children",
+              install.superAdminRole,
+            ]);
+          return {
+            a: disinherit(heirs[0].role),
+            b: disinherit(heirs[1].role),
+            left: async () => [
+              await activeSuperAdmin(heirs[0].id),
+              await activeSuperAdmin(heirs[1].id),
+            ],
+          };
+        });
+      });
+
+      it("an unassignment and a deletion of the other leave one, every round", async () => {
+        await everyRound(async install => {
+          const second = await secondSuperAdmin(install);
+          return {
+            a: () =>
+              restOrThrow(install, "DELETE", [
+                "users",
+                install.first,
+                "roles",
+                install.superAdminRole,
+              ]),
+            b: () => direct().users.delete({ id: second }),
+            left: async () => [
+              await activeSuperAdmin(install.first),
+              await activeSuperAdmin(second),
+            ],
+          };
+        });
+      });
+
+      it("an unassignment and a deactivation of the other leave one, every round", async () => {
+        await everyRound(async install => {
+          const second = await secondSuperAdmin(install);
+          return {
+            a: () =>
+              restOrThrow(install, "DELETE", [
+                "users",
+                install.first,
+                "roles",
+                install.superAdminRole,
+              ]),
+            b: () =>
+              direct().users.update({ id: second, data: { isActive: false } }),
+            left: async () => [
+              await activeSuperAdmin(install.first),
+              await activeSuperAdmin(second),
+            ],
+          };
+        });
       });
     });
   }
