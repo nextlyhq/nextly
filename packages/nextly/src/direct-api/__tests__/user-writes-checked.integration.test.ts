@@ -239,7 +239,9 @@ describe.each(getConfiguredTestDialects())(
             user: { id: keeperId },
           })
         ).rejects.toMatchObject(FORBIDDEN);
-        expect(await isSuperAdminOrThrow(subject)).toBe(false);
+        expect(await isSuperAdminOrThrow(subject, t.adapter.getDrizzle())).toBe(
+          false
+        );
 
         const before = await userCount();
         await expect(
