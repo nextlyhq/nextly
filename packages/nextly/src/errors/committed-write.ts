@@ -11,14 +11,14 @@ import { retryAfterSeconds } from "./retry-after";
  * The error to answer with for `failure`, raised after a write committed: a
  * post-commit hook, or the read that builds the response.
  *
- * A server failure, or any error that asks for a retry, is replaced. Either
+ * A server failure, a 429, or any error carrying a retry hint is replaced. Each
  * reads to a caller as "the change did not happen", whatever its code says (a
  * DATABASE_ERROR for a lost connection tells the caller to try again in its
  * message alone), and the write is durable, so trying again makes the change a
  * second time. The caller is told instead that the change was saved and the
  * request still failed, with no retry hint; `failure` stays the cause, for the
- * operator. A refusal the caller can act on (a 4xx with no retry hint) is
- * returned as it is.
+ * operator. A refusal the caller can act on (any other 4xx with no retry hint)
+ * is returned as it is.
  */
 export function afterCommittedWrite(
   failure: NextlyError,
@@ -36,13 +36,16 @@ export function afterCommittedWrite(
 
 /**
  * Whether an error tells its caller the change did not happen: a server
- * failure of any code, or an error carrying a retry hint. Decided by the
- * outcome rather than by a list of retryable codes, which would miss the next
- * transient code to be added.
+ * failure of any code, a 429 (which says "try later" with or without a hint),
+ * or an error carrying a retry hint. Decided by status and hint rather than by
+ * a list of retryable codes, which would miss the next transient code to be
+ * added. It covers every failure a client may send again on its own, the
+ * admin's mutation retry included.
  */
 function readsAsNotSaved(error: NextlyError): boolean {
   return (
     error.statusCode >= NEXTLY_ERROR_STATUS.INTERNAL_ERROR ||
+    error.statusCode === NEXTLY_ERROR_STATUS.RATE_LIMITED ||
     retryAfterSeconds(error) !== undefined
   );
 }

@@ -113,6 +113,15 @@ describe("a write that committed before the database was busy", () => {
       ),
     },
     { name: "an internal error", error: NextlyError.internal() },
+    {
+      // A hook's rate limit with no hint still says "try later".
+      name: "a RATE_LIMITED without a hint",
+      error: NextlyError.rateLimited(),
+    },
+    {
+      name: "a RATE_LIMITED with a hint",
+      error: NextlyError.rateLimited({ retryAfterSeconds: 30 }),
+    },
   ];
 
   for (const { name, error } of committedBusy) {
