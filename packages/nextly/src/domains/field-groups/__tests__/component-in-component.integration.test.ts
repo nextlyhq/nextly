@@ -12,6 +12,8 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type * as TagComponentTypes from "../../versions/tag-component-types";
+
 import {
   checkbox,
   defineCollection,
@@ -28,8 +30,27 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { FieldGroupRegistryService } from "../services/field-group-registry-service";
 import { writeFieldGroupType } from "../storage/field-group-type-key";
+
+/**
+ * Each schema resolution a component write makes for the components nested in it: the calls that
+ * pass `ownFieldsAreContainer`, which only the component write does. Counted at the resolver rather
+ * than at the registry, which the rest of the write reads too.
+ */
+const componentWriteResolutions: unknown[] = [];
+
+vi.mock("../../versions/tag-component-types", async importOriginal => {
+  const actual = await importOriginal<typeof TagComponentTypes>();
+  return {
+    ...actual,
+    containedComponentResolver: (
+      ...args: Parameters<typeof actual.containedComponentResolver>
+    ) => {
+      if (args[2] === true) componentWriteResolutions.push(args[0]);
+      return actual.containedComponentResolver(...args);
+    },
+  };
+});
 
 let current: TestNextly | undefined;
 
@@ -314,14 +335,10 @@ describe.each(getConfiguredTestDialects())(
       expect(zone.issues).toContainEqual({ path: "slot", ...NOT_STORED });
     });
 
-    it("reads a held component's schema once per write, however many rows hold it", async () => {
+    it("resolves a held component's schema once per write, however many rows hold it", async () => {
       const t = await boot(dialect);
-      const lookup = vi.spyOn(
-        FieldGroupRegistryService.prototype,
-        "getComponentBySlug"
-      );
-      const badgeReads = async (rows: number) => {
-        lookup.mockClear();
+      const passes = async (rows: number) => {
+        componentWriteResolutions.length = 0;
         await t.nextly.create({
           collection: "pages" as never,
           data: {
@@ -331,13 +348,11 @@ describe.each(getConfiguredTestDialects())(
             })),
           } as never,
         });
-        return lookup.mock.calls.filter(([slug]) => slug === "badge").length;
+        return componentWriteResolutions.length;
       };
 
-      const one = await badgeReads(1);
-      expect(one).toBeGreaterThan(0);
-      expect(await badgeReads(4)).toBe(one);
-      lookup.mockRestore();
+      expect(await passes(1)).toBe(1);
+      expect(await passes(4)).toBe(1);
     });
   }
 );

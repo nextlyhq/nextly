@@ -60,7 +60,7 @@ export function unstoredNestedComponentIssues(
   for (const field of directComponentFields(fields)) {
     const name = field.name as string;
     if (!Object.hasOwn(instance, name)) continue;
-    if (componentCarries(instance[name], field as Field, resolve)) {
+    if (componentCarries(instance[name], field as Field, resolve, new Set())) {
       issues.push({ path: name, ...NOT_STORED });
     }
   }
@@ -74,6 +74,26 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     !Array.isArray(value) &&
     !(value instanceof Date)
   );
+}
+
+/**
+ * Walks into `value` with it marked as an ancestor of what is walked next. A value that refers back
+ * to one it sits inside is no form's seeding, so meeting it again counts as carrying something: the
+ * write is refused rather than walked until the stack runs out. Only ancestors are kept, because
+ * one object reused side by side is met twice without being a cycle.
+ */
+function inside(
+  value: object,
+  ancestors: Set<object>,
+  walk: () => boolean
+): boolean {
+  if (ancestors.has(value)) return true;
+  ancestors.add(value);
+  try {
+    return walk();
+  } finally {
+    ancestors.delete(value);
+  }
 }
 
 /** The fields of the component an instance of `field` is: its one component, or the zone row's. */
@@ -92,7 +112,8 @@ function componentSchema(
 function componentCarries(
   value: unknown,
   field: Field,
-  resolve: ComponentFieldResolver | undefined
+  resolve: ComponentFieldResolver | undefined,
+  seen: Set<object>
 ): boolean {
   if (value === null || value === undefined) return false;
   // Each row of a list is added by hand, so a row is a value even while it holds only defaults;
@@ -104,23 +125,32 @@ function componentCarries(
   if (!isPlainObject(value)) return true;
   // A row that names its component was given that type by someone choosing it.
   if (readFieldGroupType(value) !== undefined) return true;
-  return entriesCarry(value, componentSchema(field, value, resolve), resolve);
+  return entriesCarry(
+    value,
+    componentSchema(field, value, resolve),
+    resolve,
+    seen
+  );
 }
 
 /** Whether any authored key of an object carries a value, judged against its fields. */
 function entriesCarry(
   value: Record<string, unknown>,
   fields: Field[] | undefined,
-  resolve: ComponentFieldResolver | undefined
+  resolve: ComponentFieldResolver | undefined,
+  seen: Set<object>
 ): boolean {
-  return Object.entries(value).some(
-    ([key, child]) =>
-      !COMPONENT_META_KEYS.has(key) &&
-      valueCarries(
-        child,
-        fields?.find(field => field.name === key),
-        resolve
-      )
+  return inside(value, seen, () =>
+    Object.entries(value).some(
+      ([key, child]) =>
+        !COMPONENT_META_KEYS.has(key) &&
+        valueCarries(
+          child,
+          fields?.find(field => field.name === key),
+          resolve,
+          seen
+        )
+    )
   );
 }
 
@@ -152,15 +182,20 @@ function isDeclaredDefault(value: unknown, field: Field | undefined): boolean {
 function valueCarries(
   value: unknown,
   field: Field | undefined,
-  resolve: ComponentFieldResolver | undefined
+  resolve: ComponentFieldResolver | undefined,
+  seen: Set<object>
 ): boolean {
   if (isSeeded(value, field)) return false;
   if (field && isFieldGroupFieldType(field.type)) {
-    return componentCarries(value, field, resolve);
+    return componentCarries(value, field, resolve, seen);
   }
   if (Array.isArray(value)) {
-    return value.some(item => valueCarries(item, field, resolve));
+    return inside(value, seen, () =>
+      value.some(item => valueCarries(item, field, resolve, seen))
+    );
   }
-  if (isPlainObject(value)) return entriesCarry(value, field?.fields, resolve);
+  if (isPlainObject(value)) {
+    return entriesCarry(value, field?.fields, resolve, seen);
+  }
   return true;
 }

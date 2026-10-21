@@ -346,7 +346,7 @@ export default function FieldGroupBuilderEditPage({
               </div>
             </Alert>
           ) : null}
-          <DirectFieldGroupsNotice fields={builder.fields} />
+          <DirectFieldGroupsNotice fields={fieldGroup.fields} />
         </>
       }
       isSaving={isSaving || confirmation.isApplying}

@@ -6,20 +6,20 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@admin/__tests__/utils";
 
 import { DirectFieldGroupsNotice } from "../DirectFieldGroupsNotice";
-import type { BuilderField } from "../types";
+/** A field as the field group's stored definition holds it. */
+type StoredField = {
+  name: string;
+  label?: string;
+  type: string;
+  virtual?: boolean;
+  fields?: StoredField[];
+};
 
 function field(
   name: string,
-  overrides: Partial<BuilderField> = {}
-): BuilderField {
-  return {
-    id: `field_${name}`,
-    name,
-    label: name,
-    type: "text",
-    validation: {},
-    ...overrides,
-  };
+  overrides: Partial<StoredField> = {}
+): StoredField {
+  return { name, label: name, type: "text", ...overrides };
 }
 
 describe("DirectFieldGroupsNotice", () => {
@@ -39,6 +39,17 @@ describe("DirectFieldGroupsNotice", () => {
     const notice = screen.getByText(/is not saved/);
     expect(notice).toHaveTextContent("Badge");
     expect(notice).not.toHaveTextContent("seal");
+  });
+
+  // A virtual field group is computed on read and stores nothing anywhere, so nothing is lost and
+  // the write does not refuse it: the notice classifies fields as the write does.
+  it("does not name a virtual field group placed directly in the fields", () => {
+    const { container } = render(
+      <DirectFieldGroupsNotice
+        fields={[field("badge", { type: "component", virtual: true })]}
+      />
+    );
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("draws nothing when every field group is held in a group or repeater", () => {
