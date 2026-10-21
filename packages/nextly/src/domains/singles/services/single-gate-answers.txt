@@ -63,6 +63,11 @@ service none key-made-by-super-admin
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service none key-custom-slugs
+  read:A
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service none key-own-roles
   read:A
   update:A
@@ -134,6 +139,11 @@ service true key-slugs-only
   publish:A
   unpublish:A
 service true key-made-by-super-admin
+  read:A
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service true key-custom-slugs
   read:A
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
@@ -213,6 +223,11 @@ service false key-made-by-super-admin
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service false key-custom-slugs
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service false key-own-roles
   read:403 Access denied: insufficient permissions for read on single "home"
   update:403 Access denied: insufficient permissions for update on single "home"
@@ -284,6 +299,11 @@ service returns-true key-slugs-only
   publish:A
   unpublish:A
 service returns-true key-made-by-super-admin
+  read:A
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service returns-true key-custom-slugs
   read:A
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
@@ -363,6 +383,11 @@ service returns-false key-made-by-super-admin
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service returns-false key-custom-slugs
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-false key-own-roles
   read:403 Access denied: insufficient permissions for read on single "home"
   update:403 Access denied: insufficient permissions for update on single "home"
@@ -434,6 +459,11 @@ service returns-null key-slugs-only
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-null key-made-by-super-admin
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service returns-null key-custom-slugs
   read:403 Access denied: insufficient permissions for read on single "home"
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
@@ -513,6 +543,11 @@ service returns-undefined key-made-by-super-admin
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service returns-undefined key-custom-slugs
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-undefined key-own-roles
   read:403 Access denied: insufficient permissions for read on single "home"
   update:403 Access denied: insufficient permissions for update on single "home"
@@ -584,6 +619,11 @@ service returns-truthy key-slugs-only
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service returns-truthy key-made-by-super-admin
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service returns-truthy key-custom-slugs
   read:403 Access denied: insufficient permissions for read on single "home"
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
@@ -663,6 +703,11 @@ service throws key-made-by-super-admin
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service throws key-custom-slugs
+  read:403 Access denied: insufficient permissions for read on single "home"
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service throws key-own-roles
   read:403 Access denied: insufficient permissions for read on single "home"
   update:403 Access denied: insufficient permissions for update on single "home"
@@ -734,6 +779,11 @@ service async-true key-slugs-only
   publish:A
   unpublish:A
 service async-true key-made-by-super-admin
+  read:A
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service async-true key-custom-slugs
   read:A
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
@@ -813,6 +863,11 @@ service role-name key-made-by-super-admin
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service role-name key-custom-slugs
+  read:A
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service role-name key-own-roles
   read:403 Access denied: insufficient permissions for read on single "home"
   update:403 Access denied: insufficient permissions for update on single "home"
@@ -884,6 +939,11 @@ service permission-spelling key-slugs-only
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service permission-spelling key-made-by-super-admin
+  read:A
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service permission-spelling key-custom-slugs
   read:A
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
@@ -963,6 +1023,11 @@ service signed-in key-made-by-super-admin
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
   unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+service signed-in key-custom-slugs
+  read:A
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
 service signed-in key-own-roles
   read:A
   update:A
@@ -1034,6 +1099,11 @@ no-service none key-slugs-only
   publish:A
   unpublish:A
 no-service none key-made-by-super-admin
+  read:A
+  update:403 Access denied: insufficient permissions for update on single "home"
+  publish:403 Access denied: insufficient permissions for publish on single "home"
+  unpublish:403 Access denied: insufficient permissions for unpublish on single "home"
+no-service none key-custom-slugs
   read:A
   update:403 Access denied: insufficient permissions for update on single "home"
   publish:403 Access denied: insufficient permissions for publish on single "home"
@@ -1113,6 +1183,11 @@ route-authorized none key-made-by-super-admin
   update:A
   publish:A
   unpublish:A
+route-authorized none key-custom-slugs
+  read:A
+  update:A
+  publish:A
+  unpublish:A
 route-authorized none key-own-roles
   read:A
   update:A
@@ -1184,6 +1259,11 @@ route-authorized true key-slugs-only
   publish:A
   unpublish:A
 route-authorized true key-made-by-super-admin
+  read:A
+  update:A
+  publish:A
+  unpublish:A
+route-authorized true key-custom-slugs
   read:A
   update:A
   publish:A
@@ -1263,6 +1343,11 @@ route-authorized false key-made-by-super-admin
   update:A
   publish:A
   unpublish:A
+route-authorized false key-custom-slugs
+  read:A
+  update:A
+  publish:A
+  unpublish:A
 route-authorized false key-own-roles
   read:A
   update:A
@@ -1334,6 +1419,11 @@ route-authorized returns-true key-slugs-only
   publish:A
   unpublish:A
 route-authorized returns-true key-made-by-super-admin
+  read:A
+  update:A
+  publish:A
+  unpublish:A
+route-authorized returns-true key-custom-slugs
   read:A
   update:A
   publish:A
@@ -1413,6 +1503,11 @@ route-authorized returns-false key-made-by-super-admin
   update:A
   publish:A
   unpublish:A
+route-authorized returns-false key-custom-slugs
+  read:A
+  update:A
+  publish:A
+  unpublish:A
 route-authorized returns-false key-own-roles
   read:A
   update:A
@@ -1484,6 +1579,11 @@ route-authorized returns-null key-slugs-only
   publish:A
   unpublish:A
 route-authorized returns-null key-made-by-super-admin
+  read:A
+  update:A
+  publish:A
+  unpublish:A
+route-authorized returns-null key-custom-slugs
   read:A
   update:A
   publish:A
@@ -1563,6 +1663,11 @@ route-authorized returns-undefined key-made-by-super-admin
   update:A
   publish:A
   unpublish:A
+route-authorized returns-undefined key-custom-slugs
+  read:A
+  update:A
+  publish:A
+  unpublish:A
 route-authorized returns-undefined key-own-roles
   read:A
   update:A
@@ -1634,6 +1739,11 @@ route-authorized returns-truthy key-slugs-only
   publish:A
   unpublish:A
 route-authorized returns-truthy key-made-by-super-admin
+  read:A
+  update:A
+  publish:A
+  unpublish:A
+route-authorized returns-truthy key-custom-slugs
   read:A
   update:A
   publish:A
@@ -1713,6 +1823,11 @@ route-authorized throws key-made-by-super-admin
   update:A
   publish:A
   unpublish:A
+route-authorized throws key-custom-slugs
+  read:A
+  update:A
+  publish:A
+  unpublish:A
 route-authorized throws key-own-roles
   read:A
   update:A
@@ -1784,6 +1899,11 @@ route-authorized async-true key-slugs-only
   publish:A
   unpublish:A
 route-authorized async-true key-made-by-super-admin
+  read:A
+  update:A
+  publish:A
+  unpublish:A
+route-authorized async-true key-custom-slugs
   read:A
   update:A
   publish:A
@@ -1863,6 +1983,11 @@ route-authorized role-name key-made-by-super-admin
   update:A
   publish:A
   unpublish:A
+route-authorized role-name key-custom-slugs
+  read:A
+  update:A
+  publish:A
+  unpublish:A
 route-authorized role-name key-own-roles
   read:A
   update:A
@@ -1938,6 +2063,11 @@ route-authorized permission-spelling key-made-by-super-admin
   update:A
   publish:A
   unpublish:A
+route-authorized permission-spelling key-custom-slugs
+  read:A
+  update:A
+  publish:A
+  unpublish:A
 route-authorized permission-spelling key-own-roles
   read:A
   update:A
@@ -2009,6 +2139,11 @@ route-authorized signed-in key-slugs-only
   publish:A
   unpublish:A
 route-authorized signed-in key-made-by-super-admin
+  read:A
+  update:A
+  publish:A
+  unpublish:A
+route-authorized signed-in key-custom-slugs
   read:A
   update:A
   publish:A
