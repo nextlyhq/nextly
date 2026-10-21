@@ -470,6 +470,13 @@ export interface SendEmailArgs extends DirectAPIConfig {
    * a staff user who does not exist is refused before anything is sent.
    */
   person?: PrincipalRef;
+  /**
+   * @experimental Send this message once for the key. A repeat of a send
+   * that succeeded returns its result with `repeat: true` and sends nothing;
+   * a repeat after a failure sends again; the same key with a different
+   * message is refused. Keys from the site's code never meet a plugin's.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -520,6 +527,13 @@ export interface SendTemplateEmailArgs extends DirectAPIConfig {
    * a staff user who does not exist is refused before anything is sent.
    */
   person?: PrincipalRef;
+  /**
+   * @experimental Send this message once for the key. A repeat of a send
+   * that succeeded returns its result with `repeat: true` and sends nothing;
+   * a repeat after a failure sends again; the same key with a different
+   * message is refused. Keys from the site's code never meet a plugin's.
+   */
+  idempotencyKey?: string;
 }
 
 /**
@@ -544,4 +558,9 @@ export interface SendEmailResult {
    * by line and position, never by address.
    */
   refused?: RefusedRecipient[];
+  /**
+   * @experimental The result of an earlier send with the same idempotency
+   * key; nothing was sent this time.
+   */
+  repeat?: true;
 }

@@ -85,24 +85,8 @@ function makeAdapter(
 ): DrizzleAdapter {
   return {
     getCapabilities: () => ({ dialect }),
-    // `activity_log` answers with a DISTINCT count so `recentChanges24h` can be
-    // told apart from the zero every other counter returns. A shared 0 would
-    // make "the scope short-circuited the query" and "the query ran and found
-    // nothing" the same observation -- and the first is the property under
-    // test.
-    executeQuery: vi
-      .fn()
-      .mockImplementation((sql: string) =>
-        Promise.resolve([{ count: sql.includes("activity_log") ? 7 : 0 }])
-      ),
+    executeQuery: vi.fn().mockResolvedValue([{ count: 0 }]),
   } as unknown as DrizzleAdapter;
-}
-
-/** Every `activity_log` query `getStats` emitted, with its bound params. */
-function activityLogCalls(adapter: DrizzleAdapter): Array<[string, unknown[]]> {
-  const calls = (adapter.executeQuery as unknown as ReturnType<typeof vi.fn>)
-    .mock.calls as Array<[string, unknown[]]>;
-  return calls.filter(([sql]) => sql.includes("activity_log"));
 }
 
 function makeLogger(): Logger {
@@ -114,11 +98,20 @@ function makeLogger(): Logger {
   };
 }
 
+/**
+ * The activity figure is counted by the activity-log service's own walk, so what this service
+ * decides is what it ASKS: the scope, the caller and the day. A distinct 7 tells the figure apart
+ * from the zero every other counter returns.
+ */
+const countRecentActivity = vi.fn();
+
 beforeEach(() => {
   vi.clearAllMocks();
   count.mockResolvedValue({ total: 0 });
+  countRecentActivity.mockResolvedValue({ count: 7, atLeast: false });
   (container.get as ReturnType<typeof vi.fn>).mockImplementation(
     (name: string) => {
+      if (name === "activityLogService") return { countRecentActivity };
       if (name === "collectionRegistryService") {
         return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
       }
@@ -126,10 +119,10 @@ beforeEach(() => {
         return { getAllSingles: vi.fn().mockResolvedValue(SINGLES) };
       }
       // `getStats` also fans out to `fieldGroupRegistryService` and reads
-      // `activity_log`/`api_keys` via raw queries; neither is registered
-      // here. Both call sites catch and fall back to zero, which is exactly
-      // what these tests want -- the assertions below are all about
-      // `collectionCounts` and `singles`.
+      // `api_keys` via a raw query; neither is registered here. Both call
+      // sites catch and fall back to zero, which is exactly what these tests
+      // want -- the assertions below are about `collectionCounts`, `singles`
+      // and the question the activity figure asks.
       throw new Error(`unexpected container.get("${name}") in this test`);
     }
   );
@@ -189,143 +182,121 @@ describe("DashboardService applies the read scope it is given", () => {
 });
 
 /**
- * `recentChanges24h` reads `activity_log` -- the very table this branch taught
- * `ActivityLogService` to filter. Left unscoped it made ONE `/stats` response
- * answer "what may this caller see" two different ways about one table:
- * `collectionCounts` honoured the scope while `recentChanges24h` counted every
- * collection's changes, so the number itself disclosed that activity exists
- * outside the caller's reach.
+ * `recentChanges24h` reads `activity_log`, and left unscoped it made ONE `/stats` response
+ * answer "what may this caller see" two different ways about one table: `collectionCounts`
+ * honoured the scope while the figure counted every collection's changes, so the number itself
+ * disclosed that activity exists outside the caller's reach.
  *
- * The counter is private and its result is a bare number, so a count of 7 and a
- * count of 7-of-which-some-are-forbidden are indistinguishable from the return
- * value alone. What separates them is the SQL: these assert the emitted query
- * and its bound params, the way `activity-scope.test.ts` does for
- * `countActivities`.
+ * The figure is now counted by the activity feed's own walk, which applies the scope and then
+ * each row's document check (`activity-scope.test.ts` asserts the query it builds). What this
+ * service decides is what it hands that walk, so these assert the question asked.
  *
- * The other five counters (`media`, `users`, `roles`, `permissions`, active API
- * keys) are deliberately left unscoped. They are uniformly unscoped rather than
- * newly inconsistent, and scoping them is a design decision about what a
- * dashboard admin metric means, not a defect in this table's filter.
+ * The other five counters (`media`, `users`, `roles`, `permissions`, active API keys) are
+ * deliberately left unscoped. They are uniformly unscoped rather than newly inconsistent, and
+ * scoping them is a design decision about what a dashboard admin metric means, not a defect in
+ * this table's filter.
  */
 describe("recentChanges24h honours the read scope", () => {
-  it("counts nothing WITHOUT querying when the caller may read nothing", async () => {
-    const adapter = makeAdapter();
-    const service = new DashboardService(adapter, makeLogger());
+  /** The one question the figure asked. */
+  const asked = () => {
+    expect(countRecentActivity).toHaveBeenCalledTimes(1);
+    return countRecentActivity.mock.calls[0]?.[0] as {
+      since: Date;
+      scope: unknown;
+      caller: unknown;
+    };
+  };
+
+  it("asks with the scope's collections, as the caller, for the last day", async () => {
+    const service = new DashboardService(makeAdapter(), makeLogger());
+    const before = Date.now();
 
     const stats = await service.getStats({
-      scope: someResources([]),
+      scope: someResources(["posts", "email-providers"]),
       caller: CALLER,
     });
 
-    expect(stats.content.recentChanges24h).toBe(0);
-    // An empty `IN ()` is a syntax error on some dialects, so the
-    // short-circuit must happen BEFORE the query is built rather than let the
-    // driver reject it -- the same rule `getRecentActivity` follows.
-    expect(activityLogCalls(adapter)).toEqual([]);
+    const question = asked();
+    expect(question.scope).toEqual(someResources(["posts", "email-providers"]));
+    expect(question.caller).toBe(CALLER);
+    // A day back from when it was asked, not from some fixed instant.
+    const day = 24 * 60 * 60 * 1000;
+    expect(question.since.getTime()).toBeGreaterThanOrEqual(before - day);
+    expect(question.since.getTime()).toBeLessThanOrEqual(Date.now() - day);
+    expect(stats.content.recentChanges24h).toBe(7);
   });
 
-  it.each([
-    {
-      dialect: "sqlite" as const,
-      expectedSql:
-        'SELECT COUNT(*) as count FROM "activity_log" WHERE "created_at" > ? AND "collection" IN (?, ?)',
-    },
-    {
-      dialect: "postgresql" as const,
-      expectedSql:
-        'SELECT COUNT(*) as count FROM "activity_log" WHERE "created_at" > $1 AND "collection" IN ($2, $3)',
-    },
-    {
-      dialect: "mysql" as const,
-      expectedSql:
-        "SELECT COUNT(*) as count FROM `activity_log` WHERE `created_at` > ? AND `collection` IN (?, ?)",
-    },
-  ])(
-    "restricts the count to the scope's collections, on $dialect",
-    async ({ dialect, expectedSql }) => {
-      const adapter = makeAdapter(dialect);
-      const service = new DashboardService(adapter, makeLogger());
+  it("asks across every collection for a super-admin's `all` scope", async () => {
+    // The positive control for the case above: `all` must reach the walk as `all`, so an
+    // implementation that narrowed unconditionally fails here.
+    const service = new DashboardService(makeAdapter(), makeLogger());
 
-      await service.getStats({
-        scope: someResources(["posts", "email-providers"]),
-        caller: CALLER,
-      });
+    await service.getStats({ scope: allResources(), caller: CALLER });
 
-      const calls = activityLogCalls(adapter);
-      expect(calls).toHaveLength(1);
-      const [sql, params] = calls[0];
-      // Full string, not a substring: `toContain("IN (")` passes a query that
-      // also dropped the cutoff, and passes one whose placeholders are
-      // numbered wrongly. The cutoff must stay bound at position 1 with the
-      // scope's values after it, in order.
-      expect(sql).toBe(expectedSql);
-      expect(params.slice(1)).toEqual(["posts", "email-providers"]);
-      // Parameterised, never interpolated: no collection name may appear in
-      // the SQL text itself.
-      expect(sql).not.toContain("posts");
-    }
-  );
+    expect(asked().scope).toEqual(allResources());
+  });
 
-  it("counts across every collection for a super-admin's `all` scope", async () => {
-    const adapter = makeAdapter();
-    const service = new DashboardService(adapter, makeLogger());
+  it("asks with nothing in scope when the scope is omitted: deny by default", async () => {
+    const service = new DashboardService(makeAdapter(), makeLogger());
+
+    await service.getStats({ caller: CALLER });
+
+    expect(asked().scope).toEqual(someResources([]));
+  });
+
+  it("says the figure is a floor when the walk stopped at its bound", async () => {
+    countRecentActivity.mockResolvedValue({ count: 1000, atLeast: true });
+    const service = new DashboardService(makeAdapter(), makeLogger());
 
     const stats = await service.getStats({
       scope: allResources(),
       caller: CALLER,
     });
 
-    const calls = activityLogCalls(adapter);
-    expect(calls).toHaveLength(1);
-    const [sql, params] = calls[0];
-    // The positive control for the two cases above: `all` must NOT narrow, so
-    // an implementation that filtered unconditionally -- which would satisfy
-    // every scoped assertion here -- fails this one.
-    expect(sql).toBe(
-      'SELECT COUNT(*) as count FROM "activity_log" WHERE "created_at" > ?'
-    );
-    expect(params).toHaveLength(1);
-    expect(stats.content.recentChanges24h).toBe(7);
+    expect(stats.content).toMatchObject({
+      recentChanges24h: 1000,
+      recentChanges24hAtLeast: true,
+    });
   });
 
-  it("denies by default when the scope is omitted", async () => {
-    const adapter = makeAdapter();
-    const service = new DashboardService(adapter, makeLogger());
+  it("leaves the floor out when the figure is whole", async () => {
+    const service = new DashboardService(makeAdapter(), makeLogger());
 
-    const stats = await service.getStats({ caller: CALLER });
+    const stats = await service.getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
+
+    expect("recentChanges24hAtLeast" in stats.content).toBe(false);
+  });
+
+  it("answers 0 when the count fails, as it always has", async () => {
+    countRecentActivity.mockRejectedValue(new Error("connection lost"));
+    const service = new DashboardService(makeAdapter(), makeLogger());
+
+    const stats = await service.getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
 
     expect(stats.content.recentChanges24h).toBe(0);
-    expect(activityLogCalls(adapter)).toEqual([]);
   });
 });
 
-/**
- * A scope may name something that is not a content collection.
- *
- * `activity_log.collection` is a free string, so the read scope carries settings
- * namespaces (`email-providers`, `email-templates`) alongside collection and
- * single slugs. Two properties have to hold at once, and they pull in opposite
- * directions: the name must reach the `activity_log` filter, and it must NOT
- * become a collection to count. `filterByResource` can only narrow the registry
- * list, so the second follows from the shape rather than from a guard — this
- * pins it, because a future `getCollectionCounts` that iterated the SCOPE
- * instead of the filtered registry would try to count a table that does not
- * exist and report the failure as a zero.
- */
 describe("a scope naming a non-content activity namespace", () => {
-  it("reaches the activity_log filter", async () => {
-    const adapter = makeAdapter();
-    const service = new DashboardService(adapter, makeLogger());
+  it("reaches the activity figure's question", async () => {
+    const service = new DashboardService(makeAdapter(), makeLogger());
 
     await service.getStats({
       scope: someResources(["posts", "email-providers"]),
       caller: CALLER,
     });
 
-    const calls = activityLogCalls(adapter);
-    expect(calls).toHaveLength(1);
-    const [, params] = calls[0];
-    expect(params.slice(1)).toEqual(["posts", "email-providers"]);
+    expect(countRecentActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: someResources(["posts", "email-providers"]),
+      })
+    );
   });
 
   it("does not become a collection to count", async () => {

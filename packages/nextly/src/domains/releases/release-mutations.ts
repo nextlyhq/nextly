@@ -61,6 +61,7 @@
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { RowLockServer } from "../../shared/lib/row-lock";
 import {
   runWithWriteReceipt,
   type WrittenState,
@@ -88,6 +89,12 @@ const WITHDRAWN_STATUS = "draft";
 export function createReleaseMutations(deps: {
   /** The Direct API. Injected for the reason the applier's own deps are. */
   contentApi: JobContentSource;
+  /**
+   * The row-lock facts of the database the writes go to, for the locked
+   * reads the applied mark takes inside each content write. From the same
+   * injected database as the rest of the job, never a global.
+   */
+  lockServer: RowLockServer;
 }): ReleaseMutations {
   const write = async (
     { ref, user, receipt }: ReleaseWrite,
@@ -112,11 +119,14 @@ export function createReleaseMutations(deps: {
         await forgetMemberApplied(tx, receipt.memberId);
         return;
       }
-      await recordMemberApplied(tx, {
-        id: receipt.memberId,
-        revision: receipt.revision,
-        ref,
-      });
+      // Refuses the write when the member's release has moved on since the
+      // run planned it, so the document never takes an action its release
+      // no longer asks for.
+      await recordMemberApplied(
+        tx,
+        { id: receipt.memberId, revision: receipt.revision, ref },
+        deps.lockServer
+      );
     };
 
     await runWithWriteReceipt(

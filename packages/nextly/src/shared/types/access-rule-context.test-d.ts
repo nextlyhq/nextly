@@ -32,7 +32,7 @@ expectTypeOf<
   Parameters<AccessFunction>[0]
 >().toEqualTypeOf<AccessRuleContext>();
 expectTypeOf<
-  Parameters<NonNullable<FieldAccess["read"]>>[0]
+  Parameters<Extract<FieldAccess["read"], AccessFunction>>[0]
 >().toEqualTypeOf<AccessRuleContext>();
 expectTypeOf<
   Parameters<Extract<CollectionAccessControl["read"], AccessControlFunction>>[0]

@@ -133,6 +133,7 @@ describe("referenceDisplayValue", () => {
       url: "/u",
       thumbnailUrl: "/t",
       mimeType: "image/png",
+      alt: "A picture",
     };
     expect(
       referenceDisplayValue({ id: "m1" }, { id: "m1", label: "pic.png", media })
@@ -260,6 +261,7 @@ describe("resolveReferenceLabels — uploads", () => {
       url: "/u",
       thumbnailUrl: "/t",
       mimeType: "image/png",
+      altText: "A red barn at dusk",
     });
 
     const req: ReferenceRequest = {
@@ -284,6 +286,8 @@ describe("resolveReferenceLabels — uploads", () => {
         url: "/u",
         thumbnailUrl: "/t",
         mimeType: "image/png",
+        // The image described as the library describes it.
+        alt: "A red barn at dusk",
       },
     });
   });
@@ -308,6 +312,7 @@ describe("resolveReferenceLabels — uploads", () => {
         url: null,
         thumbnailUrl: null,
         mimeType: null,
+        alt: null,
       },
     });
   });
@@ -524,6 +529,7 @@ describe("resolveReferenceLabels — upload target collection", () => {
         url: "/u",
         thumbnailUrl: "/t",
         mimeType: "application/pdf",
+        altText: "Quarterly report",
       },
     });
     const req: ReferenceRequest = {
@@ -550,6 +556,7 @@ describe("resolveReferenceLabels — upload target collection", () => {
         url: "/u",
         thumbnailUrl: "/t",
         mimeType: "application/pdf",
+        alt: "Quarterly report",
       },
     });
   });
@@ -573,6 +580,7 @@ describe("resolveReferenceLabels — upload target collection", () => {
         url: null,
         thumbnailUrl: null,
         mimeType: null,
+        alt: null,
       },
     });
   });

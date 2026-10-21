@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   FieldResolution,
   SchemaPreviewChange,
+  SchemaPreviewRenameCandidate,
 } from "@admin/services/schemaApi";
 
 import { SchemaChangeDialog } from "../SchemaChangeDialog";
@@ -24,7 +25,8 @@ function renderDialog(
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: unknown[]
-  ) => void
+  ) => void,
+  renamed: SchemaPreviewRenameCandidate[] = []
 ) {
   render(
     <SchemaChangeDialog
@@ -34,7 +36,7 @@ function renderDialog(
       hasDestructiveChanges
       classification="destructive"
       changes={changes}
-      renamed={[]}
+      renamed={renamed}
       warnings={[]}
       interactiveFields={[]}
       onConfirm={onConfirm}
@@ -99,5 +101,41 @@ describe("SchemaChangeDialog destructive-drop acknowledgment", () => {
       FieldResolution
     >;
     expect(resolutions).toEqual({});
+  });
+});
+
+describe("SchemaChangeDialog renames of a translated field", () => {
+  // A translated field's column lives on the companion `<table>_locales`, so its rename is
+  // offered there. It has to read as a rename, chosen by default, and come back as one, or the
+  // apply drops the column and every language's value with it.
+  it("offers the rename on the companion, chosen, and sends it back as a rename", () => {
+    const onConfirm = vi.fn();
+    renderDialog(emptyChanges(), onConfirm, [
+      {
+        table: "dc_posts_locales",
+        from: "heading",
+        to: "title2",
+        fromType: "text",
+        toType: "text",
+        typesCompatible: true,
+        preservesValues: true,
+        defaultSuggestion: "rename",
+      },
+    ]);
+
+    expect(
+      screen.getByRole("radio", { name: /rename to title2/i })
+    ).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: /apply changes/i }));
+
+    expect(onConfirm.mock.calls[0][1]).toEqual([
+      {
+        tableName: "dc_posts_locales",
+        fromColumn: "heading",
+        toColumn: "title2",
+        choice: "rename",
+      },
+    ]);
   });
 });

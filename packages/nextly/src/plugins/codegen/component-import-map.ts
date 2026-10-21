@@ -21,7 +21,7 @@
  * @module plugins/codegen/component-import-map
  */
 
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 import type {
   ComponentPath,
@@ -446,6 +446,29 @@ const AGREEMENT_CHECK = [
   "}",
 ].join("\n");
 
+/** The line the map imports the site's config with, written and read as one: see `configImportOf`. */
+const SITE_CONFIG_IMPORT = "import type * as siteConfig from ";
+
+/**
+ * The config import a generated map names, as `buildComponentImportMap` wrote it; undefined when it
+ * names none or the line cannot be read. A rewrite keeps it, so the map goes on checking against
+ * the config it was generated for, a `--config` path included, rather than one found again.
+ */
+export function configImportOf(mapCode: string): string | undefined {
+  const line = mapCode
+    .split("\n")
+    .find(each => each.startsWith(SITE_CONFIG_IMPORT));
+  if (line === undefined) return undefined;
+  try {
+    const specifier: unknown = JSON.parse(
+      line.slice(SITE_CONFIG_IMPORT.length).replace(/;\s*$/, "")
+    );
+    return typeof specifier === "string" ? specifier : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Build the generated import-map module source for all plugins' admin
  * components. Deterministic: modules and registry keys are sorted; one
@@ -453,7 +476,10 @@ const AGREEMENT_CHECK = [
  * to register imports no component and registers nothing, and still holds
  * itself to its (empty) list.
  */
-export function buildComponentImportMap(plugins: PluginDefinition[]): string {
+export function buildComponentImportMap(
+  plugins: PluginDefinition[],
+  configImport?: string
+): string {
   const paths = componentImportMapPaths(plugins);
   const parsed = paths.map(parsePath);
   const modules = Array.from(new Set(parsed.map(p => p.module))).sort();
@@ -470,6 +496,12 @@ export function buildComponentImportMap(plugins: PluginDefinition[]): string {
   lines.push(
     `import { registeredComponentPaths as listed } from "./${COMPONENT_PATHS_FILENAME.replace(/\.ts$/, "")}";`
   );
+  // The site's config, for its type alone: the check below reads the widgets it declares.
+  // Type-only, so it is erased and no server code reaches the browser bundle.
+  if (configImport !== undefined) {
+    lines.push('import type { DeclaredComponentMap } from "nextly";');
+    lines.push(`${SITE_CONFIG_IMPORT}${JSON.stringify(configImport)};`);
+  }
   lines.push("");
   lines.push("const registered = {");
   for (const p of parsed) {
@@ -477,7 +509,13 @@ export function buildComponentImportMap(plugins: PluginDefinition[]): string {
       `  ${JSON.stringify(p.path)}: ${alias.get(p.module)}.${p.member},`
     );
   }
-  lines.push("};");
+  // Each component registered under a typed widget's path must take that widget's props, or
+  // the site's build fails here; every other path is left as it was.
+  lines.push(
+    configImport === undefined
+      ? "};"
+      : "} satisfies DeclaredComponentMap<typeof siteConfig>;"
+  );
   lines.push("");
   lines.push(AGREEMENT_CHECK);
   lines.push("");
@@ -520,17 +558,38 @@ export function buildComponentPathsModule(
  */
 export function buildImportMapArtifacts(
   plugins: PluginDefinition[],
-  typesOutputPath: string
+  typesOutputPath: string,
+  configImport?: string
 ): { path: string; code: string }[] {
   const dir = dirname(typesOutputPath);
   return [
     {
       path: join(dir, COMPONENT_IMPORT_MAP_FILENAME),
-      code: buildComponentImportMap(plugins),
+      code: buildComponentImportMap(plugins, configImport),
     },
     {
       path: join(dir, COMPONENT_PATHS_FILENAME),
       code: buildComponentPathsModule(plugins),
     },
   ];
+}
+
+/**
+ * How the generated map, in `mapDir`, imports the site's config file at `configFile`: relative,
+ * with forward slashes, as TypeScript resolves it. Both absolute.
+ *
+ * A `.ts` or `.js` config is named without its extension. An ESM one keeps it, written as the
+ * output's: `.mjs` for an `.mjs` config and for an `.mts` source, which TypeScript maps back to the
+ * source. Without it the specifier resolves to neither under the site's Bundler resolution.
+ */
+export function configImportSpecifier(
+  mapDir: string,
+  configFile: string
+): string {
+  const path = relative(mapDir, configFile)
+    .split(sep)
+    .join("/")
+    .replace(/\.(ts|js)$/, "")
+    .replace(/\.mts$/, ".mjs");
+  return path.startsWith(".") ? path : `./${path}`;
 }

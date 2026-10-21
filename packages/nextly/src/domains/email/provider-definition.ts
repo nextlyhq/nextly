@@ -1429,13 +1429,15 @@ function withoutLeakedSecrets(
           const entry = refusal as NonNullable<
             EmailSendResult["refusals"]
           >[number];
+          // Every entry through containment, a reason-less one included: its
+          // status reaches the caller too, and could be a credential.
           return [
             typeof entry.reason === "string"
               ? containedClassification(
                   { ...entry, reason: entry.reason },
                   secrets
                 )
-              : entry,
+              : withContainedStatus(entry, secrets),
           ];
         }),
       }
@@ -1854,19 +1856,37 @@ function withoutDeclaredSecrets(
  * the declared credentials, or, where they cannot be compared, replaced by the
  * sentence the classification itself gives.
  */
+/**
+ * A status a provider chose, unless it could be a declared credential: one
+ * that equals a credential, or any status at all where a credential is too
+ * short to compare, is not passed on.
+ */
+function containedStatus(
+  status: number | undefined,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): number | undefined {
+  return status !== undefined &&
+    !secrets.hasUnmatchable &&
+    !secrets.comparable.includes(String(status))
+    ? status
+    : undefined;
+}
+
+/** `entry` with its status contained, for a refusal that gave no reason. */
+function withContainedStatus<E extends { status?: number }>(
+  entry: E,
+  secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
+): Omit<E, "status"> & { status?: number } {
+  const status = containedStatus(entry.status, secrets);
+  const { status: _withheld, ...rest } = entry;
+  return { ...rest, ...(status !== undefined ? { status } : {}) };
+}
+
 function containedClassification<F extends EmailFailure>(
   failure: F,
   secrets: { comparable: readonly string[]; hasUnmatchable: boolean }
 ): Omit<F, "status" | "reason"> & EmailFailure {
-  // A status is a number a provider chose, and a declared credential can be a
-  // number too: one that equals a credential, or any status at all where a
-  // credential is too short to compare, is not passed on.
-  const status =
-    failure.status !== undefined &&
-    !secrets.hasUnmatchable &&
-    !secrets.comparable.includes(String(failure.status))
-      ? failure.status
-      : undefined;
+  const status = containedStatus(failure.status, secrets);
   const reason = secrets.hasUnmatchable
     ? (failureOf({ emailFailure: { retryable: failure.retryable, status } })
         ?.reason ?? failure.reason)

@@ -1,5 +1,6 @@
 /**
- * The collection gate's answer, asked of the one decision.
+ * The collection gate's and the Single gate's answers, asked of the one
+ * decision.
  *
  * The gate keeps the order and the answers it has always given. Each step
  * either returns the decision's answer, where today's gate agrees with it, or
@@ -19,8 +20,14 @@ import {
   scopeGrants,
   type AuthenticatedScope,
 } from "../authenticated-scope";
+import { effectiveCallerScope } from "../caller-scope";
 
-import { holdsPermission, type Actor, type UserActor } from "./actor";
+import {
+  holdsPermission,
+  type Actor,
+  type KeyActor,
+  type UserActor,
+} from "./actor";
 import {
   askRule,
   askRules,
@@ -32,6 +39,7 @@ import {
   type Decision,
   type RuleOutcome,
 } from "./decide";
+import { declaredTarget } from "./declared-rules";
 import { deviate } from "./deviations";
 import {
   actorForKey,
@@ -78,13 +86,16 @@ interface RuleSource {
   getRegisteredTarget(slug: string): AccessTarget | undefined;
 }
 
-/** What the collection gate is asked, as it is asked it. */
-export interface CollectionQuestion {
+/** What a gate is asked, as it is asked it. */
+export interface GateQuestion {
   readonly slug: string;
   readonly action: AccessOperation;
   readonly user?: { id: string; role?: string; roles?: string[] };
   readonly routeAuthorized?: boolean;
-  /** The key scope in force: the caller's own, else the request's. */
+  /**
+   * The key scope in force. For a collection, the caller's own, else the
+   * request's; a Single reads only the caller's own.
+   */
   readonly scope?: AuthenticatedScope;
   /** The plugin person the call is made as, if any. */
   readonly principal: Principal | null;
@@ -93,29 +104,88 @@ export interface CollectionQuestion {
   /** The access-control service's rules; absent without the service. */
   readonly rules?: RuleSource;
   /**
-   * Without the access-control service, whether the user holds the
-   * permission, read from the gate's own database.
+   * Without the access-control service, whether a signed-in user may: for a
+   * collection, the permission read from the gate's own database.
    */
   readonly permissionWithoutService: () => Promise<boolean>;
 }
 
-/** The decision's answer, for a deviation to compare today's against. */
+/** What the collection gate is asked. */
+export type CollectionQuestion = GateQuestion;
+
+/** What the Single gate is asked. */
+export type SingleQuestion = Omit<GateQuestion, "permissionWithoutService">;
+
+/**
+ * The decision's answer, for a deviation to compare today's against: with the
+ * rules the target declares, whether or not this gate has the service that
+ * reads them.
+ */
 const decided = async (
   actor: Actor | Promise<Actor>,
   action: AccessOperation,
   target: AccessTarget
-): Promise<boolean> => (await decide(await actor, action, target)).allowed;
+): Promise<boolean> =>
+  (await decide(await actor, action, declaredTarget(target.slug) ?? target))
+    .allowed;
 
-export async function collectionGateVerdict(
+export function collectionGateVerdict(
   q: CollectionQuestion
 ): Promise<GateVerdict> {
-  // The registered target, as the access-control service resolves it; one
-  // with no rules where nothing is registered, as without the service.
-  const target: AccessTarget = q.rules?.getRegisteredTarget(q.slug) ?? {
-    kind: "collection",
-    slug: q.slug,
-  };
+  return gateVerdict("collection", q);
+}
 
+/**
+ * The Single gate's answer. It reads only the key scope it is handed: asked
+ * inside a request that arrived on a key, without that scope, it judges the
+ * caller as the user, where the collection gate judges the key.
+ */
+export async function singleGateVerdict(
+  q: SingleQuestion
+): Promise<GateVerdict> {
+  // Without the service a signed-in user is allowed, the permission unread.
+  const asked = { ...q, permissionWithoutService: () => Promise.resolve(true) };
+  const today = await gateVerdict("single", asked);
+  await scopeInForceDeviation(asked, today);
+  return today;
+}
+
+/**
+ * Where the request's key would have been judged, had the Single gate read the
+ * scope in force: compared with the decision for that key, asked directly, so
+ * recording runs no second gate and takes none of its deviations.
+ */
+async function scopeInForceDeviation(
+  q: GateQuestion,
+  today: GateVerdict
+): Promise<void> {
+  const inForce = effectiveCallerScope(q.scope);
+  if (inForce === q.scope || inForce?.actorType !== "apiKey") return;
+  // A plugin's person, a route-authorized request and a visitor are judged
+  // without the key's scope by either gate.
+  if (q.principal !== null || q.routeAuthorized || !q.user) return;
+  const actor = keyActorOf(inForce, q.user);
+  await deviate("single-explicit-scope-only", today.allowed, () =>
+    decided(actor, q.action, registeredTarget("single", q))
+  );
+}
+
+/**
+ * The registered target, as the access-control service resolves it; one with
+ * no rules where nothing is registered, as without the service.
+ */
+function registeredTarget(
+  kind: "collection" | "single",
+  q: GateQuestion
+): AccessTarget {
+  return q.rules?.getRegisteredTarget(q.slug) ?? { kind, slug: q.slug };
+}
+
+async function gateVerdict(
+  kind: "collection" | "single",
+  q: GateQuestion
+): Promise<GateVerdict> {
+  const target = registeredTarget(kind, q);
   // A plugin's person is judged by the rule alone, and a target that declares
   // none, as every target does without the service, refuses them.
   if (q.principal !== null) {
@@ -123,32 +193,53 @@ export async function collectionGateVerdict(
       await decide(actorForPrincipal(q.principal), q.action, target)
     );
   }
+  return staffOrVisitorVerdict(kind, q, target);
+}
 
-  const keyAsks = q.scope?.actorType === "apiKey";
-  if (!keyAsks && isSuperAdminContext(q.user)) {
-    const user = q.user;
-    if (
-      user &&
-      (await deviate("claimed-super-admin", true, () =>
-        decided(
-          actorForUser(user.id, { executor: q.executor }),
-          q.action,
-          target
-        )
-      ))
-    ) {
-      return ALLOWED;
-    }
-  }
-
-  if (q.routeAuthorized) {
-    // The route gate already decided for the user it authenticated; a route
-    // that authenticated nobody cannot vouch for anyone.
-    return q.user ? ALLOWED : UNAUTHENTICATED;
-  }
-  if (!q.user) return visitorVerdict(q, target);
-  if (keyAsks && q.scope) return keyVerdict(q, target, q.scope, q.user);
+/** The verdict for a signed-in user, an API key or a visitor. */
+async function staffOrVisitorVerdict(
+  kind: "collection" | "single",
+  q: GateQuestion,
+  target: AccessTarget
+): Promise<GateVerdict> {
+  const keyScope = q.scope?.actorType === "apiKey" ? q.scope : undefined;
+  if (!keyScope && (await claimedSuperAdmin(q, target))) return ALLOWED;
+  if (q.routeAuthorized) return routeAuthorizedVerdict(kind, q, target);
+  if (!q.user) return visitorVerdict(kind, q, target);
+  if (keyScope) return keyVerdict(q, target, keyScope, q.user);
   return userVerdict(q, target, q.user);
+}
+
+/**
+ * A super-admin role named on the `user` a caller hands in passes without a
+ * lookup, as it always has.
+ */
+async function claimedSuperAdmin(
+  q: GateQuestion,
+  target: AccessTarget
+): Promise<boolean> {
+  const user = q.user;
+  if (!user || !isSuperAdminContext(user)) return false;
+  return deviate("claimed-super-admin", true, () =>
+    decided(actorForUser(user.id, { executor: q.executor }), q.action, target)
+  );
+}
+
+/**
+ * The route gate already decided for the user it authenticated; a route that
+ * authenticated nobody cannot vouch for anyone. A Single still gives such a
+ * request the visitor's answer, as it always has.
+ */
+async function routeAuthorizedVerdict(
+  kind: "collection" | "single",
+  q: GateQuestion,
+  target: AccessTarget
+): Promise<GateVerdict> {
+  if (q.user) return ALLOWED;
+  if (kind === "collection") return UNAUTHENTICATED;
+  const today = await visitorVerdict(kind, q, target);
+  await deviate("single-route-authorized-visitor", today.allowed, () => false);
+  return today;
 }
 
 function answerOf(decision: Decision): GateVerdict {
@@ -156,9 +247,12 @@ function answerOf(decision: Decision): GateVerdict {
 }
 
 async function visitorVerdict(
-  q: CollectionQuestion,
+  kind: "collection" | "single",
+  q: GateQuestion,
   target: AccessTarget
 ): Promise<GateVerdict> {
+  // A Single refuses a visitor's publish before asking its rule.
+  if (kind === "single" && isLifecycle(q.action)) return UNAUTHENTICATED;
   const visitor = actorForVisitor();
   const outcome = await askRule(visitor, q.action, target);
   // A rule refuses a visitor by answering `false`, or by failing.
@@ -173,20 +267,13 @@ async function visitorVerdict(
 }
 
 async function keyVerdict(
-  q: CollectionQuestion,
+  q: GateQuestion,
   target: AccessTarget,
   scope: AuthenticatedScope,
   user: { id: string; roles?: string[] }
 ): Promise<GateVerdict> {
   const rows = rowsAgree(scope);
-  const actor = rows
-    ? actorForScope(scope, user)
-    : actorForKey({
-        keyId: "",
-        userId: user.id,
-        grants: scope.grants ?? [],
-        roles: scope.roles ?? user.roles ?? [],
-      });
+  const actor = keyActorOf(scope, user);
   // A key holds an action by its stored slug, `<action>-<target>`. The
   // decision reads the grant's action and target, which agree with the slug
   // unless the grant was stored under a slug of its own.
@@ -194,22 +281,59 @@ async function keyVerdict(
     permissionSlug(q.action, q.slug)
   );
   if (!rows || slugHolds !== holdsPermission(actor, q.action, q.slug)) {
-    // Judged on the stored slugs, as before: a scope without the rows its
-    // slugs came from, one whose slugs were narrowed apart from its rows, or
-    // a grant stored under a slug of its own.
-    const today = await apiKeyWriteAllowed(
-      scope,
-      q.action,
-      q.slug,
-      user,
-      q.rules
-    );
-    return verdictOf(
-      await deviate("key-slug-string-match", today === true, () =>
-        decided(actor, q.action, target)
-      )
-    );
+    return slugJudgedVerdict(q, target, scope, user, actor);
   }
+  return grantJudgedVerdict(q, target, actor, slugHolds);
+}
+
+/** The key a scope stands for, from its grant rows or, without them, its slugs. */
+function keyActorOf(
+  scope: AuthenticatedScope,
+  user: { id: string; roles?: string[] }
+): KeyActor {
+  return rowsAgree(scope)
+    ? actorForScope(scope, user)
+    : actorForKey({
+        keyId: "",
+        userId: user.id,
+        grants: scope.grants ?? [],
+        roles: scope.roles ?? user.roles ?? [],
+      });
+}
+
+/**
+ * Judged on the stored slugs, as before: a scope without the rows its slugs
+ * came from, one whose slugs were narrowed apart from its rows, or a grant
+ * stored under a slug of its own.
+ */
+async function slugJudgedVerdict(
+  q: GateQuestion,
+  target: AccessTarget,
+  scope: AuthenticatedScope,
+  user: { id: string; roles?: string[] },
+  actor: KeyActor
+): Promise<GateVerdict> {
+  const today = await apiKeyWriteAllowed(
+    scope,
+    q.action,
+    q.slug,
+    user,
+    q.rules
+  );
+  return verdictOf(
+    await deviate("key-slug-string-match", today === true, () =>
+      decided(actor, q.action, target)
+    )
+  );
+}
+
+/** A key whose slugs and grant rows agree on the action. */
+async function grantJudgedVerdict(
+  q: GateQuestion,
+  target: AccessTarget,
+  actor: KeyActor,
+  slugHolds: boolean
+): Promise<GateVerdict> {
   if (isLifecycle(q.action)) {
     // A key without the grant is refused before its rule is read, as today
     // and as the decision does: it lacks the permission either way.
@@ -222,8 +346,19 @@ async function keyVerdict(
       )
     );
   }
-  return answerOf(
-    judge(actor, q.action, target, await askRules(actor, q.action, target))
+  const answer = judge(
+    actor,
+    q.action,
+    target,
+    await askRules(actor, q.action, target)
+  );
+  if (q.rules) return answerOf(answer);
+  // Without the service no rule is read, where the decision reads the rules
+  // the target declares.
+  return verdictOf(
+    await deviate("no-service", answer.allowed, () =>
+      decided(actor, q.action, target)
+    )
   );
 }
 
@@ -273,7 +408,7 @@ interface UserAsk {
 }
 
 async function userVerdict(
-  q: CollectionQuestion,
+  q: GateQuestion,
   target: AccessTarget,
   user: { id: string }
 ): Promise<GateVerdict> {

@@ -26,7 +26,6 @@ import { parseLiquid, renderLiquid } from "./services/liquid-engine";
 import {
   displayNameAndMailbox,
   isSendableAddress,
-  isSendableAddressList,
   toAddressList,
 } from "./services/recipients";
 
@@ -215,7 +214,7 @@ export function renderTemplateFrom(
  * a template can make it optional (`{% if email %}{{ email }}{% endif %}`).
  *
  * @throws NextlyError, not retryable, when it renders to something that is
- *   not an address
+ *   not exactly one address
  */
 export function renderTemplateReplyTo(
   replyTo: string,
@@ -225,7 +224,10 @@ export function renderTemplateReplyTo(
   if (!usesVariables(replyTo)) return replyTo;
   const rendered = renderLiquid(replyTo, data, "line").trim();
   if (rendered === "") return undefined;
-  if (!isSendableAddressList(rendered)) {
+  // Exactly one address, display name allowed. The rendered value comes from
+  // the send's data, so a list would let that data add a second Reply-To the
+  // template's author never wrote.
+  if (!isSendableAddress(rendered)) {
     throw envelopeError(
       "replyTo",
       "The email template's Reply-To didn't render to an email address.",

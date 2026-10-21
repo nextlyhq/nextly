@@ -121,6 +121,10 @@ import { hasAuthRateLimit } from "./auth/handlers/router";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
+import {
+  roleChangeCallerFor,
+  runAsRoleChangeCaller,
+} from "./domains/auth/services/super-admin-grant";
 import type { WidgetAction } from "./domains/widgets/definition";
 import { visibilityToken } from "./domains/widgets/layout";
 import {
@@ -189,11 +193,7 @@ import { handleDevSchemaRequest } from "./route-handler/dev-schema-handler";
 import { registerNextCacheRevalidator } from "./runtime/cache/register";
 import type { CollectionsHandler } from "./services/collections-handler";
 import type { GeneralSettingsService } from "./services/general-settings/general-settings-service";
-import {
-  isSuperAdmin,
-  containsSuperAdminRole,
-  resolveRoleSlugs,
-} from "./services/lib/permissions";
+import { resolveRoleSlugs } from "./services/lib/permissions";
 import {
   builderDisabledError,
   isBuilderEnabled,
@@ -309,57 +309,6 @@ async function applyGlobalDateFormatting(
   }
 
   return withTimezoneFormatting(clean);
-}
-
-// ============================================================================
-// Super-Admin Role Protection
-// ============================================================================
-
-/**
- * Prevent non-super-admins from assigning the super_admin role.
- *
- * Applies to three paths:
- * - createLocalUser: body.roles array
- * - updateUser: body.roles array
- * - assignRoleToUser: body.roleId
- *
- * @returns A 403 Response if protection triggers, or null if allowed.
- */
-async function guardSuperAdminRoleAssignment(
-  requestingUserId: string,
-  method: string,
-  body: unknown
-): Promise<Response | null> {
-  // Collect the role IDs being assigned
-  let roleIdsToCheck: string[] = [];
-
-  if (method === "createLocalUser" || method === "updateUser") {
-    const b = body as Record<string, unknown> | undefined;
-    if (Array.isArray(b?.roles) && (b.roles as unknown[]).length > 0) {
-      roleIdsToCheck = b.roles as string[];
-    }
-  } else if (method === "assignRoleToUser") {
-    const b = body as Record<string, unknown> | undefined;
-    const roleId = b?.roleId as string | undefined;
-    if (roleId) roleIdsToCheck = [roleId];
-  }
-
-  if (roleIdsToCheck.length === 0) return null;
-
-  // Check if any role being assigned is super_admin
-  const hasSuperAdmin = await containsSuperAdminRole(roleIdsToCheck);
-  if (!hasSuperAdmin) return null;
-
-  // Verify the requesting user is themselves a super-admin
-  const callerIsSuperAdmin = await isSuperAdmin(requestingUserId);
-  if (callerIsSuperAdmin) return null;
-
-  return new Response(
-    JSON.stringify({
-      error: "Only super-admins can assign the super_admin role",
-    }),
-    { status: 403, headers: { "Content-Type": "application/json" } }
-  );
 }
 
 // ============================================================================
@@ -1616,18 +1565,10 @@ async function handleServiceRequest(
     }
   }
 
-  // ==================== SUPER-ADMIN ROLE PROTECTION ====================
-  if (authorizedUser) {
-    const guardResult = await guardSuperAdminRoleAssignment(
-      authorizedUser.userId,
-      method,
-      body
-    );
-    if (guardResult) return guardResult;
-    // Removing the last active super-admin, by its role or otherwise, is
-    // refused by the user services themselves, inside the write's own
-    // transaction: there it holds for every path and when requests race.
-  }
+  // Who may give super-admin authority, and removing the last active
+  // super-admin, are both decided by the role and user services themselves,
+  // so they hold for every path. The caller they judge is pinned around the
+  // dispatch below.
 
   // ==================== DISPATCH REQUEST ====================
   // Inject the authenticated user's ID into route params so that downstream
@@ -1664,7 +1605,10 @@ async function handleServiceRequest(
     authorizedUser?.authMethod === "api-key"
       ? apiKeyScopeFrom(authorizedUser)
       : undefined,
-    () => dispatcher.dispatch(dispatchRequest)
+    () =>
+      runAsRoleChangeCaller(roleChangeCallerFor(authorizedUser), () =>
+        dispatcher.dispatch(dispatchRequest)
+      )
   );
 
   if (result.status === 204 || result.status === 205 || result.status === 304) {

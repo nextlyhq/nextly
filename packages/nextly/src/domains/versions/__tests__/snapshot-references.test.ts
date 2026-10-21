@@ -114,6 +114,8 @@ describe("hydrateSnapshotReferences", () => {
       url: "/u",
       thumbnailUrl: "/t",
       mimeType: "image/png",
+      // The media fixture carries no alt text.
+      alt: null,
     });
   });
 

@@ -69,7 +69,7 @@ export async function onboardingSteps(
   // Short-circuits inside, and skipped entirely where no collection exists:
   // with nothing to read there is no row to find, and the walk would be a
   // guaranteed-empty pass over an empty list.
-  const hasContent = slugs.length > 0 && (await probe.hasContent());
+  const hasContent = slugs.length > 0 ? await probe.hasContent() : false;
 
   const candidates: Array<
     OnboardingStep & { offered: () => Promise<boolean> }
@@ -84,7 +84,10 @@ export async function onboardingSteps(
     },
     {
       id: "entry",
-      complete: hasContent,
+      // Done only when content is KNOWN to exist. A check that ran out of time
+      // leaves the step open, so the card stays on the dashboard while setup
+      // is not known rather than vanishing on a guess.
+      complete: hasContent === true,
       offered: () => probe.mayCreateEntry(),
     },
   ];

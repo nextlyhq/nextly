@@ -762,7 +762,7 @@ The route handler ships with built-in defences:
 - **Rate limiting** on auth write endpoints (per IP) and global per-IP / per-key limits configured in `nextly.config.ts`.
 - **CORS** controlled by `NEXTLY_ALLOWED_ORIGINS` and the `security` config.
 - **Cache headers** (`no-store`) on every `/admin/api/auth/*` response to keep tokens out of caches.
-- **Super-admin protection** so non-super-admins cannot grant the super-admin role.
+- **Super-admin protection**: only a super-admin can give super-admin authority, whether by assigning the role or a role that inherits it, or by making a role inherit one. An API key can't, whoever made it.
 - **Trusted proxy / forwarded-for** filtering when `trustProxy` is on.
 
 See [Configuration](/docs/configuration/nextly-config) and [Authentication](/docs/guides/authentication) for the configurable surface.
