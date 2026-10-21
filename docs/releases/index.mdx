@@ -84,8 +84,9 @@ experimental.
 Taking the document out of a single-document release that has not run (a draft, a scheduled
 or a stopped one) cancels the release, since without its document there is nothing to run.
 It is the cancel itself, so it needs what cancelling needs, the permission to publish
-releases, as well as the permission to create them that removing a document needs; someone
-without it is refused and nothing changes. The release is kept as cancelled, still holding its
+releases, as well as the permission to create them that removing a document needs. Someone
+without it is refused, told "Removing the last document cancels this release, which needs
+permission to schedule or cancel releases.", and nothing changes. The release is kept as cancelled, still holding its
 document as the record of what it was for, and is never deleted by this: deleting it is a
 separate act, with its own permission. Out of a single-document release that ran (published
 or cancelled), the document can't be taken at all. This is experimental.

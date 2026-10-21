@@ -55,6 +55,10 @@ afterEach(async () => {
   current = undefined;
 });
 
+/** What a caller who may not cancel is told when removing cancels. */
+const REMOVAL_CANCELS =
+  "Removing the last document cancels this release, which needs permission to schedule or cancel releases.";
+
 /** Far enough ahead that no drain reaches it during a case. */
 const AT = new Date("2099-01-10T09:00:00Z");
 
@@ -684,6 +688,23 @@ describe.each(getConfiguredTestDialects())(
           memberId,
         ]);
         expect(refused.status, state).toBe(403);
+        // Saying why removing a document needed more than removing one does.
+        expect(refused.json, state).toMatchObject({
+          error: { code: "FORBIDDEN", message: REMOVAL_CANCELS },
+        });
+        // The same refusal, in the same words, through the Direct API.
+        await expect(
+          t.nextly.releases.removeMember({
+            releaseId,
+            memberId,
+            userId: assembler.ownerId,
+            overrideAccess: false,
+          }),
+          state
+        ).rejects.toMatchObject({
+          code: "FORBIDDEN",
+          publicMessage: REMOVAL_CANCELS,
+        });
         expect(await releaseRow(t, releaseId), state).toMatchObject({
           state,
           revision: before.revision,

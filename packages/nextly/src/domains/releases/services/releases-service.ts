@@ -1542,6 +1542,14 @@ function removalCancels(
 }
 
 /**
+ * What a caller who may not cancel is told when taking the document out of
+ * a single release that has not run, which cancels it. Said in the admin's
+ * words for the permission (`publish-content-releases`).
+ */
+const REMOVAL_CANCELS_REFUSAL =
+  "Removing the last document cancels this release, which needs permission to schedule or cancel releases.";
+
+/**
  * The states a document may be scheduled with an existing release in: an
  * ordinary release still being assembled or scheduled. A stopped one is
  * fixed and scheduled again first, and a finished one takes nothing.
@@ -3569,7 +3577,7 @@ export class ReleasesService {
     // own permission. A single release that ran is refused below, as any
     // finished release is.
     if (removalCancels(release) && release !== undefined) {
-      await this.cancel(release.id, actor);
+      await this.cancelForRemoval(release.id, actor);
       return;
     }
     await this.assertNotEmptyingCommittedSingle(release, actor);
@@ -3591,6 +3599,38 @@ export class ReleasesService {
       allowedStates,
       releaseEventActorOf(actor)
     );
+  }
+
+  /**
+   * Cancel a single release because its document is being taken out:
+   * `cancel` itself, its permission and its transition, with one difference
+   * in what a refused caller is told. The cancel's own refusal is kept, its
+   * code and status and what it logs, and only its sentence says why
+   * removing a document needed more: that it cancels the release. The
+   * permission named is the one the admin names it by.
+   */
+  private async cancelForRemoval(
+    releaseId: string,
+    actor: ReleaseActor
+  ): Promise<void> {
+    try {
+      await this.cancel(releaseId, actor);
+    } catch (error) {
+      if (!NextlyError.is(error) || error.code !== "FORBIDDEN") throw error;
+      throw new NextlyError({
+        code: error.code,
+        statusCode: error.statusCode,
+        publicMessage: REMOVAL_CANCELS_REFUSAL,
+        logMessage:
+          "Taking the document out of a single release that has not run cancels it, and the caller may not cancel releases.",
+        logContext: {
+          ...error.logContext,
+          releaseId,
+          attempted: "remove-member-cancels-release",
+        },
+        cause: error,
+      });
+    }
   }
 
   /**
