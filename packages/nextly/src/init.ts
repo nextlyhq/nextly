@@ -547,6 +547,22 @@ export async function getCachedNextly(): Promise<Nextly> {
 }
 
 /**
+ * Whether a start begun elsewhere — what an `instrumentation.ts` `register()`
+ * runs, or any `getNextly({ config })` call — is still under way in this
+ * process.
+ *
+ * A synchronous observation of the in-flight promise, for a caller that must
+ * say what it saw at one instant rather than wait for the answer: a start
+ * that has not called `getNextly` at all yet is NOT in flight, and this
+ * returns `false` for it, because nothing in this process can distinguish
+ * that window from no start existing. `getCachedNextly()` is the waiting
+ * form; this is the observing one.
+ */
+export function isNextlyStartInFlight(): boolean {
+  return globalForInit.__nextly_initPromise != null;
+}
+
+/**
  * Create a Next.js instrumentation `register` function for Nextly.
  *
  * This is the recommended way to initialize Nextly via Next.js's

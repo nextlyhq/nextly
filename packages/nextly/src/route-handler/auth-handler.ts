@@ -34,6 +34,8 @@ import { ensureHmrListener } from "../runtime/hmr-listener";
 import { consoleLogger } from "../shared/types";
 import { getImageProcessor } from "../storage/image-processor";
 
+import { warnColdBootNotice } from "./cold-boot-notice";
+
 // Lazy-initialized shared dispatcher instance
 // This ensures the DI container has been set up before creating the dispatcher
 let _dispatcher: ServiceDispatcher | null = null;
@@ -444,33 +446,10 @@ async function initializeServicesOnce(): Promise<void> {
     // before that creates a singleton with zero plugins (local fallback only).
     const serviceConfig = requestPathServiceConfig(nextlyConfig);
 
-    // Warn (dev only) when an app boots through the request path instead
-    // of via Next.js's instrumentation.ts. The request-path boot still
-    // works, but with multiple Next.js workers it multiplies cold-start
-    // introspection + permission seeding by worker count and is a
-    // significant amplifier of Neon connection pressure. The fix is one
-    // line in the user's `instrumentation.ts`. See:
-    // https://nextly.dev/docs/getting-started/instrumentation
-    //
-    // Gate on `=== "development"` (not `!== "production"`) to match
-    // boot-apply.ts and to avoid polluting `test` runs and staging logs
-    // where the audience can't take action on the warning.
-    if (
-      process.env.NODE_ENV === "development" &&
-      // eslint-disable-next-line turbo/no-undeclared-env-vars
-      process.env.NEXTLY_DISABLE_INSTRUMENTATION_WARNING !== "1"
-    ) {
-      consoleLogger.warn(
-        "[nextly] Cold-boot triggered by an incoming request — no " +
-          "instrumentation.ts detected. Each Next.js worker will now " +
-          "independently run schema introspection and permission seeding " +
-          "against your database, multiplying connection load. Add an " +
-          "`instrumentation.ts` at your project root (see " +
-          "https://nextly.dev/docs/getting-started/instrumentation) to " +
-          "fold this into a single worker-warmup. Suppress with " +
-          "NEXTLY_DISABLE_INSTRUMENTATION_WARNING=1."
-      );
-    }
+    // A request booted Nextly rather than a start. What it is told depends
+    // on what this process observed at that moment, and never asserts the
+    // instrumentation file is missing (`cold-boot-notice`).
+    warnColdBootNotice();
 
     await registerServices(serviceConfig);
     // Services now match the block this config was registered from, so that
