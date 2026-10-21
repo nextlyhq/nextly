@@ -6,8 +6,9 @@
  * controls around them do, rather than running past its edge, where Save draft
  * would sit behind the navigation and out of reach.
  */
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test("keeps Save draft and Publish inside an editor narrowed by the preview", async ({

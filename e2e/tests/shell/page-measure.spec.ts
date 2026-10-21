@@ -18,8 +18,9 @@
  * of the geometry the browser computed. That makes the check complete for any
  * spelling rather than for the spellings someone thought to enumerate.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "../support/test";
 import { gotoAdmin } from "../support/admin";
 
 /**

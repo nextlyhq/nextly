@@ -8,13 +8,9 @@
  * redirects. Links made before links were recorded are signed here as an
  * earlier version minted them, shown as one row, and ended by revoke-all.
  */
-import {
-  expect,
-  test,
-  type APIRequestContext,
-  type Page,
-} from "@playwright/test";
+import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { olderPreviewToken } from "./support/preview-links";
 

@@ -6,8 +6,9 @@
  * owns, and the list is searched for that stamp, so the counts and rows are
  * exactly the ones written here whatever else the database holds.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import {
   leaveReleasesAsTheRunnerWould,
