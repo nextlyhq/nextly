@@ -594,6 +594,34 @@ describeEachDialect("a translated field that is renamed", dialect => {
     });
   });
 
+  // A many-to-many relationship keeps its links in a junction table, with no column on the
+  // collection's row, but it is still a field added beside the removed one.
+  it("refuses a collection's translated field replaced by a many-to-many relationship", async () => {
+    const id = await seedCollection();
+
+    const refusal = await archiveFieldsLeavingTranslation({
+      adapter: current.adapter,
+      entity: "posts",
+      kind: "collection",
+      tableName: "dc_posts",
+      builtBy: "collection",
+      defaultLocale: "en",
+      oldFields: TRANSLATED,
+      newFields: [MANY_TO_MANY, { name: "views", type: "number" }],
+      wasLocalized: true,
+      isLocalized: true,
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(reported(refusal)).toMatch(/TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/);
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  });
+
   // The apply takes back only the rename its preview offers. An answer naming any other pair,
   // stale or made up, is dropped, as the main table's are, rather than attach one field's
   // translations to another; the change is then judged with no rename, and refused.

@@ -13,13 +13,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { isVirtualField } from "../../../collections/fields/virtual";
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import { componentFieldHasColumn } from "../../field-groups/services/field-group-utils";
-import {
-  type ColumnOrigin,
-  fieldProducesColumn,
-} from "../../schema/services/field-column-descriptor";
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 import { companionColumnNames } from "../runtime/companion-io";
 
@@ -225,16 +222,12 @@ function refuseTranslatedFieldsRemovedBesideAdded(
   if (args.renamed === null) return;
   const before = new Set(oldFields.map(f => f.name));
   const after = new Set(args.newFields.map(f => f.name));
-  // Any new field with a column, translated or shared: a translated field renamed to a type
-  // that is shared by default reads as one removed and one shared field added.
-  // A field group keeps on its own row what a collection keeps elsewhere (a many-to-many
-  // relationship is a column there), so its own rule decides which new fields get a column.
-  const getsColumn =
-    args.builtBy === "fieldGroup"
-      ? componentFieldHasColumn
-      : fieldProducesColumn;
+  // Any new field that stores something, translated or shared, wherever it stores it: a column
+  // on the main table or the companion, a junction table, a field group's own table. A translated
+  // field renamed to a type that is shared by default reads as one removed and one shared field
+  // added. Only a virtual field stores nothing.
   const added = args.newFields
-    .filter(f => !before.has(f.name) && getsColumn(f))
+    .filter(f => !before.has(f.name) && !isVirtualField(f))
     .map(f => f.name);
   const removed = oldFields.filter(
     f => !after.has(f.name) && isFieldLocalized(f, true)
