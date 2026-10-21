@@ -618,6 +618,18 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published since it began. See the mutation service.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(
+    params: Parameters<CollectionMutationService["takeLiveSharedValues"]>[0]
+  ): ReturnType<CollectionMutationService["takeLiveSharedValues"]> {
+    return this.mutationService.takeLiveSharedValues(params);
+  }
+
+  /**
    * Each of these entries as a release would put it live, read as stored. See
    * the mutation service.
    *

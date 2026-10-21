@@ -22,6 +22,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
@@ -129,6 +130,15 @@ import { storeDraftSave } from "../../versions/draft-save";
 import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { hasLifecycle } from "../../versions/recorded-status";
 import { resolveComponentSchemas } from "../../versions/restore-version";
+import {
+  outOfDateSharedFields,
+  recordSharedBase,
+  releaseSharedBase,
+  sharedFieldNames,
+  sharedValuesConflict,
+  snapshotRecord,
+  takeLiveSharedValuesInto,
+} from "../../versions/shared-publish-base";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -263,6 +273,26 @@ export class SingleMutationService extends BaseService {
    */
   private readonly versionCapture = new VersionCaptureService();
 
+  /**
+   * The Single's main row as it stands in this transaction, in the read shape
+   * a version snapshot and a pending change hold: the shared values a publish
+   * would overwrite. Read under the row lock the write already holds.
+   */
+  private async liveSharedDocument(
+    tx: TransactionContext,
+    singleMeta: DynamicSingleRecord,
+    entryId: string
+  ): Promise<Record<string, unknown>> {
+    const row = await tx.selectOne<Record<string, unknown>>(
+      singleMeta.tableName,
+      { where: this.whereEq("id", entryId) }
+    );
+    return this.queryService.deserializeJsonFields(
+      convertTimestampsToCamelCase({ ...(row ?? {}) }) as SingleDocument,
+      singleMeta.fields
+    );
+  }
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -296,6 +326,119 @@ export class SingleMutationService extends BaseService {
    * Auto-creates the document if it doesn't exist, then applies the
    * provided partial data.
    */
+  /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published after it began: each out-of-date shared field takes
+   * its live value, and the change's base moves to the version those live
+   * values are in, so its next publish goes through. A shared value the change
+   * edited that nobody else published keeps the change's value.
+   *
+   * Applies the Single's update rules: this writes the pending change.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(params: {
+    slug: string;
+    /** Which language's pending change; the default when none is named. */
+    locale?: string | null;
+    user?: UserContext;
+    overrideAccess?: boolean;
+    routeAuthorized?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  }): Promise<SingleResult<{ taken: string[] }>> {
+    try {
+      const accessDenied = await checkSingleAccess({
+        slug: params.slug,
+        operation: "update",
+        user: params.user,
+        overrideAccess: params.overrideAccess,
+        routeAuthorized: params.routeAuthorized,
+        rbacAccessControlService: this.rbacAccessControlService,
+        authenticatedScope: params.authenticatedScope,
+        logger: this.logger,
+      });
+      if (accessDenied) {
+        return { ...accessDenied, data: undefined };
+      }
+      const singleMeta = await resolveSingleForRequest(
+        this.adapter,
+        this.singleRegistryService,
+        params.slug,
+        this.logger
+      );
+      // Only a translated Single has shared values apart from its languages'.
+      const companion =
+        singleMeta && this.localization && singleMeta.localized === true
+          ? buildCompanionSchema({
+              slug: params.slug,
+              tableName: singleMeta.tableName,
+              fields: singleMeta.fields as { name: string; type: string }[],
+              dialect: this.adapter.dialect,
+              status: (singleMeta as { status?: boolean }).status === true,
+            })
+          : null;
+      const taken =
+        singleMeta && companion
+          ? await this.adapter.transaction(async tx => {
+              const row = await tx.selectOne<{ id?: string }>(
+                singleMeta.tableName,
+                {}
+              );
+              if (row?.id === undefined) return null;
+              // The lock every save and publish of this Single takes, so the
+              // live values read here are the ones the next publish compares.
+              await tx.lockRow(singleMeta.tableName, row.id);
+              const ref = {
+                scopeKind: "single" as const,
+                scopeSlug: params.slug,
+                entryId: row.id,
+              };
+              const locale = workingDraftLocale({
+                documentLocalized: singleMeta.localized === true,
+                requestLocale: params.locale ?? null,
+                defaultLocale: this.localization?.defaultLocale ?? null,
+              });
+              const pending = await new VersionsRepository(tx).findWorkingDraft(
+                ref,
+                locale
+              );
+              if (!pending) return null;
+              const live = await this.liveSharedDocument(
+                tx,
+                singleMeta,
+                row.id
+              );
+              const shared = sharedFieldNames(
+                singleMeta.fields,
+                new Set(companion.localizedFields.map(f => f.name)),
+                live
+              );
+              return takeLiveSharedValuesInto(tx, {
+                ref,
+                locale,
+                shared,
+                live,
+                pending: snapshotRecord(pending.snapshot),
+                createdBy: params.user?.id ?? null,
+              });
+            })
+          : null;
+      if (taken === null) {
+        return {
+          success: false,
+          statusCode: 404,
+          message: "This language has no pending change.",
+        };
+      }
+      return { success: true, statusCode: 200, data: { taken } };
+    } catch (error) {
+      return {
+        ...buildSingleErrorResult(error, "Failed to take the live values"),
+        data: undefined,
+      };
+    }
+  }
+
   /**
    * Remove a Single's pending working-draft sidecar for one language, under the
    * same row lock a draft save takes.
@@ -358,14 +501,16 @@ export class SingleMutationService extends BaseService {
         requestLocale: params.locale ?? null,
         defaultLocale: this.localization?.defaultLocale ?? null,
       });
+      const discardedRef = {
+        scopeKind: "single" as const,
+        scopeSlug: params.slug,
+        entryId,
+      };
       const removed = await new VersionsRepository(tx).deleteWorkingDraft(
-        {
-          scopeKind: "single",
-          scopeSlug: params.slug,
-          entryId,
-        },
+        discardedRef,
         draftLocale
       );
+      await releaseSharedBase(tx, discardedRef, draftLocale);
       // In the Single's history only when there was a draft to discard.
       if (removed > 0) {
         await recordWriteEvent(
@@ -1847,6 +1992,48 @@ export class SingleMutationService extends BaseService {
                     callerData: { ...currentData, ...promotedComponents },
                   }
                 );
+                // A language's pending change carries every shared value; one
+                // someone else published since the change began would be put
+                // back by this write, so the publish is refused, naming it.
+                if (companion) {
+                  const live = await this.liveSharedDocument(
+                    tx,
+                    singleMeta,
+                    existingDoc.id
+                  );
+                  const stale = await outOfDateSharedFields(tx, {
+                    ref: {
+                      scopeKind: "single",
+                      scopeSlug: slug,
+                      entryId: existingDoc.id,
+                    },
+                    locale: singleDraftLocale ?? null,
+                    shared: sharedFieldNames(
+                      fieldConfigs,
+                      new Set(companion.localizedFields.map(f => f.name)),
+                      live
+                    ),
+                    live,
+                    pending: snapshotRecord(pendingDraft.snapshot),
+                  });
+                  if (stale.length > 0) {
+                    throw await sharedValuesConflict({
+                      kind: "single",
+                      slug,
+                      entryId: existingDoc.id,
+                      fields: stale,
+                      live,
+                      user: options.user,
+                      // A routed request runs trusted but still answers to
+                      // the caller's field read rules.
+                      overrideAccess:
+                        options.overrideAccess && !options.routeAuthorized,
+                      authenticatedScope: options.authenticatedScope,
+                      // Resolved before the transaction opened.
+                      grants: promoteGrants,
+                    });
+                  }
+                }
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.
@@ -2481,13 +2668,20 @@ export class SingleMutationService extends BaseService {
             // A promoted pending change is consumed: its content is now live,
             // and leaving the row would re-apply it on the next publish.
             if (promotedDraft) {
+              const promotedRef = {
+                scopeKind: "single" as const,
+                scopeSlug: slug,
+                entryId: existingDoc.id,
+              };
               await new VersionsRepository(tx).deleteWorkingDraft(
-                {
-                  scopeKind: "single",
-                  scopeSlug: slug,
-                  entryId: existingDoc.id,
-                },
+                promotedRef,
                 singleDraftLocale
+              );
+              // Its base goes with it, so retention may let that version go.
+              await releaseSharedBase(
+                tx,
+                promotedRef,
+                singleDraftLocale ?? null
               );
             }
 
@@ -2714,6 +2908,22 @@ export class SingleMutationService extends BaseService {
                 toState: "draft",
                 versionNo: draftVersionNo,
               });
+              // A language's change records its base when it begins: the
+              // version whose shared values are the live ones it began from. A
+              // later save keeps it, so saving again never makes an old shared
+              // value current.
+              if (!existingDraft && companion) {
+                await recordSharedBase(tx, {
+                  ref: draftRef,
+                  locale: singleDraftLocale ?? null,
+                  shared: sharedFieldNames(
+                    fieldConfigs,
+                    new Set(companion.localizedFields.map(f => f.name)),
+                    base
+                  ),
+                  live: base,
+                });
+              }
             }
 
             // component subtrees form the snapshot.

@@ -10,6 +10,7 @@ import {
   type NextlyErrorCode,
 } from "./error-codes";
 import type {
+  OutOfDateSharedFieldsPublicData,
   PublicData,
   ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
@@ -407,9 +408,13 @@ export class NextlyError extends Error {
     /**
      * What a caller needs to act on the conflict: for a release refused over
      * its documents, the problems by code and member; for a release that
-     * cannot be deleted, the reason.
+     * cannot be deleted, the reason; for a pending change refused over shared
+     * values someone else published since, the fields out of date.
      */
-    data?: ReleaseProblemsPublicData | ReleaseNotDeletablePublicData;
+    data?:
+      | ReleaseProblemsPublicData
+      | ReleaseNotDeletablePublicData
+      | OutOfDateSharedFieldsPublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {

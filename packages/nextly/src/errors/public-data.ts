@@ -62,10 +62,24 @@ export type ReleaseProblemsPublicData = {
   problems: Array<{ memberId: string | null; code: string }>;
 };
 
+/**
+ * The shared fields a language's pending change may not publish, because
+ * someone else published newer values for them after the change began: the
+ * names the caller may read, and a count of the others, so a refusal never
+ * reveals that a protected field exists. Names only, never values.
+ *
+ * @experimental
+ */
+export type OutOfDateSharedFieldsPublicData = {
+  outOfDate: string[];
+  hiddenOutOfDate?: number;
+};
+
 export type PublicData =
   | ValidationPublicData
   | ReleaseNotDeletablePublicData
   | RateLimitPublicData
   | SingleAbsentPublicData
   | ReleaseProblemsPublicData
+  | OutOfDateSharedFieldsPublicData
   | undefined;

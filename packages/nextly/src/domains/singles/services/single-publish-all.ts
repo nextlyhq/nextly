@@ -55,6 +55,13 @@ import { captureInTx } from "../../versions/capture-in-tx";
 import { draftComponentValues } from "../../versions/draft-components";
 import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
+  outOfDateSharedFields,
+  releaseAllSharedBases,
+  sharedFieldNames,
+  sharedValuesConflict,
+  snapshotRecord,
+} from "../../versions/shared-publish-base";
+import {
   type ComponentFieldResolver,
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -472,6 +479,14 @@ export class SinglePublishAllService extends BaseService {
     // judged when it was saved as a draft and never as published, so it is
     // judged as a promotion of an empty change in the same outcome.
     const pending = await this.pendingChanges(tx, plan);
+    await this.assertSharedValuesCurrent(
+      tx,
+      plan,
+      lockedRow,
+      pending,
+      options,
+      promoteGrants
+    );
     await this.assertPendingChangesMayBePromoted(
       tx,
       plan,
@@ -837,6 +852,8 @@ export class SinglePublishAllService extends BaseService {
     await new VersionsRepository(tx).deleteAllWorkingDrafts(
       this.workingDraftRef(plan)
     );
+    // Their bases go with them, so retention may let those versions go.
+    await releaseAllSharedBases(tx, this.workingDraftRef(plan));
   }
 
   /**
@@ -930,15 +947,78 @@ export class SinglePublishAllService extends BaseService {
     return prior;
   }
 
-  /** Every language's pending change, where the Single keeps drafts. */
+  /**
+   * Every language's pending change, where the Single keeps drafts, in the
+   * order their languages last saved. They are applied to one main row in this
+   * order, so where two changed one shared field the later save's value is
+   * the one left, whatever order the database returns the rows in.
+   */
   private async pendingChanges(
     tx: TransactionContext,
     plan: PublishPlan
   ): Promise<PendingChange[]> {
     if (!plan.draftsEligible) return [];
-    return new VersionsRepository(tx).findAllWorkingDrafts(
+    const repo = new VersionsRepository(tx);
+    const drafts = await repo.findAllWorkingDrafts(this.workingDraftRef(plan));
+    if (drafts.length < 2) return drafts;
+    const newest = await repo.newestVersionNoByLocale(
       this.workingDraftRef(plan)
     );
+    const savedAt = (draft: PendingChange) => newest.get(draft.locale) ?? 0;
+    return [...drafts].sort((a, b) => savedAt(a) - savedAt(b));
+  }
+
+  /**
+   * Refuse the publish when any language's pending change holds a shared value
+   * someone else published after it began, naming every such field. Judged on
+   * the row this transaction locked, before anything is written.
+   */
+  private async assertSharedValuesCurrent(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    lockedRow: Record<string, unknown>,
+    pending: readonly PendingChange[],
+    options: PublishAllSingleLocalesOptions,
+    promoteGrants?: () => Promise<CallerGrants>
+  ): Promise<void> {
+    const { companion, singleMeta, existingDoc, fieldConfigs, slug } = plan;
+    if (!companion || !this.queryService || pending.length === 0) return;
+    const live = this.queryService.deserializeJsonFields(
+      convertTimestampsToCamelCase({ ...lockedRow }) as SingleDocument,
+      singleMeta.fields
+    ) as Record<string, unknown>;
+    const shared = sharedFieldNames(
+      fieldConfigs,
+      new Set(companion.localizedFields.map(f => f.name)),
+      live
+    );
+    const ref = this.workingDraftRef(plan);
+    const stale = new Set<string>();
+    for (const draft of pending) {
+      const fields = await outOfDateSharedFields(tx, {
+        ref,
+        locale: draft.locale,
+        shared,
+        live,
+        pending: snapshotRecord(draft.snapshot),
+      });
+      for (const name of fields) stale.add(name);
+    }
+    if (stale.size === 0) return;
+    throw await sharedValuesConflict({
+      kind: "single",
+      slug,
+      entryId: existingDoc.id,
+      fields: [...stale],
+      live,
+      user: options.user,
+      // A routed request runs trusted but still answers to the caller's field
+      // read rules.
+      overrideAccess: options.overrideAccess && !options.routeAuthorized,
+      authenticatedScope: options.authenticatedScope,
+      // Resolved before the transaction opened.
+      grants: promoteGrants,
+    });
   }
 
   private workingDraftRef(plan: PublishPlan) {

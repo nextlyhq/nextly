@@ -201,6 +201,18 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
+   * Bring a language's pending change up to date with the shared values
+   * someone else published since it began. See the mutation service.
+   *
+   * @experimental
+   */
+  async takeLiveSharedValues(
+    params: Parameters<SingleMutationService["takeLiveSharedValues"]>[0]
+  ): ReturnType<SingleMutationService["takeLiveSharedValues"]> {
+    return this.mutationService.takeLiveSharedValues(params);
+  }
+
+  /**
    * What a release's publish of this Single would be refused with by
    * validation, judged without writing. See the mutation service.
    *

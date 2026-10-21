@@ -845,6 +845,36 @@ export class VersionsRepository {
     return rows.length === 0 ? undefined : (rows[0]?.locale ?? null);
   }
 
+  /**
+   * Each language's newest durable version number on a document: the order in
+   * which its parts last saved. Version numbers rise with every write, so they
+   * order two saves made within one second, which a whole-second timestamp
+   * cannot.
+   */
+  async newestVersionNoByLocale(
+    ref: VersionRef
+  ): Promise<Map<string | null, number>> {
+    const rows = await this.db.select<{
+      locale: string | null;
+      versionNo: number;
+    }>(TABLE, {
+      columns: ["locale", "versionNo"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NOT NULL" },
+        ],
+      },
+      orderBy: [{ column: "versionNo", direction: "desc" }],
+    });
+    const newest = new Map<string | null, number>();
+    for (const row of rows) {
+      if (!newest.has(row.locale)) newest.set(row.locale, row.versionNo);
+    }
+    return newest;
+  }
+
   /** Fetch one durable version by its number, snapshot included. */
   async findByVersionNo(
     ref: VersionRef,
