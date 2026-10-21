@@ -20,6 +20,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { askEachLanguage } from "../../../auth/access/rule-language";
 import { actorForWrite } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
@@ -219,13 +220,15 @@ export class SinglePublishAllService extends BaseService {
   ): Promise<SingleResult<PublishAllSingleResult>> {
     this.logger.debug("Publishing all languages of a Single", { slug });
 
+    // The publish permission and rule are asked inside the transaction, once
+    // for each language going live (see `commitPublish`). A refusal there is
+    // kept here, since the transaction's rollback re-wraps what it throws.
+    const refused: { denied?: SingleResult<PublishAllSingleResult> } = {};
+
     try {
       const resolved = await this.resolvePublishTarget(slug, options);
       if ("result" in resolved) return resolved.result;
       const plan = resolved.plan;
-
-      const denial = await this.authorizePublish(plan, options);
-      if (denial) return denial;
 
       // Resolved here because the gate that uses them runs inside the write
       // transaction, and resolving grants queries the pooled connection that
@@ -247,7 +250,7 @@ export class SinglePublishAllService extends BaseService {
 
       const outcome = await withVersionConflictRetry(() =>
         this.adapter.transaction(tx =>
-          this.commitPublish(tx, plan, options, promoteGrants)
+          this.commitPublish(tx, plan, options, refused, promoteGrants)
         )
       );
 
@@ -280,6 +283,7 @@ export class SinglePublishAllService extends BaseService {
           : undefined,
       };
     } catch (error) {
+      if (refused.denied) return refused.denied;
       if (error instanceof NextlyError) throw error;
       throw NextlyError.internal({
         cause: error instanceof Error ? error : undefined,
@@ -441,10 +445,13 @@ export class SinglePublishAllService extends BaseService {
    */
   private async authorizePublish(
     plan: PublishPlan,
-    options: PublishAllSingleLocalesOptions
+    options: PublishAllSingleLocalesOptions,
+    /** The publish transaction's connection, which the RBAC reads run on. */
+    executor: unknown
   ): Promise<SingleResult<PublishAllSingleResult> | undefined> {
     return (
       (await checkSingleAccess({
+        executor,
         slug: plan.slug,
         operation: "publish",
         user: options.user,
@@ -462,6 +469,44 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
+   * Refuses this publish, by throwing, where it is refused in any language it
+   * puts live: the publish permission and rule asked once for each, each time
+   * told that language and all of them, so a rule that answers by language
+   * answers for each. A change with no language of its own (the shared
+   * values) is the default language's. With no language at all, asked once.
+   * The languages refused go to the server log only.
+   */
+  private async assertPublishableInEachLanguage(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    options: PublishAllSingleLocalesOptions,
+    judged: ReadonlyArray<{ locale: string | null }>,
+    /** Where a refusal is kept: the rollback re-wraps what is thrown. */
+    refused: { denied?: SingleResult<PublishAllSingleResult> }
+  ): Promise<void> {
+    const defaultLocale = this.localization?.defaultLocale;
+    const languages = [
+      ...new Set(
+        judged
+          .map(change => change.locale ?? defaultLocale)
+          .filter((locale): locale is string => typeof locale === "string")
+      ),
+    ];
+    const denied = await askEachLanguage(languages, () =>
+      this.authorizePublish(plan, options, tx.getDrizzle())
+    );
+    if (!denied) return;
+    this.logger.warn("Publish refused in some languages", {
+      single: plan.slug,
+      refusedLanguages: denied.refused,
+    });
+    refused.denied = denied.refusal;
+    throw NextlyError.forbidden({
+      logContext: { reason: "publish-refused-in-a-language" },
+    });
+  }
+
+  /**
    * The publish itself: lock, re-check, write every status, capture, record.
    *
    * Runs inside `withVersionConflictRetry`, so the whole body may re-run — it
@@ -472,6 +517,8 @@ export class SinglePublishAllService extends BaseService {
     tx: TransactionContext,
     plan: PublishPlan,
     options: PublishAllSingleLocalesOptions,
+    /** Where a refusal to publish is kept for `publishAllLocales` to return. */
+    refused: { denied?: SingleResult<PublishAllSingleResult> },
     /** Resolved before this transaction opened; see `publishAllLocales`. */
     promoteGrants?: () => Promise<CallerGrants>
   ): Promise<PublishOutcome> {
@@ -510,26 +557,44 @@ export class SinglePublishAllService extends BaseService {
     // writer's. A language with nothing pending goes live as it is stored,
     // judged when it was saved as a draft and never as published, so it is
     // judged as a promotion of an empty change in the same outcome.
+    const stored = await this.pendingChanges(tx, plan);
+    // Derived from the stored changes, which carry the same languages as the
+    // merged ones below: merging shared values replaces a change's values,
+    // never a change or its language.
+    const alsoGoingLive = languagesGoingLiveAsStored(
+      plan,
+      stored,
+      { mainStatus: lockedRow.status, companion: priorCompanionStatuses },
+      new Set(this.localization?.locales.map(locale => locale.code) ?? [])
+    );
+
+    // The publish permission and rule, asked once for each language this puts
+    // live, before anything is written; any refusal refuses the whole
+    // publish, so nothing goes live half-way. Before the shared values are
+    // merged, so a caller who may not publish is refused rather than told
+    // which shared fields conflict.
+    await this.assertPublishableInEachLanguage(
+      tx,
+      plan,
+      options,
+      [...stored, ...alsoGoingLive],
+      refused
+    );
+
     const pending = await this.sharedValuesForPublish(
       tx,
       plan,
-      await this.pendingChanges(tx, plan),
+      stored,
       options,
       promoteGrants
     );
+    const judged = [...pending, ...alsoGoingLive];
+
     await this.assertPendingChangesMayBePromoted(
       tx,
       plan,
       lockedRow,
-      [
-        ...pending,
-        ...languagesGoingLiveAsStored(
-          plan,
-          pending,
-          { mainStatus: lockedRow.status, companion: priorCompanionStatuses },
-          new Set(this.localization?.locales.map(locale => locale.code) ?? [])
-        ),
-      ],
+      judged,
       options,
       promoteGrants
     );

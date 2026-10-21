@@ -139,10 +139,11 @@ export interface AccessRuleContext {
   /** The entry's data, where the rule is judging a known entry. */
   data?: Record<string, unknown>;
   /**
-   * The one language this answer is for, where the operation is in one: the
-   * language a read reads or a write writes (an unknown or absent one being
-   * the default it resolves to). Absent where the operation involves every
-   * language, or the site has none.
+   * The one language this answer is for: the language a read reads or a
+   * write writes (an unknown or absent one being the default it resolves
+   * to), or, where a publish puts several languages live at once, the one
+   * being asked about, since it asks once for each. Absent where the
+   * operation involves every language, or the site has none.
    */
   locale?: string;
   /**

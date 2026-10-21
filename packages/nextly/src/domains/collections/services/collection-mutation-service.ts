@@ -25,6 +25,7 @@ import { eq, ne, and, like, ilike, inArray } from "drizzle-orm";
 import type { BeforeOperationArgs } from "@nextly/hooks/types";
 import type { FieldDefinition } from "@nextly/schemas/dynamic-collections";
 
+import { askEachLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { runWithCallerScope } from "../../../auth/caller-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
@@ -162,6 +163,7 @@ import {
   isBlank,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { languagesGoingLiveFrom } from "../../i18n/languages-going-live";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
@@ -3175,6 +3177,73 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Whether a publish of every language is refused in any language it puts
+   * live: `ask` (the publish permission and rule) asked once for each, each
+   * time told that language and all of them, so a rule that answers by
+   * language answers for each. The first refusal, or `undefined`; the
+   * languages refused go to the server log only. With no language going
+   * live, `ask` is asked once, in the operation's own languages.
+   */
+  /**
+   * {@link refusedInALanguage}, refusing by throwing: the refusal is handed
+   * to `onRefusal` first, since a transaction's rollback re-wraps what is
+   * thrown.
+   */
+  private async assertPublishableInEachLanguage(
+    args: Parameters<CollectionMutationService["refusedInALanguage"]>[0] & {
+      onRefusal: (refusal: CollectionServiceResult) => void;
+    }
+  ): Promise<void> {
+    const refusal = await this.refusedInALanguage(args);
+    if (!refusal) return;
+    args.onRefusal(refusal);
+    throw NextlyError.forbidden({
+      logContext: { reason: "publish-refused-in-a-language" },
+    });
+  }
+
+  /**
+   * The lifecycle permission and rule asked before the transaction: an
+   * unpublish of every language, asked once in every language. A publish of
+   * every language is asked inside the transaction instead, once for each
+   * language it puts live, which only the locked row says.
+   */
+  private lifecycleDeniedBeforeTransaction(
+    direction: LifecycleDirection,
+    ask: () => Promise<CollectionServiceResult | null>
+  ): Promise<CollectionServiceResult | null> {
+    return direction.nextStatus === "published" ? Promise.resolve(null) : ask();
+  }
+
+  private async refusedInALanguage(args: {
+    collectionName: string;
+    entryId: string;
+    row: Record<string, unknown>;
+    tx?: TransactionContext;
+    ask: () => Promise<CollectionServiceResult | null>;
+  }): Promise<CollectionServiceResult | undefined> {
+    const goingLive = (
+      await this.languagesGoingLive({
+        collectionName: args.collectionName,
+        entryId: args.entryId,
+        row: args.row,
+        writeLocale: undefined,
+        perLocaleStatus: false,
+        everyLanguage: true,
+        ...(args.tx === undefined ? {} : { tx: args.tx }),
+      })
+    ).filter((locale): locale is string => typeof locale === "string");
+    const denied = await askEachLanguage(goingLive, args.ask);
+    if (!denied) return undefined;
+    this.logger.warn("Publish refused in some languages", {
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      refusedLanguages: denied.refused,
+    });
+    return denied.refusal;
+  }
+
+  /**
    * Which languages a publish moves from not live to live, as the stored
    * statuses say. A language keeping its own status answers from its companion
    * row, where a language with no row starts as a draft; otherwise the
@@ -3201,32 +3270,12 @@ export class CollectionMutationService extends BaseService {
             )
         : null;
     if (args.everyLanguage && statuses !== null && statuses.size > 0) {
-      // Only the languages the app still configures. A removed language's
-      // row can outlive it, and judged it would be read as the default
-      // language, refusing every publish over content no request can reach
-      // to repair.
-      const configured = new Set(
-        this.localization?.locales.map(locale => locale.code) ?? []
-      );
-      const going: (string | undefined)[] = [...statuses]
-        .filter(
-          ([locale, status]) =>
-            status !== "published" &&
-            (configured.size === 0 || configured.has(locale))
-        )
-        .map(([locale]) => locale);
-      // The main row goes live with the default language whether or not that
-      // language stores a translation row: one holding only shared values has
-      // none, and its document is still published.
-      const defaultLocale = this.localization?.defaultLocale;
-      if (
-        defaultLocale !== undefined &&
-        !statuses.has(defaultLocale) &&
-        args.row.status !== "published"
-      ) {
-        going.push(defaultLocale);
-      }
-      return going;
+      return languagesGoingLiveFrom({
+        statuses,
+        configured: this.localization?.locales.map(locale => locale.code) ?? [],
+        defaultLocale: this.localization?.defaultLocale,
+        mainPublished: args.row.status === "published",
+      });
     }
     const live =
       args.perLocaleStatus && args.writeLocale !== undefined
@@ -5968,10 +6017,11 @@ export class CollectionMutationService extends BaseService {
     direction: LifecycleDirection,
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
-    // Set when the in-transaction document-rule re-check refuses the publish
-    // against the row-locked document. Declared out here so the catch can read
-    // it: the adapter re-wraps the thrown sentinel in a DatabaseError as the
-    // transaction rolls back, so `instanceof` no longer identifies it.
+    // Set when the publish rule, asked inside the transaction once for each
+    // language going live, refuses one of them. Declared out here so the
+    // catch can read it: the adapter re-wraps the thrown sentinel in a
+    // DatabaseError as the transaction rolls back, so `instanceof` no longer
+    // identifies it.
     let publishDocDenied: CollectionServiceResult | undefined;
     // Set when judging the languages going live refuses the publish inside the
     // transaction, read by the catch for the same reason as the one above.
@@ -6071,18 +6121,28 @@ export class CollectionMutationService extends BaseService {
         locale: undefined,
       });
 
-      const publishDenied = await this.accessService.checkCollectionAccess({
-        collectionName: params.collectionName,
-        operation: direction.accessAction,
-        user: accessUser,
-        overrideAccess: params.overrideAccess,
-        // Not route-authorized as publish: the POST was authorized as `update`,
-        // so the publish permission is checked here.
-        routeAuthorized: false,
-        // Judge a scoped API key on its own `publish-<slug>` grant.
-        authenticatedScope: params.authenticatedScope,
-      });
-      if (publishDenied) return publishDenied;
+      // The lifecycle permission and rule for this direction. Not
+      // route-authorized: the POST was authorized as `update`, so the publish
+      // or unpublish permission is checked here. A scoped API key is judged on
+      // its own `<action>-<slug>` grant.
+      const lifecycleDenied = (executor?: unknown) =>
+        this.accessService.checkCollectionAccess({
+          collectionName: params.collectionName,
+          operation: direction.accessAction,
+          user: accessUser,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: false,
+          authenticatedScope: params.authenticatedScope,
+          ...(executor === undefined ? {} : { executor }),
+        });
+      // A publish is judged inside the transaction, once for each language it
+      // puts live, which only the locked row says (below). Unpublishing every
+      // language is judged here, in every language.
+      const deniedBeforePublish = await this.lifecycleDeniedBeforeTransaction(
+        direction,
+        lifecycleDenied
+      );
+      if (deniedBeforePublish) return deniedBeforePublish;
 
       // `publishCollection` (loaded above for the lifecycle flag) also resolves a
       // custom tableName/dbName override, matching every other mutation;
@@ -6207,6 +6267,19 @@ export class CollectionMutationService extends BaseService {
           // cannot judge one document differently. The refusal is kept: the
           // adapter re-wraps whatever leaves the transaction.
           if (direction.nextStatus === "published") {
+            // The publish rule, asked once for each language going live, on the
+            // row this transaction locked and before anything is written; any
+            // refusal refuses the whole publish, so nothing goes live half-way.
+            await this.assertPublishableInEachLanguage({
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              row: preImageRow,
+              tx,
+              ask: () => lifecycleDenied(tx.getDrizzle()),
+              onRefusal: refusal => {
+                publishDocDenied = refusal;
+              },
+            });
             try {
               await this.assertLanguagesGoLiveValid({
                 collectionName: params.collectionName,
@@ -8526,8 +8599,8 @@ export class CollectionMutationService extends BaseService {
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
-        const permissionDenied = await this.accessService.checkCollectionAccess(
-          {
+        const transitionDenied = () =>
+          this.accessService.checkCollectionAccess({
             collectionName: params.collectionName,
             operation: transitionOp,
             user: accessUser,
@@ -8539,8 +8612,21 @@ export class CollectionMutationService extends BaseService {
             // not the key owner's — the route only checked `update` against the
             // key's scope.
             authenticatedScope: params.authenticatedScope,
-          }
-        );
+          });
+        // A write to every language that publishes asks the publish rule once
+        // for each language it puts live, each time told that language and all
+        // of them, as publishing every language does: a rule that answers by
+        // language answers for each, and any refusal refuses the write. Judged
+        // here, before the transaction, with what goes live (above).
+        const permissionDenied =
+          sweepAllLocales && transitionOp === "publish"
+            ? ((await this.refusedInALanguage({
+                collectionName: params.collectionName,
+                entryId: params.entryId,
+                row: existingEntry as Record<string, unknown>,
+                ask: transitionDenied,
+              })) ?? null)
+            : await transitionDenied();
         if (permissionDenied) {
           transitionGuard = {
             op: transitionOp,

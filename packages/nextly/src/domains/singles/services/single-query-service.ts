@@ -290,6 +290,12 @@ export async function checkSingleAccess(params: {
   // stamped grants for the publish/unpublish transition, not the owner's RBAC.
   authenticatedScope?: AuthenticatedScope;
   logger: Logger;
+  /**
+   * A transaction-bound executor, when the caller asks from inside a write
+   * transaction, so the role and permission reads run on that transaction's
+   * connection rather than wait for a pooled one it is holding.
+   */
+  executor?: unknown;
 }): Promise<SingleResult | null> {
   const {
     slug,
@@ -300,6 +306,7 @@ export async function checkSingleAccess(params: {
     rbacAccessControlService,
     authenticatedScope,
     logger,
+    executor,
   } = params;
 
   if (overrideAccess) {
@@ -316,6 +323,8 @@ export async function checkSingleAccess(params: {
     scope: authenticatedScope,
     principal: currentPrincipal(),
     rules: rbacAccessControlService,
+    // On the caller's transaction, when it asks from inside one.
+    ...(executor === undefined ? {} : { executor }),
   });
   if (verdict.allowed) return null;
 

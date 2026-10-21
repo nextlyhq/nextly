@@ -22,6 +22,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { askEachLanguage } from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
@@ -110,6 +111,7 @@ import {
   readCompanionLocaleStatusAll,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
+import { languagesGoingLiveFrom } from "../../i18n/languages-going-live";
 import { EVERY_LOCALE } from "../../i18n/locale-selector";
 import {
   type LocalizationSource,
@@ -1489,10 +1491,13 @@ export class SingleMutationService extends BaseService {
         op: "publish" | "unpublish";
         permissionDenied: SingleResult | null;
       } | null = null;
+      // A write to every language that publishes is judged under the lock,
+      // once for each language it puts live (below), not once here.
       if (
         singleHasStatus &&
         !options.overrideAccess &&
-        transitionNextStatus !== undefined
+        transitionNextStatus !== undefined &&
+        !(sweepAllLocales && transitionNextStatus === "published")
       ) {
         const transitionOp =
           transitionNextStatus === "published" ? "publish" : "unpublish";
@@ -1978,6 +1983,49 @@ export class SingleMutationService extends BaseService {
               anotherLanguageWasAlreadyLive = [...priorStatuses.values()].some(
                 status => status === "published"
               );
+            }
+            // A write to every language that publishes asks the publish
+            // permission and rule once for each language it puts live, each
+            // time told that language and all of them, as publishing every
+            // language does: a rule that answers by language answers for each.
+            // Judged under the lock, on the statuses it reads, before the write
+            // lands; any refusal refuses the write. With no language going
+            // live, it is asked once.
+            if (
+              sweepAllLocales &&
+              !options.overrideAccess &&
+              mainStatusWritten === "published"
+            ) {
+              const goingLive = languagesGoingLiveFrom({
+                statuses: priorStatuses,
+                configured:
+                  this.localization?.locales.map(locale => locale.code) ?? [],
+                defaultLocale: this.localization?.defaultLocale,
+                mainPublished: preRowMainStatus === "published",
+              });
+              const denied = await askEachLanguage(goingLive, () =>
+                checkSingleAccess({
+                  slug,
+                  operation: "publish",
+                  user: options.user,
+                  overrideAccess: options.overrideAccess,
+                  trusted: options.trusted,
+                  routeAuthorized: false,
+                  rbacAccessControlService: this.rbacAccessControlService,
+                  authenticatedScope: options.authenticatedScope,
+                  logger: this.logger,
+                  executor: tx.getDrizzle(),
+                })
+              );
+              if (denied) {
+                // The languages refused are for the server log only.
+                this.logger.warn("Publish refused in some languages", {
+                  single: slug,
+                  refusedLanguages: denied.refused,
+                });
+                transitionDeniedResult = denied.refusal;
+                throw new SingleStatusTransitionDeniedError();
+              }
             }
             if (
               (singleMeta as { status?: boolean }).status === true &&
