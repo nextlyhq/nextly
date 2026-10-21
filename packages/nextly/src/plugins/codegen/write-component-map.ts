@@ -15,7 +15,10 @@ import { dirname, resolve } from "node:path";
 
 import type { PluginDefinition } from "../plugin-context";
 
-import { buildImportMapArtifacts } from "./component-import-map";
+import {
+  buildImportMapArtifacts,
+  configImportSpecifier,
+} from "./component-import-map";
 
 /** Where the files were written, and which of them changed. */
 export interface ComponentMapWrite {
@@ -37,17 +40,29 @@ export interface ComponentMapWrite {
 export async function writeComponentMapFiles(
   plugins: PluginDefinition[],
   typesOutputPath: string,
-  cwd: string
+  cwd: string,
+  configFile?: string
 ): Promise<ComponentMapWrite> {
+  // The config's import, for the map's check of each widget component against its widget: none
+  // where there is no config file, and the map is then written unchecked, as before.
+  const configImport =
+    configFile === undefined
+      ? undefined
+      : configImportSpecifier(
+          resolve(cwd, dirname(typesOutputPath)),
+          resolve(cwd, configFile)
+        );
   const planned = await Promise.all(
-    buildImportMapArtifacts(plugins, typesOutputPath).map(async artifact => {
-      const file = resolve(cwd, artifact.path);
-      return {
-        file,
-        code: artifact.code,
-        previous: await currentContent(file),
-      };
-    })
+    buildImportMapArtifacts(plugins, typesOutputPath, configImport).map(
+      async artifact => {
+        const file = resolve(cwd, artifact.path);
+        return {
+          file,
+          code: artifact.code,
+          previous: await currentContent(file),
+        };
+      }
+    )
   );
   // Every file a write was started on, the failing one included: a write
   // that fails partway can leave its own file cut short.

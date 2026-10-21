@@ -21,7 +21,7 @@
  * @module plugins/codegen/component-import-map
  */
 
-import { dirname, join } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 import type {
   ComponentPath,
@@ -453,7 +453,10 @@ const AGREEMENT_CHECK = [
  * to register imports no component and registers nothing, and still holds
  * itself to its (empty) list.
  */
-export function buildComponentImportMap(plugins: PluginDefinition[]): string {
+export function buildComponentImportMap(
+  plugins: PluginDefinition[],
+  configImport?: string
+): string {
   const paths = componentImportMapPaths(plugins);
   const parsed = paths.map(parsePath);
   const modules = Array.from(new Set(parsed.map(p => p.module))).sort();
@@ -470,6 +473,14 @@ export function buildComponentImportMap(plugins: PluginDefinition[]): string {
   lines.push(
     `import { registeredComponentPaths as listed } from "./${COMPONENT_PATHS_FILENAME.replace(/\.ts$/, "")}";`
   );
+  // The site's config, for its type alone: the check below reads the widgets it declares.
+  // Type-only, so it is erased and no server code reaches the browser bundle.
+  if (configImport !== undefined) {
+    lines.push('import type { DeclaredComponentMap } from "nextly";');
+    lines.push(
+      `import type * as siteConfig from ${JSON.stringify(configImport)};`
+    );
+  }
   lines.push("");
   lines.push("const registered = {");
   for (const p of parsed) {
@@ -477,7 +488,13 @@ export function buildComponentImportMap(plugins: PluginDefinition[]): string {
       `  ${JSON.stringify(p.path)}: ${alias.get(p.module)}.${p.member},`
     );
   }
-  lines.push("};");
+  // Each component registered under a typed widget's path must take that widget's props, or
+  // the site's build fails here; every other path is left as it was.
+  lines.push(
+    configImport === undefined
+      ? "};"
+      : "} satisfies DeclaredComponentMap<typeof siteConfig>;"
+  );
   lines.push("");
   lines.push(AGREEMENT_CHECK);
   lines.push("");
@@ -520,17 +537,33 @@ export function buildComponentPathsModule(
  */
 export function buildImportMapArtifacts(
   plugins: PluginDefinition[],
-  typesOutputPath: string
+  typesOutputPath: string,
+  configImport?: string
 ): { path: string; code: string }[] {
   const dir = dirname(typesOutputPath);
   return [
     {
       path: join(dir, COMPONENT_IMPORT_MAP_FILENAME),
-      code: buildComponentImportMap(plugins),
+      code: buildComponentImportMap(plugins, configImport),
     },
     {
       path: join(dir, COMPONENT_PATHS_FILENAME),
       code: buildComponentPathsModule(plugins),
     },
   ];
+}
+
+/**
+ * How the generated map, in `mapDir`, imports the site's config file at `configFile`: relative,
+ * with forward slashes and no extension, as a TypeScript import names a module. Both absolute.
+ */
+export function configImportSpecifier(
+  mapDir: string,
+  configFile: string
+): string {
+  const path = relative(mapDir, configFile)
+    .split(sep)
+    .join("/")
+    .replace(/\.(m?ts|m?js)$/, "");
+  return path.startsWith(".") ? path : `./${path}`;
 }

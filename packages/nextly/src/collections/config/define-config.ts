@@ -40,6 +40,11 @@ import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { NextlyError } from "../../errors";
 import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../field-groups/config/validate-field-group";
+import type {
+  DeclaredWidgetsRecord,
+  WidgetsOfPlugins,
+} from "../../plugins/declared-widgets";
+import type { PluginDefinition } from "../../plugins/plugin-context";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
 import {
   sanitizeConfig,
@@ -451,7 +456,20 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  * @returns Normalized configuration with all defaults applied
  * @throws Error if configuration is invalid (e.g., duplicate slugs)
  */
-export function defineConfig(config: NextlyConfig): SanitizedNextlyConfig {
-  validateNextlyConfig(config);
-  return sanitizeConfig(config);
+export function defineConfig<
+  P extends readonly PluginDefinition[] = PluginDefinition[],
+>(
+  config: Omit<NextlyConfig, "plugins"> & { plugins?: P }
+): SanitizedNextlyConfig & DeclaredWidgetsRecord<WidgetsOfPlugins<P>> {
+  // The plugins as their own type `P`, inferred from the list as written, so each keeps its
+  // widgets' types, and the returned type records those widgets for the generated component
+  // map. At run time the config is validated and sanitized as before, its plugins copied into a
+  // fresh array, since `P` may be read-only and the config's own field is not.
+  const { plugins, ...rest } = config;
+  const written: NextlyConfig = {
+    ...rest,
+    ...(plugins === undefined ? {} : { plugins: [...plugins] }),
+  };
+  validateNextlyConfig(written);
+  return sanitizeConfig(written);
 }

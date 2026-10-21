@@ -44,6 +44,7 @@ import {
 } from "../../../plugins/codegen/component-import-map";
 import { writeComponentMapFiles } from "../../../plugins/codegen/write-component-map";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
+import { findConfigFile } from "../../../shared/lib/config-file";
 import { generatedTypesFile } from "../../../shared/lib/generated-output-paths";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 
@@ -183,10 +184,13 @@ async function rewriteInDevelopment(
   obsolete: readonly string[]
 ): Promise<void> {
   try {
+    // The config file found as the loader finds it, so this map imports the config's type and
+    // checks each widget component, as `generate:types` writes it.
     await writeComponentMapFiles(
       [...plugins],
       place.typesOutputPath,
-      process.cwd()
+      process.cwd(),
+      findConfigFile(process.cwd())
     );
     getNextlyLogger().info({
       kind: "admin-component-map-regenerated",
