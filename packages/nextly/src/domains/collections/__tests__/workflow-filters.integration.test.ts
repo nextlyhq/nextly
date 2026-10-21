@@ -246,9 +246,9 @@ describe.each(getConfiguredTestDialects())(
       await versionRow(t, "posts", posts.drafted, {});
       await versionRow(t, "posts", posts.draftedInFrench, { locale: "fr" });
       // Version rows that are NOT a pending change: an autosave, and a
-      // numbered history version.
+      // numbered history version (well past the version the create recorded).
       await versionRow(t, "posts", posts.onlyHistory, { isAutosave: true });
-      await versionRow(t, "posts", posts.onlyHistory, { versionNo: 1 });
+      await versionRow(t, "posts", posts.onlyHistory, { versionNo: 999 });
       // A working draft of a secret, to show the condition stays per collection.
       await versionRow(t, "secrets", secret, {});
 
