@@ -57,4 +57,11 @@ export const dragMessages = {
   cancelledByNarrowing(): string {
     return "The dashboard is one column now, so the move was cancelled. Nothing moved. Use the card's menu to move it.";
   },
+  /**
+   * The dashboard changed width mid-drag, still more than one column: the cards reflowed, so
+   * the place the reader was aiming at moved. Says why; the card can be picked up again.
+   */
+  cancelledByResize(): string {
+    return "The dashboard changed width, so the move was cancelled. Nothing moved.";
+  },
 };

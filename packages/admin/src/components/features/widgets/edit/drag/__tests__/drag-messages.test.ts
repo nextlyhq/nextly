@@ -39,6 +39,12 @@ describe("what a drag says", () => {
       "The dashboard is one column now, so the move was cancelled. Nothing moved. Use the card's menu to move it."
     );
   });
+
+  it("says why a move ended when the dashboard changes width mid-drag", () => {
+    expect(dragMessages.cancelledByResize()).toBe(
+      "The dashboard changed width, so the move was cancelled. Nothing moved."
+    );
+  });
 });
 
 describe("the handle", () => {

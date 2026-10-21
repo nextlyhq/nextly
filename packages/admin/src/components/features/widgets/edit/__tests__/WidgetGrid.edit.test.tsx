@@ -709,6 +709,22 @@ describe("removing a card", () => {
     expect(screen.getByTestId("dashboard-edit-save")).toBeDisabled();
   });
 
+  it("rings the card Undo puts back, as putting it back from the add panel does", async () => {
+    // 🔴 Undo restored the card through its own path, which had no reach to the ring, so the
+    // card came back unmarked while the same card put back from the panel was ringed.
+    renderGrid();
+    const user = await beginEditing();
+    await choose(user, "Widget core/b", "Remove");
+    await user.click(screen.getByTestId("removal-notice-undo"));
+
+    expect(screen.getByTestId("widget-cell-core/b")).toHaveAttribute(
+      "data-highlighted"
+    );
+    expect(screen.getByTestId("widget-cell-core/a")).not.toHaveAttribute(
+      "data-highlighted"
+    );
+  });
+
   it("keeps the notice until it is closed, or replaced by the next one", async () => {
     renderGrid();
     const user = await beginEditing();
@@ -1524,6 +1540,32 @@ describe("at one column", () => {
     );
     expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
     expect(screen.queryAllByTestId("widget-drag-handle")).toEqual([]);
+  });
+
+  it("cancels a drag when the dashboard changes width but keeps its columns, and says why", async () => {
+    // 🔴 Only narrowing to one column ended a drag. A change between two wider bands reflows
+    // the cards while the drag kept the places it measured at pick-up, so the line, and the
+    // drop, pointed somewhere other than where the cards had gone.
+    renderGrid();
+    await beginEditing();
+    const handle = screen.getByRole("button", { name: "Move Widget core/b" });
+    handle.focus();
+    fireEvent.keyDown(handle, { key: " " });
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+
+    resizeDashboard(900);
+
+    await waitFor(() =>
+      expect(live()).toHaveTextContent(
+        "The dashboard changed width, so the move was cancelled. Nothing moved."
+      )
+    );
+    expect(drawnOrder()).toEqual(["core/a", "core/b", "core/c"]);
+    expect(screen.queryByTestId("widget-drop-line")).toBeNull();
+    // Still more than one column: the handles stay, and the card can be picked up again.
+    expect(
+      screen.getByRole("button", { name: "Move Widget core/b" })
+    ).toBeInTheDocument();
   });
 
   it("tells a reader with an empty dashboard to customise it, at any width", async () => {

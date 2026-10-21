@@ -70,10 +70,18 @@ export interface DragInProgress {
   by: "keyboard" | "pointer";
   /**
    * Measured once, at pick-up, relative to the grid. Nothing reflows during a drag, so the
-   * rectangles hold for its whole length, and scrolling moves the grid with them.
+   * rectangles hold for its whole length.
    */
   cards: DrawnCard[];
   gridWidth: number;
+  /**
+   * The grid's corner on the screen at pick-up. A pointer's position is read against this one,
+   * never against the grid's corner now: dnd-kit's drag delta already counts any scrolling
+   * since pick-up, so the grid's current corner would count that scrolling a second time.
+   */
+  origin: { left: number; top: number };
+  /** The dashboard's width at pick-up; any other width cancels the drag (`useCancelOnResize`). */
+  atWidth: number | undefined;
 }
 
 export interface CardDrag {
@@ -152,7 +160,7 @@ function measureCards(
   grid: HTMLElement,
   rows: readonly ArrangedWidget[],
   band: DashboardBand
-): { cards: DrawnCard[]; gridWidth: number } | undefined {
+): Pick<DragInProgress, "cards" | "gridWidth" | "origin"> | undefined {
   const box = grid.getBoundingClientRect();
   // Every cell at once, by its placement: one query rather than one per card.
   const cells = new Map<string, Element>();
@@ -176,7 +184,11 @@ function measureCards(
       },
     });
   }
-  return { cards, gridWidth: box.width };
+  return {
+    cards,
+    gridWidth: box.width,
+    origin: { left: box.left, top: box.top },
+  };
 }
 
 /** Whether a key picks a card up or puts it down. */
@@ -224,8 +236,7 @@ function announcePickUp(say: Carrying["say"], held: DragInProgress): void {
 
 /** The pointer's drag, through dnd-kit's events. */
 function usePointerCarry(
-  carrying: Carrying,
-  gridRef: RefObject<HTMLElement | null>
+  carrying: Carrying
 ): Pick<CardDrag, "onDragStart" | "onDragMove" | "onDragEnd" | "onDragCancel"> {
   const { current, setDrag, pickUp, finish, cancel, say } = carrying;
   const onDragStart = useCallback(
@@ -242,22 +253,20 @@ function usePointerCarry(
     (event: DragMoveEvent) => {
       const held = current.current;
       const point = pointerAt(event);
-      const grid = gridRef.current;
-      if (held?.by !== "pointer" || point === undefined || grid === null)
-        return;
-      // The grid's own corner, read again each move: the page may have scrolled under it.
-      const box = grid.getBoundingClientRect();
+      if (held?.by !== "pointer" || point === undefined) return;
+      // From the grid's corner at pick-up: the delta the point is built from already counts
+      // scrolling since then, so the grid's corner now would count it twice.
       const final = finalPositionAt(
         held.cards,
         held.from,
-        { x: point.x - box.left, y: point.y - box.top },
+        { x: point.x - held.origin.left, y: point.y - held.origin.top },
         held.gridWidth
       );
       if (final !== undefined && final !== held.final) {
         setDrag({ ...held, final });
       }
     },
-    [current, gridRef, setDrag]
+    [current, setDrag]
   );
 
   const onDragEnd = useCallback(() => {
@@ -326,9 +335,34 @@ function useKeyboardCarry(
   return { onHandleKeyDown, onHandleBlur };
 }
 
+/**
+ * Ends a drag the dashboard's width changed under: narrowed to one column, where dragging is
+ * off, or to any other width, where the cards reflow and the rectangles measured at pick-up no
+ * longer say where each one is. Either way the card stays where it was, and the reader is told.
+ */
+function useCancelOnResize(
+  drag: DragInProgress | null,
+  enabled: boolean,
+  width: number | undefined,
+  carrying: Pick<Carrying, "setDrag" | "say">
+): void {
+  const { setDrag, say } = carrying;
+  useEffect(() => {
+    if (drag === null) return;
+    if (!enabled) {
+      setDrag(null);
+      say(dragMessages.cancelledByNarrowing());
+    } else if (width !== drag.atWidth) {
+      setDrag(null);
+      say(dragMessages.cancelledByResize());
+    }
+  }, [drag, enabled, width, setDrag, say]);
+}
+
 export function useCardDrag({
   rows,
   band,
+  width,
   gridRef,
   say,
   drop,
@@ -337,6 +371,8 @@ export function useCardDrag({
   rows: readonly ArrangedWidget[];
   /** The dashboard's band, or `undefined` before it is measured. */
   band: DashboardBand | undefined;
+  /** The dashboard's width, or `undefined` before it is measured. */
+  width: number | undefined;
   gridRef: RefObject<HTMLElement | null>;
   /** Speak one sentence through the dashboard's region. */
   say: (sentence: string) => void;
@@ -374,9 +410,10 @@ export function useCardDrag({
         final: from,
         by,
         ...measured,
+        atWidth: width,
       };
     },
-    [gridRef, band, rows]
+    [gridRef, band, width, rows]
   );
 
   const finish = useCallback(
@@ -394,12 +431,7 @@ export function useCardDrag({
     say(dragMessages.cancelled());
   }, [setDrag, say]);
 
-  // Narrowed to one column mid-drag: dragging is off there, so the card stays where it was.
-  useEffect(() => {
-    if (enabled || drag === null) return;
-    setDrag(null);
-    say(dragMessages.cancelledByNarrowing());
-  }, [enabled, drag, setDrag, say]);
+  useCancelOnResize(drag, enabled, width, { setDrag, say });
 
   const carrying: Carrying = {
     enabled,
@@ -410,7 +442,7 @@ export function useCardDrag({
     cancel,
     say,
   };
-  const pointer = usePointerCarry(carrying, gridRef);
+  const pointer = usePointerCarry(carrying);
   const keyboard = useKeyboardCarry(carrying);
 
   return {

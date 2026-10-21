@@ -185,7 +185,7 @@ function useCardsAtDashboardWidth(
     dashboardWidth === undefined ? undefined : bandForWidth(dashboardWidth);
   return {
     dashboardRef,
-    drag: useCardDrag({ rows: visible, band, ...carry }),
+    drag: useCardDrag({ rows: visible, band, width: dashboardWidth, ...carry }),
     ...useWidgetBatch(cards),
   };
 }
@@ -310,7 +310,14 @@ export function WidgetGrid() {
 
   // Removing a card, while customising or from the card itself, and the one
   // notice that offers it back.
-  const removal = useCardRemoval(layout, editor, visible, announce, focus);
+  const removal = useCardRemoval(
+    layout,
+    editor,
+    visible,
+    announce,
+    focus,
+    arrangement.ring.highlight
+  );
 
   const byId = useMemo(
     () => new Map(declared.map(widget => [widget.id, widget])),
