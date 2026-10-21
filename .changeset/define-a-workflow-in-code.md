@@ -29,6 +29,23 @@
 "nextly": patch
 ---
 
-An editorial workflow can now be defined in code and attached to collections and Singles, from `nextly/config` or `nextly`. `defineWorkflow` declares its stages (one or more allowing publishing), its steps between them (`submit`, `approve`, `request-changes` or `move`, each with its permission, comment rule, self-approval rule and primary step), what an edit to approved content does, where the next draft starts after publishing, where removed stages go and whether approvals survive a change of definition. `reviewWorkflow()` is the one-line Drafting → In review → Approved preset. A collection's or Single's `workflow` option attaches one; it needs `status: true` and drafts enabled, and a workflow on anything that cannot keep a draft beside the live version is refused at config load, at boot and in `nextly build`, saying which condition is missing. Every definition is validated when declared, with errors that name their place and the known names (``steps[1].to: `aproved` is not a stage. Known stages: drafting, inReview, approved.``), and a misspelt stage in a step fails to compile.
+Experimental: a workflow definition can now be declared in code and attached to collections and Singles. This release only declares, validates, registers and types a definition. Nothing enforces it yet: content is not tracked through stages, no step can be taken, and publishing works exactly as before.
 
-Each registered workflow carries its definition hash (sha256 of its structure; labels and attachments do not change it) and the path of the `nextly.config.ts` that registers it, and the generated types gain a `<Name>WorkflowStage` and `<Name>WorkflowStep` union per attached collection and Single, with a `workflows` entry in `Config`. Nothing changes at runtime yet. The internal `defineWorkflow` for content states in `lib/content-states`, which was never exported, is renamed `defineContentStates`. All of this is experimental.
+`defineWorkflow`, from `nextly/config` or `nextly`, declares:
+
+- stages, one or more of them allowing publishing, but never the first;
+- steps between stages, of kind `submit`, `approve`, `request-changes` or `move`;
+- settings kept for later use: what an edit to approved content does, where the next draft starts, where removed stages go and whether approvals stand.
+
+`reviewWorkflow()` is a ready-made Drafting → In review → Approved definition. Each definition is checked when declared. An error names its place and the known names, for example ``steps[1].to: `aproved` is not a stage. Known stages: drafting, inReview, approved.``. A misspelt stage in a step fails to compile.
+
+The `workflow` option on a collection or Single attaches a definition. It needs `status: true` and drafts enabled. An attachment that cannot keep a draft beside the live version is refused at config load, at boot, on hot reload and in `nextly build`, and the refusal says which condition is missing.
+
+Each attached workflow is registered with:
+
+- a definition hash: sha256 of its structure, which labels and attachments don't change;
+- the path of its `nextly.config.ts`.
+
+`generate:types` and `nextly build` add a `<Name>WorkflowStage` and `<Name>WorkflowStep` union for each attached collection and Single, and a `workflows` entry in `Config`.
+
+An internal, never-exported `defineWorkflow` for content states in `lib/content-states` is renamed `defineContentStates`.
