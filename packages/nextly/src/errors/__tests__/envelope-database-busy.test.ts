@@ -15,8 +15,12 @@ import {
   errorEnvelopeFields,
   errorFromServiceEnvelope,
 } from "../from-service-envelope";
+import { NextlyError } from "../nextly-error";
 import { originalErrorOf } from "../original-error";
-import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "../retry-after";
+import {
+  DATABASE_BUSY_RETRY_AFTER_SECONDS,
+  retryAfterSeconds,
+} from "../retry-after";
 
 /** The envelope a collection or Single service returns for `error`. */
 function serviceEnvelope(error: unknown) {
@@ -82,5 +86,52 @@ describe("a service envelope for a busy database", () => {
 
     expect(envelope.statusCode).toBe(500);
     expect(envelope.code).toBeUndefined();
+  });
+});
+
+describe("a write that committed before the database was busy", () => {
+  const committedBusy = [
+    { name: "a raw busy error", error: poolWaitTimeoutError(15000) },
+    {
+      name: "a typed DATABASE_BUSY",
+      error: NextlyError.databaseBusy(),
+    },
+    {
+      name: "a SERVICE_UNAVAILABLE without a hint",
+      error: NextlyError.serviceUnavailable(),
+    },
+  ];
+
+  for (const { name, error } of committedBusy) {
+    it(`is answered as saved, with no retry hint, for ${name}`, () => {
+      const rebuilt = errorFromServiceEnvelope({
+        ...serviceEnvelope(error),
+        committed: true,
+      });
+
+      expect(rebuilt.code).toBe("INTERNAL_ERROR");
+      expect(rebuilt.statusCode).toBe(500);
+      expect(retryAfterSeconds(rebuilt)).toBeUndefined();
+      expect(rebuilt.publicMessage).toMatch(/change was saved/);
+    });
+  }
+
+  it("keeps an error that asks for no retry as it was", () => {
+    const rebuilt = errorFromServiceEnvelope({
+      ...serviceEnvelope(NextlyError.forbidden()),
+      committed: true,
+    });
+
+    expect(rebuilt.code).toBe("FORBIDDEN");
+  });
+
+  it("keeps DATABASE_BUSY when nothing committed", () => {
+    const rebuilt = errorFromServiceEnvelope({
+      ...serviceEnvelope(poolWaitTimeoutError(15000)),
+      committed: false,
+    });
+
+    expect(rebuilt.code).toBe("DATABASE_BUSY");
+    expect(retryAfterSeconds(rebuilt)).toBe(DATABASE_BUSY_RETRY_AFTER_SECONDS);
   });
 });

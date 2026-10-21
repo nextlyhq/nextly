@@ -8,10 +8,15 @@
  * internal error rather than as the retryable DATABASE_BUSY it is. A refusal
  * that is not a NextlyError still denies with the gate's own 500.
  */
+import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "../../../errors/retry-after";
+import { errorFromServiceEnvelope } from "../../../errors/from-service-envelope";
+import {
+  DATABASE_BUSY_RETRY_AFTER_SECONDS,
+  retryAfterSeconds,
+} from "../../../errors/retry-after";
 import {
   createMockAdapter,
   createMockDb,
@@ -72,6 +77,23 @@ describe.each(GATES)("$name, refused by its access check", ({ gate }) => {
       code: "DATABASE_BUSY",
       publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
     });
+  });
+
+  it("answers DATABASE_BUSY for a raw pool-wait timeout, through the boundary too", async () => {
+    // The error the adapters raise, unconverted: what a role or permission
+    // read throws when it waits out its bound for a connection.
+    const result = await gate(poolWaitTimeoutError(15000));
+
+    expect(result).toMatchObject({
+      success: false,
+      statusCode: 503,
+      code: "DATABASE_BUSY",
+      publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
+    });
+    // What the REST and Direct API boundaries rebuild from the gate result.
+    const rebuilt = errorFromServiceEnvelope(result as never);
+    expect(rebuilt.code).toBe("DATABASE_BUSY");
+    expect(retryAfterSeconds(rebuilt)).toBe(DATABASE_BUSY_RETRY_AFTER_SECONDS);
   });
 
   it("keeps an internal refusal a 500", async () => {
