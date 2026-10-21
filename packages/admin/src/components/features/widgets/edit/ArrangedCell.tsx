@@ -36,6 +36,7 @@ import {
 } from "./CustomizingFence";
 import { DismissWidgetButton } from "./DismissWidgetButton";
 import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
+import { SettingsPreview } from "./SettingsPreview";
 import {
   useCardQuickSetting,
   type CellSettingsWrite,
@@ -511,6 +512,15 @@ export function ArrangedCell(props: ArrangedCellProps) {
           config={row.config}
           onDone={done.done}
           {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
+          renderPreview={draft => (
+            <SettingsPreview
+              widget={row.widget}
+              placementId={row.placementId}
+              stored={row.config}
+              draft={draft}
+              shown={data}
+            />
+          )}
         />
       ) : null}
       <CardBody

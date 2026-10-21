@@ -96,3 +96,29 @@ describe("the settings sheet's Done", () => {
     expect(done()).toBeDisabled();
   });
 });
+
+describe("the settings sheet's preview", () => {
+  it("is handed what Done would keep, as the reader changes the form", async () => {
+    const renderPreview = vi.fn(() => null);
+    render(
+      <WidgetSettingsSheet
+        open
+        onOpenChange={() => {}}
+        title="Recent posts"
+        settings={[{ name: "heading", type: "text", label: "Heading" }]}
+        config={undefined}
+        onDone={() => {}}
+        renderPreview={renderPreview}
+      />
+    );
+    // Nothing changed yet, so nothing would be kept.
+    expect(renderPreview).toHaveBeenLastCalledWith({});
+    await userEvent.type(
+      screen.getByRole("textbox", { name: /Heading/ }),
+      "Latest"
+    );
+    await waitFor(() =>
+      expect(renderPreview).toHaveBeenLastCalledWith({ heading: "Latest" })
+    );
+  });
+});

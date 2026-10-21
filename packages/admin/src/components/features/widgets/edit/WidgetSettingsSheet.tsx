@@ -26,7 +26,13 @@ import {
   SheetTitle,
 } from "@nextlyhq/ui";
 import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
@@ -57,6 +63,11 @@ export interface WidgetSettingsSheetProps {
   onDone: (config: Record<string, unknown>, settled: DoneSettled) => void;
   /** Why Done cannot keep a change now, when it cannot; said in the sheet, and Done is off. */
   blocked?: string;
+  /**
+   * The card as the form's current values would draw it, beside the form: handed the values as
+   * `toStoredConfig` builds them, which is what Done would keep.
+   */
+  renderPreview?: (draft: Record<string, unknown>) => ReactNode;
 }
 
 /** How a Done ended, told back to the sheet that asked. */
@@ -188,6 +199,7 @@ export function WidgetSettingsSheet({
   config,
   onDone,
   blocked,
+  renderPreview,
 }: WidgetSettingsSheetProps) {
   // A Done in flight, and why the last one did not keep the change.
   const [saving, setSaving] = useState(false);
@@ -267,6 +279,25 @@ export function WidgetSettingsSheet({
     [onDone, onOpenChange, settings, config]
   );
 
+  // What Done would keep, as the reader changes the form, for the preview. Held as its JSON, a
+  // string that changes exactly when the draft does: the form hands every change the same values
+  // object, which would not re-render anything.
+  const draftOf = useCallback(
+    (values: Record<string, unknown>) =>
+      JSON.stringify(toStoredConfig(settings, values, config)),
+    [settings, config]
+  );
+  const [draftKey, setDraftKey] = useState(() => draftOf(form.getValues()));
+  useEffect(() => {
+    setDraftKey(draftOf(form.getValues()));
+    const subscription = form.watch(values => setDraftKey(draftOf(values)));
+    return () => subscription.unsubscribe();
+  }, [form, draftOf]);
+  const draft = useMemo(
+    () => JSON.parse(draftKey) as Record<string, unknown>,
+    [draftKey]
+  );
+
   // Not closed mid-save, by Cancel, Escape or the overlay: the save would land anyway, and the
   // reader would be left not knowing whether it did.
   const changeOpen = useCallback(
@@ -279,7 +310,16 @@ export function WidgetSettingsSheet({
 
   return (
     <Sheet open={open} onOpenChange={changeOpen}>
-      <SheetContent side="right" className="w-full sm:max-w-md">
+      <SheetContent
+        side="right"
+        // Wider with a preview, so the card and the form sit side by side on a wide screen; on a
+        // narrow one the preview stacks above the form.
+        className={
+          renderPreview
+            ? "w-full sm:max-w-md lg:max-w-4xl"
+            : "w-full sm:max-w-md"
+        }
+      >
         <SheetHeader>
           <SheetTitle>{title} settings</SheetTitle>
           <SheetDescription>
@@ -288,76 +328,90 @@ export function WidgetSettingsSheet({
           </SheetDescription>
         </SheetHeader>
 
-        <FormProvider {...form}>
-          <form
-            // `handleSubmit` answers with a promise and `onSubmit` expects
-            // nothing back, so the result is voided deliberately rather than
-            // handed to an attribute that would ignore it silently.
-            onSubmit={event => {
-              void form.handleSubmit(submit)(event);
-            }}
-            className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
-          >
-            {blocked === undefined ? null : (
-              <p role="status" className="text-sm text-muted-foreground">
-                {blocked}
-              </p>
-            )}
-            {failure === undefined ? null : (
-              <p role="alert" className="text-sm text-destructive">
-                {failure}
-              </p>
-            )}
-            {stale.map(({ name, notice }) => (
-              <p
-                key={name}
-                role="status"
-                className="text-sm text-muted-foreground"
-              >
-                {notice}
-              </p>
-            ))}
-            {settings.map(setting =>
-              isContentSetting(setting) ? (
-                <ContentSettingControl
-                  key={setting.name}
-                  setting={setting}
-                  sources={sources ?? []}
-                />
-              ) : (
-                // No cast: `WidgetSetting` is assignable to `FieldConfig`,
-                // and `settings.compat.test-d.ts` is what keeps that true.
-                <FieldRenderer key={setting.name} field={setting} mode="edit" />
-              )
-            )}
+        <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto lg:flex-row lg:overflow-hidden">
+          {renderPreview ? (
+            <div className="px-4 lg:w-1/2 lg:shrink-0 lg:overflow-y-auto">
+              {renderPreview(draft)}
+            </div>
+          ) : null}
+          <FormProvider {...form}>
+            <form
+              // `handleSubmit` answers with a promise and `onSubmit` expects
+              // nothing back, so the result is voided deliberately rather than
+              // handed to an attribute that would ignore it silently.
+              onSubmit={event => {
+                void form.handleSubmit(submit)(event);
+              }}
+              className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
+            >
+              {blocked === undefined ? null : (
+                <p role="status" className="text-sm text-muted-foreground">
+                  {blocked}
+                </p>
+              )}
+              {failure === undefined ? null : (
+                <p role="alert" className="text-sm text-destructive">
+                  {failure}
+                </p>
+              )}
+              {stale.map(({ name, notice }) => (
+                <p
+                  key={name}
+                  role="status"
+                  className="text-sm text-muted-foreground"
+                >
+                  {notice}
+                </p>
+              ))}
+              {settings.map(setting =>
+                isContentSetting(setting) ? (
+                  <ContentSettingControl
+                    key={setting.name}
+                    setting={setting}
+                    sources={sources ?? []}
+                  />
+                ) : (
+                  // No cast: `WidgetSetting` is assignable to `FieldConfig`,
+                  // and `settings.compat.test-d.ts` is what keeps that true.
+                  <FieldRenderer
+                    key={setting.name}
+                    field={setting}
+                    mode="edit"
+                  />
+                )
+              )}
 
-            <SheetFooter className="mt-auto flex-row justify-end gap-2 px-0">
-              <Button
-                type="button"
-                variant="ghost"
-                className="mr-auto"
-                onClick={() =>
-                  form.reset(
-                    resetToDefaults(settings, form.getValues(), sources)
-                  )
-                }
-              >
-                Reset to defaults
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={saving}
-                onClick={() => changeOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={saving || blocked !== undefined}>
-                {saving ? "Saving…" : "Done"}
-              </Button>
-            </SheetFooter>
-          </form>
-        </FormProvider>
+              <SheetFooter className="mt-auto flex-row justify-end gap-2 px-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="mr-auto"
+                  onClick={() =>
+                    form.reset(
+                      resetToDefaults(settings, form.getValues(), sources)
+                    )
+                  }
+                >
+                  Reset to defaults
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={saving}
+                  onClick={() => changeOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={saving || blocked !== undefined}
+                >
+                  {saving ? "Saving…" : "Done"}
+                </Button>
+              </SheetFooter>
+            </form>
+          </FormProvider>
+        </div>
       </SheetContent>
     </Sheet>
   );
