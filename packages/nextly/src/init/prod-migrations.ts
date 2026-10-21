@@ -61,6 +61,8 @@ interface MigrateCoreLike {
      * `migrateCore` reads was invisible at this boundary.
      */
     pluginsWithMigrations?: ReadonlySet<string>;
+    /** Spread in by `pluginMigrationArgs`, checked here for the same reason. */
+    declaredPlugins?: ReadonlySet<string>;
   }): Promise<{ applied: number; coreChanged: boolean; ran: boolean }>;
 }
 
