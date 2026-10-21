@@ -24,8 +24,10 @@ const compared = vi.hoisted(() => ({
 
 vi.mock("node:crypto", async importOriginal => {
   const actual = await importOriginal<typeof import("node:crypto")>();
+  // A copy, not another view: a comparison that zeroes or reuses its buffers
+  // once it has its answer must still be recorded as what it compared.
   const bytesOf = (view: NodeJS.ArrayBufferView) =>
-    Buffer.from(view.buffer, view.byteOffset, view.byteLength);
+    Buffer.from(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
   return {
     ...actual,
     timingSafeEqual: (a: NodeJS.ArrayBufferView, b: NodeJS.ArrayBufferView) => {
@@ -102,6 +104,7 @@ describe("equal", () => {
 
   it.each([
     ["at the first character", "bbcdef"],
+    ["in the middle", "abcXef"],
     ["at the last character", "abcdeg"],
     ["nowhere", "abcdef"],
   ])(
@@ -109,9 +112,9 @@ describe("equal", () => {
     (_where, other) => {
       createOpaqueSecrets().equal("abcdef", other);
       // Once, on buffers of one length, which differ exactly when the values
-      // do: a comparison of a prefix would hand over equal buffers for values
-      // that differ at the end, and one that stopped at a difference would not
-      // call it at all.
+      // do: a comparison of a prefix, or of the ends, would hand over equal
+      // buffers for values that differ past them, and one that stopped at a
+      // difference would not call it at all.
       expect(compared.calls).toHaveLength(1);
       const [{ a, b }] = compared.calls;
       expect(a.length).toBe(b.length);
