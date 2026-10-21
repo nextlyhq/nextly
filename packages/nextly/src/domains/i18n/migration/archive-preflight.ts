@@ -15,6 +15,7 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import { componentFieldHasColumn } from "../../field-groups/services/field-group-utils";
 import {
   type ColumnOrigin,
   fieldProducesColumn,
@@ -130,6 +131,9 @@ export async function archiveFieldsLeavingTranslation(args: {
   if (!args.wasLocalized) return;
   if (!args.isLocalized) {
     await refuseRenameAsTranslationEnds(args);
+    // Turning translation off restores each field from the companion under the name it had, so
+    // a translated field removed beside an added one is restored under a name no field has.
+    refuseTranslatedFieldsRemovedBesideAdded(args, args.oldFields);
     return;
   }
   // A translated field renamed in this change is judged under its new name, as the companion
@@ -223,8 +227,14 @@ function refuseTranslatedFieldsRemovedBesideAdded(
   const after = new Set(args.newFields.map(f => f.name));
   // Any new field with a column, translated or shared: a translated field renamed to a type
   // that is shared by default reads as one removed and one shared field added.
+  // A field group keeps on its own row what a collection keeps elsewhere (a many-to-many
+  // relationship is a column there), so its own rule decides which new fields get a column.
+  const getsColumn =
+    args.builtBy === "fieldGroup"
+      ? componentFieldHasColumn
+      : fieldProducesColumn;
   const added = args.newFields
-    .filter(f => !before.has(f.name) && fieldProducesColumn(f))
+    .filter(f => !before.has(f.name) && getsColumn(f))
     .map(f => f.name);
   const removed = oldFields.filter(
     f => !after.has(f.name) && isFieldLocalized(f, true)

@@ -22,6 +22,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
+import { archiveFieldsLeavingTranslation } from "../migration/archive-preflight";
 import { restoreI18nArchive } from "../migration/restore-archive";
 import { reconcileCompanionColumns } from "../runtime/companion-io";
 
@@ -501,8 +502,97 @@ describeEachDialect("a translated field that is renamed", dialect => {
         es: "Hola",
       });
       expect(await columnsOf(`${table}_locales`)).not.toContain("title2");
+      // Nor did the main table change: a new shared field would have its column there.
+      const mainColumns = await columnsOf(table);
+      for (const added of ["title2", "title3", "count2"]) {
+        expect(mainColumns).not.toContain(added);
+      }
     }
   );
+
+  // Turning translation off restores each field from the companion under the name it had, so a
+  // translated field removed beside an added one in that save would come back under a name no
+  // field has.
+  it.each([
+    {
+      path: "the builder saves the collection",
+      table: "dc_posts",
+      seed: seedCollection,
+      save: async () => {
+        const saved = await handler().updateCollection(
+          { collectionName: "posts" },
+          { localized: false, fields: TWO_ADDED }
+        );
+        if (!saved.success) throw new Error(JSON.stringify(saved));
+      },
+    },
+    {
+      path: "a Single's schema is saved",
+      table: "single_hero",
+      seed: seedSingle,
+      save: async () =>
+        dispatchSingles(
+          "updateSingleSchema",
+          { slug: "hero" },
+          { localized: false, fields: TWO_ADDED }
+        ),
+    },
+  ])(
+    "refuses a translated field removed beside added ones in the save that turns translation off, when $path",
+    async ({ table, seed, save }) => {
+      const id = await seed();
+
+      const refusal = await save().then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(reported(refusal)).toMatch(
+        /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+      );
+      expect(await companionValues(table, "heading", id)).toEqual({
+        en: "Hello",
+        es: "Hola",
+      });
+    }
+  );
+
+  // A field group keeps a many-to-many relationship on its own row, as a column, where a
+  // collection keeps it in a junction table, so replacing a translated field with one is the
+  // same removal beside an addition. Asked of the preflight directly: the schema dialog's payload
+  // spells relationships without the options object that names a many-to-many.
+  it("refuses a field group's translated field replaced by a many-to-many relationship", async () => {
+    const id = await seedFieldGroup();
+
+    const refusal = await archiveFieldsLeavingTranslation({
+      adapter: current.adapter,
+      entity: "banner",
+      kind: "fieldGroup",
+      tableName: "comp_banner",
+      builtBy: "fieldGroup",
+      defaultLocale: "en",
+      oldFields: TRANSLATED,
+      newFields: [
+        {
+          name: "related",
+          type: "relationship",
+          options: { relationType: "manyToMany", target: "users" },
+        },
+        { name: "views", type: "number" },
+      ],
+      wasLocalized: true,
+      isLocalized: true,
+    }).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(reported(refusal)).toMatch(/TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/);
+    expect(await companionValues("comp_banner", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  });
 
   // The apply takes back only the rename its preview offers. An answer naming any other pair,
   // stale or made up, is dropped, as the main table's are, rather than attach one field's
