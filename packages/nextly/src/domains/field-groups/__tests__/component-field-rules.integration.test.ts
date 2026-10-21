@@ -3,10 +3,13 @@
  * as a collection's own field rules decide its fields.
  *
  * The field group `note` carries `secret`, readable only by the allowed
- * person. It sits in every shape a field group takes that is stored: single,
- * repeatable, a dynamic zone, and inside a group field. The collection carries
- * the same rule on a field of its own, the control that the mechanism works
- * where it is applied today.
+ * person, and `label`, readable whenever `secret` is present in the stored
+ * instance: a rule whose evidence a pass removes. It sits in every shape a
+ * field group takes that is stored: single, repeatable, a dynamic zone, and
+ * inside a group field. The collection carries the same rules on fields of
+ * its own, the control that the mechanism works where it is applied today.
+ * A related collection holds the field group too, and a populated row of it
+ * is judged by its own rules; a write's response is judged as a read.
  *
  * Every read is made by an editor who may read the collection (or Single),
  * over REST and through the checked Direct API, beside the allowed person and
@@ -31,6 +34,7 @@ import {
   defineSingle,
   fieldGroup,
   group,
+  relationship,
   text,
 } from "../../../config";
 import { Nextly } from "../../../direct-api/nextly";
@@ -49,12 +53,19 @@ const ALLOWED = "allowed@example.com";
 const onlyAllowed = ({ user }: { user: unknown }) =>
   (user as { email?: string } | null)?.email === ALLOWED;
 
-/** The guarded field every field group and the collection itself carries. */
-const guarded = () => [text({ name: "secret", access: { read: onlyAllowed } })];
+/** Readable while the instance holds `secret`, which a reader may be denied. */
+const whileSecretStored = ({ data }: { data?: Doc }) =>
+  typeof data?.secret === "string";
 
-/** A value for the guarded field, marked with where it was written. */
+/** The guarded fields every field group and the collection itself carries. */
+const guarded = () => [
+  text({ name: "secret", access: { read: onlyAllowed } }),
+  text({ name: "label", access: { read: whileSecretStored } }),
+];
+
+/** Values for the guarded fields, marked with where they were written. */
 function guardedValues(tag: string): Doc {
-  return { secret: `secret-${tag}` };
+  return { secret: `secret-${tag}`, label: `label-${tag}` };
 }
 
 function typed(type: string, data: Doc): Doc {
@@ -139,19 +150,22 @@ describe.each(getConfiguredTestDialects())(
 
     function rest(
       who: "editor" | "allowed",
-      method: "GET",
+      method: "GET" | "POST",
       path: string[],
-      body?: unknown
+      options: { body?: unknown; query?: string } = {}
     ) {
       const handlers = createDynamicHandlers() as unknown as Record<
         string,
         (request: Request, context: unknown) => Promise<Response>
       >;
+      const url = `http://localhost/api/${path.join("/")}${options.query ?? ""}`;
       return handlers[method]!(
-        new Request(`http://localhost/api/${path.join("/")}`, {
+        new Request(url, {
           method,
           headers: { cookie: cookies[who], "content-type": "application/json" },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          ...(options.body === undefined
+            ? {}
+            : { body: JSON.stringify(options.body) }),
         }),
         { params: Promise.resolve({ params: path }) }
       );
@@ -167,10 +181,10 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** A page written by trusted code, so no write rule shapes what is read. */
-    async function seed(tag: string): Promise<string> {
+    async function seed(tag: string, extra: Doc = {}): Promise<string> {
       const { item } = await trusted.create({
         collection: "pages",
-        data: pageData(tag),
+        data: { ...pageData(tag), ...extra },
       } as never);
       return String(item.id);
     }
@@ -182,10 +196,16 @@ describe.each(getConfiguredTestDialects())(
       shape: "byId" | "list"
     ): Promise<Doc> {
       if (door === "rest") {
+        // Populated one level, as the Direct API reads below are.
+        const query = "?depth=1";
         const res =
           shape === "byId"
-            ? await rest(who, "GET", ["collections", "pages", "entries", id])
-            : await rest(who, "GET", ["collections", "pages", "entries"]);
+            ? await rest(who, "GET", ["collections", "pages", "entries", id], {
+                query,
+              })
+            : await rest(who, "GET", ["collections", "pages", "entries"], {
+                query,
+              });
         expect(res.status).toBe(200);
         const body = (await res.json()) as Doc & { items?: Doc[] };
         return shape === "byId"
@@ -222,11 +242,29 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
         collections: [
+          // Related from a page, holding the field group as a page does.
+          defineCollection({
+            slug: "authors",
+            fields: [
+              text({ name: "name" }),
+              fieldGroup({ name: "one", component: "note" }),
+              group({
+                name: "box",
+                fields: [fieldGroup({ name: "inBox", component: "note" })],
+              }),
+            ],
+          }),
+          // The cost control: the same rules, and no field group.
+          defineCollection({
+            slug: "plain",
+            fields: [text({ name: "title" }), ...guarded()],
+          }),
           defineCollection({
             slug: "pages",
             fields: [
               text({ name: "title" }),
               ...guarded(),
+              relationship({ name: "author", relationTo: "authors" }),
               fieldGroup({ name: "one", component: "note" }),
               fieldGroup({ name: "many", component: "note", repeatable: true }),
               fieldGroup({
@@ -277,7 +315,14 @@ describe.each(getConfiguredTestDialects())(
           data: {
             name: "editors",
             slug: "editors",
-            permissionIds: ["read-pages", "read-site"].map(id),
+            permissionIds: [
+              "create-pages",
+              "read-pages",
+              "read-authors",
+              "read-plain",
+              "read-site",
+              "update-site",
+            ].map(id),
           },
         })
       ).item.id;
@@ -319,8 +364,14 @@ describe.each(getConfiguredTestDialects())(
           );
           // Only what the rule denies: the instance's other fields stay.
           expect(notes.every(note => note.heading === "h")).toBe(true);
-          // The collection's own field: the control.
+          // `label` is judged by the stored `secret`, which the pass after the
+          // hooks sees only as the evidence the pass before them removed.
+          expect(notes.map(note => typeof note.label)).toEqual(
+            notes.map(() => "string")
+          );
+          // The collection's own fields: the control.
           expect(asEditor).not.toHaveProperty("secret");
+          expect(typeof asEditor.label).toBe("string");
 
           const asAllowed = await readVia(door, "allowed", id, shape);
           expect(noteInstances(asAllowed)).toHaveLength(5);
@@ -329,6 +380,72 @@ describe.each(getConfiguredTestDialects())(
           );
         }
       );
+
+      it.each(["byId", "list"] as const)(
+        "withholds, read %s, a field-group field inside a populated related row",
+        async shape => {
+          const { item: author } = await trusted.create({
+            collection: "authors",
+            data: {
+              name: `author-${door}-${shape}`,
+              one: { heading: "h", ...guardedValues("author-one") },
+              box: {
+                inBox: { heading: "h", ...guardedValues("author-box") },
+              },
+            },
+          } as never);
+          const id = await seed(`rel-${door}-${shape}`, {
+            author: String(author.id),
+          });
+
+          const asEditor = await readVia(door, "editor", id, shape);
+          const related = asEditor.author as Doc;
+          expect(related.name).toBe(`author-${door}-${shape}`);
+          const notes = noteInstances(related);
+          expect(notes.length).toBeGreaterThan(0);
+          expect(notes.map(note => "secret" in note)).toEqual(
+            notes.map(() => false)
+          );
+          expect(notes.map(note => typeof note.label)).toEqual(
+            notes.map(() => "string")
+          );
+
+          const asAllowed = await readVia(door, "allowed", id, shape);
+          const seenByAllowed = noteInstances(asAllowed.author as Doc);
+          expect(seenByAllowed).toHaveLength(notes.length);
+          expect(
+            seenByAllowed.every(note => typeof note.secret === "string")
+          ).toBe(true);
+        }
+      );
+
+      it("withholds, in a create's response, every field-group field the writer may not read", async () => {
+        const data = pageData(`w-${door}`);
+        const item =
+          door === "rest"
+            ? (
+                (await (
+                  await rest(
+                    "editor",
+                    "POST",
+                    ["collections", "pages", "entries"],
+                    { body: data }
+                  )
+                ).json()) as { item: Doc }
+              ).item
+            : ((
+                await checkedAs("editor").create({
+                  collection: "pages",
+                  data,
+                } as never)
+              ).item as Doc);
+        const notes = noteInstances(item);
+        expect(notes.length).toBeGreaterThan(0);
+        expect(notes.map(note => "secret" in note)).toEqual(
+          notes.map(() => false)
+        );
+        expect(item).not.toHaveProperty("secret");
+      });
     });
 
     describe("a Single", () => {
@@ -343,11 +460,23 @@ describe.each(getConfiguredTestDialects())(
         } as never)) as Doc;
         expect((read.one as Doc).heading).toBe("h");
         expect(read.one).not.toHaveProperty("secret");
+        expect((read.one as Doc).label).toBe("label-site");
 
         const allowed = (await checkedAs("allowed").findSingle({
           slug: "site",
         } as never)) as Doc;
         expect((allowed.one as Doc).secret).toBe("secret-site");
+      });
+
+      it("never echoes, in an update's response, a field-group value the writer may not read", async () => {
+        const result = await checkedAs("editor").updateSingle({
+          slug: "site",
+          data: { title: "s2", one: { heading: "h2", ...guardedValues("w") } },
+        } as never);
+        // The response carries no field-group instance to judge, so the
+        // property is the one a reader relies on: the value is not in it.
+        expect(JSON.stringify(result)).toContain("s2");
+        expect(JSON.stringify(result)).not.toContain("secret-w");
       });
     });
 
@@ -370,11 +499,14 @@ describe.each(getConfiguredTestDialects())(
           select: (...a: unknown[]) => unknown;
         };
         const select = db.select.bind(db);
-        const count = async (rows: number) => {
+        const count = async (collection: "pages" | "plain", rows: number) => {
           for (let i = 0; i < rows; i++) {
             await trusted.create({
-              collection: "pages",
-              data: pageData(`n${rows}-${i}`),
+              collection,
+              data:
+                collection === "pages"
+                  ? pageData(`n${rows}-${i}`)
+                  : { title: `p${rows}-${i}`, ...guardedValues(`p${i}`) },
             } as never);
           }
           let statements = 0;
@@ -395,7 +527,7 @@ describe.each(getConfiguredTestDialects())(
           });
           try {
             await checkedAs("editor").find({
-              collection: "pages",
+              collection,
               depth: 1,
               limit: rows,
             } as never);
@@ -404,9 +536,15 @@ describe.each(getConfiguredTestDialects())(
           }
           return statements;
         };
-        const few = await count(2);
-        const more = await count(6);
-        expect(more).toBe(few);
+        // The gate above the field rules keeps what it reads between reads, so
+        // the first read pays for it; measured after it, as every read is.
+        await count("plain", 1);
+        // One resolution, as measured on a collection whose rules are its own
+        // fields' alone: the field groups' rules add no lookup to it.
+        const once = await count("plain", 2);
+        expect(once).toBeGreaterThan(0);
+        expect(await count("pages", 2)).toBe(once);
+        expect(await count("pages", 6)).toBe(once);
       });
     });
   }
