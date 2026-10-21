@@ -507,6 +507,11 @@ interface ReleaseContext {
     authenticatedScope?: AuthenticatedScope;
     /** The authenticated roles, which code-defined access rules are evaluated against. */
     userRoles?: string[];
+    /**
+     * The key's own id when this request authenticated as one, so a release's
+     * history names the key rather than its owner.
+     */
+    apiKeyId?: string;
   };
   nextly: Awaited<ReturnType<typeof getCachedNextly>>;
   releases: Awaited<ReturnType<typeof getCachedNextly>>["releases"];
@@ -1151,6 +1156,7 @@ export async function handleReleaseRequest(
             // key, and an absence-based one ("not a contractor") admits one it
             // should refuse.
             userRoles: auth.roles,
+            apiKeyId: auth.authMethod === "api-key" ? auth.apiKeyId : undefined,
           },
           nextly,
           releases: nextly.releases,

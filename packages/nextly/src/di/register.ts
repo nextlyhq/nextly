@@ -4411,8 +4411,16 @@ async function initializePlugins(
       // The source goes through AS DECLARED. The fold has already refused any
       // kind but `plugin`, so rewriting it here would only be able to hide a
       // contribution the fold would have caught.
-      registerResolvedSource(contributed.source, (query, caller, opts) =>
-        contributed.resolve(query, caller, pluginContext, opts)
+      // `resolveMany` is bound to the same context, when the plugin wrote one.
+      const { resolveMany } = contributed;
+      registerResolvedSource(
+        contributed.source,
+        (query, caller, opts) =>
+          contributed.resolve(query, caller, pluginContext, opts),
+        resolveMany === undefined
+          ? undefined
+          : (queries, caller, opts) =>
+              resolveMany(queries, caller, pluginContext, opts)
       );
     }
 

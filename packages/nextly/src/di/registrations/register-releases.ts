@@ -19,6 +19,10 @@ import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
 import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import {
+  linkFieldKeysVisibleTo,
+  releaseLinkReads,
+} from "../../domains/collections/release-links";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
 import { registerNoticeKind } from "../../domains/notices/notice-kinds";
@@ -238,6 +242,37 @@ export function registerReleaseServices({
         // seam, which resolves the log from the container per call, so this
         // depends on no registration order.
         recordActivity: recordReleaseActivity,
+
+        // What the link check reads of content, held by this service so a
+        // call reads through the registration that built it. Soft, so
+        // scheduling, Publish now and the drain never ask it.
+        linkReads: releaseLinkReads(adapter),
+
+        // Which link fields of each scanned document a reader may view:
+        // the document the links were read from, with the field read rules,
+        // its own and its components', applied for the reader by the read
+        // path's own judges.
+        visibleLinkFields: async (scans, actor) => {
+          const none = new Map<string, ReadonlySet<string>>();
+          if (actor.userId === null) return none;
+          // The reader whole, as a read's field rules see them: a rule may
+          // ask more of the person than an id. Nobody to read as, such as a
+          // deactivated user, is shown no field.
+          const user = await releaseDocumentChecks(adapter, logger).actingAs(
+            actor.userId
+          );
+          if (user === null) return none;
+          const caller = {
+            user: {
+              ...user,
+              ...(actor.userRoles ? { roles: actor.userRoles } : {}),
+            } as Record<string, unknown>,
+            ...(actor.authenticatedScope
+              ? { authenticatedScope: actor.authenticatedScope }
+              : {}),
+          };
+          return linkFieldKeysVisibleTo(scans, caller);
+        },
 
         // The document's OWN authority, asked with the same operation the
         // ordinary write path uses. Adding a document to a release is a deferred

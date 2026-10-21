@@ -761,6 +761,7 @@ export function VersionHistorySheet({
                   hasMore={hasMore}
                   selected={selected}
                   onSelect={setSelected}
+                  onClearSelection={() => setSelected(null)}
                   // Renaming writes to the document's history, which needs the
                   // same permission restoring does. Offering it to a read-only
                   // caller would open a dialog whose save the route rejects.

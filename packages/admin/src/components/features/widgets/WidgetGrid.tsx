@@ -43,6 +43,7 @@ import { useCardDrag } from "./edit/drag/useCardDrag";
 import { RemovalNotice } from "./edit/RemovalNotice";
 import { useAnnouncerRelay } from "./edit/useArrangementAnnouncer";
 import { useCardRemoval } from "./edit/useCardRemoval";
+import { useCardSettingsWrite } from "./edit/useCardSettingsWrite";
 import {
   useDashboardArrangement,
   type ArrangedWidget,
@@ -152,7 +153,11 @@ function askedWith(
     );
     const sized = tier ? { ...row, tier } : row;
     const widget = widgetAsAsked(row.widget, row.config);
-    return widget === row.widget ? sized : { ...sized, widget };
+    // The declared query travels with the asked one, so the batch keys the card by what it
+    // declares and a change of its settings asks this card again alone.
+    return widget === row.widget
+      ? sized
+      : { ...sized, widget, declaredQuery: row.widget.query };
   });
 }
 
@@ -219,6 +224,56 @@ function cardActions(
     },
     ...(removal.dismiss ? { dismiss: removal.dismiss } : {}),
     saveSettings: editor.setConfig,
+  };
+}
+
+/**
+ * The writes a reader makes to one card from the card itself: removing it, and its settings.
+ * One hook so the grid reads both from one place.
+ */
+function useStandingCardWrites(
+  layout: ReturnType<typeof useDashboardLayout>,
+  editor: LayoutEditor,
+  visible: ReturnType<typeof useDashboardArrangement>["visible"],
+  announce: ReturnType<typeof useAnnouncerRelay>["announce"],
+  focus: ReturnType<typeof useDashboardFocus>,
+  /** Rings the card a gesture just placed, as a put-back card is. */
+  highlight: (placementId: string | null) => void
+) {
+  // Removing a card, while customising or from the card itself, and the one notice that offers
+  // it back.
+  const removal = useCardRemoval(
+    layout,
+    editor,
+    visible,
+    announce,
+    focus,
+    highlight
+  );
+  const settingsWrite = useSettingsWriteAtRest(layout, editor, announce);
+  return { removal, settingsWrite };
+}
+
+/**
+ * A card's settings saved at once, outside customise mode: its quick setting and its sheet.
+ * Offered only at rest, where there is no draft to hold a change, and once an arrangement has
+ * been read, for the reason the standing dismiss waits for one.
+ */
+function useSettingsWriteAtRest(
+  layout: ReturnType<typeof useDashboardLayout>,
+  editor: LayoutEditor,
+  announce: ReturnType<typeof useAnnouncerRelay>["announce"]
+): ComponentProps<typeof ArrangedGrid>["writes"]["settings"] {
+  const cardSettingsWrite = useCardSettingsWrite(layout);
+  if (!layout.layout || editor.isEditing) return undefined;
+  return {
+    write: (placementId, title, config, callbacks) =>
+      cardSettingsWrite.write({ placementId, title, config }, callbacks),
+    isWriting: editor.isWriting,
+    ...(cardSettingsWrite.unavailable === undefined
+      ? {}
+      : { unavailable: cardSettingsWrite.unavailable }),
+    announce: announce.settingChanged,
   };
 }
 
@@ -308,9 +363,9 @@ export function WidgetGrid() {
   );
   const { visible, editor, hasArrangement } = arrangement;
 
-  // Removing a card, while customising or from the card itself, and the one
-  // notice that offers it back.
-  const removal = useCardRemoval(
+  // What a reader changes on one card from the card itself: removing it, and
+  // its settings outside customise mode.
+  const { removal, settingsWrite } = useStandingCardWrites(
     layout,
     editor,
     visible,
@@ -437,10 +492,13 @@ export function WidgetGrid() {
               placements={editor.placements}
               isDrawn={arrangement.isDrawn}
               isEditing={editor.isEditing}
-              isWriting={editor.isWriting}
-              singleCardWriteBlocked={singleCardWriteBlocked(
-                layout.isUnreadable
-              )}
+              writes={{
+                isWriting: editor.isWriting,
+                singleCardWriteBlocked: singleCardWriteBlocked(
+                  layout.isUnreadable
+                ),
+                settings: settingsWrite,
+              }}
               slots={slots}
               cellSlots={cellSlots}
               requested={requested}

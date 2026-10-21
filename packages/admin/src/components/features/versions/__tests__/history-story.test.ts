@@ -343,6 +343,27 @@ describe("the pinned rows", () => {
     ]);
   });
 
+  it("keeps a publish of several parts in each of their language views", () => {
+    // A Spanish version whose publish shipped English too: in the English
+    // view it is English's publish, so English is pinned as published by it
+    // and its earlier save is not left pinned as a draft.
+    const result = story(
+      [
+        version(1, 1, { locale: "en" }),
+        version(2, 2, { locale: "es" }),
+        version(3, 3, { locale: "es", status: "published" }),
+      ],
+      [event("published", 3, { versionNo: 3, parts: ["en", "es"] })],
+      { view: { kind: "language", locale: "en" } }
+    );
+    expect(result.published).toMatchObject([
+      { parts: ["en"], version: { versionNo: 3 } },
+    ]);
+    expect(result.drafts).toEqual([]);
+    // The English save folds under the publish that shipped it.
+    expect(rows(result.days.flatMap(day => day.entries))).toEqual(["v3[v1]"]);
+  });
+
   it("pins a Spanish draft beside a shared-fields draft", () => {
     const result = story([
       version(1, 1, { locale: "es" }),

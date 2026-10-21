@@ -321,7 +321,9 @@ function pins(
     const latestPublish = entries.find(
       e => e.publish && e.parts.includes(part)
     );
-    const newest = entries.find(e => partOf(e.version) === part);
+    // The newest entry holding this part, a publish that shipped it among
+    // others included: a save older than that publish is no longer the draft.
+    const newest = entries.find(e => e.parts.includes(part));
     // A draft discarded since its version was saved is no longer the
     // document's draft, though its version stays in the history.
     if (
@@ -374,12 +376,14 @@ function asParts(input: StoryInput): {
 export function buildStory(input: StoryInput): Story {
   const { lifecycle, view, filter } = input;
   const { versions: own, events: ownEvents } = asParts(input);
-  const versions = own.filter(
-    v => v.versionNo !== null && inView([partOf(v)], view)
-  );
-  const versionEntries = versions.map(v =>
-    storyVersion(v, lifecycle, ownEvents)
-  );
+  // A view keeps a version by the parts it holds once its publish is
+  // attached: a publish that shipped several languages belongs to each of
+  // them, though its version records one.
+  const versionEntries = own
+    .filter(v => v.versionNo !== null)
+    .map(v => storyVersion(v, lifecycle, ownEvents))
+    .filter(entry => inView(entry.parts, view));
+  const versions = versionEntries.map(entry => entry.version);
   const attached = new Set(
     versionEntries.flatMap(e => (e.publishedBy ? [e.publishedBy.id] : []))
   );
@@ -391,13 +395,39 @@ export function buildStory(input: StoryInput): Story {
     ...foldSaves(versionEntries),
     ...eventEntries(events, listed, attached),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+  // Pinned for the parts in view only: a Spanish version kept in the English
+  // view for the English it published says nothing of Spanish here.
   const pinned = lifecycle
-    ? pins(versionEntries, versions, events)
+    ? pins(
+        versionEntries,
+        versions.filter(v => inView([partOf(v)], view)),
+        events
+      )
     : { drafts: [], published: [] };
   return {
     ...pinned,
     days: byDay(rows.filter(FILTERS[filter])),
   };
+}
+
+/**
+ * Whether a story shows a version: pinned, as a row, or folded under one.
+ */
+export function storyShows(story: Story, versionNo: number): boolean {
+  const pinned = [...story.drafts, ...story.published].some(
+    pin => pin.version.versionNo === versionNo
+  );
+  return (
+    pinned ||
+    story.days.some(day =>
+      day.entries.some(
+        entry =>
+          entry.kind === "version" &&
+          (entry.version.versionNo === versionNo ||
+            entry.folded.some(v => v.versionNo === versionNo))
+      )
+    )
+  );
 }
 
 /**

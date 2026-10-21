@@ -701,7 +701,9 @@ export {
   callerReadOptions,
   type WidgetSourceResolver,
   type PluginSourceResolver,
+  type PluginManySourceResolver,
   type ResolverOptions,
+  type WidgetScope,
   type PluginWidgetSource,
   type ReadCaller,
 } from "./domains/widgets";

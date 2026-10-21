@@ -416,6 +416,8 @@ describe("what authority rescheduling actually costs", () => {
         actorType: "apiKey",
         permissions,
       },
+      // The key's own id, which a schedule records it by.
+      apiKeyId: "k1",
     } as unknown as Parameters<ReleasesService["schedule"]>[3];
   }
 

@@ -214,6 +214,8 @@ const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
     truncated: z.boolean().optional(),
     // The grouped field, whose choices name each bucket's value.
     field: RESULT_FIELD.optional(),
+    // The bucket counts are floors, as a count's `atLeast` says its total is.
+    atLeast: z.boolean().optional(),
   }),
   timeseries: z.looseObject({
     points: z.array(

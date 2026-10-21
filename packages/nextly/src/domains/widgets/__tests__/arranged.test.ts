@@ -119,6 +119,31 @@ describe("a reader's dismissals over the live defaults", () => {
     expect(applied[1]).toMatchObject({ width: "third", removed: true });
   });
 
+  it("carries a reader's settings for a card, and keeps the default's position and width", () => {
+    // A setting changed outside customise mode is written to a row that still
+    // follows the default. Reading only removals back dropped it every time.
+    const row = readStoredLayout(
+      serializeLayout(
+        [
+          placement("b", { width: "quarter", config: { items: 9 } }),
+          placement("a", { removed: true, config: { range: "7d" } }),
+        ],
+        false
+      )
+    );
+
+    const applied = dismissalsApplied(defaults, row);
+    expect(
+      applied.map(p => [p.widgetId, p.width, p.removed, p.config])
+    ).toEqual([
+      // A removed card keeps its settings, for the day it is put back.
+      ["a", defaults[0]!.width, true, { range: "7d" }],
+      ["b", "third", false, { items: 9 }],
+      // Never in the row: the default, with no settings of its own.
+      ["new", defaults[2]!.width, false, undefined],
+    ]);
+  });
+
   it("returns the defaults unchanged for a reader with no row", () => {
     expect(dismissalsApplied(defaults, undefined)).toEqual(defaults);
   });

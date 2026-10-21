@@ -127,12 +127,19 @@ export {
  *
  * `ReadCaller` and `ResolverOptions` travel with them for the same reason: they
  * are the other arguments, so without them a parameter has no name to annotate.
+ * `PluginManySourceResolver` is the optional many-query counterpart, and
+ * `WidgetScope` the batch-shared work `ResolverOptions` carries; both are
+ * `@experimental`.
  */
 export type {
   SourceResolver as WidgetSourceResolver,
   ResolverOptions,
+  WidgetScope,
 } from "./resolved-sources";
-export type { PluginSourceResolver } from "../../plugins/widgets/collect-widget-sources";
+export type {
+  PluginSourceResolver,
+  PluginManySourceResolver,
+} from "../../plugins/widgets/collect-widget-sources";
 export type { ReadCaller } from "../../services/dashboard/readable-resources";
 export { callerReadOptions } from "./caller-read-options";
 export type {
