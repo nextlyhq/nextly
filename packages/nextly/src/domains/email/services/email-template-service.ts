@@ -350,6 +350,22 @@ async function chooseLayout(
   return own?.kind === "layout" ? own : defaultLayout();
 }
 
+/** Whether any of a template's own fields reads `brand`. */
+function textReadsBrand(template: EmailTemplateRecord): boolean {
+  return LIQUID_FIELDS.some(([field]) =>
+    readsVariable(template[field] ?? "", "brand")
+  );
+}
+
+/** Why the settings reach none of an email that has a stored version to send. */
+function unreachedReason(
+  reached: boolean,
+  layout: EmailTemplateRecord | null
+): BrandReach["reason"] {
+  if (reached) return null;
+  return layout ? "layoutWithoutBrand" : "noLayout";
+}
+
 /** Whether the site's code version comes before a stored row: unless the row is an override, or not yet given its owner. */
 function prefersCode(
   row: Pick<StoredTemplateRow, "ownerKind" | "overridden">
@@ -2340,8 +2356,9 @@ export class EmailTemplateService extends BaseService {
   /**
    * Which emails the brand settings reach: each template that is not a
    * layout, with the layout a send wraps it in (as `getLayoutFor` chooses
-   * it), and whether its own text or that layout reads `brand`. Read from one query of the
-   * templates, so the answer costs the same however many there are.
+   * it), and whether its own text or that layout reads `brand`. Read from
+   * one query of the templates, so the answer costs the same however many
+   * there are.
    */
   async brandReach(): Promise<BrandReach[]> {
     const rows = (await this.db
@@ -2358,61 +2375,70 @@ export class EmailTemplateService extends BaseService {
 
     const reach: BrandReach[] = [];
     for (const [i, row] of rows.entries()) {
-      const template = records[i];
-      if (template.kind === "layout") continue;
-      const base = {
-        templateId: template.id,
-        slug: template.slug,
-        name: template.name,
-      };
-      // Whichever version a send of it uses, as the send decides.
-      const source = sendSource({
-        stored: template,
-        preferCode: prefersCode(row),
-        hasCode: this.registry.setInCode.has(template.slug),
-      });
-      if (source !== "stored") {
-        // The code version has no stored layout, and an inactive template
-        // with no code version is not sent at all.
-        reach.push({
-          ...base,
-          reached: false,
-          reason: source === "code" ? "setInCode" : "inactive",
-          via: { body: false, layout: false },
-          layout: null,
-        });
-        continue;
-      }
-      const layout = template.useLayout
-        ? await chooseLayout(
-            template,
-            id => byId.get(id) ?? null,
-            () => defaultLayout
-          )
-        : null;
-      // The render gives the settings to the body (when its send supplies no
-      // `brand`) and to the layout, so the email is reached through either.
-      const via = {
-        body: LIQUID_FIELDS.some(([field]) =>
-          readsVariable(template[field] ?? "", "brand")
-        ),
-        layout: layout ? readsVariable(layout.htmlContent, "brand") : false,
-      };
-      const reached = via.body || via.layout;
-      reach.push({
-        ...base,
-        reached,
-        reason: reached ? null : layout ? "layoutWithoutBrand" : "noLayout",
-        via,
-        layout: layout && {
-          id: layout.id,
-          slug: layout.slug,
-          name: layout.name,
-          overridden: layout.overridden,
-        },
-      });
+      if (records[i].kind === "layout") continue;
+      reach.push(
+        await this.reachOf(row, records[i], {
+          find: id => byId.get(id) ?? null,
+          defaultLayout,
+        })
+      );
     }
     return reach;
+  }
+
+  /** Whether the brand settings reach one email, and through what. */
+  private async reachOf(
+    row: StoredTemplateRow,
+    template: EmailTemplateRecord,
+    layouts: {
+      find: (id: string) => EmailTemplateRecord | null;
+      defaultLayout: EmailTemplateRecord | null;
+    }
+  ): Promise<BrandReach> {
+    const base = {
+      templateId: template.id,
+      slug: template.slug,
+      name: template.name,
+    };
+    // Whichever version a send of it uses, as the send decides.
+    const source = sendSource({
+      stored: template,
+      preferCode: prefersCode(row),
+      hasCode: this.registry.setInCode.has(template.slug),
+    });
+    if (source !== "stored") {
+      // The code version has no stored layout, and an inactive template
+      // with no code version is not sent at all.
+      return {
+        ...base,
+        reached: false,
+        reason: source === "code" ? "setInCode" : "inactive",
+        via: { body: false, layout: false },
+        layout: null,
+      };
+    }
+    const layout = template.useLayout
+      ? await chooseLayout(template, layouts.find, () => layouts.defaultLayout)
+      : null;
+    // The render gives the settings to the body (when its send supplies no
+    // `brand`) and to the layout, so the email is reached through either.
+    const via = {
+      body: textReadsBrand(template),
+      layout: layout !== null && readsVariable(layout.htmlContent, "brand"),
+    };
+    const reached = via.body || via.layout;
+    return {
+      ...base,
+      reached,
+      reason: unreachedReason(reached, layout),
+      via,
+      layout: layout && {
+        id: layout.id,
+        slug: layout.slug,
+        name: layout.name,
+        overridden: layout.overridden,
+      },
+    };
   }
 
   // ============================================================

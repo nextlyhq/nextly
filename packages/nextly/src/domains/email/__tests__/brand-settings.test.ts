@@ -57,6 +57,27 @@ const SITE_LAYOUT = {
   ].join(""),
 };
 
+/** A built-in as the render reads it. */
+function fieldsOf(
+  template: (typeof BUILT_IN_TEMPLATES)[number]
+): TemplateFields {
+  return {
+    subject: template.subject,
+    htmlContent: template.htmlContent,
+    plainTextContent: template.plainTextContent ?? null,
+    preheader: template.preheader ?? null,
+    useLayout: template.useLayout ?? true,
+    kind: template.kind ?? "template",
+  };
+}
+
+/** The version core shipped of a built-in before brand settings; every built-in has one. */
+function earlierOf(slug: string) {
+  const earlier = EARLIER_BUILT_IN_VERSIONS[slug]?.[0];
+  if (!earlier) throw new Error(`no earlier version of ${slug}`);
+  return earlier;
+}
+
 describe("core's built-ins before and after brand settings", () => {
   const data = {
     appName: `Shop <b>&</b> 'Co' "Ltd"`,
@@ -68,32 +89,25 @@ describe("core's built-ins before and after brand settings", () => {
   it.each(BUILT_IN_TEMPLATES.map(t => [t.slug, t] as const))(
     "renders %s exactly as core shipped it before brand settings",
     (slug, template) => {
-      const fields: TemplateFields = {
-        subject: template.subject,
-        htmlContent: template.htmlContent,
-        plainTextContent: template.plainTextContent ?? null,
-        preheader: template.preheader ?? null,
-        useLayout: template.useLayout ?? true,
-        kind: template.kind ?? "template",
-      };
+      const fields = fieldsOf(template);
       // What core shipped before: the template's earlier version, in the
-      // layout's. Every built-in has one, and it differs from today's text,
-      // so the equality below compares two renders of different sources.
-      const earlier = EARLIER_BUILT_IN_VERSIONS[slug]?.[0];
-      expect(earlier?.htmlContent).toBeDefined();
-      expect(earlier?.htmlContent).not.toBe(template.htmlContent);
+      // layout's. It differs from today's text, so the equality below
+      // compares two renders of different sources.
+      const earlier = earlierOf(slug);
+      expect(earlier.htmlContent).not.toBe(template.htmlContent);
+      const layouts = fields.useLayout
+        ? { before: DEFAULT_LAYOUT_BEFORE_BRAND, after: defaultLayoutTemplate }
+        : { before: null, after: null };
       const before = renderTemplate(
         { ...fields, ...earlier },
-        fields.useLayout ? DEFAULT_LAYOUT_BEFORE_BRAND : null,
+        layouts.before,
         data,
         { appName: "Nextly" }
       );
-      const after = renderTemplate(
-        fields,
-        fields.useLayout ? defaultLayoutTemplate : null,
-        data,
-        { appName: "Nextly", brand: brand({}) }
-      );
+      const after = renderTemplate(fields, layouts.after, data, {
+        appName: "Nextly",
+        brand: brand({}),
+      });
       expect(after).toEqual(before);
     }
   );
