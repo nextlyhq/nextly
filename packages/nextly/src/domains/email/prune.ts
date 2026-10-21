@@ -65,6 +65,8 @@ export interface EmailPruneAdapter {
     }
   ): Promise<T[]>;
   delete(table: string, where: { and: WhereCondition[] }): Promise<number>;
+  /** Whether the calling flow has a transaction open, where the adapter says. */
+  transactionOpenInFlow?(): boolean;
 }
 
 export interface EmailPruneDeps {
@@ -258,7 +260,13 @@ export async function pruneEmailDataSafely(
   try {
     const result = await pruneEmailData(deps, policy, maxBatches);
     const now = (deps.now ?? (() => new Date()))();
-    if (deps.deadline === undefined || now < deps.deadline) {
+    // Not inside a caller's transaction: the claims would be read and
+    // deleted on another connection, outside it. The next pass sweeps them.
+    const inTransaction = deps.adapter.transactionOpenInFlow?.() === true;
+    if (
+      !inTransaction &&
+      (deps.deadline === undefined || now < deps.deadline)
+    ) {
       await pruneSendClaims(
         deps.adapter,
         windowForEmailClass(policy, EMAIL_RETENTION_CLASSES[0]),
