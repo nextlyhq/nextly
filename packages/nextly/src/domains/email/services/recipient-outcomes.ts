@@ -95,6 +95,11 @@ export interface CallOutcome {
   outcome: EmailSendOutcome;
   /** The provider took the message: every recipient it did not refuse. */
   accepted: boolean;
+  /**
+   * A call still unsettled at its deadline: reported as without an answer,
+   * and finished here, within `withinMs`, with what it answers then.
+   */
+  late?: (withinMs: number) => Promise<CallOutcome>;
 }
 
 /** Each mailbox of one call, with what became of it. */

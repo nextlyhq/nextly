@@ -51,6 +51,7 @@ import {
   type PrincipalDigests,
 } from "../audit/principal-digest";
 
+import { CLAIM_TAKEOVER_MS } from "./send-timing";
 import type { EmailSendOutcome } from "./services/send-failures";
 import type { ResolvedAttachment } from "./types";
 
@@ -84,12 +85,7 @@ export function scopedSender<T>(service: T, scope: string): T {
 /** The longest idempotency key a send takes, as Resend's header does. */
 export const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 
-/**
- * How long a claim with no outcome holds its key before a later send may take
- * it over: longer than the longest a built-in provider call can take, SMTP's
- * ten-minute socket timeout.
- */
-export const CLAIM_TAKEOVER_MS = 15 * 60_000;
+export { CLAIM_TAKEOVER_MS };
 
 /** Refuse an idempotency key a send cannot use, before anything is sent. */
 export function assertIdempotencyKey(key: unknown): asserts key is string {

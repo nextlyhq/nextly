@@ -53,7 +53,11 @@ import {
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
-import type { EmailFailure } from "../failure";
+import {
+  type EmailFailure,
+  noAnswerFailure,
+  withEmailFailure,
+} from "../failure";
 import { describeProviderFailure } from "../provider-definition";
 import { warnAboutLateQueuedEmail } from "../queued-email-warning";
 import {
@@ -69,6 +73,11 @@ import {
   sendKeyOf,
   type HeldClaim,
 } from "../send-claims";
+import {
+  CALL_DEADLINE_MS,
+  LEASE_LIMIT_MS,
+  LEASE_RENEWAL_MS,
+} from "../send-timing";
 import {
   renderTemplateFrom,
   renderTemplateReplyTo,
@@ -246,6 +255,21 @@ function adapterMessage(
     bcc: message.bcc,
     attachments,
   };
+}
+
+/** Whether `promise` settles, either way, within `ms`. */
+function settlesWithin(
+  promise: Promise<unknown>,
+  ms: number
+): Promise<boolean> {
+  return new Promise(resolve => {
+    const timer = setTimeout(() => resolve(false), ms);
+    const settled = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    promise.then(settled, settled);
+  });
 }
 
 /**
@@ -822,7 +846,16 @@ export class EmailService extends BaseService {
       previouslyAccepted,
       calls
     );
-    if (claimed) {
+    if (calls.some(call => call.late)) {
+      // A call is still unsettled: its claim stays held, renewed, until the
+      // call answers or the lease limit passes, and is settled then.
+      void this.finishLateCalls({
+        keyed: claimed?.keyed,
+        envelope,
+        previouslyAccepted,
+        calls,
+      });
+    } else if (claimed) {
       await this.deliveries?.settleSend(claimed.keyed.claim, outcome, accepted);
     }
 
@@ -860,6 +893,47 @@ export class EmailService extends BaseService {
       calls.push(await this.dispatchMessage(message, context));
     }
     return calls;
+  }
+
+  /**
+   * Finish a send whose calls were still unsettled at their deadline: renew
+   * its claim's lease while they are, record what each answers within the
+   * lease limit (or that it never answered), and settle the claim with the
+   * send's outcome then. Never throws: the caller has its result.
+   */
+  private async finishLateCalls(late: {
+    keyed?: KeyedSend;
+    envelope: SendEnvelope;
+    previouslyAccepted: ReadonlySet<string>;
+    calls: readonly CallOutcome[];
+  }): Promise<void> {
+    const renewal = setInterval(() => {
+      void late.keyed?.renew();
+    }, LEASE_RENEWAL_MS);
+    // A renewal timer must not keep a process alive that has nothing else.
+    renewal.unref?.();
+    try {
+      const within = LEASE_LIMIT_MS - CALL_DEADLINE_MS;
+      const calls = await Promise.all(
+        late.calls.map(call =>
+          call.late ? call.late(within) : Promise.resolve(call)
+        )
+      );
+      if (late.keyed) {
+        const { outcome, accepted } = sendResultOf(
+          late.envelope,
+          late.previouslyAccepted,
+          calls
+        );
+        await this.deliveries?.settleSend(late.keyed.claim, outcome, accepted);
+      }
+    } catch (error) {
+      warnQuietly(this.logger, "A late email send could not be finished", {
+        error,
+      });
+    } finally {
+      clearInterval(renewal);
+    }
   }
 
   /**
@@ -915,7 +989,55 @@ export class EmailService extends BaseService {
     message: SendMessage,
     context: DispatchContext
   ): Promise<CallOutcome> {
+    // A keyed send of several messages renews its claim before each one, so a
+    // later send with the key does not take over a send still in progress.
+    await context.keyed?.renew();
     const startedAt = Date.now();
+    const controller = new AbortController();
+    // Started once, and answered within the deadline or carried on past it:
+    // never started again, which would send the message twice.
+    const sending = Promise.resolve().then(() =>
+      context.adapter.send({
+        ...adapterMessage(message, context),
+        signal: controller.signal,
+      })
+    );
+    if (await settlesWithin(sending, CALL_DEADLINE_MS)) {
+      return this.recordAnswer(message, context, sending, startedAt);
+    }
+    // No answer yet: the caller is told so now, the adapter is told to stop,
+    // and the call is finished later with whatever it answers.
+    controller.abort();
+    return {
+      message,
+      outcome: { success: false, failure: noAnswerFailure() },
+      accepted: false,
+      late: async withinMs => {
+        if (await settlesWithin(sending, withinMs)) {
+          return this.recordAnswer(message, context, sending, startedAt);
+        }
+        // Never answered: recorded as without an answer, and its claim let go.
+        const outcome = await this.recordFailed(
+          message,
+          withEmailFailure(
+            new Error("no answer by the lease limit"),
+            noAnswerFailure()
+          ),
+          context,
+          startedAt
+        );
+        return { message, outcome, accepted: false };
+      },
+    };
+  }
+
+  /** Record what a provider call answered, or how it failed. */
+  private async recordAnswer(
+    message: SendMessage,
+    context: DispatchContext,
+    sending: Promise<Awaited<ReturnType<EmailProviderAdapter["send"]>>>,
+    startedAt: number
+  ): Promise<CallOutcome> {
     // Two fields rather than one, because they answer different questions
     // and only one of them can be answered immediately. `verdict` is the fact
     // that the provider took the message; `dispatched` is the response, which
@@ -929,14 +1051,9 @@ export class EmailService extends BaseService {
     // failed, and an auth flow withholding a token for a message that was
     // delivered.
     const state: DispatchState = {};
-    // A keyed send of several messages renews its claim before each one, so a
-    // later send with the key does not take over a send still in progress.
-    await context.keyed?.renew();
 
     try {
-      const result = await context.adapter.send(
-        adapterMessage(message, context)
-      );
+      const result = await sending;
 
       // The provider has answered, and WHAT it answered. Both are recorded
       // here: a later throw must not be able to turn a refusal into a success
