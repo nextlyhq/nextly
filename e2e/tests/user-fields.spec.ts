@@ -8,8 +8,9 @@
  * Safe to write against because the suite owns its database and empties it
  * before every run. Nothing here belongs to anyone.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const FIELD_LABEL = "Job Title";

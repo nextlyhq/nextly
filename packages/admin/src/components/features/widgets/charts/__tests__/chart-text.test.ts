@@ -40,22 +40,47 @@ describe("the chart's name", () => {
 });
 
 describe("the current point, read politely as the keys move", () => {
-  it("says when and how many", () => {
-    expect(currentPointText({ when: "Oct 14", value: "12" })).toBe(
-      "Oct 14: 12."
-    );
+  const at = (index: number, of: number) => ({ index, of });
+
+  it("says when, how many, and where it sits", () => {
+    expect(
+      currentPointText({ when: "Oct 14", value: "12", position: at(2, 7) })
+    ).toBe("Oct 14: 12. 3 of 7.");
   });
 
   it("names the series where there are several", () => {
     expect(
-      currentPointText({ series: "Pages", when: "Oct 14", value: "3" })
-    ).toBe("Pages, Oct 14: 3.");
+      currentPointText({
+        series: "Pages",
+        when: "Oct 14",
+        value: "3",
+        position: at(0, 7),
+      })
+    ).toBe("Pages, Oct 14: 3. 1 of 7.");
   });
 
   it("says a bar's group and its count, a floor as it is spoken", () => {
-    expect(currentPointText({ when: "Draft", value: "100 or more" })).toBe(
-      "Draft: 100 or more."
-    );
+    expect(
+      currentPointText({
+        when: "Draft",
+        value: "100 or more",
+        position: at(1, 3),
+      })
+    ).toBe("Draft: 100 or more. 2 of 3.");
+  });
+
+  it("reads two points that look alike differently, by where they sit", () => {
+    const one = currentPointText({
+      when: "Done",
+      value: "4",
+      position: at(0, 2),
+    });
+    const two = currentPointText({
+      when: "Done",
+      value: "4",
+      position: at(1, 2),
+    });
+    expect(one).not.toBe(two);
   });
 });
 
