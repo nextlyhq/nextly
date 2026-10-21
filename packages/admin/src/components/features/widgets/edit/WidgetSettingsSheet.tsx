@@ -30,6 +30,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -234,10 +235,15 @@ export function WidgetSettingsSheet({
   // The form keeps the values it was mounted with, and `defaultValues` changing
   // later does not replace them. So while the sheet is closed it is rebuilt
   // from the latest baseline: sources that arrive or change after mounting are
-  // what it opens with, and a value a notice says was reset is the value Save
-  // writes. Never while it is open, where it would discard the reader's edits.
+  // what it opens with, and a value a notice says was reset is the value Done
+  // keeps. And again as it opens, so a sheet always opens on what is stored,
+  // never on a change a reader cancelled, whatever wrote to the form after it
+  // closed. Never while it stays open, where it would discard the reader's edits.
+  const wasOpen = useRef(open);
   useEffect(() => {
-    if (!open) {
+    const opening = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!open || opening) {
       form.reset(defaultValues);
       setFailure(undefined);
     }

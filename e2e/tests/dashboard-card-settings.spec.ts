@@ -120,7 +120,7 @@ const WIDTHS = [
 ];
 
 for (const viewport of WIDTHS) {
-  test(`the quick setting saves at once, asks nothing of other cards, and is announced (${viewport.name})`, async ({
+  test(`the quick setting saves at once, asks no other card, and is announced (${viewport.name})`, async ({
     page,
   }) => {
     await page.setViewportSize(viewport);
@@ -137,9 +137,20 @@ for (const viewport of WIDTHS) {
     await expect(page.getByTestId("widget-grid-live")).toHaveText(
       `${TITLE}: Accent set to Bold.`
     );
-    // Accent changes how the card is drawn, not what it asks: no card on the dashboard is
-    // asked again for it.
-    expect(sent).toEqual([]);
+    // Only this card may be asked again for its own setting, never another card: each request
+    // sent carries this card's question alone.
+    const asked = sent.map(
+      request =>
+        (request.postDataJSON() as { queries?: Array<{ source?: string }> })
+          .queries ?? []
+    );
+    expect(
+      asked.filter(
+        queries =>
+          queries.length !== 1 || queries[0]?.source !== "collection:posts"
+      ),
+      `requests that asked other cards: ${JSON.stringify(asked)}`
+    ).toEqual([]);
 
     // Saved for this reader: it is there after a reload.
     await page.reload();

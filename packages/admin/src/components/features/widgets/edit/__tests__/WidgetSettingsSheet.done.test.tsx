@@ -8,6 +8,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AnyWidgetSetting } from "nextly/config";
+import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { WidgetSettingsSheet, type DoneSettled } from "../WidgetSettingsSheet";
@@ -94,6 +95,36 @@ describe("the settings sheet's Done", () => {
     sheet(reason);
     expect(screen.getByText(reason)).toBeInTheDocument();
     expect(done()).toBeDisabled();
+  });
+});
+
+describe("reopening the settings sheet", () => {
+  it("opens on what is stored, not on a change the reader cancelled", async () => {
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Open again
+          </button>
+          <WidgetSettingsSheet
+            open={open}
+            onOpenChange={setOpen}
+            title="Recent posts"
+            settings={[{ name: "heading", type: "text", label: "Heading" }]}
+            config={{ heading: "Stored" }}
+            onDone={() => {}}
+          />
+        </>
+      );
+    }
+    render(<Harness />);
+    const heading = () => screen.getByRole("textbox", { name: /Heading/ });
+    await userEvent.clear(heading());
+    await userEvent.type(heading(), "Cancelled");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Open again" }));
+    expect(heading()).toHaveValue("Stored");
   });
 });
 
