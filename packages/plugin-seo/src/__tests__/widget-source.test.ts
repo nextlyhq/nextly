@@ -835,4 +835,28 @@ describe("one scan for every question in a batch", () => {
       ],
     });
   });
+
+  it("fails only the query its filter refuses late, and answers the rest from the scan", async () => {
+    // `contains` passes the host's validation but not this source's filter,
+    // which refuses it only once the scan is read: that query alone may fail.
+    const { resolveMany } = seoIssuesWidgetSource(
+      ["pages"],
+      defaultSeoFields()
+    );
+    if (!resolveMany) throw new Error("resolveMany is published");
+    const answers = await resolveMany(
+      [
+        countQuery,
+        {
+          ...countQuery,
+          where: { [ISSUE_FIELD]: { contains: "title" } },
+        } as never,
+      ],
+      caller,
+      { services: servicesWith({ pages: [untitled] }) } as never,
+      undefined
+    );
+    expect(answers[0]).toEqual({ op: "count", total: 1 });
+    expect(answers[1]).toBeInstanceOf(Error);
+  });
 });
