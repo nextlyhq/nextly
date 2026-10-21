@@ -47,6 +47,8 @@ import {
 const NOTES = "plugin_history_notes";
 /** A collection with drafts but autosave turned off: drafts alone turn it on. */
 const PLAIN = "plugin_history_plain";
+/** A collection with a field its editors may not read. */
+const GUARDED = "plugin_history_guarded";
 /** An autosaving collection with a password field. */
 const SECRETS = "plugin_history_secrets";
 
@@ -58,7 +60,7 @@ interface PluginVersions {
     label: string | null,
     by?: unknown,
     opts?: ServiceOpts
-  ): Promise<unknown>;
+  ): Promise<{ snapshot?: unknown }>;
   deleteWorkingDraft(
     ref: VersionRef,
     locale: string | null,
@@ -195,6 +197,15 @@ describe.each(getConfiguredTestDialects())(
             fields: [text({ name: "title" })],
           }),
           defineCollection({
+            slug: GUARDED,
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              text({ name: "internal", access: { read: () => false } }),
+            ],
+          }),
+          defineCollection({
             slug: SECRETS,
             status: true,
             versions: { drafts: { autosave: true } },
@@ -218,6 +229,8 @@ describe.each(getConfiguredTestDialects())(
           `update-${PLAIN}`,
           `read-${SECRETS}`,
           `update-${SECRETS}`,
+          `read-${GUARDED}`,
+          `update-${GUARDED}`,
         ]),
       ]);
       readerId = await account(t, "reader@example.com", [
@@ -294,6 +307,28 @@ describe.each(getConfiguredTestDialects())(
           )
         ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
         expect((await versions.get(ref, 1)).label ?? null).toBeNull();
+      });
+
+      it("hands back no field the caller may not read", async () => {
+        // The version is a copy of the document, so what the call returns is
+        // what the caller may read of it, as on REST, which returns none of it.
+        const created = await handler().createEntry(
+          {
+            collectionName: GUARDED,
+            overrideAccess: true,
+            user: { id: ownerId },
+          },
+          { title: "public", internal: "hidden-note", status: "published" }
+        );
+        const ref = refOf(GUARDED, created.data!.id);
+        const named = await versions.setLabel(
+          ref,
+          1,
+          "named",
+          undefined,
+          asUser(editorId)
+        );
+        expect(JSON.stringify(named)).not.toContain("hidden-note");
       });
 
       it("records the caller's own name, not the one the plugin passes", async () => {
@@ -408,6 +443,35 @@ describe.each(getConfiguredTestDialects())(
         await versions.deleteWorkingDraft(ref, null, asUser(editorId));
         expect(await draftParts(ref)).toEqual([]);
       });
+
+      it("goes the way REST's discard goes, recording that the draft was discarded", async () => {
+        // The shared discard path: the one that holds the document while it
+        // removes the draft, and records the discard in the document's history.
+        const ref = await withWorkingDraft(NOTES);
+        await versions.deleteWorkingDraft(ref, null, asUser(editorId));
+        const { items } = await versions.listEvents(
+          { kind: "collection", slug: NOTES, id: ref.entryId },
+          // The kind as history stores it.
+          { kinds: ["draft-discarded"] }
+        );
+        expect(items.map(e => [e.actorKind, e.actorId])).toEqual([
+          ["person", editorId],
+        ]);
+      });
+
+      it("is refused to an API key, whose own id a plugin cannot name, and the draft stays", async () => {
+        const ref = await withWorkingDraft(NOTES);
+        await expect(
+          versions.deleteWorkingDraft(ref, null, {
+            ...asUser(editorId),
+            authenticatedScope: {
+              actorType: "apiKey",
+              permissions: [`read-${NOTES}`, `update-${NOTES}`],
+            },
+          })
+        ).rejects.toMatchObject({ code: "FORBIDDEN", statusCode: 403 });
+        expect((await draftParts(ref)).length).toBeGreaterThan(0);
+      });
     });
 
     describe("recording an autosave", () => {
@@ -513,6 +577,18 @@ describe.each(getConfiguredTestDialects())(
           title: "typing",
           pin: "4321",
         });
+      });
+
+      it("are left out of a snapshot that is a list of rows", async () => {
+        const ref = refOf(SECRETS, await published(SECRETS, "u"));
+        await versions.autosave({
+          ref,
+          status: "draft",
+          snapshot: [{ title: "typing", pin: "4321" }],
+          createdBy: ownerId,
+        });
+        const stored = await versions.getAutosave(ref, ownerId);
+        expect(stored?.snapshot).toEqual([{ title: "typing" }]);
       });
 
       it("are left out for a person the plugin acts for", async () => {

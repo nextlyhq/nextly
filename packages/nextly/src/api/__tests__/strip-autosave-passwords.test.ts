@@ -48,6 +48,24 @@ describe("stripAutosavePasswords", () => {
     expect(snapshot).toEqual({ title: "typing" });
   });
 
+  it("leaves out a password value in each row of a list", async () => {
+    // The store takes a list as readily as an object, so a list is stripped too.
+    getCollection.mockResolvedValue({
+      fields: [
+        { type: "text", name: "title" },
+        { type: "password", name: "pin" },
+      ],
+    });
+    const snapshot = [
+      { title: "a", pin: "1" },
+      { title: "b", pin: "2" },
+    ];
+
+    await stripAutosavePasswords("collection", "notes", snapshot);
+
+    expect(snapshot).toEqual([{ title: "a" }, { title: "b" }]);
+  });
+
   it("leaves out a password declared inside a referenced component", async () => {
     getCollection.mockResolvedValue({
       fields: [{ type: "component", name: "hero", component: "hero" }],
