@@ -326,6 +326,12 @@ export class SingleMutationService extends BaseService {
     /** Who discarded it, for the Single's history. */
     actor?: RequestActor;
     user?: UserContext;
+    /**
+     * The document the caller was checked against, when it was. A Single
+     * deleted and made again since is a different document, so the discard
+     * is refused rather than removing that document's draft.
+     */
+    entryId?: string;
   }): Promise<number> {
     const singleMeta = await resolveSingleForRequest(
       this.adapter,
@@ -349,6 +355,14 @@ export class SingleMutationService extends BaseService {
       // which cannot have a pending change against it.
       const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
       const entryId = row?.id;
+      if (params.entryId !== undefined && entryId !== params.entryId) {
+        throw NextlyError.notFound({
+          logContext: {
+            reason: "discard-working-draft-single-replaced",
+            scopeSlug: params.slug,
+          },
+        });
+      }
       if (entryId === undefined) return 0;
 
       // Serialize with concurrent draft-save upserts, which lock this same row

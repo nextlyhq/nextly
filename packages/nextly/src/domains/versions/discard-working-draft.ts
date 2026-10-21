@@ -164,6 +164,8 @@ export async function discardWorkingDraft(
     args.scopeKind === "single"
       ? await getService("singleEntryService").discardWorkingDraft({
           slug: args.slug,
+          // The document every check above was made against.
+          entryId: args.entryId,
           locale: args.locale ?? null,
           actor: args.actor,
           user: args.user,

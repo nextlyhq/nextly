@@ -833,7 +833,7 @@ export class CollectionsHandler {
   async discardWorkingDraftCounted(
     params: Parameters<CollectionEntryService["discardWorkingDraft"]>[0]
   ): Promise<number> {
-    return this.entryService.discardWorkingDraft(params);
+    return this.entryService.discardWorkingDraftCounted(params);
   }
 
   /**

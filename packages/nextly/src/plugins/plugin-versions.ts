@@ -373,18 +373,20 @@ export function pluginVersionWrites(
           writer.actor.id === undefined
             ? undefined
             : { actor: writer.actor, personName: writer.user.name ?? null };
-        const row = await service().setLabel(ref, versionNo, label, namer);
         // The version is a copy of the document, so it is handed back as the
-        // caller may read it: a field their read rules withhold stays out, as
-        // it does from every version read.
+        // writer may read it. Redacted before anything is written: a
+        // redaction that cannot be made refuses the call with nothing changed,
+        // rather than failing after the label and its history event are in.
+        const shown = await service().get(ref, versionNo);
         await redactSnapshotForUser(
-          row.snapshot,
+          shown.snapshot,
           ref.scopeKind,
           ref.scopeSlug,
           writer.user,
           writer.authenticatedScope
         );
-        return row;
+        const row = await service().setLabel(ref, versionNo, label, namer);
+        return { ...row, snapshot: shown.snapshot };
       });
     },
 
