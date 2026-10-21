@@ -28,9 +28,13 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
 import { NextlyError } from "../../../../errors";
+import { countLongerThan } from "../classifier/count-helpers";
+import { narrowingRefusal } from "../classifier/narrowing-refusal";
+import { stringNarrowingLimit } from "../classifier/type-widening";
 import {
   isPreResolutionOp,
   isReferenceListConversion,
+  type ChangeColumnTypeOp,
   type Operation,
 } from "../diff/types";
 // F11 PR 3: SQL-template generation moved to the shared sql-templates/
@@ -73,7 +77,9 @@ export async function executePreResolutionOps(
    */
   leadingStatements: readonly string[] = []
 ): Promise<number> {
-  const preOps = ops.filter(isPreResolutionOp);
+  const preOps = ops.filter(
+    op => isPreResolutionOp(op) || isMysqlStringNarrowing(op, dialect)
+  );
   if (preOps.length === 0 && leadingStatements.length === 0) return 0;
 
   const ordered = orderForExecution(preOps);
@@ -85,15 +91,14 @@ export async function executePreResolutionOps(
   // run, and the column is left renamed and unconverted with nothing able to take it back. The only
   // safe moment to discover that the data will not convert is before the first statement.
   await assertConversionsAreSafe(txOrDb, ordered, dialect);
+  await assertNarrowingsFit(txOrDb, ordered, dialect);
 
   for (const statement of leadingStatements) {
     await runRaw(txOrDb, statement, dialect);
   }
 
   for (const op of ordered) {
-    for (const statement of statementsForOp(op, dialect)) {
-      await runRaw(txOrDb, statement, dialect);
-    }
+    await runOrderedOp(txOrDb, op, dialect);
   }
 
   // A rename moves the column; it does not change what the column IS. When the two sides differ, the
@@ -112,11 +117,43 @@ export async function executePreResolutionOps(
   for (const op of ordered) {
     if (op.type !== "rename_column") continue;
     for (const conversion of conversionForRename(op, dialect)) {
-      await runRaw(txOrDb, generateSQL(conversion, dialect), dialect);
+      await runConversion(txOrDb, conversion, dialect);
     }
   }
 
   return ordered.length;
+}
+
+/** One ordered op's statements; a MySQL string narrowing runs strict (`runInStrictMysqlSession`). */
+async function runOrderedOp(
+  txOrDb: unknown,
+  op: Operation,
+  dialect: SupportedDialect
+): Promise<void> {
+  if (isMysqlStringNarrowing(op, dialect)) {
+    await runInStrictMysqlSession(
+      txOrDb,
+      generateSQL(withLiveNullability(op), dialect)
+    );
+    return;
+  }
+  for (const statement of statementsForOp(op, dialect)) {
+    await runRaw(txOrDb, statement, dialect);
+  }
+}
+
+/** A rename's type change; a MySQL string narrowing runs strict, as its own narrowings do. */
+async function runConversion(
+  txOrDb: unknown,
+  conversion: Operation,
+  dialect: SupportedDialect
+): Promise<void> {
+  const statement = generateSQL(conversion, dialect);
+  if (isMysqlStringNarrowing(conversion, dialect)) {
+    await runInStrictMysqlSession(txOrDb, statement);
+  } else {
+    await runRaw(txOrDb, statement, dialect);
+  }
 }
 
 /**
@@ -294,7 +331,159 @@ function orderForExecution(ops: Operation[]): Operation[] {
     ...dropColumns,
     ...dropTables,
     ...referenceListConversions,
+    // Last, like the conversions and for the same reason: a MySQL string narrowing
+    // (`isMysqlStringNarrowing`) names its column as every rename has left it.
+    ...ops.filter(
+      op => op.type === "change_column_type" && !isReferenceListConversion(op)
+    ),
   ];
+}
+
+/**
+ * Whether `op` narrows a MySQL string column to `varchar(N)`, so that running it can cut a stored
+ * value short.
+ *
+ * The classifier lets such a change through without a prompt once it has counted no value longer
+ * than N, but a value written after that count is one it never saw, and drizzle-kit would run the
+ * change on whichever pooled connection it takes, in whatever mode the server gives it. So it runs
+ * here instead, on the apply's own connection in strict mode (`runInStrictMysqlSession`), and a
+ * value that no longer fits makes the statement fail rather than lose its end. The kit then finds
+ * the column already converted, and plans nothing for it.
+ */
+function isMysqlStringNarrowing(
+  op: Operation,
+  dialect: SupportedDialect
+): boolean {
+  return (
+    dialect === "mysql" &&
+    op.type === "change_column_type" &&
+    op.conversion === undefined &&
+    stringNarrowingLimit(op.fromType, op.toType, dialect) !== null
+  );
+}
+
+/**
+ * Refuses the apply, before any statement runs, when a MySQL string narrowing it is about to make
+ * would cut a stored value short: its own narrowings, and the type change a confirmed rename
+ * carries. The classifier counts the first kind already, but a rename reached it as a drop and an
+ * add, with no type change to count; asked here, every narrowing is counted where the values still
+ * sit, under the table and column names they have before any rename runs. MySQL commits each
+ * statement as it runs, so a refusal found after the first one would leave it behind.
+ */
+async function assertNarrowingsFit(
+  txOrDb: unknown,
+  ordered: readonly Operation[],
+  dialect: SupportedDialect
+): Promise<void> {
+  if (dialect !== "mysql") return;
+  for (const check of narrowingsToCount(ordered, dialect)) {
+    const longer = await countLongerThan(
+      txOrDb,
+      dialect,
+      check.tableName,
+      check.columnName,
+      check.limit
+    );
+    if (longer > 0) throw narrowingRefusal({ ...check, longer });
+  }
+}
+
+interface NarrowingCheck {
+  tableName: string;
+  columnName: string;
+  fromType: string;
+  toType: string;
+  limit: number;
+}
+
+/**
+ * Every MySQL string narrowing `ordered` makes, named as the table and column are before any rename
+ * runs: an op's own, and the type change of each rename.
+ */
+function narrowingsToCount(
+  ordered: readonly Operation[],
+  dialect: SupportedDialect
+): NarrowingCheck[] {
+  const tableBeforeRename = new Map<string, string>();
+  for (const op of ordered) {
+    if (op.type === "rename_table")
+      tableBeforeRename.set(op.toName, op.fromName);
+  }
+  const liveTable = (name: string) => tableBeforeRename.get(name) ?? name;
+
+  const checks: NarrowingCheck[] = [];
+  for (const op of ordered) {
+    if (op.type === "change_column_type") {
+      checks.push(
+        ...narrowingCheck(op, liveTable(op.tableName), op.columnName, dialect)
+      );
+    } else if (op.type === "rename_column") {
+      for (const conversion of conversionForRename(op, dialect)) {
+        if (conversion.type !== "change_column_type") continue;
+        checks.push(
+          ...narrowingCheck(
+            conversion,
+            liveTable(op.tableName),
+            op.fromColumn,
+            dialect
+          )
+        );
+      }
+    }
+  }
+  return checks;
+}
+
+/** The check for one type change, when it is a MySQL string narrowing; none otherwise. */
+function narrowingCheck(
+  op: ChangeColumnTypeOp,
+  tableName: string,
+  columnName: string,
+  dialect: SupportedDialect
+): NarrowingCheck[] {
+  if (!isMysqlStringNarrowing(op, dialect)) return [];
+  const limit = stringNarrowingLimit(op.fromType, op.toType, dialect);
+  if (limit === null) return [];
+  return [
+    { tableName, columnName, fromType: op.fromType, toType: op.toType, limit },
+  ];
+}
+
+/**
+ * A narrowing restated with the nullability the column has now. MySQL's MODIFY restates the whole
+ * definition, so the diff's operation carries the target nullability; run here, ahead of the
+ * pre-cleanup that fills or removes the NULLs a NOT NULL would refuse, it would fail on exactly the
+ * rows the operator chose to resolve. The column keeps what it has, and the NOT NULL is left to
+ * the route that runs after the cleanup.
+ */
+function withLiveNullability(op: Operation): Operation {
+  if (op.type !== "change_column_type" || op.fromNullable === undefined) {
+    return op;
+  }
+  return { ...op, nullable: op.fromNullable };
+}
+
+/**
+ * Run one MySQL statement in strict mode on this connection, with the session's own mode put back
+ * afterwards whether the statement succeeded or not, so the pooled connection the apply returns
+ * carries nothing of it. `STRICT_ALL_TABLES` is added to the session's mode, keeping its other
+ * flags.
+ */
+async function runInStrictMysqlSession(
+  txOrDb: unknown,
+  statement: string
+): Promise<void> {
+  await runRaw(txOrDb, "SET @nextly_sql_mode = @@SESSION.sql_mode", "mysql");
+  await runRaw(
+    txOrDb,
+    "SET SESSION sql_mode = TRIM(BOTH ',' FROM CONCAT(@@SESSION.sql_mode, ',STRICT_ALL_TABLES'))",
+    "mysql"
+  );
+  try {
+    await runRaw(txOrDb, statement, "mysql");
+  } finally {
+    await runRaw(txOrDb, "SET SESSION sql_mode = @nextly_sql_mode", "mysql");
+  }
 }
 
 // F11 PR 3: this function used to dispatch to four `buildXxxSql` helpers

@@ -1,7 +1,9 @@
 /**
  * A Single's saves in Recent activity and in the 24-hour figure, on every
  * dialect: headed by the Single's label, shown only to someone who may read
- * that Single, and left out of both when the Single is hidden or internal.
+ * that Single, and left out of both when the Single is hidden or internal. The
+ * figure counts exactly what the feed's own check shows, a collection's rows
+ * and a Single's alike.
  * Which rows a hidden slug removes is decided by the row's stated kind, so a
  * Single and a collection sharing a slug never remove each other's, and a
  * row from before the kind was recorded counts as a collection's.
@@ -95,6 +97,15 @@ describeEachDialect("a Single's saves in Recent activity", dialect => {
     return (result.data as { id: string }).id;
   };
 
+  /** Create a post, returning its id. */
+  const createPost = async (title: string) => {
+    const created = await handle!.nextly.create({
+      collection: POSTS,
+      data: { title },
+    });
+    return String(created.item.id);
+  };
+
   const feedFor = async (caller: ReadCaller, scope: ReadableResources) =>
     (
       await handle!.getService("activityLogService").getRecentActivity({
@@ -148,22 +159,59 @@ describeEachDialect("a Single's saves in Recent activity", dialect => {
   it("removes only the hidden kind's rows from the figure when a slug is shared", async () => {
     // Under the internal Single's slug only the Single's rows go; under the
     // hidden collection's, the collection's and the kindless ones go, since a
-    // row stating no kind is a collection's. Uneven counts per kind, so each
-    // wrong rule gives its own total: right is 3 + 1 = 4; blind to kind and to
-    // Singles (the rule this replaces) 6; blind to kind for both 0; kindless
-    // read as a Single's 6; kindless dropped 2.
-    const rows: [string, ActivitySubjectKind | null, number][] = [
-      [FLAGS, "single", 3],
+    // row stating no kind is a collection's. The internal Single's rows name its
+    // live document, so only its being kept off removes them; the Single row
+    // under the collection's slug names no Single's document, and the feed's
+    // own check drops it as the feed does. Uneven counts per kind, so each wrong
+    // rule gives its own total: right is 1 + 2 = 3; blind to kind for both 0;
+    // Singles not left out 6; kindless read as a Single's 5; kindless dropped
+    // 1; collections not left out 9.
+    const flagsId = await save(FLAGS, { flag: "on" });
+    const startedWith = await recentChanges(handle!, owner);
+    const rows: [string, ActivitySubjectKind | null, number, string?][] = [
+      [FLAGS, "single", 3, flagsId],
       [FLAGS, "collection", 1],
       [FLAGS, null, 2],
       [PATTERNS, "single", 1],
       [PATTERNS, "collection", 2],
       [PATTERNS, null, 4],
     ];
-    for (const [slug, kind, times] of rows) {
-      for (let i = 0; i < times; i++) await log(handle!, owner, slug, kind);
+    for (const [slug, kind, times, entryId] of rows) {
+      for (let i = 0; i < times; i++) {
+        await log(handle!, owner, slug, kind, entryId);
+      }
     }
-    expect(await recentChanges(handle!, owner)).toBe(4);
+    expect((await recentChanges(handle!, owner)) - startedWith).toBe(3);
+  });
+
+  it("counts in the figure only the rows the feed shows the reader, for a collection and a Single", async () => {
+    // In the scope, so each row reaches the feed's per-row check, which refuses
+    // a reader with no grant on either. The figure is counted by that same
+    // check, so it refuses them too; a count of what the scope admits would
+    // count both, and say changes happened that this reader cannot see.
+    await save(SETTINGS, { siteName: "Acme" });
+    const post = await createPost("Draft plan");
+    await log(handle!, owner, POSTS, "collection", post);
+    const stranger: ReadCaller = { user: { id: "stranger", roles: [] } };
+
+    expect(await feedFor(stranger, allResources())).toEqual([]);
+    expect(await recentChanges(handle!, stranger)).toBe(0);
+    // The control: the owner is shown both, and the figure counts what the feed shows.
+    const shown = await feedFor(owner, allResources());
+    expect(new Set(shown.map(row => row.subjectKind))).toEqual(
+      new Set(["single", "collection"])
+    );
+    expect(await recentChanges(handle!, owner)).toBe(shown.length);
+  });
+
+  it("counts a Single's row naming a document it no longer has only if the feed shows it", async () => {
+    // A row from before the Single's document was replaced names an id the
+    // Single no longer has. Whatever the feed's check decides about it, the
+    // figure decides the same, because it is counted by that check.
+    await save(SETTINGS, { siteName: "Acme" });
+    await log(handle!, owner, SETTINGS, "single", "an-earlier-document");
+    const shown = await feedFor(owner, allResources());
+    expect(await recentChanges(handle!, owner)).toBe(shown.length);
   });
 });
 

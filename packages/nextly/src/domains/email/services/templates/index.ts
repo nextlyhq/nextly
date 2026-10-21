@@ -9,7 +9,7 @@
  * @since 1.0.0
  */
 
-import type { EmailTemplateInsert } from "../../../../schemas/email-templates/types";
+import type { OwnerTemplate } from "../../template-ownership";
 
 // Re-import for array construction
 import { defaultLayoutTemplate } from "./default-layout";
@@ -32,7 +32,7 @@ export { welcomeTemplate } from "./welcome";
  * The default layout is listed first so it exists before any body
  * template with `useLayout: true` is previewed or sent.
  */
-export const BUILT_IN_TEMPLATES: EmailTemplateInsert[] = [
+export const BUILT_IN_TEMPLATES: OwnerTemplate[] = [
   defaultLayoutTemplate,
   welcomeTemplate,
   passwordResetTemplate,

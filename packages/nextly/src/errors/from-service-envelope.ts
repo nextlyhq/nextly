@@ -8,6 +8,7 @@
 import { isDatabaseBusy } from "../database/errors";
 import { recordFlattenedError } from "../hooks/side-effect-warnings";
 
+import { afterCommittedWrite } from "./committed-write";
 import {
   genericPublicMessage,
   NEXTLY_ERROR_STATUS,
@@ -38,6 +39,11 @@ export interface ServiceErrorEnvelope {
     code?: string;
     message: string;
   }>;
+  /**
+   * Whether the write this envelope reports committed before it failed. A
+   * write result carries it; any other envelope leaves it unset.
+   */
+  committed?: boolean;
 }
 
 /**
@@ -117,6 +123,9 @@ function validationFromEnvelope(
  * identifies an error exactly: three codes share 401, two share 409, two share
  * 500, and plugins declare codes outside the canonical set entirely. The status
  * mapping below is the fallback for envelopes built by hand that carry no code.
+ *
+ * A write that committed before it failed is never answered with an error that
+ * asks for a retry: see {@link afterCommittedWrite}.
  */
 export function errorFromServiceEnvelope(
   envelope: ServiceErrorEnvelope,
@@ -128,6 +137,20 @@ export function errorFromServiceEnvelope(
   // a NextlyError exists — and it belongs to the error's identity, not to
   // something bolted on after the fact.
   cause?: Error
+): NextlyError {
+  const rebuilt = rebuildFromEnvelope(envelope, logContext, cause);
+  // Decided here, on the rebuilt error, because every boundary rebuilds
+  // through this function: a busy read in a post-commit step reaches it from a
+  // collection write and a Single write alike, already flattened to a code.
+  return envelope.committed === true
+    ? afterCommittedWrite(rebuilt, logContext)
+    : rebuilt;
+}
+
+function rebuildFromEnvelope(
+  envelope: ServiceErrorEnvelope,
+  logContext: Record<string, unknown>,
+  cause: Error | undefined
 ): NextlyError {
   // Taken off the envelope rather than from each boundary's argument list. The
   // envelope IS what the services attached the thrown error to, and it is the

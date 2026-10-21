@@ -311,3 +311,83 @@ describe("executePreResolutionOps - SQLite", () => {
     expect(executed[1]).toContain('DROP COLUMN "hero_image"');
   });
 });
+
+// A MySQL string narrowing runs here, on the apply's own connection in strict mode, and only once
+// every value is known to fit — whether the narrowing is its own operation or the type change a
+// confirmed rename carries.
+describe("executePreResolutionOps - MySQL string narrowing", () => {
+  function countingTx(longer: number) {
+    const executed: string[] = [];
+    const tx = {
+      execute: vi.fn(async (sql: unknown) => {
+        const text = extractSqlString(sql);
+        executed.push(text);
+        return text.includes("COUNT(*)") ? [[{ count: longer }], []] : [[], []];
+      }),
+    };
+    return { tx, executed };
+  }
+
+  it("keeps the column's live nullability, leaving a pending NOT NULL to run after cleanup", async () => {
+    const { tx, executed } = countingTx(0);
+    await executePreResolutionOps(
+      tx,
+      [
+        {
+          type: "change_column_type",
+          tableName: "single_site",
+          columnName: "title",
+          fromType: "text",
+          toType: "varchar(255)",
+          nullable: false,
+          fromNullable: true,
+        },
+      ],
+      "mysql"
+    );
+    const modify = executed.find(s => s.includes("MODIFY COLUMN"));
+    expect(modify).toContain("MODIFY COLUMN `title` varchar(255) NULL");
+    expect(modify).not.toContain("NOT NULL");
+  });
+
+  const narrowingRename: RenameColumnOp = {
+    type: "rename_column",
+    tableName: "dc_posts",
+    fromColumn: "title",
+    toColumn: "name",
+    fromType: "text",
+    toType: "varchar(255)",
+  };
+
+  it("refuses a rename whose type change would cut a value, before any statement runs", async () => {
+    const { tx, executed } = countingTx(2);
+    await expect(
+      executePreResolutionOps(tx, [narrowingRename], "mysql")
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      publicData: {
+        errors: [
+          expect.objectContaining({
+            code: "NARROWING_WOULD_TRUNCATE",
+            path: "schema.dc_posts.title",
+          }),
+        ],
+      },
+    });
+    expect(executed.filter(s => !s.includes("COUNT(*)"))).toEqual([]);
+  });
+
+  it("runs a rename's narrowing type change in strict mode once the values fit", async () => {
+    const { tx, executed } = countingTx(0);
+    await executePreResolutionOps(tx, [narrowingRename], "mysql");
+    const statements = executed.filter(s => !s.includes("COUNT(*)"));
+    const modify = statements.findIndex(s =>
+      s.includes("MODIFY COLUMN `name`")
+    );
+    expect(statements[0]).toContain("RENAME COLUMN");
+    expect(statements[modify - 1]).toContain("STRICT_ALL_TABLES");
+    expect(statements[modify + 1]).toBe(
+      "SET SESSION sql_mode = @nextly_sql_mode"
+    );
+  });
+});

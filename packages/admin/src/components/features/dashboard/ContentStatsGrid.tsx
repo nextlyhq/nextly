@@ -14,6 +14,7 @@ import { Alert, AlertDescription, Spinner } from "@nextlyhq/ui";
 import type React from "react";
 
 import { StatsCard } from "@admin/components/features/dashboard/StatsCard";
+import { cardNumber } from "@admin/components/features/widgets/frame/format";
 import {
   FileText,
   Image,
@@ -90,7 +91,13 @@ export const ContentStatsGrid: React.FC = () => {
       />
       <StatsCard
         title="Changes (24h)"
-        value={stats.content.recentChanges24h}
+        // A floor when the server stopped counting at its bound, written as every bounded count
+        // on the dashboard is: `1,000+`.
+        value={
+          stats.content.recentChanges24hAtLeast
+            ? cardNumber(stats.content.recentChanges24h, { floor: true }).text
+            : stats.content.recentChanges24h
+        }
         icon={<Clock className="h-5 w-5" />}
         sparklineData={[5, 4, 3, 2, 1, 0, 0]} // Mock trend showing decline/zero
         footer="No changes today"

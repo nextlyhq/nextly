@@ -67,6 +67,16 @@ export interface Classifier {
     operations: Operation[];
     countNulls: (table: string, column: string) => Promise<number>;
     countRows: (table: string) => Promise<number>;
+    /**
+     * How many rows hold a value in `column` longer than `length` characters. A caller that
+     * cannot count leaves it out, and a string narrowing then keeps its confirmation rather than
+     * being judged lossless on data nobody read.
+     */
+    countLongerThan?: (
+      table: string,
+      column: string,
+      length: number
+    ) => Promise<number>;
     dialect: SupportedDialect;
   }): Promise<ClassificationResult>;
 }

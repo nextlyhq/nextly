@@ -2282,3 +2282,94 @@ describe("PushSchemaPipeline - a refused pre-cleanup", () => {
     expect(mocks.executor.executeStatements).not.toHaveBeenCalled();
   });
 });
+
+describe("PushSchemaPipeline - a MySQL apply that fails after lifting a foreign key", () => {
+  // MySQL commits each schema statement as it runs, so a foreign key dropped to retype its column
+  // stays dropped when a later statement of the apply fails — and the batch that would have added
+  // it back never runs. The apply puts it back before reporting the failure.
+  const shelfKey = {
+    name: "fk_cx__items_shelf_id",
+    columns: ["shelf_id"],
+    referencesTable: "cx__shelves",
+    referencesColumns: ["id"],
+    onDelete: "no action" as const,
+    onUpdate: "no action" as const,
+  };
+  const live: NextlySchemaSnapshot = {
+    tables: [
+      {
+        name: "cx__items",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(36)",
+            nullable: false,
+            primaryKey: true,
+          },
+          { name: "shelf_id", type: "varchar(255)", nullable: false },
+        ],
+        foreignKeys: [shelfKey],
+      },
+      {
+        name: "cx__shelves",
+        columns: [
+          {
+            name: "id",
+            type: "varchar(255)",
+            nullable: false,
+            primaryKey: true,
+          },
+        ],
+      },
+    ],
+  };
+
+  it("adds the lifted key back when the retype fails", async () => {
+    const { pipeline, mocks } = makePipeline({
+      introspectImpl: vi
+        .fn<
+          (
+            db: unknown,
+            dialect: SupportedDialect,
+            tableNames: string[]
+          ) => Promise<NextlySchemaSnapshot>
+        >()
+        .mockResolvedValue(live),
+      resolvedOpsOverride: [
+        {
+          type: "change_column_type",
+          tableName: "cx__items",
+          columnName: "shelf_id",
+          fromType: "varchar(255)",
+          toType: "varchar(64)",
+        },
+      ],
+      executePreResImpl: vi
+        .fn<
+          (
+            txOrDb: unknown,
+            ops: Operation[],
+            dialect: SupportedDialect
+          ) => Promise<number>
+        >()
+        .mockRejectedValue(new Error("Data too long for column 'shelf_id'")),
+    });
+
+    const result = await pipeline.apply({
+      desired: onePostsCollection,
+      db: {},
+      dialect: "mysql",
+      source: "code",
+      promptChannel: "terminal",
+      databaseName: "nextly_test",
+    });
+
+    expect(result.success).toBe(false);
+    const ran = mocks.executor.executeStatements.mock.calls.flatMap(
+      call => call[1]
+    );
+    expect(ran).toEqual([
+      expect.stringContaining("ADD CONSTRAINT `fk_cx__items_shelf_id`"),
+    ]);
+  });
+});

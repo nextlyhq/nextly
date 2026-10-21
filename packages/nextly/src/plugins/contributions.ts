@@ -158,6 +158,20 @@ export interface PluginEmailTemplate {
    * password").
    */
   description?: string;
+  /**
+   * @experimental Mark a template that carries a secret: a sign-in, reset or
+   * verification link or code. Such a template takes no `cc` or `bcc`, and
+   * any stored on it are not sent, so nobody who can edit templates can copy
+   * themselves on it. Leave it unset only on a template whose every copy is
+   * harmless to share; it cannot be changed from the admin.
+   */
+  carriesSecret?: boolean;
+  /**
+   * @experimental The Reply-To the template starts with, which may use the
+   * send's variables (for example `{{customerEmail}}`). After the first boot
+   * it is the site's setting, as the provider and From are.
+   */
+  replyTo?: string;
 }
 
 /**
