@@ -2,8 +2,8 @@
  * A hidden column a schema hook contributes to a core table stays out of every
  * public read and write of that table's records, and the core's own writes
  * keep working once it is added. The five tables a hook may extend are each
- * covered: `users` and `media` through REST, the Direct API, and a
- * relationship or upload field that populates them; `nextly_jobs` and
+ * covered: `users` and `media` through REST, the Direct API (media uploads
+ * included), and a relationship or upload field that populates them; `nextly_jobs` and
  * `activity_log` through the one route each that lists their rows; and
  * `audit_log`, which no public route reads, through its writer alone.
  *
@@ -22,7 +22,23 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+// Only the storage backend is stubbed, so an upload runs the real media
+// service and writes the real row without putting a file in the checkout.
+vi.mock("@nextly/storage", async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getMediaStorage: vi.fn(() => ({
+    upload: vi.fn(async (_buffer: Buffer, options: { filename: string }) => ({
+      url: `https://test.local/${options.filename}`,
+      path: options.filename,
+    })),
+    delete: vi.fn().mockResolvedValue(undefined),
+    exists: vi.fn().mockResolvedValue(false),
+    getPublicUrl: vi.fn((path: string) => `https://test.local/${path}`),
+    getStorageType: vi.fn().mockReturnValue("local"),
+  })),
+}));
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
@@ -38,6 +54,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { pdfDocument } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { buildAuditLogWriter } from "../../audit/audit-log-writer";
 
 import { col } from "./dsl";
@@ -89,6 +106,7 @@ interface Direct {
     update(a: Record<string, unknown>): Promise<unknown>;
   };
   media: {
+    upload(a: Record<string, unknown>): Promise<{ id: string }>;
     find(a?: Record<string, unknown>): Promise<unknown>;
     findByID(a: Record<string, unknown>): Promise<unknown>;
     update(a: Record<string, unknown>): Promise<unknown>;
@@ -183,22 +201,26 @@ describe.each(getConfiguredTestDialects())(
     }
 
     function mediaRest(
-      method: "GET" | "PATCH",
+      method: "GET" | "POST" | "PATCH",
       path: string[],
       body?: unknown
     ) {
       // The admin mount: authenticated, and serving writes as well as reads.
       const handlers = createMediaHandlers({ requireAuth: true });
+      // A form is sent as it is, so the runtime sets its multipart boundary.
+      const isForm = body instanceof FormData;
       return handlers[method](
         new Request(`http://localhost/api/media/${path.join("/")}`, {
           method,
           headers: {
             ...headers,
-            ...(body === undefined
+            ...(body === undefined || isForm
               ? {}
               : { "content-type": "application/json" }),
           },
-          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+          ...(body === undefined
+            ? {}
+            : { body: isForm ? body : JSON.stringify(body) }),
         }),
         { params: Promise.resolve({ path }) }
       );
@@ -502,6 +524,43 @@ describe.each(getConfiguredTestDialects())(
         expect(out).toContain("alt 2");
         expectNoHiddenColumn(out);
         expect(await stored("media", mediaId)).toBe(SENTINEL);
+      });
+
+      it("Direct API and REST upload succeed, return no hidden column, and cannot set it", async () => {
+        // An upload inserts and returns its row through code of its own, not
+        // the update path above, so it is checked on both surfaces.
+        const direct1 = pdfDocument("direct-upload");
+        const viaDirect = await direct.media.upload({
+          file: {
+            data: direct1,
+            name: "direct-upload.pdf",
+            mimetype: "application/pdf",
+            size: direct1.length,
+          },
+          user: { id: ownerId },
+        });
+        const directOut = serialised(viaDirect);
+        expect(directOut).toContain("direct-upload");
+        expectNoHiddenColumn(directOut);
+        expect(await stored("media", viaDirect.id)).toBeNull();
+
+        const rest1 = pdfDocument("rest-upload");
+        const form = new FormData();
+        form.append(
+          "file",
+          new File([new Uint8Array(rest1)], "rest-upload.pdf", {
+            type: "application/pdf",
+          })
+        );
+        // The column named in the form too, in both spellings.
+        form.append("leakProbe", ATTEMPT);
+        form.append("leak_probe", ATTEMPT);
+        const restOut = await bodyOf(await mediaRest("POST", [], form));
+        expect(restOut).toContain("rest-upload");
+        expectNoHiddenColumn(restOut);
+        const restId = (JSON.parse(restOut) as { item: { id: string } }).item
+          .id;
+        expect(await stored("media", restId)).toBeNull();
       });
     });
 
