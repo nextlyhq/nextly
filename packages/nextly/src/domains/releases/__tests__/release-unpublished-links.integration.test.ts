@@ -702,10 +702,18 @@ describe.each(getConfiguredTestDialects())(
         "readiness",
       ]);
       expect(readiness.status).toBe(200);
-      const soft = (readiness.json as { soft: ReadinessFinding[] }).soft;
-      expect(linksIn(soft)).toEqual([["hidden", "1"]]);
-      expect(JSON.stringify(soft)).not.toContain(draftAuthor);
-      expect(JSON.stringify(soft)).not.toContain('"fields"');
+      const answer = readiness.json as {
+        soft: ReadinessFinding[];
+        hidden: Array<{ scopeSlug: string; count: number; soft: number }>;
+      };
+      // The post is a document the reader may not read: it is one count among
+      // the release's hidden documents, and none of its links is reported.
+      expect(linksIn(answer.soft)).toEqual([]);
+      expect(answer.hidden).toEqual([
+        expect.objectContaining({ scopeSlug: "posts", count: 1, soft: 1 }),
+      ]);
+      expect(JSON.stringify(answer)).not.toContain(draftAuthor);
+      expect(JSON.stringify(answer)).not.toContain('"fields"');
     });
 
     it("names a link in a protected field only to a reader who may read that field, and counts it for both", async () => {

@@ -115,18 +115,23 @@ export async function rest(
   key: string,
   method: "GET" | "POST" | "PATCH",
   path: string[],
-  body?: unknown
+  body?: unknown,
+  /** A query string, without its `?`. */
+  query?: string
 ): Promise<{ status: number; json: Record<string, unknown> }> {
   const handlers = createDynamicHandlers();
   const res = await handlers[method](
-    new Request(`http://localhost/api/${path.join("/")}`, {
-      method,
-      headers: {
-        authorization: `Bearer ${key}`,
-        "content-type": "application/json",
-      },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    }),
+    new Request(
+      `http://localhost/api/${path.join("/")}${query ? `?${query}` : ""}`,
+      {
+        method,
+        headers: {
+          authorization: `Bearer ${key}`,
+          "content-type": "application/json",
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }
+    ),
     { params: Promise.resolve({ params: path }) }
   );
   return {

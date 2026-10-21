@@ -498,7 +498,7 @@ A document **coming down** is judged only on its status and on a pending change 
 | `IN_OTHER_RELEASE`                 | is also in another scheduled release, named by `detail.releaseId`. `detail.winningReleaseId` is the one whose action stands once both have run, or `null` while this release has no time set |
 | `UNPUBLISHED_LINK`                 | is going live and links to a document that will not be live at the release's moment (see [Linked documents](#linked-documents-that-will-not-be-live))                                        |
 | `UNPUBLISHED_LINKS_HIDDEN`         | is going live and links to documents that will not be live, which you may not read: `detail.count` says how many, and nothing else about them is given                                       |
-| `UNPUBLISHED_LINK_IN_HIDDEN_FIELD` | is going live and links to a document that will not be live through a field you may not view: neither the field nor the document is named                                                    |
+| `UNPUBLISHED_LINK_IN_HIDDEN_FIELD` | is going live and links to a document that will not be live through a field you may not view: neither the field nor the document is named, and `detail.count` says how many links            |
 
 Ask for them with:
 
@@ -688,13 +688,19 @@ live itself.
 
 **You are only told what you may read.**
 
-- A link from a document you may not read, or to a document you may not read, is never named,
-  by id or otherwise. Each document's such links are counted together in one
-  `UNPUBLISHED_LINKS_HIDDEN` problem, whose `detail.count` says how many there are.
-- A link in a field you may not view, by that field's read rule, is reported as
-  `UNPUBLISHED_LINK_IN_HIDDEN_FIELD`, "a field you can't view links to an unpublished document",
-  naming neither the field nor the document. It still counts, so the release reads the same
-  size to everyone.
+- A document of the release you may not read is counted among the release's hidden documents,
+  as any problem of it is, and none of its links is reported.
+- A link to a document you may not read is never named, by id or otherwise. Each document's such
+  links are counted together in one `UNPUBLISHED_LINKS_HIDDEN` problem, whose `detail.count`
+  says how many there are.
+- A link in a field you may not view, by that field's read rule (a field group's own fields
+  included), is reported as `UNPUBLISHED_LINK_IN_HIDDEN_FIELD`, "a field you can't view links
+  to an unpublished document", naming neither the field nor the document. Its `detail.count`
+  says how many links it stands for, so the release reads the same size to everyone. Each field
+  is judged on its own: two fields that share a name, such as `author` in two kinds of block,
+  never answer for each other.
+- What you may see of a document's links is judged on the document they were read from, at the
+  same reading.
 - A trusted Direct API call (`overrideAccess`, the default) may read everything, so it is told
   about every link.
 

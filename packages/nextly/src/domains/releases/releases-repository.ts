@@ -586,10 +586,10 @@ function releaseMovedConflict(
  * read in runs of this many, leaving room for the statement's other
  * parameters.
  */
-const IDS_PER_LOOKUP = 500;
+export const IDS_PER_LOOKUP = 500;
 
 /** These ids, once each, in runs of at most {@link IDS_PER_LOOKUP}. */
-function idBatches(ids: readonly string[]): string[][] {
+export function idBatches(ids: readonly string[]): string[][] {
   const unique = [...new Set(ids)];
   const runs: string[][] = [];
   for (let start = 0; start < unique.length; start += IDS_PER_LOOKUP) {

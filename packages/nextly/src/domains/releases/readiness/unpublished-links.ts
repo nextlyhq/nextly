@@ -36,6 +36,8 @@
  */
 import {
   documentRefKey,
+  idBatches,
+  IDS_PER_LOOKUP,
   type ReleaseMemberRow,
   type ReleaseRow,
 } from "../releases-repository";
@@ -72,14 +74,32 @@ export type UnpublishedLinkCode = (typeof UNPUBLISHED_LINK_CODES)[number];
 
 /**
  * One document another document links to, through the field at `field` (a
- * path of field names, such as `meta.editor`).
+ * path of field names, such as `meta.editor`, for a reader to read).
+ *
+ * `fieldKey` names the very field the value sits in, within the document it
+ * was read from: two fields with the same path, such as `author` in two kinds
+ * of block, have different keys. A reader's access to a field is judged by
+ * this key, never by the path, so one field cannot answer for another.
  *
  * @experimental
  */
 export interface DocumentLink {
   field: string;
+  fieldKey: string;
   collection: string;
   entryId: string;
+}
+
+/**
+ * What one document links to, with the document the links were read from.
+ * The document is the reads' own, and is handed back as it is to judge what
+ * a reader may see of those links, so both come from one reading of it.
+ *
+ * @experimental
+ */
+export interface ScannedLinks {
+  links: readonly DocumentLink[];
+  snapshot: unknown;
 }
 
 /**
@@ -105,7 +125,7 @@ export interface ReleaseLinkReads {
   linksOf(
     scope: ReleaseCheckScope,
     entryIds: readonly string[]
-  ): Promise<ReadonlyMap<string, readonly DocumentLink[]>>;
+  ): Promise<ReadonlyMap<string, ScannedLinks>>;
   /**
    * For each of these documents of one collection that exists, whether it is
    * live now: stored as published, or in a collection without a lifecycle. A
@@ -119,17 +139,14 @@ export interface ReleaseLinkReads {
 }
 
 /**
- * Ids per read. Each id binds one parameter and SQLite's default limit is
- * 999, the lowest of the supported dialects, so a release's links are asked
- * for in runs of this many rather than in one statement the driver refuses.
+ * `items` split into runs of the repository's lookup size, the number of ids
+ * one statement binds within the lowest parameter limit of the supported
+ * dialects. For a list of ids themselves, `idBatches`.
  */
-const LINK_ID_CHUNK = 400;
-
-/** `items` split into runs of {@link LINK_ID_CHUNK}. */
 function chunked<T>(items: readonly T[]): T[][] {
   const runs: T[][] = [];
-  for (let start = 0; start < items.length; start += LINK_ID_CHUNK) {
-    runs.push(items.slice(start, start + LINK_ID_CHUNK));
+  for (let start = 0; start < items.length; start += IDS_PER_LOOKUP) {
+    runs.push(items.slice(start, start + IDS_PER_LOOKUP));
   }
   return runs;
 }
@@ -204,18 +221,21 @@ function byScope(
 async function linksOfMembers(
   reads: ReleaseLinkReads,
   ctx: ReleaseCheckContext,
-  members: readonly ReleaseMemberRow[]
+  members: readonly ReleaseMemberRow[],
+  onScanned: (member: ReleaseMemberRow, scanned: ScannedLinks) => void
 ): Promise<Map<string, readonly DocumentLink[]>> {
   const found = new Map<string, readonly DocumentLink[]>();
   for (const group of byScope(members).values()) {
     if (await ctx.reads.companionLacksLifecycle(group[0])) continue;
     for (const run of chunked(group)) {
-      const links = await reads.linksOf(
+      const scanned = await reads.linksOf(
         run[0],
         run.map(member => member.entryId)
       );
       for (const member of run) {
-        found.set(member.id, links.get(member.entryId) ?? []);
+        const read = scanned.get(member.entryId);
+        found.set(member.id, read?.links ?? []);
+        if (read !== undefined) onScanned(member, read);
       }
     }
   }
@@ -291,7 +311,7 @@ async function liveWinnerAuthors(
     if (typeof author === "string" && author !== "") authors.add(author);
   }
   const live = new Set<string>();
-  for (const run of chunked([...authors])) {
+  for (const run of idBatches([...authors])) {
     for (const id of await ctx.reads.liveAuthors(run)) live.add(id);
   }
   return live;
@@ -316,7 +336,7 @@ async function publishedNow(
   const published = new Map<string, boolean>();
   const judged = new Set<string>();
   for (const [collection, ids] of byCollection) {
-    for (const run of chunked(ids)) {
+    for (const run of idBatches(ids)) {
       const answer = await reads.publishedOf(collection, run);
       if (answer === null) continue;
       judged.add(collection);
@@ -341,6 +361,11 @@ async function publishedNow(
 export function unpublishedLinksSource(deps: {
   reads: ReleaseLinkReads;
   membersOf(releaseId: string): Promise<readonly ReleaseMemberRow[]>;
+  /**
+   * Told each member's links and the document they were read from, so what
+   * a reader may see of them is judged on that same reading.
+   */
+  onScanned?: (member: ReleaseMemberRow, scanned: ScannedLinks) => void;
 }): ReleaseCheckSource<UnpublishedLinkCode> {
   return defineReleaseCheckSource({
     key: UNPUBLISHED_LINKS_SOURCE_KEY,
@@ -351,7 +376,12 @@ export function unpublishedLinksSource(deps: {
       // stops mattering once it is not live itself.
       const going = batch.filter(member => member.action === "publish");
       if (going.length === 0) return [];
-      const links = await linksOfMembers(deps.reads, ctx, going);
+      const links = await linksOfMembers(
+        deps.reads,
+        ctx,
+        going,
+        deps.onScanned ?? (() => undefined)
+      );
       const targets = uniqueTargets([...links.values()].flat());
       if (targets.length === 0) return [];
 
@@ -402,6 +432,11 @@ function uniqueTargets(
  * field that links to it, in the order the targets are first met; then one
  * per field holding links to deleted documents, with how many, naming no
  * target, since a deleted document has nothing left to name it by.
+ *
+ * Each names its fields twice: `fields`, the paths a reader reads, and
+ * `fieldKeys` with `fieldNames`, each field's own key and path side by side,
+ * for judging what a reader may see. The keys are taken off before any
+ * reader is shown a finding ({@link narrowLinkFindings}).
  */
 function findingsFor(
   member: ReleaseMemberRow,
@@ -409,13 +444,17 @@ function findingsFor(
   stateOf: (link: DocumentLink) => "live" | UnpublishedLinkCause
 ): ReleaseCheckFinding<UnpublishedLinkCode>[] {
   const findings: ReleaseCheckFinding<UnpublishedLinkCode>[] = [];
-  const deleted = new Map<string, number>();
+  const deleted = new Map<string, { field: DocumentLink; count: number }>();
   for (const { link, fields } of byTarget(links)) {
     const state = stateOf(link);
     if (state === "live") continue;
     if (state === "deleted") {
       for (const field of fields) {
-        deleted.set(field, (deleted.get(field) ?? 0) + 1);
+        const held = deleted.get(field.fieldKey);
+        deleted.set(field.fieldKey, {
+          field,
+          count: (held?.count ?? 0) + 1,
+        });
       }
       continue;
     }
@@ -426,19 +465,36 @@ function findingsFor(
         scopeKind: "collection",
         scopeSlug: link.collection,
         entryId: link.entryId,
-        fields,
+        ...fieldsDetail(fields),
         cause: state,
       },
     });
   }
-  for (const [field, count] of deleted) {
+  for (const { field, count } of deleted.values()) {
     findings.push({
       memberId: member.id,
       code: "UNPUBLISHED_LINK",
-      detail: { fields: [field], cause: "deleted", count: String(count) },
+      detail: {
+        ...fieldsDetail([field]),
+        cause: "deleted",
+        count: String(count),
+      },
     });
   }
   return findings;
+}
+
+/** The fields a finding names, as paths and as keys beside their paths. */
+function fieldsDetail(fields: readonly DocumentLink[]): {
+  fields: string[];
+  fieldKeys: string[];
+  fieldNames: string[];
+} {
+  return {
+    fields: [...new Set(fields.map(field => field.field))],
+    fieldKeys: fields.map(field => field.fieldKey),
+    fieldNames: fields.map(field => field.field),
+  };
 }
 
 /**
@@ -447,13 +503,18 @@ function findingsFor(
  */
 function byTarget(
   links: readonly DocumentLink[]
-): Array<{ link: DocumentLink; fields: string[] }> {
-  const targets = new Map<string, { link: DocumentLink; fields: string[] }>();
+): Array<{ link: DocumentLink; fields: DocumentLink[] }> {
+  const targets = new Map<
+    string,
+    { link: DocumentLink; fields: DocumentLink[] }
+  >();
   for (const link of links) {
     const key = targetKey(link.collection, link.entryId);
     const held = targets.get(key);
-    if (held === undefined) targets.set(key, { link, fields: [link.field] });
-    else if (!held.fields.includes(link.field)) held.fields.push(link.field);
+    if (held === undefined) targets.set(key, { link, fields: [link] });
+    else if (!held.fields.some(field => field.fieldKey === link.fieldKey)) {
+      held.fields.push(link);
+    }
   }
   return [...targets.values()];
 }
@@ -493,12 +554,18 @@ export interface LinkReaderVerdicts {
   /** Whether the reader may read the document the link is FROM. */
   sourceReadable(finding: ReadinessFinding): boolean;
   /**
-   * The field paths of that document's links the reader is shown, or `null`
+   * The keys of that document's link fields the reader may view, or `null`
    * when every field is.
    */
   visibleFields(finding: ReadinessFinding): ReadonlySet<string> | null;
   /** Whether the reader may read the document the link is TO. */
   targetReadable(target: { collection: string; entryId: string }): boolean;
+}
+
+/** How many links a link finding stands for: a deleted one may stand for several. */
+function weightOf(finding: ReadinessFinding): number {
+  const count = Number(finding.detail?.count ?? 1);
+  return Number.isFinite(count) && count > 0 ? count : 1;
 }
 
 /**
@@ -511,9 +578,13 @@ export interface LinkReaderVerdicts {
  *   so it still counts;
  * - a link to a deleted document names no target, so only its field is
  *   judged;
- * - the fields a kept finding names are those the reader is shown.
+ * - the fields a kept finding names are those the reader may view, judged by
+ *   each field's own key, never by its path;
+ * - every count is of links: a finding standing for several deleted links
+ *   counts as that many.
  *
- * Every other finding passes through untouched, in its order.
+ * Every other finding passes through untouched, in its order, and no finding
+ * leaves with the field keys it was judged by.
  *
  * @experimental
  */
@@ -522,36 +593,53 @@ export function narrowLinkFindings(
   verdicts: LinkReaderVerdicts
 ): ReadinessFinding[] {
   const shown: ReadinessFinding[] = [];
-  let hidden: { finding: ReadinessFinding; count: number } | null = null;
+  // The member whose links are being counted, and how many so far.
+  const held: { finding: ReadinessFinding | null; count: number } = {
+    finding: null,
+    count: 0,
+  };
   const flush = (): void => {
-    if (hidden === null) return;
+    if (held.finding === null) return;
     shown.push(
-      bare(hidden.finding, "UNPUBLISHED_LINKS_HIDDEN", {
-        count: String(hidden.count),
+      bare(held.finding, "UNPUBLISHED_LINKS_HIDDEN", {
+        count: String(held.count),
       })
     );
-    hidden = null;
+    held.finding = null;
+    held.count = 0;
   };
   for (const finding of findings) {
     // A member's link findings are contiguous, so its count is placed where
     // its links were, before the next member's findings.
-    if (hidden !== null && hidden.finding.memberId !== finding.memberId) {
+    if (held.finding !== null && held.finding.memberId !== finding.memberId) {
       flush();
     }
     const judged = isLinkFinding(finding)
       ? judgedForReader(finding, verdicts)
       : finding;
     if (judged === null) {
-      hidden =
-        hidden === null
-          ? { finding, count: 1 }
-          : { finding: hidden.finding, count: hidden.count + 1 };
+      held.finding ??= finding;
+      held.count += weightOf(finding);
       continue;
     }
     shown.push(judged);
   }
   flush();
   return shown;
+}
+
+/**
+ * `findings` with the field keys taken off, as a reader who may see every
+ * field is shown them.
+ *
+ * @experimental
+ */
+export function withoutFieldKeys(
+  findings: readonly ReadinessFinding[]
+): ReadinessFinding[] {
+  return findings.map(finding =>
+    isLinkFinding(finding) ? shownAs(finding, null) : finding
+  );
 }
 
 /**
@@ -563,17 +651,37 @@ function judgedForReader(
   verdicts: LinkReaderVerdicts
 ): ReadinessFinding | null {
   if (!verdicts.sourceReadable(finding)) return null;
-  const fields = finding.detail?.fields;
-  const named = Array.isArray(fields) ? fields : [];
   const visible = verdicts.visibleFields(finding);
-  const shownFields =
-    visible === null ? named : named.filter(field => visible.has(field));
-  if (shownFields.length === 0) {
-    return bare(finding, "UNPUBLISHED_LINK_IN_HIDDEN_FIELD", undefined);
+  const shown = shownAs(finding, visible);
+  if (shown.detail?.fields?.length === 0) {
+    return bare(finding, "UNPUBLISHED_LINK_IN_HIDDEN_FIELD", {
+      count: String(weightOf(finding)),
+    });
   }
   const target = linkTargetOf(finding);
   if (target !== null && !verdicts.targetReadable(target)) return null;
-  return { ...finding, detail: { ...finding.detail, fields: shownFields } };
+  return shown;
+}
+
+/**
+ * A link finding naming only the fields whose keys are in `visible` (every
+ * field when `null`), without the keys.
+ */
+function shownAs(
+  finding: ReadinessFinding,
+  visible: ReadonlySet<string> | null
+): ReadinessFinding {
+  const { fieldKeys, fieldNames, ...rest } = finding.detail ?? {};
+  const keys = Array.isArray(fieldKeys) ? fieldKeys : [];
+  const names = Array.isArray(fieldNames) ? fieldNames : [];
+  const fields = [
+    ...new Set(
+      keys.flatMap((key, index) =>
+        visible === null || visible.has(key) ? [names[index] ?? ""] : []
+      )
+    ),
+  ].filter(name => name !== "");
+  return { ...finding, detail: { ...rest, fields } };
 }
 
 /** A finding about the same member, with only `code` and `detail` of its own. */
@@ -658,7 +766,7 @@ function addToReport(
   if (finding.code === "UNPUBLISHED_LINKS_HIDDEN") {
     report.hiddenCount += countOf(detail);
   } else if (finding.code === "UNPUBLISHED_LINK_IN_HIDDEN_FIELD") {
-    report.inHiddenFields += 1;
+    report.inHiddenFields += countOf(detail) || 1;
   } else if (detail.cause === "deleted") {
     const count = countOf(detail);
     report.deletedLinks.push(

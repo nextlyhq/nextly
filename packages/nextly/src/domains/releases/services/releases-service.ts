@@ -81,7 +81,6 @@ import {
   planReleaseMaterialisation,
 } from "../plan-release-materialisation";
 import {
-  releaseCheckSources,
   type ReleaseCheckReads,
   type ReleaseCheckSource,
 } from "../readiness/check-sources";
@@ -99,6 +98,10 @@ import {
   narrowLinkFindings,
   UNPUBLISHED_LINKS_SOURCE_KEY,
   unpublishedLinksReport,
+  unpublishedLinksSource,
+  withoutFieldKeys,
+  type ReleaseLinkReads,
+  type ScannedLinks,
   type UnpublishedLinksReport,
 } from "../readiness/unpublished-links";
 import type { ReleaseActivityEntry } from "../release-activity";
@@ -313,33 +316,27 @@ export interface ReleasesServiceDeps {
    */
   recordActivity?: (entry: ReleaseActivityEntry) => Promise<void>;
   /**
-   * Which of these documents the actor may read, answered as their `id`s.
-   *
-   * The same visibility question a release's members are put through for a
-   * reader, asked here of the documents a member LINKS to, so a link finding
-   * never names a target its reader could not open. Wired to the one
-   * implementation of it (`services/lib/document-visibility`), batched and
-   * failing closed: a document whose readability cannot be decided counts as
-   * unreadable. Optional: a service built without it tells an untrusted
-   * reader about no linked document at all, only how many there are.
+   * What the link check reads of content: what each document links to as it
+   * would go live, with the document it was read from, and which linked
+   * documents are live. Held by this service, so every call it serves reads
+   * through the one registration it was built with. Optional: without it no
+   * link is checked.
    *
    * @experimental
    */
-  readableDocuments?: (
-    documents: readonly (DocumentRef & { id: string })[],
-    actor: ReleaseActor
-  ) => Promise<ReadonlySet<string>>;
+  linkReads?: ReleaseLinkReads;
   /**
-   * For each of these documents, by `id`, the field paths of its links the
-   * actor is shown: the document as it would go live, with the field read
-   * rules applied for the actor as a read applies them. A link in any other
-   * field is reported without its field or target. Optional: without it, an
-   * untrusted reader is shown no linked field at all.
+   * For each of these scanned documents, by `id`, the keys of the link fields
+   * the actor may view, judged on the scanned document itself
+   * ({@link ScannedLinks.snapshot}) with the field read rules applied for the
+   * actor as a read applies them. A link in any other field is reported
+   * without its field or target. Optional: without it, an untrusted reader is
+   * shown no linked field at all.
    *
    * @experimental
    */
   visibleLinkFields?: (
-    documents: readonly (DocumentRef & { id: string })[],
+    scans: ReadonlyArray<{ id: string; scanned: ScannedLinks }>,
     actor: ReleaseActor
   ) => Promise<ReadonlyMap<string, ReadonlySet<string>>>;
 }
@@ -1482,6 +1479,41 @@ export interface AddMemberInput extends Omit<DocumentRef, "scopeKind"> {
   action: ReleaseMemberAction;
 }
 
+/**
+ * Every document these link findings name, once each, its document key as its
+ * id: the documents the links are TO, and when `withSources` the ones they are
+ * FROM.
+ */
+function documentsAskedAbout(
+  links: readonly ReadinessFinding[],
+  withSources: boolean
+): ReleaseDocument[] {
+  const asked = new Map<string, ReleaseDocument>();
+  const ask = (ref: DocumentRef): void => {
+    const id = documentRefKey(ref);
+    asked.set(id, { ...ref, id });
+  };
+  for (const finding of links) {
+    if (withSources) ask(sourceOf(finding));
+    const target = linkTargetOf(finding);
+    if (target !== null) ask(targetRef(target));
+  }
+  return [...asked.values()];
+}
+
+/** The scanned documents of these findings' members, once each. */
+function scansOf(
+  links: readonly ReadinessFinding[],
+  scans: ReadonlyMap<string, ScannedLinks>
+): Array<{ id: string; scanned: ScannedLinks }> {
+  return [...new Set(links.map(finding => finding.memberId))].flatMap(
+    memberId => {
+      const scanned = scans.get(memberId);
+      return scanned === undefined ? [] : [{ id: memberId, scanned }];
+    }
+  );
+}
+
 /** The document a link finding is FROM: the member's. */
 function sourceOf(finding: ReadinessFinding): DocumentRef {
   return {
@@ -2098,19 +2130,29 @@ export class ReleasesService {
     await this.authorize(actor, "read");
     const release = await this.requireRelease(releaseId);
     const members = await this.deps.repository.listMembers(release.id);
+    const scan = this.linkScan();
     const found = await this.checkMembers(
       release,
       members,
-      registeredReleaseCheckSources()
+      this.sourcesWith(scan)
     );
+    // Which members the reader may read, judged once and used twice: for the
+    // links they are FROM, then for the members themselves.
+    const view = await this.membersVisibleTo(actor, members);
     // Link findings first, targets and fields, then the members themselves.
     // A link the reader may not be told about is counted, not named.
-    [found.soft] = await this.narrowLinksFor([found.soft], actor);
+    [found.soft] = await this.narrowLinksFor(
+      [found.soft],
+      actor,
+      scan.scans,
+      view.sees
+    );
     const readiness = await this.readinessFor(
       actor,
       release.id,
       members,
-      found
+      found,
+      view
     );
     return { ...readiness, hidden: await this.labelled(readiness.hidden) };
   }
@@ -2195,6 +2237,9 @@ export class ReleasesService {
       actor,
       [...membersByRelease.values()].flat()
     );
+    // One scan for the page, so every release's links are judged on the
+    // documents its own check read.
+    const scan = this.linkScan();
     const entries: Array<ReleaseReadinessEntry | null> = [];
     const checked: Array<{
       at: number;
@@ -2217,16 +2262,42 @@ export class ReleasesService {
       const found = await this.checkMembers(
         release,
         members,
-        registeredReleaseCheckSources()
+        this.sourcesWith(scan)
       );
       checked.push({ at: entries.length, id, members, found });
       entries.push(null);
     }
-    // Link findings first, in one pass for the whole page so a document
-    // linked from several releases gets one verdict; then the members.
+    await this.fillCheckedEntries(entries, checked, actor, scan.scans, view);
+    return this.labelledEntries(
+      entries.filter((entry): entry is ReleaseReadinessEntry => entry !== null)
+    );
+  }
+
+  /**
+   * Each checked release's entry, in its place in `entries`, as `actor` may
+   * be told it: link findings first, in one pass for the whole page so a
+   * document linked from several releases gets one verdict; then the members.
+   */
+  private async fillCheckedEntries(
+    entries: Array<ReleaseReadinessEntry | null>,
+    checked: ReadonlyArray<{
+      at: number;
+      id: string;
+      members: ReleaseMemberRow[];
+      found: Awaited<ReturnType<ReleasesService["checkMembers"]>>;
+    }>,
+    actor: ReleaseActor,
+    scans: ReadonlyMap<string, ScannedLinks>,
+    view: {
+      hidden: readonly ReleaseMemberRow[];
+      sees: (memberId: string) => boolean;
+    }
+  ): Promise<void> {
     const narrowed = await this.narrowLinksFor(
       checked.map(entry => entry.found.soft),
-      actor
+      actor,
+      scans,
+      view.sees
     );
     for (const [index, entry] of checked.entries()) {
       entry.found.soft = narrowed[index];
@@ -2241,9 +2312,6 @@ export class ReleasesService {
         checked: true,
       };
     }
-    return this.labelledEntries(
-      entries.filter((entry): entry is ReleaseReadinessEntry => entry !== null)
-    );
   }
 
   /**
@@ -2266,16 +2334,61 @@ export class ReleasesService {
   }
 
   /**
-   * Each of these lists of soft findings as `actor` may be told them: a link
-   * whose target the actor may not read is counted, not named
-   * ({@link narrowLinkFindings}). One readability question for every list,
-   * and none for a trusted actor, who may read everything.
+   * The link check for one call, and the documents it scans, by member id.
+   *
+   * Built from this service's own reads, never from the registry: a
+   * registration made while the call is under way cannot change what the
+   * call reads its links through.
+   */
+  private linkScan(): {
+    source: ReleaseCheckSource | null;
+    scans: Map<string, ScannedLinks>;
+  } {
+    const scans = new Map<string, ScannedLinks>();
+    const reads = this.deps.linkReads;
+    if (reads === undefined) return { source: null, scans };
+    const repository = this.deps.repository;
+    return {
+      source: unpublishedLinksSource({
+        reads,
+        membersOf: releaseId => repository.listMembers(releaseId),
+        onScanned: (member, scanned) => scans.set(member.id, scanned),
+      }),
+      scans,
+    };
+  }
+
+  /**
+   * Every check a readiness read runs: the registered ones, and this call's
+   * link check in place of any registered under its key.
+   */
+  private sourcesWith(scan: {
+    source: ReleaseCheckSource | null;
+  }): ReleaseCheckSource[] {
+    const registered = registeredReleaseCheckSources().filter(
+      source => source.key !== UNPUBLISHED_LINKS_SOURCE_KEY
+    );
+    return scan.source === null ? registered : [...registered, scan.source];
+  }
+
+  /**
+   * Each of these lists of soft findings as `actor` may be told them
+   * ({@link narrowLinkFindings}): a link from or to a document the actor may
+   * not read is counted, and one in a field they may not view is named by
+   * neither field nor target. Readability is one question, `readableMembers`:
+   * for the documents links are FROM, the members' verdict `sees` already
+   * holds when given, so a member reads alike as a member and as a source;
+   * for the documents they are TO, asked once for all the lists. Field
+   * visibility is judged on the documents `scans` read the links from, so
+   * both come from one reading. A trusted actor is shown everything.
    */
   private async narrowLinksFor(
     lists: readonly ReadinessFinding[][],
-    actor: ReleaseActor
+    actor: ReleaseActor,
+    scans: ReadonlyMap<string, ScannedLinks>,
+    sees?: (memberId: string) => boolean
   ): Promise<ReadinessFinding[][]> {
-    if (actor.overrideAccess === true) return [...lists];
+    if (actor.overrideAccess === true) return lists.map(withoutFieldKeys);
     const links = lists
       .flat()
       .filter(
@@ -2283,49 +2396,29 @@ export class ReleasesService {
           finding.source === UNPUBLISHED_LINKS_SOURCE_KEY &&
           finding.code === "UNPUBLISHED_LINK"
       );
-    if (links.length === 0) return [...lists];
-    // Every document asked about once, its document key as its id: the
-    // documents the links are FROM and the ones they are TO.
-    const asked = new Map<string, DocumentRef & { id: string }>();
-    const ask = (ref: DocumentRef): string => {
-      const id = documentRefKey(ref);
-      asked.set(id, { ...ref, id });
-      return id;
-    };
-    for (const finding of links) {
-      ask(sourceOf(finding));
-      const target = linkTargetOf(finding);
-      if (target !== null) ask(targetRef(target));
-    }
+    if (links.length === 0) return lists.map(withoutFieldKeys);
+    const asked = documentsAskedAbout(links, sees === undefined);
     const readable =
-      this.deps.readableDocuments === undefined
+      actor.userId === null || asked.length === 0
         ? new Set<string>()
-        : await this.deps.readableDocuments([...asked.values()], actor);
-    // Which fields of each readable source the reader is shown, asked only
-    // of the sources the reader may read at all.
-    const sources = [
-      ...new Map(
-        links
-          .map(sourceOf)
-          .filter(ref => readable.has(documentRefKey(ref)))
-          .map(ref => [
-            documentRefKey(ref),
-            { ...ref, id: documentRefKey(ref) },
-          ])
-      ).values(),
-    ];
+        : await this.deps.readableMembers(asked, actor);
+    const sourceReadable = (finding: ReadinessFinding): boolean =>
+      sees === undefined
+        ? readable.has(documentRefKey(sourceOf(finding)))
+        : sees(finding.memberId);
+    // Which fields the reader may view, judged only for members whose
+    // document the reader may read at all, on the document each was read as.
+    const judged = scansOf(links.filter(sourceReadable), scans);
     const fields =
-      this.deps.visibleLinkFields === undefined || sources.length === 0
+      this.deps.visibleLinkFields === undefined || judged.length === 0
         ? new Map<string, ReadonlySet<string>>()
-        : await this.deps.visibleLinkFields(sources, actor);
+        : await this.deps.visibleLinkFields(judged, actor);
     const none = new Set<string>();
     return lists.map(findings =>
       narrowLinkFindings(findings, {
-        sourceReadable: finding =>
-          readable.has(documentRefKey(sourceOf(finding))),
-        // Failing closed: a source nothing was learned about shows no field.
-        visibleFields: finding =>
-          fields.get(documentRefKey(sourceOf(finding))) ?? none,
+        sourceReadable,
+        // Failing closed: a member nothing was learned about shows no field.
+        visibleFields: finding => fields.get(finding.memberId) ?? none,
         targetReadable: target =>
           readable.has(documentRefKey(targetRef(target))),
       })
@@ -2336,21 +2429,19 @@ export class ReleasesService {
    * The documents `member` links to that will not be live at `release`'s
    * moment, as `actor` may be told them: the link check's findings for that
    * one member, narrowed as a readiness read narrows them. Nothing for a
-   * document coming down, or where the check is not registered.
+   * document coming down, or for a service built without link reads.
    */
   private async unpublishedLinksOf(
     release: ReleaseRow,
     member: ReleaseMemberRow,
     actor: ReleaseActor
   ): Promise<UnpublishedLinksReport> {
-    const sources = releaseCheckSources().filter(
-      source => source.key === UNPUBLISHED_LINKS_SOURCE_KEY
-    );
-    if (sources.length === 0 || member.action !== "publish") {
+    const scan = this.linkScan();
+    if (scan.source === null || member.action !== "publish") {
       return noUnpublishedLinks();
     }
-    const { soft } = await this.checkMembers(release, [member], sources);
-    const [narrowed] = await this.narrowLinksFor([soft], actor);
+    const { soft } = await this.checkMembers(release, [member], [scan.source]);
+    const [narrowed] = await this.narrowLinksFor([soft], actor, scan.scans);
     return unpublishedLinksReport(narrowed);
   }
 

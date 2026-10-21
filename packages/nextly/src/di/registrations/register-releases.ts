@@ -20,15 +20,13 @@ import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import {
-  linkFieldsVisibleTo,
+  linkFieldKeysVisibleTo,
   releaseLinkReads,
 } from "../../domains/collections/release-links";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
 import { registerNoticeKind } from "../../domains/notices/notice-kinds";
-import { registerReleaseCheckSource } from "../../domains/releases/readiness/check-sources";
 import { registerCoreReleaseCheckSources } from "../../domains/releases/readiness/core-sources";
-import { unpublishedLinksSource } from "../../domains/releases/readiness/unpublished-links";
 import { recordReleaseActivity } from "../../domains/releases/release-activity";
 import { RELEASE_STOPPED_NOTICE } from "../../domains/releases/release-stopped-notice";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
@@ -62,17 +60,6 @@ export function registerReleaseServices({
   // Core's checks, which every release's readiness, scheduling and Publish now
   // ask. Registered with the feature, so a boot that has releases has them.
   registerCoreReleaseCheckSources();
-  // The note that a document going live links to documents that will not be
-  // live then. Soft, so scheduling, Publish now and the drain never ask it;
-  // registered here because its reads are the content's, which this wiring
-  // holds.
-  const linkMembers = new ReleasesRepository(adapter);
-  registerReleaseCheckSource(
-    unpublishedLinksSource({
-      reads: releaseLinkReads(adapter),
-      membersOf: releaseId => linkMembers.listMembers(releaseId),
-    })
-  );
   // The notice a stopped release's owner is given, which the one transition
   // into `blocked` records: registered with the feature, so no boot can stop
   // a release without being able to tell its owner.
@@ -256,38 +243,16 @@ export function registerReleaseServices({
         // depends on no registration order.
         recordActivity: recordReleaseActivity,
 
-        // Which linked documents a reader may be told about: the one
-        // visibility question every content-keyed surface asks, batched and
-        // failing closed. A caller with nobody to read as may read none.
-        readableDocuments: async (refs, actor) => {
-          if (actor.userId === null) return new Set<string>();
-          const scope = await resolveDocumentVisibilityScope();
-          const readable = await visibleDocuments(
-            refs,
-            ref => ({
-              kind: ref.scopeKind === "single" ? "single" : "collection",
-              slug: ref.scopeSlug,
-              entryId: ref.entryId,
-              locale: ref.locale,
-            }),
-            {
-              user: {
-                id: actor.userId,
-                ...(actor.userRoles ? { roles: actor.userRoles } : {}),
-              },
-              ...(actor.authenticatedScope
-                ? { authenticatedScope: actor.authenticatedScope }
-                : {}),
-            },
-            scope
-          );
-          return new Set(readable.map(document => document.id));
-        },
+        // What the link check reads of content, held by this service so a
+        // call reads through the registration that built it. Soft, so
+        // scheduling, Publish now and the drain never ask it.
+        linkReads: releaseLinkReads(adapter),
 
-        // Which fields of each linked-from document a reader is shown: the
-        // document as it would go live, with the field read rules applied for
-        // the reader by the read path's own judge, a scope at a time.
-        visibleLinkFields: async (documents, actor) => {
+        // Which link fields of each scanned document a reader may view:
+        // the document the links were read from, with the field read rules,
+        // its own and its components', applied for the reader by the read
+        // path's own judges.
+        visibleLinkFields: async (scans, actor) => {
           const none = new Map<string, ReadonlySet<string>>();
           if (actor.userId === null) return none;
           // The reader whole, as a read's field rules see them: a rule may
@@ -306,7 +271,7 @@ export function registerReleaseServices({
               ? { authenticatedScope: actor.authenticatedScope }
               : {}),
           };
-          return linkFieldsVisibleTo(documents, caller);
+          return linkFieldKeysVisibleTo(scans, caller);
         },
 
         // The document's OWN authority, asked with the same operation the

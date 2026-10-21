@@ -13,6 +13,10 @@
  * repeaters, components and dynamic zones alike, and each value is read as
  * expansion reads it ({@link relationshipTargetsOf}).
  *
+ * What a reader may see of those links is judged on the very document they
+ * were read from ({@link ScannedDocument}), never on a second reading of it,
+ * and field by field, by each field's own key.
+ *
  * @module domains/collections/release-links
  * @experimental
  */
@@ -22,14 +26,22 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import type { CollectionsHandler } from "../../services/collections-handler";
-import { applyFieldReadAccess } from "../../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  callerAccessGrants,
+} from "../../shared/lib/field-level-registry";
+import type { FieldGroupDataService } from "../field-groups/services/field-group-data-service";
 import type { ReleaseCheckScope } from "../releases/readiness/check-sources";
 import type {
   DocumentLink,
   ReleaseLinkReads,
+  ScannedLinks,
 } from "../releases/readiness/unpublished-links";
+import { idBatches } from "../releases/releases-repository";
 import type { SingleEntryService } from "../singles/services/single-entry-service";
+import { applyComponentReadAccess } from "../versions/component-read-access";
 import { walkReferenceFields } from "../versions/snapshot-references";
+import { resolveComponentFieldMap } from "../versions/tag-component-types";
 
 import { relationshipTargetsOf } from "./services/collection-relationship-service";
 import {
@@ -38,28 +50,50 @@ import {
 } from "./services/collection-utils";
 
 /**
- * Where a link sits: the top-level field, then the field holding the value
- * when that is a different one inside it, such as `meta.editor` or
- * `blocks.cite`. Levels between the two are not named.
+ * The document a document's links were read from, held to judge what a
+ * reader may see of them.
+ *
+ * `data` is the walk's own copy, and `keys` names each object in it that
+ * holds a link field, so a field's key is that object and the field's name:
+ * unique in the document whatever its path.
+ *
+ * @experimental
+ */
+export interface ScannedDocument {
+  kind: "collection" | "single";
+  slug: string;
+  /** The schema's fields as stored, which the read rules are judged by. */
+  fields: readonly FieldConfig[];
+  /** The same fields with their components' schemas, as the walk reads them. */
+  enriched: readonly FieldConfig[];
+  data: Record<string, unknown>;
+  keys: WeakMap<object, number>;
+}
+
+/**
+ * Where a link sits, for a reader: the top-level field, then the field
+ * holding the value when that is a different one inside it, such as
+ * `meta.editor` or `blocks.cite`. Levels between the two are not named, so
+ * two fields can share a path; their keys never do.
  */
 function fieldPath(top: string, leaf: string): string {
   return top === leaf ? top : `${top}.${leaf}`;
 }
 
-/** A deep copy of plain document data, for a walk that normalises in place. */
-function copied(data: Record<string, unknown>): Record<string, unknown> {
-  return structuredClone(data);
-}
-
 /**
  * Run the reference walk over `data` one top-level field at a time, so each
- * leaf it reaches is reported with the field path it sits under.
+ * leaf it reaches is reported with the field path it sits under and the
+ * object holding it.
  */
 function eachReference(
   fields: readonly FieldConfig[],
   data: Record<string, unknown>,
-  includeReadRuleFields: boolean,
-  visit: (field: FieldConfig, value: unknown, path: string) => void
+  visit: (
+    field: FieldConfig,
+    holder: Record<string, unknown>,
+    name: string,
+    path: string
+  ) => void
 ): void {
   for (const top of fields) {
     const name = (top as { name?: unknown }).name;
@@ -69,11 +103,14 @@ function eachReference(
       (field, holder, leaf) =>
         visit(
           field,
-          holder[leaf],
+          holder,
+          leaf,
           typeof name === "string" && name !== "" ? fieldPath(name, leaf) : leaf
         ),
       false,
-      { includeReadRuleFields }
+      // Every link, protected ones too: what a reader may see of them is
+      // judged by the field rules themselves.
+      { includeReadRuleFields: true }
     );
   }
 }
@@ -81,66 +118,143 @@ function eachReference(
 /**
  * Every document `data` links to through its relationship and upload fields,
  * one level deep: its own fields at any nesting, components and dynamic zones
- * included, but never the links of the documents it links to. Fields protected
- * by a read rule are included: whether a reader may be told about them is
- * decided per reader ({@link linkFieldsVisibleIn}).
+ * included, but never the links of the documents it links to, with the
+ * document they were read from.
  *
- * `fields` are enriched with their component schemas, as the walk reads them.
+ * `enriched` are the schema's fields with their components' schemas, as the
+ * walk reads them.
  *
  * @experimental
  */
 export function linksInDocument(
-  fields: readonly FieldConfig[],
+  enriched: readonly FieldConfig[],
   data: Record<string, unknown>
-): DocumentLink[] {
+): {
+  links: DocumentLink[];
+  data: Record<string, unknown>;
+  keys: WeakMap<object, number>;
+} {
+  // The walk normalises what it reads in place, so it reads a copy.
+  const copy = structuredClone(data);
+  const keys = new WeakMap<object, number>();
+  let numbered = 0;
+  const numberOf = (holder: object): number => {
+    let number = keys.get(holder);
+    if (number === undefined) {
+      number = numbered++;
+      keys.set(holder, number);
+    }
+    return number;
+  };
   const links: DocumentLink[] = [];
-  eachReference(fields, copied(data), true, (field, value, path) => {
+  eachReference(enriched, copy, (field, holder, name, path) => {
+    const fieldKey = `${numberOf(holder)}:${name}`;
     for (const target of relationshipTargetsOf(
       field as unknown as Parameters<typeof relationshipTargetsOf>[0],
-      value
+      holder[name]
     )) {
       links.push({
         field: path,
+        fieldKey,
         collection: target.collection,
         entryId: target.id,
       });
     }
   });
-  return links;
+  return { links, data: copy, keys };
 }
 
 /**
- * The field paths of `data`'s links that a reader is shown: the document with
- * the field read rules applied for that reader, as a read applies them, then
- * walked as the preview walks it, which leaves out a protected field inside a
- * component, where a rule cannot be judged. A link outside these is in a field
- * the reader may not view.
+ * A deep copy of plain document data, with each copied object mapped back to
+ * the one it was copied from.
+ */
+function copiedWithOrigins(
+  data: unknown,
+  origins: WeakMap<object, object>
+): unknown {
+  if (Array.isArray(data)) {
+    const copy = data.map(item => copiedWithOrigins(item, origins));
+    origins.set(copy, data);
+    return copy;
+  }
+  if (data instanceof Date) return new Date(data.getTime());
+  if (typeof data !== "object" || data === null) return data;
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    copy[key] = copiedWithOrigins(value, origins);
+  }
+  origins.set(copy, data);
+  return copy;
+}
+
+/**
+ * The keys of a scanned document's link fields a reader may view: a copy of
+ * that same document with the field read rules applied for the reader, the
+ * document's own and each component's, as a read applies them; then walked
+ * as it was scanned. A field the rules removed, anywhere, is not among them.
+ * Rules that cannot be evaluated show no field at all.
  *
  * @experimental
  */
-export async function linkFieldsVisibleIn(args: {
-  kind: "collection" | "single";
-  slug: string;
-  fields: readonly FieldConfig[];
-  data: Record<string, unknown>;
-  user: Record<string, unknown>;
-  authenticatedScope?: AuthenticatedScope;
-}): Promise<Set<string>> {
-  const entry = copied(args.data);
-  await applyFieldReadAccess({
-    kind: args.kind,
-    slug: args.slug,
-    entry,
-    user: args.user,
-    ...(args.authenticatedScope
-      ? { authenticatedScope: args.authenticatedScope }
-      : {}),
-  });
+export async function linkFieldKeysVisibleIn(
+  scanned: ScannedDocument,
+  caller: {
+    user: Record<string, unknown>;
+    authenticatedScope?: AuthenticatedScope;
+  }
+): Promise<Set<string>> {
+  const origins = new WeakMap<object, object>();
+  const entry = copiedWithOrigins(scanned.data, origins) as Record<
+    string,
+    unknown
+  >;
+  const grants = callerAccessGrants(caller.user, caller.authenticatedScope);
+  try {
+    await applyFieldReadAccess({
+      kind: scanned.kind,
+      slug: scanned.slug,
+      entry,
+      user: caller.user,
+      ...(caller.authenticatedScope
+        ? { authenticatedScope: caller.authenticatedScope }
+        : {}),
+      grants,
+      overrideAccess: false,
+    });
+    await applyComponentReadAccess(
+      entry,
+      scanned.fields,
+      await componentFieldsOf(scanned.fields),
+      {
+        user: caller.user,
+        ...(caller.authenticatedScope
+          ? { authenticatedScope: caller.authenticatedScope }
+          : {}),
+        grants,
+      }
+    );
+  } catch {
+    return new Set();
+  }
   const visible = new Set<string>();
-  eachReference(args.fields, entry, false, (_field, _value, path) => {
-    visible.add(path);
+  eachReference(scanned.enriched, entry, (_field, holder, name) => {
+    const origin = origins.get(holder);
+    if (origin === undefined) return;
+    const number = scanned.keys.get(origin);
+    if (number !== undefined) visible.add(`${number}:${name}`);
   });
   return visible;
+}
+
+/** The current fields of the components `fields` reach, by slug. */
+async function componentFieldsOf(
+  fields: readonly FieldConfig[]
+): Promise<Map<string, FieldConfig[]>> {
+  if (!container.has("fieldGroupDataService")) return new Map();
+  const service = container.get<FieldGroupDataService>("fieldGroupDataService");
+  return resolveComponentFieldMap([...fields], slug =>
+    service.getComponentFields(slug)
+  );
 }
 
 /** The registry record of a collection or Single, or `null`. */
@@ -165,60 +279,48 @@ async function registryRecord(
 
 /** A schema's fields, enriched with the component schemas the walk reads. */
 async function enrichedFields(
-  record: Record<string, unknown>
+  fields: readonly FieldConfig[]
 ): Promise<FieldConfig[]> {
-  const fields = collectionFields(record) as unknown as Record<
-    string,
-    unknown
-  >[];
-  if (!container.has("fieldGroupRegistryService")) {
-    return fields as unknown as FieldConfig[];
-  }
+  if (!container.has("fieldGroupRegistryService")) return [...fields];
   const registry = container.get<{
     enrichFieldsWithComponentSchemas(
       fields: Record<string, unknown>[]
     ): Promise<unknown[]>;
   }>("fieldGroupRegistryService");
   return (await registry.enrichFieldsWithComponentSchemas(
-    fields
+    fields as unknown as Record<string, unknown>[]
   )) as unknown as FieldConfig[];
 }
 
 /**
- * The documents of one scope as they would go live, keyed by entry id, with
- * the scope's enriched fields. A document that is not there is absent.
+ * The documents of one scope as they would go live, keyed by entry id, read
+ * in runs the parameter limit admits. A document that is not there is
+ * absent.
  */
 async function goingLiveDocuments(
   scope: ReleaseCheckScope,
   entryIds: readonly string[]
-): Promise<{
-  fields: FieldConfig[];
-  documents: Map<string, Record<string, unknown>>;
-}> {
-  const kind = scope.scopeKind === "single" ? "single" : "collection";
-  const record = await registryRecord(kind, scope.scopeSlug);
-  if (record === null || entryIds.length === 0) {
-    return { fields: [], documents: new Map() };
-  }
-  const fields = await enrichedFields(record);
-  if (kind === "collection") {
-    const documents = await container
-      .get<CollectionsHandler>("collectionsHandler")
-      .releaseGoingLiveDocuments({
+): Promise<Map<string, Record<string, unknown>>> {
+  const documents = new Map<string, Record<string, unknown>>();
+  if (scope.scopeKind !== "single") {
+    const handler = container.get<CollectionsHandler>("collectionsHandler");
+    for (const run of idBatches(entryIds)) {
+      const read = await handler.releaseGoingLiveDocuments({
         collectionName: scope.scopeSlug,
-        entryIds,
+        entryIds: run,
       });
-    return { fields, documents };
+      for (const [id, document] of read) documents.set(id, document);
+    }
+    return documents;
   }
   const single = await container
     .get<SingleEntryService>("singleEntryService")
     .releaseGoingLiveDocument({ slug: scope.scopeSlug });
   // Only a member naming the Single's current row is answered about it.
-  const documents = new Map<string, Record<string, unknown>>();
   if (single !== null && entryIds.includes(single.entryId)) {
     documents.set(single.entryId, single.document);
   }
-  return { fields, documents };
+  return documents;
 }
 
 /**
@@ -254,19 +356,32 @@ async function publishedEntries(
 
 /**
  * The reads the releases domain's link check asks, bound to one adapter.
+ * Each scanned link list carries its {@link ScannedDocument}.
  *
  * @experimental
  */
 export function releaseLinkReads(adapter: DrizzleAdapter): ReleaseLinkReads {
   return {
     linksOf: async (scope, entryIds) => {
-      const { fields, documents } = await goingLiveDocuments(scope, entryIds);
-      return new Map(
-        [...documents].map(([id, document]) => [
-          id,
-          linksInDocument(fields, document),
-        ])
-      );
+      const scanned = new Map<string, ScannedLinks>();
+      const kind = scope.scopeKind === "single" ? "single" : "collection";
+      const record = await registryRecord(kind, scope.scopeSlug);
+      if (record === null || entryIds.length === 0) return scanned;
+      const fields = collectionFields(record) as unknown as FieldConfig[];
+      const enriched = await enrichedFields(fields);
+      for (const [id, document] of await goingLiveDocuments(scope, entryIds)) {
+        const { links, data, keys } = linksInDocument(enriched, document);
+        const snapshot: ScannedDocument = {
+          kind,
+          slug: scope.scopeSlug,
+          fields,
+          enriched,
+          data,
+          keys,
+        };
+        scanned.set(id, { links, snapshot });
+      }
+      return scanned;
     },
     publishedOf: (collection, entryIds) =>
       publishedEntries(adapter, collection, entryIds),
@@ -274,44 +389,33 @@ export function releaseLinkReads(adapter: DrizzleAdapter): ReleaseLinkReads {
 }
 
 /**
- * For each of these documents, by `id`, the field paths of its links a reader
- * is shown ({@link linkFieldsVisibleIn}), read a scope at a time. A document
- * that is not there is absent.
+ * For each of these scanned documents, by `id`, the keys of the link fields
+ * a reader may view ({@link linkFieldKeysVisibleIn}), judged on the scanned
+ * document itself. A scan this module did not make shows no field.
  *
  * @experimental
  */
-export async function linkFieldsVisibleTo(
-  documents: ReadonlyArray<ReleaseCheckScope & { entryId: string; id: string }>,
+export async function linkFieldKeysVisibleTo(
+  scans: ReadonlyArray<{ id: string; scanned: ScannedLinks }>,
   caller: {
     user: Record<string, unknown>;
     authenticatedScope?: AuthenticatedScope;
   }
 ): Promise<Map<string, Set<string>>> {
-  const byScope = new Map<string, typeof documents>();
-  for (const document of documents) {
-    const key = `${document.scopeKind}:${document.scopeSlug}`;
-    byScope.set(key, [...(byScope.get(key) ?? []), document]);
-  }
   const visible = new Map<string, Set<string>>();
-  for (const group of byScope.values()) {
-    const { fields, documents: read } = await goingLiveDocuments(
-      group[0],
-      group.map(document => document.entryId)
-    );
-    for (const document of group) {
-      const data = read.get(document.entryId);
-      if (data === undefined) continue;
-      visible.set(
-        document.id,
-        await linkFieldsVisibleIn({
-          kind: document.scopeKind === "single" ? "single" : "collection",
-          slug: document.scopeSlug,
-          fields,
-          data,
-          ...caller,
-        })
-      );
+  for (const { id, scanned } of scans) {
+    const snapshot = scanned.snapshot as Partial<ScannedDocument> | null;
+    if (
+      snapshot === null ||
+      typeof snapshot !== "object" ||
+      !(snapshot.keys instanceof WeakMap)
+    ) {
+      continue;
     }
+    visible.set(
+      id,
+      await linkFieldKeysVisibleIn(snapshot as ScannedDocument, caller)
+    );
   }
   return visible;
 }
