@@ -64,6 +64,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { pdfDocument } from "../../../services/upload-validation/__tests__/format-fixtures";
 import { buildAuditLogWriter } from "../../audit/audit-log-writer";
 
+import { hiddenColumnNames } from "./active-schema";
 import { col } from "./dsl";
 import { EXTENDABLE_CORE_TABLES } from "./extension-columns";
 
@@ -73,20 +74,6 @@ const SENTINEL = "hidden-sentinel-7f3a";
 const ATTEMPT = "written-through-api-9c1e";
 
 const hiddenColumns = { leakProbe: col.text({ nullable: true }) };
-
-/**
- * The core tables this file has a section for. The column is contributed to
- * every table in `EXTENDABLE_CORE_TABLES` itself, and a guard below fails
- * when that set names a table not listed here, so a table made extendable
- * later cannot go untested while this suite stays green.
- */
-const COVERED_TABLES = [
-  "users",
-  "media",
-  "nextly_jobs",
-  "audit_log",
-  "activity_log",
-] as const;
 
 const contributor = definePlugin({
   name: "@test/leak-probe",
@@ -141,6 +128,19 @@ describe.each(getConfiguredTestDialects())(
     let headers: Record<string, string>;
     const mediaId = "probe-media-1";
 
+    /**
+     * The core tables this file has a section for, recorded by the sections
+     * themselves as they are declared. The column is contributed to every
+     * table in `EXTENDABLE_CORE_TABLES`, and a guard fails when that set names
+     * a table with no section, so a table made extendable later cannot go
+     * untested while this suite stays green.
+     */
+    const sections = new Set<string>();
+    function section(table: string, body: () => void): void {
+      sections.add(table);
+      describe(table, body);
+    }
+
     async function sql(statement: string): Promise<Record<string, unknown>[]> {
       return (await t.adapter.executeQuery(statement)) as Record<
         string,
@@ -162,7 +162,7 @@ describe.each(getConfiguredTestDialects())(
      * than as an empty column.
      */
     async function storedBy(
-      table: (typeof COVERED_TABLES)[number],
+      table: string,
       column: string,
       value: string
     ): Promise<unknown[]> {
@@ -172,7 +172,6 @@ describe.each(getConfiguredTestDialects())(
       return rows.map(row => row.leak_probe ?? null);
     }
 
-    /** The response, serialised, so the sentinel is found under any key. */
     /** A user to delete, holding the sentinel like every other row. */
     async function disposableUser(email: string): Promise<string> {
       const id = (
@@ -214,6 +213,7 @@ describe.each(getConfiguredTestDialects())(
       return (await sql(`SELECT id FROM ${table} WHERE id = '${id}'`)).length;
     }
 
+    /** The response, serialised, so the sentinel is found under any key. */
     function serialised(value: unknown): string {
       return JSON.stringify(value);
     }
@@ -376,6 +376,15 @@ describe.each(getConfiguredTestDialects())(
       expect(await stored("media", mediaId)).toBe(SENTINEL);
     });
 
+    it("the plugin's contribution is registered as hidden on every table", () => {
+      // Without this, every check below would also pass if the hook never
+      // ran, or if the column it declared were named other than the one the
+      // fixture adds: the static tables lack the column either way.
+      for (const table of EXTENDABLE_CORE_TABLES) {
+        expect(hiddenColumnNames(table), table).toEqual(["leak_probe"]);
+      }
+    });
+
     it("the search finds the sentinel in a read that does return the column", async () => {
       // The positive control for every read below: a whole-row read of the
       // live table carries the column, and the same search reports it. A
@@ -389,12 +398,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("covers every core table a hook may extend", () => {
-      expect([...EXTENDABLE_CORE_TABLES].sort()).toEqual(
-        [...COVERED_TABLES].sort()
-      );
+      expect([...EXTENDABLE_CORE_TABLES].sort()).toEqual([...sections].sort());
     });
 
-    describe("users", () => {
+    section("users", () => {
       it("Direct API find", async () => {
         const out = serialised(await direct.users.find({ limit: 50 }));
         expect(out).toContain("member@example.com");
@@ -516,6 +523,7 @@ describe.each(getConfiguredTestDialects())(
           password: "Password123!",
           data: { name: "New", leakProbe: ATTEMPT, leak_probe: ATTEMPT },
         });
+        expect(serialised(created)).toContain("direct-new@example.com");
         expectNoHiddenColumn(serialised(created));
         expect(await stored("users", created.item.id)).toBeNull();
 
@@ -527,6 +535,7 @@ describe.each(getConfiguredTestDialects())(
           leak_probe: ATTEMPT,
         });
         const out = await bodyOf(res);
+        expect(out).toContain("rest-new@example.com");
         expectNoHiddenColumn(out);
         const rows = await sql(
           `SELECT leak_probe FROM users WHERE email = 'rest-new@example.com'`
@@ -536,7 +545,7 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe("media", () => {
+    section("media", () => {
       it("Direct API find and findByID", async () => {
         const list = serialised(await direct.media.find({ limit: 50 }));
         expect(list).toContain("probe.pdf");
@@ -676,7 +685,10 @@ describe.each(getConfiguredTestDialects())(
 
       it("Direct API and REST upload succeed, return no hidden column, and cannot set it", async () => {
         // An upload inserts and returns its row through code of its own, not
-        // the update path above, so it is checked on both surfaces.
+        // the update path above, so it is checked on both surfaces. As with
+        // the media updates, what this holds is the public surface: neither
+        // surface hands a key it does not name to the media service, so the
+        // service's own handling of one is not reached from here.
         const direct1 = pdfDocument("direct-upload");
         const viaDirect = await direct.media.upload({
           file: {
@@ -716,7 +728,7 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe("nextly_jobs", () => {
+    section("nextly_jobs", () => {
       it("the queue's own write succeeds, and the jobs list never returns it", async () => {
         const queued = await direct.jobs.queue({
           task: "leak-probe.sweep",
@@ -736,7 +748,7 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe("activity_log", () => {
+    section("activity_log", () => {
       it("the activity log's own write succeeds, and the dashboard feed never returns it", async () => {
         const activity = t.getService("activityLogService") as unknown as {
           logActivity(input: Record<string, unknown>): Promise<unknown>;
@@ -764,7 +776,7 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe("audit_log", () => {
+    section("audit_log", () => {
       // No REST route, Direct API method or admin loader reads this table, so
       // there is no public read to search. What is left is the core's own
       // write, which must still store its row once the column is added.
@@ -782,13 +794,22 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("every reader of a core table", () => {
-      // The paths above are the public surfaces, listed one by one. Under all
-      // of them, and under any surface not listed, a core table's rows are
-      // read in one of three ways, since product code reaches the database
-      // through Drizzle only: the static table bundle, the schema registry
-      // by SQL name, or the adapter's whole-row select, which resolves through
-      // that registry. This holds the class: with the contribution declared
-      // and the column live, none of the three reads it.
+      // The paths above are the public surfaces, listed one by one. Under
+      // them, a core table's rows are read through the static table bundle,
+      // the schema registry by SQL name, or the adapter's whole-row select,
+      // which resolves through that registry; the relational query config
+      // closes over the bundle's own table objects. With the contribution
+      // declared and the column live, none of these reads it, so a surface
+      // built on them is held without being listed.
+      //
+      // Two things this does not hold. The adapter's raw insert inside a
+      // transaction answers with every column (`RETURNING *`, or a re-read
+      // with `SELECT *` on MySQL), so a caller asking it for the inserted row
+      // would get the column; the one such insert on these tables, the media
+      // upload, asks for no columns back. And the column is added after boot,
+      // as `nextly migrate` adds it: no boot path builds a core table from
+      // the live database today, and one that did would be checked only by a
+      // boot that finds the column already there.
       it("none of the three returns the column, on any extendable core table", async () => {
         // A row in each table, written here so the check stands on its own.
         await direct.jobs.queue({ task: "leak-probe.guard", input: null });
@@ -805,7 +826,7 @@ describe.each(getConfiguredTestDialects())(
         });
         await buildAuditLogWriter((name: string) =>
           t.getService(name as keyof ServiceMap)
-        ).write({ kind: "csrf-failed", metadata: { path: "/leak-guard" } });
+        ).write({ kind: "password-changed" });
 
         const columnNames = (table: unknown): string[] =>
           Object.values(getTableColumns(table as Table)).map(
@@ -828,10 +849,13 @@ describe.each(getConfiguredTestDialects())(
             candidate => isTable(candidate) && getTableName(candidate) === table
           );
           expect(fromBundle, table).toBeDefined();
+          // `id` present, so an empty column list cannot pass as a clean one.
+          expect(columnNames(fromBundle), table).toContain("id");
           expect(columnNames(fromBundle), table).not.toContain("leak_probe");
 
           const fromRegistry = registry.getTable(table);
           expect(fromRegistry, table).toBeTruthy();
+          expect(columnNames(fromRegistry), table).toContain("id");
           expect(columnNames(fromRegistry), table).not.toContain("leak_probe");
 
           const rows = await t.adapter.select<Record<string, unknown>>(table);
