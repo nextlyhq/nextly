@@ -5,7 +5,9 @@
  */
 import { describe, it, expect, vi } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import userEvent from "@testing-library/user-event";
+
+import { render, screen, within } from "@admin/__tests__/utils";
 import type { VersionScope } from "@admin/services/versionApi";
 
 const { useVersionDiffMock } = vi.hoisted(() => ({
@@ -54,9 +56,11 @@ describe("VersionDiffView", () => {
 
     expect(screen.getByText("Views")).toBeInTheDocument();
     expect(screen.getByText(/Comparing version/)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Changed only/ })
-    ).toBeInTheDocument();
+    expect(screen.getByText(/1 of 1 fields changed/)).toBeInTheDocument();
+    // Every field is read, so the count and the fold cover the whole document.
+    expect(useVersionDiffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ modifiedOnly: false })
+    );
   });
 
   it("says the versions are identical when nothing changed", () => {
@@ -138,9 +142,64 @@ describe("VersionDiffView", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders the unchanged fields with a no-change note when filter is off", () => {
-    // "Changed only" off returns the unchanged fields even though hasChanges is
-    // false; they must render (with a note) rather than showing "identical".
+  it("says how many fields changed, and folds the unchanged ones until asked", async () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "value",
+            name: "views",
+            label: "Views",
+            type: "number",
+            status: "changed",
+            before: 1,
+            after: 2,
+          },
+          {
+            kind: "value",
+            name: "title",
+            label: "Title",
+            type: "text",
+            status: "unchanged",
+            before: "same",
+            after: "same",
+          },
+          {
+            kind: "value",
+            name: "slug",
+            label: "Slug",
+            type: "text",
+            status: "unchanged",
+            before: "s",
+            after: "s",
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByText(/1 of 3 fields changed/)).toBeInTheDocument();
+    expect(screen.queryByText("Title")).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show 2 unchanged fields" })
+    );
+    expect(screen.getByText("Title")).toBeInTheDocument();
+    expect(screen.getByText("Slug")).toBeInTheDocument();
+    // Each unfolded field shows its value, read-only, as a changed one does.
+    expect(screen.getByText("same")).toBeInTheDocument();
+    expect(screen.getByText("s")).toBeInTheDocument();
+  });
+
+  it("says two versions are identical, with their fields folded", async () => {
     useVersionDiffMock.mockReturnValue({
       data: {
         from: 1,
@@ -167,9 +226,83 @@ describe("VersionDiffView", () => {
 
     render(<VersionDiffView scope={scope} from={1} to={2} />);
 
-    expect(screen.getByText("Title")).toBeInTheDocument();
-    expect(screen.getByText(/No changes between/)).toBeInTheDocument();
-    expect(screen.queryByText(/identical/)).not.toBeInTheDocument();
+    expect(screen.getByText(/identical/)).toBeInTheDocument();
+    expect(screen.getByText(/0 of 1 fields changed/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Show 1 unchanged field" })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps system fields out of the count and behind Show system fields", async () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "value",
+            name: "views",
+            label: "Views",
+            type: "number",
+            status: "changed",
+            before: 1,
+            after: 2,
+          },
+          {
+            kind: "unknown",
+            name: "firstPublishedAt",
+            status: "changed",
+            reason: "system",
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByText(/1 of 1 fields changed/)).toBeInTheDocument();
+    expect(screen.queryByText("First Published At")).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Show system fields" })
+    );
+    expect(screen.getByText("First Published At")).toBeInTheDocument();
+  });
+
+  it("offers Previous and Next change once there is more than one", () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: ["a", "b"].map(name => ({
+          kind: "value",
+          name,
+          label: name,
+          type: "text",
+          status: "changed",
+          before: "x",
+          after: "y",
+        })),
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(
+      screen.getByRole("button", { name: "Previous change" })
+    ).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Next change" })).toBeEnabled();
   });
 
   it("offers a retry when the comparison fails", () => {
@@ -290,5 +423,99 @@ describe("VersionDiffView", () => {
     render(<VersionDiffView scope={scope} from={1} to={2} />);
 
     expect(screen.getByText("hero.png")).toBeInTheDocument();
+  });
+
+  it("offers no side-by-side view of a comparison that has none", () => {
+    // A relationship's change is its added and removed targets, drawn one way
+    // only: a toggle here would change nothing on screen.
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "set",
+            name: "tags",
+            label: "Tags",
+            type: "relationship",
+            status: "changed",
+            added: [{ id: "c", label: "C" }],
+            removed: [{ id: "a", label: "A" }],
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByRole("button", { name: "Side by side" })).toBeDisabled();
+  });
+
+  it("says only system fields changed, never identical, with the control to show them", async () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "value",
+            name: "views",
+            label: "Views",
+            type: "number",
+            status: "unchanged",
+            before: 1,
+            after: 1,
+          },
+          {
+            kind: "unknown",
+            name: "firstPublishedAt",
+            status: "changed",
+            reason: "system",
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.queryByText(/identical/)).toBeNull();
+    const note = screen.getByText("Only system fields changed.");
+    await userEvent.click(
+      within(note.parentElement!).getByRole("button", {
+        name: "Show system fields",
+      })
+    );
+    expect(screen.getByText("First Published At")).toBeInTheDocument();
+  });
+
+  it("never calls versions identical when the server reports a difference", () => {
+    // A difference the reader is not shown, such as a removed column the
+    // server compared, is still a difference.
+    useVersionDiffMock.mockReturnValue({
+      data: { from: 1, to: 2, locale: null, hasChanges: true, fields: [] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.queryByText(/identical/)).toBeNull();
+    expect(
+      screen.getByText("No changes in the fields you can read.")
+    ).toBeInTheDocument();
   });
 });

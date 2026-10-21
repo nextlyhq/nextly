@@ -18,8 +18,9 @@ import {
   userRoleAssignmentsInForce,
 } from "../../../services/lib/role-assignments";
 import type { Logger } from "../../../services/shared";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
-import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   refuseRemovingLastSuperAdmin,
@@ -27,6 +28,7 @@ import {
 } from "../../users/services/last-super-admin";
 
 import { invalidateApiKeyPermissionsCache } from "./api-key-service";
+import { refuseGrantingSuperAdmin } from "./super-admin-grant";
 
 /**
  * UserRoleService handles user-role assignment management.
@@ -94,32 +96,10 @@ export class UserRoleService extends BaseService {
         return { success: false, statusCode: 404, message: "Role not found" };
       }
 
-      // "Already assigned" means held now. An assignment that has lapsed grants
-      // nothing, so answering 409 for it left the role impossible to give
-      // again while every check refused it.
       const { userRoles } = this.tables;
       // One moment for the check and the replacement below, so the row this
       // request found lapsed is the row it replaces.
       const now = new Date();
-      const held = await this.db
-        .select({ id: userRoles.id })
-        .from(userRoles)
-        .where(
-          and(
-            userRoleAssignmentsInForce(userRoles, userId, now),
-            eq(userRoles.roleId, roleId)
-          )
-        )
-        .limit(1);
-
-      if (held.length > 0) {
-        return {
-          success: false,
-          statusCode: 409,
-          message: "Role already assigned to this user",
-        };
-      }
-
       const userRoleData: UserRoleInsertData = {
         id: randomUUID(),
         userId,
@@ -127,18 +107,44 @@ export class UserRoleService extends BaseService {
         expiresAt: opts?.expiresAt ?? null,
       };
 
-      // Through the adapter on SQLite, as the removal below is: a plain insert
-      // made while another request's transaction is open would run inside it
-      // and be undone by its rollback.
-      await serializeOnSqlite(this.adapter, async () => {
+      // One transaction for the decision and the write. Whether this role
+      // confers super-admin is asked under the lock every change to that takes,
+      // so a concurrent change to the role's inheritance can't land between the
+      // answer and the insert. On SQLite it goes through the adapter: a plain
+      // insert made while another request's transaction is open would run
+      // inside it and be undone by its rollback.
+      const alreadyHeld = await this.withTransaction(async tx => {
+        const txDb = tx as RBACDatabaseInstance;
+        await refuseGrantingSuperAdmin(
+          tx as LastSuperAdminTx,
+          this.dialect,
+          [roleId],
+          { userId, roleId }
+        );
+
+        // "Already assigned" means held now. An assignment that has lapsed
+        // grants nothing, so answering 409 for it left the role impossible to
+        // give again while every check refused it.
+        const held = await (tx as LastSuperAdminTx)
+          .select({ id: userRoles.id })
+          .from(userRoles)
+          .where(
+            and(
+              userRoleAssignmentsInForce(userRoles, userId, now),
+              eq(userRoles.roleId, roleId)
+            )
+          )
+          .limit(1);
+        if (held.length > 0) return true;
+
         // A lapsed assignment of this role is replaced rather than kept beside
-        // the new one, since one pair holds one row. Only a lapsed one: the
-        // check above is a read, and on PostgreSQL and MySQL another request
-        // can grant the role between it and this delete. Deleting every row
-        // for the pair removed that completed grant and put this request's
-        // expiry in its place; now it stands, and the pair's unique index
-        // keeps the insert below from adding a second row beside it.
-        await (this.db as RBACDatabaseInstance)
+        // the new one, since one pair holds one row. Only a lapsed one: on
+        // PostgreSQL and MySQL another request can grant the role between the
+        // read above and this delete. Deleting every row for the pair removed
+        // that completed grant and put this request's expiry in its place; now
+        // it stands, and the pair's unique index keeps the insert below from
+        // adding a second row beside it.
+        await txDb
           .delete(userRoles)
           .where(
             and(
@@ -147,16 +153,35 @@ export class UserRoleService extends BaseService {
               not(roleAssignmentInForce(userRoles, now))
             )
           );
-        const insert = (this.db as RBACDatabaseInstance)
-          .insert(this.tables.userRoles)
-          .values(userRoleData);
-
-        if (typeof insert.onConflictDoNothing === "function") {
-          await insert.onConflictDoNothing();
-        } else {
-          await insert;
+        // A grant another request made since the read above is kept, and this
+        // one then wrote nothing: the user holds the role already, answered
+        // the same on every dialect. PostgreSQL and SQLite skip the row;
+        // MySQL, which has no such clause, refuses it on the pair's index.
+        let written: number;
+        try {
+          const insert = txDb
+            .insert(this.tables.userRoles)
+            .values(userRoleData);
+          written = affectedRowCount(
+            typeof insert.onConflictDoNothing === "function"
+              ? await insert.onConflictDoNothing()
+              : await insert,
+            this.dialect
+          );
+        } catch (error) {
+          if (!isUniqueViolation(error)) throw error;
+          written = 0;
         }
+        return written === 0;
       });
+
+      if (alreadyHeld) {
+        return {
+          success: false,
+          statusCode: 409,
+          message: "Role already assigned to this user",
+        };
+      }
 
       await this.invalidateRoleCaches(userId);
 
@@ -166,14 +191,11 @@ export class UserRoleService extends BaseService {
         message: "Role assigned successfully",
       };
     } catch (error) {
-      return {
-        success: false,
-        statusCode: 500,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to assign role to user",
-      };
+      // Thrown, not reported as a failed result: a refused grant, or a read
+      // the decision needed that failed, must refuse the request. A database
+      // failure gets the typed error every other write reports.
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

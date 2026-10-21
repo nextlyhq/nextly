@@ -804,3 +804,29 @@ export { sanitizeAdminPath, DEFAULT_ADMIN_PATH } from "nextly";
  * @experimental
  */
 export { collectDeclarations } from "nextly";
+
+/**
+ * @experimental `markHtml` — mark HTML a plugin's own code built so an email
+ *   template writes it unescaped.
+ *
+ * A template escapes every value it writes; the mark is what turns that off.
+ * Only code marks HTML, and only markup that code built itself: never a value
+ * from a request, a form, a stored row or another plugin, since marking it
+ * lets whatever it holds into the email as markup.
+ *
+ * Re-exported here so a plugin reaches it through the package it builds
+ * against. The same function as the `nextly` root's, so a mark made here is
+ * one the template engine recognises.
+ */
+export { markHtml } from "nextly";
+/**
+ * @experimental `TrustedHtml` is what `markHtml` returns. Tagged on its own
+ *   declaration: a release tag applies to the declaration it precedes.
+ */
+export { TrustedHtml } from "nextly";
+/**
+ * @experimental `EmailTemplateData` is the data a template is rendered with:
+ *   lists and objects as well as strings, and a `TrustedHtml` wherever code
+ *   marked a value.
+ */
+export type { EmailTemplateData } from "nextly";

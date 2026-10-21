@@ -33,12 +33,14 @@ A release now notes, for each document going live, the documents it links
 to through its relationship and upload fields (field groups and blocks
 included) that will not be live at the release's moment: drafts nothing
 publishes by then, documents a release takes down by then (another release, or this one), and
-documents that no longer exist. It is a soft problem, `UNPUBLISHED_LINK`, in
+documents that no longer exist (named as deleted only to a trusted caller). It is a soft problem, `UNPUBLISHED_LINK`, in
 the release's readiness, and never stops scheduling, Publish now or the run.
 Adding a document to a release answers with the same links as
 `unpublishedLinks` (experimental), so a client can offer to add them too. A
-link from or to a document the caller may not read is only counted, and one
-in a field the caller may not view names neither the field nor the document.
+link from a document the caller may not read is only counted, and so is every
+link to a document the caller may not read, whatever that document is (live, a
+draft, coming down or deleted); one in a field the caller may not view names
+neither the field nor the document.
 Files in the media library are never reported, and links inside rich text
 are not checked yet.
 

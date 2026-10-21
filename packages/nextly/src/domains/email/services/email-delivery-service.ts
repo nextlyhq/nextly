@@ -60,7 +60,19 @@ import {
   type EmailDeliveryStatus,
 } from "../delivery-record";
 import { eraseRecipientDeliveries } from "../erase-recipient";
+import { pruneSendClaims } from "../prune";
 import type { ResolvedEmailRetentionConfig } from "../retention-config";
+import {
+  claimSendKey,
+  renewSendClaim,
+  sendClaimsTableFor,
+  settleSendClaim,
+  type ClaimDecision,
+  type HeldClaim,
+  type SendKey,
+} from "../send-claims";
+
+import type { EmailSendOutcome } from "./send-failures";
 
 /** The Drizzle surface a write naming a person needs. */
 type PersonRowsDb = PrincipalDigestDb;
@@ -246,6 +258,78 @@ export class EmailDeliveryService extends BaseService {
       warnQuietly(this.logger, "Email retention policy could not be read", {
         error,
       });
+      return false;
+    }
+  }
+
+  /**
+   * Claim a keyed send before any provider is contacted (`send-claims.ts`).
+   *
+   * Throws when the claim cannot be read or written, unlike the recorder: a
+   * send that cannot be claimed cannot promise to go out once, and nothing has
+   * been sent yet.
+   */
+  async claimSend(sendKey: SendKey): Promise<ClaimDecision> {
+    try {
+      return await claimSendKey(this.adapter, sendKey, this.digestSecrets());
+    } catch (error) {
+      if (NextlyError.is(error)) throw error;
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+  }
+
+  /**
+   * Record a claimed send's outcome, then sweep claims past their lifetime.
+   *
+   * Never throws, as `record` never does: the send has happened. A claim left
+   * without its outcome is taken over once its lease lapses. A successful
+   * claim lives as long as the delivery log keeps its records, so a site that
+   * keeps none keeps no claim either.
+   */
+  async settleSend(
+    claim: HeldClaim,
+    outcome: EmailSendOutcome,
+    acceptedLegs: readonly string[] = []
+  ): Promise<void> {
+    try {
+      await settleSendClaim(this.adapter, claim, outcome, {
+        keep: !this.keepsNothing(),
+        acceptedLegs,
+      });
+    } catch (error) {
+      warnQuietly(this.logger, "Email send claim could not be recorded", {
+        error,
+      });
+    }
+    try {
+      await pruneSendClaims(this.adapter, this.sentClaimLifetime(), new Date());
+    } catch (error) {
+      warnQuietly(this.logger, "Email send claims could not be swept", {
+        error,
+      });
+    }
+  }
+
+  /**
+   * Push a held claim's lease on before the next provider call of a send.
+   * Never throws: a renewal that fails leaves the lease as it was.
+   */
+  async renewSend(claim: HeldClaim): Promise<void> {
+    try {
+      await renewSendClaim(this.adapter, claim);
+    } catch (error) {
+      warnQuietly(this.logger, "Email send claim could not be renewed", {
+        error,
+      });
+    }
+  }
+
+  /** How long a successful claim is kept: the delivery log's window. */
+  private sentClaimLifetime(): number | false {
+    try {
+      return this.retentionPolicy?.()?.maxAgeMs ?? false;
+    } catch {
+      // Unreadable: kept, as the delivery records it describes are.
       return false;
     }
   }
@@ -516,6 +600,9 @@ export class EmailDeliveryService extends BaseService {
       this.digestSecrets()
     );
     const decided: Record<string, unknown>[] = [];
+    // The key digests of sends to someone already reported deleted, which
+    // their erasure ran too early to find: cleared here, as it would have.
+    const erasedKeys = new Set<unknown>();
     for (const [index, row] of rows.entries()) {
       const person = people[index];
       if (!person) {
@@ -523,6 +610,7 @@ export class EmailDeliveryService extends BaseService {
         continue;
       }
       const gone = await digests.isDeleted(person);
+      if (gone && row.keyDigest) erasedKeys.add(row.keyDigest);
       decided.push({
         ...row,
         principalKind: person.kind,
@@ -530,7 +618,20 @@ export class EmailDeliveryService extends BaseService {
         ...(gone ? { recipientHash: ERASED_RECIPIENT_HASH } : {}),
       });
     }
-    await db.insert(this.deliveries).values(decided);
+    await db
+      .insert(this.deliveries)
+      .values(
+        decided.map(row =>
+          erasedKeys.has(row.keyDigest) ? { ...row, keyDigest: null } : row
+        )
+      );
+    if (erasedKeys.size > 0) {
+      const claims = sendClaimsTableFor(this.dialect);
+      await db
+        .update(claims)
+        .set({ keyDigest: null, messageDigest: null })
+        .where(inArray(claims.keyDigest, [...erasedKeys] as string[]));
+    }
   }
 
   /** The rows for one chunk, with or without the provider reference. */
@@ -560,6 +661,7 @@ export class EmailDeliveryService extends BaseService {
       retentionClass: EMAIL_RETENTION_CLASS,
       error: input.error ? storableError(input.error) : null,
       messageId: input.messageId ?? null,
+      keyDigest: input.keyDigest ?? null,
       // One timestamp for the whole message: the rows describe a single
       // send, and staggering them by microseconds would suggest otherwise.
       createdAt: now,

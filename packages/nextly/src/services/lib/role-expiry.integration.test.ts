@@ -499,34 +499,59 @@ describe.each(getConfiguredTestDialects())(
         await raw(t).delete(userRoles).where(eq(userRoles.userId, userId));
         await assign(t, userId, ROLES.lapsed.id, null);
       };
-      const realDb = (service as unknown as { db: object }).db;
-      const db = new Proxy(realDb, {
-        get(target, prop) {
-          const value = Reflect.get(target, prop) as unknown;
-          if (prop === "delete" && typeof value === "function" && !granted) {
-            return (table: unknown) => {
-              const builder = (
-                value as (t: unknown) => {
-                  where: (cond: unknown) => Promise<unknown>;
-                }
-              ).call(target, table);
-              return {
-                where: async (cond: unknown) => {
-                  await otherRequest();
-                  return builder.where(cond);
-                },
+      // The service's handle, and any transaction it opens on it, stop just
+      // before their first delete until the other request is done: the
+      // assignment is written inside a transaction on PostgreSQL and MySQL.
+      // The other request is made by the test itself, outside that
+      // transaction's flow, as a second request is.
+      let reachedDelete!: () => void;
+      const atDelete = new Promise<void>(resolve => (reachedDelete = resolve));
+      let otherRequestDone!: () => void;
+      const afterOther = new Promise<void>(
+        resolve => (otherRequestDone = resolve)
+      );
+      const intercepted = <T extends object>(handle: T): T =>
+        new Proxy(handle, {
+          get(target, prop) {
+            const value = Reflect.get(target, prop) as unknown;
+            if (prop === "delete" && typeof value === "function" && !granted) {
+              return (table: unknown) => {
+                const builder = (
+                  value as (t: unknown) => {
+                    where: (cond: unknown) => Promise<unknown>;
+                  }
+                ).call(target, table);
+                return {
+                  where: async (cond: unknown) => {
+                    granted = true;
+                    reachedDelete();
+                    await afterOther;
+                    return builder.where(cond);
+                  },
+                };
               };
-            };
-          }
-          return typeof value === "function" ? value.bind(target) : value;
-        },
-      });
+            }
+            if (prop === "transaction" && typeof value === "function") {
+              return (work: (tx: object) => Promise<unknown>) =>
+                (
+                  value as (w: (tx: object) => Promise<unknown>) => unknown
+                ).call(target, (tx: object) => work(intercepted(tx)));
+            }
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      const realDb = (service as unknown as { db: object }).db;
+      const db = intercepted(realDb);
       Object.defineProperty(service, "db", { get: () => db });
 
       // This request asks for an hour; the grant made meanwhile has no end.
-      await service.assignRoleToUser(userId, ROLES.lapsed.id, {
+      const assigning = service.assignRoleToUser(userId, ROLES.lapsed.id, {
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       });
+      await Promise.race([atDelete, assigning]);
+      await otherRequest();
+      otherRequestDone();
+      await assigning;
 
       expect(granted).toBe(true);
       const rows = (await raw(t)

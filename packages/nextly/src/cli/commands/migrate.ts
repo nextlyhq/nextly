@@ -62,6 +62,10 @@ import {
   runMigrationStatements,
   type MigrationUnit,
 } from "../../domains/schema/migrate/migration-transaction";
+import {
+  assertPluginHistories,
+  assertPluginListsSound,
+} from "../../domains/schema/migrate/plugin/plugin-history";
 import { pluginSchemaVersionFromLedger } from "../../domains/schema/migrate/plugin/plugin-schema-version";
 import {
   appliedPluginShas,
@@ -577,6 +581,17 @@ export interface MigrateCoreDeps {
    * the run. Omitted by callers with no plugin migrations to run.
    */
   pluginMigrationSets?: readonly PluginMigrationSet[];
+  /**
+   * Every plugin the configuration declares, a plugin shipping no modules
+   * included (`pluginMigrationArgs`), so the history check finds a module
+   * the ledger records applied for a plugin whose list has since emptied.
+   */
+  declaredPlugins?: ReadonlySet<string>;
+  /**
+   * The applied plugin modules the ledger records, by ledger key. Injected
+   * for tests; the default reads the ledger (`appliedPluginModules`).
+   */
+  appliedPluginModulesFn?: () => Promise<ReadonlyMap<string, string | null>>;
   dialect: SupportedDialect;
   db: unknown;
   adapter: CLIDatabaseAdapter;
@@ -679,10 +694,13 @@ export async function previewMigrate(args: {
   const rows = hasLedger
     ? await new SchemaEventsRepository(db, dialect).listFileApplies()
     : [];
-  const { pluginMigrationSets } = await pluginMigrationArgs(args.plugins);
+  const { pluginMigrationSets, declaredPlugins } = await pluginMigrationArgs(
+    args.plugins
+  );
   const modules = await previewPluginMigrations(pluginMigrationSets, {
     dialect,
     rows,
+    declaredPlugins,
     limit: args.step,
   });
   const pendingModules = modules.filter(module => !module.recorded);
@@ -923,6 +941,51 @@ async function retireElementOwners(deps: MigrateCoreDeps): Promise<void> {
 }
 
 /**
+ * Refuse, before the run changes anything, a plugin history the ledger shows
+ * was changed (`assertPluginHistories`): an applied module edited, removed or
+ * renamed, or a pending one placed before it.
+ *
+ * Reads the ledger only when a plugin is declared, so a run with no plugins
+ * reads nothing more than it did.
+ */
+async function assertPluginHistoriesHold(deps: MigrateCoreDeps): Promise<void> {
+  const lists = deps.pluginMigrationSets ?? [];
+  const declared = deps.declaredPlugins ?? new Set<string>();
+  if (lists.length === 0 && declared.size === 0) return;
+  assertPluginHistories({
+    lists,
+    appliedShas: await (
+      deps.appliedPluginModulesFn ?? (() => appliedPluginModules(deps))
+    )(),
+    declaredPlugins: declared,
+  });
+}
+
+/**
+ * The applied plugin modules the ledger records, by ledger key — none when
+ * the ledger has not been created yet, which the core reconcile does on a
+ * fresh database: such a database has no applied module to check.
+ */
+async function appliedPluginModules(
+  deps: Pick<MigrateCoreDeps, "adapter" | "db" | "dialect">
+): Promise<ReadonlyMap<string, string | null>> {
+  // Detected, as `migrateCore` detects the adapter's other operations: an
+  // adapter without it is asked for the rows directly.
+  const probe = deps.adapter as unknown as {
+    tableExists?: (table: string) => Promise<boolean>;
+  };
+  if (
+    typeof probe.tableExists === "function" &&
+    !(await probe.tableExists("nextly_schema_events"))
+  ) {
+    return new Map();
+  }
+  return appliedPluginShas(
+    await new SchemaEventsRepository(deps.db, deps.dialect).listFileApplies()
+  );
+}
+
+/**
  * Phase 1.5 — plugin migration modules, between core and the app's files,
  * under the caller's lock. Plugins run first because an app migration may
  * index an entity table a plugin contributes. The first failure propagates
@@ -972,6 +1035,7 @@ export async function runPluginPhase(
   const pluginOutcome = await runPluginMigrations(deps.pluginMigrationSets, {
     dialect: deps.dialect,
     appliedShas,
+    declaredPlugins: deps.declaredPlugins,
     // `--step` counts plugin modules first, as they run first; see
     // `appStepAfter` for the app files' share.
     limit: deps.step,
@@ -1279,6 +1343,9 @@ export async function migrateCore(
     deps.extensionSchema,
     new Set(deps.pluginsWithMigrations ?? [])
   );
+  // The history checks that need no database, before the lock is waited on:
+  // a list edited by hand is refused with nothing changed.
+  assertPluginListsSound(deps.pluginMigrationSets ?? []);
 
   const reconcile = deps.reconcileCoreFn ?? reconcileCore;
   const runFiles = deps.runFileMigrationsFn ?? runFileMigrations;
@@ -1302,6 +1369,10 @@ export async function migrateCore(
     deps.db,
     deps.dialect,
     async () => {
+      // Before anything changes the database, the core reconcile included:
+      // a deploy refused after the core reconcile would leave core's tables
+      // at a release that never ran.
+      await assertPluginHistoriesHold(deps);
       deps.logger.info("Phase 1: reconciling core schema...");
       // Resolved here, where a failure can still fail the command cleanly. The
       // core schema is a desired shape, so naming a registry the database does

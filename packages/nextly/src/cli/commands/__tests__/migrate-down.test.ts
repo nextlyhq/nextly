@@ -780,4 +780,98 @@ describe("migrateDownCore and the tables a DOWN creates", () => {
     });
     expect(executed).toEqual([]);
   });
+
+  it("judges a later target against the descendants read before the rollback", async () => {
+    // `app_child` inherits from the plugin's `t`, and no row gives it to the
+    // plugin. The older module's DOWN runs second; its ALTER without ONLY
+    // reaches `app_child` as much as the first target's would.
+    const live = Object.assign(new Set<string>(), {
+      descendants: new Map([["t", ["app_child"]]]),
+    });
+    const { deps, executed } = plugin(
+      {
+        "plugin:auth/001_init": 'ALTER TABLE "t" ADD COLUMN "x" int;',
+        "plugin:auth/002_more": 'CREATE TABLE "scratch" (id INT);',
+      },
+      async () => live
+    );
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: {
+        table: "app_child",
+        parent: "t",
+        source: "plugin:auth/001_init",
+      },
+    });
+    expect(executed).toEqual([]);
+  });
+  it("refuses a later target looking up a name an earlier target vacated", async () => {
+    // The newer module's DOWN, run first, drops `t`. The name may then reach
+    // an index `t` shadowed on the search path, which the lookup made before
+    // the rollback never saw, so the older module's ALTER of it is refused.
+    const { deps, executed } = plugin(
+      {
+        "plugin:auth/001_init": 'ALTER TABLE "t" SET TABLESPACE fast;',
+        "plugin:auth/002_more": 'DROP TABLE "t";',
+      },
+      async () => new Set()
+    );
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: { name: "t", source: "plugin:auth/001_init" },
+    });
+    expect(executed).toEqual([]);
+  });
+
+  it("refuses a later target reaching a tree an earlier target attached to", async () => {
+    // The app's newer file, rolled back first, attaches a partition to its
+    // `parent`; the descendants were read before the rollback, so the older
+    // file's rename of the parent's column cannot be judged for it.
+    const downs: Record<string, string> = {
+      "001_init.sql": 'ALTER TABLE "parent" RENAME COLUMN "x" TO "y";',
+      "002_more.sql":
+        'ALTER TABLE "parent" ATTACH PARTITION "part" FOR VALUES IN (1);',
+    };
+    const { deps, executed } = baseDeps({
+      options: { step: 2, allowDataLoss: true, yes: false, dryRun: false },
+      listFileApplies: async () =>
+        Object.keys(downs).map((filename, at) =>
+          row(filename, "applied", 1000 + at)
+        ),
+      readDownSql: async (filename: string) => down(downs[filename]),
+      readLiveTables: async () =>
+        Object.assign(new Set<string>(), {
+          descendants: new Map<string, string[]>(),
+        }),
+    });
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: { table: "parent", source: "001_init.sql" },
+    });
+    expect(executed).toEqual([]);
+  });
+
+  it("follows the descendants through a rename an earlier target makes", async () => {
+    // The newer module's DOWN, run first, renames `t`; the older one alters
+    // it under the name it then has, which reaches `app_child` all the same.
+    const live = Object.assign(new Set<string>(), {
+      descendants: new Map([["t", ["app_child"]]]),
+    });
+    const { deps, executed } = plugin(
+      {
+        "plugin:auth/001_init": 'ALTER TABLE "t_old" ADD COLUMN "x" int;',
+        "plugin:auth/002_more": 'ALTER TABLE "t" RENAME TO "t_old";',
+      },
+      async () => live
+    );
+    await expect(migrateDownCore(deps)).rejects.toMatchObject({
+      code: "DROP_OF_FOREIGN_TABLE",
+      logContext: {
+        table: "app_child",
+        parent: "t_old",
+        source: "plugin:auth/001_init",
+      },
+    });
+    expect(executed).toEqual([]);
+  });
 });

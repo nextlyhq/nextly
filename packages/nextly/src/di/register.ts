@@ -4412,6 +4412,8 @@ async function initializePlugins(
       // kind but `plugin`, so rewriting it here would only be able to hide a
       // contribution the fold would have caught.
       // `resolveMany` is bound to the same context, when the plugin wrote one.
+      // Read once, and called on its entry as `resolve` is, so one written
+      // with method syntax that reaches `this.resolve` keeps its receiver.
       const { resolveMany } = contributed;
       registerResolvedSource(
         contributed.source,
@@ -4420,7 +4422,13 @@ async function initializePlugins(
         resolveMany === undefined
           ? undefined
           : (queries, caller, opts) =>
-              resolveMany(queries, caller, pluginContext, opts)
+              resolveMany.call(
+                contributed,
+                queries,
+                caller,
+                pluginContext,
+                opts
+              )
       );
     }
 

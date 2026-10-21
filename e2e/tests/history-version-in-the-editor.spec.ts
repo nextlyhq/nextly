@@ -103,6 +103,39 @@ test.describe("a past version in the editor", () => {
     ).toHaveValue("as it stands now");
   });
 
+  test("on a wide screen: side by side puts a change's two sides in columns", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const id = await noteWithTwoVersions(page);
+    await showNewestVersion(page, id);
+    const summary = page.getByRole("region", { name: "Summary, changed" });
+    await expect(summary).toBeVisible();
+
+    const toggle = page.getByRole("button", { name: "Side by side" });
+    if ((await toggle.getAttribute("aria-pressed")) !== "true") {
+      await toggle.click();
+    }
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+
+    // Each side is the cell its caption heads. In columns they share a row,
+    // After to the right of Before; stacked, After would sit below.
+    const side = (caption: string) =>
+      summary.getByText(caption, { exact: true }).locator("..").boundingBox();
+    await expect
+      .poll(async () => {
+        const [before, after] = await Promise.all([
+          side("Before"),
+          side("After"),
+        ]);
+        if (!before || !after) return "unmeasured";
+        return Math.abs(after.y - before.y) < 4 && after.x > before.x + 100
+          ? "columns"
+          : "stacked";
+      })
+      .toBe("columns");
+  });
+
   test("on a phone: the version's actions in a bar at the bottom", async ({
     page,
   }) => {

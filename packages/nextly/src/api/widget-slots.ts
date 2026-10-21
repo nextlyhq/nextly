@@ -354,8 +354,11 @@ async function answerGroup(
   try {
     resolveMany = liveResolveMany(source);
   } catch (error) {
+    logAskedSeveral(source, group.length, false);
     return group.map(() => failedSlot(error));
   }
+  // Logged from the live decision, so the line says what actually answered.
+  logAskedSeveral(source, group.length, resolveMany !== undefined);
   return resolveMany === undefined
     ? Promise.all(group.map(entry => answerOne(entry, caller, scope)))
     : answerMany(group, resolveMany, caller, scope);
@@ -383,24 +386,7 @@ export async function answerReadyQueries(
   const answered = new Map<number, QuerySlot>();
   await Promise.all(
     [...bySource.entries()].map(async ([source, group]) => {
-      const first = group[0];
-      // Only a resolver-answered source can have one; a collection or a single is
-      // read through the Direct API, one query at a time.
-      const executable = first?.executable;
-      const resolveMany =
-        executable?.kind === "system" || executable?.kind === "plugin"
-          ? executable.resolveMany
-          : undefined;
-      const grouped = resolveMany !== undefined && group.length > 1;
-      if (group.length > 1) logAskedSeveral(source, group.length, grouped);
-      // Whether to group is read from the prepared copy, which says what the
-      // source offered when the batch began; what answers it is asked again
-      // when it runs.
-      const slots = grouped
-        ? await answerGroup(group, caller, scope)
-        : await Promise.all(
-            group.map(entry => answerOne(entry, caller, scope))
-          );
+      const slots = await answerSource(source, group, caller, scope);
       group.forEach((entry, position) => {
         const slot = slots[position];
         if (slot) answered.set(entry.index, slot);
@@ -408,6 +394,33 @@ export async function answerReadyQueries(
     })
   );
   return answered;
+}
+
+/** Whether a prepared group offered a many-query resolver when the batch began. */
+function preparedToGroup(group: readonly ReadyQuery[]): boolean {
+  // Only a resolver-answered source can have one; a collection or a single is
+  // read through the Direct API, one query at a time.
+  const executable = group[0]?.executable;
+  const offered =
+    executable?.kind === "system" || executable?.kind === "plugin"
+      ? executable.resolveMany !== undefined
+      : false;
+  return offered && group.length > 1;
+}
+
+/** One source's queries in the batch, answered together or one at a time. */
+async function answerSource(
+  source: string,
+  group: readonly ReadyQuery[],
+  caller: ReadCaller,
+  scope: BatchScope
+): Promise<QuerySlot[]> {
+  // Whether to group is read from the prepared copy, which says what the
+  // source offered when the batch began; what answers it is asked again when
+  // it runs, and `answerGroup` logs that live decision.
+  if (preparedToGroup(group)) return answerGroup(group, caller, scope);
+  if (group.length > 1) logAskedSeveral(source, group.length, false);
+  return Promise.all(group.map(entry => answerOne(entry, caller, scope)));
 }
 
 /** One line for a source asked more than once in a batch, guarded as `failedSlot`'s is. */

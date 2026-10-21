@@ -13,6 +13,7 @@
  * @packageDocumentation
  */
 
+import { scopedSender, SITE_KEY_SCOPE } from "../../domains/email/send-claims";
 import type {
   EmailTemplateComparison,
   OwnerUpdateUndo,
@@ -79,7 +80,13 @@ function directResult(result: EmailSendOutcome): SendEmailResult {
       ? { error: result.failure.reason, failure: result.failure }
       : {}),
     ...(result.refused ? { refused: result.refused } : {}),
+    ...(result.repeat ? { repeat: result.repeat } : {}),
   };
+}
+
+/** The send service as the site's own code sends through it. */
+function siteSender(ctx: NextlyContext): NextlyContext["emailSendService"] {
+  return scopedSender(ctx.emailSendService, SITE_KEY_SCOPE);
 }
 
 /**
@@ -96,7 +103,7 @@ export interface EmailNamespace {
 export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
   return {
     async send(args: SendEmailArgs): Promise<SendEmailResult> {
-      const result = await ctx.emailSendService.send({
+      const result = await siteSender(ctx).send({
         // Every recipient, as given: the service delivers to each one and
         // refuses a list it cannot deliver whole.
         to: args.to,
@@ -111,6 +118,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         providerId: args.providerId,
         attachments: args.attachments,
         person: args.person,
+        idempotencyKey: args.idempotencyKey,
       });
       return directResult(result);
     },
@@ -126,6 +134,7 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
         bcc?: string[];
         attachments?: typeof args.attachments;
         person?: typeof args.person;
+        idempotencyKey?: string;
       } = {};
       if (args.providerId) sendOptions.providerId = args.providerId;
       // The send's own From and Reply-To win over the template's, which win
@@ -140,8 +149,11 @@ export function createEmailNamespace(ctx: NextlyContext): EmailNamespace {
       // Anything given is forwarded, so the send validates it as `send` does;
       // only an absent person is left out.
       if (args.person !== undefined) sendOptions.person = args.person;
+      if (args.idempotencyKey !== undefined) {
+        sendOptions.idempotencyKey = args.idempotencyKey;
+      }
 
-      const result = await ctx.emailSendService.sendWithTemplate(
+      const result = await siteSender(ctx).sendWithTemplate(
         args.template,
         // Every recipient, as given (see `send`).
         args.to,
@@ -400,6 +412,8 @@ export function createEmailTemplatesNamespace(
           layoutId: args.data.layoutId,
           fromOverride: args.data.fromOverride,
           replyTo: args.data.replyTo,
+          cc: args.data.cc,
+          bcc: args.data.bcc,
           useLayout: args.data.useLayout,
           variables: args.data.variables,
           attachments: args.data.attachments,

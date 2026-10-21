@@ -1628,41 +1628,6 @@ export async function hasSuperAdminExcluding(
 }
 
 /**
- * Check if any of the given role IDs belongs to the super-admin role.
- *
- * Used for role-assignment protection: prevents non-super-admins from
- * assigning the super_admin role to any user via create/update user or
- * individual role-assignment endpoints.
- *
- * @param roleIds - Array of role IDs to check
- * @returns `true` if any role ID has the slug `super-admin`
- */
-export async function containsSuperAdminRole(
-  roleIds: string[]
-): Promise<boolean> {
-  if (!roleIds || roleIds.length === 0) return false;
-
-  try {
-    const t = getTablesLazy();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { roles } = t as any;
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const rows = await (getDb() as any)
-      .select({ id: roles.id })
-      .from(roles)
-      .where(and(inArray(roles.id, roleIds), eq(roles.slug, "super-admin")))
-      .limit(1);
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (rows as any[]).length > 0;
-  } catch {
-    // fail-open: don't break normal flow if we can't check
-    return false;
-  }
-}
-
-/**
  * Get role slugs for a user by resolving role IDs to slugs.
  *
  * Used by the RBAC AccessControlService to build context for code-defined

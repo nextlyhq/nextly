@@ -1348,6 +1348,40 @@ describe("a batch that asks one source several times", () => {
     expect(slots.results.slice(1).map(slot => slot.ok)).toEqual([false, false]);
   });
 
+  it("logs the live decision: a group whose source lost resolveMany meanwhile is answered per query", async () => {
+    const replaced = answering(1);
+    registerManySource(replaced);
+
+    await askWhileDeciding(() => {
+      clearSources();
+      clearResolvers();
+      // The same source again, answering one query at a time.
+      registerResolvedSource(
+        {
+          id: ISSUES,
+          label: "Issues",
+          kind: "plugin",
+          supports: ["count"],
+          fields: [{ name: "issue", type: "string" }],
+        },
+        vi.fn()
+      );
+    }, [count("a"), count("b")]);
+
+    expect(replaced).not.toHaveBeenCalled();
+    expect(executeWidgetQuery).toHaveBeenCalledTimes(3);
+    expect(info).toContainEqual(
+      expect.objectContaining({
+        kind: "widget-source-asked-several",
+        source: ISSUES,
+        grouped: false,
+      })
+    );
+    expect(info).not.toContainEqual(
+      expect.objectContaining({ source: ISSUES, grouped: true })
+    );
+  });
+
   it("fails only the query whose answer is an Error", async () => {
     registerManySource(async () => [
       { op: "count", total: 4 },

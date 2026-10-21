@@ -68,7 +68,7 @@
     "lane:test:playground": "pnpm --filter playground exec vitest run",
     "lane:test:integration:postgres": "turbo run test:integration --filter=@nextlyhq/adapter-postgres --filter=nextly --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder",
     "lane:test:integration:mysql": "turbo run test:integration --filter=@nextlyhq/adapter-mysql --filter=nextly --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-form-builder",
-    "lane:test:integration:sqlite": "turbo run test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-mcp",
+    "lane:test:integration:sqlite": "turbo run test:integration --filter=@nextlyhq/adapter-sqlite --filter=nextly --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts --filter=@nextlyhq/plugin-seo --filter=@nextlyhq/plugin-form-builder --filter=@nextlyhq/plugin-mcp --filter=@nextlyhq/plugin-sdk",
     "_comment_verify": "=== Bounded local verification. Same limits as .husky/pre-push; check:local-gate-bounds holds them to it. ===",
     "verify:pr": "node scripts/bounded.mjs node scripts/verify.mjs pr",
     "verify:full": "node scripts/bounded.mjs node scripts/verify.mjs full",
