@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
 import {
   pnpmInvocation,
@@ -13,6 +13,7 @@ import {
 import { cleanUpNextWrites, stop } from "../support/playground-dev-server";
 
 import { E2E_NEXTLY_SECRET } from "./support/preview-links";
+import { test } from "./support/test";
 
 /**
  * A development server whose component map lacks a dashboard widget's
