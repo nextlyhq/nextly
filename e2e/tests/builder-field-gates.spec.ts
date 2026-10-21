@@ -9,8 +9,9 @@
  *
  * @module tests/builder-field-gates
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import {
   createEntry,

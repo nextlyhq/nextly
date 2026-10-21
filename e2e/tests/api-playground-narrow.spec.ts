@@ -9,8 +9,9 @@
  * jsdom cannot see this: it computes no layout, so a clipped button and a
  * visible one have the same zero-sized box and the same DOM.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test("Send stays inside the request bar on a phone-width screen", async ({
