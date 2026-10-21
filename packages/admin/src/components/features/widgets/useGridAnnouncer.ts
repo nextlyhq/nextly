@@ -205,7 +205,6 @@ export function useGridAnnouncer(
       say(`${title}: ${setting} set to ${value}.`),
     [say]
   );
-  const announceDrag = useCallback((sentence: string) => say(sentence), [say]);
 
   return {
     announcement,
@@ -220,6 +219,7 @@ export function useGridAnnouncer(
     announceSaved,
     announceRefused,
     announceSaveFailed,
-    announceDrag,
+    // A drag's sentence is already its own, so it is said as it comes.
+    announceDrag: say,
   };
 }

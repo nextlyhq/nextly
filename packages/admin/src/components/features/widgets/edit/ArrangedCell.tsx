@@ -313,6 +313,7 @@ function useRestingControls(
     config: props.row.config,
     isEditing: props.isEditing,
     isFetching: props.data.isFetching,
+    updatedAt: props.data.updatedAt,
     settingsWrite: props.settingsWrite,
   });
   const menu = restingMenuFor(props, widget, hasSettings, quick, () =>

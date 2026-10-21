@@ -38,6 +38,8 @@ import {
 import { ArrangedCell } from "./ArrangedCell";
 import type { DropLine } from "./drag/drop-geometry";
 import type { CardDrag } from "./drag/useCardDrag";
+import type { CellDrag } from "./DraggableWidgetCell";
+import type { CellSettingsWrite } from "./useCardQuickSetting";
 import type { ArrangedWidget } from "./useDashboardArrangement";
 import type { DashboardFocus } from "./useDashboardFocus";
 
@@ -63,27 +65,30 @@ export interface ArrangedGridProps {
     | "onHandleKeyDown"
     | "onHandleBlur"
   >;
-  /** Whether a layout write is in flight anywhere on this dashboard. */
-  isWriting: boolean;
-  /** Why a single-card write is unavailable right now, when it is. */
-  singleCardWriteBlocked?: string;
-  /**
-   * How a card's settings are saved at once, outside customise mode. ABSENT while customising and
-   * before an arrangement has been read; see `ArrangedCell`'s `settingsWrite`.
-   */
-  settingsWrite?:
-    | {
-        write: (
-          placementId: string,
-          title: string,
-          config: Record<string, unknown>,
-          callbacks: { onLanded: () => void; onFailed: () => void }
-        ) => void;
-        isWriting: boolean;
-        unavailable?: string;
-        announce: (title: string, setting: string, value: string) => void;
-      }
-    | undefined;
+  /** What a card may write now, and how: one prop, as they are one concern. */
+  writes: {
+    /** Whether a layout write is in flight anywhere on this dashboard. */
+    isWriting: boolean;
+    /** Why a single-card write is unavailable right now, when it is. */
+    singleCardWriteBlocked?: string | undefined;
+    /**
+     * How a card's settings are saved at once, outside customise mode. ABSENT while customising
+     * and before an arrangement has been read; see `ArrangedCell`'s `settingsWrite`.
+     */
+    settings?:
+      | {
+          write: (
+            placementId: string,
+            title: string,
+            config: Record<string, unknown>,
+            callbacks: { onLanded: () => void; onFailed: () => void }
+          ) => void;
+          isWriting: boolean;
+          unavailable?: string;
+          announce: (title: string, setting: string, value: string) => void;
+        }
+      | undefined;
+  };
   slots: Record<string, WidgetSlot>;
   cellSlots: CellSlots;
   requested: ReadonlySet<string>;
@@ -155,6 +160,49 @@ function DropLineMark({ line }: { line: DropLine | undefined }) {
   );
 }
 
+/** One card's handle drag, bound to its placement; absent while dragging is off. */
+function cellDragFor(
+  drag: ArrangedGridProps["drag"],
+  focus: ArrangedGridProps["focus"],
+  placementId: string
+): CellDrag | undefined {
+  if (!drag?.enabled) return undefined;
+  return {
+    held: drag.drag?.placementId === placementId,
+    onKeyDown: event => drag.onHandleKeyDown(placementId, event),
+    onBlur: () => drag.onHandleBlur(placementId),
+    handleRef: focus.handleRef(placementId),
+  };
+}
+
+/**
+ * The grid's settings write, bound to one card: its placement, and its title to announce by. No
+ * prop at all while the grid has none, so the cell draws no control that could not save.
+ */
+function cellSettingsWrite(
+  settingsWrite: ArrangedGridProps["writes"]["settings"],
+  row: ArrangedWidget
+): { settingsWrite?: CellSettingsWrite } {
+  if (!settingsWrite) return {};
+  return {
+    settingsWrite: {
+      write: (config, callbacks) =>
+        settingsWrite.write(
+          row.placementId,
+          row.widget.title,
+          config,
+          callbacks
+        ),
+      isWriting: settingsWrite.isWriting,
+      ...(settingsWrite.unavailable === undefined
+        ? {}
+        : { unavailable: settingsWrite.unavailable }),
+      announce: (setting, value) =>
+        settingsWrite.announce(row.widget.title, setting, value),
+    },
+  };
+}
+
 export function ArrangedGrid({
   rows,
   placements,
@@ -162,9 +210,7 @@ export function ArrangedGrid({
   isEditing,
   highlightedId = null,
   drag,
-  isWriting,
-  singleCardWriteBlocked,
-  settingsWrite,
+  writes,
   slots,
   cellSlots,
   requested,
@@ -210,38 +256,10 @@ export function ArrangedGrid({
             highlighted={highlightedId === row.placementId}
             // At one column each card menu lists its widths in place, where a submenu has no room.
             widthsInPlace={drag?.oneColumn === true}
-            drag={
-              drag?.enabled
-                ? {
-                    held: drag.drag?.placementId === row.placementId,
-                    onKeyDown: event =>
-                      drag.onHandleKeyDown(row.placementId, event),
-                    onBlur: () => drag.onHandleBlur(row.placementId),
-                    handleRef: focus.handleRef(row.placementId),
-                  }
-                : undefined
-            }
-            isWriting={isWriting}
-            singleCardWriteBlocked={singleCardWriteBlocked}
-            {...(settingsWrite
-              ? {
-                  settingsWrite: {
-                    write: (config, callbacks) =>
-                      settingsWrite.write(
-                        row.placementId,
-                        row.widget.title,
-                        config,
-                        callbacks
-                      ),
-                    isWriting: settingsWrite.isWriting,
-                    ...(settingsWrite.unavailable === undefined
-                      ? {}
-                      : { unavailable: settingsWrite.unavailable }),
-                    announce: (setting, value) =>
-                      settingsWrite.announce(row.widget.title, setting, value),
-                  },
-                }
-              : {})}
+            drag={cellDragFor(drag, focus, row.placementId)}
+            isWriting={writes.isWriting}
+            singleCardWriteBlocked={writes.singleCardWriteBlocked}
+            {...cellSettingsWrite(writes.settings, row)}
             // The same rule the move applies, so an item is enabled exactly
             // when choosing it would move the card.
             can={moveAvailability(placements, row.placementId, isDrawn)}

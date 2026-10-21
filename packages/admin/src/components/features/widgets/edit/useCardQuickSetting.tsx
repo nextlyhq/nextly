@@ -48,6 +48,8 @@ interface PendingAnnouncement {
   asksAgain: boolean;
   /** The card's re-ask has been seen in flight. */
   seenFetching: boolean;
+  /** When the answer on screen as the change was made arrived, so a new one can be told apart. */
+  shownAt: number | null;
 }
 
 /** Whether `config` changes what the card asks, compared with `current`. */
@@ -81,10 +83,13 @@ export function useCardQuickSetting(args: {
   isEditing: boolean;
   /** This card's own request is in flight. */
   isFetching: boolean;
+  /** When the answer this card shows arrived. */
+  updatedAt: Date | null;
   /** Absent while customising, and before an arrangement has been read. */
   settingsWrite: CellSettingsWrite | undefined;
 }): Partial<CardQuickSettingState> {
   const { widget, config, isEditing, isFetching, settingsWrite } = args;
+  const shownAt = args.updatedAt?.getTime() ?? null;
   const [pending, setPending] = useState<PendingAnnouncement | null>(null);
 
   // Announced once the card shows the change; see the module note.
@@ -95,9 +100,13 @@ export function useCardQuickSetting(args: {
       return;
     }
     if (isFetching) return;
-    settingsWrite.announce(pending.setting, pending.value);
+    // A refused quiet re-ask keeps the answer the card had, and its time with it: the card does
+    // not show the change, so it is not said. Only an answer that arrived after the change is.
+    if (!pending.asksAgain || shownAt !== pending.shownAt) {
+      settingsWrite.announce(pending.setting, pending.value);
+    }
     setPending(null);
-  }, [pending, isFetching, settingsWrite]);
+  }, [pending, isFetching, shownAt, settingsWrite]);
 
   const quick = quickSettingOf(widget.settings);
   // Nothing to draw: no quick setting, or nowhere to save one.
@@ -119,6 +128,7 @@ export function useCardQuickSetting(args: {
           value: quickValueLabel(quick, next),
           asksAgain,
           seenFetching: false,
+          shownAt,
         }),
       onFailed: reverted,
     });

@@ -263,7 +263,7 @@ function useSettingsWriteAtRest(
   layout: ReturnType<typeof useDashboardLayout>,
   editor: LayoutEditor,
   announce: ReturnType<typeof useAnnouncerRelay>["announce"]
-): ComponentProps<typeof ArrangedGrid>["settingsWrite"] {
+): ComponentProps<typeof ArrangedGrid>["writes"]["settings"] {
   const cardSettingsWrite = useCardSettingsWrite(layout);
   if (!layout.layout || editor.isEditing) return undefined;
   return {
@@ -492,11 +492,13 @@ export function WidgetGrid() {
               placements={editor.placements}
               isDrawn={arrangement.isDrawn}
               isEditing={editor.isEditing}
-              isWriting={editor.isWriting}
-              singleCardWriteBlocked={singleCardWriteBlocked(
-                layout.isUnreadable
-              )}
-              settingsWrite={settingsWrite}
+              writes={{
+                isWriting: editor.isWriting,
+                singleCardWriteBlocked: singleCardWriteBlocked(
+                  layout.isUnreadable
+                ),
+                settings: settingsWrite,
+              }}
               slots={slots}
               cellSlots={cellSlots}
               requested={requested}
