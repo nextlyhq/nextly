@@ -55,6 +55,7 @@ import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
   editedSharedFields,
   outOfDateSharedFields,
+  sharedEditOrder,
   releaseAllSharedBases,
   sharedValuesConflict,
   snapshotRecord,
@@ -1078,8 +1079,10 @@ export class SinglePublishAllService extends BaseService {
   }
 
   /**
-   * The live shared values, each overlaid by the latest change that edited
-   * it: `pending` is in the order the languages last saved.
+   * The live shared values, each overlaid by the change that edited it last:
+   * where two changes edited one field, the one whose edit of THAT field is
+   * the later, from its language's version history, whichever language saved
+   * anything last.
    */
   private async mergedSharedState(
     tx: TransactionContext,
@@ -1092,6 +1095,7 @@ export class SinglePublishAllService extends BaseService {
     const state: Record<string, unknown> = Object.fromEntries(
       shared.map(name => [name, live[name]])
     );
+    const editedAt = new Map<string, number>();
     for (const draft of pending) {
       const values = snapshotRecord(draft.snapshot);
       const edited = await editedSharedFields(tx, {
@@ -1100,7 +1104,18 @@ export class SinglePublishAllService extends BaseService {
         shared,
         pending: values,
       });
-      for (const name of edited) state[name] = values[name];
+      const order = await sharedEditOrder(tx, {
+        ref,
+        locale: draft.locale,
+        fields: edited,
+        pending: values,
+      });
+      for (const name of edited) {
+        const at = order.get(name) ?? 0;
+        if (at < (editedAt.get(name) ?? -1)) continue;
+        editedAt.set(name, at);
+        state[name] = values[name];
+      }
     }
     return state;
   }

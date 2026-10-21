@@ -135,6 +135,45 @@ export function snapshotRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
+ * A document's newest durable versions, snapshots read, newest first: of one
+ * language (null for none) when one is named, else of every part.
+ */
+async function recentVersions(
+  tx: TransactionContext,
+  ref: VersionRef,
+  locale?: string | null
+): Promise<Array<{ versionNo: number; values: Record<string, unknown> }>> {
+  const rows = await tx.select<{ versionNo: number; snapshot: unknown }>(
+    VERSIONS_TABLE,
+    {
+      columns: ["versionNo", "snapshot"],
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: ref.scopeKind },
+          { column: "scopeSlug", op: "=", value: ref.scopeSlug },
+          { column: "entryId", op: "=", value: ref.entryId },
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NOT NULL" },
+          ...(locale === undefined
+            ? []
+            : [
+                locale === null
+                  ? { column: "locale", op: "IS NULL" as const }
+                  : { column: "locale", op: "=" as const, value: locale },
+              ]),
+        ],
+      },
+      orderBy: [{ column: "versionNo", direction: "desc" }],
+      limit: BASE_SEARCH_DEPTH,
+    }
+  );
+  return rows.map(row => ({
+    versionNo: row.versionNo,
+    values: snapshotRecord(row.snapshot),
+  }));
+}
+
+/**
  * Pin a pending change's base: the newest version whose shared values equal
  * the live document's. With none (versions captured before this document's
  * shared values last changed, or pruned), any pin the slot held is released,
@@ -154,27 +193,9 @@ export async function recordSharedBase(
   }
 ): Promise<void> {
   const { ref, locale, shared, live, views } = args;
-  const recent = await tx.select<{ versionNo: number; snapshot: unknown }>(
-    VERSIONS_TABLE,
-    {
-      columns: ["versionNo", "snapshot"],
-      where: {
-        and: [
-          { column: "scopeKind", op: "=", value: ref.scopeKind },
-          { column: "scopeSlug", op: "=", value: ref.scopeSlug },
-          { column: "entryId", op: "=", value: ref.entryId },
-          { column: "isAutosave", op: "=", value: false },
-          { column: "versionNo", op: "IS NOT NULL" },
-        ],
-      },
-      orderBy: [{ column: "versionNo", direction: "desc" }],
-      limit: BASE_SEARCH_DEPTH,
-    }
-  );
+  const recent = await recentVersions(tx, ref);
   const match = recent.find(
-    row =>
-      differingFields(shared, snapshotRecord(row.snapshot), live, views)
-        .length === 0
+    row => differingFields(shared, row.values, live, views).length === 0
   );
   const slot = slotOf(locale);
   if (match) {
@@ -359,6 +380,38 @@ export async function editedSharedFields(
     base,
     args.views
   );
+}
+
+/**
+ * When a language last edited each of these shared fields: the version from
+ * which its history has held the pending change's value. A later save of
+ * other fields leaves that version where it was, so two languages' edits of
+ * one field are ordered by the edits themselves, not by whichever language
+ * saved anything last. A field whose value no recorded version holds counts
+ * as edited at the language's newest version.
+ */
+export async function sharedEditOrder(
+  tx: TransactionContext,
+  args: {
+    ref: VersionRef;
+    locale: string | null;
+    fields: readonly string[];
+    pending: Record<string, unknown>;
+  }
+): Promise<Map<string, number>> {
+  const { ref, locale, fields, pending } = args;
+  const order = new Map<string, number>();
+  if (fields.length === 0) return order;
+  const snapshots = await recentVersions(tx, ref, locale);
+  for (const name of fields) {
+    let since = snapshots[0]?.versionNo ?? 0;
+    for (const row of snapshots) {
+      if (!sameValue(row.values[name], pending[name])) break;
+      since = row.versionNo;
+    }
+    order.set(name, since);
+  }
+  return order;
 }
 
 /**
