@@ -28,6 +28,24 @@ const PLUGIN =
 export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   {
     dialect: "mysql",
+    key: "* (opened the transaction) \u00b7 select dynamic_collections",
+    witness: null,
+    reason: REGISTRY,
+  },
+  {
+    dialect: "mysql",
+    key: "* (opened the transaction) \u00b7 select dynamic_singles",
+    witness: null,
+    reason: REGISTRY,
+  },
+  {
+    dialect: "mysql",
+    key: "* (opened the transaction) \u00b7 select nextly_webhooks",
+    witness: null,
+    reason: REGISTRY,
+  },
+  {
+    dialect: "mysql",
     key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select COLUMNS",
     witness:
       "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
@@ -161,13 +179,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dynamic_collections",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
@@ -185,27 +196,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_preview_links",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry (opened the transaction) \u00b7 select dynamic_collections",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry (opened the transaction) \u00b7 select dynamic_singles",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry (opened the transaction) \u00b7 select nextly_webhooks",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
     reason: CALLER,
   },
   {
@@ -300,27 +290,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/singles/services/single-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select dynamic_collections",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/singles/services/single-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select dynamic_singles",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
-    key: "packages/nextly/src/domains/singles/services/single-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select nextly_webhooks",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/users/services/plaintext-password-cleanup.ts#PlainTextPasswordCleanup.clear (opened the transaction) \u00b7 insert users",
     witness:
       "packages/nextly/src/domains/users/__tests__/plaintext-password-cleanup.integration.test.ts",
@@ -339,6 +308,24 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     witness:
       "packages/nextly/src/plugins/__tests__/plugin-db-transaction-dialects.integration.test.ts",
     reason: PLUGIN,
+  },
+  {
+    dialect: "postgresql",
+    key: "* (opened the transaction) \u00b7 select dynamic_collections",
+    witness: null,
+    reason: REGISTRY,
+  },
+  {
+    dialect: "postgresql",
+    key: "* (opened the transaction) \u00b7 select dynamic_singles",
+    witness: null,
+    reason: REGISTRY,
+  },
+  {
+    dialect: "postgresql",
+    key: "* (opened the transaction) \u00b7 select nextly_webhooks",
+    witness: null,
+    reason: REGISTRY,
   },
   {
     dialect: "postgresql",
@@ -405,13 +392,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dynamic_collections",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select email_deliveries",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
@@ -429,27 +409,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_preview_links",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select dynamic_collections",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select dynamic_singles",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select nextly_webhooks",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
     reason: CALLER,
   },
   {
@@ -541,27 +500,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     witness:
       "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
     reason: PIPELINE,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/singles/services/single-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select dynamic_collections",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/singles/services/single-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select dynamic_singles",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "postgresql",
-    key: "packages/nextly/src/domains/singles/services/single-mutation-service.ts#<anonymous> (opened the transaction) \u00b7 select nextly_webhooks",
-    witness:
-      "packages/nextly/src/auth/__tests__/access-every-way-in.postgresql.integration.test.ts",
-    reason: CALLER,
   },
   {
     dialect: "postgresql",
