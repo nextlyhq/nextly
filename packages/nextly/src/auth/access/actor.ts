@@ -17,8 +17,10 @@ import { isCorePrincipal } from "../../plugins/principals/principal";
 import type { Principal } from "../../plugins/principals/types";
 import { SUPER_ADMIN_SLUG } from "../../services/access/super-admin";
 import type { AccessOperation } from "../../services/access/types";
-import type { AccessControlContext } from "../../shared/types/access";
+import type { AccessRuleContext } from "../../shared/types/access";
 import type { GrantedPermission } from "../authenticated-scope";
+
+import { buildRuleContext } from "./rule-context";
 
 /**
  * What a caller asks to do to a collection entry or a Single: the one list of
@@ -191,18 +193,14 @@ export function storedPermissions(actor: Actor): string[] {
   return grantsOf(actor).map(grant => grant.slug);
 }
 
-/** The actor's permissions in the spelling a rule reads, `posts:read`. */
-export function rulePermissions(actor: Actor): string[] {
-  return grantsOf(actor).map(grant => `${grant.resource}:${grant.action}`);
-}
-
 /** Whether the actor holds super-admin authority. Only a user can. */
 export function isSuperAdmin(actor: Actor): boolean {
   return actor.kind === "user" && actor.superAdmin;
 }
 
 /**
- * What a collection or Single rule is handed for this actor.
+ * What a collection or Single rule is handed for this actor, built by the
+ * one rule-context builder every rule is asked through.
  *
  * A key's rule is handed the user who made the key, as it is today. A
  * visitor and a plugin person are handed no user, and only a plugin person is
@@ -210,22 +208,25 @@ export function isSuperAdmin(actor: Actor): boolean {
  * the Public role grants decides whether the visitor holds the permission,
  * but a rule written against an anonymous caller is asked with none, as it
  * always has been, so the same rule answers the same way.
+ *
+ * `rule` is the rule being asked, so a deprecated permission spelling it
+ * checks is warned about once for that rule.
  */
 export function ruleContext(
   actor: Exclude<Actor, SystemActor>,
   operation: AccessAction,
-  slug: string
-): AccessControlContext {
-  const user =
-    actor.kind === "user" || actor.kind === "key" ? { id: actor.userId } : null;
-  const roles =
-    actor.kind === "user" || actor.kind === "key" ? [...actor.roles] : [];
-  return {
-    user,
-    roles,
-    permissions: actor.kind === "visitor" ? [] : rulePermissions(actor),
-    principal: actor.kind === "principal" ? actor.principal : null,
-    operation,
-    collection: slug,
-  };
+  target: { readonly kind: "collection" | "single"; readonly slug: string },
+  rule: object
+): AccessRuleContext {
+  const staff = actor.kind === "user" || actor.kind === "key";
+  return buildRuleContext(
+    rule,
+    {
+      user: staff ? { id: actor.userId } : null,
+      roles: staff ? actor.roles : [],
+      permissions: actor.kind === "visitor" ? [] : grantsOf(actor),
+      principal: actor.kind === "principal" ? actor.principal : null,
+    },
+    { operation, target: { kind: target.kind, slug: target.slug } }
+  );
 }

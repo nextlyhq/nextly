@@ -129,6 +129,7 @@ import {
   type WidgetAudience,
 } from "./domains/widgets/visibility";
 import { NextlyError } from "./errors/nextly-error";
+import { retryAfterHeader } from "./errors/retry-after";
 import {
   currentFlattenedErrors,
   logFlattenedErrors,
@@ -1652,8 +1653,8 @@ async function handleServiceRequest(
   // The key's own scope is pinned for the whole dispatch rather than serialized
   // into route params beside it. The params carry strings, so the scope written
   // there was a lossy copy: it held the stored permission slugs and neither the
-  // caller's roles nor the rows a rule's `resource:action` spelling is derived
-  // from, and every gate underneath that read it judged the key on a scope
+  // caller's roles nor the permission rows a rule's list is built from, and
+  // every gate underneath that read it judged the key on a scope
   // missing most of itself. Pinning hands the same object to all of them, and a
   // field added to the scope later reaches them without a second edit here.
   const result = await runWithCallerScope(
@@ -1730,20 +1731,8 @@ async function handleServiceRequest(
     if (schemaVersion !== undefined) {
       errorHeaders["X-Nextly-Schema-Version"] = String(schemaVersion);
     }
-    if (nextlyErr.code === "RATE_LIMITED") {
-      const data = nextlyErr.publicData;
-      if (
-        data &&
-        typeof data === "object" &&
-        "retryAfterSeconds" in data &&
-        typeof (data as { retryAfterSeconds?: unknown }).retryAfterSeconds ===
-          "number"
-      ) {
-        errorHeaders["retry-after"] = String(
-          (data as { retryAfterSeconds: number }).retryAfterSeconds
-        );
-      }
-    }
+    // Any error carrying a retry hint: RATE_LIMITED, DATABASE_BUSY.
+    Object.assign(errorHeaders, retryAfterHeader(nextlyErr));
     // A REFUSAL from a session-private read must not be cacheable either. The
     // success path already carries these headers, but a shared cache holding
     // the 404 this produces would replay it to a caller the gate WOULD have

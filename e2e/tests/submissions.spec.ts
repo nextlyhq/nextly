@@ -5,8 +5,9 @@
  * the plugin's List-view override, the admin's DataTable, and the plugin's
  * export/permission routes — the seams unit tests mock away.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test.describe.configure({ mode: "serial" });

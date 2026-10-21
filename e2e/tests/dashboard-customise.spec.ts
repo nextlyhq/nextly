@@ -1,6 +1,6 @@
 /**
  * Customise mode in a browser: where focus goes, what the keyboard can reach,
- * what happens on the way out with unsaved changes, and an axe scan.
+ * what happens on the way out with unsaved changes, the add panel, and axe scans.
  *
  * jsdom has no `inert`, no focus navigation and no `beforeunload` prompt, so
  * the component tests can say which attributes and handlers are there but not
@@ -13,8 +13,9 @@
  * @module tests/dashboard-customise.spec
  */
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 
 const CELLS = '[data-testid^="widget-cell-"]';
@@ -154,8 +155,8 @@ test("entering by keyboard lands on the bar, and Tab never reaches a card's own 
   await customize(page);
   await expect(bar(page)).toBeFocused();
 
-  // Tab from the bar through every card, until focus reaches the add picker
-  // below them. Each stop inside a card must be one of its edit controls.
+  // Tab from the bar through every card, until focus leaves the last of them.
+  // Each stop inside a card must be one of its edit controls.
   const stops: Array<{ label: string; inCard: boolean; isControl: boolean }> =
     [];
   for (let i = 0; i < 400; i += 1) {
@@ -170,11 +171,12 @@ test("entering by keyboard lands on the bar, and Tab never reaches a card's own 
         isControl: active.matches(
           '[data-testid="widget-drag-handle"], [aria-label^="Card actions for "]'
         ),
-        pastCards: active.closest('[data-testid="add-widget-picker"]') !== null,
         onBar: active.closest('[data-testid="dashboard-edit-bar"]') !== null,
       };
     });
-    if (!stop || stop.pastCards) break;
+    if (!stop) break;
+    // Out of the cards once inside them: the grid has been passed.
+    if (!stop.inCard && stops.some(seen => seen.inCard)) break;
     // Round the page and back to the bar: every card has been passed.
     if (stop.onBar && stops.some(seen => seen.inCard)) break;
     stops.push(stop);
@@ -293,4 +295,113 @@ for (const theme of ["light", "dark"] as Theme[]) {
     await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
     await expectNoAxeViolations(page);
   });
+}
+
+/** Opens the add panel from the bar, and waits for focus to land in its search. */
+async function openAddPanel(page: Page) {
+  await bar(page).getByRole("button", { name: "Add widget" }).click();
+  const panel = page.getByRole("dialog", { name: "Add widget" });
+  await expect(
+    panel.getByRole("searchbox", { name: "Search widgets" })
+  ).toBeFocused();
+  return panel;
+}
+
+/**
+ * The next control in the panel that puts a card on the dashboard: a new card (Add, Add
+ * another) where one is offered, else a removed card back. Whichever widgets the site offers,
+ * so the visit does not depend on them.
+ */
+function nextAdd(panel: Locator): Locator {
+  const fresh = panel.locator(
+    '[data-testid^="add-panel-add-"]:not([data-testid^="add-panel-add-back-"]):enabled'
+  );
+  const back = panel.locator('[data-testid^="add-panel-add-back-"]');
+  return fresh.or(back).first();
+}
+
+test("the add panel adds three cards in one visit, each said and ringed, and closing lands on the last", async ({
+  page,
+}) => {
+  await gotoAdmin(page, "/");
+  await expect(page.locator(CELLS).first()).toBeVisible();
+  await customize(page);
+  // Three cards out of the draft first, so there is something to put back on any site.
+  for (let i = 0; i < 3; i += 1) {
+    await page
+      .getByRole("button", { name: /^Card actions for / })
+      .first()
+      .click();
+    await page.getByRole("menuitem", { name: "Remove" }).click();
+  }
+  const before = await page.locator(CELLS).count();
+
+  const panel = await openAddPanel(page);
+  for (let added = 1; added <= 3; added += 1) {
+    await nextAdd(panel).click();
+    await expect(page.locator(CELLS)).toHaveCount(before + added);
+    await expect(panel.getByTestId("add-panel-live")).toHaveText(
+      new RegExp(`^Added (back )?.+ at position \\d+ of ${before + added}\\.$`)
+    );
+    // Still open, and focus still inside it.
+    await expect(panel).toBeVisible();
+    expect(
+      await panel.evaluate(node => node.contains(document.activeElement))
+    ).toBe(true);
+    await expect(page.locator(`${CELLS}[data-highlighted]`)).toHaveCount(1);
+  }
+
+  await page.keyboard.press("Escape");
+  await expect(panel).toBeHidden();
+  const ringed = page.locator(`${CELLS}[data-highlighted]`);
+  await expect(ringed).toBeInViewport();
+  await expect(
+    ringed.getByRole("button", { name: /^Card actions for / })
+  ).toBeFocused();
+});
+
+for (const theme of ["light", "dark"] as Theme[]) {
+  for (const viewport of [
+    { name: "1440", width: 1440, height: 900 },
+    { name: "phone 390", width: 390, height: 844 },
+  ]) {
+    test(`the add panel passes axe at ${viewport.name} (${theme}), every control at least 24px`, async ({
+      page,
+    }) => {
+      // Customise mode is entered where it is offered, then the window narrowed: a mode that
+      // is open stays open at every width, and the panel is what is measured at this one.
+      await gotoAdmin(page, "/", theme);
+      await expect(page.locator(CELLS).first()).toBeVisible();
+      await customize(page);
+      await page.setViewportSize(viewport);
+      // One card removed, so the Removed group and its Add back are scanned too.
+      await page
+        .getByRole("button", { name: /^Card actions for / })
+        .first()
+        .click();
+      await page.getByRole("menuitem", { name: "Remove" }).click();
+      const panel = await openAddPanel(page);
+      if (viewport.width < 640) {
+        // Full width on a phone.
+        expect((await panel.boundingBox())?.width).toBe(viewport.width);
+      }
+
+      await expectNoAxeViolations(page);
+
+      // WCAG 2.5.8's minimum, measured on every control the panel draws.
+      const small = await panel
+        .locator("button:visible, input:visible")
+        .evaluateAll(controls =>
+          controls.flatMap(control => {
+            const box = control.getBoundingClientRect();
+            return box.width < 24 || box.height < 24
+              ? [
+                  `${control.getAttribute("aria-label") ?? control.textContent?.trim()}: ${box.width}x${box.height}`,
+                ]
+              : [];
+          })
+        );
+      expect(small).toEqual([]);
+    });
+  }
 }

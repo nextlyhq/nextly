@@ -10,6 +10,8 @@ const service = {
 };
 const auth = { userId: "u1", userName: "Ada", userEmail: "ada@example.com" };
 const requireAuthentication = vi.fn();
+// The route gate's update decision, the one a REST update of the document asks.
+const authorizeCaller = vi.fn();
 
 vi.mock("../../init", () => ({
   getCachedNextly: vi.fn().mockResolvedValue({}),
@@ -17,6 +19,7 @@ vi.mock("../../init", () => ({
 vi.mock("../../di/container", () => ({ container: { get: () => service } }));
 vi.mock("../../auth/middleware", () => ({
   requireAuthentication: (req: Request) => requireAuthentication(req),
+  authorizeCaller: (...args: unknown[]) => authorizeCaller(...args) as unknown,
   // The real predicate, not a stand-in. It keys on `statusCode`, and a mock
   // recognising a `Response` instead sends the fixture down the wrong branch:
   // `toNextlyAuthError` sees no status, produces a 500, and a loose `>= 400`
@@ -27,6 +30,7 @@ vi.mock("../../auth/middleware", () => ({
 
 // Every operation is authorized against the document it names.
 const canReadEntity = vi.fn();
+// The grant alone, which a release still asks.
 const callerHoldsPermission = vi.fn();
 vi.mock("../../auth/entity-read-access", () => ({
   readAccessCaller: (caller: { user: unknown }) => caller.user,
@@ -68,6 +72,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   requireAuthentication.mockResolvedValue(auth);
   canReadEntity.mockResolvedValue(true);
+  authorizeCaller.mockImplementation((caller: unknown) =>
+    Promise.resolve(caller)
+  );
   callerHoldsPermission.mockResolvedValue(true);
   assertDocumentUpdatable.mockResolvedValue(undefined);
 });
@@ -247,6 +254,7 @@ describe("document lock route", () => {
     // A lock is a statement that you are editing. Someone who may read a
     // document but not change it is not editing it, and must not be able to
     // displace a colleague with `takeover`.
+    authorizeCaller.mockResolvedValue({ statusCode: 403 });
     callerHoldsPermission.mockResolvedValue(false);
 
     for (const call of [
@@ -261,6 +269,24 @@ describe("document lock route", () => {
     expect(service.release).not.toHaveBeenCalled();
   });
 
+  it("lets a holder release on the grant alone, whatever the update rule now says", async () => {
+    // The claim token fences a release, and a rule that changed while the
+    // claim was held must not strand it until its lease lapses.
+    authorizeCaller.mockResolvedValue({ statusCode: 403 });
+    service.release.mockResolvedValue(undefined);
+
+    const response = await releaseLock(
+      post({ ...ref, claimToken: "t" }, "DELETE")
+    );
+
+    expect(response.status).toBe(200);
+    expect(authorizeCaller).not.toHaveBeenCalled();
+    expect(callerHoldsPermission).toHaveBeenCalledWith(
+      "update-posts",
+      expect.anything()
+    );
+  });
+
   it("asks about the document it was given, not a fixed one", async () => {
     // A gate that always asked about the same slug would pass every case above
     // while authorizing the wrong thing.
@@ -268,10 +294,7 @@ describe("document lock route", () => {
 
     await acquireLock(post({ ...ref, slug: "invoices" }));
 
-    expect(callerHoldsPermission).toHaveBeenCalledWith(
-      "update-invoices",
-      expect.anything()
-    );
+    expect(authorizeCaller).toHaveBeenCalledWith(auth, "update", "invoices");
   });
 
   it("keeps a lock read out of every cache", async () => {

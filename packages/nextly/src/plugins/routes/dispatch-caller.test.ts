@@ -177,7 +177,16 @@ beforeEach(() => {
   getRegisteredAccess.mockReturnValue(undefined);
   container.register(
     "rbacAccessControlService",
-    () => ({ checkAccess, getRegisteredAccess }) as never
+    () =>
+      ({
+        checkAccess,
+        getRegisteredAccess,
+        // Derived from `getRegisteredAccess`, as the service derives it.
+        getRegisteredTarget: (slug: string) => {
+          const access: unknown = getRegisteredAccess();
+          return access ? { kind: "collection", slug, access } : undefined;
+        },
+      }) as never
   );
 });
 

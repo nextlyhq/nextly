@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (5ab82763b39bba22). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (f4c09382b402c1e5). Edit that file, never this one. -->
 
 # packages/admin: Agent Guide
 
@@ -82,3 +82,13 @@ Flag a change that pulls `@tanstack/react-query`, or another dependency listed
 as external in `tsup.config.ts`, back into the bundle. The consumer resolves
 these from their own `node_modules`, and bundling one produces two copies with
 separate state.
+
+## Measuring the bundle
+
+`pnpm --filter @nextlyhq/admin report:bundle` builds nothing and measures
+`dist` as it stands: every emitted chunk, classified by what `index.mjs`
+loads eagerly, what its lazy routes fetch on a direct visit, what the other
+published entrypoints ship, what nothing can load, and the CLI tools.
+`--json` and `--dist <dir>` are available. The real-dist test suite runs the
+same measurement; its `ensure-dist` prerequisite builds the package when the
+dist is missing.

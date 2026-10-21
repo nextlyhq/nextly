@@ -64,18 +64,20 @@ plugin `ctx` (services/db/events/logger/self/…) **plus** per-request fields:
 | `ctx.authenticatedScope` | The caller's own grants when they arrived on an API key; `undefined` for a session or a `public` route. |
 | `ctx.principal` | `@experimental` The signed-in person of the kind the route asks for in `principal`, or `null`. See [Signed-in people of your own kind](/docs/plugins/signed-in-people). |
 
-### The two spellings of a permission
+### How a permission is spelled
 
-A permission is written two ways, and both are correct:
+A permission is spelled one way everywhere: `read-posts`. The database, the
+admin's permission matrix, `requiredPermission` on a route,
+`ctx.authenticatedScope.permissions` and every code-defined `access` rule all
+use it.
 
-| Spelling | Where it is used |
-|---|---|
-| `read-posts` | The stored slug — the database, the admin's permission matrix, and `requiredPermission` on a route. |
-| `posts:read` | What a code-defined `access` rule receives, on a collection, a Single or a field. |
+Rules were once handed `posts:read` instead. For one release a rule's list
+still carries that spelling too, after the other, and Nextly warns once per
+rule that checks it; it stops being accepted in a later release.
 
-`ctx.authenticatedScope.permissions` gives you the first. Both are derived from
+`ctx.authenticatedScope.permissions` is derived from
 `ctx.authenticatedScope.grants`, the permission rows the key resolved to, so
-they can never name different sets.
+the two can never name different sets.
 
 ### Narrowing the scope before a sensitive call
 

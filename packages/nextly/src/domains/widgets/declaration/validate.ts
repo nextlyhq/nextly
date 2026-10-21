@@ -59,8 +59,8 @@ const MAX_DESCRIPTION = 80;
 
 /**
  * A permission as core stores and seeds it, `action-resource` (`read-orders`).
- * A widget names the stored form; the rule-facing `resource:action` spelling is
- * for code-defined access rules, and a sentence names no permission at all.
+ * A widget names the stored form, the one spelling a permission has, and a
+ * sentence names no permission at all.
  */
 const PERMISSION_NAME = /^[a-z][a-z0-9_]*-[a-z0-9][a-z0-9_-]*$/;
 

@@ -19,6 +19,7 @@ import { NextlyError } from "../../errors/nextly-error";
 import { toCamelCase, toSnakeCase } from "./case-conversion";
 import {
   callerAccessGrants,
+  fieldRuleTarget,
   getFieldFunctions,
   readableWithoutEntry,
   type FieldFunctions,
@@ -161,6 +162,7 @@ async function unreadableFields(
   const ruleCaller = {
     user: caller.user,
     grants: callerAccessGrants(caller.user, caller.authenticatedScope),
+    target: fieldRuleTarget(kind, slug),
   };
   const denied: string[] = [];
   for (const name of new Set(names)) {

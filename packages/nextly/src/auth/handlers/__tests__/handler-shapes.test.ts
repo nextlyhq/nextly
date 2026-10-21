@@ -980,7 +980,12 @@ describe("setup handler: respondAction shape", () => {
     };
     const req = makeRequest("POST", {
       email: "a@example.com",
-      password: "weak",
+      // 130 characters breaks two rules at once — the 128-character ceiling
+      // and the digester's 72-byte reach — so a single-reason envelope would
+      // still be hiding half the answer. Nothing shorter can multi-offend:
+      // a below-minimum password trips only the length rule, and the common
+      // list holds nothing under 8 characters.
+      password: "a".repeat(130),
       name: "A",
     });
     const res = await handleSetup(req, deps);
@@ -995,13 +1000,14 @@ describe("setup handler: respondAction shape", () => {
       };
     };
     const errors = body.error.data?.errors ?? [];
-    // "weak" breaks four rules at once, so a single-reason envelope would
-    // still be hiding most of the answer.
     expect(errors.length).toBeGreaterThan(1);
     expect(errors.every(e => e.path === "password")).toBe(true);
     expect(errors.every(e => e.code === "WEAK_PASSWORD")).toBe(true);
     expect(errors.map(e => e.message)).toContain(
-      "Password must contain at least one uppercase letter"
+      "Password must be at most 128 characters"
+    );
+    expect(errors.map(e => e.message)).toContain(
+      "Password exceeds the 72-byte limit of the password digester."
     );
     // The old shape put them here, where no client would ever find them.
     expect(body.error).not.toHaveProperty("details");

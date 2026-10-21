@@ -47,6 +47,8 @@ export interface ArrangedGridProps {
   placements: readonly WidgetPlacement[];
   isDrawn: IsDrawn;
   isEditing: boolean;
+  /** The card the add panel just added, ringed until the next add. */
+  highlightedId?: string | null;
   /** Whether a layout write is in flight anywhere on this dashboard. */
   isWriting: boolean;
   /** Why a single-card write is unavailable right now, when it is. */
@@ -93,7 +95,7 @@ function EmptyArrangement({
       className="col-span-full rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
     >
       {isEditing ? (
-        "Every card is removed. Add one back below, or reset to the default dashboard."
+        "Every card is removed. Put one back from Add widget, or reset to the default dashboard."
       ) : (
         <>
           Your dashboard has no cards on it.{" "}
@@ -117,6 +119,7 @@ export function ArrangedGrid({
   placements,
   isDrawn,
   isEditing,
+  highlightedId = null,
   isWriting,
   singleCardWriteBlocked,
   slots,
@@ -166,6 +169,7 @@ export function ArrangedGrid({
               key={row.placementId}
               row={row}
               isEditing={isEditing}
+              highlighted={highlightedId === row.placementId}
               isWriting={isWriting}
               singleCardWriteBlocked={singleCardWriteBlocked}
               // The same rule the move applies, so an item is enabled exactly
