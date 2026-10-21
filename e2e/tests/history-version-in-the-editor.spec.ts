@@ -10,8 +10,9 @@
  * The document and its second version are written through the API, so what
  * the test watches is history, not the editor's create flow.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const ENTRIES = "/admin/api/collections/history-notes/entries";
@@ -42,7 +43,7 @@ async function noteWithTwoVersions(page: Page): Promise<string> {
 /** Open History and choose the newest version, the one with changes. */
 async function showNewestVersion(page: Page, id: string): Promise<void> {
   await gotoAdmin(page, `/collections/history-notes/${id}?history=1`);
-  const rows = page.getByRole("button", { name: /^Version \d+/ });
+  const rows = page.getByRole("button", { name: /Version \d+/ });
   await expect(rows.first()).toBeVisible({ timeout: 30_000 });
   await rows.first().click();
   await expect(page.getByRole("region", { name: "Comparison" })).toBeVisible({

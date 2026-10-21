@@ -102,6 +102,10 @@ function service(over: {
     ),
     canActOnDocument: vi.fn(async () => over.mayActOnDocument !== false),
     runDrainNow: vi.fn(async () => undefined),
+    // Every reader may read every member: these tests are not about which
+    // documents a reader sees.
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
     checks,
   };
   return { svc: new ReleasesService(deps), repo, deps, checks };
@@ -310,7 +314,9 @@ describe("switching a document's action", () => {
     expect(repo.changeMemberAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: "m1" }),
       "unpublish",
-      [...RELEASE_ASSEMBLABLE_FROM, ...RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM]
+      [...RELEASE_ASSEMBLABLE_FROM, ...RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM],
+      // Who switched it, for the release's history.
+      expect.objectContaining({ kind: "person" })
     );
   });
 
@@ -385,7 +391,8 @@ describe("switching a document's action", () => {
     expect(repo.changeMemberAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: "m1" }),
       "publish",
-      expect.any(Array)
+      expect.any(Array),
+      expect.objectContaining({ kind: "person" })
     );
   });
 });

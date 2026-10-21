@@ -12,7 +12,6 @@
  * @module components/features/widgets/edit/useDashboardArrangement
  */
 
-import type { Announcements, DragEndEvent } from "@dnd-kit/core";
 import { useCallback, useMemo } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
@@ -23,21 +22,16 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import {
-  positionInList,
-  sortableAnnouncements,
-  useSortableSensors,
-  type AnnouncedItem,
-} from "../../entries/fields/structured/field-array-helpers";
-import {
   drawnPosition,
   movePlacement,
-  movePlacementTo,
+  movePlacementToPosition,
   type IsDrawn,
   type MoveDirection,
 } from "../layout-editor";
 import { WIDTH_NAMES, widthFromDeclaredSize } from "../sizes";
 
 import type { ArrangementAnnouncer } from "./useArrangementAnnouncer";
+import { useCardHighlight, type CardHighlight } from "./useCardHighlight";
 import type { DashboardFocus } from "./useDashboardFocus";
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
 import type { SaveOptions, SaveOutcome } from "./useLayoutLifecycle";
@@ -91,16 +85,18 @@ export interface DashboardArrangement {
    * because the cached arrangement is drawn while it is read again.
    */
   awaitingArrangement: boolean;
-  sensors: ReturnType<typeof useSortableSensors>;
-  handleDragEnd: (event: DragEndEvent) => void;
   /**
-   * What a screen reader hears while a card is being dragged: pick-up, hover
-   * and cancel, by title and position. The LANDING is spoken by the grid's own
-   * region, in the same sentence a menu move uses, so it is not read twice.
+   * The one card ringed for having just been placed: moved, resized, added or put back. Each
+   * of those gestures moves the ring to its card.
    */
-  announcements: Announcements;
+  ring: CardHighlight;
   /** Move one card from its menu, saying where it went. */
   moveCard: (placementId: string, direction: MoveDirection) => void;
+  /**
+   * Put a dragged card down at `final` among the drawn cards, saying where it went, with focus
+   * back on its handle. The menu's sentence, so a drag and a menu move are heard alike.
+   */
+  dropCard: (placementId: string, final: number) => void;
   /** Set one card's width from its menu, saying so. */
   setCardWidth: (placementId: string, width: WidgetWidth) => void;
   /** Put the default dashboard in the draft, saying nothing is saved yet. */
@@ -225,6 +221,7 @@ export function useDashboardArrangement(
   );
 
   const editor = useLayoutEditor(layout, isDrawn);
+  const ring = useCardHighlight(editor.isEditing);
   const hasArrangement = layout.layout !== undefined;
   const awaitingArrangement = !hasArrangement && !layout.isUnavailable;
 
@@ -275,20 +272,37 @@ export function useDashboardArrangement(
         movePlacement(editor.placements, placementId, direction, isDrawn)
       );
       editor.move(placementId, direction);
+      ring.highlight(placementId);
       // Back to THIS card's menu, which is now somewhere else on the page: the
       // reader who moved it can move it again without hunting for it.
       focus.request({ kind: "menu", placementId });
     },
-    [announceMove, editor, isDrawn, focus]
+    [announceMove, editor, isDrawn, focus, ring]
+  );
+
+  const dropCard = useCallback(
+    (placementId: string, final: number) => {
+      announceMove(
+        placementId,
+        movePlacementToPosition(editor.placements, placementId, final, isDrawn)
+      );
+      editor.moveTo(placementId, final);
+      ring.highlight(placementId);
+      // Back to the handle it was dragged by: the card moved in the page, and React moving a
+      // focused element takes the focus with nowhere to go.
+      focus.request({ kind: "handle", placementId });
+    },
+    [announceMove, editor, isDrawn, focus, ring]
   );
 
   const setCardWidth = useCallback(
     (placementId: string, width: WidgetWidth) => {
       const title = titleOf(placementId);
       editor.setWidth(placementId, width);
+      ring.highlight(placementId);
       if (title !== undefined) announce.width(title, WIDTH_NAMES[width].name);
     },
-    [titleOf, editor, announce]
+    [titleOf, editor, announce, ring]
   );
 
   const stageReset = useCallback(() => {
@@ -302,51 +316,15 @@ export function useDashboardArrangement(
     focus
   );
 
-  // The sensors alone are shared with every other sortable surface.
-  const sensors = useSortableSensors();
-
-  const rowIds = useMemo(() => visible.map(row => row.placementId), [visible]);
-
-  const announcements = useMemo<Announcements>(
-    () => ({
-      ...sortableAnnouncements({
-        describe: (item: AnnouncedItem) => titleOf(String(item.id)),
-        place: (item: AnnouncedItem) => positionInList(rowIds, String(item.id)),
-      }),
-      // The landing is spoken by `handleDragEnd` below, through the grid's own
-      // live region and in the menu's sentence. Spoken here as well, a
-      // keyboard drop would be read twice in two wordings.
-      onDragEnd: () => undefined,
-    }),
-    [titleOf, rowIds]
-  );
-
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const activeId = String(event.active.id);
-      if (!event.over) return;
-      const overId = String(event.over.id);
-      // Released where it was picked up: nothing moved, and nothing is said.
-      if (overId === activeId) return;
-      announceMove(
-        activeId,
-        movePlacementTo(editor.placements, activeId, overId)
-      );
-      editor.moveTo(activeId, overId);
-    },
-    [announceMove, editor]
-  );
-
   return {
     visible,
     editor,
     isDrawn,
     hasArrangement,
     awaitingArrangement,
-    sensors,
-    announcements,
-    handleDragEnd,
+    ring,
     moveCard,
+    dropCard,
     setCardWidth,
     stageReset,
     begin,

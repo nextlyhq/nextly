@@ -481,9 +481,28 @@ export class NextlyError extends Error {
    * services unconverted to the boundary that answers the request.
    */
   static fromUnexpected(error: unknown): NextlyError {
-    const cause = error instanceof Error ? error : undefined;
-    if (isDatabaseBusy(error)) return NextlyError.databaseBusy({ cause });
-    return NextlyError.internal({ cause });
+    return NextlyError.busyOr(error, () =>
+      NextlyError.internal({
+        cause: error instanceof Error ? error : undefined,
+      })
+    );
+  }
+
+  /**
+   * "Database busy" when `error` is a request that waited out its bound for
+   * a connection, and `otherwise()` for anything else.
+   *
+   * For a boundary that answers an unexpected failure with an error of its
+   * own choosing rather than an internal one (a 503 for a flow that must not
+   * answer on incomplete data), so that a busy database still answers there
+   * as it does everywhere else. `fromUnexpected` is this rule with the
+   * internal error as its fallback.
+   */
+  static busyOr(error: unknown, otherwise: () => NextlyError): NextlyError {
+    if (!isDatabaseBusy(error)) return otherwise();
+    return NextlyError.databaseBusy({
+      cause: error instanceof Error ? error : undefined,
+    });
   }
 
   static internal(opts?: {

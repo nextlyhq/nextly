@@ -116,6 +116,10 @@ function refKindOf(type: string): ReferenceKind | null {
  * declaring `access.read` is skipped at ANY depth — a protected relationship or
  * upload sitting under a group or repeater within a component must not be
  * hydrated into a readable label either.
+ *
+ * `includeReadRuleFields` turns that skip off, for a caller that finds the
+ * references without showing them and judges each field's read rule itself.
+ * Off by default, so the preview's walk is unchanged.
  */
 function walk(
   value: unknown,
@@ -125,7 +129,8 @@ function walk(
     holder: Record<string, unknown>,
     name: string
   ) => void,
-  inComponent = false
+  inComponent = false,
+  options: { includeReadRuleFields?: boolean } = {}
 ): void {
   if (!isPlainObject(value)) return;
 
@@ -134,14 +139,22 @@ function walk(
 
     // Inside a component, a field the caller may not read was not stripped by
     // redaction, so it is skipped here rather than resolved to a label.
-    if (inComponent && hasReadAccessRule(field)) continue;
+    if (
+      inComponent &&
+      options.includeReadRuleFields !== true &&
+      hasReadAccessRule(field)
+    ) {
+      continue;
+    }
 
     // A nameless presentational group stores its children on THIS object, so
     // recurse its fields against the same holder rather than skipping it.
     if (typeof name !== "string" || name.length === 0) {
       if (field.type === "group") {
         const inline = childFieldsOf(field);
-        if (inline.length > 0) walk(value, inline, visit, inComponent);
+        if (inline.length > 0) {
+          walk(value, inline, visit, inComponent, options);
+        }
       }
       continue;
     }
@@ -164,7 +177,13 @@ function walk(
     if (isFieldGroupFieldType(field.type)) {
       const instances = Array.isArray(raw) ? raw : [raw];
       for (const instance of instances) {
-        walk(instance, componentChildFieldsFor(field, instance), visit, true);
+        walk(
+          instance,
+          componentChildFieldsFor(field, instance),
+          visit,
+          true,
+          options
+        );
       }
       continue;
     }
@@ -172,9 +191,9 @@ function walk(
     const children = childFieldsOf(field);
     if (children.length === 0) continue;
     if (Array.isArray(raw)) {
-      for (const row of raw) walk(row, children, visit, inComponent);
+      for (const row of raw) walk(row, children, visit, inComponent, options);
     } else {
-      walk(raw, children, visit, inComponent);
+      walk(raw, children, visit, inComponent, options);
     }
   }
 }
@@ -263,3 +282,11 @@ export async function hydrateSnapshotReferences(
         : current;
   });
 }
+
+/**
+ * The walk above, for other callers: every relationship and upload leaf in a
+ * value, components and dynamic zones included, against enriched fields.
+ *
+ * @experimental
+ */
+export { walk as walkReferenceFields };

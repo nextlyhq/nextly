@@ -895,6 +895,61 @@ describe("useWidgetQueries, grouped results", () => {
     });
   });
 
+  it("carries a grouped answer's floor through to the slot, and only a boolean one", async () => {
+    // The decoder rebuilds each result from the fields it knows. A floor it did
+    // not carry would be dropped, and every bucket's short count would reach
+    // the chart as a whole one. Answered by source rather than by position, so
+    // the batch's own ordering cannot decide which slot gets which answer.
+    vi.mocked(protectedApi.post).mockImplementation(async (_path, body) => ({
+      results: (body as { queries: Array<{ source: string }> }).queries.map(
+        query => ({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "published", count: 4 }],
+            atLeast: query.source === "collection:posts" ? true : "true",
+          },
+        })
+      ),
+    }));
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "p1",
+            cellKey: "bounded",
+            query: groupQuery("collection:posts"),
+          },
+          {
+            placementId: "p2",
+            cellKey: "garbled",
+            query: groupQuery("collection:pages"),
+          },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() => {
+      expect(result.current.cellSlots.p1?.bounded).toBeDefined();
+      expect(result.current.cellSlots.p2?.garbled).toBeDefined();
+    });
+
+    expect(result.current.cellSlots.p1?.bounded).toEqual({
+      ok: true,
+      result: {
+        op: "groupBy",
+        buckets: [{ value: "published", count: 4 }],
+        atLeast: true,
+      },
+    });
+    // A string is not a claim the contract makes, so it is not carried.
+    expect(result.current.cellSlots.p2?.garbled).toEqual({
+      ok: true,
+      result: { op: "groupBy", buckets: [{ value: "published", count: 4 }] },
+    });
+  });
+
   it("refuses a bucket whose count is not a finite number", async () => {
     // `1e400` is valid JSON and parses to `Infinity`, which would draw as a bar
     // dwarfing every real bucket rather than as a card admitting it cannot

@@ -71,6 +71,14 @@ export interface ActivityLogEntry {
   collection: string;
   entryId: string | null;
   entryTitle: string | null;
+  /**
+   * What the row is about, as it was recorded: a collection's entry, a
+   * Single, or an install-level settings change. NULL on a row written before
+   * the kind was recorded, which is a collection's or a settings change's.
+   * Lets a reader head a Single's row by its label rather than read
+   * `collection` as a collection's slug.
+   */
+  subjectKind?: ActivitySubjectKind | null;
   metadata: Record<string, unknown> | null;
   createdAt: string;
   /**
@@ -171,6 +179,58 @@ export interface ActivityLogQueryOptions {
    * makes those different sets.
    */
   caller?: ReadCaller;
+  /**
+   * The Singles as the registry holds them now, for the rows that are a
+   * Single's. Omitted, or from a registry read that did not complete, no
+   * Single's row is returned: which Singles are kept off the dashboard is then
+   * unknown, and showing every Single's row would show the hidden ones too.
+   */
+  singles?: ActivitySingles;
+}
+
+/**
+ * The Singles one registry read found: each one's label, and which are kept
+ * off the dashboard. `complete` is false when the read did not finish, and the
+ * two sets then describe nothing.
+ */
+export interface ActivitySingles {
+  labels: ReadonlyMap<string, string>;
+  keptOff: ReadonlySet<string>;
+  complete: boolean;
+}
+
+/**
+ * The condition that leaves the rows of Singles kept off the dashboard out of
+ * the feed, by the row's stated kind.
+ *
+ * Written as three alternatives so a row that states no kind, from before the
+ * kind was recorded, always passes: that row is a collection's or a settings
+ * change's, and a bare `NOT (kind = 'single' AND ...)` evaluates to unknown on
+ * its NULL and would drop it. With no complete read of the Singles, only the
+ * first two remain, so every Single's row is left out rather than a hidden
+ * one shown.
+ */
+function singlesKeptOffClause(
+  singles: ActivitySingles | undefined
+): WhereClause | undefined {
+  const complete = singles?.complete === true;
+  // Nothing to leave out: no clause, rather than one every row satisfies.
+  if (complete && singles.keptOff.size === 0) return undefined;
+  return {
+    or: [
+      { column: "subjectKind", op: "IS NULL" },
+      { column: "subjectKind", op: "!=", value: "single" },
+      ...(complete
+        ? [
+            {
+              column: "collection",
+              op: "NOT IN" as const,
+              value: [...singles.keptOff],
+            },
+          ]
+        : []),
+    ],
+  };
 }
 
 const TABLE = "activity_log";
@@ -207,6 +267,23 @@ function statedKindOf(
   return stated === "collection" || stated === "single" || stated === "settings"
     ? stated
     : undefined;
+}
+
+/**
+ * The heading a row is shown under. A Single's row takes the Single's label as
+ * the registry holds it now, so a renamed Single's rows read as it does today,
+ * and falls back to the label stored with the row. Every other row keeps the
+ * title it was recorded with: a deleted entry's title can be recovered nowhere
+ * else.
+ */
+function headingOf(
+  row: Record<string, unknown>,
+  singleLabels: ReadonlyMap<string, string> | undefined
+): string | null {
+  const stored = toNullableString(row.entryTitle);
+  if (statedKindOf(row) !== "single") return stored;
+  const slug = stringOr(row.collection);
+  return (slug === undefined ? undefined : singleLabels?.get(slug)) ?? stored;
 }
 
 /** True when `slug` names one of the install-level settings namespaces. */
@@ -249,6 +326,13 @@ function documentSubject(
  * return a real document's row unauthorized, so it is dropped. Rows written from
  * here on state their kind and are never ambiguous; what is lost is legacy
  * settings detail, on colliding installations only.
+ *
+ * A row from before the column is a COLLECTION's or a settings change's, never
+ * a Single's: Singles were not recorded until every row they write stated its
+ * kind. So a legacy row under a slug the registry now holds as a Single is a
+ * collection row whose slug a Single has since taken, and it is dropped rather
+ * than shown as that Single's. The kept-off filters read such a row as a
+ * collection's too, so the two never disagree about what it is.
  */
 function legacySubject(
   row: Record<string, unknown>,
@@ -260,7 +344,7 @@ function legacySubject(
   if (isSettingsNamespace(slug)) {
     return registered ? { kind: "undecidable" } : { kind: "install-level" };
   }
-  if (!registered) return { kind: "undecidable" };
+  if (registered !== "collection") return { kind: "undecidable" };
   return documentSubject(registered, slug, entryId, row);
 }
 
@@ -279,6 +363,12 @@ function subjectOf(
   const slug = stringOr(row.collection);
   const entryId = stringOr(row.entryId);
   const stated = statedKindOf(row);
+
+  // A Single's row with no document id names a document no read check can be
+  // asked about, and a Single's row is shown only once one has answered. Every
+  // Single row is written with its live id, so this drops only a row that was
+  // not, rather than showing it to everyone as an install-level event.
+  if (stated === "single" && !entryId) return { kind: "undecidable" };
 
   // No entry id, or a row that says it is a settings change: an install-level
   // event with no document to authorize.
@@ -693,16 +783,16 @@ export class ActivityLogService extends BaseService {
         });
       }
 
-      const where =
-        filters.length > 0
-          ? {
-              and: filters.map(f => ({
-                column: f.property,
-                op: f.op,
-                value: f.value,
-              })),
-            }
-          : undefined;
+      const singlesClause = singlesKeptOffClause(options?.singles);
+      const conditions: NonNullable<WhereClause["and"]> = [
+        ...filters.map(f => ({
+          column: f.property,
+          op: f.op,
+          value: f.value,
+        })),
+        ...(singlesClause === undefined ? [] : [singlesClause]),
+      ];
+      const where = conditions.length > 0 ? { and: conditions } : undefined;
 
       // One past the page, so `hasMore` is an observation rather than a guess:
       // the extra row is fetched, AUTHORIZED, and then dropped. Counting
@@ -715,7 +805,9 @@ export class ActivityLogService extends BaseService {
         caller
       );
       return {
-        activities: visible.rows.slice(0, limit).map(this.mapRow),
+        activities: visible.rows
+          .slice(0, limit)
+          .map(row => this.mapRow(row, options?.singles?.labels)),
         // 🔴 `end` as well as the count, because a page can come back short for
         // two opposite reasons. The extra row is the ordinary signal; a refill
         // that stopped at its round limit found fewer than that and has said
@@ -1006,7 +1098,11 @@ export class ActivityLogService extends BaseService {
     return value === "apiKey" || value === "system" ? value : "user";
   }
 
-  private mapRow = (row: Record<string, unknown>): ActivityLogEntry => {
+  private mapRow = (
+    row: Record<string, unknown>,
+    /** The Singles' labels now, which head a Single's row over the stored one. */
+    singleLabels?: ReadonlyMap<string, string>
+  ): ActivityLogEntry => {
     let metadata: Record<string, unknown> | null = null;
     if (row.metadata) {
       try {
@@ -1045,7 +1141,8 @@ export class ActivityLogService extends BaseService {
       // Type-narrow before stringification so we don't fall through to
       // Object#toString for non-primitive driver values.
       entryId: toNullableString(row.entryId),
-      entryTitle: toNullableString(row.entryTitle),
+      entryTitle: headingOf(row, singleLabels),
+      subjectKind: statedKindOf(row) ?? null,
       metadata,
       createdAt:
         createdAt instanceof Date ? createdAt.toISOString() : String(createdAt),

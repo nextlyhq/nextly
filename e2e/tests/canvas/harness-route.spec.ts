@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "../support/test";
 
 /**
  * The canvas harness route is real, and the canvas on it is live.

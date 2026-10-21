@@ -874,6 +874,7 @@ export class VersionsRepository {
       includeAutosave?: boolean;
       cursor?: number;
       locale?: string;
+      locales?: readonly string[];
     } = {}
   ): Promise<VersionMeta[]> {
     const and: (VersionsWhereCondition | VersionsWhere)[] = [
@@ -909,6 +910,21 @@ export class VersionsRepository {
           { column: "locale", op: "IS NULL" },
         ],
       });
+    }
+    // Only the languages a caller may read, in the database so a page stays
+    // full. A version in no language belongs to the whole document, whose read
+    // the caller has passed, so it stays.
+    if (opts.locales !== undefined) {
+      and.push(
+        opts.locales.length === 0
+          ? { column: "locale", op: "IS NULL" }
+          : {
+              or: [
+                { column: "locale", op: "IN", value: [...opts.locales] },
+                { column: "locale", op: "IS NULL" },
+              ],
+            }
+      );
     }
     // Keyset pagination: return versions strictly older than the cursor, which
     // is the last versionNo the caller already has. Stable under concurrent

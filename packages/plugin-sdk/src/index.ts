@@ -734,8 +734,11 @@ export type {
  * Type a contributed resolver as `PluginSourceResolver`, not
  * `WidgetSourceResolver`: the latter is core's own shape and rejects the
  * `PluginContext` parameter a plugin needs to read any data. `ResolverOptions`
- * is what the host passes beside the question -- a cancellation signal today --
- * and is published so a standalone resolver can annotate that parameter.
+ * is what the host passes beside the question -- a cancellation signal, and the
+ * batch's shared work as a `WidgetScope` -- and is published so a standalone
+ * resolver can annotate that parameter. `PluginManySourceResolver` types the
+ * optional `resolveMany`, which answers several of a source's queries in one
+ * call; it and `WidgetScope` are `@experimental`.
  *
  * `callerReadOptions(caller)` turns the caller a resolver is handed into the
  * `ServiceOpts` a managed read takes. Use it rather than assembling them: the
@@ -779,7 +782,9 @@ export {
   callerReadOptions,
   type WidgetSourceResolver,
   type PluginSourceResolver,
+  type PluginManySourceResolver,
   type ResolverOptions,
+  type WidgetScope,
   type PluginWidgetSource,
   type ReadCaller,
 } from "nextly";

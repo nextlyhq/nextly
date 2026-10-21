@@ -160,7 +160,7 @@ describe("the bars archetype", () => {
         { value: "Draft", count: 57 },
       ])
     );
-    const graphic = screen.getByRole("img");
+    const graphic = screen.getByRole("group", { name: /Use the arrow keys/ });
     expect(graphic).toHaveAccessibleName(/Entries by status/);
     expect(graphic).toHaveAccessibleDescription(/Most: Published, 128/);
   });
@@ -186,6 +186,16 @@ describe("the bars archetype", () => {
     expect(
       screen.getByText("More groups exist than are shown.")
     ).toBeInTheDocument();
+  });
+
+  it("says only part was checked when an empty answer is a floor, not that nothing matched", () => {
+    // A source that stops at a work bound can find no group in what it read
+    // while the rest still holds some: an empty floor is not an empty answer.
+    draw({ op: "groupBy", buckets: [], atLeast: true });
+    const empty = screen.getByTestId("card-empty");
+    expect(empty).toHaveTextContent(/None found in what was checked/);
+    expect(empty).toHaveTextContent(/only part of the content/);
+    expect(empty).not.toHaveTextContent(/Nothing to compare yet/);
   });
 
   it("says nothing was matched rather than drawing an empty frame", () => {

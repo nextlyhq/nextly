@@ -147,3 +147,30 @@ describe("when the cause has already been fixed", () => {
     expect(text()).toMatch(/schedule it again/i);
   });
 });
+
+describe("when what blocks it is a document the reader cannot view", () => {
+  it("counts it, never says nothing is blocking it, and names nothing", () => {
+    render(
+      <BlockedReleaseNotice
+        blockers={[blocker()]}
+        hidden={[{ scopeKind: "collection", scopeSlug: "secrets", count: 2 }]}
+      />
+    );
+    expect(text()).not.toMatch(/nothing is blocking it/i);
+    expect(text()).toMatch(/2 documents you can't view need a fix/);
+    // The document the reader may read is still named.
+    expect(text()).toMatch(/posts \/ e1/);
+  });
+
+  it("is still a stopped release when only hidden documents block it", () => {
+    render(
+      <BlockedReleaseNotice
+        blockers={[]}
+        hidden={[{ scopeKind: "collection", scopeSlug: "secrets", count: 1 }]}
+      />
+    );
+    expect(text()).not.toMatch(/nothing is blocking it/i);
+    expect(text()).toMatch(/will not run on its own/i);
+    expect(text()).toMatch(/1 document you can't view needs a fix/);
+  });
+});

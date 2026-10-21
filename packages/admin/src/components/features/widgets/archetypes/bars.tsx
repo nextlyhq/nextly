@@ -99,12 +99,23 @@ export const barsBody: ArchetypeBody = (result, definition) => {
   if (rows.length === 0) {
     // The frame's one empty state, worded for groups. Source-neutral: the card may read any
     // collection's, system's or plugin's data, so it names no kind of row it cannot know.
+    //
+    // A source that stopped at a work bound found no group in what it read, and the rest may
+    // still hold some: that answer is a floor, so it says what was checked rather than claim
+    // that nothing matches.
     return {
       ok: true,
-      empty: {
-        title: "Nothing to compare yet",
-        detail: "Groups appear here once something matches this card.",
-      },
+      empty:
+        result.atLeast === true
+          ? {
+              title: "None found in what was checked",
+              detail:
+                "This card read only part of the content, so groups may exist beyond what it checked.",
+            }
+          : {
+              title: "Nothing to compare yet",
+              detail: "Groups appear here once something matches this card.",
+            },
     };
   }
 
@@ -116,6 +127,9 @@ export const barsBody: ArchetypeBody = (result, definition) => {
       <GroupsChart
         groups={rows}
         truncated={result.truncated === true}
+        // A source that counts only up to a bound says so, and every count is then drawn,
+        // described and tabled as a floor ("N+").
+        floors={result.atLeast === true}
         title={definition.title ?? "Comparison"}
         labelHeading={result.field?.label ?? "Value"}
       />

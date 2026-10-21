@@ -132,6 +132,18 @@ export class FieldGroupDataService {
   }
 
   /**
+   * Judge component values as {@link saveComponentDataInTransaction} would,
+   * writing nothing. See
+   * {@link FieldGroupMutationService.validateComponentDataInTransaction}.
+   */
+  validateComponentDataInTransaction(
+    tx: TransactionContext,
+    params: SaveComponentDataParams
+  ): Promise<void> {
+    return this.mutationService.validateComponentDataInTransaction(tx, params);
+  }
+
+  /**
    * Verify every localized field group in a payload can be written, BEFORE the caller opens its
    * transaction. See {@link FieldGroupMutationService.assertLocalizedFieldGroupsWritable} — this
    * cannot run inside the transaction without risking pool starvation, and answering it first

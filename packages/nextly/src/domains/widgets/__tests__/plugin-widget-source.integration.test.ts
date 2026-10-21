@@ -30,7 +30,7 @@ import {
 import type { ReadCaller } from "../../../services/dashboard/readable-resources";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
-import type { ResolverOptions } from "../resolved-sources";
+import { sourceAnswerers, type ResolverOptions } from "../resolved-sources";
 import { getSource } from "../sources";
 
 const NOTES = "notes";
@@ -179,6 +179,37 @@ describe("a plugin's widget source, booted", () => {
     // entities while believing they were its own.
     expect((handed.ctx as unknown as { self?: unknown }).self).toBeDefined();
     expect(handed.ctx?.services).toBeDefined();
+  });
+
+  it("calls a resolveMany written as a method with its own entry as `this`", async () => {
+    // A plugin may write `resolveMany` with method syntax and delegate to its
+    // own `resolve` through `this`, as the one-query path allows: the boot's
+    // forward has to call it on the entry, not detached.
+    const plugin = acmePlugin() as {
+      contributes: { widgetSources: Array<Record<string, unknown>> };
+    };
+    const entry = plugin.contributes.widgetSources[0]!;
+    entry.resolveMany = async function (
+      this: { resolve: (...args: unknown[]) => Promise<unknown> },
+      queries: unknown[],
+      ...rest: unknown[]
+    ) {
+      return Promise.all(queries.map(query => this.resolve(query, ...rest)));
+    };
+    const t = await boot([plugin]);
+    await write(t, "only");
+
+    const query = validateWidgetQuery({ source: SOURCE_ID, op: "count" });
+    const answers = await sourceAnswerers(SOURCE_ID)?.resolveMany?.(
+      [query, query],
+      admin,
+      {}
+    );
+
+    expect(answers).toEqual([
+      { op: "count", total: 1 },
+      { op: "count", total: 1 },
+    ]);
   });
 
   it("carries the host's cancellation signal all the way to the plugin", async () => {
