@@ -480,7 +480,6 @@ export class SinglePublishAllService extends BaseService {
     await this.assertSharedValuesCurrent(
       tx,
       plan,
-      lockedRow,
       pending,
       options,
       promoteGrants
@@ -969,12 +968,11 @@ export class SinglePublishAllService extends BaseService {
   /**
    * Refuse the publish when any language's pending change holds a shared value
    * someone else published after it began, naming every such field. Judged on
-   * the row this transaction locked, before anything is written.
+   * the document as this transaction locked it, before anything is written.
    */
   private async assertSharedValuesCurrent(
     tx: TransactionContext,
     plan: PublishPlan,
-    lockedRow: Record<string, unknown>,
     pending: readonly PendingChange[],
     options: PublishAllSingleLocalesOptions,
     promoteGrants?: () => Promise<CallerGrants>
@@ -982,7 +980,8 @@ export class SinglePublishAllService extends BaseService {
     const { companion, singleMeta, existingDoc, slug } = plan;
     const reader = this.queryService;
     if (!companion || !reader || pending.length === 0) return;
-    // The row this transaction locked, with its shared components.
+    // Read under the lock this transaction took on the row, with its shared
+    // components.
     const { live, shared } = await liveSharedSingle(
       tx,
       {
