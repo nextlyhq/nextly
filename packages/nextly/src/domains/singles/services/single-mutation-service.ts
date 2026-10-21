@@ -65,6 +65,7 @@ import {
   attachFieldValidators,
   runFieldHooks,
   resolvedCallerGrants,
+  type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -139,6 +140,8 @@ import {
   sharedValuesConflict,
   snapshotRecord,
   takeLiveSharedValuesInto,
+  takenLiveValues,
+  type TakenLiveValues,
 } from "../../versions/shared-publish-base";
 import {
   resolveComponentFieldMap,
@@ -328,6 +331,23 @@ export class SingleMutationService extends BaseService {
    * provided partial data.
    */
   /**
+   * The schema of a translated Single's translations table; null for a Single
+   * without languages, which has no shared values apart from its languages'.
+   */
+  private translationsOf(
+    singleMeta: DynamicSingleRecord
+  ): CompanionSchema | null {
+    if (!this.localization || singleMeta.localized !== true) return null;
+    return buildCompanionSchema({
+      slug: singleMeta.slug,
+      tableName: singleMeta.tableName,
+      fields: singleMeta.fields as { name: string; type: string }[],
+      dialect: this.adapter.dialect,
+      status: (singleMeta as { status?: boolean }).status === true,
+    });
+  }
+
+  /**
    * A language's pending change on this Single, under the row lock every save
    * and publish takes, so the live values read beside it are the ones the
    * next publish compares. Null when the Single has no row or the language no
@@ -364,8 +384,13 @@ export class SingleMutationService extends BaseService {
     tx: TransactionContext,
     singleMeta: DynamicSingleRecord,
     companion: CompanionSchema,
-    params: Parameters<SingleMutationService["takeLiveSharedValues"]>[0]
-  ): Promise<string[] | null> {
+    params: Parameters<SingleMutationService["takeLiveSharedValues"]>[0],
+    grants: () => Promise<CallerGrants>
+  ): Promise<{
+    taken: string[];
+    remaining: string[];
+    live: Record<string, unknown>;
+  } | null> {
     const found = await this.lockedPendingChange(
       tx,
       singleMeta,
@@ -387,6 +412,23 @@ export class SingleMutationService extends BaseService {
       pending: snapshotRecord(pending.snapshot),
       createdBy: params.user?.id ?? null,
       maxPerDoc: singleMeta.versions?.maxPerDoc,
+      // Only what this caller may write: a field rule that refuses them a
+      // value refuses them taking its live one too.
+      mayTake: async stale => {
+        const data = Object.fromEntries(stale.map(name => [name, live[name]]));
+        await applyFieldWriteAccess({
+          kind: "single",
+          slug: params.slug,
+          data,
+          operation: "update",
+          user: params.user,
+          authenticatedScope: params.authenticatedScope,
+          overrideAccess: params.overrideAccess,
+          id: ref.entryId,
+          grants,
+        });
+        return Object.keys(data);
+      },
     });
     // A save of the pending change, in its history like any other.
     await this.recordSingleSave(
@@ -396,7 +438,7 @@ export class SingleMutationService extends BaseService {
       { user: params.user, actor: params.actor },
       { locale, toState: "draft", versionNo: took.versionNo }
     );
-    return took.taken;
+    return { taken: took.taken, remaining: took.remaining, live };
   }
 
   /**
@@ -420,7 +462,7 @@ export class SingleMutationService extends BaseService {
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
-  }): Promise<SingleResult<{ taken: string[] }>> {
+  }): Promise<SingleResult<TakenLiveValues>> {
     try {
       const accessDenied = await checkSingleAccess({
         slug: params.slug,
@@ -441,31 +483,39 @@ export class SingleMutationService extends BaseService {
         params.slug,
         this.logger
       );
-      // Only a translated Single has shared values apart from its languages'.
-      const companion =
-        singleMeta && this.localization && singleMeta.localized === true
-          ? buildCompanionSchema({
-              slug: params.slug,
-              tableName: singleMeta.tableName,
-              fields: singleMeta.fields as { name: string; type: string }[],
-              dialect: this.adapter.dialect,
-              status: (singleMeta as { status?: boolean }).status === true,
-            })
-          : null;
-      const taken =
+      const companion = singleMeta ? this.translationsOf(singleMeta) : null;
+      // Resolved before the transaction: they take a pooled connection.
+      const grants = await resolvedCallerGrants(
+        params.user,
+        params.authenticatedScope
+      );
+      const took =
         singleMeta && companion
           ? await this.adapter.transaction(tx =>
-              this.takeLiveInTx(tx, singleMeta, companion, params)
+              this.takeLiveInTx(tx, singleMeta, companion, params, grants)
             )
           : null;
-      if (taken === null) {
-        return {
-          success: false,
-          statusCode: 404,
+      if (!took) {
+        throw NextlyError.notFound({
           message: "This language has no pending change.",
-        };
+          logContext: {
+            reason: "take-live-no-pending-change",
+            single: params.slug,
+          },
+        });
       }
-      return { success: true, statusCode: 200, data: { taken } };
+      const data = await takenLiveValues(
+        {
+          kind: "single",
+          slug: params.slug,
+          user: params.user,
+          overrideAccess: params.overrideAccess && !params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
+          grants,
+        },
+        took
+      );
+      return { success: true, statusCode: 200, data };
     } catch (error) {
       return {
         ...buildSingleErrorResult(error, "Failed to take the live values"),
@@ -2923,6 +2973,23 @@ export class SingleMutationService extends BaseService {
                   pending[name] = recordNested({ [name]: pending[name] })[name];
                 }
               }
+              // A language's change records its base when it begins: the
+              // version whose shared values are the live ones it began from. A
+              // later save keeps it, so saving again never makes an old shared
+              // value current. Recorded before the save's own capture, whose
+              // retention pass then keeps it.
+              if (!existingDraft && companion) {
+                await recordSharedBase(tx, {
+                  ref: draftRef,
+                  locale: singleDraftLocale ?? null,
+                  shared: sharedFieldNames(
+                    fieldConfigs,
+                    new Set(companion.localizedFields.map(f => f.name)),
+                    base
+                  ),
+                  live: base,
+                });
+              }
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.
               const { versionNo: draftVersionNo } = await storeDraftSave(
@@ -2943,22 +3010,6 @@ export class SingleMutationService extends BaseService {
                 toState: "draft",
                 versionNo: draftVersionNo,
               });
-              // A language's change records its base when it begins: the
-              // version whose shared values are the live ones it began from. A
-              // later save keeps it, so saving again never makes an old shared
-              // value current.
-              if (!existingDraft && companion) {
-                await recordSharedBase(tx, {
-                  ref: draftRef,
-                  locale: singleDraftLocale ?? null,
-                  shared: sharedFieldNames(
-                    fieldConfigs,
-                    new Set(companion.localizedFields.map(f => f.name)),
-                    base
-                  ),
-                  live: base,
-                });
-              }
             }
 
             // component subtrees form the snapshot.

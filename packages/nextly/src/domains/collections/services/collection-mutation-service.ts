@@ -187,6 +187,8 @@ import {
   sharedFieldNames,
   sharedValuesConflict,
   snapshotRecord,
+  takenLiveValues,
+  type TakenLiveValues,
   takeLiveSharedValuesInto,
 } from "../../versions/shared-publish-base";
 import {
@@ -3294,12 +3296,15 @@ export class CollectionMutationService extends BaseService {
 
   /**
    * Bring a language's pending change up to date with the shared values
-   * someone else published after it began: each out-of-date shared field takes
-   * its live value, and the change's base moves to the version those live
-   * values are in, so its next publish goes through. A shared value the change
-   * edited that nobody else published keeps the change's value.
+   * someone else published after it began: each out-of-date shared field the
+   * caller may write takes its live value, saved as a save of the change. Its
+   * base moves to the live version only when every out-of-date field was
+   * taken; a protected field left behind stays out of date for someone who may
+   * write it. A shared value the change edited that nobody else published
+   * keeps the change's value.
    *
-   * Applies the document's update rules: this writes the pending change.
+   * Applies the document's update rules and its field rules: this writes the
+   * pending change. The fields it names are those the caller may read.
    *
    * @experimental
    */
@@ -3314,102 +3319,52 @@ export class CollectionMutationService extends BaseService {
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
     authenticatedScope?: AuthenticatedScope;
-  }): Promise<CollectionServiceResult<{ taken: string[] }>> {
+  }): Promise<CollectionServiceResult<TakenLiveValues>> {
     try {
-      const accessDenied = await this.accessService.checkCollectionAccess<{
-        taken: string[];
-      }>({
-        collectionName: params.collectionName,
-        operation: "update",
-        user: params.overrideAccess ? undefined : params.user,
-        overrideAccess: params.overrideAccess,
-        routeAuthorized: params.routeAuthorized,
-        authenticatedScope: params.authenticatedScope,
-      });
+      const accessDenied =
+        await this.accessService.checkCollectionAccess<TakenLiveValues>({
+          collectionName: params.collectionName,
+          operation: "update",
+          user: params.overrideAccess ? undefined : params.user,
+          overrideAccess: params.overrideAccess,
+          routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
+        });
       if (accessDenied) return accessDenied;
       const collection = await this.collectionService.getCollection(
         params.collectionName
       );
-      const fields = collectionFields(collection);
-      const tableName = collectionTableName(collection, params.collectionName);
-      const schema = await this.fileManager.loadDynamicSchema(
-        params.collectionName
+      // Resolved before the transaction: they take a pooled connection.
+      const grants = await resolvedCallerGrants(
+        params.user,
+        params.authenticatedScope
       );
-      const ref = {
-        scopeKind: "collection" as const,
-        scopeSlug: params.collectionName,
-        entryId: params.entryId,
-      };
-      const draftLocale = workingDraftLocale({
-        documentLocalized:
-          (collection as { localized?: boolean }).localized === true,
-        requestLocale: params.locale ?? null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
-      });
-      const taken = await this.adapter.transaction(async tx => {
-        // The lock every save and publish of this document takes, so the
-        // live values read here are the ones the next publish compares with.
-        await tx.lockRow(tableName, params.entryId);
-        const pending = await new VersionsRepository(tx).findWorkingDraft(
-          ref,
-          draftLocale
-        );
-        const [row] = await tx
-          .getDrizzle<typeof this.db>()
-          .select()
-          .from(schema)
-          .where(eq(schema.id, params.entryId))
-          .limit(1);
-        if (!pending || !row) return null;
-        const live = this.deserializeJsonFieldsForSnapshot(
-          convertTimestampsToCamelCase({ ...(row as Record<string, unknown>) }),
-          fields
-        );
-        const shared = await this.sharedFieldsOf(
-          params.collectionName,
-          fields,
-          live,
-          tx.getDrizzle()
-        );
-        const took = await takeLiveSharedValuesInto(tx, this.versionCapture, {
-          ref,
-          locale: draftLocale,
-          shared,
-          live,
-          pending: snapshotRecord(pending.snapshot),
-          createdBy: params.user?.id ?? null,
-          maxPerDoc: (
-            collection as { versions?: ResolvedVersionsConfig | null }
-          ).versions?.maxPerDoc,
-        });
-        // A save of the pending change, in its history like any other.
-        await this.recordSaveHistory(
-          tx,
-          params.collectionName,
-          params.entryId,
-          {
-            actor: actorForWrite(params.actor, params.user),
-            personName: params.user?.name ?? null,
-            locale: draftLocale,
-            toState: "draft",
-            versionNo: took.versionNo,
-          }
-        );
-        return took.taken;
-      });
-      if (taken === null) {
-        return {
-          success: false,
-          statusCode: 404,
+      const took = await this.adapter.transaction(tx =>
+        this.takeLiveInTx(tx, collection, params, grants)
+      );
+      if (!took) {
+        throw NextlyError.notFound({
           message: "This language has no pending change.",
-          data: null,
-        };
+          logContext: {
+            reason: "take-live-no-pending-change",
+            collection: params.collectionName,
+            entryId: params.entryId,
+          },
+        });
       }
+      const reader = {
+        kind: "collection" as const,
+        slug: params.collectionName,
+        user: params.user,
+        overrideAccess: params.overrideAccess && !params.routeAuthorized,
+        authenticatedScope: params.authenticatedScope,
+        grants,
+      };
       return {
         success: true,
         statusCode: 200,
         message: "The pending change now holds the live shared values.",
-        data: { taken },
+        data: await takenLiveValues(reader, took),
       };
     } catch (error: unknown) {
       return errorToServiceResult(
@@ -3418,6 +3373,97 @@ export class CollectionMutationService extends BaseService {
         this.dialect
       );
     }
+  }
+
+  /**
+   * The body of {@link takeLiveSharedValues}, in its transaction: null when
+   * the language has no pending change.
+   */
+  private async takeLiveInTx(
+    tx: TransactionContext,
+    collection: Awaited<ReturnType<DynamicCollectionService["getCollection"]>>,
+    params: Parameters<CollectionMutationService["takeLiveSharedValues"]>[0],
+    grants: () => Promise<CallerGrants>
+  ): Promise<{
+    taken: string[];
+    remaining: string[];
+    live: Record<string, unknown>;
+  } | null> {
+    const fields = collectionFields(collection);
+    const tableName = collectionTableName(collection, params.collectionName);
+    const schema = await this.fileManager.loadDynamicSchema(
+      params.collectionName
+    );
+    const ref = {
+      scopeKind: "collection" as const,
+      scopeSlug: params.collectionName,
+      entryId: params.entryId,
+    };
+    const draftLocale = workingDraftLocale({
+      documentLocalized:
+        (collection as { localized?: boolean }).localized === true,
+      requestLocale: params.locale ?? null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    // The lock every save and publish of this document takes, so the live
+    // values read here are the ones the next publish compares with.
+    await tx.lockRow(tableName, params.entryId);
+    const pending = await new VersionsRepository(tx).findWorkingDraft(
+      ref,
+      draftLocale
+    );
+    const [row] = await tx
+      .getDrizzle<typeof this.db>()
+      .select()
+      .from(schema)
+      .where(eq(schema.id, params.entryId))
+      .limit(1);
+    if (!pending || !row) return null;
+    const live = this.deserializeJsonFieldsForSnapshot(
+      convertTimestampsToCamelCase({ ...(row as Record<string, unknown>) }),
+      fields
+    );
+    const took = await takeLiveSharedValuesInto(tx, this.versionCapture, {
+      ref,
+      locale: draftLocale,
+      shared: await this.sharedFieldsOf(
+        params.collectionName,
+        fields,
+        live,
+        tx.getDrizzle()
+      ),
+      live,
+      pending: snapshotRecord(pending.snapshot),
+      createdBy: params.user?.id ?? null,
+      maxPerDoc: (collection as { versions?: ResolvedVersionsConfig | null })
+        .versions?.maxPerDoc,
+      // Only what this caller may write: a field rule that refuses them a
+      // value refuses them taking its live one too.
+      mayTake: async stale => {
+        const data = Object.fromEntries(stale.map(name => [name, live[name]]));
+        await applyFieldWriteAccess({
+          kind: "collection",
+          slug: params.collectionName,
+          data,
+          operation: "update",
+          user: params.user,
+          authenticatedScope: params.authenticatedScope,
+          overrideAccess: params.overrideAccess,
+          id: params.entryId,
+          grants,
+        });
+        return Object.keys(data);
+      },
+    });
+    // A save of the pending change, in its history like any other.
+    await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
+      actor: actorForWrite(params.actor, params.user),
+      personName: params.user?.name ?? null,
+      locale: draftLocale,
+      toState: "draft",
+      versionNo: took.versionNo,
+    });
+    return { taken: took.taken, remaining: took.remaining, live };
   }
 
   private async readCompanionSlugsAllLocales(
@@ -7351,6 +7397,26 @@ export class CollectionMutationService extends BaseService {
         draftIsPluginCollection
       );
     }
+    // A language's change records its base when it begins: the version whose
+    // shared values are the live ones it began from. A later save keeps it, so
+    // saving again never makes an old shared value current. Recorded before
+    // the save's own capture, whose retention pass then keeps it.
+    if (
+      !existingDraft &&
+      (collection as { localized?: boolean }).localized === true
+    ) {
+      await recordSharedBase(tx, {
+        ref: draftRef,
+        locale: draftLocale,
+        shared: await this.sharedFieldsOf(
+          params.collectionName,
+          fields,
+          ctx.liveParentRow,
+          tx.getDrizzle()
+        ),
+        live: ctx.liveParentRow,
+      });
+    }
     // The draft, and the save as a version of its own, in this transaction.
     // A save that changes nothing against what it replaces records no version.
     const versionsConfig = (collection as Record<string, unknown>).versions as
@@ -7368,25 +7434,6 @@ export class CollectionMutationService extends BaseService {
       sourceVersionNo: params.sourceVersionNo ?? null,
       maxPerDoc: versionsConfig?.maxPerDoc,
     });
-    // A language's change records its base when it begins: the version whose
-    // shared values are the live ones it began from. A later save keeps it, so
-    // saving again never makes an old shared value current.
-    if (
-      !existingDraft &&
-      (collection as { localized?: boolean }).localized === true
-    ) {
-      await recordSharedBase(tx, {
-        ref: draftRef,
-        locale: draftLocale,
-        shared: await this.sharedFieldsOf(
-          params.collectionName,
-          fields,
-          ctx.liveParentRow,
-          tx.getDrizzle()
-        ),
-        live: ctx.liveParentRow,
-      });
-    }
     // Both update paths hold a draft through here, so the save's history
     // event is recorded here once.
     await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
@@ -9292,14 +9339,17 @@ export class CollectionMutationService extends BaseService {
               // delete is a cheap indexed no-op when none exists, and it never hits
               // a just-stored draft: that path keeps `splitEnabled` true.
               if (!splitEnabled) {
+                const staleRef = {
+                  scopeKind: "collection" as const,
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                };
                 await new VersionsRepository(tx).deleteWorkingDraft(
-                  {
-                    scopeKind: "collection",
-                    scopeSlug: params.collectionName,
-                    entryId: params.entryId,
-                  },
+                  staleRef,
                   draftLocaleKey
                 );
+                // Its base goes with it, so retention may let that version go.
+                await releaseSharedBase(tx, staleRef, draftLocaleKey);
               }
 
               // A restore that lands a non-published status turns the live row
@@ -9317,14 +9367,16 @@ export class CollectionMutationService extends BaseService {
                 transitionNextStatus !== undefined &&
                 transitionNextStatus !== "published"
               ) {
+                const restoredRef = {
+                  scopeKind: "collection" as const,
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                };
                 await new VersionsRepository(tx).deleteWorkingDraft(
-                  {
-                    scopeKind: "collection",
-                    scopeSlug: params.collectionName,
-                    entryId: params.entryId,
-                  },
+                  restoredRef,
                   draftLocaleKey
                 );
+                await releaseSharedBase(tx, restoredRef, draftLocaleKey);
               }
 
               // Append the outbox event in the same transaction, so it commits

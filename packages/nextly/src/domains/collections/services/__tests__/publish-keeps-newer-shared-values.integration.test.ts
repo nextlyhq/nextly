@@ -222,7 +222,7 @@ describe.each(getConfiguredTestDialects())(
         locale: "en",
       });
       expect(taken.success).toBe(true);
-      expect(taken.data).toEqual({ taken: ["articleCount"] });
+      expect(taken.data).toEqual({ taken: ["articleCount"], outOfDate: [] });
       // Saved as any save of the change is: a version history shows and a
       // restore can undo.
       const [newest] = await handle!.adapter.select<{
