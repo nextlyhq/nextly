@@ -115,6 +115,43 @@ describe("a boolean field rule", () => {
     expect(entry.title).toBe("t");
   });
 
+  it("answers without resolving the caller's grants, where a function rule resolves them", async () => {
+    registerFieldFunctions("collection", "posts", [
+      { name: "hidden", access: { read: false } },
+      { name: "shown", access: { read: true } },
+    ]);
+    const grants = vi.fn(async () => ({ permissions: [], roles: [] }));
+    const entry: Record<string, unknown> = {
+      id: "e1",
+      hidden: "h",
+      shown: "s",
+    };
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug: "posts",
+      entry,
+      user: USER,
+      grants,
+    });
+    expect(entry).not.toHaveProperty("hidden");
+    expect(entry.shown).toBe("s");
+    // A literal asks nothing of the caller, so no lookup is made for it.
+    expect(grants).not.toHaveBeenCalled();
+
+    // The control: the same pass resolves them for a function rule.
+    registerFieldFunctions("collection", "posts", [
+      { name: "asked", access: { read: () => true } },
+    ]);
+    await applyFieldReadAccess({
+      kind: "collection",
+      slug: "posts",
+      entry: { id: "e2", asked: "a" },
+      user: USER,
+      grants,
+    });
+    expect(grants).toHaveBeenCalled();
+  });
+
   it("decides a field nested in a group", async () => {
     registerFieldFunctions("collection", "posts", [
       {
