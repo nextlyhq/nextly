@@ -375,6 +375,32 @@ describe("the language being edited", () => {
     ).toHaveTextContent("Spanish and shared fields");
   });
 
+  it("ends the preview of a version the language view stops showing", async () => {
+    const onClearSelection = vi.fn();
+    renderList(versions, [], {
+      lifecycle: false,
+      localized: true,
+      editingLocale: "es",
+      // An English version, chosen while every language was shown.
+      selected: 1,
+      onClearSelection,
+    });
+    const languages = () =>
+      screen.getByRole("combobox", { name: "Languages shown" });
+
+    await userEvent.click(languages());
+    await userEvent.click(
+      screen.getByRole("option", { name: "All languages" })
+    );
+    expect(onClearSelection).not.toHaveBeenCalled();
+
+    await userEvent.click(languages());
+    await userEvent.click(
+      screen.getByRole("option", { name: "Spanish and shared fields" })
+    );
+    expect(onClearSelection).toHaveBeenCalledTimes(1);
+  });
+
   it("shows every part under All languages", () => {
     renderList(versions, [], { lifecycle: false });
     expect(
