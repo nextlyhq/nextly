@@ -285,24 +285,25 @@ export interface HeldClaim {
   /** The key handed to a provider that takes one, for one call. */
   providerKey: (call: ProviderCall) => string;
   /**
-   * The calls of the send an earlier attempt already had accepted, by their
-   * provider key: a retry of a split send sends only the others.
+   * The recipients an earlier attempt already had accepted, by line and
+   * position in the envelope (`recipientSlot`): a retry sends only to the
+   * others, whatever provider carries it.
    */
-  acceptedLegs: ReadonlySet<string>;
+  acceptedRecipients: ReadonlySet<string>;
 }
 
-/** The legs a partly delivered claim recorded, from its stored result. */
-function acceptedLegsOf(row: ClaimRow | undefined): Set<string> {
+/** The recipients a partly delivered claim recorded, from its stored result. */
+function acceptedRecipientsOf(row: ClaimRow | undefined): Set<string> {
   // `claimed` too: a send that took a partly delivered claim over and then
-  // stopped leaves the recorded calls in place.
+  // stopped leaves the recorded recipients in place.
   if (row?.state !== "partial" && row?.state !== "claimed") return new Set();
   try {
     const stored = JSON.parse(row.result ?? "null") as {
-      acceptedLegs?: unknown;
+      accepted?: unknown;
     } | null;
-    const legs = Array.isArray(stored?.acceptedLegs) ? stored.acceptedLegs : [];
+    const slots = Array.isArray(stored?.accepted) ? stored.accepted : [];
     return new Set(
-      legs.filter((leg): leg is string => typeof leg === "string")
+      slots.filter((slot): slot is string => typeof slot === "string")
     );
   } catch {
     return new Set();
@@ -394,7 +395,7 @@ async function attemptClaim(
       holder,
       keyDigest: digests.key,
       providerKey: digests.providerKey,
-      acceptedLegs: acceptedLegsOf(found),
+      acceptedRecipients: acceptedRecipientsOf(found),
     },
   });
   if (!found) {
@@ -518,9 +519,9 @@ export async function renewSendClaim(
 /**
  * Record a claimed send's outcome: a successful send's result, which a repeat
  * returns, or a failure, which lets the next send with the key try again. A
- * failure after some calls of a split send were accepted is `partial`: it
- * records those calls, so a retry sends only the rest, and is kept as long as
- * a successful claim. `keep: false` removes the claim instead, whatever the
+ * failure after some recipients were accepted is `partial`: it records them by
+ * position, so a retry sends only to the rest, and is kept as long as a
+ * successful claim. `keep: false` removes the claim instead, whatever the
  * outcome, for a site that keeps no delivery history.
  *
  * Written only while this send still holds the claim.
@@ -529,7 +530,11 @@ export async function settleSendClaim(
   adapter: DrizzleAdapter,
   claim: HeldClaim,
   outcome: EmailSendOutcome,
-  options: { keep: boolean; acceptedLegs?: readonly string[]; now?: number }
+  options: {
+    keep: boolean;
+    acceptedRecipients?: readonly string[];
+    now?: number;
+  }
 ): Promise<void> {
   const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
   const now = options.now ?? Date.now();
@@ -539,16 +544,15 @@ export async function settleSendClaim(
       await db.delete(table).where(held);
       return;
     }
-    const legs = options.acceptedLegs ?? [];
+    const accepted = options.acceptedRecipients ?? [];
     await db
       .update(table)
       .set(
         outcome.success
           ? { state: "sent", result: JSON.stringify(outcome), settledAt: now }
           : {
-              state: legs.length > 0 ? "partial" : "failed",
-              result:
-                legs.length > 0 ? JSON.stringify({ acceptedLegs: legs }) : null,
+              state: accepted.length > 0 ? "partial" : "failed",
+              result: accepted.length > 0 ? JSON.stringify({ accepted }) : null,
               leaseExpiresAt: now,
               settledAt: now,
             }

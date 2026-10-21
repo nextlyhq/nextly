@@ -52,6 +52,8 @@ const behaviour: {
   gate?: Promise<void>;
   /** Fail only the call to this `to` address, while `failures` lasts. */
   failFor?: string;
+  /** A copied address every call refuses, as an SMTP server would. */
+  refuse?: string;
 } = { failures: 0 };
 
 const contexts: Record<string, PluginContext> = {};
@@ -64,6 +66,7 @@ afterEach(async () => {
   behaviour.failures = 0;
   behaviour.gate = undefined;
   behaviour.failFor = undefined;
+  behaviour.refuse = undefined;
 });
 
 /** A provider that records what it is handed, and accepts it unless told. */
@@ -89,7 +92,23 @@ function capturing(
           behaviour.failures -= 1;
           throw new Error("provider down");
         }
-        return { success: true, messageId: `captured-${messages.length}` };
+        const refused = [...(options.cc ?? []), ...(options.bcc ?? [])].filter(
+          address => address === behaviour.refuse
+        );
+        return {
+          success: true,
+          messageId: `captured-${messages.length}`,
+          ...(refused.length > 0
+            ? {
+                rejected: refused,
+                refusals: refused.map(address => ({
+                  address,
+                  retryable: false,
+                  status: 550,
+                })),
+              }
+            : {}),
+        };
       },
     }),
   });
@@ -360,6 +379,90 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.email.send(keyed);
 
       expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
+    }, 120_000);
+
+    it("reports a partly delivered send recipient by recipient, and an all-accepted one as before", async () => {
+      const { t, oneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+
+      const partly = await t.nextly.email.send({
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: oneAtATime,
+      });
+      const whole = await t.nextly.email.send({
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: "another-key",
+        providerId: oneAtATime,
+      });
+
+      expect(partly).toMatchObject({
+        success: false,
+        partlyDelivered: true,
+        recipients: [
+          { kind: "to", position: 0, outcome: "accepted" },
+          { kind: "to", position: 1, outcome: "unknown", retryable: true },
+        ],
+      });
+      // Exactly as a send of two was before: nothing added.
+      expect(whole).toEqual({ success: true, messageId: "captured-3" });
+    }, 120_000);
+
+    it("retries through a provider that groups recipients differently, only to those not yet accepted", async () => {
+      const { t, oneAtATime, keyless } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      const keyed = {
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+      };
+
+      await t.nextly.email.send({ ...keyed, providerId: oneAtATime });
+      const retried = await t.nextly.email.send({
+        ...keyed,
+        providerId: keyless,
+      });
+
+      expect(retried).toEqual({ success: true, messageId: "captured-3" });
+      // A once through the first provider; B again through the batching one.
+      expect(
+        messages.map(m => [m.provider, m.options.toList ?? [m.options.to]])
+      ).toEqual([
+        ["capturing-one", [A]],
+        ["capturing-one", [B]],
+        ["capturing-keyless", [B]],
+      ]);
+    }, 120_000);
+
+    it("keeps a refused copy's outcome on a keyed retry, at its place in the send", async () => {
+      const { t, oneAtATime } = await boot(dialect);
+      const C = "c@example.com";
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      behaviour.refuse = C;
+      const keyed = {
+        to: [A, B],
+        cc: [C],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: oneAtATime,
+      };
+
+      await t.nextly.email.send(keyed);
+      const retried = await t.nextly.email.send(keyed);
+
+      expect(retried).toMatchObject({
+        success: true,
+        refused: [{ kind: "cc", position: 0, retryable: false, status: 550 }],
+      });
     }, 120_000);
 
     it("refuses the key with a different message, through the Direct API", async () => {

@@ -94,6 +94,11 @@ import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
 import { LOG_PROVIDER_TYPE } from "./providers/log-provider";
 import {
+  type CallOutcome,
+  pendingEnvelope,
+  sendResultOf,
+} from "./recipient-outcomes";
+import {
   assertSendable,
   assertSendableReplyTo,
   declaredMaxTo,
@@ -115,7 +120,6 @@ import {
   refusedRecipients,
   refusedRecordError,
   type RefusedRecipient,
-  splitSendOutcome,
   thrownFailure,
 } from "./send-failures";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
@@ -763,8 +767,6 @@ export class EmailService extends BaseService {
     // recipients, and is held to the same rule before any provider is called.
     assertSendableReplyTo(envelope.replyTo);
 
-    const messages = messagesFor(envelope, maxToPerMessage);
-
     // Claimed on the envelope that goes out, so a filter's change is part of
     // the message the key names. A repeat is answered here, sending nothing.
     const claimed = await this.claimForSend(options.idempotencyKey, {
@@ -773,6 +775,15 @@ export class EmailService extends BaseService {
       person,
     });
     if (claimed && "answer" in claimed) return claimed.answer;
+
+    // A keyed retry sends only to the recipients an earlier attempt with the
+    // key had not reached. With none, this is the envelope itself.
+    const previouslyAccepted =
+      claimed?.keyed.claim.acceptedRecipients ?? new Set<string>();
+    const messages = messagesFor(
+      pendingEnvelope(envelope, previouslyAccepted),
+      maxToPerMessage
+    );
 
     const runAfterSend = (value: EmailAfterSendValue) =>
       registry.runActions<EmailAfterSendValue, EmailFilterContext>(
@@ -793,7 +804,7 @@ export class EmailService extends BaseService {
             return Promise.resolve();
           };
 
-    const { outcomes, acceptedLegs } = await this.dispatchAll(messages, {
+    const calls = await this.dispatchAll(messages, {
       adapter,
       providerType,
       resolvedProviderId,
@@ -806,14 +817,13 @@ export class EmailService extends BaseService {
     });
     // One message is today's send, and its result is returned as it is; a
     // split send's messages are combined into one result.
-    const outcome =
-      outcomes.length === 1 ? outcomes[0] : splitSendOutcome(outcomes);
+    const { outcome, accepted } = sendResultOf(
+      envelope,
+      previouslyAccepted,
+      calls
+    );
     if (claimed) {
-      await this.deliveries?.settleSend(
-        claimed.keyed.claim,
-        outcome,
-        acceptedLegs
-      );
+      await this.deliveries?.settleSend(claimed.keyed.claim, outcome, accepted);
     }
 
     for (const value of deferred) {
@@ -834,32 +844,22 @@ export class EmailService extends BaseService {
   }
 
   /**
-   * Hand each message to the provider in turn, and say which calls of a keyed
-   * send have been accepted, by their provider key.
+   * Hand each message to the provider in turn, and say what each call
+   * answered.
    *
    * In turn rather than at once: a provider that takes one `to` per message
    * is usually one that rate-limits, and the delivery records of each message
-   * are written before the next is sent. A call an earlier attempt with the
-   * key already had accepted is not sent again.
+   * are written before the next is sent.
    */
   private async dispatchAll(
     messages: readonly SendMessage[],
     context: DispatchContext
-  ): Promise<{ outcomes: SendOutcome[]; acceptedLegs: string[] }> {
-    const claim = context.keyed?.claim;
-    const accepted = new Set(claim?.acceptedLegs ?? []);
-    const outcomes: SendOutcome[] = [];
+  ): Promise<CallOutcome[]> {
+    const calls: CallOutcome[] = [];
     for (const message of messages) {
-      const leg = claim?.providerKey(message);
-      if (leg !== undefined && accepted.has(leg)) {
-        outcomes.push({ success: true });
-        continue;
-      }
-      const outcome = await this.dispatchMessage(message, context);
-      if (leg !== undefined && outcome.success) accepted.add(leg);
-      outcomes.push(outcome);
+      calls.push(await this.dispatchMessage(message, context));
     }
-    return { outcomes, acceptedLegs: [...accepted] };
+    return calls;
   }
 
   /**
@@ -914,7 +914,7 @@ export class EmailService extends BaseService {
   private async dispatchMessage(
     message: SendMessage,
     context: DispatchContext
-  ): Promise<SendOutcome> {
+  ): Promise<CallOutcome> {
     const startedAt = Date.now();
     // Two fields rather than one, because they answer different questions
     // and only one of them can be answered immediately. `verdict` is the fact
@@ -946,25 +946,33 @@ export class EmailService extends BaseService {
       // said it did not send.
       state.verdict = result.success === true;
 
-      return await this.recordAccepted(
+      const outcome = await this.recordAccepted(
         message,
         result,
         context,
         state,
         startedAt
       );
+      return { message, outcome, accepted: state.verdict, answered: true };
     } catch (error) {
       // The message was already accepted, so this is not a provider failure
       // however it reached here. Reporting one would contradict the rows and
       // the action that have already gone out, and would tell an auth flow to
       // withhold a token for a mail that was sent.
       if (state.verdict !== undefined) {
-        return this.acceptedDespite(error, context.providerType, {
+        const outcome = this.acceptedDespite(error, context.providerType, {
           verdict: state.verdict,
           dispatched: state.dispatched,
         });
+        return { message, outcome, accepted: state.verdict, answered: true };
       }
-      return await this.recordFailed(message, error, context, startedAt);
+      const outcome = await this.recordFailed(
+        message,
+        error,
+        context,
+        startedAt
+      );
+      return { message, outcome, accepted: false, answered: false };
     }
   }
 

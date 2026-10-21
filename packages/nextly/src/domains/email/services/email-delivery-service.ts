@@ -289,12 +289,12 @@ export class EmailDeliveryService extends BaseService {
   async settleSend(
     claim: HeldClaim,
     outcome: EmailSendOutcome,
-    acceptedLegs: readonly string[] = []
+    acceptedRecipients: readonly string[] = []
   ): Promise<void> {
     try {
       await settleSendClaim(this.adapter, claim, outcome, {
         keep: !this.keepsNothing(),
-        acceptedLegs,
+        acceptedRecipients,
       });
     } catch (error) {
       warnQuietly(this.logger, "Email send claim could not be recorded", {

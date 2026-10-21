@@ -13,6 +13,8 @@ import { type EmailDeliveryRecipientKind, mailboxOf } from "../delivery-record";
 import { type EmailFailure, failureOf, unclassifiedFailure } from "../failure";
 import type { EmailProviderAdapter } from "../types";
 
+import type { RecipientOutcome } from "./recipient-outcomes";
+
 type AdapterResult = Awaited<ReturnType<EmailProviderAdapter["send"]>>;
 
 /**
@@ -198,6 +200,16 @@ export interface EmailSendOutcome {
    * idempotency key, and nothing was sent this time.
    */
   repeat?: true;
+  /**
+   * @experimental Some recipients were accepted and the send still did not
+   * succeed. Present only then, beside `recipients`.
+   */
+  partlyDelivered?: true;
+  /**
+   * @experimental Each recipient's outcome by line and position, listed only
+   * for a partly delivered send.
+   */
+  recipients?: RecipientOutcome[];
 }
 
 /**
