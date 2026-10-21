@@ -268,6 +268,15 @@ describe("the claim store", () => {
     });
   });
 
+  it("keeps no failed claim for a site that keeps no delivery history", async () => {
+    const store = service(0);
+    const first = await store.claimSend(sendKeyOf("site", "k", MESSAGE));
+    if (first.kind !== "claimed") expect.fail(first.kind);
+    await store.settleSend(first.claim, { success: false });
+
+    expect(claims()).toEqual([]);
+  });
+
   it("keeps no claim for a site that keeps no delivery history", async () => {
     const store = service(0);
     const first = await store.claimSend(sendKeyOf("site", "k", MESSAGE));

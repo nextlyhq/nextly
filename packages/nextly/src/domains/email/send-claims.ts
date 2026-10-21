@@ -486,8 +486,8 @@ export async function renewSendClaim(
 /**
  * Record a claimed send's outcome: a successful send's result, which a repeat
  * returns, or a failure, which lets the next send with the key try again.
- * `keep: false` removes a successful claim instead, for a site that keeps no
- * delivery history.
+ * `keep: false` removes the claim instead, whatever the outcome, for a site
+ * that keeps no delivery history.
  *
  * Written only while this send still holds the claim.
  */
@@ -501,7 +501,7 @@ export async function settleSendClaim(
   const now = options.now ?? Date.now();
   const held = and(eq(table.id, claim.id), eq(table.holder, claim.holder));
   await ownTransaction(adapter)(async db => {
-    if (outcome.success && !options.keep) {
+    if (!options.keep) {
       await db.delete(table).where(held);
       return;
     }
