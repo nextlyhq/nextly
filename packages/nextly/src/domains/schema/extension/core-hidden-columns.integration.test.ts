@@ -22,6 +22,12 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
+import {
+  getTableColumns,
+  getTableName,
+  isTable,
+  type Table,
+} from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Only the storage backend is stubbed, so an upload runs the real media
@@ -45,6 +51,7 @@ import { signAccessToken } from "../../../auth/jwt/sign";
 import { resetSessionStandingForTests } from "../../../auth/session/session-standing";
 import { createMediaHandlers } from "../../../api/media-handlers";
 import { defineCollection, relationship, text, upload } from "../../../config";
+import { getDialectTables } from "../../../database/index";
 import type { ServiceMap } from "../../../di/register";
 import { definePlugin } from "../../../plugins/plugin-context";
 import {
@@ -102,14 +109,18 @@ interface Direct {
   users: {
     create(a: Record<string, unknown>): Promise<{ item: { id: string } }>;
     find(a?: Record<string, unknown>): Promise<unknown>;
+    findOne(a?: Record<string, unknown>): Promise<unknown>;
     findByID(a: Record<string, unknown>): Promise<unknown>;
     update(a: Record<string, unknown>): Promise<unknown>;
+    delete(a: Record<string, unknown>): Promise<unknown>;
   };
   media: {
     upload(a: Record<string, unknown>): Promise<{ id: string }>;
     find(a?: Record<string, unknown>): Promise<unknown>;
     findByID(a: Record<string, unknown>): Promise<unknown>;
     update(a: Record<string, unknown>): Promise<unknown>;
+    delete(a: Record<string, unknown>): Promise<unknown>;
+    bulkDelete(a: Record<string, unknown>): Promise<unknown>;
   };
   jobs: {
     queue(a: Record<string, unknown>): Promise<{ id: string }>;
@@ -162,6 +173,47 @@ describe.each(getConfiguredTestDialects())(
     }
 
     /** The response, serialised, so the sentinel is found under any key. */
+    /** A user to delete, holding the sentinel like every other row. */
+    async function disposableUser(email: string): Promise<string> {
+      const id = (
+        await direct.users.create({
+          email,
+          password: "Password123!",
+          data: { name: email, isActive: true },
+        })
+      ).item.id;
+      await sql(
+        `UPDATE users SET leak_probe = '${SENTINEL}' WHERE id = '${id}'`
+      );
+      return id;
+    }
+
+    /** A media row to delete or file, holding the sentinel. */
+    async function disposableMedia(
+      id: string,
+      folderId: string | null = null
+    ): Promise<void> {
+      await t.adapter.insert("media", {
+        id,
+        filename: `${id}.pdf`,
+        originalFilename: `${id}.pdf`,
+        mimeType: "application/pdf",
+        size: 1,
+        url: `/uploads/${id}.pdf`,
+        folderId,
+        uploadedBy: ownerId,
+        uploadedAt: new Date("2020-01-01T00:00:00Z"),
+        updatedAt: new Date("2020-01-01T00:00:00Z"),
+      });
+      await sql(
+        `UPDATE media SET leak_probe = '${SENTINEL}' WHERE id = '${id}'`
+      );
+    }
+
+    async function rowCount(table: "users" | "media", id: string) {
+      return (await sql(`SELECT id FROM ${table} WHERE id = '${id}'`)).length;
+    }
+
     function serialised(value: unknown): string {
       return JSON.stringify(value);
     }
@@ -179,7 +231,7 @@ describe.each(getConfiguredTestDialects())(
     }
 
     function rest(
-      method: "GET" | "POST" | "PATCH",
+      method: "GET" | "POST" | "PATCH" | "DELETE",
       path: string[],
       body?: unknown,
       query = ""
@@ -201,7 +253,7 @@ describe.each(getConfiguredTestDialects())(
     }
 
     function mediaRest(
-      method: "GET" | "POST" | "PATCH",
+      method: "GET" | "POST" | "PATCH" | "DELETE",
       path: string[],
       body?: unknown
     ) {
@@ -373,6 +425,14 @@ describe.each(getConfiguredTestDialects())(
         expectNoHiddenColumn(out);
       });
 
+      it("Direct API findOne", async () => {
+        const out = serialised(
+          await direct.users.findOne({ search: "member@example.com" })
+        );
+        expect(out).toContain("member@example.com");
+        expectNoHiddenColumn(out);
+      });
+
       it("a relationship populated at depth 1 (Direct API and REST)", async () => {
         const viaDirect = serialised(
           await direct.findByID({
@@ -390,6 +450,21 @@ describe.each(getConfiguredTestDialects())(
         );
         expect(viaRest).toContain("member@example.com");
         expectNoHiddenColumn(viaRest);
+      });
+
+      it("Direct API and REST delete succeed and return no hidden column", async () => {
+        const viaDirect = await disposableUser("delete-direct@example.com");
+        const directOut = serialised(
+          await direct.users.delete({ id: viaDirect })
+        );
+        expect(directOut).toContain(viaDirect);
+        expectNoHiddenColumn(directOut);
+        expect(await rowCount("users", viaDirect)).toBe(0);
+
+        const viaRest = await disposableUser("delete-rest@example.com");
+        const restOut = await bodyOf(await rest("DELETE", ["users", viaRest]));
+        expectNoHiddenColumn(restOut);
+        expect(await rowCount("users", viaRest)).toBe(0);
       });
 
       it("Direct API update cannot set it", async () => {
@@ -501,6 +576,79 @@ describe.each(getConfiguredTestDialects())(
         expectNoHiddenColumn(viaRest);
       });
 
+      it("a collection list populating both at depth 1 (Direct API and REST)", async () => {
+        // A list reads its entries and populates them through a path of its
+        // own, apart from the by-id read above.
+        const viaDirect = serialised(
+          await direct.find({
+            collection: "posts",
+            depth: 1,
+            overrideAccess: true,
+          })
+        );
+        const viaRest = await bodyOf(
+          await rest(
+            "GET",
+            ["collections", "posts", "entries"],
+            undefined,
+            "?depth=1"
+          )
+        );
+        for (const out of [viaDirect, viaRest]) {
+          expect(out).toContain("member@example.com");
+          expect(out).toContain("probe.pdf");
+          expectNoHiddenColumn(out);
+        }
+      });
+
+      it("REST folder contents, at the root and in a folder", async () => {
+        const root = await bodyOf(
+          await mediaRest("GET", ["folders", "root", "contents"])
+        );
+        expect(root).toContain("probe.pdf");
+        expectNoHiddenColumn(root);
+
+        const folder = await bodyOf(
+          await mediaRest("POST", ["folders"], { name: "Probe folder" })
+        );
+        const folderId = (JSON.parse(folder) as { item: { id: string } }).item
+          .id;
+        await disposableMedia("probe-filed", folderId);
+        const contents = await bodyOf(
+          await mediaRest("GET", ["folders", folderId, "contents"])
+        );
+        expect(contents).toContain("probe-filed.pdf");
+        expectNoHiddenColumn(contents);
+      });
+
+      it("Direct API and REST delete and bulk delete succeed and return no hidden column", async () => {
+        for (const id of [
+          "del-direct",
+          "del-rest",
+          "bulk-direct",
+          "bulk-rest",
+        ]) {
+          await disposableMedia(id);
+        }
+        const outs = [
+          serialised(await direct.media.delete({ id: "del-direct" })),
+          await bodyOf(await mediaRest("DELETE", ["del-rest"])),
+          serialised(await direct.media.bulkDelete({ ids: ["bulk-direct"] })),
+          await bodyOf(
+            await mediaRest("DELETE", ["bulk"], { mediaIds: ["bulk-rest"] })
+          ),
+        ];
+        for (const out of outs) expectNoHiddenColumn(out);
+        for (const id of [
+          "del-direct",
+          "del-rest",
+          "bulk-direct",
+          "bulk-rest",
+        ]) {
+          expect(await rowCount("media", id), id).toBe(0);
+        }
+      });
+
       it("Direct API update cannot set it", async () => {
         const out = serialised(
           await direct.media.update({
@@ -538,6 +686,10 @@ describe.each(getConfiguredTestDialects())(
             size: direct1.length,
           },
           user: { id: ownerId },
+          // The column named beside the upload's own arguments, in both
+          // spellings, as the REST form below names it.
+          leakProbe: ATTEMPT,
+          leak_probe: ATTEMPT,
         });
         const directOut = serialised(viaDirect);
         expect(directOut).toContain("direct-upload");
@@ -626,6 +778,66 @@ describe.each(getConfiguredTestDialects())(
         expect(await storedBy("audit_log", "kind", "csrf-failed")).toEqual([
           null,
         ]);
+      });
+    });
+
+    describe("every reader of a core table", () => {
+      // The paths above are the public surfaces, listed one by one. Under all
+      // of them, and under any surface not listed, a core table's rows are
+      // read in one of three ways, since product code reaches the database
+      // through Drizzle only: the static table bundle, the schema registry
+      // by SQL name, or the adapter's whole-row select, which resolves through
+      // that registry. This holds the class: with the contribution declared
+      // and the column live, none of the three reads it.
+      it("none of the three returns the column, on any extendable core table", async () => {
+        // A row in each table, written here so the check stands on its own.
+        await direct.jobs.queue({ task: "leak-probe.guard", input: null });
+        await (
+          t.getService("activityLogService") as unknown as {
+            logActivity(input: Record<string, unknown>): Promise<unknown>;
+          }
+        ).logActivity({
+          actorType: "user",
+          userId: ownerId,
+          action: "create",
+          collection: "posts",
+          entryTitle: "Guard activity",
+        });
+        await buildAuditLogWriter((name: string) =>
+          t.getService(name as keyof ServiceMap)
+        ).write({ kind: "csrf-failed", metadata: { path: "/leak-guard" } });
+
+        const columnNames = (table: unknown): string[] =>
+          Object.values(getTableColumns(table as Table)).map(
+            column => column.name
+          );
+        const bundle = Object.values(getDialectTables(dialect));
+        const registry = t.getService(
+          "schemaRegistry" as keyof ServiceMap
+        ) as unknown as { getTable(name: string): unknown };
+
+        for (const table of EXTENDABLE_CORE_TABLES) {
+          await sql(`UPDATE ${table} SET leak_probe = '${SENTINEL}'`);
+          // The control: the column is live and holds the sentinel.
+          expect(
+            serialised(await sql(`SELECT * FROM ${table}`)),
+            table
+          ).toContain(SENTINEL);
+
+          const fromBundle = bundle.find(
+            candidate => isTable(candidate) && getTableName(candidate) === table
+          );
+          expect(fromBundle, table).toBeDefined();
+          expect(columnNames(fromBundle), table).not.toContain("leak_probe");
+
+          const fromRegistry = registry.getTable(table);
+          expect(fromRegistry, table).toBeTruthy();
+          expect(columnNames(fromRegistry), table).not.toContain("leak_probe");
+
+          const rows = await t.adapter.select<Record<string, unknown>>(table);
+          expect(rows.length, table).toBeGreaterThan(0);
+          expectNoHiddenColumn(serialised(rows));
+        }
       });
     });
   }
