@@ -410,6 +410,42 @@ export async function getVersionForDocument(
 }
 
 /**
+ * Refuse a caller the language of one version, before anything is written or
+ * returned about it. Returns the version's part, or undefined when there is no
+ * such version, which the read or write that follows refuses in its own way.
+ */
+async function assertVersionLanguageReadable(
+  document: {
+    scopeKind: VersionScopeKind;
+    slug: string;
+    entryId: string;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  versionNo: number
+): Promise<string | null | undefined> {
+  const part = await getService("versionsService").partOfVersion(
+    {
+      scopeKind: document.scopeKind,
+      scopeSlug: document.slug,
+      entryId: document.entryId,
+    },
+    versionNo
+  );
+  if (part === undefined) return undefined;
+  await assertHistoryLocalesReadable(
+    document.scopeKind,
+    document.slug,
+    document.entryId,
+    document.user,
+    document.authenticatedScope,
+    {},
+    [part]
+  );
+  return part;
+}
+
+/**
  * Record that a signed-in person was shown one version, for "the version you
  * last looked at" (see `domains/versions/version-views`). The admin calls this
  * when it actually shows a version or a comparison; no read records anything.
@@ -463,20 +499,8 @@ export async function markVersionSeenForDocument(
   // The version's language is asked about before anything is written. A
   // version's language never changes, so the mark below records the part
   // judged here.
-  const versionPart = await getService("versionsService").partOfVersion(
-    ref,
-    args.versionNo
-  );
-  if (versionPart === undefined) throw notFound("mark-seen-version-missing");
-  await assertHistoryLocalesReadable(
-    args.scopeKind,
-    args.slug,
-    args.entryId,
-    args.user,
-    args.authenticatedScope,
-    {},
-    [versionPart]
-  );
+  if ((await assertVersionLanguageReadable(args, args.versionNo)) === undefined)
+    throw notFound("mark-seen-version-missing");
   // One transaction holding the locks the sweeps of markers take: the
   // person's account row (account deletion), then the entity's registry row
   // and the document's row (entity and document deletion). A mark either
@@ -695,6 +719,12 @@ export async function setVersionLabelForDocument(
     args.user,
     readAuthenticatedScope(args.params)
   );
+  // A version is named in its own language's history, so the caller must be
+  // able to read that language before it is named or shown.
+  await assertVersionLanguageReadable(
+    { ...args, authenticatedScope: readAuthenticatedScope(args.params) },
+    args.versionNo
+  );
 
   // Renaming a version edits a record of the document, so it owes the
   // document's own update rules and not just the coarse `update-<slug>` the
@@ -790,6 +820,12 @@ export async function restoreVersionForDocument(
     args.entryId,
     args.user,
     readAuthenticatedScope(args.params)
+  );
+  // A restore reads the version's snapshot back into its own language, so
+  // the caller must be able to read that language before anything is written.
+  await assertVersionLanguageReadable(
+    { ...args, authenticatedScope: readAuthenticatedScope(args.params) },
+    args.versionNo
   );
 
   return restoreVersion({

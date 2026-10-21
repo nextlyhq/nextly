@@ -244,6 +244,26 @@ async function restGet(
   });
 }
 
+/** A REST write, as a key, of a path under the API with a JSON body. */
+async function restWrite(
+  method: "PATCH" | "POST",
+  key: string,
+  segments: string[],
+  body: unknown = {}
+): Promise<Response> {
+  const request = new Request(`http://localhost/api/${segments.join("/")}`, {
+    method,
+    headers: {
+      authorization: `Bearer ${key}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  return createDynamicHandlers()[method](request, {
+    params: Promise.resolve({ params: segments }),
+  });
+}
+
 const asPerson = (userId: string) => ({
   user: { id: userId },
   overrideAccess: false,
@@ -685,6 +705,164 @@ describe.each(getConfiguredTestDialects())(
       };
       expect(items.map(item => item.locale)).toContain("en");
       expect(items.map(item => item.locale)).not.toContain("es");
+    }, 120_000);
+
+    it("asks a version's own language before naming or restoring it, and names it only there", async () => {
+      const t = await boot(dialect);
+      const key = await keyHolding(t, ["read-regional", "update-regional"]);
+      const reader = await personHolding(t, ["read-regional"]);
+      const id = await regionalDocument(t);
+      const byLanguage = await versionsByLanguage(
+        t,
+        "collection",
+        "regional",
+        id
+      );
+      const [es] = byLanguage.get("es") ?? [];
+      const [en] = byLanguage.get("en") ?? [];
+      const versions = ["collections", "regional", "entries", id, "versions"];
+      const okOrNot = (response: Promise<Response>) =>
+        response.then(r => (r.ok ? "done" : "refused"));
+
+      expect([
+        await okOrNot(
+          restWrite("PATCH", key, [...versions, String(es)], { label: "x" })
+        ),
+        await okOrNot(
+          restWrite("POST", key, [...versions, String(es), "restore"])
+        ),
+      ]).toEqual(["refused", "refused"]);
+      // The same caller names and restores a version of a language it reads.
+      expect([
+        await okOrNot(
+          restWrite("PATCH", key, [...versions, String(en)], { label: "y" })
+        ),
+        await okOrNot(
+          restWrite("POST", key, [...versions, String(en), "restore"])
+        ),
+      ]).toEqual(["done", "done"]);
+
+      // Naming a Spanish version, as trusted code may, is an event of Spanish.
+      await t
+        .getService("versionsService")
+        .setLabel(
+          { scopeKind: "collection", scopeSlug: "regional", entryId: id },
+          es!,
+          "Spanish name",
+          { actor: { type: "system" } }
+        );
+      const subject = { kind: "collection" as const, slug: "regional", id };
+      const named = (await t.nextly.contentEvents.list({ subject })).items
+        .filter(e => e.kind === "named")
+        .map(e => [e.payload?.label, e.parts]);
+      expect(named).toContainEqual(["Spanish name", ["es"]]);
+      const seen = await t.nextly.contentEvents.list({
+        subject,
+        ...asPerson(reader),
+      });
+      expect(
+        seen.items.filter(e => e.kind === "named").map(e => e.payload?.label)
+      ).toEqual(["y"]);
+    }, 120_000);
+
+    it("asks a comparison's target language before pairing it, and only that", async () => {
+      const t = await boot(dialect);
+      const reader = await personHolding(t, ["read-regional"]);
+      const id = await regionalDocument(t);
+      const byLanguage = await versionsByLanguage(
+        t,
+        "collection",
+        "regional",
+        id
+      );
+      const [es] = byLanguage.get("es") ?? [];
+      const [en1, en2] = byLanguage.get("en") ?? [];
+      const document = {
+        scopeKind: "collection" as const,
+        slug: "regional",
+        entryId: id,
+        user: { id: reader },
+      };
+      const compare = (query: Record<string, unknown>) =>
+        getVersionDiffForDocument({ ...document, ...query }).then(
+          () => "compared",
+          (error: { code?: string }) => error.code
+        );
+
+      // A Spanish target is not found before its baseline is looked for.
+      expect(await compare({ to: es })).toBe("NOT_FOUND");
+      // An English pair is compared whatever language the request names.
+      expect(await compare({ from: en1, to: en2, locale: "es" })).toBe(
+        "compared"
+      );
+      expect(await compare({ to: en2, locale: "es" })).toBe("compared");
+    }, 120_000);
+
+    it("reads only the default language of a document no longer localized", async () => {
+      const t = await boot(dialect);
+      const reader = await personHolding(t, ["read-plain"]);
+      const created = await t.nextly.create({
+        collection: "plain",
+        data: { title: "one" },
+      });
+      const id = (created.item as { id: string }).id;
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: "plain",
+        entryId: id,
+      };
+      // History from when the collection had languages, beside today's.
+      const repo = new VersionsRepository(
+        t.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      );
+      for (const [versionNo, locale] of [
+        [2, "es"],
+        [3, "en"],
+      ] as const) {
+        await repo.insertVersion({
+          ref,
+          versionNo,
+          status: "draft",
+          isAutosave: false,
+          snapshot: { title: locale },
+          locale,
+        });
+      }
+      ensureCoreContentEventKinds();
+      const subject = { kind: "collection" as const, slug: "plain", id };
+      await t.adapter.transaction(tx =>
+        recordContentEvent(tx, {
+          subject,
+          kind: "saved",
+          actor: { kind: "system" },
+          note: "in Spanish, before",
+          versionNo: 2,
+          parts: { locales: ["es"] },
+        })
+      );
+      const document = {
+        scopeKind: "collection" as const,
+        slug: "plain",
+        entryId: id,
+        user: { id: reader },
+      };
+
+      const versions = await listVersionsForDocument(document);
+      expect(new Set(versions.items.map(v => v.locale))).toEqual(
+        new Set([null, "en"])
+      );
+      const events = await t.nextly.contentEvents.list({
+        subject,
+        ...asPerson(reader),
+      });
+      expect(events.items.map(e => e.note)).not.toContain("in Spanish, before");
+      expect([
+        await outcome(listVersionsForDocument({ ...document, locale: "es" })),
+        await outcome(getVersionForDocument({ ...document, versionNo: 2 })),
+        await outcome(getVersionForDocument({ ...document, versionNo: 3 })),
+      ]).toEqual(["refused", "refused", "readable"]);
     }, 120_000);
 
     it("withholds history recorded in a language once the install configures none", async () => {

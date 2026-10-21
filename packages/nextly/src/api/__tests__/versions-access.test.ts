@@ -37,6 +37,9 @@ vi.mock("../../di", () => ({
         return { getCollection: vi.fn().mockResolvedValue({ fields: [] }) };
       case "versionsService":
         return { list: vi.fn().mockResolvedValue([]), get: vi.fn() };
+      // No registered entity is localized, so history asks no language.
+      case "collectionRegistryService":
+        return { getCollectionBySlug: vi.fn().mockResolvedValue(null) };
       default:
         return {};
     }
@@ -266,7 +269,10 @@ describe("version list pagination meta", () => {
           : name === "adapter"
             ? // The caller has no "last looked at" markers.
               { select: vi.fn().mockResolvedValue([]) }
-            : {}) as typeof di.getService);
+            : name === "collectionRegistryService"
+              ? // Not localized, so the listing asks no language.
+                { getCollectionBySlug: vi.fn().mockResolvedValue(null) }
+              : {}) as typeof di.getService);
   });
 
   function ctx() {

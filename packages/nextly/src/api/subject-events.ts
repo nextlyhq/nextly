@@ -39,7 +39,6 @@ import {
   type ContentEventQuery,
   type ContentEventRecord,
 } from "../domains/content-events/repository";
-import { configuredLocales } from "../domains/i18n/configured-locales";
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
@@ -48,6 +47,7 @@ import { SHARED_PART } from "../schemas/content-events";
 import type { PaginationMeta } from "./response-shapes";
 import {
   assertVersionDocumentReadable,
+  historyLanguagesOf,
   readableHistoryLocales,
 } from "./versions-access";
 
@@ -284,7 +284,8 @@ async function authorizeSubject(
  * A deleted document's gate, and the parts its events may show.
  *
  * A row that is gone cannot be read in any language, so the languages shown
- * are the configured ones, which `mayReadDeletedDocument` decides alike. A
+ * are those its history can be asked about (`historyLanguagesOf`), which
+ * `mayReadDeletedDocument` decides alike. A
  * language no longer configured is withheld here as it is from a live
  * document's history, and a read naming one is refused.
  */
@@ -296,7 +297,10 @@ async function authorizeDeletedDocument(
   if (!(await mayReadDeletedDocument(subject, readerOf(caller)))) {
     throw refused(subject, "deleted-document-not-readable");
   }
-  const visibleParts = [...(configuredLocales() ?? []), SHARED_PART];
+  const visibleParts = [
+    ...(await historyLanguagesOf(subject.kind, subject.slug)),
+    SHARED_PART,
+  ];
   if ((query.parts ?? []).some(part => !visibleParts.includes(part))) {
     throw refused(subject, "deleted-document-language-not-readable");
   }

@@ -138,7 +138,8 @@ export class VersionsService {
       // rather than named in history while no row takes the name.
       await lockDocument(tx, ref);
       const repo = new VersionsRepository(tx);
-      if (!(await repo.findByVersionNo(ref, versionNo))) {
+      const named = await repo.findByVersionNo(ref, versionNo);
+      if (!named) {
         throw NextlyError.notFound({
           logContext: {
             reason: "version-pruned-while-naming",
@@ -171,6 +172,9 @@ export class VersionsService {
             personName: by.personName,
             versionNo,
             payload: { label },
+            // The language of the version named, so a reader of the history
+            // is shown its name only where they may read that language.
+            ...(named.locale ? { parts: { locales: [named.locale] } } : {}),
           }
         );
       }

@@ -275,6 +275,32 @@ export async function assertHistoryLocalesReadable(
 }
 
 /**
+ * The languages a document's history can be asked about: the configured ones
+ * for a localized collection or Single, and for one that is not, the default
+ * language alone. An unlocalized document reads the same in every language, so
+ * no other language can be asked about it, and history it holds from when it
+ * was localized stays withheld. The default language stays, because a save of
+ * an unlocalized document can be recorded under it.
+ */
+export async function historyLanguagesOf(
+  scopeKind: VersionScopeKind,
+  slug: string
+): Promise<ReadonlySet<string>> {
+  const configured = configuredLocales() ?? new Set<string>();
+  const entity = await registryEntityOf(scopeKind, slug);
+  if ((entity as { localized?: boolean } | null)?.localized === true) {
+    return configured;
+  }
+  const defaultLocale =
+    getService("config").localization?.defaultLocale ?? null;
+  return new Set(
+    defaultLocale !== null && configured.has(defaultLocale)
+      ? [defaultLocale]
+      : []
+  );
+}
+
+/**
  * The languages of a document the caller may read its history in.
  *
  * Asked of the document's read in each language, because a read rule or hook
@@ -303,9 +329,9 @@ export async function readableHistoryLocales(
   hookInputs: DocumentReadHookInputs = {},
   among?: readonly string[]
 ): Promise<ReadonlySet<string>> {
-  const configured = configuredLocales() ?? new Set<string>();
-  const asked = (among ?? [...configured]).filter(locale =>
-    configured.has(locale)
+  const languages = await historyLanguagesOf(scopeKind, slug);
+  const asked = (among ?? [...languages]).filter(locale =>
+    languages.has(locale)
   );
   const readable = new Set<string>();
   for (const group of authorizationGroups(asked)) {
@@ -1001,8 +1027,11 @@ export async function compareDocumentVersions(args: {
   query: ComparisonQuery;
 }): Promise<VersionDiff> {
   const { query } = args;
-  // A comparison scoped to a language reads that language's history to find
-  // its pair, so the language is asked about before anything is read.
+  // The language whose history finds the pair is asked about before anything
+  // of it is read, or a refusal said: the target's own when one is named,
+  // since the baseline is found in its part, and otherwise the `locale` the
+  // server pairs in. An explicit pair names no language here; its two rows are
+  // asked about below.
   await assertHistoryLocalesReadable(
     args.scopeKind,
     args.slug,
@@ -1010,7 +1039,7 @@ export async function compareDocumentVersions(args: {
     args.user,
     args.authenticatedScope,
     {},
-    [query.locale ?? null]
+    [await pairingPart(args, query)]
   );
   let pair: { from: number; to: number };
   let baseline: VersionDiff["baseline"];
@@ -1061,6 +1090,28 @@ export async function compareDocumentVersions(args: {
     authenticatedScope: args.authenticatedScope,
   });
   return baseline ? { ...diff, baseline } : diff;
+}
+
+/**
+ * The part a comparison's pair is found in, before it is resolved: the
+ * target's, when the comparison names one and not a pair, else the `locale`
+ * it names. Null when it names neither, or names a pair.
+ */
+async function pairingPart(
+  document: { scopeKind: VersionScopeKind; slug: string; entryId: string },
+  query: ComparisonQuery
+): Promise<string | null> {
+  if (query.from !== undefined) return null;
+  if (query.to === undefined) return query.locale ?? null;
+  const part = await getService("versionsService").partOfVersion(
+    {
+      scopeKind: document.scopeKind,
+      scopeSlug: document.slug,
+      entryId: document.entryId,
+    },
+    query.to
+  );
+  return part ?? null;
 }
 
 /** The collection's or Single's registry record, or null when it is gone. */
