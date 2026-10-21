@@ -33,7 +33,7 @@ import {
   type CallerGrants,
 } from "../../shared/lib/field-level-registry";
 
-import { storeDraftSave } from "./draft-save";
+import { canonicalJson, storeDraftSave } from "./draft-save";
 import type { VersionCaptureService } from "./version-capture-service";
 import { registerVersionPinHolder, versionPins } from "./version-pins";
 import type { VersionRef } from "./versions-repository";
@@ -68,25 +68,13 @@ function parsedContainer(value: unknown): unknown {
 
 /**
  * A stored value in one comparable form. A version's snapshot went through
- * JSON on its way into storage, so the live row's value is put through the
- * same: a date becomes its ISO string, a container held as text is parsed,
- * and object keys are ordered, so two copies of one value compare equal
- * however each was produced.
+ * JSON on its way into storage, so the live value is put through the same: a
+ * date becomes its ISO string, a container held as text is parsed, and a
+ * component row's own timestamps, which a publish rewrites, are left out, as
+ * a save's no-op check leaves them out.
  */
 function comparable(value: unknown): string {
-  return JSON.stringify(
-    parsedContainer(value) ?? null,
-    (_key, inner: unknown) => {
-      if (inner && typeof inner === "object" && !Array.isArray(inner)) {
-        return Object.fromEntries(
-          Object.entries(inner as Record<string, unknown>).sort(([a], [b]) =>
-            a < b ? -1 : a > b ? 1 : 0
-          )
-        );
-      }
-      return inner;
-    }
-  );
+  return canonicalJson(parsedContainer(value) ?? null);
 }
 
 /**

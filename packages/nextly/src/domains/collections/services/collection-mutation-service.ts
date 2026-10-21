@@ -165,6 +165,7 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
+import { perLanguageFieldNames } from "../../singles/services/single-publish-all";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { mergeComponentPatches } from "../../versions/draft-components";
@@ -2214,26 +2215,58 @@ export class CollectionMutationService extends BaseService {
    * Never mutates the input.
    */
   /**
-   * The fields every language of a localized document shares that its main
-   * row stores: those its translations table does not hold. Narrowed to the
-   * keys the live document carries, so a relation or component kept in tables
-   * of its own is not compared as a column.
+   * A localized document as it stands live, in the shape a version snapshot
+   * holds, and the fields every language shares in it. The main row's shared
+   * columns, its shared components, and its many-to-many relations: a publish
+   * writes each from the pending change. A translated field, and a component
+   * whose values are kept per language, belong to their language.
+   *
+   * @param main The live main row, shaped as a snapshot's is.
    */
-  private async sharedFieldsOf(
-    collectionName: string,
-    fields: FieldDefinition[],
-    live: Record<string, unknown>,
-    executor: unknown
-  ): Promise<string[]> {
+  private async liveSharedDocument(
+    tx: TransactionContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      tableName: string;
+      fields: FieldDefinition[];
+      main: Record<string, unknown>;
+      locale: string | null;
+    }
+  ): Promise<{ live: Record<string, unknown>; shared: string[] }> {
+    const { collectionName, entryId, tableName, fields, main } = args;
+    const executor = tx.getDrizzle();
+    const relations = await this.buildFullSnapshotRelations(
+      tx,
+      entryId,
+      collectionName,
+      tableName,
+      fields,
+      fields.filter(
+        f =>
+          f.type === "relationship" && f.options?.relationType === "manyToMany"
+      ),
+      args.locale ?? undefined
+    );
+    const live = assembleDocument(
+      await this.snapshotPartsFor({ parentRow: main, ...relations }, fields, tx)
+    );
     const companion = await this.fileManager.loadCompanionSchema(
       collectionName,
       executor
     );
-    return sharedFieldNames(
-      fields,
-      new Set((companion?.localizedFields ?? []).map(f => f.name)),
-      live
+    const translated = new Set(
+      (companion?.localizedFields ?? []).map(f => f.name)
     );
+    const service = this.fieldGroupDataService;
+    const perLanguage = service
+      ? await perLanguageFieldNames(
+          fields as unknown as FieldConfig[],
+          translated,
+          slug => service.isComponentLocalized(slug, executor)
+        )
+      : translated;
+    return { live, shared: sharedFieldNames(fields, perLanguage, live) };
   }
 
   private deserializeJsonFieldsForSnapshot(
@@ -3361,16 +3394,19 @@ export class CollectionMutationService extends BaseService {
           .where(eq(schema.id, params.entryId))
           .limit(1);
         if (!pending || !row) return null;
-        const live = this.deserializeJsonFieldsForSnapshot(
-          convertTimestampsToCamelCase({ ...(row as Record<string, unknown>) }),
-          fields
-        );
-        const shared = await this.sharedFieldsOf(
-          params.collectionName,
+        const { live, shared } = await this.liveSharedDocument(tx, {
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          tableName,
           fields,
-          live,
-          tx.getDrizzle()
-        );
+          main: this.deserializeJsonFieldsForSnapshot(
+            convertTimestampsToCamelCase({
+              ...(row as Record<string, unknown>),
+            }),
+            fields
+          ),
+          locale: draftLocale,
+        });
         const took = await takeLiveSharedValuesInto(tx, this.versionCapture, {
           ref,
           locale: draftLocale,
@@ -7375,16 +7411,21 @@ export class CollectionMutationService extends BaseService {
       !existingDraft &&
       (collection as { localized?: boolean }).localized === true
     ) {
+      // A held save has written nothing live, so the live document read
+      // here is the one the change began from.
+      const { live, shared } = await this.liveSharedDocument(tx, {
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        tableName: collectionTableName(collection, params.collectionName),
+        fields,
+        main: ctx.liveParentRow,
+        locale: draftLocale,
+      });
       await recordSharedBase(tx, {
         ref: draftRef,
         locale: draftLocale,
-        shared: await this.sharedFieldsOf(
-          params.collectionName,
-          fields,
-          ctx.liveParentRow,
-          tx.getDrizzle()
-        ),
-        live: ctx.liveParentRow,
+        shared,
+        live,
       });
     }
     // Both update paths hold a draft through here, so the save's history
@@ -8568,12 +8609,19 @@ export class CollectionMutationService extends BaseService {
               // someone else published since the change began would be put
               // back by this write, so the publish is refused, naming it.
               if (documentLocalized) {
-                const live = this.deserializeJsonFieldsForSnapshot(
-                  convertTimestampsToCamelCase({
-                    ...(preUpdateRow as Record<string, unknown>),
-                  }),
-                  fields
-                );
+                const { live, shared } = await this.liveSharedDocument(tx, {
+                  collectionName: params.collectionName,
+                  entryId: params.entryId,
+                  tableName,
+                  fields,
+                  main: this.deserializeJsonFieldsForSnapshot(
+                    convertTimestampsToCamelCase({
+                      ...(preUpdateRow as Record<string, unknown>),
+                    }),
+                    fields
+                  ),
+                  locale: draftLocaleKey,
+                });
                 const stale = await outOfDateSharedFields(tx, {
                   ref: {
                     scopeKind: "collection",
@@ -8581,12 +8629,7 @@ export class CollectionMutationService extends BaseService {
                     entryId: params.entryId,
                   },
                   locale: draftLocaleKey,
-                  shared: await this.sharedFieldsOf(
-                    params.collectionName,
-                    fields,
-                    live,
-                    tx.getDrizzle()
-                  ),
+                  shared,
                   live,
                   pending: snapshotRecord(workingDraft.snapshot),
                 });
