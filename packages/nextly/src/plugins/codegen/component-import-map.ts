@@ -446,6 +446,29 @@ const AGREEMENT_CHECK = [
   "}",
 ].join("\n");
 
+/** The line the map imports the site's config with, written and read as one: see `configImportOf`. */
+const SITE_CONFIG_IMPORT = "import type * as siteConfig from ";
+
+/**
+ * The config import a generated map names, as `buildComponentImportMap` wrote it; undefined when it
+ * names none or the line cannot be read. A rewrite keeps it, so the map goes on checking against
+ * the config it was generated for, a `--config` path included, rather than one found again.
+ */
+export function configImportOf(mapCode: string): string | undefined {
+  const line = mapCode
+    .split("\n")
+    .find(each => each.startsWith(SITE_CONFIG_IMPORT));
+  if (line === undefined) return undefined;
+  try {
+    const specifier: unknown = JSON.parse(
+      line.slice(SITE_CONFIG_IMPORT.length).replace(/;\s*$/, "")
+    );
+    return typeof specifier === "string" ? specifier : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Build the generated import-map module source for all plugins' admin
  * components. Deterministic: modules and registry keys are sorted; one
@@ -477,9 +500,7 @@ export function buildComponentImportMap(
   // Type-only, so it is erased and no server code reaches the browser bundle.
   if (configImport !== undefined) {
     lines.push('import type { DeclaredComponentMap } from "nextly";');
-    lines.push(
-      `import type * as siteConfig from ${JSON.stringify(configImport)};`
-    );
+    lines.push(`${SITE_CONFIG_IMPORT}${JSON.stringify(configImport)};`);
   }
   lines.push("");
   lines.push("const registered = {");
@@ -555,7 +576,11 @@ export function buildImportMapArtifacts(
 
 /**
  * How the generated map, in `mapDir`, imports the site's config file at `configFile`: relative,
- * with forward slashes and no extension, as a TypeScript import names a module. Both absolute.
+ * with forward slashes, as TypeScript resolves it. Both absolute.
+ *
+ * A `.ts` or `.js` config is named without its extension. An ESM one keeps it, written as the
+ * output's: `.mjs` for an `.mjs` config and for an `.mts` source, which TypeScript maps back to the
+ * source. Without it the specifier resolves to neither under the site's Bundler resolution.
  */
 export function configImportSpecifier(
   mapDir: string,
@@ -564,6 +589,7 @@ export function configImportSpecifier(
   const path = relative(mapDir, configFile)
     .split(sep)
     .join("/")
-    .replace(/\.(m?ts|m?js)$/, "");
+    .replace(/\.(ts|js)$/, "")
+    .replace(/\.mts$/, ".mjs");
   return path.startsWith(".") ? path : `./${path}`;
 }

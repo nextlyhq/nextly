@@ -1,3 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 import { buildPluginAdminMeta, type PluginAdminMeta } from "../admin-meta";
@@ -159,16 +164,49 @@ describe("the map's check against the site's config", () => {
       "/app/nextly.config.ts",
       "../../../nextly.config",
     ],
+    // An ESM config keeps its module extension, written as the output's (`.mjs` for an `.mts`
+    // source, which TypeScript maps back): an extensionless specifier resolves to neither under
+    // the site's Bundler resolution.
     [
       "/app/src/types/generated",
       "/app/src/nextly.config.mts",
-      "../../nextly.config",
+      "../../nextly.config.mjs",
     ],
-    ["/app", "/app/nextly.config.mjs", "./nextly.config"],
+    ["/app", "/app/nextly.config.mjs", "./nextly.config.mjs"],
     ["/app/types", "/app/config/nextly.config.js", "../config/nextly.config"],
   ])("imports the config from %s as it sits at %s", (dir, file, expected) => {
     expect(configImportSpecifier(dir, file)).toBe(expected);
   });
+});
+
+// What the string is for: the site's compiler resolving it to the config. Checked with TypeScript's
+// own resolver under the Bundler resolution a Next.js site uses, against real files, since a
+// specifier only reads right if it also resolves.
+describe("the config specifier, as the site's compiler resolves it", () => {
+  it.each(["nextly.config.mts", "nextly.config.mjs", "nextly.config.ts"])(
+    "resolves %s from the generated map's directory",
+    file => {
+      const root = mkdtempSync(join(tmpdir(), "config-specifier-"));
+      try {
+        const mapDir = join(root, "src", "types", "generated");
+        mkdirSync(mapDir, { recursive: true });
+        writeFileSync(join(root, file), "export default {};\n");
+        const resolved = ts.resolveModuleName(
+          configImportSpecifier(mapDir, join(root, file)),
+          join(mapDir, "nextly-component-map.ts"),
+          {
+            module: ts.ModuleKind.ESNext,
+            moduleResolution: ts.ModuleResolutionKind.Bundler,
+            allowJs: true,
+          },
+          ts.sys
+        ).resolvedModule;
+        expect(resolved?.resolvedFileName).toBe(join(root, file));
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
 });
 
 describe("buildImportMapArtifacts", () => {

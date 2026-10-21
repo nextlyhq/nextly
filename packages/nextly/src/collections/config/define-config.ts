@@ -457,7 +457,9 @@ function findLocalizedEntitySlug(config: NextlyConfig): string | null {
  * @throws Error if configuration is invalid (e.g., duplicate slugs)
  */
 export function defineConfig<
-  P extends readonly PluginDefinition[] = PluginDefinition[],
+  // `| []` asks for the list as a tuple, so a plugin typed `any` stays one element rather than
+  // typing the whole list `any[]`; see `WidgetsOfPlugins`.
+  P extends readonly PluginDefinition[] | [] = PluginDefinition[],
 >(
   config: Omit<NextlyConfig, "plugins"> & { plugins?: P }
 ): SanitizedNextlyConfig & DeclaredWidgetsRecord<WidgetsOfPlugins<P>> {

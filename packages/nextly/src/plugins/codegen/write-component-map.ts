@@ -41,16 +41,19 @@ export async function writeComponentMapFiles(
   plugins: PluginDefinition[],
   typesOutputPath: string,
   cwd: string,
-  configFile?: string
+  /**
+   * The site's config, for the map's check of each widget component against its widget: its file,
+   * whose import is worked out from where the map sits, or an import an earlier write chose, kept
+   * as it stands. None where there is no config, and the map is then written unchecked, as before.
+   */
+  config?: string | { import: string }
 ): Promise<ComponentMapWrite> {
-  // The config's import, for the map's check of each widget component against its widget: none
-  // where there is no config file, and the map is then written unchecked, as before.
   const configImport =
-    configFile === undefined
-      ? undefined
+    config === undefined || typeof config !== "string"
+      ? config?.import
       : configImportSpecifier(
           resolve(cwd, dirname(typesOutputPath)),
-          resolve(cwd, configFile)
+          resolve(cwd, config)
         );
   const planned = await Promise.all(
     buildImportMapArtifacts(plugins, typesOutputPath, configImport).map(

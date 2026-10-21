@@ -32,13 +32,16 @@ export interface DeclaredWidgetsRecord<W extends AnyWidget> {
  * The widgets each plugin declares, from the plugins' own types. A plugin whose widgets' types
  * were not kept (a plain object, JavaScript, or a factory returning `PluginDefinition`) brings
  * `AnyWidget`, which `TypedWidgets` then leaves out.
+ *
+ * 🔴 Taken element by element, before any union is formed. A plugin typed `any` (JavaScript with
+ * no declarations) would make `P[number]` itself `any`, erasing the typed plugins beside it; taken
+ * on its own it brings only widgets `TypedWidgets` leaves out. `defineConfig` infers its list as a
+ * tuple for the same reason: as a plain array, one `any` element types the whole array `any[]`
+ * before this sees it.
  */
-export type WidgetsOfPlugins<P extends readonly unknown[]> =
-  P[number] extends infer Each
-    ? Each extends PluginDefinition<infer W>
-      ? W
-      : never
-    : never;
+export type WidgetsOfPlugins<P extends readonly unknown[]> = {
+  [K in keyof P]: P[K] extends PluginDefinition<infer W> ? W : never;
+}[number];
 
 /**
  * The widgets a config declares, given the config or the module that exports it: its default

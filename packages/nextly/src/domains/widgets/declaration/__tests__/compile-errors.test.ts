@@ -756,6 +756,26 @@ export const registered = {
     message: "is not assignable to type '(props: WidgetProps<",
   },
   {
+    // A plugin typed `any` (a JavaScript plugin with no declarations) must not collapse the list's
+    // element type to `any`, which would erase the typed plugins beside it.
+    name: "a plugin typed any beside a typed one does not switch the map's check off",
+    ...pair(
+      card => `${SITE}
+declare const fromJavaScript: any;
+const config = defineConfig({ plugins: [fromJavaScript, shop] });
+
+export const registered = {
+  "@acme/nextly-plugin-shop/admin#RevenueCard": ${card}, ${MARK}
+  "@acme/nextly-plugin-shop/admin#UnpaidCard": UnpaidCard,
+} satisfies DeclaredComponentMap<typeof config>;
+`,
+      "UnpaidCard",
+      "RevenueCard"
+    ),
+    code: 2322,
+    message: "is not assignable to type '(props: WidgetProps<",
+  },
+  {
     name: "a site's config keeps a plugin's widget, and its props, through definePlugin and defineConfig",
     ...pair(
       kept => `${SITE}

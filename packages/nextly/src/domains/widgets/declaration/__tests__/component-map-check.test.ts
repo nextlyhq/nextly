@@ -272,6 +272,38 @@ describe("where the map is", () => {
   });
 });
 
+describe("the config a development rewrite checks against", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "nextly-component-check-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // `generate:types --config <path>` wrote the map against that config; a rewrite searching the
+  // default names again would check against a different file, or none.
+  it("is the one the existing map imports, not one found again by the default names", async () => {
+    await mkdir(join(root, "src/types/generated"), { recursive: true });
+    await writeFile(join(root, "nextly.config.ts"), "");
+    await writeFile(
+      join(root, "src/types/generated/plugin-admin-imports.generated.ts"),
+      'import type * as siteConfig from "../../../config/site.config.mjs";\n'
+    );
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    vi.stubEnv("NODE_ENV", "development");
+
+    await check([]);
+
+    expect(writeComponentMapFiles).toHaveBeenCalledWith(
+      [shop],
+      join(root, "src/types/generated/nextly-types.ts"),
+      root,
+      { import: "../../../config/site.config.mjs" }
+    );
+  });
+});
+
 describe("two widgets drawn with one component", () => {
   it("names and counts both when it is missing", async () => {
     vi.stubEnv("NODE_ENV", "production");
