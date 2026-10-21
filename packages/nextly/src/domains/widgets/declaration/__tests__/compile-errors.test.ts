@@ -857,6 +857,30 @@ export const registered = {
 `,
   },
   {
+    // 🔴 The config's type includes every branch, so a plugin added only when a setting is on is
+    // declared there, while the map generated without that setting has no component for it.
+    // Requiring one refused the site's own build; the admin's check at run time is what refuses
+    // a missing component, when the plugin is actually on.
+    name: "a plugin the config adds only when a setting is on needs no component in the map",
+    source: `import { defineConfig } from "../../../../collections/config/define-config";
+import type { DeclaredComponentMap } from "../../../../plugins/declared-widgets";
+import { definePlugin } from "../../../../plugins/plugin-context";
+import { widgets } from "./plugin/widgets";
+
+declare const turnedOn: boolean;
+const shop = definePlugin({
+  name: "shop",
+  version: "1.0.0",
+  nextly: "*",
+  contributes: { dashboard: { widgets } },
+});
+const config = defineConfig({ plugins: [...(turnedOn ? [shop] : [])] });
+export const registered = {
+  "@nextlyhq/plugin-page-builder/admin#BlocksField": (): null => null,
+} satisfies DeclaredComponentMap<typeof config>;
+`,
+  },
+  {
     name: "a JavaScript config, typed any, leaves the map unchecked rather than failing",
     source: `import type { DeclaredComponentMap } from "../../../../plugins/declared-widgets";
 

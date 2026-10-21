@@ -75,8 +75,13 @@ type TypedWidgets<W> = W extends AnyWidget
 
 /**
  * The type a site's generated admin component map is checked against: each typed widget's
- * declared component path holding a component that takes that widget's props, and any other
- * path (a page, a field editor, an untyped plugin's widget) holding anything.
+ * declared component path, where the map has it, holding a component that takes that widget's
+ * props, and any other path (a page, a field editor, an untyped plugin's widget) holding anything.
+ *
+ * A typed path may be absent. The config's type includes every branch of the config, a plugin
+ * added only when some setting is on among them, while the map holds what the config registered
+ * when it was generated. That every declared component is registered is the admin's own check at
+ * run time, which refuses to serve without one; this one is about the pairing.
  *
  * ```ts
  * import type * as siteConfig from "../../nextly.config";
@@ -85,7 +90,7 @@ type TypedWidgets<W> = W extends AnyWidget
  *
  * @experimental Meant to become stable surface once the plugin API's shape for widgets settles.
  */
-export type DeclaredComponentMap<C> = WidgetComponentMap<
-  TypedWidgets<WidgetsOf<C>>
+export type DeclaredComponentMap<C> = Partial<
+  WidgetComponentMap<TypedWidgets<WidgetsOf<C>>>
 > &
   Readonly<Record<string, unknown>>;
