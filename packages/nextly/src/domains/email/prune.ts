@@ -215,7 +215,14 @@ export async function pruneSendClaims(
   const at = now.getTime();
   const expired: WhereCondition[][] = [
     [
-      { column: "state", op: "IN", value: ["claimed", "failed"] },
+      { column: "state", op: "=", value: "failed" },
+      { column: "leaseExpiresAt", op: "<", value: at - CLAIM_TAKEOVER_MS },
+    ],
+    // A claim taken over from a partly delivered one keeps its accepted
+    // calls in `result`, and is kept for the longer lifetime below.
+    [
+      { column: "state", op: "=", value: "claimed" },
+      { column: "result", op: "IS NULL" },
       { column: "leaseExpiresAt", op: "<", value: at - CLAIM_TAKEOVER_MS },
     ],
   ];
@@ -225,6 +232,11 @@ export async function pruneSendClaims(
       // long as a successful one.
       { column: "state", op: "IN", value: ["sent", "partial"] },
       { column: "settledAt", op: "<", value: at - sentLifetimeMs },
+    ]);
+    expired.push([
+      { column: "state", op: "=", value: "claimed" },
+      { column: "result", op: "IS NOT NULL" },
+      { column: "claimedAt", op: "<", value: at - sentLifetimeMs },
     ]);
   }
   let removed = 0;

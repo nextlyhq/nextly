@@ -375,6 +375,35 @@ describe.each(getConfiguredTestDialects())(
       expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
     }, 120_000);
 
+    it("keeps the accepted calls of a partly delivered send whose retry stopped", async () => {
+      const { t, oneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      const keyed = {
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: oneAtATime,
+      };
+      await t.nextly.email.send(keyed);
+      // As a retry that took the claim over and then stopped leaves it.
+      await t.adapter.update(
+        "email_send_claims",
+        { state: "claimed", leaseExpiresAt: 0 },
+        { and: [{ column: "state", op: "=", value: "partial" }] }
+      );
+
+      await pruneSendClaims(
+        t.adapter as never,
+        90 * 24 * 60 * 60 * 1000,
+        new Date(Date.now() + CLAIM_TAKEOVER_MS + 1000)
+      );
+      await t.nextly.email.send(keyed);
+
+      expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
+    }, 120_000);
+
     it("refuses the key with a different message, through the Direct API and REST", async () => {
       const { t } = await boot(dialect);
       await t.nextly.email.send({
