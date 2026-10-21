@@ -95,6 +95,7 @@ import {
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { recordWriteEvent } from "../../content-events/write-event";
+import { liveFieldGroupReadPass } from "../../field-groups/live-read-access";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -860,6 +861,71 @@ export class SingleQueryService extends BaseService {
     return doc;
   }
 
+  /**
+   * Field read rules on one Single document, in place: its own fields, and
+   * the fields inside the field groups it holds.
+   */
+  private async judgeReadFields(
+    doc: Record<string, unknown>,
+    slug: string,
+    fields: FieldConfig[],
+    options: GetSingleOptions
+  ): Promise<void> {
+    // Field read access, then the field-level afterRead hooks, then field
+    // read access AGAIN, sharing one redactions store: the two passes the
+    // collection read runs. The first hides a denied field from the hooks,
+    // so a hook on an allowed field cannot read a denied sibling and copy it
+    // onto its own value; the second re-judges the post-hook document, with
+    // the first pass's removals restored as evidence where the rows still
+    // stand, so a denied field a hook reintroduced is caught. Document trust
+    // and FIELD trust are separate questions and this read may answer them
+    // differently: `overrideAccess` alone means both; a caller that asked for
+    // field rules to be enforced keeps its document bypass and gives up only
+    // the field one.
+    const skipFieldRules =
+      options.enforceFieldAccess === true ? false : options.overrideAccess;
+    // The field-access identity, never the hook one. A preview judges these
+    // fields as the sharer while the hooks go on seeing the anonymous bearer
+    // who is actually asking.
+    const fieldAccessUser = options.fieldAccessUser ?? options.user;
+    const fieldAccess = {
+      kind: "single" as const,
+      slug,
+      entry: doc,
+      user: fieldAccessUser,
+      overrideAccess: skipFieldRules,
+      // One grants resolver for both passes, so the caller's roles and
+      // permissions are read once and both passes judge with one authority.
+      grants: callerAccessGrants(fieldAccessUser),
+    };
+    // The rules on fields inside field groups, which the Single's own pass
+    // does not reach, judged with the same grants resolver. Before the hooks
+    // and after them, as the collection read runs it: a hook cannot copy a
+    // denied value onto an allowed field, and one it puts back is caught.
+    const fieldGroupPass = skipFieldRules
+      ? undefined
+      : await liveFieldGroupReadPass(fields, this.fieldGroupDataService);
+    const fieldGroupCaller = {
+      user: fieldAccessUser,
+      grants: fieldAccess.grants,
+    };
+    const sourceRedactions: ReadAccessRedactions = new WeakMap();
+    await applyFieldReadAccess(fieldAccess, sourceRedactions);
+    await fieldGroupPass?.(doc, fieldGroupCaller);
+
+    await runFieldHooks({
+      kind: "single",
+      slug,
+      phase: "afterRead",
+      data: doc,
+      operation: "read",
+      user: options.user,
+    });
+
+    await applyFieldReadAccess(fieldAccess, sourceRedactions);
+    await fieldGroupPass?.(doc, fieldGroupCaller);
+  }
+
   // ============================================================
   // Public API
   // ============================================================
@@ -1060,46 +1126,7 @@ export class SingleQueryService extends BaseService {
 
       this.logger.debug("Single document retrieved", { slug, id: doc.id });
 
-      // Field read access, then the field-level afterRead hooks, then field
-      // read access AGAIN, sharing one redactions store: the two passes the
-      // collection read runs. The first hides a denied field from the hooks,
-      // so a hook on an allowed field cannot read a denied sibling and copy it
-      // onto its own value; the second re-judges the post-hook document, with
-      // the first pass's removals restored as evidence where the rows still
-      // stand, so a denied field a hook reintroduced is caught. Document trust
-      // and FIELD trust are separate questions and this read may answer them
-      // differently: `overrideAccess` alone means both; a caller that asked for
-      // field rules to be enforced keeps its document bypass and gives up only
-      // the field one.
-      const skipFieldRules =
-        options.enforceFieldAccess === true ? false : options.overrideAccess;
-      // The field-access identity, never the hook one. A preview judges these
-      // fields as the sharer while the hooks go on seeing the anonymous bearer
-      // who is actually asking.
-      const fieldAccessUser = options.fieldAccessUser ?? options.user;
-      const fieldAccess = {
-        kind: "single" as const,
-        slug,
-        entry: doc,
-        user: fieldAccessUser,
-        overrideAccess: skipFieldRules,
-        // One grants resolver for both passes, so the caller's roles and
-        // permissions are read once and both passes judge with one authority.
-        grants: callerAccessGrants(fieldAccessUser),
-      };
-      const sourceRedactions: ReadAccessRedactions = new WeakMap();
-      await applyFieldReadAccess(fieldAccess, sourceRedactions);
-
-      await runFieldHooks({
-        kind: "single",
-        slug,
-        phase: "afterRead",
-        data: doc,
-        operation: "read",
-        user: options.user,
-      });
-
-      await applyFieldReadAccess(fieldAccess, sourceRedactions);
+      await this.judgeReadFields(doc, slug, singleMeta.fields, options);
 
       // Defense in depth, after every user callback on this document: hooks,
       // access rules and field rules are all app code, and this is the last

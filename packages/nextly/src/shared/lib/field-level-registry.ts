@@ -488,6 +488,30 @@ export function hasFieldAccessRule(
   return fns ? nestedHasAccessCallback(fns, operation) : false;
 }
 
+/**
+ * Whether any field group declares an access rule for one operation, at any
+ * depth.
+ *
+ * The question a read asks before paying to resolve the field groups its
+ * fields reach: their rules live in their own registrations, so an
+ * application whose field groups declare none has nothing to judge inside
+ * them, and the schema lookups would be pure cost on every read.
+ */
+export function anyFieldGroupHasAccessRule(
+  operation: "create" | "update" | "read"
+): boolean {
+  const prefix = key("fieldGroup", "");
+  for (const [registered, fns] of store()) {
+    if (
+      registered.startsWith(prefix) &&
+      nestedHasAccessCallback(fns, operation)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function nestedHasAccessCallback(
   fns: Record<string, FieldFunctions>,
   operation: "create" | "update" | "read"

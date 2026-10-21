@@ -95,6 +95,7 @@ import {
 } from "../../../shared/lib/case-conversion";
 import {
   applyFieldReadAccess,
+  callerAccessGrants,
   type ReadAccessRedactions,
   runFieldHooks,
 } from "../../../shared/lib/field-level-registry";
@@ -122,6 +123,7 @@ import {
 } from "../../../types/pagination";
 import type { PaginatedResponse } from "../../../types/pagination";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { liveFieldGroupReadPass } from "../../field-groups/live-read-access";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import { resolveTypeColumns } from "../../field-groups/storage/resolve-storage-names";
@@ -2321,6 +2323,23 @@ export class CollectionQueryService extends BaseService {
     // they cannot drift apart.
     const skipFieldRules =
       params.enforceFieldAccess === true ? false : params.overrideAccess;
+    // The rules on fields inside field groups, which the collection's own pass
+    // does not reach: resolved once for the whole read, judged by one grants
+    // resolver across every row, so the caller's roles are read once.
+    const fieldGroupPass = skipFieldRules
+      ? undefined
+      : await liveFieldGroupReadPass(
+          fields as FieldConfig[],
+          this.fieldGroupDataService
+        );
+    const fieldGroupCaller = {
+      user: params.fieldAccessUser ?? params.user,
+      authenticatedScope: params.authenticatedScope,
+      grants: callerAccessGrants(
+        params.fieldAccessUser ?? params.user,
+        params.authenticatedScope
+      ),
+    };
     for (const row of finalData) {
       const sourceRedactions: ReadAccessRedactions = new WeakMap();
       const target = {
@@ -2331,6 +2350,11 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: skipFieldRules,
       };
       await applyFieldReadAccess(target, sourceRedactions);
+      // The field-group pass runs before the field-level hooks, so a hook on
+      // an allowed field cannot copy a denied field-group value onto its own,
+      // and again after them, so one a hook put back is caught. It only
+      // removes, so the second run can narrow the first, never restore it.
+      await fieldGroupPass?.(row, fieldGroupCaller);
       await runFieldHooks({
         kind: "collection",
         slug: collectionName,
@@ -2340,6 +2364,7 @@ export class CollectionQueryService extends BaseService {
         user: params.user,
       });
       await applyFieldReadAccess(target, sourceRedactions);
+      await fieldGroupPass?.(row, fieldGroupCaller);
     }
 
     // Authoritative related-row sanitization over the assembled response, after
