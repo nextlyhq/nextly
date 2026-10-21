@@ -41,6 +41,7 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { buildAuditLogWriter } from "../../audit/audit-log-writer";
 
 import { col } from "./dsl";
+import { EXTENDABLE_CORE_TABLES } from "./extension-columns";
 
 /** What the hidden column holds. Searched for in every response. */
 const SENTINEL = "hidden-sentinel-7f3a";
@@ -49,8 +50,13 @@ const ATTEMPT = "written-through-api-9c1e";
 
 const hiddenColumns = { leakProbe: col.text({ nullable: true }) };
 
-/** Every core table a hook may extend. */
-const CORE_TARGETS = [
+/**
+ * The core tables this file has a section for. The column is contributed to
+ * every table in `EXTENDABLE_CORE_TABLES` itself, and a guard below fails
+ * when that set names a table not listed here, so a table made extendable
+ * later cannot go untested while this suite stays green.
+ */
+const COVERED_TABLES = [
   "users",
   "media",
   "nextly_jobs",
@@ -66,7 +72,7 @@ const contributor = definePlugin({
     schema: {
       extend: [
         ({ schema }) => {
-          for (const table of CORE_TARGETS) {
+          for (const table of EXTENDABLE_CORE_TABLES) {
             schema.extendTable(table, { columns: hiddenColumns });
           }
         },
@@ -127,7 +133,7 @@ describe.each(getConfiguredTestDialects())(
      * than as an empty column.
      */
     async function storedBy(
-      table: (typeof CORE_TARGETS)[number],
+      table: (typeof COVERED_TABLES)[number],
       column: string,
       value: string
     ): Promise<unknown[]> {
@@ -140,6 +146,18 @@ describe.each(getConfiguredTestDialects())(
     /** The response, serialised, so the sentinel is found under any key. */
     function serialised(value: unknown): string {
       return JSON.stringify(value);
+    }
+
+    /**
+     * Neither the column nor anything written at it is in a response: not the
+     * stored sentinel, not the value a write attempted, and not the key in
+     * either spelling, which a response would carry even holding `null`.
+     */
+    function expectNoHiddenColumn(out: string): void {
+      expect(out).not.toContain(SENTINEL);
+      expect(out).not.toContain(ATTEMPT);
+      expect(out).not.toContain('"leakProbe"');
+      expect(out).not.toContain('"leak_probe"');
     }
 
     function rest(
@@ -246,7 +264,7 @@ describe.each(getConfiguredTestDialects())(
 
       // The column the app's migration adds, added here directly, then the
       // value only the contributor should ever see.
-      for (const table of CORE_TARGETS) {
+      for (const table of EXTENDABLE_CORE_TABLES) {
         await sql(`ALTER TABLE ${table} ADD COLUMN leak_probe TEXT`);
       }
       await sql(`UPDATE users SET leak_probe = '${SENTINEL}'`);
@@ -290,41 +308,47 @@ describe.each(getConfiguredTestDialects())(
       // search that could not see the column would pass every read for the
       // wrong reason.
       for (const table of ["users", "media"] as const) {
-        expect(serialised(await sql(`SELECT * FROM ${table}`))).toContain(
-          SENTINEL
-        );
+        const whole = serialised(await sql(`SELECT * FROM ${table}`));
+        expect(whole).toContain(SENTINEL);
+        expect(whole).toContain('"leak_probe"');
       }
+    });
+
+    it("covers every core table a hook may extend", () => {
+      expect([...EXTENDABLE_CORE_TABLES].sort()).toEqual(
+        [...COVERED_TABLES].sort()
+      );
     });
 
     describe("users", () => {
       it("Direct API find", async () => {
         const out = serialised(await direct.users.find({ limit: 50 }));
         expect(out).toContain("member@example.com");
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
       });
 
       it("Direct API findByID", async () => {
         const out = serialised(await direct.users.findByID({ id: memberId }));
         expect(out).toContain("member@example.com");
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
       });
 
       it("REST list", async () => {
         const out = await bodyOf(await rest("GET", ["users"]));
         expect(out).toContain("member@example.com");
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
       });
 
       it("REST by id", async () => {
         const out = await bodyOf(await rest("GET", ["users", memberId]));
         expect(out).toContain("member@example.com");
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
       });
 
       it("REST me", async () => {
         const out = await bodyOf(await rest("GET", ["me"]));
         expect(out).toContain("owner@example.com");
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
       });
 
       it("a relationship populated at depth 1 (Direct API and REST)", async () => {
@@ -337,13 +361,13 @@ describe.each(getConfiguredTestDialects())(
           })
         );
         expect(viaDirect).toContain("member@example.com");
-        expect(viaDirect).not.toContain(SENTINEL);
+        expectNoHiddenColumn(viaDirect);
 
         const viaRest = await bodyOf(
           await rest("GET", ["collections", "posts", "entries", postId])
         );
         expect(viaRest).toContain("member@example.com");
-        expect(viaRest).not.toContain(SENTINEL);
+        expectNoHiddenColumn(viaRest);
       });
 
       it("Direct API update cannot set it", async () => {
@@ -354,7 +378,7 @@ describe.each(getConfiguredTestDialects())(
           })
         );
         expect(out).toContain("Member 2");
-        expect(out).not.toContain(ATTEMPT);
+        expectNoHiddenColumn(out);
         expect(await stored("users", memberId)).toBe(SENTINEL);
       });
 
@@ -367,7 +391,7 @@ describe.each(getConfiguredTestDialects())(
           })
         );
         expect(out).toContain("Member 3");
-        expect(out).not.toContain(ATTEMPT);
+        expectNoHiddenColumn(out);
         expect(await stored("users", memberId)).toBe(SENTINEL);
       });
 
@@ -379,7 +403,13 @@ describe.each(getConfiguredTestDialects())(
             leak_probe: ATTEMPT,
           })
         );
-        expect(out).not.toContain(ATTEMPT);
+        // The ordinary update happened, so the request reached the write the
+        // hidden key could have ridden on.
+        expect(out).toContain("Owner 2");
+        expect(
+          (await sql(`SELECT name FROM users WHERE id = '${ownerId}'`))[0]?.name
+        ).toBe("Owner 2");
+        expectNoHiddenColumn(out);
         expect(await stored("users", ownerId)).toBe(SENTINEL);
       });
 
@@ -389,7 +419,7 @@ describe.each(getConfiguredTestDialects())(
           password: "Password123!",
           data: { name: "New", leakProbe: ATTEMPT, leak_probe: ATTEMPT },
         });
-        expect(serialised(created)).not.toContain(ATTEMPT);
+        expectNoHiddenColumn(serialised(created));
         expect(await stored("users", created.item.id)).toBeNull();
 
         const res = await rest("POST", ["users"], {
@@ -400,7 +430,7 @@ describe.each(getConfiguredTestDialects())(
           leak_probe: ATTEMPT,
         });
         const out = await bodyOf(res);
-        expect(out).not.toContain(ATTEMPT);
+        expectNoHiddenColumn(out);
         const rows = await sql(
           `SELECT leak_probe FROM users WHERE email = 'rest-new@example.com'`
         );
@@ -413,21 +443,21 @@ describe.each(getConfiguredTestDialects())(
       it("Direct API find and findByID", async () => {
         const list = serialised(await direct.media.find({ limit: 50 }));
         expect(list).toContain("probe.pdf");
-        expect(list).not.toContain(SENTINEL);
+        expectNoHiddenColumn(list);
 
         const one = serialised(await direct.media.findByID({ id: mediaId }));
         expect(one).toContain("probe.pdf");
-        expect(one).not.toContain(SENTINEL);
+        expectNoHiddenColumn(one);
       });
 
       it("REST list and by id", async () => {
         const list = await bodyOf(await mediaRest("GET", []));
         expect(list).toContain("probe.pdf");
-        expect(list).not.toContain(SENTINEL);
+        expectNoHiddenColumn(list);
 
         const one = await bodyOf(await mediaRest("GET", [mediaId]));
         expect(one).toContain("probe.pdf");
-        expect(one).not.toContain(SENTINEL);
+        expectNoHiddenColumn(one);
       });
 
       it("an upload field populated at depth 1 (Direct API and REST)", async () => {
@@ -440,13 +470,13 @@ describe.each(getConfiguredTestDialects())(
           })
         );
         expect(viaDirect).toContain("probe.pdf");
-        expect(viaDirect).not.toContain(SENTINEL);
+        expectNoHiddenColumn(viaDirect);
 
         const viaRest = await bodyOf(
           await rest("GET", ["collections", "posts", "entries", postId])
         );
         expect(viaRest).toContain("probe.pdf");
-        expect(viaRest).not.toContain(SENTINEL);
+        expectNoHiddenColumn(viaRest);
       });
 
       it("Direct API update cannot set it", async () => {
@@ -457,8 +487,7 @@ describe.each(getConfiguredTestDialects())(
           })
         );
         expect(out).toContain("alt 1");
-        expect(out).not.toContain(ATTEMPT);
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
         expect(await stored("media", mediaId)).toBe(SENTINEL);
       });
 
@@ -471,8 +500,7 @@ describe.each(getConfiguredTestDialects())(
           })
         );
         expect(out).toContain("alt 2");
-        expect(out).not.toContain(ATTEMPT);
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
         expect(await stored("media", mediaId)).toBe(SENTINEL);
       });
     });
@@ -493,7 +521,7 @@ describe.each(getConfiguredTestDialects())(
         );
         const out = await bodyOf(await rest("GET", ["jobs"]));
         expect(out).toContain("leak-probe.sweep");
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
       });
     });
 
@@ -521,7 +549,7 @@ describe.each(getConfiguredTestDialects())(
           await rest("GET", ["dashboard", "activity"], undefined, "?limit=50")
         );
         expect(out).toContain("Probe activity");
-        expect(out).not.toContain(SENTINEL);
+        expectNoHiddenColumn(out);
       });
     });
 
