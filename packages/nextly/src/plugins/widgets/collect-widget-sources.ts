@@ -215,27 +215,7 @@ function consider(
     });
   }
 
-  if (typeof contributed.resolve !== "function") {
-    // The half that fails latest if it is not caught here: a source with no
-    // resolver is discoverable and passes validation, and only a reader who
-    // places the card finds out that nothing answers it.
-    throw NextlyError.invalidInput({
-      message: `NEXTLY_WIDGET_SOURCE_INVALID: "${owner}" contributes widget source "${id}" without a resolver function.`,
-      logContext: { id, owner },
-    });
-  }
-
-  if (
-    contributed.resolveMany !== undefined &&
-    typeof contributed.resolveMany !== "function"
-  ) {
-    // Caught at boot for the reason the resolver is: otherwise it fails only
-    // when a batch first asks this source for more than one card.
-    throw NextlyError.invalidInput({
-      message: `NEXTLY_WIDGET_SOURCE_INVALID: "${owner}" contributes widget source "${id}" with a resolveMany that is not a function.`,
-      logContext: { id, owner },
-    });
-  }
+  refuseUnanswerable(contributed, owner, id);
 
   const previous = seen.get(id);
   if (previous !== undefined) {
@@ -247,4 +227,35 @@ function consider(
 
   seen.set(id, owner);
   out.push({ ...contributed, owner });
+}
+
+/**
+ * Refuse a contribution whose answering functions are not functions.
+ *
+ * The half that fails latest if it is not caught at boot: a source with no
+ * resolver is discoverable and passes validation, and only a reader who places
+ * the card finds out that nothing answers it. A `resolveMany` that is not a
+ * function would likewise fail only when a batch first asks this source for
+ * more than one card.
+ */
+function refuseUnanswerable(
+  contributed: PluginWidgetSource,
+  owner: string,
+  id: string
+): void {
+  if (typeof contributed.resolve !== "function") {
+    throw NextlyError.invalidInput({
+      message: `NEXTLY_WIDGET_SOURCE_INVALID: "${owner}" contributes widget source "${id}" without a resolver function.`,
+      logContext: { id, owner },
+    });
+  }
+  if (
+    contributed.resolveMany !== undefined &&
+    typeof contributed.resolveMany !== "function"
+  ) {
+    throw NextlyError.invalidInput({
+      message: `NEXTLY_WIDGET_SOURCE_INVALID: "${owner}" contributes widget source "${id}" with a resolveMany that is not a function.`,
+      logContext: { id, owner },
+    });
+  }
 }

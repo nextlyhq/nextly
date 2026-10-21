@@ -410,17 +410,20 @@ async function readableScope(caller: ReadCaller) {
   return { scope, readableSlugs };
 }
 
+/** The snapshot through the batch's scope when the host hands one, so its cards share it. */
+function sharedReadableScope(caller: ReadCaller, opts?: ResolverOptions) {
+  return opts?.scope
+    ? opts.scope.getOrCompute(READABLE_SCOPE_KEY, () => readableScope(caller))
+    : readableScope(caller);
+}
+
 async function resolveVersions(
   query: WidgetQuery,
   caller: ReadCaller,
   opts?: ResolverOptions
 ): Promise<WidgetResult> {
   refuseUnconsumed(query);
-  const { scope, readableSlugs } = opts?.scope
-    ? await opts.scope.getOrCompute(READABLE_SCOPE_KEY, () =>
-        readableScope(caller)
-      )
-    : await readableScope(caller);
+  const { scope, readableSlugs } = await sharedReadableScope(caller, opts);
 
   if (query.op === "count") {
     // 🔴 No pre-authorization aggregate decides anything here any more. Counting
