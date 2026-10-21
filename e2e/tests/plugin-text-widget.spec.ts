@@ -7,8 +7,9 @@
  * renderer, and what the reader sees is markdown made into elements -- with
  * the one link that must not become a link left as text.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test("a plugin's text widget draws its markdown on the dashboard", async ({

@@ -16,8 +16,9 @@
  *
  * @module tests/builder-pattern-dialog
  */
-import { expect, test, type Page, type Request } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 /*
