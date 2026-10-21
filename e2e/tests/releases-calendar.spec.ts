@@ -16,7 +16,11 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
-import { expectNoAxeViolations } from "./support/axe";
+import {
+  expectBrandColourApplied,
+  expectNoAxeViolations,
+  expectShortTextReadable,
+} from "./support/axe";
 import { leaveReleasesAsTheRunnerWould } from "./support/release-states";
 import { post, publishNow, release, schedule } from "./support/releases-api";
 
@@ -363,4 +367,90 @@ test.describe("the Releases calendar", () => {
       page.getByRole("heading", { name: titles[0] }).first()
     ).toBeVisible();
   });
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`passes axe under the brand colour, grid and day lists, at desk and phone widths (${theme})`, async ({
+      page,
+    }) => {
+      test.setTimeout(180_000);
+      const stamp = `${Date.now()}`;
+      const postId = await post(page, `cal-brand-${stamp}`);
+      // Today holds a release published now and a stopped one due an hour
+      // ago, so today's cell and list draw both; next month holds a
+      // scheduled one, so a future day's cell and list are drawn too.
+      const future = dayAhead(1, 12);
+      await schedule(
+        page,
+        await release(page, `Brand future ${stamp}`, postId),
+        at(future, 15),
+        "UTC"
+      );
+      await publishNow(
+        page,
+        await release(page, `Brand today ${stamp}`, postId)
+      );
+      const stoppedId = await release(page, `Brand stopped ${stamp}`, postId);
+      await schedule(page, stoppedId, at(dayAhead(5, 21), 15), "UTC");
+      // Last, since Publish now runs the runner.
+      await leaveReleasesAsTheRunnerWould(page, [
+        { id: stoppedId, outcome: "stopped" },
+      ]);
+
+      for (const viewport of [
+        { width: 1440, height: 1000 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await gotoAdmin(page, "/releases", theme);
+        await expectBrandColourApplied(page);
+        await page.getByRole("button", { name: "calendar" }).click();
+        await expect(page.getByRole("grid")).toBeVisible();
+        const today = page.locator('[aria-current="date"]');
+        await scanCalendar(page);
+        await scanDayList(page, today);
+
+        await showMonth(page, future);
+        await scanCalendar(page);
+        await scanDayList(page, page.locator(`[data-day="${future}"]`));
+      }
+    });
+  }
 });
+
+/**
+ * Wait for the page to be at rest: the view switch, the grid and the sheet
+ * colour in over 150ms, and a scan mid-transition reads a colour nobody sees
+ * for long. The pointer is moved off, so no hover colour is judged either.
+ */
+async function settle(page: Page): Promise<void> {
+  await page.mouse.move(0, 0);
+  await page.waitForFunction(() => document.getAnimations().length === 0);
+}
+
+/** The month on screen, and each day's date and count, held to AA. */
+async function scanCalendar(page: Page): Promise<void> {
+  // Each day's data has arrived: a day with releases names their count.
+  await expect(page.locator("[data-day]").first()).toBeVisible();
+  await settle(page);
+  await expectNoAxeViolations(page);
+  // The dates and counts are a character or two, which axe will not fail on
+  // its own.
+  await expectShortTextReadable(page, '[role="grid"]');
+}
+
+/** Open the list of the day `button` names, hold it to AA, and close it. */
+async function scanDayList(page: Page, button: Locator): Promise<void> {
+  // By keyboard: at a desk's width the day's chips cover the middle of its
+  // button, where a pointer click would land on a chip.
+  await button.focus();
+  await page.keyboard.press("Enter");
+  const list = page.getByRole("dialog");
+  await expect(
+    list.getByRole("list", { name: "Releases on this day" })
+  ).toBeVisible();
+  await settle(page);
+  await expectNoAxeViolations(page);
+  await expectShortTextReadable(page, '[role="dialog"]');
+  await page.keyboard.press("Escape");
+  await expect(list).toBeHidden();
+}

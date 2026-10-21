@@ -11,7 +11,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
-import { expectNoAxeViolations } from "./support/axe";
+import { expectBrandColourApplied, expectNoAxeViolations } from "./support/axe";
 import {
   leaveReleasesAsTheRunnerWould,
   type RunnerOutcome,
@@ -206,12 +206,6 @@ test.describe("the Releases list, read from New York", () => {
 });
 
 /**
- * The admin's default primary, which the brand colour must have replaced for
- * the scan below to say anything about a branded admin.
- */
-const DEFAULT_PRIMARY = "oklch(0 0 0)";
-
-/**
  * The state badges, which are what this check holds to AA.
  *
  * Scoped to them rather than the whole page because, under the brand colour,
@@ -256,18 +250,7 @@ test.describe("the Releases list, under a brand colour", () => {
       await leaveReleasesAsTheRunnerWould(page, attention);
 
       await gotoAdmin(page, "/releases", theme);
-      // The suite's server runs with the playground's brand colours on.
-      // Checked rather than assumed: on the default palette the primary is
-      // the foreground colour, and every badge would pass whatever it is
-      // drawn with.
-      const primary = await page
-        .locator(".nextly-admin")
-        .first()
-        .evaluate(root =>
-          getComputedStyle(root).getPropertyValue("--nx-primary").trim()
-        );
-      expect(primary).not.toBe("");
-      expect(primary).not.toBe(DEFAULT_PRIMARY);
+      await expectBrandColourApplied(page);
       await searchFor(page, stamp);
 
       for (const label of [

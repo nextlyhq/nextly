@@ -163,8 +163,13 @@ function DayList({
         </SheetClose>
         <SheetTitle className="text-base">
           {longDayLabel(day)}
+          {/* A space, so the sheet's name reads "…, 2026 Today". */}
+          {isToday ? " " : null}
           {isToday ? (
-            <span className="ml-2 align-middle text-xs font-medium text-primary">
+            // Drawn as the grid draws today's date, in the foreground and
+            // background pair: the brand colour as small text on the
+            // sheet's surface falls below AA under some brands.
+            <span className="ml-2 inline-flex rounded-full bg-foreground px-2 py-0.5 align-middle text-[11px] font-medium leading-4 text-background">
               Today
             </span>
           ) : null}
