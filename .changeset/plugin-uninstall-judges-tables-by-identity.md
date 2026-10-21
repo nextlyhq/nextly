@@ -38,9 +38,10 @@ was recorded uninstalled. Each table is now identified by what the database
 keeps for it (its oid on PostgreSQL, its creation time on MySQL, its root page
 on SQLite), read before and after the hook. On SQLite, where a root page can
 be given to a new table, a hook that changes the schema at all is refused
-too. Nothing
-has run when the refusal comes, and every module is still recorded as
-applied.
+too. The refusal comes after `onUninstall` has run but before any DOWN
+migration, so no table is dropped and every module is still recorded as
+applied. A table whose identity can't be read is refused before the hook
+runs.
 
 A disabled plugin's transform that moves a field into another group or tab
 keeps that field's access rule even when the collection has an index with the
