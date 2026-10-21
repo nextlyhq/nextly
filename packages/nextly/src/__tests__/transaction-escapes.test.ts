@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ANY_OPENER,
   escapeKeyOf,
   knownEscape,
   type KnownEscape,
@@ -171,5 +172,62 @@ describe("knownEscape", () => {
 
   it("does not accept the listed statement on another dialect", () => {
     expect(knownEscape("mysql", listed.key, [listed])).toBeUndefined();
+  });
+});
+
+describe("a known escape listed for any opener", () => {
+  const anyOpener: KnownEscape = {
+    dialect: "mysql",
+    key: `${ANY_OPENER}${OPENED_BY} · select dynamic_collections`,
+    witness: null,
+    reason: "known, timing-dependent: test",
+  };
+  const opener = (fn: string) =>
+    `${fn} (/repo/packages/nextly/src/domains/collections/services/collection-mutation-service.ts:80:5)`;
+
+  it("matches the statement whichever write opened the transaction", () => {
+    for (const fn of [
+      "CollectionMutationService.createEntry",
+      "CollectionMutationService.deleteEntry",
+    ]) {
+      const key = escapeKeyOf({
+        site: undefined,
+        opener: opener(fn),
+        statement: 'select * from "dynamic_collections"',
+      });
+      expect(knownEscape("mysql", key, [anyOpener])).toBe(anyOpener);
+    }
+  });
+
+  it("does not match a write to the table, another table, another dialect, or an escape at its own call site", () => {
+    const otherTable = escapeKeyOf({
+      site: undefined,
+      opener: opener("CollectionMutationService.createEntry"),
+      statement: 'select * from "nextly_meta"',
+    });
+    const ownSite = escapeKeyOf({
+      site: opener("CollectionMutationService.createEntry"),
+      opener: undefined,
+      statement: 'select * from "dynamic_collections"',
+    });
+    const write = escapeKeyOf({
+      site: undefined,
+      opener: opener("CollectionMutationService.createEntry"),
+      statement: 'insert into "dynamic_collections" ("id") values ($1)',
+    });
+    expect(knownEscape("mysql", otherTable, [anyOpener])).toBeUndefined();
+    expect(knownEscape("mysql", write, [anyOpener])).toBeUndefined();
+    expect(knownEscape("mysql", ownSite, [anyOpener])).toBeUndefined();
+    expect(
+      knownEscape(
+        "postgresql",
+        escapeKeyOf({
+          site: undefined,
+          opener: opener("CollectionMutationService.createEntry"),
+          statement: 'select * from "dynamic_collections"',
+        }),
+        [anyOpener]
+      )
+    ).toBeUndefined();
   });
 });

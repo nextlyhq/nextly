@@ -108,8 +108,22 @@ export function knownEscape(
   key: string,
   known: readonly KnownEscape[] = KNOWN_ESCAPES
 ): KnownEscape | undefined {
-  return known.find(entry => entry.dialect === dialect && entry.key === key);
+  return known.find(
+    entry =>
+      entry.dialect === dialect &&
+      (entry.key === key ||
+        (entry.key.startsWith(ANY_OPENER) &&
+          key.endsWith(entry.key.slice(ANY_OPENER.length))))
+  );
 }
+
+/**
+ * Starts a known escape's key that matches the same statement whichever transaction it escaped:
+ * `*${OPENED_BY} · select nextly_webhooks`. Only for a read made outside whichever write first
+ * needs it, which test order decides, so no one opener can be listed. It never matches an escape
+ * keyed by its own call site, whose key carries no `OPENED_BY`.
+ */
+export const ANY_OPENER = "*";
 
 /**
  * An escape's key: where it was made, by its own call site when the stack reaches it and by

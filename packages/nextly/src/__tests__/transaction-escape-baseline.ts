@@ -20,6 +20,8 @@ const CALLER =
   "known: a write made inside a caller's transaction reads or writes on another connection";
 const TIMING =
   "known, timing-dependent: a schema probe on another connection, made only when the first check of the run happens inside a transaction; unwitnessed, since a run where it does not happen would report it fixed";
+const REGISTRY =
+  "known, timing-dependent: the collection and Single registry cache is filled on another connection inside whichever write first needs it, which test order decides, so it is listed for any opener; the fix fills the cache before the transaction opens, or inside it";
 const PLUGIN =
   "known: a statement in a plugin's transaction runs on another connection";
 
