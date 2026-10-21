@@ -29,6 +29,7 @@ import {
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
 import {
   omitDirectComponentFields,
+  storesItsChildren,
   type DirectField,
 } from "../direct-component-fields";
 import {
@@ -1152,9 +1153,9 @@ export class FieldGroupRegistryService extends BaseRegistryService<
           nestedFields,
           componentMap,
           currentDepth,
-          // A layout container keeps its children where it sits; a group or repeater stores them
-          // in its own JSON value.
-          inContainer || fieldType === "group" || fieldType === "repeater"
+          // A named group or a repeater stores its children in its own JSON value; a container
+          // with no name only arranges the form and keeps them where it sits.
+          inContainer || storesItsChildren(field)
         );
       }
 

@@ -26,6 +26,17 @@ export type DirectField = {
 };
 
 /**
+ * Whether a field holds its children in a value of its own: a named group or a repeater, whose
+ * value is stored as JSON where it sits. A container with no name only arranges the form, and its
+ * children are stored at the level it sits in, so it does not: the walk below looks through such a
+ * container for that reason. The schema the admin draws asks this to know when a component is held
+ * in a stored container.
+ */
+export function storesItsChildren(field: DirectField): boolean {
+  return Boolean(field.name) && Array.isArray(field.fields);
+}
+
+/**
  * Each component field among `fields`, at their top level or inside a layout container (a row,
  * tabs, a collapsible), which keeps its children on the same instance. A virtual one stores
  * nothing anywhere, so it is not listed.

@@ -420,6 +420,29 @@ describe.each(getConfiguredTestDialects())(
       ).toContain("seal");
     });
 
+    // An unnamed group only arranges the form: its children are stored where it sits, so the outer
+    // component under it is still a row of its own table, and the field is still left out. A
+    // registry shape (the code-first config names every field), so it is enriched as stored.
+    it("leaves one placed directly in it out under a group that only arranges the form", async () => {
+      const t = await boot(dialect);
+      const [layout] = (await t
+        .getService("fieldGroupRegistryService")
+        .enrichFieldsWithComponentSchemas([
+          {
+            type: "group",
+            fields: [
+              { name: "plaque", type: "component", component: "plaque" },
+            ],
+          },
+        ])) as Array<{
+        fields?: Array<{ componentFields?: Array<{ name?: string }> }>;
+      }>;
+
+      expect(
+        (layout?.fields?.[0]?.componentFields ?? []).map(field => field.name)
+      ).not.toContain("seal");
+    });
+
     it("judges a held component's validators against that component's own values", async () => {
       const t = await boot(dialect);
       const refused = await outcomeOf(() =>
