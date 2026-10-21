@@ -1607,12 +1607,7 @@ export class EmailTemplateService extends BaseService {
     }
     if (!mark.present) return;
     const recorded = mark.value ?? "";
-    if (
-      entry.engine === "liquid" ||
-      replaced ||
-      declaredLegacy(recorded) ||
-      recordedForOtherText(recorded, row)
-    ) {
+    if (releasesOwnersMark(entry, replaced, recorded, row)) {
       await this.releaseOwnersVersion(row, entry, recorded);
     }
   }
@@ -2250,6 +2245,24 @@ function ownersMark(entry: OwnedTemplate): string {
     string
   >;
   return JSON.stringify({ ...digests, [DECLARED]: "legacy" });
+}
+
+/**
+ * Whether the kept mark of a row holding its owner's version, which Liquid
+ * reads, goes (see EmailTemplateService.settleOwnersEngine).
+ */
+function releasesOwnersMark(
+  entry: OwnedTemplate,
+  replaced: boolean,
+  recorded: string,
+  row: LiquidFieldValues
+): boolean {
+  return (
+    entry.engine === "liquid" ||
+    replaced ||
+    declaredLegacy(recorded) ||
+    recordedForOtherText(recorded, row)
+  );
 }
 
 /** Whether a kept mark was recorded for an owner's legacy declaration. */
