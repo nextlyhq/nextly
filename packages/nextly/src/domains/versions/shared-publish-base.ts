@@ -103,13 +103,26 @@ export function sharedFieldNames(
   );
 }
 
+/**
+ * How a shared field is compared where not as its whole value: a junction's
+ * ids as a set, since a junction keeps no order; a translated component as
+ * its shared sub-fields only, since its other values belong to a language.
+ */
+export type SharedViews = ReadonlyMap<string, (value: unknown) => unknown>;
+
 /** The shared fields whose values differ between two copies of a document. */
 export function differingFields(
   shared: readonly string[],
   a: Record<string, unknown>,
-  b: Record<string, unknown>
+  b: Record<string, unknown>,
+  views?: SharedViews
 ): string[] {
-  return shared.filter(name => !sameValue(a[name], b[name]));
+  return shared.filter(name => {
+    const view = views?.get(name);
+    return view
+      ? !sameValue(view(a[name]), view(b[name]))
+      : !sameValue(a[name], b[name]);
+  });
 }
 
 /** A stored snapshot as a record, whether the driver parsed its JSON or not. */
@@ -137,9 +150,10 @@ export async function recordSharedBase(
     locale: string | null;
     shared: readonly string[];
     live: Record<string, unknown>;
+    views?: SharedViews;
   }
 ): Promise<void> {
-  const { ref, locale, shared, live } = args;
+  const { ref, locale, shared, live, views } = args;
   const recent = await tx.select<{ versionNo: number; snapshot: unknown }>(
     VERSIONS_TABLE,
     {
@@ -159,7 +173,8 @@ export async function recordSharedBase(
   );
   const match = recent.find(
     row =>
-      differingFields(shared, snapshotRecord(row.snapshot), live).length === 0
+      differingFields(shared, snapshotRecord(row.snapshot), live, views)
+        .length === 0
   );
   const slot = slotOf(locale);
   if (match) {
@@ -277,19 +292,20 @@ export async function outOfDateSharedFields(
     shared: readonly string[];
     live: Record<string, unknown>;
     pending: Record<string, unknown>;
+    views?: SharedViews;
   }
 ): Promise<string[]> {
-  const { ref, locale, live, pending } = args;
+  const { ref, locale, live, pending, views } = args;
   // Only the fields the change holds: a snapshot without a field writes
   // nothing to it.
   const held = args.shared.filter(name => name in pending);
   // Where the change already holds the live value, publishing it puts back
   // nothing, whatever the base says: a field whose live value was taken stays
   // current though the base stays put for another left behind.
-  const changed = differingFields(held, pending, live);
+  const changed = differingFields(held, pending, live, views);
   const base = await baseSnapshotOf(tx, ref, locale);
   if (!base) return changed;
-  const moved = new Set(differingFields(held, base, live));
+  const moved = new Set(differingFields(held, base, live, views));
   return changed.filter(name => moved.has(name));
 }
 
@@ -332,6 +348,7 @@ export async function editedSharedFields(
     locale: string | null;
     shared: readonly string[];
     pending: Record<string, unknown>;
+    views?: SharedViews;
   }
 ): Promise<string[]> {
   const base = await baseSnapshotOf(tx, args.ref, args.locale);
@@ -339,7 +356,8 @@ export async function editedSharedFields(
   return differingFields(
     args.shared.filter(name => name in args.pending),
     args.pending,
-    base
+    base,
+    args.views
   );
 }
 
@@ -370,22 +388,24 @@ export async function takeLiveSharedValuesInto(
     createdBy: string | null;
     maxPerDoc?: number | false;
     mayTake?: (stale: string[]) => Promise<string[]>;
+    views?: SharedViews;
   }
 ): Promise<{ taken: string[]; remaining: string[]; versionNo: number | null }> {
-  const { ref, locale, shared, live, pending, createdBy } = args;
+  const { ref, locale, shared, live, pending, createdBy, views } = args;
   const stale = await outOfDateSharedFields(tx, {
     ref,
     locale,
     shared,
     live,
     pending,
+    views,
   });
   const allowed = args.mayTake ? new Set(await args.mayTake(stale)) : null;
   const taken = allowed ? stale.filter(name => allowed.has(name)) : stale;
   const remaining = stale.filter(name => !taken.includes(name));
   // Recorded before the save, so the save's retention pass already keeps it.
   if (remaining.length === 0) {
-    await recordSharedBase(tx, { ref, locale, shared, live });
+    await recordSharedBase(tx, { ref, locale, shared, live, views });
   }
   const { versionNo } = await storeDraftSave(tx, capture, {
     ref,
@@ -413,19 +433,38 @@ export interface TakenLiveValues {
   hiddenTaken?: number;
   outOfDate: string[];
   hiddenOutOfDate?: number;
+  /**
+   * Out-of-date fields no take copies: a translated component's shared
+   * sub-fields, whose instances it cannot match to the change's safely.
+   */
+  copyByHand?: { fields: string[]; reason: string };
 }
+
+/** Why a translated component's shared sub-fields are left to the editor. */
+const COPY_BY_HAND_REASON =
+  "This field is inside a translated component; copy its shared values by hand, then publish.";
 
 /** {@link TakenLiveValues} for this caller. */
 export async function takenLiveValues(
   reader: FieldNameReader,
-  took: { taken: string[]; remaining: string[]; live: Record<string, unknown> }
+  took: {
+    taken: string[];
+    remaining: string[];
+    live: Record<string, unknown>;
+    /** Fields no take copies; see {@link TakenLiveValues.copyByHand}. */
+    byHand?: ReadonlySet<string>;
+  }
 ): Promise<TakenLiveValues> {
   const taken = await readableFieldNames(reader, took.taken, took.live);
   const left = await readableFieldNames(reader, took.remaining, took.live);
+  const byHand = left.named.filter(name => took.byHand?.has(name));
   return {
     taken: taken.named,
     ...(taken.hidden > 0 ? { hiddenTaken: taken.hidden } : {}),
     outOfDate: left.named,
     ...(left.hidden > 0 ? { hiddenOutOfDate: left.hidden } : {}),
+    ...(byHand.length > 0
+      ? { copyByHand: { fields: byHand, reason: COPY_BY_HAND_REASON } }
+      : {}),
   };
 }

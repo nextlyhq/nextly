@@ -20,7 +20,11 @@ import type { FieldGroupDataService } from "../../../services/field-groups/field
 import { convertTimestampsToCamelCase } from "../../../shared/lib/case-conversion";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
-import { sharedFieldNames } from "../../versions/shared-publish-base";
+import { isFieldLocalized } from "../../i18n/classify-fields";
+import {
+  sharedFieldNames,
+  type SharedViews,
+} from "../../versions/shared-publish-base";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -45,7 +49,7 @@ export async function liveSharedSingle(
     locale: string | null;
     translated: ReadonlySet<string>;
   }
-): Promise<{ live: Record<string, unknown>; shared: string[] }> {
+): Promise<SharedComparison & { live: Record<string, unknown> }> {
   const { singleMeta, entryId } = args;
   const fields = singleMeta.fields;
   const service = deps.fieldGroupDataService;
@@ -78,13 +82,147 @@ export async function liveSharedSingle(
     ...deps.deserialize(convertTimestampsToCamelCase({ ...(row ?? {}) })),
     ...components,
   };
-  // A component whose values are kept per language belongs to its language.
-  const perLanguage = service
-    ? await perLanguageFieldNames(fields, new Set(args.translated), slug =>
-        service.isComponentLocalized(slug, executor)
-      )
-    : args.translated;
-  return { live, shared: sharedFieldNames(fields, perLanguage, live) };
+  return {
+    live,
+    ...(await sharedComparison({
+      fields,
+      translated: args.translated,
+      document: live,
+      componentFields,
+      isComponentLocalized: slug =>
+        service
+          ? service.isComponentLocalized(slug, executor)
+          : Promise.resolve(false),
+    })),
+  };
+}
+
+/**
+ * A document's shared fields as the comparison judges them: their names, the
+ * view some are compared through, and those no take of the live values copies.
+ */
+export interface SharedComparison {
+  shared: string[];
+  views: SharedViews;
+  byHand: ReadonlySet<string>;
+}
+
+/**
+ * Which of a localized document's fields every language shares, and how each
+ * is compared.
+ *
+ * - A translated field belongs to its language.
+ * - A component kept per language belongs to its language too, except for the
+ *   sub-fields it marks shared, which live on the shared component row: the
+ *   field is compared through those alone, and left for the editor to copy by
+ *   hand, since a take cannot match its instances to the change's safely. One
+ *   with no shared sub-fields is not compared at all.
+ * - A junction's ids are compared as a set: a junction keeps no order.
+ *
+ * Whether a component is translated is asked once per distinct component the
+ * fields reference, however many fields reference it.
+ *
+ * @param componentFields Each referenced component's fields, by slug.
+ * @param unordered The fields kept in a junction.
+ */
+export async function sharedComparison(args: {
+  fields: readonly FieldConfig[];
+  translated: ReadonlySet<string>;
+  document: Record<string, unknown>;
+  componentFields: ReadonlyMap<string, FieldConfig[]>;
+  isComponentLocalized: (slug: string) => Promise<boolean>;
+  unordered?: readonly string[];
+}): Promise<SharedComparison> {
+  const asked = new Map<string, Promise<boolean>>();
+  const isLocalized = (slug: string): Promise<boolean> => {
+    let answer = asked.get(slug);
+    if (!answer) {
+      answer = args.isComponentLocalized(slug);
+      asked.set(slug, answer);
+    }
+    return answer;
+  };
+  const perLanguage = await perLanguageFieldNames(
+    args.fields,
+    args.translated,
+    isLocalized
+  );
+  const views = new Map<string, (value: unknown) => unknown>();
+  const byHand = new Set<string>();
+  const excluded = new Set(args.translated);
+  for (const field of args.fields) {
+    if (!field.name || args.translated.has(field.name)) continue;
+    if (!perLanguage.has(field.name) || !isFieldGroupField(field)) continue;
+    const kept = await sharedSubFields(
+      field,
+      args.componentFields,
+      isLocalized
+    );
+    if (kept.size === 0) {
+      excluded.add(field.name);
+      continue;
+    }
+    views.set(field.name, componentView(kept, fieldGroupSlugList(field)[0]));
+    byHand.add(field.name);
+  }
+  for (const name of args.unordered ?? []) views.set(name, asIdSet);
+  return {
+    shared: sharedFieldNames(args.fields, excluded, args.document),
+    views,
+    byHand,
+  };
+}
+
+/**
+ * Each component type's shared sub-fields: every field of a component kept
+ * whole, and those a translated component marks shared. Empty when none.
+ */
+async function sharedSubFields(
+  field: FieldConfig,
+  componentFields: ReadonlyMap<string, FieldConfig[]>,
+  isLocalized: (slug: string) => Promise<boolean>
+): Promise<Map<string, Set<string>>> {
+  const kept = new Map<string, Set<string>>();
+  for (const slug of fieldGroupSlugList(field)) {
+    const translated = await isLocalized(slug);
+    const names = (componentFields.get(slug) ?? []).flatMap(sub => {
+      const name = sub.name;
+      if (!name) return [];
+      return translated && isFieldLocalized({ ...sub, name }, true)
+        ? []
+        : [name];
+    });
+    if (names.length > 0) kept.set(slug, new Set(names));
+  }
+  return kept;
+}
+
+/** A component value as its shared sub-fields, instance by instance. */
+function componentView(
+  kept: ReadonlyMap<string, ReadonlySet<string>>,
+  onlySlug: string | undefined
+): (value: unknown) => unknown {
+  const instance = (value: unknown): unknown => {
+    if (!value || typeof value !== "object") return value ?? null;
+    const row = value as Record<string, unknown>;
+    const type =
+      typeof row._componentType === "string" ? row._componentType : onlySlug;
+    const names = type ? kept.get(type) : undefined;
+    return {
+      type: type ?? null,
+      shared: Object.fromEntries(
+        Object.entries(row).filter(([key]) => names?.has(key) === true)
+      ),
+    };
+  };
+  return value =>
+    Array.isArray(value) ? value.map(instance) : instance(value);
+}
+
+/** A junction's ids, in one order. */
+function asIdSet(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return value.map(id => String(id)).sort();
 }
 
 /**

@@ -165,7 +165,10 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { stopReleasesHolding } from "../../releases/early-stop";
-import { perLanguageFieldNames } from "../../singles/services/live-shared-single";
+import {
+  sharedComparison,
+  type SharedComparison,
+} from "../../singles/services/live-shared-single";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { mergeComponentPatches } from "../../versions/draft-components";
@@ -185,7 +188,6 @@ import {
   outOfDateSharedFields,
   recordSharedBase,
   releaseSharedBase,
-  sharedFieldNames,
   sharedValuesConflict,
   snapshotRecord,
   takenLiveValues,
@@ -2235,19 +2237,19 @@ export class CollectionMutationService extends BaseService {
       main: Record<string, unknown>;
       locale: string | null;
     }
-  ): Promise<{ live: Record<string, unknown>; shared: string[] }> {
+  ): Promise<SharedComparison & { live: Record<string, unknown> }> {
     const { collectionName, entryId, tableName, fields, main } = args;
     const executor = tx.getDrizzle();
+    const junctions = fields.filter(
+      f => f.type === "relationship" && f.options?.relationType === "manyToMany"
+    );
     const relations = await this.buildFullSnapshotRelations(
       tx,
       entryId,
       collectionName,
       tableName,
       fields,
-      fields.filter(
-        f =>
-          f.type === "relationship" && f.options?.relationType === "manyToMany"
-      ),
+      junctions,
       args.locale ?? undefined
     );
     const live = assembleDocument(
@@ -2257,18 +2259,28 @@ export class CollectionMutationService extends BaseService {
       collectionName,
       executor
     );
-    const translated = new Set(
-      (companion?.localizedFields ?? []).map(f => f.name)
-    );
+    const schema = fields as unknown as FieldConfig[];
     const service = this.fieldGroupDataService;
-    const perLanguage = service
-      ? await perLanguageFieldNames(
-          fields as unknown as FieldConfig[],
-          translated,
-          slug => service.isComponentLocalized(slug, executor)
-        )
-      : translated;
-    return { live, shared: sharedFieldNames(fields, perLanguage, live) };
+    return {
+      live,
+      ...(await sharedComparison({
+        fields: schema,
+        translated: new Set(
+          (companion?.localizedFields ?? []).map(f => f.name)
+        ),
+        document: live,
+        componentFields: service
+          ? await resolveComponentFieldMap(schema, slug =>
+              service.getComponentFields(slug, executor)
+            )
+          : new Map<string, FieldConfig[]>(),
+        isComponentLocalized: slug =>
+          service
+            ? service.isComponentLocalized(slug, executor)
+            : Promise.resolve(false),
+        unordered: junctions.map(f => f.name),
+      })),
+    };
   }
 
   private deserializeJsonFieldsForSnapshot(
@@ -3421,6 +3433,7 @@ export class CollectionMutationService extends BaseService {
     taken: string[];
     remaining: string[];
     live: Record<string, unknown>;
+    byHand: ReadonlySet<string>;
   } | null> {
     const fields = collectionFields(collection);
     const tableName = collectionTableName(collection, params.collectionName);
@@ -3452,7 +3465,7 @@ export class CollectionMutationService extends BaseService {
       .where(eq(schema.id, params.entryId))
       .limit(1);
     if (!pending || !row) return null;
-    const { live, shared } = await this.liveSharedDocument(tx, {
+    const { live, shared, views, byHand } = await this.liveSharedDocument(tx, {
       collectionName: params.collectionName,
       entryId: params.entryId,
       tableName,
@@ -3468,14 +3481,21 @@ export class CollectionMutationService extends BaseService {
       locale: draftLocale,
       shared,
       live,
+      views,
       pending: snapshotRecord(pending.snapshot),
       createdBy: params.user?.id ?? null,
       maxPerDoc: (collection as { versions?: ResolvedVersionsConfig | null })
         .versions?.maxPerDoc,
       // Only what this caller may write: a field rule that refuses them a
       // value refuses them taking its live one too.
+      // Nor a translated component's shared sub-fields, which are left to the
+      // editor to copy by hand.
       mayTake: async stale => {
-        const data = Object.fromEntries(stale.map(name => [name, live[name]]));
+        const data = Object.fromEntries(
+          stale
+            .filter(name => !byHand.has(name))
+            .map(name => [name, live[name]])
+        );
         await applyFieldWriteAccess({
           kind: "collection",
           slug: params.collectionName,
@@ -3498,7 +3518,7 @@ export class CollectionMutationService extends BaseService {
       toState: "draft",
       versionNo: took.versionNo,
     });
-    return { taken: took.taken, remaining: took.remaining, live };
+    return { taken: took.taken, remaining: took.remaining, live, byHand };
   }
 
   private async readCompanionSlugsAllLocales(
@@ -7442,7 +7462,7 @@ export class CollectionMutationService extends BaseService {
     ) {
       // A held save has written nothing live, so the live document read
       // here is the one the change began from.
-      const { live, shared } = await this.liveSharedDocument(tx, {
+      const { live, shared, views } = await this.liveSharedDocument(tx, {
         collectionName: params.collectionName,
         entryId: params.entryId,
         tableName: collectionTableName(collection, params.collectionName),
@@ -7455,6 +7475,7 @@ export class CollectionMutationService extends BaseService {
         locale: draftLocale,
         shared,
         live,
+        views,
       });
     }
     // The draft, and the save as a version of its own, in this transaction.
@@ -8655,19 +8676,22 @@ export class CollectionMutationService extends BaseService {
               // someone else published since the change began would be put
               // back by this write, so the publish is refused, naming it.
               if (documentLocalized) {
-                const { live, shared } = await this.liveSharedDocument(tx, {
-                  collectionName: params.collectionName,
-                  entryId: params.entryId,
-                  tableName,
-                  fields,
-                  main: this.deserializeJsonFieldsForSnapshot(
-                    convertTimestampsToCamelCase({
-                      ...(preUpdateRow as Record<string, unknown>),
-                    }),
-                    fields
-                  ),
-                  locale: draftLocaleKey,
-                });
+                const { live, shared, views } = await this.liveSharedDocument(
+                  tx,
+                  {
+                    collectionName: params.collectionName,
+                    entryId: params.entryId,
+                    tableName,
+                    fields,
+                    main: this.deserializeJsonFieldsForSnapshot(
+                      convertTimestampsToCamelCase({
+                        ...(preUpdateRow as Record<string, unknown>),
+                      }),
+                      fields
+                    ),
+                    locale: draftLocaleKey,
+                  }
+                );
                 const stale = await outOfDateSharedFields(tx, {
                   ref: {
                     scopeKind: "collection",
@@ -8678,6 +8702,7 @@ export class CollectionMutationService extends BaseService {
                   shared,
                   live,
                   pending: snapshotRecord(workingDraft.snapshot),
+                  views,
                 });
                 if (stale.length > 0) {
                   outOfDateShared = { fields: stale, live };

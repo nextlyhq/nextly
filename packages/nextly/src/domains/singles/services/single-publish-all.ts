@@ -58,6 +58,7 @@ import {
   releaseAllSharedBases,
   sharedValuesConflict,
   snapshotRecord,
+  type SharedViews,
 } from "../../versions/shared-publish-base";
 import {
   type ComponentFieldResolver,
@@ -995,7 +996,7 @@ export class SinglePublishAllService extends BaseService {
     if (!companion || !reader || pending.length === 0) return [...pending];
     // Read under the lock this transaction took on the row, with its shared
     // components.
-    const { live, shared } = await liveSharedSingle(
+    const { live, shared, views, byHand } = await liveSharedSingle(
       tx,
       {
         fieldGroupDataService: this.fieldGroupDataService,
@@ -1016,14 +1017,18 @@ export class SinglePublishAllService extends BaseService {
       tx,
       plan,
       pending,
-      { live, shared },
+      { live, shared, views },
       {
         options,
         promoteGrants,
       }
     );
-    const state = await this.mergedSharedState(tx, plan, pending, live, shared);
-    return pending.map(draft => withSharedState(draft, shared, state));
+    // A translated component's shared sub-fields are judged above but not
+    // merged: each language's component also holds its own translated values,
+    // so it goes live as that language saved it.
+    const merged = shared.filter(name => !byHand.has(name));
+    const state = await this.mergedSharedState(tx, plan, pending, live, merged);
+    return pending.map(draft => withSharedState(draft, merged, state));
   }
 
   /** Refuse, naming every field, when any change is behind live. */
@@ -1031,7 +1036,11 @@ export class SinglePublishAllService extends BaseService {
     tx: TransactionContext,
     plan: PublishPlan,
     pending: readonly PendingChange[],
-    document: { live: Record<string, unknown>; shared: readonly string[] },
+    document: {
+      live: Record<string, unknown>;
+      shared: readonly string[];
+      views: SharedViews;
+    },
     caller: {
       options: PublishAllSingleLocalesOptions;
       promoteGrants?: () => Promise<CallerGrants>;
@@ -1046,6 +1055,7 @@ export class SinglePublishAllService extends BaseService {
         shared: document.shared,
         live: document.live,
         pending: snapshotRecord(draft.snapshot),
+        views: document.views,
       });
       for (const name of fields) stale.add(name);
     }

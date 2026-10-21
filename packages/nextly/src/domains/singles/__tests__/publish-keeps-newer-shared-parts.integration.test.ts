@@ -35,7 +35,11 @@ async function boot(dialect: TestDialect): Promise<SingleEntryService> {
       defineFieldGroup({
         slug: "banner",
         localized: true,
-        fields: [text({ name: "words" })],
+        // Its words are per language; its code is shared by every language.
+        fields: [
+          text({ name: "words" }),
+          text({ name: "code", localized: false }),
+        ],
       }),
     ],
     singles: [
@@ -139,6 +143,45 @@ describe.each(getConfiguredTestDialects())(
         overrideAccess: true,
       });
       expect((es.data as { siteName?: unknown }).siteName).toBe("ES edited");
+    });
+
+    it("refuses English's change after Spanish publishes a banner's shared code, and leaves it to copy by hand", async () => {
+      const singles = await boot(dialect);
+      await live(singles);
+      expect(
+        (await save(singles, "en", { siteName: "EN edited" })).success
+      ).toBe(true);
+      expect(
+        (
+          await save(singles, "es", {
+            banner: { words: "ES banner", code: "new code" },
+          })
+        ).success
+      ).toBe(true);
+      expect((await save(singles, "es", { status: "published" })).success).toBe(
+        true
+      );
+
+      const refused = await save(singles, "en", { status: "published" });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.publicData).toEqual({ outOfDate: ["banner"] });
+
+      // A take cannot match the banner's instances to English's safely, so it
+      // says so rather than copying the Spanish banner over English's words.
+      const taken = await singles.takeLiveSharedValues({
+        slug: SLUG,
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect(taken.data).toEqual({
+        taken: [],
+        outOfDate: ["banner"],
+        copyByHand: {
+          fields: ["banner"],
+          reason:
+            "This field is inside a translated component; copy its shared values by hand, then publish.",
+        },
+      });
     });
   }
 );

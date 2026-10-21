@@ -172,7 +172,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { liveSharedSingle } from "./live-shared-single";
+import { liveSharedSingle, type SharedComparison } from "./live-shared-single";
 import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
@@ -288,7 +288,7 @@ export class SingleMutationService extends BaseService {
     entryId: string,
     companion: CompanionSchema,
     locale: string | null
-  ): Promise<{ live: Record<string, unknown>; shared: string[] }> {
+  ): Promise<SharedComparison & { live: Record<string, unknown> }> {
     return liveSharedSingle(
       tx,
       {
@@ -401,6 +401,7 @@ export class SingleMutationService extends BaseService {
     taken: string[];
     remaining: string[];
     live: Record<string, unknown>;
+    byHand: ReadonlySet<string>;
   } | null> {
     const found = await this.lockedPendingChange(
       tx,
@@ -410,7 +411,7 @@ export class SingleMutationService extends BaseService {
     );
     if (!found) return null;
     const { ref, locale, pending } = found;
-    const { live, shared } = await this.liveSharedDocument(
+    const { live, shared, views, byHand } = await this.liveSharedDocument(
       tx,
       singleMeta,
       ref.entryId,
@@ -422,13 +423,20 @@ export class SingleMutationService extends BaseService {
       locale,
       shared,
       live,
+      views,
       pending: snapshotRecord(pending.snapshot),
       createdBy: params.user?.id ?? null,
       maxPerDoc: singleMeta.versions?.maxPerDoc,
       // Only what this caller may write: a field rule that refuses them a
       // value refuses them taking its live one too.
+      // Nor a translated component's shared sub-fields, which are left to the
+      // editor to copy by hand.
       mayTake: async stale => {
-        const data = Object.fromEntries(stale.map(name => [name, live[name]]));
+        const data = Object.fromEntries(
+          stale
+            .filter(name => !byHand.has(name))
+            .map(name => [name, live[name]])
+        );
         await applyFieldWriteAccess({
           kind: "single",
           slug: params.slug,
@@ -451,7 +459,7 @@ export class SingleMutationService extends BaseService {
       { user: params.user, actor: params.actor },
       { locale, toState: "draft", versionNo: took.versionNo }
     );
-    return { taken: took.taken, remaining: took.remaining, live };
+    return { taken: took.taken, remaining: took.remaining, live, byHand };
   }
 
   /**
@@ -2094,7 +2102,7 @@ export class SingleMutationService extends BaseService {
                 // someone else published since the change began would be put
                 // back by this write, so the publish is refused, naming it.
                 if (companion) {
-                  const { live, shared } = await this.liveSharedDocument(
+                  const { live, shared, views } = await this.liveSharedDocument(
                     tx,
                     singleMeta,
                     existingDoc.id,
@@ -2111,6 +2119,7 @@ export class SingleMutationService extends BaseService {
                     shared,
                     live,
                     pending: snapshotRecord(pendingDraft.snapshot),
+                    views,
                   });
                   if (stale.length > 0) {
                     throw await sharedValuesConflict({
@@ -2992,7 +3001,7 @@ export class SingleMutationService extends BaseService {
               if (!existingDraft && companion) {
                 // A held save has written nothing live, so the live document
                 // read here is the one the change began from.
-                const { live, shared } = await this.liveSharedDocument(
+                const { live, shared, views } = await this.liveSharedDocument(
                   tx,
                   singleMeta,
                   existingDoc.id,
@@ -3004,6 +3013,7 @@ export class SingleMutationService extends BaseService {
                   locale: singleDraftLocale ?? null,
                   shared,
                   live,
+                  views,
                 });
               }
               // The draft, and the save as a version of its own. A save that
