@@ -33,7 +33,7 @@ An email the provider fails or refuses now says whether sending it again can
 help: `nextly.email`, a plugin's `ctx.services.email` and the REST send routes
 return `failure` with `retryable`, the provider's status where it gave one, and a
 short reason, and list any recipients the provider refused. A send refused before
-any provider is reached (a bad recipient, no provider, a missing template) still
+any provider is reached (a bad recipient, a provider named but not found, a missing template) still
 throws, as before. Form Builder logs a
 notification that was not sent as failed instead of sent, and no longer writes
 recipient addresses into its logs.
