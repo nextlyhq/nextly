@@ -10,7 +10,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import {
   expect,
-  test,
   type APIRequestContext,
   type Page,
   type PlaywrightWorkerArgs,
@@ -20,6 +19,7 @@ import { STORAGE_STATE } from "../global-setup";
 
 import { gotoAdmin } from "./support/admin";
 import { createEntry, expectOk } from "./support/runtime-collection";
+import { test } from "./support/test";
 
 const BREAKDOWN = "collection/posts-breakdown";
 const TIMELINE = "collection/posts-timeline";
