@@ -3,8 +3,9 @@
  * copies, and what a send makes of them.
  *
  * - From's display name may use variables; its address may not.
- * - Reply-To may use variables, and one that renders to something other than
- *   an address fails the send as not retryable, naming the field.
+ * - Reply-To may use variables, and one that renders to anything but one
+ *   address (a list included) fails the send as not retryable, naming the
+ *   field.
  * - Copies are fixed addresses, added after the send's own without
  *   duplicates, and refused on a template that carries a secret.
  * - A field that uses no variables is sent exactly as stored.
@@ -236,6 +237,55 @@ describe("a send's Reply-To", () => {
     });
     // The rendered value came from the send's data and stays out of the log.
     expect(JSON.stringify(error.logContext)).not.toContain("not an address");
+  });
+
+  it("refuses a rendered list, so a reply can't reach a second address", () => {
+    // A customer types two addresses into a form field the template reads.
+    // As a list it would make every staff reply go to both.
+    const error = failure(() =>
+      renderTemplateReplyTo(
+        "{{ customer.email }}",
+        { customer: { email: "me@x.com, attacker@evil.com" } },
+        "contact"
+      )
+    );
+    expect(error.code).toBe("BUSINESS_RULE_VIOLATION");
+    expect(error.logContext).toMatchObject({
+      retryable: false,
+      field: "replyTo",
+      slug: "contact",
+    });
+    expect(JSON.stringify(error.logContext)).not.toContain("evil.com");
+  });
+
+  it("refuses a rendered list separated by a semicolon", () => {
+    expect(() =>
+      renderTemplateReplyTo(
+        "{{ email }}",
+        { email: "me@x.com; attacker@evil.com" },
+        "t"
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("refuses a rendered list of addresses with display names", () => {
+    expect(() =>
+      renderTemplateReplyTo(
+        "{{ email }}",
+        { email: "Me <me@x.com>, Them <attacker@evil.com>" },
+        "t"
+      )
+    ).toThrow(NextlyError);
+  });
+
+  it("renders one address with a display name", () => {
+    expect(
+      renderTemplateReplyTo(
+        "{{ name }} <{{ email }}>",
+        { name: "Jane Buyer", email: "jane@example.com" },
+        "t"
+      )
+    ).toBe("Jane Buyer <jane@example.com>");
   });
 
   it("refuses a rendered line break rather than letting it start a header", () => {

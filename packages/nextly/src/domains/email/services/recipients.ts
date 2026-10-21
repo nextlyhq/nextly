@@ -229,8 +229,7 @@ export const MAX_TO_PER_SEND = 100;
 
 /**
  * Whether a value is one address, or a comma-joined list of addresses, that a
- * message can be sent to: what the service accepts for one `to` entry, and for
- * a Reply-To, which may name several.
+ * message can be sent to: what the service accepts for one `to` entry.
  */
 export function isSendableAddressList(value: unknown): value is string {
   if (typeof value !== "string") return false;

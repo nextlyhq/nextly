@@ -26,7 +26,6 @@ import { parseLiquid, renderLiquid } from "./services/liquid-engine";
 import {
   displayNameAndMailbox,
   isSendableAddress,
-  isSendableAddressList,
   toAddressList,
 } from "./services/recipients";
 
@@ -214,8 +213,13 @@ export function renderTemplateFrom(
  * rendered from the send's data. One that renders empty sets no Reply-To, so
  * a template can make it optional (`{% if email %}{{ email }}{% endif %}`).
  *
- * @throws NextlyError, not retryable, when it renders to something that is
- *   not an address
+ * A rendered Reply-To must be exactly one address (a display name is
+ * allowed). The data usually comes from whoever filled a form, and a list
+ * there (`me@x.com, attacker@evil.com`) would send every staff reply to each
+ * address in it.
+ *
+ * @throws NextlyError, not retryable, when it renders to anything but one
+ *   address
  */
 export function renderTemplateReplyTo(
   replyTo: string,
@@ -225,10 +229,10 @@ export function renderTemplateReplyTo(
   if (!usesVariables(replyTo)) return replyTo;
   const rendered = renderLiquid(replyTo, data, "line").trim();
   if (rendered === "") return undefined;
-  if (!isSendableAddressList(rendered)) {
+  if (!isSendableAddress(rendered)) {
     throw envelopeError(
       "replyTo",
-      "The email template's Reply-To didn't render to an email address.",
+      "The email template's Reply-To didn't render to one email address.",
       slug
     );
   }

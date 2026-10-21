@@ -33,9 +33,9 @@ An email template's Reply-To and the display name of its From can now follow
 the send's variables: a Reply-To of `{{ customer.email }}` answers the person
 an order is about, and a From of `{{ shopName }} <orders@shop.example>` names
 the shop. The From address stays fixed: a variable in it is refused on save. A
-send whose rendered Reply-To is not an address fails before any provider is
-asked, as not retryable, naming the Reply-To; one that renders empty sets no
-Reply-To. The send's own `from` and `replyTo` still win over the
+send whose rendered Reply-To is not exactly one address (a display name is
+allowed, a list is not) fails before any provider is asked, as not retryable,
+naming the Reply-To; one that renders empty sets no Reply-To. The send's own `from` and `replyTo` still win over the
 template's, and a From or Reply-To that uses no variables is sent exactly as
 before.
 
