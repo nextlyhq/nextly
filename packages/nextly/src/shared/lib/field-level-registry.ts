@@ -88,7 +88,8 @@ export interface CallerGrants {
  */
 function grantsResolver(
   userId: string | undefined,
-  scope?: AuthenticatedScope
+  scope?: AuthenticatedScope,
+  executor?: unknown
 ): () => Promise<CallerGrants> {
   let pending: Promise<CallerGrants> | undefined;
   return () => {
@@ -120,8 +121,8 @@ function grantsResolver(
       return pending;
     }
     pending = Promise.all([
-      listEffectiveGrants(userId),
-      listRoleSlugsForUser(userId),
+      listEffectiveGrants(userId, executor),
+      listRoleSlugsForUser(userId, executor),
     ])
       // A lookup that fails rejects, and every rule awaiting it is denied by
       // its own guard (`runFieldRule`). Not an empty grant set: that denies
@@ -984,11 +985,18 @@ export async function resolvedCallerGrants(
  */
 export function callerAccessGrants(
   user: Record<string, unknown> | undefined,
-  authenticatedScope?: AuthenticatedScope
+  authenticatedScope?: AuthenticatedScope,
+  /**
+   * The transaction-bound executor, for a pass that runs while a write holds
+   * its connection: the lookups then read on it, rather than waiting on the
+   * pool for the connection the transaction itself is holding.
+   */
+  executor?: unknown
 ): () => Promise<CallerGrants> {
   return grantsResolver(
     typeof user?.id === "string" ? user.id : undefined,
-    authenticatedScope
+    authenticatedScope,
+    executor
   );
 }
 

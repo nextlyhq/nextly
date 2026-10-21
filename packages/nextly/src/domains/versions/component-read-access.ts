@@ -70,13 +70,21 @@ function nameOf(field: FieldConfig): string | undefined {
  * The component instances a field-group field's value holds, each with the
  * component it is judged by: a block's own type (under either stored key), or
  * the field's single component.
+ *
+ * A field declared with one component holds only that one, so its instances
+ * are judged by it whatever type they claim: a value a hook retagged as a
+ * component with no rules is still judged by the rules it was declared under.
+ * A type is read only where the field offers several, a dynamic zone.
  */
 function componentInstances(
   field: FieldConfig,
   value: unknown
 ): { slug: string; instance: Record<string, unknown> }[] {
-  const { single } = extractFieldGroupReferences(field);
+  const { single, many } = extractFieldGroupReferences(field);
   return rowsOf(value).flatMap(instance => {
+    if (single !== undefined && many === undefined) {
+      return [{ slug: single, instance }];
+    }
     const own = readFieldGroupType(instance);
     const slug = own !== undefined && own !== "" ? own : single;
     return slug ? [{ slug, instance }] : [];

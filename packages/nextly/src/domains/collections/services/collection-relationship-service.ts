@@ -3955,7 +3955,11 @@ export class CollectionRelationshipService extends BaseService {
     const user = access.fieldAccessUser ?? access.user;
     let state = relatedFieldGroupState.get(access);
     if (!state) {
-      state = { passes: new Map(), grants: callerAccessGrants(user) };
+      // A scoped API key's own grants, never its owner's.
+      state = {
+        passes: new Map(),
+        grants: callerAccessGrants(user, access.authenticatedScope),
+      };
       relatedFieldGroupState.set(access, state);
     }
     let pending = state.passes.get(targetCollection);
@@ -3965,7 +3969,12 @@ export class CollectionRelationshipService extends BaseService {
     }
     const pass = await pending;
     if (!pass) return;
-    const caller = { user, grants: state.grants, redactions };
+    const caller = {
+      user,
+      authenticatedScope: access.authenticatedScope,
+      grants: state.grants,
+      redactions,
+    };
     for (const row of rows) await pass(row, caller);
   }
 

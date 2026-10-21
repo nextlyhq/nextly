@@ -3850,6 +3850,8 @@ export class CollectionMutationService extends BaseService {
       user?: Record<string, unknown>;
       overrideAccess?: boolean;
       routeAuthorized?: boolean;
+      /** A scoped API key's own grants, which its rules are judged by. */
+      authenticatedScope?: AuthenticatedScope;
     },
     slug: string,
     /**
@@ -3857,7 +3859,13 @@ export class CollectionMutationService extends BaseService {
      * because a `dbName` collection's table is not `dc_<slug>`, and the
      * hidden columns contributed to it are keyed by the physical name.
      */
-    tableName: string
+    tableName: string,
+    /**
+     * The transaction-bound executor when the response is redacted while the
+     * write still holds its connection, so the rules' lookups read on it
+     * rather than wait on the pool for the connection it holds.
+     */
+    executor?: unknown
   ): Promise<void> {
     // Deserialize JSON-stored containers (group/repeater/json/chips/hasMany)
     // before redaction so the read-access walker descends into them — SQLite
@@ -3884,22 +3892,37 @@ export class CollectionMutationService extends BaseService {
     // access reads it from SQL, never from the returned row.
     stripServerOnlyColumns(entry, tableName);
     const trusted = params.overrideAccess && !params.routeAuthorized;
+    // One resolver for both passes: one authority, and one lookup.
+    const grants = callerAccessGrants(
+      params.user,
+      params.authenticatedScope,
+      executor
+    );
     await applyFieldReadAccess({
       kind: "collection",
       slug,
       entry,
       user: params.user,
       overrideAccess: trusted,
+      grants,
     });
     // The fields inside the field groups the entry holds, by their own rules,
     // as a read of the document would judge them: a response never echoes a
     // field-group value the writer may not read.
+    const service = this.fieldGroupDataService;
     if (!trusted) {
       await withholdFieldGroupFields(
         [entry],
         fields as FieldConfig[],
-        this.fieldGroupDataService,
-        { user: params.user, grants: callerAccessGrants(params.user) }
+        service && {
+          getComponentFields: componentSlug =>
+            service.getComponentFields(componentSlug, executor),
+        },
+        {
+          user: params.user,
+          authenticatedScope: params.authenticatedScope,
+          grants,
+        }
       );
     }
   }
@@ -5176,6 +5199,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
         },
         params.collectionName,
         tableName
@@ -9724,6 +9748,7 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
         },
         params.collectionName,
         tableName
@@ -10715,9 +10740,12 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
         },
         params.collectionName,
-        tableName
+        tableName,
+        // Still inside the caller-owned transaction.
+        tx.getDrizzle()
       );
 
       return {
@@ -11834,9 +11862,12 @@ export class CollectionMutationService extends BaseService {
           user: params.user,
           overrideAccess: params.overrideAccess,
           routeAuthorized: params.routeAuthorized,
+          authenticatedScope: params.authenticatedScope,
         },
         params.collectionName,
-        tableName
+        tableName,
+        // Still inside the caller-owned transaction.
+        tx.getDrizzle()
       );
 
       return {

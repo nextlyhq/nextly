@@ -62,6 +62,7 @@ import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
   attachFieldValidators,
+  callerAccessGrants,
   runFieldHooks,
   resolvedCallerGrants,
 } from "../../../shared/lib/field-level-registry";
@@ -83,6 +84,7 @@ import {
   recordTransitionEvents,
   recordWriteEvent,
 } from "../../content-events/write-event";
+import { withholdFieldGroupFields } from "../../field-groups/live-read-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
@@ -3542,13 +3544,37 @@ export class SingleMutationService extends BaseService {
       // override does not skip redaction (mirrors the collection path).
       stripPasswordFieldValues(updatedDoc, fieldConfigs);
       stripServerOnlyColumns(updatedDoc, singleMeta.tableName);
+      const trustedResponse =
+        options.overrideAccess && !options.routeAuthorized;
+      // One resolver for both passes: one authority, and one lookup. A scoped
+      // API key's own grants, never its owner's.
+      const responseGrants = callerAccessGrants(
+        options.user,
+        options.authenticatedScope
+      );
       await applyFieldReadAccess({
         kind: "single",
         slug,
         entry: updatedDoc,
         user: options.user,
-        overrideAccess: options.overrideAccess && !options.routeAuthorized,
+        overrideAccess: trustedResponse,
+        grants: responseGrants,
       });
+      // The fields inside the field groups the response holds, by their own
+      // rules, as a read of the Single would judge them: an afterChange hook
+      // may hand back a document carrying them.
+      if (!trustedResponse) {
+        await withholdFieldGroupFields(
+          [updatedDoc],
+          fieldConfigs,
+          this.fieldGroupDataService,
+          {
+            user: options.user,
+            authenticatedScope: options.authenticatedScope,
+            grants: responseGrants,
+          }
+        );
+      }
 
       return {
         success: true,
