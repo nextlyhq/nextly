@@ -7,8 +7,9 @@
  * admin's retry made it look like an infinite page reload — while every unit
  * test stayed green, because the mock had the column.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const SCREENS = [

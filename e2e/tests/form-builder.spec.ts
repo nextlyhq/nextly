@@ -5,8 +5,9 @@
  * the plugin, the SDK's field-UI kit, and the shared catalog — the seams unit
  * tests mock away.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test("builds a form with catalog fields, keyboard reorder, and a guarded delete", async ({

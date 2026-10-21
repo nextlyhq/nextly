@@ -13,8 +13,9 @@
  * and populated widths it gains a line, pushing the tab bar and the body down
  * while somebody is reading them.
  */
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 /**
