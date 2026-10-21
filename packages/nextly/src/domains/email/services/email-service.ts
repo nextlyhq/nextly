@@ -44,6 +44,7 @@ import {
   type EmailDeliveryRecipientKind,
 } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
+import type { EmailFailure } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
 import { CODE_TEMPLATE_KEYS } from "../template-ownership";
 import type {
@@ -66,6 +67,7 @@ import type { EmailTemplateService } from "./email-template-service";
 import { LOG_PROVIDER_TYPE } from "./providers/log-provider";
 import {
   assertSendable,
+  assertSendableReplyTo,
   declaredMaxTo,
   filteredToList,
   firstAddress,
@@ -75,7 +77,18 @@ import {
   type SendEnvelope,
   type SendMessage,
 } from "./recipients";
-import { DEFAULT_APP_NAME, renderTemplate } from "./render-template";
+import { DEFAULT_APP_NAME } from "./render-template";
+import {
+  answeredFailure,
+  type EmailSendOutcome,
+  notAcceptedFailure,
+  refusalOf,
+  refusedRecipients,
+  refusedRecordError,
+  type RefusedRecipient,
+  splitSendOutcome,
+  thrownFailure,
+} from "./send-failures";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
 import { htmlToText, validateTemplateVariables } from "./template-engine";
 
@@ -141,7 +154,7 @@ function deliveryRecipients(payload: {
 }
 
 /** What a send, or one message of it, reports to the caller. */
-type SendOutcome = { success: boolean; messageId?: string };
+type SendOutcome = EmailSendOutcome;
 
 /** What one message's dispatch needs beyond the message itself. */
 interface DispatchContext {
@@ -187,9 +200,21 @@ function adapterMessage(
   };
 }
 
-/** The caller's result: the outcome, and the message id when one is safe. */
-function outcomeOf(success: boolean, messageId: string | null): SendOutcome {
-  return { success, ...(messageId !== null ? { messageId } : {}) };
+/**
+ * The caller's result: the outcome, the message id when one is safe, and what
+ * went wrong when anything did.
+ */
+function outcomeOf(
+  success: boolean,
+  messageId: string | null,
+  problems: { failure?: EmailFailure; refused?: RefusedRecipient[] } = {}
+): SendOutcome {
+  return {
+    success,
+    ...(messageId !== null ? { messageId } : {}),
+    ...(problems.failure ? { failure: problems.failure } : {}),
+    ...(problems.refused?.length ? { refused: problems.refused } : {}),
+  };
 }
 
 /**
@@ -225,21 +250,22 @@ function acceptedRow(
   recipient: ReturnType<typeof deliveryRecipients>[number],
   facts: {
     refused: ReadonlySet<string>;
-    providerAccepted: boolean;
+    result: Awaited<ReturnType<EmailProviderAdapter["send"]>>;
     safeMessageId: string | null;
     context: DispatchContext;
   }
 ) {
   const wasRefused = facts.refused.has(recipient.to.trim().toLowerCase());
-  const delivered = facts.providerAccepted && !wasRefused;
+  const delivered = facts.result.success && !wasRefused;
   return {
     ...rowBase(recipient, facts.context),
     status: delivered ? ("sent" as const) : ("failed" as const),
     messageId: facts.safeMessageId,
+    // A refusal says, on the record, whether a retry can help it.
     error: delivered
       ? null
       : wasRefused
-        ? "Recipient refused by the provider"
+        ? refusedRecordError(refusalOf(facts.result, recipient.to))
         : "Send returned unsuccessful",
   };
 }
@@ -335,7 +361,7 @@ export class EmailService extends BaseService {
        */
       person?: PrincipalRef;
     }
-  ): Promise<{ success: boolean; messageId?: string }> {
+  ): Promise<EmailSendOutcome> {
     // Whitespace-only overrides must not shadow the template/provider
     // defaults or reach a provider as malformed headers.
     const fromOverride = options?.from?.trim() || undefined;
@@ -374,18 +400,15 @@ export class EmailService extends BaseService {
         );
       }
 
-      // One composition, shared with every preview surface. Resolving WHICH
-      // layout wraps this template needs the database; composing with it does
-      // not, so only the resolution stays here.
-      const layout = dbTemplate.useLayout
-        ? await this.templateService.getLayoutFor(dbTemplate)
-        : null;
-
+      // One composition, shared with every preview surface: the layout, and
+      // the engine each renders with, are resolved by the template service. A
+      // template that cannot be rendered throws here, before any provider is
+      // asked, and the send fails; retrying cannot fix a template.
       const {
         subject,
         html,
         text: plainText,
-      } = renderTemplate(dbTemplate, layout, variables, {
+      } = await this.templateService.renderStored(dbTemplate, variables, {
         appName: this.getAppName(),
       });
 
@@ -418,16 +441,19 @@ export class EmailService extends BaseService {
 
     // The site's code version.
     if (codeFn) {
+      // Template data may now hold any value; the code version's contract is
+      // strings, so only a string reaches it.
+      const text = (value: unknown) =>
+        typeof value === "string" ? value : undefined;
       const result = codeFn({
         user: {
-          name: (variables.userName as string) ?? null,
+          name: text(variables.userName) ?? null,
           // A code-first template renders for one user; with several `to`
           // addresses it is given the first, and `send` delivers to all.
           email: firstAddress(to),
         },
-        token: variables.token as string | undefined,
-        url:
-          (variables.resetLink as string) ?? (variables.verifyLink as string),
+        token: text(variables.token),
+        url: text(variables.resetLink) ?? text(variables.verifyLink),
       });
 
       // The code supplies the content; how it is delivered (provider, From,
@@ -518,7 +544,7 @@ export class EmailService extends BaseService {
      * the `to` rows only: a copied address is someone else.
      */
     person?: PrincipalRef;
-  }): Promise<{ success: boolean; messageId?: string }> {
+  }): Promise<EmailSendOutcome> {
     // A precondition, before anything is resolved or sent: a person that
     // cannot be read would leave the record unable to be erased with them.
     const person = await this.personToRecord(options.person);
@@ -634,6 +660,10 @@ export class EmailService extends BaseService {
       bcc: filtered.bcc,
     };
 
+    // The Reply-To that goes out, whoever set it, is a header like the
+    // recipients, and is held to the same rule before any provider is called.
+    assertSendableReplyTo(envelope.replyTo);
+
     const messages = messagesFor(envelope, maxToPerMessage);
     const runAfterSend = (value: EmailAfterSendValue) =>
       registry.runActions<EmailAfterSendValue, EmailFilterContext>(
@@ -654,7 +684,7 @@ export class EmailService extends BaseService {
             return Promise.resolve();
           };
 
-    const outcomes: Array<{ success: boolean; messageId?: string }> = [];
+    const outcomes: SendOutcome[] = [];
     for (const message of messages) {
       // In turn rather than at once: a provider that takes one `to` per
       // message is usually one that rate-limits, and the delivery records of
@@ -686,18 +716,9 @@ export class EmailService extends BaseService {
       }
     }
 
-    // One message is today's send, and its result is returned as it is.
-    if (outcomes.length === 1) return outcomes[0];
-
-    // Split into one message per `to`: successful only when every message
-    // was, identified by the first message id there is.
-    const messageId = outcomes.find(
-      outcome => outcome.messageId !== undefined
-    )?.messageId;
-    return {
-      success: outcomes.every(outcome => outcome.success),
-      ...(messageId !== undefined ? { messageId } : {}),
-    };
+    // One message is today's send, and its result is returned as it is; a
+    // split send's messages are combined into one result.
+    return outcomes.length === 1 ? outcomes[0] : splitSendOutcome(outcomes);
   }
 
   /**
@@ -855,7 +876,12 @@ export class EmailService extends BaseService {
     // recipients an `email.beforeSend` filter added, and a contributed
     // provider can put anything else there while holding decrypted
     // configuration. What this method promises is what it returns.
-    const outcome = outcomeOf(deliveredToCaller, safeMessageId);
+    const outcome = outcomeOf(deliveredToCaller, safeMessageId, {
+      failure: deliveredToCaller
+        ? undefined
+        : answeredFailure(result, recipients, refused),
+      refused: refusedRecipients(message, refused, result),
+    });
 
     // The provider has answered. Everything below this line is bookkeeping
     // about a message that was already handed over, and the catch beneath
@@ -869,7 +895,7 @@ export class EmailService extends BaseService {
       recipients.map(recipient =>
         acceptedRow(recipient, {
           refused,
-          providerAccepted: result.success,
+          result,
           safeMessageId,
           context,
         })
@@ -969,7 +995,12 @@ export class EmailService extends BaseService {
     // No identifier travels with it: the one the provider returned has not
     // been through the check that keeps a credential or a recipient out of
     // it, and an unchecked id is the thing that check exists to stop.
-    return state.dispatched ?? { success: state.verdict };
+    return (
+      state.dispatched ??
+      (state.verdict
+        ? { success: true }
+        : { success: false, failure: notAcceptedFailure() })
+    );
   }
 
   /**
@@ -981,12 +1012,17 @@ export class EmailService extends BaseService {
     context: DispatchContext,
     startedAt: number
   ): Promise<SendOutcome> {
+    const recipients = deliveryRecipients(message);
     // Recorded before the action seam, for the reason given in the success
     // path: a plugin handler that blocks must not be able to cost us the
     // record of an attempt. A throw here is the case where the record
     // matters most, since it is the only durable trace of the failure.
-    await this.deliveries?.recordAll(
-      deliveryRecipients(message).map(recipient => ({
+    //
+    // Contained, like the log line below: a recorder or a logger that throws
+    // here would otherwise turn this message's failure into an exception, and
+    // on a split send stop every later message from being sent.
+    await this.containedRecord(
+      recipients.map(recipient => ({
         ...rowBase(recipient, context),
         status: "failed" as const,
         // The NORMALISED message, never the cause. `cause` is the provider's
@@ -1013,17 +1049,40 @@ export class EmailService extends BaseService {
       messageId: undefined,
     });
 
-    this.logger.error("email.failed", {
-      event: "email.failed",
-      provider: context.providerType,
-      durationMs: Date.now() - startedAt,
-      // The cause too, not just the message. A provider's own diagnostic --
-      // an SMTP status line, an API error code -- is moved onto `cause` when
-      // its failure is normalised, so a log reading only `message` records
-      // the generic sentence and loses the one fact worth having.
-      ...describeProviderFailure(error),
-    });
-    return { success: false };
+    const failure = thrownFailure(
+      error,
+      recipients.map(recipient => recipient.to)
+    );
+    try {
+      this.logger.error("email.failed", {
+        event: "email.failed",
+        provider: context.providerType,
+        durationMs: Date.now() - startedAt,
+        retryable: failure.retryable,
+        ...(failure.status !== undefined ? { status: failure.status } : {}),
+        // The cause too, not just the message. A provider's own diagnostic --
+        // an SMTP status line, an API error code -- is moved onto `cause` when
+        // its failure is normalised, so a log reading only `message` records
+        // the generic sentence and loses the one fact worth having.
+        ...describeProviderFailure(error),
+      });
+    } catch {
+      // Nowhere left to report it: the reporter is what failed. The failure
+      // is still returned, which is what the caller acts on.
+    }
+    return { success: false, failure };
+  }
+
+  /** Record delivery rows, never letting the recorder's own failure escape. */
+  private async containedRecord(
+    rows: Parameters<EmailDeliveryService["recordAll"]>[0]
+  ): Promise<void> {
+    try {
+      await this.deliveries?.recordAll(rows);
+    } catch {
+      // The recorder already promises not to throw; one that breaks that
+      // promise costs the record of this attempt, never the send.
+    }
   }
 
   // ============================================================
@@ -1060,7 +1119,7 @@ export class EmailService extends BaseService {
        */
       staffUserId?: string;
     }
-  ): Promise<{ success: boolean; messageId?: string }> {
+  ): Promise<EmailSendOutcome> {
     const baseUrl = this.getBaseUrl();
     const path =
       options?.path ??
@@ -1114,7 +1173,7 @@ export class EmailService extends BaseService {
        */
       staffUserId?: string;
     }
-  ): Promise<{ success: boolean; messageId?: string }> {
+  ): Promise<EmailSendOutcome> {
     const baseUrl = this.getBaseUrl();
     const path =
       options?.path ??
@@ -1163,7 +1222,7 @@ export class EmailService extends BaseService {
        */
       staffUserId?: string;
     }
-  ): Promise<{ success: boolean; messageId?: string }> {
+  ): Promise<EmailSendOutcome> {
     return this.sendWithTemplate(
       "welcome",
       to,

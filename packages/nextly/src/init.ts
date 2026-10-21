@@ -192,6 +192,9 @@ function buildNextlyInstance(
     roles: directAPI.roles,
     permissions: directAPI.permissions,
     access: directAPI.access,
+    // API keys, forwarded for the reason stated above. Checked as REST checks
+    // the caller when a call says `overrideAccess: false`.
+    apiKeys: directAPI.apiKeys,
 
     // Service accessors
     collections: getService("collectionService"),

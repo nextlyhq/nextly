@@ -10,8 +10,9 @@
  * The document and its second version are written through the API, so what
  * the test watches is history, not the editor's create flow.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const ENTRIES = "/admin/api/collections/history-notes/entries";

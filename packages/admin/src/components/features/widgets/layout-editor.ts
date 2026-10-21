@@ -298,7 +298,7 @@ export function newPlacementId(): string {
  * same widget, or one whose natural id is taken, gets a fresh id, because ids
  * are unique within a layout and the server refuses a repeat.
  */
-function addedPlacementId(
+export function addedPlacementId(
   placements: readonly WidgetPlacement[],
   widgetId: string
 ): string {
@@ -319,17 +319,25 @@ function addedPlacementId(
 export function addPlacement(
   placements: readonly WidgetPlacement[],
   widgetId: string,
-  defaultWidth: WidgetWidth
+  defaultWidth: WidgetWidth,
+  /**
+   * The new card's id, when the caller has to know it before the list changes (to highlight
+   * the card, or to move focus to it). Decided by {@link addedPlacementId} otherwise.
+   */
+  id: string = addedPlacementId(placements, widgetId)
 ): WidgetPlacement[] {
   // 🔴 REFUSED at capacity, and refused HERE rather than only at the control.
   // `MAX_PLACEMENTS` is what the layout endpoint accepts in one submission --
   // removed cards included, since they travel with the list -- so an unguarded
   // add built a draft the server was always going to reject.
   if (placements.length >= MAX_PLACEMENTS) return [...placements];
+  // A decided id that is already taken is an add made twice before the list moved on (a
+  // double click): adding it again would give two cards one id, so the second adds nothing.
+  if (placements.some(placement => placement.id === id)) return [...placements];
   return [
     ...placements,
     {
-      id: addedPlacementId(placements, widgetId),
+      id,
       widgetId,
       width: defaultWidth,
       removed: false,

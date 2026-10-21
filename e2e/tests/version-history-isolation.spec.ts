@@ -18,8 +18,9 @@
  * and a spec pointed at a collection without it fails for a configuration
  * reason that looks like a broken feature.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 /**

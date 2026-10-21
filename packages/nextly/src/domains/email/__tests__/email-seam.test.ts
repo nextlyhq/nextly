@@ -217,7 +217,12 @@ describe("EmailService — D63 filter/action seams", () => {
       html: "<p>x</p>",
     });
 
-    expect(result).toEqual({ success: false });
+    // A plain error is unclassified, so it is reported as retryable; still
+    // nothing else on the result.
+    expect(result).toEqual({
+      success: false,
+      failure: { retryable: true, reason: "The email provider failed." },
+    });
     expect(captured).toEqual([expect.objectContaining({ success: false })]);
   });
 
@@ -831,7 +836,12 @@ describe("a failure AFTER the provider accepted the message", () => {
       html: "<p>x</p>",
     });
 
-    expect(result).toEqual({ success: false });
+    // A plain error is unclassified, so it is reported as retryable; still
+    // nothing else on the result.
+    expect(result).toEqual({
+      success: false,
+      failure: { retryable: true, reason: "The email provider failed." },
+    });
   });
 });
 
@@ -1117,7 +1127,13 @@ describe("a provider that reports its refusals as a bare string", () => {
       html: "<p>x</p>",
     });
 
-    expect(result).toEqual({ success: true, messageId: "msg-1" });
+    // Delivered to `to`; the refused copy is reported by line and position,
+    // never by address.
+    expect(result).toEqual({
+      success: true,
+      messageId: "msg-1",
+      refused: [{ kind: "cc", position: 0, retryable: true }],
+    });
   });
 
   it("still reads that string as a refusal", async () => {

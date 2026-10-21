@@ -12,12 +12,19 @@
  * layout wraps a template needs the database; composing with it does not, and
  * only the second half belongs here. That split is what lets an unsaved draft
  * be rendered through the same code as a saved row.
+ *
+ * Templates render as Liquid (`liquid-engine.ts`). A template or layout stored
+ * before Liquid that holds syntax the old `{{variable}}` engine sent as text is
+ * marked `legacy` by its caller and renders exactly as that engine did.
  */
+import { randomUUID } from "crypto";
+
 import type {
   EmailTemplateKind,
   EmailTemplateRecord,
 } from "../../../schemas/email-templates/types";
 
+import { markHtml, renderLiquid, type LiquidContext } from "./liquid-engine";
 import { htmlToText, interpolateTemplate } from "./template-engine";
 
 /** The slot a layout declares for the message body. */
@@ -54,7 +61,18 @@ export interface TemplateFields {
   preheader: string | null;
   useLayout: boolean;
   kind: EmailTemplateKind;
+  /**
+   * Render with the old `{{variable}}` engine, for a template stored before
+   * Liquid that it would read differently. Decided by the caller, from what
+   * is stored about the template; absent means Liquid.
+   */
+  legacy?: boolean;
 }
+
+/** A layout as the render needs it. */
+export type LayoutFields = Pick<EmailTemplateRecord, "htmlContent"> & {
+  legacy?: boolean;
+};
 
 /**
  * The complete artifact: everything the transport is handed.
@@ -76,26 +94,50 @@ export interface RenderTemplateOptions {
   appName: string;
 }
 
+/**
+ * Fill one field. HTML is escaped; plain text is not; a line is plain text
+ * with line breaks removed. The old engine has no notion of a line, and keeps
+ * the plain-text behaviour it always had.
+ */
+function fill(
+  source: string,
+  data: Record<string, unknown>,
+  context: LiquidContext,
+  legacy: boolean | undefined
+): string {
+  if (legacy) {
+    return interpolateTemplate(source, data, {
+      escapeHtml: context === "html",
+    });
+  }
+  return renderLiquid(source, data, context);
+}
+
+/**
+ * @throws NextlyError when a Liquid template cannot be rendered (it does not
+ *   parse, or a render limit is hit); it is not retryable.
+ */
 export function renderTemplate(
   template: TemplateFields,
-  layout: Pick<EmailTemplateRecord, "htmlContent"> | null,
+  layout: LayoutFields | null,
   data: Record<string, unknown>,
   options: RenderTemplateOptions
 ): RenderedTemplate {
+  const legacy = template.legacy;
   // Mail clients render a subject as plain text, so escaping it would show the
   // reader `&amp;` where the value contains `&`.
-  const subject = interpolateTemplate(template.subject, data, {
-    escapeHtml: false,
-  });
+  const subject = fill(template.subject, data, "line", legacy);
 
   // A layout row IS the wrapper, so the chrome variables its own markup
   // references resolve here exactly as they do when a body is spliced into it.
   // Withheld from an ordinary body: a template that says `{{appName}}` in its
   // own copy has always rendered whatever the caller supplied, and nothing
   // when the caller supplied nothing.
-  let html = interpolateTemplate(
+  let html = fill(
     template.htmlContent,
-    template.kind === "layout" ? withLayoutChrome(data, options) : data
+    template.kind === "layout" ? withLayoutChrome(data, options) : data,
+    "html",
+    legacy
   );
 
   // Derived BEFORE the preheader and the layout are spliced in. The preheader
@@ -103,24 +145,18 @@ export function renderTemplate(
   // that line as the message's opening words; the layout's chrome would follow
   // it into the text part for the same reason.
   const text = template.plainTextContent?.trim()
-    ? interpolateTemplate(template.plainTextContent, data, {
-        escapeHtml: false,
-      })
+    ? fill(template.plainTextContent, data, "text", legacy)
     : htmlToText(html);
 
   if (template.preheader?.trim()) {
-    const preheader = interpolateTemplate(template.preheader, data);
+    const preheader = fill(template.preheader, data, "html", legacy);
     html = `${PREHEADER_OPEN}${preheader}</div>${html}`;
   }
 
   // A layout row IS a wrapper, so wrapping it in another would nest two
   // documents. It renders as itself.
   if (template.kind !== "layout" && template.useLayout && layout) {
-    html = spliceIntoLayout(
-      layout.htmlContent,
-      html,
-      withLayoutChrome(data, options)
-    );
+    html = spliceIntoLayout(layout, html, withLayoutChrome(data, options));
   }
 
   return { subject, html, text };
@@ -159,15 +195,30 @@ function withLayoutChrome(
  * appended after the wrapper so a malformed layout drops nothing.
  */
 function spliceIntoLayout(
-  wrapper: string,
+  layout: LayoutFields,
   body: string,
   variables: Record<string, unknown>
 ): string {
+  const wrapper = layout.htmlContent;
   const at = wrapper.indexOf(CONTENT_MARKER);
-  if (at === -1) return interpolateTemplate(wrapper, variables) + body;
-  return (
-    interpolateTemplate(wrapper.slice(0, at), variables) +
-    body +
-    interpolateTemplate(wrapper.slice(at + CONTENT_MARKER.length), variables)
+  if (layout.legacy) {
+    if (at === -1) return interpolateTemplate(wrapper, variables) + body;
+    return (
+      interpolateTemplate(wrapper.slice(0, at), variables) +
+      body +
+      interpolateTemplate(wrapper.slice(at + CONTENT_MARKER.length), variables)
+    );
+  }
+  if (at === -1) return renderLiquid(wrapper, variables, "html") + body;
+  // A Liquid layout renders as one document, so a block may enclose the body.
+  // The body arrives as marked HTML in a slot the marker is swapped for, and is
+  // written as it is: it is finished, already-escaped output. The slot is named
+  // afresh for each render, so no layout can assign to it and no data key can
+  // collide with it.
+  const slot = `nextly_body_${randomUUID().replace(/-/g, "")}`;
+  return renderLiquid(
+    `${wrapper.slice(0, at)}{{ ${slot} }}${wrapper.slice(at + CONTENT_MARKER.length)}`,
+    { ...variables, [slot]: markHtml(body) },
+    "html"
   );
 }

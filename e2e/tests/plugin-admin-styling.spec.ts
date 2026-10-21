@@ -11,8 +11,9 @@
  *  - Layer 2 (safelist): a `bg-card` utility paints.
  *  - Layer 3 (admin.styles): the plugin's own `.sf-panel` paints.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 
 const TRANSPARENT = new Set(["rgba(0, 0, 0, 0)", "transparent"]);

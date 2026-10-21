@@ -34,6 +34,7 @@ import type {
   BaseListResult,
 } from "../../../shared/base-registry-service";
 import { fieldDefaultsSignature } from "../../../shared/lib/field-defaults";
+import { stopReleasesHolding } from "../../releases/early-stop";
 import {
   calculateSchemaHash,
   schemaHashesMatch,
@@ -364,6 +365,23 @@ export class CollectionRegistryService extends BaseRegistryService<
       updated_at: this.formatDateForDb(),
     };
 
+    // Whether this update changes what the collection's documents are judged
+    // against: its fields (by hash), or its draft/published or localization
+    // switch. Asked of the update itself, so a pure-metadata sync that
+    // re-sends unchanged fields is not one.
+    const statusToggled =
+      data.status !== undefined &&
+      (data.status === true) !== (existing.status === true);
+    const localizedToggled =
+      data.localized !== undefined &&
+      (data.localized === true) !== (existing.localized === true);
+    const schemaChanged =
+      statusToggled ||
+      localizedToggled ||
+      (data.fields !== undefined &&
+        (data.schemaHash === undefined ||
+          !schemaHashesMatch(data.schemaHash, existing.schemaHash)));
+
     if (data.labels) {
       updateData.labels = JSON.stringify(data.labels);
     }
@@ -378,16 +396,7 @@ export class CollectionRegistryService extends BaseRegistryService<
       // pure-metadata sync (versions/labels/admin) re-sends unchanged fields and
       // must not force a spurious pending-migration cycle. Without a hash we
       // cannot compare fields, so fall back to the prior always-bump behavior.
-      const fieldsActuallyChanged =
-        data.schemaHash === undefined ||
-        !schemaHashesMatch(data.schemaHash, existing.schemaHash);
-      const statusToggled =
-        data.status !== undefined &&
-        (data.status === true) !== (existing.status === true);
-      const localizedToggled =
-        data.localized !== undefined &&
-        (data.localized === true) !== (existing.localized === true);
-      if (fieldsActuallyChanged || statusToggled || localizedToggled) {
+      if (schemaChanged) {
         updateData.schema_version = existing.schemaVersion + 1;
         updateData.migration_status = "pending";
       }
@@ -476,6 +485,13 @@ export class CollectionRegistryService extends BaseRegistryService<
 
       this.logger.info("Collection updated", { slug });
 
+      // A stricter schema (a required field added, a rule tightened, the
+      // lifecycle switched off) can leave a scheduled release holding this
+      // collection's documents with a hard problem: they are checked again
+      // once this is durable, and such a release stops now rather than at
+      // its instant.
+      if (schemaChanged) await this.recheckReleasesHolding(slug);
+
       return this.deserializeRecord(results[0]);
     } catch (error) {
       if (NextlyError.is(error)) {
@@ -484,6 +500,18 @@ export class CollectionRegistryService extends BaseRegistryService<
       // Normalise raw driver errors so unique/fk/etc. produce the right kind.
       throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
+  }
+
+  /**
+   * Hand the scheduled releases holding this collection's documents to the
+   * early stop, once the change is durable.
+   */
+  private recheckReleasesHolding(slug: string): Promise<void> {
+    return this.afterCommit(() =>
+      stopReleasesHolding({
+        scopes: [{ scopeKind: "collection", scopeSlug: slug }],
+      })
+    );
   }
 
   async deleteCollection(
@@ -531,6 +559,10 @@ export class CollectionRegistryService extends BaseRegistryService<
       clearWebhookRecording("collection", slug);
 
       this.logger.info("Collection deleted", { slug });
+
+      // Its documents are gone with it, so a scheduled release holding one
+      // cannot run: stopped now rather than at its instant.
+      await this.recheckReleasesHolding(slug);
     } catch (error) {
       if (NextlyError.is(error)) {
         throw error;

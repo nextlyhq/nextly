@@ -17,8 +17,9 @@
  *
  * @module tests/inline-rich-text
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { STORAGE_STATE } from "../global-setup";
 import { gotoAdmin } from "./support/admin";
 

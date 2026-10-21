@@ -228,6 +228,64 @@ export function recipientsOf(envelope: {
 export const MAX_TO_PER_SEND = 100;
 
 /**
+ * Whether a value is one address, or a comma-joined list of addresses, that a
+ * message can be sent to: what the service accepts for one `to` entry, and for
+ * a Reply-To, which may name several.
+ */
+export function isSendableAddressList(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const addresses = toAddressList([value]);
+  return addresses.length > 0 && addresses.every(isSendableAddress);
+}
+
+/**
+ * Refuse a Reply-To holding a line break or other control character, before
+ * any provider is contacted.
+ *
+ * Checked on the envelope that is sent, so a Reply-To an `email.beforeSend`
+ * filter set is held to the same rule as the caller's own. A Reply-To becomes
+ * a header, and a line break in it would let the value add a header of its own
+ * at an adapter that writes it out unescaped. Any other value passes through as
+ * it always has, for the provider to judge, so no send that works today is
+ * refused.
+ */
+export function assertSendableReplyTo(replyTo: unknown): void {
+  if (typeof replyTo !== "string" || !hasControlCharacter(replyTo)) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "replyTo",
+        code: "INVALID",
+        message:
+          "The Reply-To holds a line break or another control character.",
+      },
+    ],
+    logContext: { operation: "email.send" },
+  });
+}
+
+/**
+ * Split a display-name address into its name and mailbox, reading quoted text
+ * as text: `"A < B" <a@example.com>` names `"A < B"` and `a@example.com`. A
+ * bare address has an empty name.
+ */
+export function displayNameAndMailbox(address: string): {
+  name: string;
+  email: string;
+} {
+  const trimmed = address.trim();
+  const blanked = unquoted(trimmed);
+  const open = blanked.lastIndexOf("<");
+  if (open === -1 || !blanked.endsWith(">")) {
+    return { name: "", email: trimmed };
+  }
+  return {
+    name: trimmed.slice(0, open).trim(),
+    email: trimmed.slice(open + 1, -1).trim(),
+  };
+}
+
+/**
  * Refuse an envelope that cannot be sent as asked, before any provider is
  * contacted.
  *

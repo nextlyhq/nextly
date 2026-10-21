@@ -9,6 +9,14 @@
  * @since 1.0.0
  */
 
+import {
+  type EmailFailure,
+  failureOf,
+  networkFailure,
+  smtpFailure,
+  unclassifiedFailure,
+  withEmailFailure,
+} from "../../failure";
 import type { EmailProviderAdapter } from "../../types";
 
 import { loadNodemailer } from "./nodemailer-loader";
@@ -141,6 +149,47 @@ function addressOf(entry: unknown): string {
  */
 export const SMTP_MAX_TO = 100;
 
+/** Nodemailer's codes for a connection that failed or never answered. */
+const SMTP_NETWORK_CODES = new Set([
+  "ECONNECTION",
+  "ETIMEDOUT",
+  "ESOCKET",
+  "EDNS",
+  "ECONNREFUSED",
+  "ECONNRESET",
+]);
+
+/**
+ * The classification of a nodemailer error: by its SMTP reply code when the
+ * server gave one, as a network failure when the connection failed, and
+ * otherwise as unclassified.
+ */
+function smtpErrorFailure(error: unknown): EmailFailure {
+  const { responseCode, code } = (error ?? {}) as {
+    responseCode?: unknown;
+    code?: unknown;
+  };
+  if (typeof responseCode === "number") return smtpFailure(responseCode);
+  if (typeof code === "string" && SMTP_NETWORK_CODES.has(code)) {
+    return networkFailure();
+  }
+  return unclassifiedFailure();
+}
+
+/**
+ * Each refused recipient nodemailer reports, with what its reply code says.
+ */
+function refusalsOf(
+  rejectedErrors: unknown[] | undefined
+): Array<{ address: string } & EmailFailure> | undefined {
+  if (!rejectedErrors?.length) return undefined;
+  const refusals = rejectedErrors.flatMap(entry => {
+    const address = addressOf((entry as { recipient?: unknown })?.recipient);
+    return address ? [{ address, ...smtpErrorFailure(entry) }] : [];
+  });
+  return refusals.length > 0 ? refusals : undefined;
+}
+
 export function createSmtpProvider(
   config: SmtpProviderConfig
 ): EmailProviderAdapter {
@@ -182,6 +231,7 @@ export function createSmtpProvider(
           })),
         });
 
+        const refusals = refusalsOf(info.rejectedErrors);
         return {
           success: true,
           messageId: info.messageId,
@@ -189,11 +239,16 @@ export function createSmtpProvider(
           // would let a partially refused send be recorded as delivered to
           // everyone it was addressed to.
           rejected: info.rejected?.map(addressOf).filter(Boolean),
+          // And what each refusal's reply code says about trying again.
+          ...(refusals ? { refusals } : {}),
         };
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "SMTP send failed";
-        throw new Error(`SMTP provider error: ${message}`);
+        throw withEmailFailure(
+          new Error(`SMTP provider error: ${message}`),
+          failureOf(error) ?? smtpErrorFailure(error)
+        );
       }
     },
   };

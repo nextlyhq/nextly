@@ -61,7 +61,9 @@
  *
  * **What a cell says.** `A` allowed, `R` refused, an HTTP status for a refusal
  * or failure that carried one, `E` a failure that carried none, `=<value>` a
- * check that answered something other than a boolean, and `.` not asked.
+ * check that answered something other than a boolean, `S` a media row
+ * populated with its internal columns taken off, which presents a refusal,
+ * and `.` not asked.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -105,6 +107,8 @@ const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
   "schema",
   "population",
   "system",
+  "widget",
+  "lock",
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");

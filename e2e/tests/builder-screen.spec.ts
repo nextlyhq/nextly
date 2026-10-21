@@ -7,8 +7,9 @@
  *
  * @module tests/builder-screen
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;

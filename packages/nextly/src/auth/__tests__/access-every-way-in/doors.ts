@@ -18,13 +18,18 @@ import { CollectionAccessService } from "../../../domains/collections/services/c
 import { checkSingleAccess } from "../../../domains/singles/services/single-query-service";
 import { getPluginRouteRegistry } from "../../../plugins/routes/route-registry";
 import { runPluginRoute } from "../../../plugins/routes/dispatch";
+import type {
+  DocumentLockService,
+  DocumentRef,
+} from "../../../domains/document-lock";
+import { widgetAudience } from "../../../domains/widgets/visibility";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { resolveContent } from "../../../runtime/routing/resolve-content";
 import { consoleLogger } from "../../../services/shared";
 import { canReadEntity, readAccessCaller } from "../../entity-read-access";
 import { canReadSystemResource } from "../../resource-readable";
 
-import type { Answer, Door, Row } from "./table";
+import { rowKey, type Answer, type Door, type Row } from "./table";
 import {
   MEDIA_MARKER,
   ORIGIN,
@@ -36,6 +41,7 @@ import {
   pubSingleOf,
   relationOf,
   singleOf,
+  widgetFor,
   type CallerHandle,
   type World,
 } from "./world";
@@ -142,12 +148,73 @@ function restSingle(row: Row, slug: string, headers: Record<string, string>) {
   return request("PATCH", ["singles", slug], headers, body);
 }
 
+/** The REST path of each resource that is not an entry. */
+const RESOURCE_PATHS: Partial<Record<Row["target"], string>> = {
+  users: "users",
+  roles: "roles",
+  providers: "email-providers",
+};
+
+/**
+ * The request each action is on a resource's own routes. A write names an id
+ * that does not exist (in the UUID shape the role routes validate first), or
+ * sends a body the route refuses, so a caller the gate lets through is
+ * answered by the route behind it (a 404 or a 400) and nothing is changed:
+ * the table asks the gate, never the resource.
+ */
+const RESOURCE_REQUESTS: Partial<
+  Record<Row["action"], { method: Method; byId: boolean; body?: object }>
+> = {
+  read: { method: "GET", byId: false },
+  // An address no account can have, so a user is never made.
+  create: { method: "POST", byId: false, body: { email: "not-an-address" } },
+  update: { method: "PATCH", byId: true, body: {} },
+  delete: { method: "DELETE", byId: true },
+};
+
+const ABSENT_ID = "00000000-0000-4000-8000-00000000abcd";
+
+/**
+ * A resource route's answer: its gate's 401 or 403 as is, and `A` for a
+ * request the gate let through, whatever the route then said about the
+ * absent id or the empty body. A failure (5xx) or a limit (429) is kept.
+ */
+async function restResource(row: Row, headers: Record<string, string>) {
+  const path = RESOURCE_PATHS[row.target];
+  const asked = RESOURCE_REQUESTS[row.action];
+  if (!path || !asked)
+    throw new Error(`no resource request for ${rowKey(row)}`);
+  const segments = asked.byId ? [path, ABSENT_ID] : [path];
+  const { status } = await request(asked.method, segments, headers, asked.body);
+  if (status === 401 || status === 403 || status === 429 || status >= 500) {
+    return String(status);
+  }
+  return "A";
+}
+
+/**
+ * The REST answer for a target that is not a rule collection or Single, or
+ * nothing for one that is: media and users' read keep the handlers they have
+ * always been asked through, and every other resource its own routes.
+ */
+function restSystem(
+  row: Row,
+  headers: Record<string, string>
+): Promise<Answer> | undefined {
+  if (row.target === "media") return restMedia(headers);
+  if (row.target === "users" && row.action === "read") {
+    return request("GET", ["users"], headers).then(res =>
+      fromStatus(res.status)
+    );
+  }
+  if (RESOURCE_PATHS[row.target]) return restResource(row, headers);
+  return undefined;
+}
+
 async function rest(world: World, row: Row, who: CallerHandle) {
   const h = who.headers;
-  if (row.target === "media") return restMedia(h);
-  if (row.target === "users") {
-    return fromStatus((await request("GET", ["users"], h)).status);
-  }
+  const system = restSystem(row, h);
+  if (system) return system;
   const { slug, id } = addressOf(world, row, "rest");
   if (row.target === "single" || row.target === "single-pub") {
     return fromStatus((await restSingle(row, slug, h)).status);
@@ -303,7 +370,9 @@ function pluginRequest(
 }
 
 async function route(world: World, row: Row, who: CallerHandle) {
-  const { slug } = addressOf(world, row, "route");
+  const slug = RESOURCE_PATHS[row.target]
+    ? targetSlug(row)
+    : addressOf(world, row, "route").slug;
   const res = await pluginRequest(
     ["probe", "gate", slug, row.action],
     who.headers
@@ -315,7 +384,7 @@ function targetSlug(row: Row): string {
   if (row.target === "collection") return collectionOf(row.rule);
   if (row.target === "single") return singleOf(row.rule);
   if (row.target === "single-pub") return pubSingleOf(row.rule);
-  return row.target;
+  return RESOURCE_PATHS[row.target] ?? row.target;
 }
 
 async function can(_world: World, row: Row, who: CallerHandle) {
@@ -412,39 +481,136 @@ async function schema(world: World, row: Row, who: CallerHandle) {
   return answer.includes(collectionOf(row.rule)) ? "A" : "R";
 }
 
+/**
+ * A trusted read whose bound reaches only `refs`, the collection it reads,
+ * so every target it populates is read as the caller would read it.
+ */
+function boundCaller(who: CallerHandle) {
+  return {
+    overrideAccess: true as const,
+    trusted: (collection: string) => collection === "refs",
+    ...(who.user ? { user: who.user } : {}),
+    ...(who.actor ? { actor: who.actor } : {}),
+  };
+}
+
+/** The field of `refs` that points at a row's target, and what a populated one carries. */
+function populatedField(row: Row): { field: string; marker: string } {
+  if (row.target === "media") return { field: "picture", marker: MEDIA_MARKER };
+  if (row.target === "users") return { field: "owner", marker: USER_MARKER };
+  return { field: relationOf(row.rule), marker: "probe" };
+}
+
+/**
+ * What a populated field says: `R` when its target was withheld, `S` when a
+ * media row came without who filed it, a refusal presented as the file
+ * alone, and `A` when the whole row came.
+ */
+function populationAnswer(value: unknown, row: Row, marker: string): Answer {
+  if (typeof value !== "object" || value === null) return "R";
+  if (!JSON.stringify(value).includes(marker)) return "R";
+  if (row.target !== "media") return "A";
+  return "uploadedBy" in value || "uploaded_by" in value ? "A" : "S";
+}
+
 /** Reads `refs` with its relationships populated, once per caller. */
 async function population(world: World, row: Row, who: CallerHandle) {
   const ref = (await world.t.nextly.findByID({
     collection: "refs",
     id: world.refId,
     depth: 1,
-    ...directCaller(who),
+    ...(row.setup === "bound" ? boundCaller(who) : directCaller(who)),
   })) as Record<string, unknown> | null;
   if (!ref) return "R";
-  const field =
-    row.target === "media"
-      ? "picture"
-      : row.target === "users"
-        ? "owner"
-        : relationOf(row.rule);
-  const marker =
-    row.target === "media"
-      ? MEDIA_MARKER
-      : row.target === "users"
-        ? USER_MARKER
-        : "probe";
-  const value = ref[field];
-  const populated =
-    typeof value === "object" &&
-    value !== null &&
-    JSON.stringify(value).includes(marker);
-  return populated ? "A" : "R";
+  const { field, marker } = populatedField(row);
+  return populationAnswer(ref[field], row, marker);
 }
 
 async function system(_world: World, row: Row, who: CallerHandle) {
   return fromBoolean(
     await canReadSystemResource(row.target, who.user?.id, who.actor)
   );
+}
+
+const audiences = new WeakMap<
+  World,
+  Map<string, Promise<ReadonlySet<string>>>
+>();
+
+/**
+ * Whether the dashboard offers the caller the widget that requires the row's
+ * permission. What a caller is offered is worked out once per caller and
+ * setup, as the layout endpoint works it out once per request.
+ */
+async function widget(world: World, row: Row, who: CallerHandle) {
+  if (!who.user) throw new Error(`${row.caller} has no user to ask about`);
+  let cache = audiences.get(world);
+  if (!cache) {
+    cache = new Map();
+    audiences.set(world, cache);
+  }
+  const key = `${row.setup} ${row.caller}`;
+  let offered = cache.get(key);
+  if (!offered) {
+    const caller = readAccessCaller({
+      user: who.user,
+      ...(who.actor ? { authenticatedScope: who.actor } : {}),
+    });
+    offered = widgetAudience(caller).then(
+      ({ visible }) => new Set(visible.map(card => card.id))
+    );
+    cache.set(key, offered);
+  }
+  const id = widgetFor(targetSlug(row), row.action);
+  return (await offered).has(id) ? "A" : "R";
+}
+
+/** The id of a Single's one document, made by the reads that came before. */
+async function singleDocumentId(world: World, slug: string): Promise<string> {
+  const [row] = await world.t.adapter.select<{ id: unknown }>(
+    `single_${slug}`,
+    {}
+  );
+  if (!row) throw new Error(`single_${slug} holds no row`);
+  return String(row.id);
+}
+
+/**
+ * Claims the entry's or Single's document lock through REST, as an editor
+ * opening it does. Only an `acquired` claim is an `A`: a claim answered
+ * `held` was never this caller's, so it is recorded as such rather than as an
+ * answer about this caller.
+ *
+ * Every acquired claim is given straight back through the lock service with
+ * its token, never through the route: a caller a rule lets claim may hold no
+ * grant to release with, and a claim it left behind would answer every caller
+ * after it `held`.
+ */
+async function lock(world: World, row: Row, who: CallerHandle) {
+  const ref: DocumentRef =
+    row.target === "single"
+      ? {
+          scopeKind: "single",
+          slug: singleOf(row.rule),
+          entryId: await singleDocumentId(world, singleOf(row.rule)),
+        }
+      : {
+          scopeKind: "collection",
+          slug: collectionOf(row.rule),
+          entryId: addressOf(world, row, "lock").id,
+        };
+  const res = await request("POST", ["document-lock"], who.headers, ref);
+  if (res.status !== 200) return fromStatus(res.status);
+  const body = (await res.json()) as {
+    item?: { status?: unknown; claimToken?: unknown };
+  };
+  const { status, claimToken } = body.item ?? {};
+  if (typeof claimToken === "string") {
+    await container
+      .get<DocumentLockService>("documentLockService")
+      .release(ref, claimToken);
+  }
+  return status === "acquired" ? "A" : `=${String(status)}`;
 }
 
 const ADAPTERS: Record<
@@ -461,6 +627,8 @@ const ADAPTERS: Record<
   schema,
   population,
   system,
+  widget,
+  lock,
 };
 
 /**
