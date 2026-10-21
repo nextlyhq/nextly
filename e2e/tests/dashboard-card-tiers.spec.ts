@@ -8,8 +8,9 @@
  * is the container's, not the window's, so the window is sized until the container measures
  * what each case names.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const RECENT_POSTS = "collection/posts-recent";

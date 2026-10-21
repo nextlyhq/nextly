@@ -13,12 +13,12 @@
  */
 import {
   expect,
-  test,
   type Browser,
   type BrowserContext,
   type Page,
 } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;

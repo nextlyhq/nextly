@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, devices } from "@playwright/test";
 
 import { E2E_NEXTLY_SECRET } from "./tests/support/preview-links";
+import { STORAGE_STATE } from "./tests/support/session";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const NEXTLY_ROOT = path.resolve(HERE, "..");
@@ -96,8 +97,9 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        // Signed in before the first test, by global-setup.
-        storageState: "./.playwright/session.json",
+        // Signed in before the first test, by global-setup, and renewed as
+        // the suite runs by `tests/support/test`.
+        storageState: STORAGE_STATE,
       },
     },
   ],

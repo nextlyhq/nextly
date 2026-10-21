@@ -18,8 +18,9 @@
  * Each load's counts are printed and attached to the report, so the measured
  * numbers can be recorded.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 /** A tenth of a window's session budget, at the default limits. */
