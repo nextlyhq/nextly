@@ -97,20 +97,32 @@ function probePlugin(collections: string[]): unknown {
             const cells = (
               seoIssuesWidget(defaultSeoFields())?.cells ?? []
             ).map(cell => cell.query);
-            const counted = countingReads(ctx);
-            const answers =
-              new URL(req.url).searchParams.get("mode") === "many" &&
-              resolveMany
-                ? await resolveMany(cells, reader, counted.ctx, undefined)
-                : await Promise.all(
-                    cells.map(cell =>
-                      resolve(cell, reader, counted.ctx, undefined)
-                    )
-                  );
-            return new Response(
-              JSON.stringify({ answers, pagesRead: counted.pagesRead() }),
-              { headers: { "content-type": "application/json" } }
-            );
+            // A failure here is reported in the response, since the harness keeps
+            // the server log quiet and a bare 500 would say nothing about why.
+            try {
+              const counted = countingReads(ctx);
+              const answers =
+                new URL(req.url).searchParams.get("mode") === "many" &&
+                resolveMany
+                  ? await resolveMany(cells, reader, counted.ctx, undefined)
+                  : await Promise.all(
+                      cells.map(cell =>
+                        resolve(cell, reader, counted.ctx, undefined)
+                      )
+                    );
+              return new Response(
+                JSON.stringify({ answers, pagesRead: counted.pagesRead() }),
+                { headers: { "content-type": "application/json" } }
+              );
+            } catch (error) {
+              return new Response(
+                JSON.stringify({
+                  probeError:
+                    error instanceof Error ? error.stack : String(error),
+                }),
+                { status: 500, headers: { "content-type": "application/json" } }
+              );
+            }
           },
         },
         {
@@ -144,35 +156,25 @@ function probePlugin(collections: string[]): unknown {
 
 /**
  * The plugin's context with its collection reads counted, the real service doing
- * the reading. Through a `Proxy`, because the service's methods live on its
- * prototype: a spread copy would lose them.
+ * the reading. A copy with `listEntries` wrapped, not a `Proxy`: the services the
+ * host hands a plugin are frozen, and a proxy may not answer a frozen property
+ * with anything but its own value.
  */
 function countingReads<C extends { services: object }>(ctx: C) {
   let pages = 0;
-  const bind = (target: object, value: unknown) =>
-    typeof value === "function" ? value.bind(target) : value;
-  const services = ctx.services as { collections: object };
-  const collections = new Proxy(services.collections, {
-    get(target, key, receiver) {
-      const value = Reflect.get(target, key, receiver);
-      if (key !== "listEntries" || typeof value !== "function") {
-        return bind(target, value);
-      }
-      return (...args: unknown[]) => {
-        pages += 1;
-        return (value as (...a: unknown[]) => unknown).apply(target, args);
-      };
+  const services = ctx.services as {
+    collections: { listEntries: (...args: unknown[]) => unknown };
+  };
+  const real = services.collections;
+  const collections = {
+    ...real,
+    listEntries: (...args: unknown[]) => {
+      pages += 1;
+      return real.listEntries(...args);
     },
-  });
-  const counted = new Proxy(services, {
-    get(target, key, receiver) {
-      return key === "collections"
-        ? collections
-        : bind(target, Reflect.get(target, key, receiver));
-    },
-  });
+  };
   return {
-    ctx: { ...ctx, services: counted } as C,
+    ctx: { ...ctx, services: { ...services, collections } } as C,
     pagesRead: () => pages,
   };
 }
@@ -187,6 +189,10 @@ async function probe(path: string, query = ""): Promise<unknown> {
       }),
     }
   );
+  // A probe that failed says so, rather than handing back a body whose fields are all
+  // undefined, which two failing calls would compare equal on.
+  if (!res.ok)
+    throw new Error(`probe ${path}: ${res.status} ${await res.text()}`);
   return (await res.json()) as unknown;
 }
 
