@@ -75,7 +75,9 @@ vi.mock("@admin/hooks/useLocalization", () => ({
   }),
 }));
 
+import { useHostedDocumentActions } from "../DocumentActionsContext";
 import { EntryForm } from "../EntryForm";
+import { useDocumentStatus } from "../EntryFormContext";
 
 const VIEW = "@acme/pb/admin#Builder";
 const collection = {
@@ -395,6 +397,60 @@ describe("EntryForm with a document view", () => {
     } finally {
       error.mockRestore();
     }
+  });
+
+  it("tells the view the document's status, as the embedded editor and a Single do", () => {
+    const STATUS_VIEW = "@acme/pb/admin#Status";
+    function StatusView(): ReactElement {
+      const status = useDocumentStatus();
+      return (
+        <p data-testid="status">
+          {status === null
+            ? "unknown"
+            : `${status.status}${status.hasWorkingDraft ? " with a draft" : ""}`}
+        </p>
+      );
+    }
+    registerComponent(STATUS_VIEW, StatusView);
+    renderView({
+      entry: { id: "e1", title: "Hello", status: "published" } as never,
+      documentView: { component: STATUS_VIEW, onExit },
+    });
+    expect(screen.getByTestId("status")).toHaveTextContent("published");
+  });
+
+  it("lets the view run the document's save, with no header drawn, and hear how it went", async () => {
+    const ACTIONS_VIEW = "@acme/pb/admin#Actions";
+    const heard = vi.fn();
+    function ActionsView(): ReactElement {
+      const { run } = useHostedDocumentActions();
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            void run("save").then(heard);
+          }}
+        >
+          Save from the view
+        </button>
+      );
+    }
+    registerComponent(ACTIONS_VIEW, ActionsView);
+    update.mockResolvedValue({ item: { id: "e1", title: "Hello" } });
+    renderView({ documentView: { component: ACTIONS_VIEW, onExit } });
+
+    expect(screen.queryByRole("textbox", { name: "Title" })).toBeNull();
+    await userEvent.click(
+      screen.getByRole("button", { name: "Save from the view" })
+    );
+
+    await waitFor(() =>
+      expect(heard).toHaveBeenCalledWith({
+        ok: true,
+        item: { id: "e1", title: "Hello" },
+      })
+    );
+    expect(update).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the ordinary editor when no view is routed", () => {

@@ -123,6 +123,10 @@ function service(over?: {
     runDrainNow: vi.fn(
       async (_options: { maxDurationMs: number }) => undefined
     ),
+    // Every reader may read every member: these tests are not about which
+    // documents a reader sees.
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
     logger: {
       warn: vi.fn((_message: string, _meta?: Record<string, unknown>) => {}),
     },

@@ -18,7 +18,6 @@ import {
 } from "@admin/components/icons";
 import { Link } from "@admin/components/ui/link";
 import { useCan } from "@admin/hooks/useCan";
-import type { AutosaveStatus } from "@admin/hooks/useDocumentAutosave";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { cn } from "@admin/lib/utils";
 import type { PreviewLinkDocument } from "@admin/services/previewLinkApi";
@@ -27,28 +26,21 @@ import { useEntryLocale } from "../EntryLocaleContext";
 import { SharePreviewPopover } from "../PreviewShare/SharePreviewPopover";
 import { translationCounts } from "../translation-meta";
 
-import { AutoSaveIndicator } from "./AutoSaveIndicator";
-import { DiscardDraftConfirmDialog } from "./DiscardDraftConfirmDialog";
-import { documentActions } from "./document-actions";
 import {
-  acceptContributions,
   DocumentActionBar,
   WIDE_ONLY,
-  type ActionBinding,
-  type ContributedAction,
   type NarrowMenuItem,
 } from "./DocumentActionBar";
+import { useHostedDocumentActions } from "./DocumentActionsContext";
 import { DocumentStatusLive } from "./DocumentStatusLive";
-import { effectiveEntryStatus } from "./entry-address";
 import { EntryTitleInput } from "./EntryTitleInput";
 import {
   PreviewActions,
   previewChoices,
   type PreviewActionsProps,
 } from "./PreviewActions";
+import { SaveStateIndicator } from "./SaveStateIndicator";
 import { TOOLBAR_CONTAINER } from "./toolbar-density";
-import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
-import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { EntryData, EntryFormMode } from "./useEntryForm";
 
 // into one component. The title input lives in the action-bar row (autofocus
@@ -65,20 +57,8 @@ export interface EntrySystemHeaderProps {
   /** Title field config (from Builder schema). Determines the placeholder
    *  fallback and the required-validation flag. */
   titleField?: FieldConfig;
-  /** Whether the collection has the Draft/Published feature enabled.
-   *  Splits the primary submit into Save Draft + Publish/Update. */
-  hasStatus: boolean;
-  /** Whether the working-draft split is enabled (drafts on a versioned
-   *  collection). When `true`, editing a PUBLISHED entry saves a pending
-   *  working draft (live row untouched) instead of re-publishing, and a
-   *  separate Publish promotes it. */
-  draftsEnabled?: boolean;
   /** Whether the form is currently submitting. Disables buttons + spinner. */
   isSubmitting?: boolean;
-  /** Whether the form has validation errors. Disables submit. */
-  isInvalid?: boolean;
-  /** Whether the form has unsaved changes. Toggles Discard menu item. */
-  isDirty?: boolean;
   /**
    * The editor's WHOLE unsaved-work state — form dirtiness plus state a
    * field holds outside the form (the page builder commits on exit). The
@@ -91,25 +71,18 @@ export interface EntrySystemHeaderProps {
    * that has never been saved, which has no id for the endpoint to address.
    */
   autosaveEnabled?: boolean;
-  /** Recording state of this author's recovery point. */
-  autosaveStatus?: AutosaveStatus;
   /** When the server last stored a recovery point, by the server's clock. */
   autosaveLastSavedAt?: Date | null;
-  /** Form id for the single submit button when drafts are off. */
-  /** Entry data; needed for Show JSON dialog (entry id) and Duplicate (id). */
   /**
-   * The form this header's save submits.
-   *
-   * Load-bearing for a collection with NO status column: that save has always
-   * been a native submit with no intent attached, because every intent-carrying
-   * handler writes a `status` such a collection does not have.
+   * When a recovery point NEWER than the stored document was made, while it is
+   * still on offer. Its edits live in the recovery point only, so the save
+   * indicator says the work is not stored, whatever the form says.
    */
-  formId?: string;
+  pendingRecoveryAt?: Date | null;
+  /** Entry data; needed for Show JSON dialog (entry id) and Duplicate (id). */
   entry?: EntryData | null;
   /** Collection slug for the Show JSON dialog. */
   collectionSlug: string;
-  /** Active content locale. Shown/selected in the language switcher. */
-  locale?: string;
   /** Called when the user switches the active content language. When omitted, the
    *  language switcher is not rendered. */
   /** Whether the entity is localized. Forwarded to the version-history panel as
@@ -175,39 +148,6 @@ export interface EntrySystemHeaderProps {
    */
   shareDocument?: PreviewLinkDocument;
 
-  /** Save Draft handler — routed through useEntryForm.handleSubmit('save-draft').
-   *  Used in create mode and when editing a draft entry. */
-  onSaveDraft?: () => void;
-  /** Publish handler — routed through useEntryForm.handleSubmit('publish').
-   *  Used in create mode and when promoting a draft to published. */
-  onPublish?: () => void;
-  /** Save changes handler — routed through useEntryForm.handleSubmit('save-changes').
-   *  Used when editing a published entry on a NON-drafts collection; submits
-   *  dirty fields with status="published" so the lifecycle stays the same. */
-  onSaveChanges?: () => void;
-  /** Save working draft handler — routed through
-   *  useEntryForm.handleSubmit('save-working-draft'). Used when editing a
-   *  published entry on a drafts-enabled collection: stores a pending working
-   *  draft (status-less) instead of writing the live row. */
-  onSaveWorkingDraft?: () => void;
-  /** Unpublish handler — routed through useEntryForm.handleSubmit('unpublish').
-   *  Fires only after the user confirms the modal. Sends `{ status: "draft" }`
-   *  with no other field changes (matches Payload's Unpublish pattern). */
-  onUnpublish?: () => void;
-  /** Discard-working-draft handler (draft/published split). Throws away the
-   *  pending working draft and reverts the editor to the live published row.
-   *  Shown as a confirmed menu action for a Changed document. */
-  onDiscardWorkingDraft?: () => void | Promise<void>;
-  /** Discard / Cancel handler. */
-  onCancel?: () => void;
-  /** Delete handler (edit mode only). */
-  onDelete?: () => void;
-  /** Duplicate handler (edit mode only). When provided, the menu item is
-   *  enabled; otherwise hidden. */
-  onDuplicate?: () => void;
-  /** View API response handler — opens a modal styled like Show JSON. */
-  onViewApi?: () => void;
-
   /**
    * Resource scope passed through to the Show JSON dialog and used by the
    * `View API response` URL display. Determines whether the dialog hits
@@ -250,17 +190,6 @@ export interface EntrySystemHeaderProps {
    */
   backLink?: { href: string; label: string };
   /**
-   * Document actions the PAGE owns, folded in with the built-in ones.
-   *
-   * Descriptions rather than rendered controls, so placement, ordering and
-   * disabled reasons stay this component's answer. A rendered node decides all
-   * three where it is written, and a control with no way to carry a reason has
-   * to disappear when a permission withholds it — which an author cannot
-   * distinguish from a feature that does not exist.
-   */
-  contributedActions?: readonly ContributedAction[];
-
-  /**
    * Current schema fields, used to render a stored version in the history
    * panel. Absent means the caller cannot show history, so the control hides.
    */
@@ -278,29 +207,13 @@ export interface EntrySystemHeaderProps {
 export function EntrySystemHeader({
   mode,
   titleField,
-  hasStatus,
-  draftsEnabled = false,
   isSubmitting = false,
-  isInvalid = false,
-  isDirty = false,
   hasUnsavedWork = false,
   autosaveEnabled = false,
-  autosaveStatus = "idle",
   autosaveLastSavedAt = null,
-  formId = "entry-form",
+  pendingRecoveryAt = null,
   entry,
   collectionSlug,
-  locale,
-  onSaveDraft,
-  onPublish,
-  onSaveChanges,
-  onSaveWorkingDraft,
-  onUnpublish,
-  onDiscardWorkingDraft,
-  onCancel,
-  onDelete,
-  onDuplicate,
-  onViewApi,
   scope = "collection",
   historyFields,
   historyEnabled,
@@ -310,7 +223,6 @@ export function EntrySystemHeader({
   onToggleRail,
   toolbarSlot,
   backLink,
-  contributedActions = [],
   localized,
   isPreviewAvailable = false,
   onPreview,
@@ -325,8 +237,7 @@ export function EntrySystemHeader({
   // the document menu's row on a narrow one.
   const [shareOpen, setShareOpen] = useState(false);
   const entryLocale = useEntryLocale();
-  // The default language is edited with `locale === undefined`, and its status
-  // can live on the companion, so resolve it to read the right lifecycle.
+  // The language a first save is made in, named on the create-mode row.
   const {
     enabled: localizationEnabled,
     defaultLocale,
@@ -348,8 +259,6 @@ export function EntrySystemHeader({
     defaultLocale
   );
   const inputRef = useRef<HTMLInputElement>(null);
-  const [unpublishOpen, setUnpublishOpen] = useState(false);
-  const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
   // Whether history is open lives in the address, so a reload or a shared link
   // opens it again and the back button closes it.
   // True while the document area is showing a past version rather than the
@@ -362,18 +271,15 @@ export function EntrySystemHeader({
   const versionActions = useVersionActions(documentLocked || isSubmitting);
 
   // Both collections and singles authorize a document write as `update-{slug}`.
-  // Read here, inside the guard this header renders under, so a deliberate
-  // discard can say so before it navigates.
-  const leaveWithoutWarning = useLeaveWithoutWarning();
   const canUpdateDocument = useCan(`update-${collectionSlug}`);
 
-  // Publishing is its own permission, distinct from editing. Without it the
-  // Publish affordance is hidden — matching the server, which refuses a write
-  // that moves a document into `published` from a caller lacking it. An author
-  // keeps Save Draft and stops there. Unpublish is gated separately, since
-  // taking content down is a different responsibility from putting it up.
-  const canPublishDocument = useCan(`publish-${collectionSlug}`);
-  const canUnpublishDocument = useCan(`unpublish-${collectionSlug}`);
+  // The document's actions and what each runs, decided once by the editor
+  // hosting the form (`DocumentActionsHost`) for every surface that offers
+  // one. Decided there rather than here because a plugin's document view
+  // replaces the form body without this header and still offers, and runs, the
+  // same actions; this header draws them.
+  const documentActions = useHostedDocumentActions();
+  const { effectiveStatus } = documentActions;
 
   // Why: autofocus the title input on create so the cursor blinks ready for
   // typing. Skip in edit mode — focusing a populated title interrupts the
@@ -422,205 +328,6 @@ export function EntrySystemHeader({
       entryLocale.collectionLocalized
     );
 
-  // - hasStatus + create or hasStatus+edit+draft → Save Draft + Publish
-  //   (the user is working on something not yet live).
-  // - hasStatus + edit + published → Save changes + Unpublish (the user
-  //   is editing live content). Save changes is disabled when there are
-  //   no dirty edits — there's nothing to save in that state, so the
-  //   button greys out and Unpublish becomes the only enabled action.
-  // - !hasStatus → single Save button (collections without drafts).
-  // On a localized draft collection each language has its own lifecycle, so the
-  // active locale's status — not the main/default row's — decides which submit
-  // affordances to show. Shared with the slug freeze and the public-URL notice,
-  // which ask the same question and must not answer it differently.
-  const effectiveStatus = effectiveEntryStatus(entry, locale, defaultLocale);
-  const isPublishedEditState =
-    mode === "edit" && effectiveStatus === "published";
-  // A drafts-enabled published entry that has a pending working draft: the
-  // server flags the overlay read with `_isWorkingDraft`. This is Payload's
-  // "Changed" state — Publish promotes it and the status pill reflects it.
-  const hasWorkingDraft =
-    draftsEnabled &&
-    (entry as { _isWorkingDraft?: boolean } | null | undefined)
-      ?._isWorkingDraft === true;
-  // The "Discard draft" revert is offered for a Changed document (a pending
-  // working draft over a published row). The server authorizes it as an update,
-  // and the working-draft split is code-first only, so update can be granted by a
-  // collection `access.update` rule that the flat `update-{slug}` permission does
-  // not list. Gating on that permission here would hide Discard from an editor who
-  // can create and keep saving the very draft this reverts, so it is not gated on
-  // it — the sibling Save affordances are not either, and the endpoint refuses if
-  // the caller truly may not update.
-  const showDiscardDraft = hasWorkingDraft && !!onDiscardWorkingDraft;
-  /*
-   * What an author may do to this document, and what each verb runs.
-   *
-   * The two are separate on purpose. `documentVerbs` is about permissions and
-   * document state and is decided in a module with no React in it, so every
-   * combination is testable without rendering a header. The BINDINGS below are
-   * about this form at this instant — mid-submit, invalid, nothing changed —
-   * which only the form knows, and about which handler a verb runs, which only
-   * the host knows.
-   */
-  const documentVerbs = documentActions({
-    mode,
-    hasStatus,
-    draftsEnabled: draftsEnabled === true,
-    status: effectiveStatus === "published" ? "published" : "draft",
-    hasWorkingDraft: hasWorkingDraft === true,
-    readingHistory: isReadingHistory,
-    canPublish: canPublishDocument,
-    canUnpublish: canUnpublishDocument,
-    canDelete: onDelete !== undefined,
-    isDirty: isDirty === true,
-    canDuplicate: onDuplicate !== undefined,
-  });
-
-  /*
-   * Saving means three different calls depending on where the work lands, which
-   * is a fact about this host rather than about the document: a drafts-enabled
-   * published entry stores a working draft and leaves the live one alone, a
-   * drafts-disabled one re-asserts published, and anything else writes a draft.
-   * The model deliberately does not know this — it names ONE verb, `save`, and
-   * the label already says which of the three an author is about to get.
-   */
-  const runSave =
-    isPublishedEditState && draftsEnabled
-      ? onSaveWorkingDraft
-      : isPublishedEditState
-        ? onSaveChanges
-        : onSaveDraft;
-
-  /**
-   * Why a verb cannot run at this instant, or undefined when it can.
-   *
-   * Separate from the model's own reasons, which are about permission and
-   * document state. A save is additionally refused while a submit is in flight,
-   * while the form is invalid, and — on a published document — while nothing has
-   * changed, which is the existing behaviour kept rather than re-decided.
-   */
-  const busyReason = isSubmitting ? "Saving…" : undefined;
-  /*
-   * Why every write verb is refused while a colleague holds the document.
-   *
-   * 🔴 The handlers already refuse, so this is not what makes the document safe —
-   * it is what stops the interface lying. A live Save beside a strip saying the
-   * document is somebody else's invites a click that silently does nothing, which
-   * reads as the editor being broken rather than as the lock working.
-   *
-   * Reading verbs are deliberately left alone: discarding your own unsaved
-   * changes, previewing and opening history are yours to do whoever holds the row.
-   */
-  const lockedReason = documentLocked
-    ? "Someone else is editing this document"
-    : undefined;
-  const invalidReason = isInvalid
-    ? "Fix the errors on this page first."
-    : undefined;
-  const saveReason =
-    lockedReason ??
-    busyReason ??
-    invalidReason ??
-    (isPublishedEditState && isDirty !== true
-      ? "Nothing has changed yet."
-      : undefined);
-
-  /*
-   * A collection with NO status column saves by SUBMITTING, with no intent.
-   *
-   * Every save handler a host exposes carries one, and the draft handler writes
-   * `status: "draft"` — a column such a collection does not have, so routing
-   * this through a callback turns both Create and Save into a failing write.
-   * The control has always been a submit button here for that reason.
-   */
-  const saveBinding: ActionBinding | undefined = hasStatus
-    ? runSave === undefined
-      ? undefined
-      : { onSelect: runSave, disabledReason: saveReason }
-    : {
-        // Never called: a submit-typed control does not use it. Present because
-        // a binding is what says the action exists at all.
-        onSelect: () => {},
-        submitForm: formId,
-        disabledReason: saveReason,
-      };
-
-  const actionBindings: Record<string, ActionBinding | undefined> = {
-    ...(saveBinding === undefined ? {} : { save: saveBinding }),
-    ...(onPublish === undefined
-      ? {}
-      : {
-          publish: {
-            onSelect: onPublish,
-            disabledReason: lockedReason ?? busyReason ?? invalidReason,
-          },
-        }),
-    ...(onDuplicate === undefined
-      ? {}
-      : {
-          duplicate: {
-            onSelect: onDuplicate,
-            // Duplicating WRITES a new document, so it is withheld too.
-            disabledReason: lockedReason ?? busyReason,
-          },
-        }),
-    ...(onViewApi === undefined ? {} : { "view-api": { onSelect: onViewApi } }),
-    ...(showDiscardDraft
-      ? {
-          "discard-draft": {
-            onSelect: () => setDiscardDraftOpen(true),
-            disabledReason: lockedReason ?? busyReason,
-          },
-        }
-      : {}),
-    ...(onCancel === undefined
-      ? {}
-      : {
-          "discard-changes": {
-            // Says so before leaving: this action IS the answer to the
-            // unsaved-changes question, so being asked it again reads as a
-            // warning rather than as the confirmation just given.
-            onSelect: () => {
-              leaveWithoutWarning();
-              onCancel();
-            },
-            disabledReason: busyReason,
-          },
-        }),
-    ...(onUnpublish === undefined
-      ? {}
-      : {
-          unpublish: {
-            onSelect: () => setUnpublishOpen(true),
-            disabledReason: lockedReason ?? busyReason,
-          },
-        }),
-    ...(onDelete === undefined
-      ? {}
-      : {
-          delete: {
-            onSelect: onDelete,
-            disabledReason: lockedReason ?? busyReason,
-          },
-        }),
-  };
-
-  /*
-   * One merge for both halves. Splitting them would let the bar draw a built-in
-   * verb wired to a contribution that lost its collision — Delete, from the
-   * model, running somebody else's handler.
-   *
-   * A past version on screen withholds the page's contributions entirely, the
-   * same treatment the model gives the built-in writes: they act on the LIVE
-   * document, which is not what is on screen, and a contributor cannot be
-   * expected to know about history — the header is where that knowledge lives.
-   */
-  const withContributions = acceptContributions(
-    documentVerbs,
-    actionBindings,
-    isReadingHistory ? [] : contributedActions
-  );
-
   const showHistory = historyOffered;
 
   // What the preview control is given, once: the control draws from it on a
@@ -657,11 +364,6 @@ export function EntrySystemHeader({
       disabled: choice.disabled,
     })),
   ];
-
-  const entryLabel =
-    typeof entry?.title === "string" && entry.title.trim().length > 0
-      ? entry.title
-      : ((entry?.slug as string | undefined) ?? null);
 
   return (
     <div
@@ -791,8 +493,8 @@ export function EntrySystemHeader({
                 actions, above.
               */}
                 <DocumentActionBar
-                  actions={withContributions.actions}
-                  bindings={withContributions.bindings}
+                  actions={documentActions.actions}
+                  bindings={documentActions.bindings}
                   pending={isSubmitting}
                   narrowItems={narrowItems}
                 />
@@ -874,33 +576,25 @@ export function EntrySystemHeader({
             "text-[13px] leading-[18px] text-muted-foreground empty:hidden"
           )}
         >
-          {/* The condition is only whether recording is POSSIBLE, never
-            whether there is anything to show. `AutoSaveIndicator` already
-            returns null when it has no state to report, and restating that
-            here suppressed its "Not saved" state for the whole debounce
-            window: on the first edit to a saved entry the status is still idle
-            and no recovery point exists yet, which is exactly when the reader
-            most wants to be told their change is not stored. */}
-          {autosaveEnabled ? (
-            <AutoSaveIndicator
-              lastSavedAt={autosaveLastSavedAt}
-              isSaving={autosaveStatus === "saving"}
-              isDirty={isDirty}
-            />
-          ) : null}
+          {/* The document's own save state, the one every surface reads; the
+            recovery point is a safety net rather than a save, and is described
+            in its tooltip. */}
+          <SaveStateIndicator
+            saveState={documentActions.saveState}
+            recovery={{
+              enabled: autosaveEnabled,
+              storedAt: autosaveLastSavedAt,
+              pendingOfferAt: pendingRecoveryAt,
+            }}
+          />
         </div>
-        {/* The spoken half of the same information. `AutoSaveIndicator` reports
-          visually only — it carries no live region — so an author using a
-          screen reader was never told whether their work had been stored.
-          This is rendered unconditionally rather than beside the indicator's
-          own condition, because a live region has to be PRESENT BEFORE the
-          text it will announce changes: mounting a region and populating it
-          in the same commit is not reliably announced. */}
+        {/* The spoken half of the same information. Rendered unconditionally,
+          because a live region has to be PRESENT BEFORE the text it will
+          announce changes: mounting a region and populating it in the same
+          commit is not reliably announced. */}
         <DocumentStatusLive
-          autosaveEnabled={autosaveEnabled}
-          isSaving={autosaveStatus === "saving"}
-          isDirty={isDirty}
-          lastSavedAt={autosaveLastSavedAt}
+          saveState={documentActions.saveState}
+          pendingRecovery={pendingRecoveryAt !== null}
           {...(entryTranslations === undefined
             ? {}
             : {
@@ -941,46 +635,6 @@ export function EntrySystemHeader({
           </span>
         </div>
       )}
-
-      {/* Why: render the confirm modal at the component root so it's
-          mounted regardless of which button matrix branch fired. The
-          dialog itself controls open state via the prop; we close
-          immediately on confirm and let the parent's mutation toast
-          handle success/error feedback. Loading state is intentionally
-          short-lived since unpublish is a single-field PATCH. */}
-      <UnpublishConfirmDialog
-        open={unpublishOpen}
-        onOpenChange={setUnpublishOpen}
-        entryLabel={entryLabel}
-        onConfirm={() => {
-          setUnpublishOpen(false);
-          onUnpublish?.();
-        }}
-        isLoading={isSubmitting}
-      />
-
-      {/* Discarding a working draft deletes saved-but-unpublished edits, so it
-          is confirmed like Unpublish. Mounted at the root for the same reason:
-          it must survive whichever button-matrix branch rendered. */}
-      <DiscardDraftConfirmDialog
-        open={discardDraftOpen}
-        onOpenChange={setDiscardDraftOpen}
-        entryLabel={entryLabel}
-        onConfirm={async () => {
-          // Keep the dialog open (and its in-flight spinner visible) while the
-          // discard runs, then close only once it SUCCEEDS. Closing first — as
-          // this did — hid the progress state; closing on failure too would drop
-          // the retry context. A rejection leaves the dialog open; its error was
-          // already surfaced by the mutation's onError toast.
-          try {
-            await onDiscardWorkingDraft?.();
-            setDiscardDraftOpen(false);
-          } catch {
-            // Stay open for a retry.
-          }
-        }}
-        isLoading={isSubmitting}
-      />
 
       {/* Mounted at the component root for the same reason as the dialog above:
           the panel must survive whichever button matrix branch rendered. */}

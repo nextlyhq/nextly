@@ -128,6 +128,7 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
+  stripSingleComponentTags,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
@@ -570,6 +571,8 @@ export class SingleMutationService extends BaseService {
             slug: params.slug,
             defaultLocale: this.localization?.defaultLocale ?? null,
             fields: fieldConfigs,
+            componentFields: componentSlug =>
+              componentSchemas?.get(componentSlug)?.fields,
             // The caller the release's write has: the member's author, checked.
             options: { user: params.user, overrideAccess: false },
             grants,
@@ -1650,6 +1653,8 @@ export class SingleMutationService extends BaseService {
                 slug,
                 defaultLocale: this.localization?.defaultLocale ?? null,
                 fields: fieldConfigs,
+                componentFields: componentSlug =>
+                  singleComponentSchemas?.get(componentSlug)?.fields,
                 options,
                 grants: promoteGrants,
               }),
@@ -1757,14 +1762,23 @@ export class SingleMutationService extends BaseService {
                   singleMeta.tableName,
                   fieldConfigs,
                   companion && companionPhysicallyExists ? companion : null,
-                  updatePayload
+                  updatePayload,
+                  componentSlug =>
+                    singleComponentSchemas?.get(componentSlug)?.fields
                 );
                 mainPayload = promoted.main;
                 companionData = promoted.companion;
                 // The draft's component values, with the publish's own over
-                // them, are written by the component save below.
+                // them, are written by the component save below, without the
+                // type tags the draft records: the component's validators see
+                // the value as an ordinary write shows it to them.
                 for (const [name, value] of Object.entries(
-                  promotedComponents
+                  stripSingleComponentTags(
+                    promotedComponents,
+                    fieldConfigs,
+                    componentSlug =>
+                      singleComponentSchemas?.get(componentSlug)?.fields
+                  )
                 )) {
                   attemptComponentFields[name] = value;
                 }
@@ -2218,7 +2232,22 @@ export class SingleMutationService extends BaseService {
 
             // 9.5. Save component field data to separate comp_{slug} tables. The
             // write locale is threaded so an embedded localized component stores
-            // its translatable fields to the companion for this language.
+            // its translatable fields to the companion for this language. A held
+            // edit writes no component rows; its values are judged below, once
+            // they are merged into the draft the publish would write.
+            const componentParentId = existingDoc.id;
+            const componentWrite = (data: Record<string, unknown>) => ({
+              parentId: componentParentId,
+              parentTable: singleMeta.tableName,
+              fields: fieldConfigs,
+              data,
+              locale: options.locale,
+              // A component instance is validated by its own pass inside the
+              // field-group service, so the request has to travel with it for a
+              // field rule nested in a field group to see the same `user` a
+              // top-level field rule sees.
+              req: options.user ? { user: options.user } : {},
+            });
             if (
               !holdEdit &&
               this.fieldGroupDataService &&
@@ -2226,18 +2255,7 @@ export class SingleMutationService extends BaseService {
             ) {
               await this.fieldGroupDataService.saveComponentDataInTransaction(
                 tx,
-                {
-                  parentId: existingDoc.id,
-                  parentTable: singleMeta.tableName,
-                  fields: fieldConfigs,
-                  data: attemptComponentData,
-                  locale: options.locale,
-                  // A component instance is validated by its own pass inside the
-                  // field-group service, so the request has to travel with it for a
-                  // field rule nested in a field group to see the same `user` a
-                  // top-level field rule sees.
-                  req: options.user ? { user: options.user } : {},
-                }
+                componentWrite(attemptComponentData)
               );
             }
 
@@ -2468,6 +2486,9 @@ export class SingleMutationService extends BaseService {
               // wholesale, for the reason the version capture below gives: a
               // field genuinely named `site_title` must keep its own spelling.
               let pending: Record<string, unknown> = { ...base };
+              // The fields this save supplies, as opposed to those carried over
+              // from the draft or the live document it builds on.
+              const suppliedFieldNames = new Set<string>();
               for (const field of singleMeta.fields) {
                 if (field.name === undefined) continue;
                 const column = toSnakeCase(field.name);
@@ -2475,6 +2496,7 @@ export class SingleMutationService extends BaseService {
                   pending[field.name] = (
                     mainPayload as Record<string, unknown>
                   )[column];
+                  suppliedFieldNames.add(field.name);
                 }
               }
               // The system columns the loop above does not declare — status and
@@ -2500,6 +2522,7 @@ export class SingleMutationService extends BaseService {
                     )
                   ) {
                     pending[f.name] = companionData[f.column];
+                    suppliedFieldNames.add(f.name);
                   }
                 }
               }
@@ -2528,6 +2551,53 @@ export class SingleMutationService extends BaseService {
                   singleComponentSchemas
                 );
               }
+              // The held component values are judged as the publish would
+              // judge them: merged into the draft, since a save carries only the
+              // sub-fields it changed, and without the type tags the draft
+              // holds, which no ordinary write shows a validator. Judged by the
+              // pass the component write runs, so a value the publish would
+              // refuse is refused now, with the same issues, before any draft or
+              // version is recorded.
+              if (
+                this.fieldGroupDataService &&
+                Object.keys(attemptComponentFields).length > 0
+              ) {
+                await this.fieldGroupDataService.validateComponentDataInTransaction(
+                  tx,
+                  componentWrite(
+                    stripSingleComponentTags(
+                      Object.fromEntries(
+                        Object.keys(attemptComponentFields).map(name => [
+                          name,
+                          pending[name],
+                        ])
+                      ),
+                      fieldConfigs,
+                      componentResolver
+                    )
+                  )
+                );
+              }
+              // A component nested in a group or repeater rides in that
+              // container's value, so the tagging above never reached it. It
+              // is recorded with its type as a captured version records it, so
+              // a restore after its field is pointed at another component can
+              // tell which schema the value belonged to. Only values this save
+              // supplies, and the live document a first held save builds on:
+              // a type the draft already recorded is kept, or a save after a
+              // retarget would rewrite it to the new component's.
+              const recordNested = (document: Record<string, unknown>) =>
+                tagNestedComponentTypes(
+                  document,
+                  fieldConfigs,
+                  componentResolver
+                ) as Record<string, unknown>;
+              for (const name of suppliedFieldNames) {
+                if (Object.prototype.hasOwnProperty.call(pending, name)) {
+                  pending[name] = recordNested({ [name]: pending[name] })[name];
+                }
+              }
+              const replaces = existingDraft ? base : recordNested(base);
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.
               const { versionNo: draftVersionNo } = await storeDraftSave(
@@ -2537,7 +2607,7 @@ export class SingleMutationService extends BaseService {
                   ref: draftRef,
                   locale: singleDraftLocale,
                   snapshot: pending,
-                  replaces: base,
+                  replaces,
                   createdBy: options.user?.id ?? null,
                   sourceVersionNo: options.sourceVersionNo ?? null,
                   maxPerDoc: singleMeta.versions?.maxPerDoc,

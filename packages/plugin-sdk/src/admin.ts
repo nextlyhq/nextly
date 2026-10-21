@@ -134,6 +134,44 @@ export {
 export { useReportUnsavedWork } from "@nextlyhq/admin";
 
 /**
+ * The document's actions, from inside its editor (@experimental).
+ *
+ * For a document view, which replaces the form body and the header with it:
+ * without these it can neither offer Save or Publish nor say whether the page
+ * is stored.
+ *
+ * - `useDocumentActions()` is the header's own actions — the same list, the
+ *   same leading action, the same reasons one cannot run — with `run(id)`,
+ *   which does what that action's control does and resolves to what it came
+ *   to, and `saveState`, the one answer to whether the work is stored. Null
+ *   outside a document editor.
+ * - `useBeforeDocumentAction(handler)` runs `handler` before every action that
+ *   stores the editor's work, from any control, the shortcut or `run`, while
+ *   the caller is mounted: commit work held outside the form there. Throwing
+ *   refuses the action.
+ * - `useTrackedWrite()` counts a write the document depends on but does not
+ *   contain. Storing actions wait for it and are refused, naming it, while its
+ *   latest attempt has failed.
+ *
+ * Running an action never bypasses the editor: a colleague's claim, a past
+ * version on screen, a save in flight and the questions Unpublish and Discard
+ * draft ask all apply exactly as they do to the header's controls.
+ */
+export {
+  useDocumentActions,
+  useBeforeDocumentAction,
+  useTrackedWrite,
+  type DocumentActions,
+  type DocumentAction,
+  type ActionPlacement,
+  type ActionGroup,
+  type DocumentActionOutcome,
+  type DocumentSaveState,
+  type BeforeDocumentAction,
+  type SubmitRefusal,
+} from "@nextlyhq/admin";
+
+/**
  * The entry's remaining fields, drawn for a takeover surface (@experimental).
  *
  * A field whose type is registered as a TAKEOVER covers the whole form, so an

@@ -114,6 +114,10 @@ function serviceOver(repository: ReleasesRepository): ReleasesService {
     canActOnDocument: async () => false,
     // No move under test runs a release.
     runDrainNow: async () => undefined,
+    // Every reader may read every member: these tests are not about which
+    // documents a reader sees.
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
     checks: READY_CHECKS,
   });
 }

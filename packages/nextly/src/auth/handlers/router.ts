@@ -1,4 +1,9 @@
+import { readOrGenerateRequestId } from "../../api/request-id";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import {
+  isLimitStoreDown,
+  signInLimitUnavailable,
+} from "../../domains/limits/core-limit-outage";
 import type { LimitStore } from "../../domains/limits/limit-store";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { PluginContext } from "../../plugins/plugin-context";
@@ -22,6 +27,7 @@ import { handleChallengeResolve } from "./challenge-resolve";
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
 import { handleForgotPassword } from "./forgot-password";
+import { buildAuthErrorResponse } from "./handler-utils";
 import type { RefreshTokenRecord } from "./issue-session";
 import { handleLogin } from "./login";
 import { handleLogout } from "./logout";
@@ -36,6 +42,7 @@ import { handleSetInitialPassword } from "./set-initial-password";
 import { handleSetupStatus, handleSetup, type SetupHandlerDeps } from "./setup";
 import {
   admitUnknownSource,
+  countsOf,
   type ReadingPlace,
   type StoredTokenKind,
 } from "./unknown-source";
@@ -177,8 +184,14 @@ export interface AuthRouterDeps {
      */
     store?: RateLimitStore;
     /**
-     * Where unknown-source admissions are counted. Absent means `store`
-     * when one is set, else this process's own counter.
+     * Where core's own limits count: `store` when the app configured one,
+     * else the limit store the site selected. Absent means this process's
+     * memory.
+     */
+    counts?: RateLimitStore;
+    /**
+     * Where unknown-source admissions are counted. Absent means `counts`
+     * when it is set, else this process's own counter.
      */
     unknownSourceCounter?: UnknownSourceCounter;
   };
@@ -564,10 +577,25 @@ async function checkAuthIpRateLimit(
   });
 
   if (ip === null) noteUnresolvedAuthRequest(request);
-  const admission =
-    ip === null
-      ? await admitUnknownSource(request, authPath, deps)
-      : { verdict: await admitAddress(ip, deps) };
+  let admission: Awaited<ReturnType<typeof admitUnknownSource>>;
+  try {
+    admission =
+      ip === null
+        ? await admitUnknownSource(request, authPath, deps)
+        : { verdict: await admitAddress(ip, deps) };
+  } catch (error) {
+    // Refused while the store is away: admitting would let sign-in attempts
+    // run uncounted for as long as it is (see `core-limit-outage`).
+    if (isLimitStoreDown(error)) {
+      return {
+        refused: buildAuthErrorResponse(
+          signInLimitUnavailable(error),
+          readOrGenerateRequestId(request)
+        ),
+      };
+    }
+    throw error;
+  }
   const result = admission.verdict;
   if (result.allowed) return { refused: null, place: admission.place };
 
@@ -605,7 +633,7 @@ async function admitAddress(
   ip: string,
   deps: AuthRouterDeps
 ): Promise<UnknownSourceVerdict> {
-  const result = await authRateLimiter(deps.authRateLimit.store).check(
+  const result = await authRateLimiter(countsOf(deps.authRateLimit)).check(
     `auth-ip:${ip}`,
     deps.authRateLimit.requestsPerHour,
     deps.authRateLimit.windowMs

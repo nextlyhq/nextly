@@ -74,7 +74,9 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
+import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
+import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warning";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
 import type { NoticesService } from "../domains/notices/notices-service";
@@ -146,6 +148,7 @@ import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
 import { env } from "../lib/env";
+import type { RateLimitStore } from "../middleware/rate-limit";
 import { maskingServiceLogger } from "../observability/mask-emails";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
@@ -556,6 +559,12 @@ export interface ServiceMap {
    * selects it. @experimental
    */
   limitStore: LimitStore;
+  /**
+   * Where core's own limits count (sign-in, plugin routes, the REST API, API
+   * keys): an app's store of the older contract when it configured one, and
+   * otherwise the selected limit store, its keys stored as keyed hashes.
+   */
+  coreRateLimitStore: RateLimitStore;
 }
 
 // ============================================================
@@ -840,6 +849,14 @@ async function registerServicesOnce(
   // without client addresses and nothing else would tell its operator.
   const edgeWarning = edgeProxyWarning(transformedConfig);
   if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
+  // Likewise a production start whose limits count in one process's memory:
+  // each instance would count a budget of its own, and nothing at the limit
+  // can tell whether the site runs one.
+  const memoryWarning = limitsInMemoryWarning(
+    transformedConfig,
+    process.env.NODE_ENV === "production"
+  );
+  if (memoryWarning) resolvedLogger.warn?.(memoryWarning);
   // Likewise each configured auth strategy the sign-in limiter cannot ask
   // which account a request names: its sign-ins are limited by email instead.
   for (const warning of unkeyedStrategyWarnings(transformedConfig)) {
@@ -970,6 +987,17 @@ async function registerServicesOnce(
     globalForReg.__nextly_closeLimitStore = selected.close;
     return selected.store;
   });
+  // Where core's own limits count. An app's store of the older contract keeps
+  // serving them, as it did before the limit store existed; without one they
+  // count in the selected store, so on the database store every instance
+  // counts one budget.
+  container.registerSingleton<RateLimitStore>("coreRateLimitStore", () =>
+    coreRateLimitStoreFor(
+      transformedConfig.rateLimit?.store,
+      () => container.get<LimitStore>("limitStore"),
+      env.NEXTLY_SECRET
+    )
+  );
   // Beside the config rather than in it: what the boot granted, decided once
   // when the plugin list was resolved. The auth router builds its plugin
   // contexts from this entry, as `initializePlugins` does from the same value.

@@ -138,9 +138,8 @@ async function sessionCount(db: TestDb): Promise<number> {
  *
  * The harness configures no hasher, so the service is assembled here around
  * the real account service; the query and mutation services are not reached
- * by a password change. The hasher declares the reach of the bcrypt digester
- * it wraps, read from the constant that digester declares, as every hasher
- * the service is handed must.
+ * by a password change. The hasher declares core's own reach, the contract
+ * every digester a service is handed must state.
  */
 function usersService(t: TestNextly): UserService {
   return new UserService(

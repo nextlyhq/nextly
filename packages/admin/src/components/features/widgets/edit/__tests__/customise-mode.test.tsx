@@ -363,11 +363,17 @@ describe("the bar", () => {
     await beginEditing();
 
     expect(bar()).toHaveTextContent("Customizing your dashboard");
+    const status = within(bar()).getByTestId("dashboard-edit-status");
+    expect(status).toHaveTextContent("Only you see this layout.");
+    // The handle is named only where it is drawn: from the dashboard's one-column width up.
     expect(
-      within(bar()).getByTestId("dashboard-edit-status")
-    ).toHaveTextContent(
-      "Drag a card by its handle, or use its menu. Only you see this layout."
-    );
+      within(status).getByText("Drag a card by its handle, or use its menu.")
+    ).toHaveClass("hidden", "@min-[640px]/dashboard:inline");
+    expect(
+      within(status).getByText(
+        "Use a card's menu to move, resize or remove it."
+      )
+    ).toHaveClass("@min-[640px]/dashboard:hidden");
     expect(
       within(bar())
         .getAllByRole("button")
@@ -525,9 +531,7 @@ describe("the cards' own content while customising", () => {
           .closest("[inert]")
       ).toBeNull();
       expect(
-        screen
-          .getByRole("button", { name: `Drag to reorder ${title}` })
-          .closest("[inert]")
+        screen.getByRole("button", { name: `Move ${title}` }).closest("[inert]")
       ).toBeNull();
     });
 

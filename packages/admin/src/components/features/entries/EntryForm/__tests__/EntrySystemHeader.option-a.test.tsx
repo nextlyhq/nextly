@@ -19,7 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@admin/__tests__/utils";
 
 import { NARROW_ONLY, WIDE_ONLY } from "../DocumentActionBar";
-import { EntrySystemHeader } from "../EntrySystemHeader";
+import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
 // The share popover reads the document's live links when it opens.
@@ -103,7 +103,6 @@ function Harness({
         collectionSlug="posts"
         historyFields={[]}
         autosaveEnabled
-        autosaveStatus="idle"
         {...(backLink === undefined ? {} : { backLink })}
         {...(share
           ? {
