@@ -190,7 +190,9 @@ export function archiveOwnerOf(
 function buildArchiveNonDefaultStatement(
   ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
   owner: ArchiveOwner,
-  columnName: string
+  columnName: string,
+  /** The field the rows are recorded under, when it differs from the column they are read from. */
+  archivedAs: string = columnName
 ): string {
   const { dialect, companionTable, defaultLocale } = ref;
   const source = q("source", dialect);
@@ -206,12 +208,12 @@ function buildArchiveNonDefaultStatement(
     // the companion may carry different collations (see `exactText`).
     `AND ${exactText(`${archived}.${q("entry_id", dialect)}`, dialect)} = ${exactText(castText(`${source}.${q("_parent", dialect)}`, dialect), dialect)} ` +
     `AND ${exactText(`${archived}.${q("locale", dialect)}`, dialect)} = ${exactText(`${source}.${q("_locale", dialect)}`, dialect)} ` +
-    `AND ${archived}.${q("field", dialect)} = ${lit(columnName)} ` +
+    `AND ${archived}.${q("field", dialect)} = ${lit(archivedAs)} ` +
     `ORDER BY ${archived}.${q("id", dialect)} DESC LIMIT 1)`;
   return (
     `INSERT INTO ${q(ARCHIVE, dialect)} ` +
     `(${q("collection", dialect)}, ${q("entity_kind", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
-    `SELECT ${lit(owner.slug)}, ${lit(owner.kind)}, ${source}.${q("_parent", dialect)}, ${source}.${q("_locale", dialect)}, ${lit(columnName)}, ${value} ` +
+    `SELECT ${lit(owner.slug)}, ${lit(owner.kind)}, ${source}.${q("_parent", dialect)}, ${source}.${q("_locale", dialect)}, ${lit(archivedAs)}, ${value} ` +
     `FROM ${q(companionTable, dialect)} ${source} WHERE ${source}.${q("_locale", dialect)} <> ${lit(defaultLocale)} ` +
     `AND ${nullSafeDiffers(exactText(newest, dialect), exactText(value, dialect), dialect)}`
   );
@@ -227,9 +229,14 @@ function buildArchiveNonDefaultStatement(
 export function buildFieldLeavesTranslationArchiveStatement(
   ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
   owner: ArchiveOwner,
-  columnName: string
+  columnName: string,
+  /**
+   * The field the rows are recorded under, for a field renamed in the same change: read from the
+   * column it has now, recorded under the name it is restored by.
+   */
+  archivedAs: string = columnName
 ): string {
-  return buildArchiveNonDefaultStatement(ref, owner, columnName);
+  return buildArchiveNonDefaultStatement(ref, owner, columnName, archivedAs);
 }
 
 /**

@@ -17,6 +17,7 @@ import type {
 } from "../diff/types";
 import { createIndexSql } from "../sql-templates/create-index";
 import { columnDefinition } from "../sql-templates/create-table-body";
+import { postgresAlterTypeUsing } from "../sql-templates/postgres-alter-type-using";
 
 import { createTableStatement, tableIndexStatements } from "./create-table";
 import { quoteIdent } from "./identifiers";
@@ -41,7 +42,8 @@ function createIndexStatement(tableName: string, index: IndexSpec): string {
  * the rext-site-v2 / `dc_case_studies` incident: 10 `*_section`
  * columns stuck on `text` despite repeated "successful" applies).
  *
- * Strategy: emit `USING "<col>"::<targetType>` for every change. The
+ * Strategy: emit `USING "<col>"::<targetType>` for every change but a string
+ * narrowing (`postgresAlterTypeUsing`, which says why that one differs). The
  * `::` cast operator dispatches to whichever cast Postgres has
  * registered for the (source → target) pair. When no cast exists
  * (e.g. arbitrary `bytea` → `int4`) the statement fails loudly at
@@ -51,8 +53,12 @@ function createIndexStatement(tableName: string, index: IndexSpec): string {
  * success is the bug we are fixing here; explicit failure is the
  * contract.
  */
-function renderAlterTypeUsing(columnName: string, toType: string): string {
-  return `USING ${quoteIdent(columnName)}::${toType}`;
+function renderAlterTypeUsing(op: ChangeColumnTypeOp): string {
+  return postgresAlterTypeUsing(
+    quoteIdent(op.columnName),
+    op.fromType,
+    op.toType
+  );
 }
 
 // Emit Nextly's canonical secondary indexes for a managed collection
@@ -93,7 +99,7 @@ function changeColumnTypeStatements(op: ChangeColumnTypeOp): string[] {
     `ALTER TABLE ${quoteIdent(op.tableName)} ` +
       `ALTER COLUMN ${quoteIdent(op.columnName)} ` +
       `SET DATA TYPE ${op.toType} ` +
-      renderAlterTypeUsing(op.columnName, op.toType),
+      renderAlterTypeUsing(op),
   ];
 }
 

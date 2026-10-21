@@ -65,6 +65,26 @@ function droppedByDowns(
 }
 
 function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
+  const given = depsWithout(over);
+  return {
+    // Each live table as its own, unchanged one: a test that changes a
+    // table's identity says so; one that drops or renames a table does it
+    // through `liveTables`, which this reads.
+    tableIdentities: async tables =>
+      new Map(
+        [...(await given.liveTables(tables))].map(table => [table, table])
+      ),
+    // The same schema before and after any hook: a test whose hook changes
+    // it says so.
+    schemaVersion: async () => 1,
+    ...given,
+  };
+}
+
+function depsWithout(
+  over: Partial<PluginLifecycleDeps>
+): Omit<PluginLifecycleDeps, "tableIdentities" | "schemaVersion"> &
+  Partial<Pick<PluginLifecycleDeps, "tableIdentities" | "schemaVersion">> {
   return {
     adapter: {} as never,
     // The owner registry reads through this. `read()` awaits the builder
@@ -549,6 +569,295 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     expect(runDown).not.toHaveBeenCalled();
   });
 
+  /**
+   * A database in which onUninstall renames fx__notes away and creates a new
+   * fx__notes: the name is still there, but its table is another one.
+   */
+  function replacedByHook() {
+    let hookRan = false;
+    return {
+      runLifecycleHook: vi.fn(async () => {
+        hookRan = true;
+      }),
+      liveTables: vi.fn(async (tables: readonly string[]) => new Set(tables)),
+      tableIdentities: vi.fn(
+        async (tables: readonly string[]) =>
+          new Map(tables.map(table => [table, hookRan ? "t2" : "t1"]))
+      ),
+    };
+  }
+
+  it("refuses to run any DOWN once onUninstall has put another table under a name", async () => {
+    // Renamed away and replaced: a check of the name alone passes, and the
+    // approved drop then takes the replacement while the original and its
+    // rows survive under the other name.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      replacedByHook()
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("refuses before the hook and the record when a table's identity cannot be read", async () => {
+    // An identity the database does not report cannot show the table is the
+    // one the DOWNs were judged against, so the uninstall cannot succeed.
+    // Refused before anything changes: run past here, the hook ran and the
+    // plugin was recorded uninstalling, and every run again did the same.
+    const recordLifecycle = vi.fn(async () => {});
+    const { run, runDown, runLifecycleHook } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        recordLifecycle,
+        tableIdentities: vi.fn(
+          async (tables: readonly string[]) =>
+            new Map(tables.map(table => [table, null]))
+        ),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: {
+        reason: "table-identity-unreadable",
+        tables: ["fx__notes"],
+      },
+    });
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  /** A hook that runs after its boot, with the baseline read between them. */
+  const afterBoot = (onBoot: () => void, onHook: () => void) =>
+    vi.fn(
+      async (
+        _plugin: unknown,
+        _hook: unknown,
+        _opts: unknown,
+        beforeHook?: () => Promise<void>
+      ) => {
+        onBoot();
+        await beforeHook?.();
+        onHook();
+      }
+    );
+
+  it("refuses on SQLite once onUninstall has replaced a table on its own root page", async () => {
+    // Renamed away, VACUUM, created again: the replacement gets the root page
+    // the original moved off, so its identity reads the same.
+    let hookRan = false;
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        dialect: "sqlite",
+        runLifecycleHook: afterBoot(
+          () => {},
+          () => {
+            hookRan = true;
+          }
+        ),
+        tableIdentities: vi.fn(
+          async (tables: readonly string[]) =>
+            new Map(tables.map(table => [table, "4"]))
+        ),
+        schemaVersion: vi.fn(async () => (hookRan ? 6 : 3)),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "schema-changed-by-hook", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A SQLite database whose runtime boot, before the hook, changes the
+   * schema (code-first sync creates a table); the hook changes it too, or
+   * not.
+   */
+  function schemaChangedByTheBoot(hookChangesIt: boolean) {
+    let booted = false;
+    let hookRan = false;
+    return {
+      dialect: "sqlite" as const,
+      runLifecycleHook: afterBoot(
+        () => {
+          booted = true;
+        },
+        () => {
+          hookRan = true;
+        }
+      ),
+      schemaVersion: vi.fn(
+        async () => 3 + (booted ? 1 : 0) + (hookRan && hookChangesIt ? 1 : 0)
+      ),
+    };
+  }
+
+  it("does not count a schema change the runtime boot made as the hook's", async () => {
+    // The baseline is read after the boot, right before onUninstall: read
+    // before it, what the boot's sync did read as the hook's doing.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      schemaChangedByTheBoot(false)
+    );
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
+  it("still refuses a schema change the hook made after a boot that made one", async () => {
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      schemaChangedByTheBoot(true)
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "schema-changed-by-hook" },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("refuses on SQLite once onUninstall has changed the schema, whatever names and root pages read", async () => {
+    // The hook drops another table on a lower page, renames fx__notes into
+    // its name, runs VACUUM and creates fx__notes again: afterwards every
+    // table's name and root page read as before, and only the schema
+    // version shows the schema changed.
+    let hookRan = false;
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        dialect: "sqlite",
+        runLifecycleHook: afterBoot(
+          () => {},
+          () => {
+            hookRan = true;
+          }
+        ),
+        schemaVersion: vi.fn(async () => (hookRan ? 7 : 3)),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: {
+        reason: "schema-changed-by-hook",
+        tables: ["fx__notes"],
+      },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("judges the tables against what they were before the hook's boot", async () => {
+    // The boot runs every enabled plugin's init(), which could rename
+    // fx__notes away and create another in its place: judged against the
+    // tables as the boot left them, the replacement would pass for the one
+    // the DOWNs were judged against.
+    let booted = false;
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        runLifecycleHook: afterBoot(
+          () => {
+            booted = true;
+          },
+          () => {}
+        ),
+        tableIdentities: vi.fn(
+          async (tables: readonly string[]) =>
+            new Map(tables.map(table => [table, booted ? "t2" : "t1"]))
+        ),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("refuses on SQLite before the hook when the schema version cannot be read after the boot", async () => {
+    // Read again once the boot is done; unreadable there, the comparison
+    // after the hook could only refuse, so the hook is not run at all.
+    let booted = false;
+    let hookRan = false;
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        dialect: "sqlite",
+        runLifecycleHook: afterBoot(
+          () => {
+            booted = true;
+          },
+          () => {
+            hookRan = true;
+          }
+        ),
+        schemaVersion: vi.fn(async () => (booted ? null : 3)),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: {
+        reason: "table-identity-unreadable",
+        tables: ["the schema version"],
+      },
+    });
+    expect(hookRan).toBe(false);
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("refuses on SQLite before the hook when the schema version cannot be read", async () => {
+    const { run, runDown, runLifecycleHook } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      { dialect: "sqlite", schemaVersion: vi.fn(async () => null) }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: {
+        reason: "table-identity-unreadable",
+        tables: ["the schema version"],
+      },
+    });
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("runs the DOWNs on SQLite when onUninstall changes no schema (control)", async () => {
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      { dialect: "sqlite", schemaVersion: vi.fn(async () => 3) }
+    );
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs the DOWNs when onUninstall leaves each table as it was (control)", async () => {
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        tableIdentities: vi.fn(
+          async (tables: readonly string[]) =>
+            new Map(tables.map(table => [table, "t1"]))
+        ),
+      }
+    );
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
   it("counts two owned tables whose names differ only in case as left", async () => {
     // Read lower-cased, the one drop could be either table's.
     const { run, runDown } = await uninstallWith(
@@ -752,9 +1061,13 @@ describe("plugins uninstall", () => {
       deps({ runLifecycleHook })
     );
 
-    expect(runLifecycleHook).toHaveBeenCalledWith(plugin, "onUninstall", {
-      keepData: true,
-    });
+    // The fourth argument is the read right before the hook, not the hook's.
+    expect(runLifecycleHook).toHaveBeenCalledWith(
+      plugin,
+      "onUninstall",
+      { keepData: true },
+      expect.any(Function)
+    );
   });
 
   it("clears the uninstalled mark BEFORE the hook boots", async () => {
