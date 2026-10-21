@@ -156,5 +156,12 @@ test("every spec this config runs is written with the suite's test", () => {
         .some(name => /^test(\s+as\s+\w+)?$/.test(name))
     )
   );
-  expect(onPlaywrightTest.map(file => path.relative(TESTS, file))).toEqual([]);
+  expect(
+    onPlaywrightTest.map(file => path.relative(TESTS, file)),
+    'These specs take `test` from "@playwright/test", which runs without the ' +
+      "session renewal and is signed out once a run passes 15 minutes. In each, " +
+      'take `test` from the suite instead: import { test } from "./support/test" ' +
+      '(or "../support/test" one folder down), keeping `expect` and the types ' +
+      'from "@playwright/test".'
+  ).toEqual([]);
 });
