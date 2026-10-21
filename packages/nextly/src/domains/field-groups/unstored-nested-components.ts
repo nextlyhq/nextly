@@ -116,11 +116,10 @@ function componentCarries(
   seen: Set<object>
 ): boolean {
   if (value === null || value === undefined) return false;
-  // Each row of a list is added by hand, so a row is a value even while it holds only defaults;
-  // only a list equal to the field's declared default was seeded rather than added.
-  if (Array.isArray(value)) {
-    return value.length > 0 && !isDeclaredDefault(value, field);
-  }
+  // The field's own declared default is what a form seeds for it, one instance or a list.
+  if (isDeclaredDefault(value, field)) return false;
+  // Each row of a list is added by hand, so a row is a value even while it holds only defaults.
+  if (Array.isArray(value)) return value.length > 0;
   // Not an instance at all: nothing could store it, so it is not passed over as empty.
   if (!isPlainObject(value)) return true;
   // A row that names its component was given that type by someone choosing it.
@@ -144,14 +143,38 @@ function entriesCarry(
     Object.entries(value).some(
       ([key, child]) =>
         !COMPONENT_META_KEYS.has(key) &&
-        valueCarries(
-          child,
-          fields?.find(field => field.name === key),
-          resolve,
-          seen
-        )
+        keyCarries(child, key, fields, resolve, seen)
     )
   );
+}
+
+/**
+ * One key of an object, judged by the field it names. No form seeds a key its fields do not
+ * declare, so such a key carries whatever it holds unless that is nothing. Without the fields to
+ * tell (a component whose schema is unknown), it is judged as a field that declares no default.
+ */
+function keyCarries(
+  child: unknown,
+  key: string,
+  fields: Field[] | undefined,
+  resolve: ComponentFieldResolver | undefined,
+  seen: Set<object>
+): boolean {
+  const field = fields ? fieldNamed(fields, key) : undefined;
+  if (fields && !field) return child !== null && child !== undefined;
+  return valueCarries(child, field, resolve, seen);
+}
+
+/** The field named `key`, looking through layout containers, whose children sit on the same object. */
+function fieldNamed(fields: readonly Field[], key: string): Field | undefined {
+  for (const field of fields) {
+    if (field.name === key) return field;
+    if (!field.name && field.fields) {
+      const found = fieldNamed(field.fields, key);
+      if (found) return found;
+    }
+  }
+  return undefined;
 }
 
 /**

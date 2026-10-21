@@ -9,7 +9,21 @@ import { describe, expect, it } from "vitest";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { unstoredNestedComponentIssues } from "../unstored-nested-components";
 
-const badgeFields = [{ name: "label", type: "text" }] as FieldConfig[];
+const note = { name: "note", type: "text" };
+// `extra.back` declares the badge's own fields, so a value that points back to the badge is walked
+// as a badge again: the walk descends for as long as the value lets it.
+const back: { name: string; type: string; fields: unknown[] } = {
+  name: "back",
+  type: "group",
+  fields: [],
+};
+const badgeFields = [
+  { name: "label", type: "text" },
+  { name: "extra", type: "group", fields: [back] },
+  { name: "first", type: "group", fields: [note] },
+  { name: "second", type: "group", fields: [note] },
+] as unknown as FieldConfig[];
+back.fields = badgeFields;
 const cardFields = [
   { name: "badge", type: "component", component: "badge" },
 ] as unknown as FieldConfig[];
@@ -35,6 +49,49 @@ describe("a value for a component placed directly in a component", () => {
         resolve
       )
     ).toEqual([]);
+  });
+
+  // No form seeds a key its component does not declare, so one with any value was given by
+  // someone, `false` and "" included.
+  it("is refused when it carries a key the component does not declare", () => {
+    for (const stray of [false, ""]) {
+      expect(
+        unstoredNestedComponentIssues(
+          { badge: { label: "", stray } },
+          cardFields,
+          resolve
+        )
+      ).toEqual([
+        expect.objectContaining({ path: "badge", code: "NOT_STORED" }),
+      ]);
+    }
+  });
+
+  // The field's own declared default is what a form seeds for it, whatever its parts would say.
+  it("passes the component field's own declared default, and refuses a change to it", () => {
+    const preset = [
+      {
+        name: "badge",
+        type: "component",
+        component: "badge",
+        defaultValue: { label: "Preset" },
+      },
+    ] as unknown as FieldConfig[];
+
+    expect(
+      unstoredNestedComponentIssues(
+        { badge: { label: "Preset" } },
+        preset,
+        resolve
+      )
+    ).toEqual([]);
+    expect(
+      unstoredNestedComponentIssues(
+        { badge: { label: "Other" } },
+        preset,
+        resolve
+      )
+    ).toEqual([expect.objectContaining({ path: "badge", code: "NOT_STORED" })]);
   });
 
   it("still passes one that holds only what a form seeds", () => {
