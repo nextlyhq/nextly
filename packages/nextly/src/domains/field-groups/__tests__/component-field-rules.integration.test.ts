@@ -298,16 +298,6 @@ describe.each(getConfiguredTestDialects())(
         singles: [
           defineSingle({
             slug: "site",
-            hooks: {
-              // Hands back a field-group value the stored row does not hold,
-              // so the update's response carries one to judge.
-              afterChange: [
-                ({ data }: { data: Doc }) => ({
-                  ...data,
-                  one: { heading: "h-hook", ...guardedValues("hook") },
-                }),
-              ],
-            },
             fields: [
               text({ name: "title" }),
               fieldGroup({ name: "one", component: "note" }),
@@ -494,17 +484,18 @@ describe.each(getConfiguredTestDialects())(
         expect((allowed.one as Doc).secret).toBe("secret-site");
       });
 
-      it("withholds, in an update's response, a field-group field the writer may not read", async () => {
+      it("answers an update with the stored row, which holds no field-group instance", async () => {
         const result = (await checkedAs("editor").updateSingle({
           slug: "site",
           data: { title: "s2", one: { heading: "h2", ...guardedValues("w") } },
-        } as never)) as Doc & { item?: Doc };
-        const doc = result.item ?? result;
-        // The instance the afterChange hook handed back, judged by its rules.
-        const one = doc.one as Doc;
-        expect(one.heading).toBe("h-hook");
-        expect(one.label).toBe("label-hook");
-        expect(one).not.toHaveProperty("secret");
+        } as never)) as unknown as { item: Doc };
+        // The response is the stored Single row: its field groups live in
+        // their own tables, and the update hooks cannot reshape it (their
+        // return is discarded). So there is no instance here for a field rule
+        // to judge; should one ever appear, this fails before it is shown.
+        expect(result.item.title).toBe("s2");
+        expect(result.item).not.toHaveProperty("one");
+        expect(JSON.stringify(result)).not.toContain("secret-w");
       });
     });
 
