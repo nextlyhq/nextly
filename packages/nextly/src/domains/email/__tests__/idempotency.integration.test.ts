@@ -496,9 +496,9 @@ describe.each(getConfiguredTestDialects())(
       const scopes = (
         await t.adapter.select<ClaimRow>("email_send_claims")
       ).map(row => row.scope);
-      expect(scopes.sort()).toEqual(
-        ["rest:api-key:k1", "rest:user:u1", "rest:user:u2"].sort()
-      );
+      // Three claims, each stored under the label alone: the person or key
+      // they belong to reaches only the key digest.
+      expect(scopes).toEqual(["rest", "rest", "rest"]);
     }, 120_000);
 
     it("answers an API key's repeat from its first send", async () => {

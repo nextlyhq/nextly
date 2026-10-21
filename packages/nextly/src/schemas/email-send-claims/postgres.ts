@@ -29,8 +29,10 @@ export const emailSendClaimsPg = pgTable(
   {
     id: varchar("id", { length: 36 }).primaryKey(),
     /**
-     * Who sent: `site`, `core`, or `plugin:<name>`. Never chosen by a caller,
-     * and unbounded, as a plugin's name is; the key digest includes it.
+     * Who sent: `site`, `core`, `plugin:<name>`, or `rest` for a REST caller,
+     * whose person or API key reaches only the key digest. Never chosen by a
+     * caller, and unbounded, as a plugin's name is; the key digest includes
+     * the full scope.
      */
     scope: text("scope").notNull(),
     /**

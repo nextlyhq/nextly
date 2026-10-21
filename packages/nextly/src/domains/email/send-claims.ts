@@ -75,16 +75,38 @@ export interface RestKeyCaller {
   apiKeyId?: string;
 }
 
+/** What every REST caller's scope starts with, and what a claim stores of it. */
+const REST_SCOPE_LABEL = "rest";
+
 /**
  * A REST caller's scope: its own API key, or the signed-in person. A key sent
  * over REST is the caller's alone, so it can never claim a key the site's own
  * code sends with, nor learn from the answer which keys anyone else has used.
  * The `rest:` prefix keeps it apart from the site, core and plugin scopes.
+ *
+ * An API-key caller without its key's id is refused rather than given the
+ * owner's scope: the key and the owner's own session would then share keys.
  */
 export function restKeyScope(caller: RestKeyCaller): string {
-  return caller.authMethod === "api-key" && caller.apiKeyId
-    ? `rest:api-key:${caller.apiKeyId}`
-    : `rest:user:${caller.userId}`;
+  if (caller.authMethod !== "api-key") {
+    return `${REST_SCOPE_LABEL}:user:${caller.userId}`;
+  }
+  if (!caller.apiKeyId) {
+    throw NextlyError.internal({
+      logContext: { reason: "api-key-caller-without-key-id" },
+    });
+  }
+  return `${REST_SCOPE_LABEL}:api-key:${caller.apiKeyId}`;
+}
+
+/**
+ * A scope as a claim row stores it. A REST caller's scope names a person or an
+ * API key, so the row stores `rest` alone and the caller reaches only the key
+ * digest, which erasing a person clears. Every other scope names code, and is
+ * stored as it is.
+ */
+export function storedScope(scope: string): string {
+  return scope.startsWith(`${REST_SCOPE_LABEL}:`) ? REST_SCOPE_LABEL : scope;
 }
 
 /**
@@ -421,7 +443,8 @@ async function attemptClaim(
     await db.insert(table).values({
       id,
       holder,
-      scope: context.scope,
+      // A REST caller's person or key stays inside the key digest.
+      scope: storedScope(context.scope),
       keyDigest: digests.key,
       messageDigest: digests.message,
       state: "claimed",
