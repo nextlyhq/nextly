@@ -32,7 +32,7 @@
 Email templates now render with Liquid (LiquidJS), so a template can loop over
 a list, branch on a value, and format text, numbers and dates with filters.
 Today's `{{variable}}` and `{{a.b}}` are Liquid, and every existing template
-renders exactly as before.
+renders as before, but for line breaks in a subject (below).
 
 Escaping is not up to the template author. Every value written into HTML is
 escaped as before; no filter that skips escaping is available, and the tags
@@ -44,7 +44,9 @@ and only markup it built itself: never a value from a request, a form, a
 stored row or another plugin. Nothing parsed from JSON or a stored row can
 carry the mark. A render is limited in
 template size, time and memory, and stops with an error naming the limit. A
-subject has its line breaks removed.
+Liquid template's subject has its line breaks removed, so a subject value
+holding a newline sends as one line; a template kept on the previous engine
+renders its subject as before.
 
 A stored template that holds text the previous engine sent as written, and
 Liquid would read differently (a `{% … %}`, a filter, `{{0}}`, or text Liquid

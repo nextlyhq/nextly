@@ -44,6 +44,7 @@ import type {
   ReleaseReadinessEntry,
 } from "@admin/types/releases";
 
+import { describeHidden } from "./release-hidden";
 import {
   releaseOwnerView,
   describeDocuments,
@@ -245,6 +246,7 @@ function ReadinessLine({
   }
   const summary = summariseReadiness(total, entry);
   const label = describeReadiness(summary);
+  const hidden = describeHidden(entry.hidden);
   return (
     <span className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1 text-xs @md/table:flex-nowrap @md/table:justify-start @md/table:whitespace-nowrap">
       <Progress
@@ -261,6 +263,9 @@ function ReadinessLine({
           {describeNeedFix(summary.needFix)}
         </span>
       ) : null}
+      {/* Quiet, beside the count it is part of: the reader is told how many
+          documents they cannot open and where, never which. */}
+      {hidden ? <span className="text-muted-foreground">{hidden}</span> : null}
     </span>
   );
 }

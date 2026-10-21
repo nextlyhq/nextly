@@ -42,9 +42,14 @@ import {
 import { resolveSingleDocumentId } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { NextlyError } from "../errors/nextly-error";
+import { SHARED_PART } from "../schemas/content-events";
 
 import type { PaginationMeta } from "./response-shapes";
-import { assertVersionDocumentReadable } from "./versions-access";
+import {
+  assertVersionDocumentReadable,
+  historyLanguagesOf,
+  readableHistoryLocales,
+} from "./versions-access";
 
 /** Who is reading. */
 export interface SubjectEventsCaller {
@@ -224,10 +229,16 @@ async function readAuthorizedLife(
   repository: ContentEventsRepository
 ): Promise<Awaited<ReturnType<ContentEventsRepository["listForSubject"]>>> {
   for (let attempt = 1; attempt <= LIFE_ATTEMPTS; attempt += 1) {
-    const { life, ended } = await authorizeSubject(subject, caller, repository);
+    const { life, ended, visibleParts } = await authorizeSubject(
+      subject,
+      query,
+      caller,
+      repository
+    );
     const page = await repository.listForSubject(subject, {
       ...query,
       ...(life === undefined ? {} : { life }),
+      ...(visibleParts === undefined ? {} : { visibleParts }),
     });
     // Only the current life can change under a read: an ended one is named by
     // its end, and a release has one life.
@@ -239,13 +250,19 @@ async function readAuthorizedLife(
 
 /**
  * Refuse a caller who may not read this subject's events, and say which life
- * of it to read, with the subject's latest end as it stood before deciding.
+ * of it to read, with the subject's latest end as it stood before deciding,
+ * and which of its parts the caller may be shown.
  */
 async function authorizeSubject(
   subject: ContentEventSubject,
+  query: ContentEventQuery,
   caller: SubjectEventsCaller,
   repository: ContentEventsRepository
-): Promise<{ life: ContentEventQuery["life"]; ended: string | null }> {
+): Promise<{
+  life: ContentEventQuery["life"];
+  ended: string | null;
+  visibleParts?: readonly string[];
+}> {
   if (subject.kind === "release") {
     await authorizeRelease(subject.id, caller);
     // A release id is never reused, so it has one life.
@@ -253,44 +270,85 @@ async function authorizeSubject(
   }
   const ended = await repository.latestEnd(subject);
   if (ended !== null && !(await documentExists(subject))) {
-    if (!caller.overrideAccess) {
-      const reader = readerOf(caller);
-      if (!(await mayReadDeletedDocument(subject, reader))) {
-        throw refused(subject, "deleted-document-not-readable");
-      }
-    }
-    return { life: { endedBy: ended }, ended };
+    const life = { endedBy: ended };
+    if (caller.overrideAccess) return { life, ended };
+    const visibleParts = await authorizeDeletedDocument(subject, query, caller);
+    return { life, ended, visibleParts };
   }
-  if (!caller.overrideAccess) await authorizeLiveDocument(subject, caller);
-  return { life: "current", ended };
+  if (caller.overrideAccess) return { life: "current", ended };
+  const visibleParts = await authorizeLiveDocument(subject, query, caller);
+  return { life: "current", ended, visibleParts };
+}
+
+/**
+ * A deleted document's gate, and the parts its events may show.
+ *
+ * A row that is gone cannot be read in any language, so the languages shown
+ * are those its history can be asked about (`historyLanguagesOf`), which
+ * `mayReadDeletedDocument` decides alike. A
+ * language no longer configured is withheld here as it is from a live
+ * document's history, and a read naming one is refused.
+ */
+async function authorizeDeletedDocument(
+  subject: Exclude<ContentEventSubject, { kind: "release" }>,
+  query: ContentEventQuery,
+  caller: SubjectEventsCaller
+): Promise<readonly string[]> {
+  if (!(await mayReadDeletedDocument(subject, readerOf(caller)))) {
+    throw refused(subject, "deleted-document-not-readable");
+  }
+  const visibleParts = [
+    ...(await historyLanguagesOf(subject.kind, subject.slug)),
+    SHARED_PART,
+  ];
+  if ((query.parts ?? []).some(part => !visibleParts.includes(part))) {
+    throw refused(subject, "deleted-document-language-not-readable");
+  }
+  return visibleParts;
 }
 
 /**
  * The live document's gate, as its version history has it. The coarse read
  * permission runs here too, because not every entry point has a route that ran
  * it first: the Direct API, a plugin, and the read by subject.
+ *
+ * Returns the parts the caller may be shown: the shared part and each
+ * language they may read the document in.
  */
 async function authorizeLiveDocument(
   subject: Exclude<ContentEventSubject, { kind: "release" }>,
+  query: ContentEventQuery,
   caller: SubjectEventsCaller
-): Promise<void> {
+): Promise<readonly string[]> {
   const { user } = caller;
   if (user === undefined) throw refused(subject, "anonymous");
   if (!(await canReadEntity(subject.slug, readerOf(caller)))) {
     throw refused(subject, "document-type-not-readable");
   }
+  // The hooks see what they would on the caller's own read of the document.
+  const hookInputs = {
+    ...(caller.request === undefined ? {} : { request: caller.request }),
+    ...(caller.context === undefined ? {} : { context: caller.context }),
+  };
+  // Each language the read names is asked about, and any refused refuses it.
   await assertVersionDocumentReadable(
     subject.kind,
     subject.slug,
     subject.id,
     user,
     caller.authenticatedScope,
-    // The hooks see what they would on the caller's own read of the document.
-    {
-      ...(caller.request === undefined ? {} : { request: caller.request }),
-      ...(caller.context === undefined ? {} : { context: caller.context }),
-    }
+    hookInputs,
+    (query.parts ?? []).filter(part => part !== SHARED_PART)
   );
+  const readable = await readableHistoryLocales(
+    subject.kind,
+    subject.slug,
+    subject.id,
+    user,
+    caller.authenticatedScope,
+    hookInputs
+  );
+  return [...readable, SHARED_PART];
 }
 
 /**

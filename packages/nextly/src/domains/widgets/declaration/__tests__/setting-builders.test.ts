@@ -64,3 +64,20 @@ describe("a built setting is core's setting definition", () => {
     });
   });
 });
+
+describe("a quick setting, as the builders write it", () => {
+  it("is marked only when asked, and unmarked settings carry no flag", () => {
+    expect(settings.dateRange({ quick: true })).toMatchObject({ quick: true });
+    expect(settings.chartStyle({ quick: true })).toMatchObject({ quick: true });
+    expect(settings.onlyMine({ quick: true })).toMatchObject({ quick: true });
+    expect(settings.toggle({ default: false, quick: true })).toMatchObject({
+      quick: true,
+    });
+    expect(
+      settings.select({ options: ["a", "b"], default: "a", quick: true })
+    ).toMatchObject({ quick: true });
+    // Unmarked, the declaration is what it was before quick settings existed.
+    expect(settings.dateRange()).not.toHaveProperty("quick");
+    expect(settings.dateRange({ quick: false })).not.toHaveProperty("quick");
+  });
+});

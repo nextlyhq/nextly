@@ -204,15 +204,22 @@ export interface ReleaseReadinessSummary {
  *
  * Counted by DOCUMENT, not by finding: one document missing two required
  * fields is one document to fix. Only hard problems make a document not
- * ready; soft ones are notes and never stop a release.
+ * ready; soft ones are notes and never stop a release. Documents the reader
+ * may not read count too, from the server's per-collection tally, so the
+ * release reads as ready only when all of it is.
  */
 export function summariseReadiness(
   total: number,
-  readiness: Pick<ReleaseReadiness, "hard">
+  readiness: Pick<ReleaseReadiness, "hard" | "hidden">
 ): ReleaseReadinessSummary {
+  const hiddenNeedFix = (readiness.hidden ?? []).reduce(
+    (count, entry) => count + entry.hard,
+    0
+  );
   const needFix = Math.min(
     total,
-    new Set(readiness.hard.map(finding => finding.memberId)).size
+    new Set(readiness.hard.map(finding => finding.memberId)).size +
+      hiddenNeedFix
   );
   return { total, ready: total - needFix, needFix };
 }

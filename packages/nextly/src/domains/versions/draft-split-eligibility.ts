@@ -26,8 +26,10 @@
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
 import type { FieldConfig } from "../../collections/fields/types";
+import { isVirtualField } from "../../collections/fields/virtual";
 import { hasPasswordField } from "../../shared/lib/password-fields";
 import { consoleLogger } from "../../shared/types";
+import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 
 import { resolveVersionsConfig } from "./resolve-config";
 import type { ComponentSchemas } from "./restore-snapshot";
@@ -150,7 +152,15 @@ export function evaluateDraftSplitEligibility(
     };
   }
   if (input.entityKind === "single" && input.documentLocalized === false) {
-    const localized = schemas.find(([, schema]) => schema.localized);
+    // A component named only by virtual fields stores no rows, so it holds no
+    // per-language values for a language-less draft to mix.
+    const virtualOnly = reachedOnlyThroughVirtualFields(
+      input.fields,
+      input.componentSchemas
+    );
+    const localized = schemas.find(
+      ([slug, schema]) => schema.localized && !virtualOnly.has(slug)
+    );
     if (localized) {
       return {
         eligible: false,
@@ -353,4 +363,80 @@ export async function collectionDraftSplit(
     fields: collection.fields,
     slug: collection.slug,
   });
+}
+
+/**
+ * The components `fields` reach only through virtual fields: named by a virtual
+ * field-group field, or by any field under a virtual container, and by no
+ * stored field anywhere. A virtual field stores nothing, and the field-group
+ * write skips it, so such a component has no rows of this entity's at all.
+ *
+ * Follows a component into its own fields, so one embedded in a virtually
+ * reached component counts as virtually reached too. A component nothing names
+ * is in neither set, and is judged as before.
+ */
+function reachedOnlyThroughVirtualFields(
+  fields: FieldConfig[],
+  componentSchemas: ComponentSchemas | null
+): Set<string> {
+  const reached = { stored: new Set<string>(), virtual: new Set<string>() };
+  // Each field list once per state, so a group whose fields lead back to
+  // itself ends, and a work list rather than recursion, so a deep chain of
+  // groups and components cannot exhaust the stack.
+  const walked = { stored: new Set<unknown>(), virtual: new Set<unknown>() };
+  const work: WalkStep[] = [[fields, "stored"]];
+  for (let next = work.pop(); next; next = work.pop()) {
+    const [list, state] = next;
+    if (walked[state].has(list)) continue;
+    walked[state].add(list);
+    for (const field of list.filter(isFieldRecord)) {
+      work.push(...stepsFrom(field, state, reached, componentSchemas));
+    }
+  }
+  return new Set(
+    [...reached.virtual].filter(slug => !reached.stored.has(slug))
+  );
+}
+
+/** Whether the walk is under a virtual field, which stores nothing. */
+type WalkState = "stored" | "virtual";
+type WalkStep = [readonly unknown[], WalkState];
+
+/**
+ * Records the components one field names under the state it is reached in,
+ * and returns the field lists to walk from it: its own children, and the
+ * fields of each component it names.
+ */
+function stepsFrom(
+  field: FieldRecord,
+  inherited: WalkState,
+  reached: Record<WalkState, Set<string>>,
+  componentSchemas: ComponentSchemas | null
+): WalkStep[] {
+  const state: WalkState =
+    inherited === "virtual" || isVirtualField(field) ? "virtual" : "stored";
+  const next: WalkStep[] = [[childFieldsOf(field), state]];
+  for (const slug of componentSlugsOf(field)) {
+    reached[state].add(slug);
+    next.push([componentSchemas?.get(slug)?.fields ?? [], state]);
+  }
+  return next;
+}
+
+/** A field definition as the walk above reads it. */
+type FieldRecord = { virtual?: unknown; options?: unknown; fields?: unknown };
+
+function isFieldRecord(entry: unknown): entry is FieldRecord {
+  return typeof entry === "object" && entry !== null;
+}
+
+/** Every component a field names, through the shared reference reader. */
+function componentSlugsOf(field: FieldRecord): string[] {
+  const { single, many } = extractFieldGroupReferences(field);
+  return [...(single ? [single] : []), ...(many ?? [])];
+}
+
+/** A container's own fields; none for a field that holds no others. */
+function childFieldsOf(field: FieldRecord): readonly unknown[] {
+  return Array.isArray(field.fields) ? field.fields : [];
 }

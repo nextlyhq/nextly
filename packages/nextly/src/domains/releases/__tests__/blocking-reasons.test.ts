@@ -64,6 +64,10 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
     runDrainNow: vi.fn(async () => undefined),
+    // Every reader may read every member: these tests are not about which
+    // documents a reader sees.
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
     checks: READY_CHECKS,
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
@@ -174,6 +178,10 @@ describe("as an instrument", () => {
       canActOnDocument: vi.fn(async () => true),
       // Running a release is not what these cases are about.
       runDrainNow: vi.fn(async () => undefined),
+      // Every reader may read every member: these tests are not about which
+      // documents a reader sees.
+      readableMembers: async (members: readonly { id: string }[]) =>
+        new Set(members.map(member => member.id)),
       checks: READY_CHECKS,
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
@@ -339,6 +347,10 @@ describe("the blocker verdict and the write share a fence", () => {
       canActOnDocument: vi.fn(async () => true),
       // Running a release is not what these cases are about.
       runDrainNow: vi.fn(async () => undefined),
+      // Every reader may read every member: these tests are not about which
+      // documents a reader sees.
+      readableMembers: async (members: readonly { id: string }[]) =>
+        new Set(members.map(member => member.id)),
       checks: READY_CHECKS,
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {

@@ -23,7 +23,7 @@ import type {
 
 import {
   movePlacement,
-  movePlacementTo,
+  movePlacementToPosition,
   removePlacement,
   restorePlacement,
   setPlacementConfig,
@@ -45,8 +45,8 @@ export interface PlacementMutations {
   setConfig: (placementId: string, config: Record<string, unknown>) => void;
   /** Move one card to an end, or one step past its drawn neighbour. */
   move: (placementId: string, direction: MoveDirection) => void;
-  /** A drag dropped `fromId` onto `toId`: it takes that card's position. */
-  moveTo: (fromId: string, toId: string) => void;
+  /** Move one card to `final` among the drawn cards: where a drag released it. */
+  moveTo: (placementId: string, final: number) => void;
   /** Set one card's width, when its widget allows that width. */
   setWidth: (placementId: string, width: WidgetWidth) => void;
   /** Take one card off the dashboard, keeping it in the list. */
@@ -85,9 +85,11 @@ export function usePlacementMutations(
   );
 
   const moveTo = useCallback(
-    (fromId: string, toId: string) =>
-      mutatePlacements(placements => movePlacementTo(placements, fromId, toId)),
-    [mutatePlacements]
+    (placementId: string, final: number) =>
+      mutatePlacements(placements =>
+        movePlacementToPosition(placements, placementId, final, isDrawn)
+      ),
+    [mutatePlacements, isDrawn]
   );
 
   const setWidth = useCallback(

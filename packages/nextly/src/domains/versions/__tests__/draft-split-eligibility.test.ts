@@ -100,6 +100,65 @@ describe("isDraftSplitEligible", () => {
     ).toBe(true);
   });
 
+  // A virtual field-group field stores no component rows, so a localized
+  // component it names holds no language-keyed values the draft could mix.
+  describe("a localized component named only by a virtual field", () => {
+    const single = {
+      ...base,
+      entityKind: "single" as const,
+      documentLocalized: false,
+      componentSchemas: components({ localized: true }),
+    };
+    const virtualHero = {
+      name: "hero",
+      type: "component",
+      component: "hero",
+      virtual: true,
+    };
+
+    it("keeps a non-localized Single's drafts", () => {
+      expect(
+        evaluateDraftSplitEligibility({
+          ...single,
+          fields: [...textFields, virtualHero] as unknown as FieldConfig[],
+        })
+      ).toEqual({ eligible: true, reason: null, componentSlug: null });
+    });
+
+    it("keeps them when the field sits inside a virtual group", () => {
+      const group = {
+        name: "extras",
+        type: "group",
+        options: { virtual: true },
+        fields: [{ name: "hero", type: "component", component: "hero" }],
+      };
+      expect(
+        isDraftSplitEligible({
+          ...single,
+          fields: [...textFields, group] as unknown as FieldConfig[],
+        })
+      ).toBe(true);
+    });
+
+    it("still turns them off when a stored field names it too", () => {
+      const storedHero = {
+        name: "banner",
+        type: "component",
+        component: "hero",
+      };
+      expect(
+        evaluateDraftSplitEligibility({
+          ...single,
+          fields: [
+            ...textFields,
+            virtualHero,
+            storedHero,
+          ] as unknown as FieldConfig[],
+        }).reason
+      ).toBe("localized-component");
+    });
+  });
+
   it("is off for a non-localized Single that reaches a localized component", () => {
     // Its working draft is keyed with no language while the component stores
     // a value per language, so one draft would mix several languages' edits.

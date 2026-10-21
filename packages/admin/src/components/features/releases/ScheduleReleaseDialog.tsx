@@ -36,6 +36,7 @@ import { isValidTimezone } from "@admin/lib/dates/format";
 import type { Release, ReleaseBlocker } from "@admin/types/releases";
 
 import { blockerSummary } from "./release-blockers";
+import { describeHiddenNeedFix, hiddenTotal } from "./release-hidden";
 import { instantFor, readerZone } from "./release-timezone";
 
 /**
@@ -64,16 +65,25 @@ function readyToSchedule(state: {
  *
  * NAMED rather than counted, which is the entire reason this is asked before
  * scheduling instead of being left to the server's refusal: that refusal cannot
- * say which documents, and nobody can act on a number.
+ * say which documents, and nobody can act on a number. Those the reader may
+ * not read are the exception: the server counts them and never names them,
+ * so they are said as a count, and still stop the schedule.
  */
-function WouldStopThis({ blocking }: { blocking: ReleaseBlocker[] }) {
-  if (blocking.length === 0) return null;
+function WouldStopThis({
+  blocking,
+  hidden,
+}: {
+  blocking: ReleaseBlocker[];
+  hidden: number;
+}) {
+  const total = blocking.length + hidden;
+  if (total === 0) return null;
   return (
     <div role="alert" className="flex flex-col gap-1">
       <p className="text-sm font-medium text-destructive">
-        {blocking.length === 1
+        {total === 1
           ? "One document would stop this release."
-          : `${blocking.length} documents would stop this release.`}
+          : `${total} documents would stop this release.`}
       </p>
       <ul className="flex list-disc flex-col gap-0.5 pl-5">
         {blocking.map(blocker => (
@@ -87,6 +97,11 @@ function WouldStopThis({ blocking }: { blocking: ReleaseBlocker[] }) {
           </li>
         ))}
       </ul>
+      {hidden > 0 ? (
+        <p className="text-sm text-muted-foreground">
+          {describeHiddenNeedFix(hidden)}.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -125,6 +140,9 @@ export function ScheduleReleaseDialog({
   // that list.
   const blockers = useReleaseBlockers(release.id, open);
   const blocking = blockers.data?.items ?? [];
+  // Blocked documents the reader may not read: counted, never named, and
+  // still a reason not to offer a schedule the server would refuse.
+  const hiddenBlocking = hiddenTotal(blockers.data?.meta.hidden);
 
   const canSubmit = readyToSchedule({
     instant,
@@ -137,7 +155,7 @@ export function ScheduleReleaseDialog({
     // of the named blocker this preflight exists to show.
     checking: blockers.isFetching,
     checkFailed: blockers.isError,
-    blocking: blocking.length,
+    blocking: blocking.length + hiddenBlocking,
   });
 
   return (
@@ -204,7 +222,7 @@ export function ScheduleReleaseDialog({
               scheduleFailed={schedule.isError}
             />
 
-            <WouldStopThis blocking={blocking} />
+            <WouldStopThis blocking={blocking} hidden={hiddenBlocking} />
           </div>
 
           <DialogFooter>
