@@ -368,33 +368,55 @@ function nodeProblems(
   for (const [key, value] of Object.entries(node)) {
     const at = `${path}.${key}`;
     if (key === "and" || key === "or") {
-      if (!Array.isArray(value)) {
-        into.push({
-          path: at,
-          code: "FILTER_INVALID_LOGICAL",
-          message: `"${key}" must be a list of filters, not ${describe(value)}.`,
-        });
-        continue;
-      }
-      // By index rather than `forEach`, which skips the holes of a sparse
-      // list — and a query string such as `where[or][3]` with no `[0]` builds
-      // exactly that. A hole is no filter, and must be refused like one.
-      for (let i = 0; i < value.length; i++) {
-        nodeProblems(value[i], `${at}.${i}`, into, false);
-      }
-      continue;
+      logicalProblems(at, key, value, into);
+    } else if (!(allowTranslated && reservedKeyProblems(key, value, into))) {
+      fieldProblems(at, key, value, into);
     }
-    if (key === TRANSLATED_KEY && allowTranslated) {
-      translatedProblems(value, into);
-      continue;
-    }
-    if (isWorkflowKey(key) && allowTranslated) {
-      const problem = workflowKeyProblem(key, value);
-      if (problem) into.push(problem);
-      continue;
-    }
-    fieldProblems(at, key, value, into);
   }
+}
+
+/** The problems with an `and` or `or` member and every filter in it. */
+function logicalProblems(
+  at: string,
+  key: string,
+  value: unknown,
+  into: FilterProblem[]
+): void {
+  if (!Array.isArray(value)) {
+    into.push({
+      path: at,
+      code: "FILTER_INVALID_LOGICAL",
+      message: `"${key}" must be a list of filters, not ${describe(value)}.`,
+    });
+    return;
+  }
+  // By index rather than `forEach`, which skips the holes of a sparse
+  // list — and a query string such as `where[or][3]` with no `[0]` builds
+  // exactly that. A hole is no filter, and must be refused like one.
+  for (let i = 0; i < value.length; i++) {
+    nodeProblems(value[i], `${at}.${i}`, into, false);
+  }
+}
+
+/**
+ * The problems with a reserved key given at the top level, appended to
+ * `into`; `false` when the key is not one, so it is judged as a field.
+ */
+function reservedKeyProblems(
+  key: string,
+  value: unknown,
+  into: FilterProblem[]
+): boolean {
+  if (key === TRANSLATED_KEY) {
+    translatedProblems(value, into);
+    return true;
+  }
+  if (isWorkflowKey(key)) {
+    const problem = workflowKeyProblem(key, value);
+    if (problem) into.push(problem);
+    return true;
+  }
+  return false;
 }
 
 /**
