@@ -18,13 +18,11 @@
  * @module plugins/plugin-media
  */
 
+import { runWithCallerScope } from "../auth/caller-scope";
 import type { AuthContext } from "../auth/middleware";
+import { runAsPrincipal } from "../auth/principal-scope";
 import type { RequestActor } from "../auth/request-actor";
-import {
-  authorizeChecked,
-  checkedCaller,
-  directApiActor,
-} from "../direct-api/namespaces/helpers";
+import { checkWrite, directApiActor } from "../direct-api/namespaces/helpers";
 import type { DirectAPIConfig } from "../direct-api/types";
 import { SYSTEM_WRITE_POLICY } from "../domains/auth/system-write-policy";
 import { NextlyError } from "../errors/nextly-error";
@@ -220,24 +218,35 @@ function checkedWrite(
     const opts = (args[at] ?? {}) as ServiceOpts;
     const resolved = await resolveServiceOpts(opts);
     const config = callerConfig(resolved);
-    // The precondition, before any work: the question the Direct API asks,
-    // through the seam it asks it with, so a refused caller is refused here
-    // exactly as there and on REST.
-    const caller = checkedCaller({}, config);
-    if (caller) await authorizeChecked(caller, SYSTEM_WRITE_POLICY.media[name]);
+    // The whole write runs as the call names it, as `services.collections`
+    // runs its calls: with the person it names (or none) and the scope it
+    // resolved. Without the fresh frame, a write made inside one of the
+    // plugin's people's frames is recorded as that person, and anything the
+    // write sets going runs with grants the call gave up.
+    return runAsPrincipal(opts.principal ?? null, () =>
+      runWithCallerScope(resolved.authenticatedScope, async () => {
+        // The precondition, before any work: the Direct API's own write gate,
+        // so a caller refused there is refused here, and on REST.
+        const caller = await checkWrite(
+          {},
+          config,
+          SYSTEM_WRITE_POLICY.media[name]
+        );
 
-    // Nothing past the caller travels but the service's own `actor`.
-    const next: unknown[] = args.slice(0, at);
-    next[at] = { ...resolved } satisfies RequestContext;
-    if (takesActor) {
-      next[at + 1] = actorFor(
-        name,
-        args[at + 1] as RequestActor | undefined,
-        caller,
-        config
-      );
-    }
-    return write.apply(service, next);
+        // Nothing past the caller travels but the service's own `actor`.
+        const next: unknown[] = args.slice(0, at);
+        next[at] = { ...resolved } satisfies RequestContext;
+        if (takesActor) {
+          next[at + 1] = actorFor(
+            name,
+            args[at + 1] as RequestActor | undefined,
+            caller,
+            config
+          );
+        }
+        return write.apply(service, next);
+      })
+    );
   };
 }
 
