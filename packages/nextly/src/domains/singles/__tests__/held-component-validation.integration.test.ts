@@ -18,6 +18,7 @@ import {
   defineFieldGroup,
   defineSingle,
   fieldGroup,
+  group,
   text,
 } from "../../../config";
 import {
@@ -227,6 +228,51 @@ describe.each(getConfiguredTestDialects())(
       expect(await liveHero(current)).toMatchObject({
         heading: "Valid",
         code: "new",
+      });
+    });
+  }
+);
+
+describe.each(getConfiguredTestDialects())(
+  "a collection component held inside a group (integration, %s)",
+  dialect => {
+    // A component in a group is stored in the group's value, so no component
+    // write reaches it: the entry's own validation judges it.
+    it("is judged by its own validators on an ordinary write", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [heroGroup()],
+        collections: [
+          defineCollection({
+            slug: "pages",
+            fields: [
+              text({ name: "title" }),
+              group({
+                name: "layout",
+                fields: [fieldGroup({ name: "hero", component: "hero" })],
+              }),
+            ],
+          }),
+        ],
+      });
+      const t = current;
+      const create = (code: string) =>
+        outcomeOf(() =>
+          t.nextly.create({
+            collection: "pages" as never,
+            data: {
+              title: "T",
+              layout: { hero: { heading: "H", code } },
+            } as never,
+          })
+        );
+
+      expect((await create("ok")).ok).toBe(true);
+      const refused = await create("forbidden");
+      expect(refused.ok).toBe(false);
+      expect(refused.issues).toContainEqual({
+        path: "layout.hero.code",
+        message: "code cannot be forbidden.",
       });
     });
   }

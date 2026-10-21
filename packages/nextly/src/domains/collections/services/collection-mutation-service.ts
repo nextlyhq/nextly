@@ -181,6 +181,7 @@ import {
 } from "../../versions/restore-snapshot";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
+  containedComponentResolver,
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
   stripSingleComponentTags,
@@ -1626,6 +1627,16 @@ export class CollectionMutationService extends BaseService {
         mode: args.mode,
         req: args.user ? { user: args.user } : {},
         ...args.localeCtx,
+        // A component inside a group or repeater is judged here, since no
+        // component write reaches it; read on the write's own connection.
+        componentFields: await containedComponentResolver(
+          args.fields as unknown as FieldConfig[],
+          async componentSlug =>
+            (await this.fieldGroupDataService?.getComponentFields(
+              componentSlug,
+              args.tx?.getDrizzle()
+            )) ?? null
+        ),
         write: this.validationWrite(
           args.collectionName,
           args.id ??

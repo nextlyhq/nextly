@@ -128,6 +128,7 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
+  containedComponentResolver,
   stripSingleComponentTags,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -918,6 +919,15 @@ export class SingleMutationService extends BaseService {
           {
             mode: "update",
             req: options.user ? { user: options.user } : {},
+            // A component inside a group or repeater is judged here, since
+            // no component write reaches it. On the pool, as this is.
+            componentFields: await containedComponentResolver(
+              fieldConfigs,
+              async componentSlug =>
+                (await this.fieldGroupDataService?.getComponentFields(
+                  componentSlug
+                )) ?? null
+            ),
             localizedFieldNames,
             enforceLocalizedRequired,
             // Before the transaction opens, so on the pool.
@@ -2485,7 +2495,24 @@ export class SingleMutationService extends BaseService {
               // Mapped through the declared fields rather than camel-cased
               // wholesale, for the reason the version capture below gives: a
               // field genuinely named `site_title` must keep its own spelling.
-              let pending: Record<string, unknown> = { ...base };
+              // A component nested in a group or repeater rides in that
+              // container's value, so the component tagging below never reaches
+              // it. It is recorded with its type as a captured version records
+              // it, so a restore after its field is pointed at another
+              // component can tell which schema the value belonged to. The live
+              // document a first held save builds on is recorded whole, the
+              // untouched containers included; a type a draft already recorded
+              // is kept, or a save after a retarget would rewrite it to the new
+              // component's. Both sides compare from the same base, so an
+              // unchanged save records no version.
+              const recordNested = (document: Record<string, unknown>) =>
+                tagNestedComponentTypes(
+                  document,
+                  fieldConfigs,
+                  componentResolver
+                ) as Record<string, unknown>;
+              const replaces = existingDraft ? base : recordNested(base);
+              let pending: Record<string, unknown> = { ...replaces };
               // The fields this save supplies, as opposed to those carried over
               // from the draft or the live document it builds on.
               const suppliedFieldNames = new Set<string>();
@@ -2578,26 +2605,12 @@ export class SingleMutationService extends BaseService {
                   )
                 );
               }
-              // A component nested in a group or repeater rides in that
-              // container's value, so the tagging above never reached it. It
-              // is recorded with its type as a captured version records it, so
-              // a restore after its field is pointed at another component can
-              // tell which schema the value belonged to. Only values this save
-              // supplies, and the live document a first held save builds on:
-              // a type the draft already recorded is kept, or a save after a
-              // retarget would rewrite it to the new component's.
-              const recordNested = (document: Record<string, unknown>) =>
-                tagNestedComponentTypes(
-                  document,
-                  fieldConfigs,
-                  componentResolver
-                ) as Record<string, unknown>;
+              // This save's own container values, recorded the same way.
               for (const name of suppliedFieldNames) {
                 if (Object.prototype.hasOwnProperty.call(pending, name)) {
                   pending[name] = recordNested({ [name]: pending[name] })[name];
                 }
               }
-              const replaces = existingDraft ? base : recordNested(base);
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.
               const { versionNo: draftVersionNo } = await storeDraftSave(
