@@ -1,27 +1,15 @@
-import type { Params } from "../types";
+import { currentRequestCaller } from "../../auth/caller-scope";
 
 /**
- * Decode the authenticated role set forwarded by the route handler.
+ * The authenticated caller's role slugs, for the handlers that hand roles to
+ * access rules.
  *
- * Route params are strings, so roles arrive JSON-encoded. Parse defensively:
- * require a non-empty array of only strings, so a malformed, mixed-type, or
- * empty value degrades to "no roles" rather than throwing or forwarding a
- * partial set. Shared by the collection and single dispatchers.
+ * Read from the request caller the route handler set, which carries roles
+ * only for the routes that use them. An empty set reads as no roles, so a
+ * rule sees the same `undefined` on every route that has none to give.
+ * Shared by the collection and single dispatchers.
  */
-export function readAuthenticatedRoles(p: Params): string[] | undefined {
-  const raw = p._authenticatedUserRoles;
-  if (!raw) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      !Array.isArray(parsed) ||
-      parsed.length === 0 ||
-      !parsed.every((role): role is string => typeof role === "string")
-    ) {
-      return undefined;
-    }
-    return parsed;
-  } catch {
-    return undefined;
-  }
+export function readAuthenticatedRoles(): string[] | undefined {
+  const roles = currentRequestCaller()?.roles;
+  return roles && roles.length > 0 ? [...roles] : undefined;
 }

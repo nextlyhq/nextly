@@ -11,8 +11,7 @@
  *
  * Any value that holds something is refused. The admin never draws such a field (the schema it
  * reads leaves it out, see `omitDirectComponentFields`), so no form seeds one, and whatever arrives
- * was sent by someone. Only an empty value passes: nothing, an empty list, or an object with no
- * authored key.
+ * was sent by someone. Only an empty value passes: nothing, an empty list, or an empty object.
  *
  * @module domains/field-groups/unstored-nested-components
  */
@@ -21,8 +20,6 @@ import type { FieldConfig } from "../../collections/fields/types";
 import type { ValidationIssue } from "../../shared/lib/entry-validation";
 
 import { directComponentFields } from "./direct-component-fields";
-import { COMPONENT_META_KEYS } from "./services/field-group-utils";
-import { readFieldGroupType } from "./storage/field-group-type-key";
 
 const NOT_STORED: Omit<ValidationIssue, "path"> = {
   code: "NOT_STORED",
@@ -46,16 +43,15 @@ export function unstoredNestedComponentIssues(
 }
 
 /**
- * Whether a value holds anything: a list with a row, an object with an authored key or that names
- * its component, or anything else that is not nothing. Shallow on purpose: one authored key is
- * enough, so a value is never walked, and one that refers back to itself ends here like any other.
+ * Whether a value holds anything: a list with a row, an object with any key at all, or anything
+ * else that is not nothing. Any key, an instance id or a type marker included: no instance of such
+ * a field is ever stored or drawn, so none of its keys can have been seeded, and whatever is there
+ * was sent. Shallow on purpose: a value is never walked, so one that refers back to itself ends
+ * here like any other.
  */
 function holdsAnything(value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value !== "object" || value instanceof Date) return true;
-  return (
-    readFieldGroupType(value) !== undefined ||
-    Object.keys(value).some(key => !COMPONENT_META_KEYS.has(key))
-  );
+  return Object.keys(value).length > 0;
 }

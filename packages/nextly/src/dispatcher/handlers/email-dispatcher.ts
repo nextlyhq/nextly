@@ -92,7 +92,7 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async (svc, p, body) => {
       const provider = await svc.providerService.createProvider(
         body as Parameters<typeof svc.providerService.createProvider>[0],
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email provider created.", provider, {
         status: 201,
@@ -112,7 +112,7 @@ const EMAIL_PROVIDER_METHODS: Record<
       const provider = await svc.providerService.updateProvider(
         p.providerId,
         body as Parameters<typeof svc.providerService.updateProvider>[1],
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email provider updated.", provider);
     },
@@ -128,7 +128,7 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async (svc, p) => {
       await svc.providerService.deleteProvider(
         p.providerId,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondAction("Email provider deleted.", {
         providerId: p.providerId,
@@ -143,7 +143,7 @@ const EMAIL_PROVIDER_METHODS: Record<
     execute: async (svc, p) => {
       const provider = await svc.providerService.setDefault(
         p.providerId,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondAction("Default email provider updated.", { provider });
     },
@@ -182,7 +182,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p, body) => {
       const template = await svc.templateService.createTemplate(
         body as Parameters<typeof svc.templateService.createTemplate>[0],
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email template created.", template, {
         status: 201,
@@ -200,7 +200,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
       const template = await svc.templateService.updateTemplate(
         p.templateId,
         body as Parameters<typeof svc.templateService.updateTemplate>[1],
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email template updated.", template);
     },
@@ -216,7 +216,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p) => {
       await svc.templateService.deleteTemplate(
         p.templateId,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondAction("Email template deleted.", {
         templateId: p.templateId,
@@ -254,7 +254,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
       const template = await svc.templateService.overrideTemplate(
         p.templateId,
         { version },
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Email template overridden.", template);
     },
@@ -263,7 +263,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
     execute: async (svc, p) => {
       const template = await svc.templateService.resetTemplate(
         p.templateId,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation(
         "Email template reset to its owner's version.",
@@ -287,7 +287,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
         p.templateId,
         choices,
         review,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       // A non-CRUD write with a result beside the item: Undo needs it.
       return respondAction("Owner's update applied.", {
@@ -302,7 +302,7 @@ const EMAIL_TEMPLATE_METHODS: Record<
       const template = await svc.templateService.undoOwnerUpdate(
         p.templateId,
         undo,
-        readAuthenticatedActor(p)
+        readAuthenticatedActor()
       );
       return respondMutation("Owner's update undone.", template);
     },

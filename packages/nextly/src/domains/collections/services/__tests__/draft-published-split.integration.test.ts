@@ -19,6 +19,10 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
+import {
+  asCaller,
+  sessionCaller,
+} from "../../../../dispatcher/__tests__/request-caller";
 import { discardWorkingDraftForDocument } from "../../../../dispatcher/handlers/versions-methods";
 import type { CollectionsHandler } from "../../../../services/collections-handler";
 import type { CollectionEntryService } from "../../../../services/collections/collection-entry-service";
@@ -460,17 +464,20 @@ describe("draft/published split — discard working draft (integration)", () => 
     );
     expect(await workingDraftCount(id)).toBe(1);
 
-    const discarded = await discardWorkingDraftForDocument({
-      scopeKind: "collection",
-      slug: COLLECTION,
-      entryId: id,
-      user: { id: "editor-1" },
-      params: {
-        collectionName: COLLECTION,
-        entryId: id,
-        _authenticatedUserId: "editor-1",
-      },
-    });
+    const discarded = await asCaller(
+      sessionCaller({ userId: "editor-1" }),
+      () =>
+        discardWorkingDraftForDocument({
+          scopeKind: "collection",
+          slug: COLLECTION,
+          entryId: id,
+          user: { id: "editor-1" },
+          params: {
+            collectionName: COLLECTION,
+            entryId: id,
+          },
+        })
+    );
 
     // The sidecar is gone...
     expect(await workingDraftCount(id)).toBe(0);
@@ -517,17 +524,18 @@ describe("draft/published split — discard working draft (integration)", () => 
     expect(await workingDraftCount(id)).toBe(1);
 
     await expect(
-      discardWorkingDraftForDocument({
-        scopeKind: "collection",
-        slug: COLLECTION,
-        entryId: id,
-        user: { id: "reader-1" },
-        params: {
-          collectionName: COLLECTION,
+      asCaller(sessionCaller({ userId: "reader-1" }), () =>
+        discardWorkingDraftForDocument({
+          scopeKind: "collection",
+          slug: COLLECTION,
           entryId: id,
-          _authenticatedUserId: "reader-1",
-        },
-      })
+          user: { id: "reader-1" },
+          params: {
+            collectionName: COLLECTION,
+            entryId: id,
+          },
+        })
+      )
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     // The pending draft survives a refused discard.
@@ -617,18 +625,19 @@ describe("draft/published split — discard working draft (integration)", () => 
     expect(await workingDraftLocales(id)).toEqual(["en", "es"]);
 
     // The editor is on Spanish and discards. The request names that language.
-    await discardWorkingDraftForDocument({
-      scopeKind: "collection",
-      slug: COLLECTION,
-      entryId: id,
-      user: { id: "editor-1" },
-      locale: "es",
-      params: {
-        collectionName: COLLECTION,
+    await asCaller(sessionCaller({ userId: "editor-1" }), () =>
+      discardWorkingDraftForDocument({
+        scopeKind: "collection",
+        slug: COLLECTION,
         entryId: id,
-        _authenticatedUserId: "editor-1",
-      },
-    });
+        user: { id: "editor-1" },
+        locale: "es",
+        params: {
+          collectionName: COLLECTION,
+          entryId: id,
+        },
+      })
+    );
 
     // Spanish is gone and English survives untouched.
     expect(await workingDraftLocales(id)).toEqual(["en"]);

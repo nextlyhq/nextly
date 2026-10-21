@@ -35,15 +35,18 @@ const refusedAt = (path: string) => [
 
 describe("a value for a component placed directly in a component", () => {
   it("passes when empty", () => {
-    for (const badge of [null, undefined, {}, [], { id: "kept-id" }]) {
+    for (const badge of [null, undefined, {}, []]) {
       expect(unstoredNestedComponentIssues({ badge }, cardFields)).toEqual([]);
     }
   });
 
   it("is refused when it holds anything, an empty string and false included", () => {
+    // An id included: no instance of such a field is ever stored, so an id names nothing the write
+    // could keep, and was sent by someone.
     for (const badge of [
       { label: "" },
       { flag: false },
+      { id: "an-instance-id" },
       [{}],
       "Just a heading",
     ]) {

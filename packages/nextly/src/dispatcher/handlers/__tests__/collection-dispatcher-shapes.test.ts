@@ -66,6 +66,7 @@ import {
   getCollectionRegistryFromDI,
   getMigrationJournalFromDI,
 } from "../../helpers/di";
+import { asCaller, sessionCaller } from "../../__tests__/request-caller";
 import { createApplyDesiredSchema } from "../../../domains/schema/pipeline/apply";
 import { previewDesiredSchema } from "../../../domains/schema/pipeline/preview";
 import { translatePipelinePreviewToLegacy } from "../../../domains/schema/legacy-preview/translate";
@@ -497,7 +498,10 @@ describe("dispatchCollections, mutations (respondMutation)", () => {
     });
   });
 
-  it("createEntry decodes and forwards the authenticated roles", async () => {
+  it("createEntry forwards the authenticated caller as one built user", async () => {
+    // The service is handed the user the access rules and hooks read, roles
+    // and verified claims included, rather than loose id/name/role fields it
+    // would have to reassemble.
     const spy = vi.fn().mockResolvedValue({
       success: true,
       statusCode: 201,
@@ -506,61 +510,71 @@ describe("dispatchCollections, mutations (respondMutation)", () => {
     });
     const container = makeContainer({ createEntry: spy });
 
-    await dispatchCollections(
-      container,
-      "createEntry",
-      {
-        collectionName: "posts",
-        _authenticatedUserId: "u1",
-        // Route params are strings; roles arrive JSON-encoded.
-        _authenticatedUserRoles: JSON.stringify(["editor", "author"]),
-      },
-      { title: "Hello" }
+    await asCaller(
+      sessionCaller({
+        userId: "u1",
+        roles: ["editor", "author"],
+        claims: { tenantId: "acme" },
+      }),
+      () =>
+        dispatchCollections(
+          container,
+          "createEntry",
+          { collectionName: "posts" },
+          { title: "Hello" }
+        )
     );
 
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
         collectionName: "posts",
         userId: "u1",
-        userRoles: ["editor", "author"],
+        user: {
+          tenantId: "acme",
+          id: "u1",
+          name: undefined,
+          email: undefined,
+          roles: ["editor", "author"],
+          role: "editor",
+        },
+      }),
+      expect.anything()
+    );
+    expect(spy.mock.calls[0][0]).not.toHaveProperty("userRoles");
+  });
+
+  it("createEntry reads an empty role set as no roles", async () => {
+    // A caller resolved to no roles hands the rules no `roles` and no `role`,
+    // never an empty grant.
+    const spy = vi.fn().mockResolvedValue({
+      success: true,
+      statusCode: 201,
+      message: "ok",
+      data: { id: "e1" },
+    });
+    const container = makeContainer({ createEntry: spy });
+
+    await asCaller(sessionCaller({ userId: "u1", roles: [] }), () =>
+      dispatchCollections(
+        container,
+        "createEntry",
+        { collectionName: "posts" },
+        { title: "Hello" }
+      )
+    );
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "u1",
+        user: expect.objectContaining({
+          id: "u1",
+          roles: undefined,
+          role: undefined,
+        }),
       }),
       expect.anything()
     );
   });
-
-  it.each([
-    ["non-JSON string", "not-json"],
-    ["a mixed-type array", JSON.stringify(["editor", 123])],
-    ["a non-array value", JSON.stringify({ role: "editor" })],
-    ["an empty array", JSON.stringify([])],
-  ])(
-    "createEntry degrades %s roles param to undefined",
-    async (_label, raw) => {
-      const spy = vi.fn().mockResolvedValue({
-        success: true,
-        statusCode: 201,
-        message: "ok",
-        data: { id: "e1" },
-      });
-      const container = makeContainer({ createEntry: spy });
-
-      await dispatchCollections(
-        container,
-        "createEntry",
-        {
-          collectionName: "posts",
-          _authenticatedUserId: "u1",
-          _authenticatedUserRoles: raw,
-        },
-        { title: "Hello" }
-      );
-
-      expect(spy).toHaveBeenCalledWith(
-        expect.objectContaining({ userRoles: undefined }),
-        expect.anything()
-      );
-    }
-  );
 
   it("updateEntry returns { message, item } body and 200 status", async () => {
     const fakeEntry = { id: "e1", title: "Hello (updated)" };
@@ -839,24 +853,33 @@ describe("dispatchCollections, bulk ops respondBulk envelope", () => {
     });
     const container = makeContainer({ bulkUpdateByQuery: spy });
 
-    await dispatchCollections(
-      container,
-      "bulkUpdateByQuery",
-      {
-        collectionName: "posts",
-        _authenticatedUserId: "user-1",
-        _authenticatedUserName: "Ada",
-        _authenticatedUserEmail: "ada@example.com",
-      },
-      { where: { status: { equals: "draft" } }, data: { status: "published" } }
+    await asCaller(
+      sessionCaller({
+        userId: "user-1",
+        name: "Ada",
+        email: "ada@example.com",
+      }),
+      () =>
+        dispatchCollections(
+          container,
+          "bulkUpdateByQuery",
+          { collectionName: "posts" },
+          {
+            where: { status: { equals: "draft" } },
+            data: { status: "published" },
+          }
+        )
     );
 
     expect(spy).toHaveBeenCalledWith(
       expect.objectContaining({
         collectionName: "posts",
         userId: "user-1",
-        userName: "Ada",
-        userEmail: "ada@example.com",
+        user: expect.objectContaining({
+          id: "user-1",
+          name: "Ada",
+          email: "ada@example.com",
+        }),
       }),
       expect.anything()
     );
