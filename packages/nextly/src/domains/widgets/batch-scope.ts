@@ -27,14 +27,24 @@ export interface BatchScope {
  * instead of every card in the batch inheriting one failure.
  */
 export function createBatchScope(): BatchScope {
-  const computed = new Map<string, Promise<unknown>>();
+  // One map of keys per source, rather than the two joined into one string: a
+  // source id and a key are both arbitrary, so no separator between them is
+  // one neither can contain, and ("a", "b\0c") would meet ("a\0b", "c").
+  const bySource = new Map<string, Map<string, Promise<unknown>>>();
+  const keysOf = (sourceId: string): Map<string, Promise<unknown>> => {
+    let keys = bySource.get(sourceId);
+    if (keys === undefined) {
+      keys = new Map();
+      bySource.set(sourceId, keys);
+    }
+    return keys;
+  };
   return {
     forSource(sourceId) {
+      const computed = keysOf(sourceId);
       return {
         getOrCompute<T>(key: string, compute: () => Promise<T>): Promise<T> {
-          // A separator no source id contains, so ("a", "b:c") and ("a:b", "c")
-          // never land on one entry.
-          const entry = `${sourceId}\u0000${key}`;
+          const entry = key;
           const kept = computed.get(entry);
           if (kept !== undefined) return kept as Promise<T>;
           let running: Promise<T>;

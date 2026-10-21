@@ -357,6 +357,12 @@ interface ScanTally {
   pagesUsed: number;
   /** Whether pages were left unfetched because the budget ran out. */
   bounded: boolean;
+  /**
+   * This collection's issues alone, by kind. Kept apart from the shared tally
+   * until the scan has finished, so a collection refused partway through
+   * contributes nothing rather than the pages read before the refusal.
+   */
+  byIssue: Map<string, number>;
 }
 
 /**
@@ -416,11 +422,10 @@ function assertStatusIsAnswerable(status: string | undefined): void {
   });
 }
 
-/** What this scan looks for, what it may read, and where it tallies what it finds. */
+/** What this scan looks for, and what it may read. */
 interface ScanRules {
   checks: IssueChecks;
   readOptions: ReturnType<typeof callerReadOptions>;
-  byIssue: Map<string, number>;
 }
 
 /**
@@ -442,9 +447,10 @@ async function scanCollection(
   abandoned: () => boolean
 ): Promise<ScanTally> {
   let pagesUsed = 0;
+  const byIssue = new Map<string, number>();
 
   for (let page = 1; ; page += 1) {
-    if (pagesUsed >= pagesAllowed) return { pagesUsed, bounded: true };
+    if (pagesUsed >= pagesAllowed) return { pagesUsed, bounded: true, byIssue };
     if (abandoned()) throwAbandoned();
 
     const result = await services.collections.listEntries(
@@ -466,13 +472,22 @@ async function scanCollection(
     pagesUsed += 1;
 
     for (const row of result.data) {
-      for (const issue of issuesFor(row, rules.checks)) {
-        rules.byIssue.set(issue, (rules.byIssue.get(issue) ?? 0) + 1);
-      }
+      for (const issue of issuesFor(row, rules.checks))
+        addTo(byIssue, issue, 1);
     }
 
-    if (!result.pagination.hasMore) return { pagesUsed, bounded: false };
+    if (!result.pagination.hasMore)
+      return { pagesUsed, bounded: false, byIssue };
   }
+}
+
+/** Adds `count` to `issue`'s tally in `byIssue`. */
+function addTo(
+  byIssue: Map<string, number>,
+  issue: string,
+  count: number
+): void {
+  byIssue.set(issue, (byIssue.get(issue) ?? 0) + count);
 }
 
 /**
@@ -524,7 +539,6 @@ async function tallyIssues(
   const scanRules: ScanRules = {
     checks,
     readOptions: callerReadOptions(caller),
-    byIssue,
   };
   // Read through a call rather than inline: the value changes between awaits,
   // and an inline check narrows it for the rest of the block, so the second
@@ -553,6 +567,8 @@ async function tallyIssues(
       );
       pagesUsed += tally.pagesUsed;
       if (tally.bounded) bounded = true;
+      // Merged only now that the collection's scan has finished.
+      for (const [issue, count] of tally.byIssue) addTo(byIssue, issue, count);
     } catch (error) {
       if (!isDenial(error)) throw error;
       // Denied: this collection contributes nothing rather than failing the card.
@@ -589,20 +605,39 @@ function countAnswer(
   };
 }
 
+/**
+ * `buckets` as a grouped answer holds them: largest first, then by value, as
+ * core's grouped read orders them, and at most `limit` of them, with
+ * `truncated` saying when some were left out.
+ */
+function rankedBuckets(
+  buckets: { value: string; count: number }[],
+  limit: number | undefined
+): { buckets: { value: string; count: number }[]; truncated: boolean } {
+  const ranked = [...buckets].sort(
+    (a, b) =>
+      b.count - a.count || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0)
+  );
+  const cap = limit ?? ranked.length;
+  return { buckets: ranked.slice(0, cap), truncated: ranked.length > cap };
+}
+
 function groupAnswer(
   query: Parameters<PluginSourceResolver>[0],
   tally: IssueTally
 ) {
   const keep = issueFilter(query.where);
-  const buckets = [...tally.byIssue]
+  const found = [...tally.byIssue]
     .filter(([issue]) => keep(issue))
     .map(([value, count]) => ({ value, count }));
-  // Under the bound, every bucket found is real and every count may be short:
-  // `atLeast` says so. No bucket is left out of what was read, so `truncated`
-  // would claim something false.
+  const { buckets, truncated } = rankedBuckets(found, query.limit);
+  // Two different claims, and an answer can make both. Under the scan's bound
+  // every bucket found is real and every count may be short: `atLeast`. Past
+  // the query's limit some buckets found are left out: `truncated`.
   return {
     op: "groupBy" as const,
     buckets,
+    ...(truncated ? { truncated: true } : {}),
     ...(tally.bounded ? { atLeast: true } : {}),
   };
 }

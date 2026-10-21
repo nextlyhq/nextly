@@ -30,6 +30,19 @@ describe("a batch's shared work", () => {
     expect([one, two]).toEqual(["a's rows", "b's rows"]);
   });
 
+  it("keeps two sources apart whatever characters their ids and keys hold", async () => {
+    // A source id and a key are both arbitrary strings, so no separator joined
+    // between them can be one neither contains.
+    const batch = createBatchScope();
+    const one = await batch
+      .forSource("plugin:a")
+      .getOrCompute("b\u0000c", async () => "the first source's");
+    const two = await batch
+      .forSource("plugin:a\u0000b")
+      .getOrCompute("c", async () => "the second source's");
+    expect([one, two]).toEqual(["the first source's", "the second source's"]);
+  });
+
   it("keeps two batches apart: nothing one computed reaches the other", async () => {
     const first = createBatchScope().forSource("system:versions");
     const second = createBatchScope().forSource("system:versions");

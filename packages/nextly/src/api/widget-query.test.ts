@@ -59,7 +59,10 @@ vi.mock("../auth/entity-read-access", async importOriginal => {
 });
 
 import { requireAuthentication } from "../auth/middleware";
-import { registerResolvedSource } from "../domains/widgets/resolved-sources";
+import {
+  clearResolvers,
+  registerResolvedSource,
+} from "../domains/widgets/resolved-sources";
 import { clearSources, registerSource } from "../domains/widgets/sources";
 import {
   clearSystemResolvers,
@@ -1285,6 +1288,64 @@ describe("a batch that asks one source several times", () => {
         grouped: true,
       })
     );
+  });
+
+  /**
+   * A batch with a collection query ahead of `queries`, whose read decision --
+   * taken once every query is prepared and before any is answered -- runs
+   * `meanwhile` first, as a source registry changing mid-batch would.
+   */
+  async function askWhileDeciding(meanwhile: () => void, queries: object[]) {
+    canReadEntity.mockImplementationOnce(async () => {
+      meanwhile();
+      return true;
+    });
+    const res = await postWidgetQuery(
+      makeReq({
+        queries: [{ source: "collection:posts", op: "count" }, ...queries],
+      })
+    );
+    return (await res.json()) as {
+      results: Array<{ ok: boolean; result?: { total: number } }>;
+    };
+  }
+
+  const answering = (total: number) =>
+    vi.fn(async (queries: unknown[]) =>
+      queries.map(() => ({ op: "count", total }))
+    );
+
+  it("answers a source replaced while the batch awaited its read decisions through the replacement", async () => {
+    const replaced = answering(1);
+    const replacement = answering(2);
+    registerManySource(replaced);
+
+    // A source id is registered once, so a replacement is the old source
+    // removed and a new one registered under its id.
+    const slots = await askWhileDeciding(() => {
+      clearSources();
+      clearResolvers();
+      registerManySource(replacement);
+    }, [count("a"), count("b")]);
+
+    expect(replaced).not.toHaveBeenCalled();
+    expect(replacement).toHaveBeenCalledTimes(1);
+    expect(slots.results.slice(1).map(slot => slot.result?.total)).toEqual([
+      2, 2,
+    ]);
+  });
+
+  it("refuses a source removed while the batch awaited its read decisions, as one query would be", async () => {
+    const removed = answering(1);
+    registerManySource(removed);
+
+    const slots = await askWhileDeciding(
+      () => clearResolvers(),
+      [count("a"), count("b")]
+    );
+
+    expect(removed).not.toHaveBeenCalled();
+    expect(slots.results.slice(1).map(slot => slot.ok)).toEqual([false, false]);
   });
 
   it("fails only the query whose answer is an Error", async () => {

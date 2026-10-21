@@ -38,11 +38,27 @@ const allChecks = checksFor(defaultSeoFields());
  * arithmetic the real service uses, and the reason a scan may not narrow its
  * page width partway through.
  */
+/**
+ * Whether the stub refuses `slug`'s page `page`, as a read rule or hook would:
+ * the whole collection, or every page from a given one on.
+ */
+function refuses(
+  options: { denied?: string[]; deniedFromPage?: Record<string, number> },
+  slug: string,
+  page: number
+): boolean {
+  if (options.denied?.includes(slug)) return true;
+  const from = options.deniedFromPage?.[slug];
+  return from !== undefined && page >= from;
+}
+
 function servicesWith(
   rows: Record<string, Record<string, unknown>[]>,
   options: {
     lifecycle?: boolean;
     denied?: string[];
+    /** Collections the caller may read until this page, and is refused from it on. */
+    deniedFromPage?: Record<string, number>;
     broken?: string[];
     /**
      * Rows an `afterRead` hook left of each page. `hasMore` is still derived
@@ -58,11 +74,11 @@ function servicesWith(
       query: { pagination?: { limit?: number; page?: number } },
       _opts: unknown
     ) => {
-      if (options.denied?.includes(slug)) throw NextlyError.forbidden();
+      const page = query.pagination?.page ?? 1;
+      if (refuses(options, slug, page)) throw NextlyError.forbidden();
       if (options.broken?.includes(slug)) throw new Error(`outage: ${slug}`);
       const all = rows[slug] ?? [];
       const limit = query.pagination?.limit ?? 200;
-      const page = query.pagination?.page ?? 1;
       const start = (page - 1) * limit;
       const fetched = all.slice(start, start + limit);
       const hasMore = start + fetched.length < all.length;
@@ -178,6 +194,22 @@ describe("counting across collections", () => {
 
     const opts = services.collections.listEntries.mock.calls[0]?.[2];
     expect(opts).toMatchObject({ as: "user", user: caller.user });
+  });
+
+  it("counts nothing from a collection refused partway through its scan", async () => {
+    // A read rule or hook can refuse a later page after earlier ones were read:
+    // the collection was denied, so none of its pages may reach the count.
+    const services = servicesWith(
+      {
+        pages: Array.from({ length: ISSUE_SCAN_PAGE_SIZE + 1 }, () => untitled),
+        posts: [untitled],
+      },
+      { deniedFromPage: { pages: 2 } }
+    );
+    expect(await countFor(services, ["pages", "posts"])).toEqual({
+      op: "count",
+      total: 1,
+    });
   });
 
   it("counts a collection the caller cannot read as zero", async () => {
@@ -768,5 +800,39 @@ describe("one scan for every question in a batch", () => {
     });
     // Every bucket the scan found is here: a floor, not buckets left out.
     expect(bounded).not.toHaveProperty("truncated");
+  });
+
+  it("returns at most the query's limit of buckets, largest first, and says when it left some out", async () => {
+    const { resolve } = seoIssuesWidgetSource(["pages"], defaultSeoFields());
+    const undescribed = { seo: { ...clean.seo, metaDescription: "" } };
+    // The smaller bucket is found first, so its place in the tally is ahead.
+    const services = servicesWith({
+      pages: [untitled, undescribed, undescribed, undescribed],
+    });
+    const grouped = (limit: number) =>
+      resolve(
+        {
+          source: SEO_ISSUES_SOURCE_ID,
+          op: "groupBy" as const,
+          groupBy: ISSUE_FIELD,
+          limit,
+        },
+        caller,
+        { services } as never,
+        undefined
+      );
+
+    expect(await grouped(1)).toEqual({
+      op: "groupBy",
+      buckets: [{ value: "Missing meta description", count: 3 }],
+      truncated: true,
+    });
+    expect(await grouped(10)).toEqual({
+      op: "groupBy",
+      buckets: [
+        { value: "Missing meta description", count: 3 },
+        { value: "Missing meta title", count: 1 },
+      ],
+    });
   });
 });

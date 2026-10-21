@@ -16,7 +16,10 @@
  */
 
 import type { BatchScope } from "../domains/widgets/batch-scope";
-import type { ExecutableSource } from "../domains/widgets/executable-source";
+import {
+  resolveExecutableSource,
+  type ExecutableSource,
+} from "../domains/widgets/executable-source";
 import { executeWidgetQuery } from "../domains/widgets/execute";
 import type { WidgetQuery } from "../domains/widgets/query";
 import type { ManySourceResolver } from "../domains/widgets/resolved-sources";
@@ -318,6 +321,47 @@ async function answerMany(
 }
 
 /**
+ * A source's many-query resolver as the live registry holds it now, or
+ * `undefined` when the source no longer answers several queries at once.
+ *
+ * 🔴 Looked up at execution, as `executeWidgetQuery` looks up a single query's
+ * source, rather than taken from the copy captured while the batch was being
+ * prepared. Between the two the batch awaits read decisions and query checks,
+ * and a source removed or replaced meanwhile must be refused, or answered by
+ * its replacement, exactly as one query to it would be. Throws, as that lookup
+ * does, when the source is gone.
+ */
+function liveResolveMany(source: string): ManySourceResolver | undefined {
+  const live = resolveExecutableSource(source);
+  return live.kind === "system" || live.kind === "plugin"
+    ? live.resolveMany
+    : undefined;
+}
+
+/**
+ * Several of one source's queries, answered by whatever answers that source
+ * now: its live many-query resolver, or each query on its own when the live
+ * source has none. A source that no longer answers at all fails every query in
+ * the group, with the reason one query to it would be given.
+ */
+async function answerGroup(
+  group: readonly ReadyQuery[],
+  caller: ReadCaller,
+  scope: BatchScope
+): Promise<QuerySlot[]> {
+  const source = group[0]?.query.source ?? "";
+  let resolveMany: ManySourceResolver | undefined;
+  try {
+    resolveMany = liveResolveMany(source);
+  } catch (error) {
+    return group.map(() => failedSlot(error));
+  }
+  return resolveMany === undefined
+    ? Promise.all(group.map(entry => answerOne(entry, caller, scope)))
+    : answerMany(group, resolveMany, caller, scope);
+}
+
+/**
  * Every ready query answered, as slots keyed by their place in the batch.
  *
  * Grouped by source; a source asked more than once is logged once, saying
@@ -349,8 +393,11 @@ export async function answerReadyQueries(
           : undefined;
       const grouped = resolveMany !== undefined && group.length > 1;
       if (group.length > 1) logAskedSeveral(source, group.length, grouped);
+      // Whether to group is read from the prepared copy, which says what the
+      // source offered when the batch began; what answers it is asked again
+      // when it runs.
       const slots = grouped
-        ? await answerMany(group, resolveMany, caller, scope)
+        ? await answerGroup(group, caller, scope)
         : await Promise.all(
             group.map(entry => answerOne(entry, caller, scope))
           );
