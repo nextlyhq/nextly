@@ -5,6 +5,7 @@
  * @module errors/from-service-envelope
  */
 
+import { isDatabaseBusy } from "../database/errors";
 import { recordFlattenedError } from "../hooks/side-effect-warnings";
 
 import {
@@ -229,8 +230,20 @@ export function errorEnvelopeFields(
   // cases is what stops this being an opt-in: a caller spreads the result and
   // is covered, instead of each failure branch remembering to attach the
   // original itself.
+  //
+  // Except a busy database, which arrives raw too: the request waited out its
+  // bound for a connection, and the caller should be told DATABASE_BUSY and
+  // when to retry, not the 500 a service gives an unexpected failure.
   if (!NextlyError.is(error)) {
-    return error instanceof Error ? withOriginalError({}, error) : {};
+    if (!isDatabaseBusy(error)) {
+      return error instanceof Error ? withOriginalError({}, error) : {};
+    }
+    // The raw error stays the busy error's cause, for the operator.
+    return errorEnvelopeFields(
+      NextlyError.databaseBusy({
+        cause: error instanceof Error ? error : undefined,
+      })
+    );
   }
   // Kept for the operator before the detail is dropped. This function IS the
   // flattening for every path that uses it, so recording here covers them all

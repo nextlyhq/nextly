@@ -29,8 +29,9 @@
 "@nextlyhq/ui": patch
 ---
 
-Every auth handler now answers a busy database as `DATABASE_BUSY` (503) with `Retry-After: 5`, as every other route does.
+Every auth handler, and every collection and Single entry read and write, now answers a busy database as `DATABASE_BUSY` (503) with `Retry-After: 5`, as every other route does.
 
 - **Setup-status, the setup pre-check and the refresh rotation** answer an unexpected failure with a 503 of their own, `SERVICE_UNAVAILABLE`. A request there that waited out `pool.connectionTimeoutMs` came back as that, with no busy code and no retry hint. It is now `DATABASE_BUSY`; any other failure keeps its `SERVICE_UNAVAILABLE`.
 - **The password-reset and invite-acceptance responses** send `Retry-After` for an error carrying a retry hint, from the same helper the other response builders use.
 - **`NextlyError.busyOr(error, otherwise)`** is the rule they share: "database busy" for a busy error, and the boundary's own error otherwise. `NextlyError.fromUnexpected` is that rule with the internal error as its fallback.
+- **Collection and Single entry reads and writes** catch what their work throws and answered anything that was not a typed error with a 500 carrying the driver's message. A request there that waited out `pool.connectionTimeoutMs` now answers `DATABASE_BUSY` with the generic message and the retry hint; any other failure keeps its 500.
