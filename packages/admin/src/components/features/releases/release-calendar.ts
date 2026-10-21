@@ -168,10 +168,13 @@ export function dayChips(day: Pick<ReleaseCalendarDay, "total" | "releases">): {
   shown: Release[];
   more: number;
 } {
+  // In the order of the times the chips show, which for a release published
+  // late is not the order the server sends them in.
+  const ordered = [...day.releases].sort(compareByPlacement);
   if (day.total <= CALENDAR_CHIP_LIMIT) {
-    return { shown: day.releases.slice(0, CALENDAR_CHIP_LIMIT), more: 0 };
+    return { shown: ordered.slice(0, CALENDAR_CHIP_LIMIT), more: 0 };
   }
-  const shown = day.releases.slice(0, CALENDAR_CHIP_LIMIT - 1);
+  const shown = ordered.slice(0, CALENDAR_CHIP_LIMIT - 1);
   return { shown, more: day.total - shown.length };
 }
 
@@ -193,16 +196,44 @@ export function releaseCalendarInstant(
 }
 
 /**
- * Where a release stands, in the list's words.
+ * Releases in the order of the instants they are drawn at, from
+ * {@link releaseCalendarInstant}: the one rule that places a release, times
+ * it and orders it, so a day never reads 11:00 before 10:00. A release with
+ * no instant goes last; equal instants keep the order they came in.
+ */
+export function compareByPlacement(
+  a: Pick<Release, "state" | "scheduledAt" | "publishedAt">,
+  b: Pick<Release, "state" | "scheduledAt" | "publishedAt">
+): number {
+  const at = (release: typeof a) => {
+    const instant = releaseCalendarInstant(release);
+    const ms = instant ? Date.parse(instant) : Number.NaN;
+    return Number.isNaN(ms) ? Number.POSITIVE_INFINITY : ms;
+  };
+  const diff = at(a) - at(b);
+  return Number.isNaN(diff) ? 0 : diff;
+}
+
+/**
+ * Where a release stands, in the list's words, or `null` when that is not
+ * known yet.
  *
  * Overdue is the server's answer, not a clock here: `overdue` holds the ids
  * the server's own Needs attention read calls overdue, so the calendar and
- * the list cannot disagree about a release near the cutoff.
+ * the list cannot disagree about a release near the cutoff. While that answer
+ * is on its way, or after it failed, `overdue` is `null` and a scheduled
+ * release has no state to claim: "Scheduled" would be wrong for every one
+ * the server calls overdue. Every other state is said regardless.
  */
 export function releaseCalendarStatus(
   release: Pick<Release, "id" | "state">,
-  overdue: ReadonlySet<string>
-): ReleaseRowStatus {
+  overdue: ReadonlySet<string> | null
+): ReleaseRowStatus | null {
+  if (overdue === null) {
+    return release.state === "scheduled"
+      ? null
+      : releaseRowStatus(release, "upcoming");
+  }
   return releaseRowStatus(
     release,
     overdue.has(release.id) ? "attention" : "upcoming"

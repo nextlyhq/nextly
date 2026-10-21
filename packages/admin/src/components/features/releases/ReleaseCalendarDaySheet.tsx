@@ -15,7 +15,7 @@
  *
  * @module components/features/releases/ReleaseCalendarDaySheet
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { CalendarClock, Globe, X } from "@admin/components/icons";
 import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -36,6 +36,7 @@ import { useReleaseListPage } from "@admin/hooks/queries/useReleases";
 import type { Release } from "@admin/types/releases";
 
 import {
+  compareByPlacement,
   longDayLabel,
   releaseCalendarInstant,
   releaseCalendarStatus,
@@ -67,8 +68,8 @@ export function ReleaseCalendarDaySheet({
   day: DayKey | null;
   zone: string;
   isToday: boolean;
-  /** The ids the server calls overdue. */
-  overdue: ReadonlySet<string>;
+  /** The ids the server calls overdue, or `null` while not known. */
+  overdue: ReadonlySet<string> | null;
   now: number;
   onClose: () => void;
   /**
@@ -115,7 +116,7 @@ function DayList({
   day: DayKey;
   zone: string;
   isToday: boolean;
-  overdue: ReadonlySet<string>;
+  overdue: ReadonlySet<string> | null;
   now: number;
 }) {
   const [page, setPage] = useState(0);
@@ -125,7 +126,14 @@ function DayList({
     limit: DAY_PAGE_SIZE,
   });
   const total = list.data?.meta.total;
-  const rows = list.data?.items ?? [];
+  // In the order of the times shown, as the grid draws them: the server
+  // sends a page by scheduled time, and a release published late is shown at
+  // the time it went out.
+  const items = list.data?.items;
+  const rows = useMemo(
+    () => [...(items ?? [])].sort(compareByPlacement),
+    [items]
+  );
   // A day shrinks under the reader: publishing or moving the only release on
   // the last page leaves that page empty, with no pager to leave it by.
   useClampedPage(
@@ -225,7 +233,7 @@ function DayListBody({
   list: ReturnType<typeof useReleaseListPage>;
   rows: Release[];
   zone: string;
-  overdue: ReadonlySet<string>;
+  overdue: ReadonlySet<string> | null;
   now: number;
   onOpen: (dialog: OpenDialog) => void;
 }) {
@@ -282,11 +290,13 @@ function DayListRow({
 }: {
   release: Release;
   zone: string;
-  overdue: ReadonlySet<string>;
+  overdue: ReadonlySet<string> | null;
   now: number;
   onOpen: (dialog: OpenDialog) => void;
 }) {
   const instant = releaseCalendarInstant(release);
+  // `null` while overdue is not known: the row then claims no state.
+  const status = releaseCalendarStatus(release, overdue);
   // The scheduled zone belongs to a scheduled instant only: a published
   // release is shown at the moment it went out, which was scheduled nowhere.
   const scheduled =
@@ -310,7 +320,7 @@ function DayListRow({
           {release.title}
         </Link>
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-          <ReleaseStatusMark status={releaseCalendarStatus(release, overdue)} />
+          {status ? <ReleaseStatusMark status={status} /> : null}
           {scheduled ? (
             <span className="flex items-center gap-1 text-muted-foreground">
               <Globe className="size-3 shrink-0" aria-hidden />

@@ -130,7 +130,7 @@ describe("the calendar screen", () => {
     expect(screen.getByRole("button", { name: "Today" })).toBeTruthy();
   });
 
-  it("draws a busy day's chips with time, title and state, and '+N more' from the day's total", () => {
+  it("draws a busy day's chips with time, title and state, and '+N more' from the day's total", async () => {
     render(<ReleaseCalendar />);
     const cell = dayButton("2026-10-23").closest("td") as HTMLElement;
     const chips = within(cell).getAllByRole("link");
@@ -138,7 +138,8 @@ describe("the calendar screen", () => {
     expect(chips).toHaveLength(2);
     expect(chips[0]?.textContent).toContain("Launch a");
     expect(chips[0]?.textContent).toMatch(/\d{1,2}:00/);
-    expect(chips[0]?.textContent).toContain("Scheduled");
+    // Scheduled once the overdue answer is in, and not before.
+    await waitFor(() => expect(chips[0]?.textContent).toContain("Scheduled"));
     expect(chips[1]?.textContent).toContain("Stopped");
     expect(
       within(cell).getByRole("button", { name: /^\+5 more/ })
@@ -212,6 +213,82 @@ describe("the calendar screen", () => {
         page: 2,
       })
     );
+  });
+
+  it("claims no Scheduled state while the overdue answer is on its way", async () => {
+    fetchReleasesMock.mockImplementation((params: { tab?: string }) =>
+      params.tab === "attention"
+        ? new Promise(() => undefined)
+        : Promise.resolve({ items: [], meta: { total: 0, hasNext: false } })
+    );
+    render(<ReleaseCalendar />);
+    const cell = dayButton("2026-10-23").closest("td") as HTMLElement;
+    await waitFor(() => expect(fetchReleasesMock).toHaveBeenCalled());
+    const chips = within(cell).getAllByRole("link");
+    // The time is known; whether it is overdue is not.
+    expect(chips[0]?.textContent).toMatch(/\d{1,2}:00/);
+    expect(chips[0]?.textContent).not.toContain("Scheduled");
+    // A state that does not hang on overdue is still said.
+    expect(chips[1]?.textContent).toContain("Stopped");
+  });
+
+  it("says the overdue answer failed, with a retry, and claims no Scheduled state", async () => {
+    fetchReleasesMock.mockImplementation((params: { tab?: string }) =>
+      params.tab === "attention"
+        ? Promise.reject(new Error("refused"))
+        : Promise.resolve({ items: [], meta: { total: 0, hasNext: false } })
+    );
+    render(<ReleaseCalendar />);
+    expect(
+      await screen.findByText("Overdue releases could not be checked")
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+    const cell = dayButton("2026-10-23").closest("td") as HTMLElement;
+    for (const chip of within(cell).getAllByRole("link")) {
+      expect(chip.textContent).not.toContain("Scheduled");
+    }
+  });
+
+  it("draws a day's releases in the order of the times it shows", () => {
+    // Sent by scheduled time: 09:00 (published at 11:00), then 10:00
+    // (published on time). Drawn at 11:00 and 10:00, so 10:00 comes first.
+    calendarMock.mockReturnValue(
+      calendarAnswer([
+        {
+          date: "2026-10-23",
+          total: 2,
+          counts: {
+            draft: 0,
+            scheduled: 0,
+            published: 2,
+            cancelled: 0,
+            blocked: 0,
+          },
+          releases: [
+            release("late", {
+              state: "published",
+              scheduledAt: "2026-10-23T09:00:00.000Z",
+              publishedAt: "2026-10-23T11:00:00.000Z",
+            }),
+            release("on-time", {
+              state: "published",
+              scheduledAt: "2026-10-23T10:00:00.000Z",
+              publishedAt: "2026-10-23T10:00:00.000Z",
+            }),
+          ],
+        },
+      ])
+    );
+    render(<ReleaseCalendar />);
+    const cell = dayButton("2026-10-23").closest("td") as HTMLElement;
+    expect(
+      within(cell)
+        .getAllByRole("link")
+        .map(chip => chip.textContent)
+    ).toEqual([
+      expect.stringContaining("Launch on-time"),
+      expect.stringContaining("Launch late"),
+    ]);
   });
 
   it("says where drafts are, since a draft has no day to be drawn on", () => {

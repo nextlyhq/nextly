@@ -108,6 +108,9 @@ function monthLabel(month: string): string {
   });
 }
 
+/** No release is overdue. */
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
 /**
  * The ids of the releases the server calls overdue, among those the grid
  * can show.
@@ -134,7 +137,16 @@ function useOverdueIds(days: { from: DayKey; to: DayKey }, now: number) {
     after < now
   );
   const ids = read.data;
-  return useMemo(() => new Set(ids ?? []), [ids]);
+  const known = useMemo(() => (ids ? new Set(ids) : null), [ids]);
+  // Not asked at all for a grid wholly in the future: nothing there can be
+  // overdue, which is a known answer, not a missing one.
+  const asked = after < now;
+  return {
+    /** The overdue ids, or `null` while the answer is on its way or failed. */
+    ids: asked ? known : EMPTY_IDS,
+    failed: asked && read.isError,
+    retry: () => void read.refetch(),
+  };
 }
 
 /**
@@ -238,6 +250,37 @@ function CalendarToolbar({
   );
 }
 
+/**
+ * What could not be read, each said as a failure with a retry, never as an
+ * empty month or as releases that are on time.
+ */
+function CalendarReadFailures({
+  calendar,
+  overdue,
+}: {
+  calendar: { failed: boolean; retry: () => void };
+  overdue: { failed: boolean; retry: () => void };
+}) {
+  return (
+    <>
+      {calendar.failed ? (
+        <SectionErrorFallback
+          title="This month's releases could not be loaded"
+          description="This is a failed request, not an empty month. Try again in a moment."
+          reset={calendar.retry}
+        />
+      ) : null}
+      {overdue.failed ? (
+        <SectionErrorFallback
+          title="Overdue releases could not be checked"
+          description="Scheduled releases show their time but not whether they are overdue until this loads. Try again in a moment."
+          reset={overdue.retry}
+        />
+      ) : null}
+    </>
+  );
+}
+
 export function ReleaseCalendar() {
   const reader = useMemo(() => readerZone(), []);
   const [zone, setZone] = useState(reader);
@@ -260,7 +303,8 @@ export function ReleaseCalendar() {
 
   const gridDays = useMemo(() => calendarWindow(month), [month]);
   const calendar = useReleaseCalendar({ ...gridDays, timezone: zone });
-  const overdue = useOverdueIds(gridDays, now);
+  const overdueRead = useOverdueIds(gridDays, now);
+  const overdue = overdueRead.ids;
 
   /** Show `day`'s month, focused on `day`. */
   const goTo = (day: DayKey) =>
@@ -303,13 +347,13 @@ export function ReleaseCalendar() {
         />
       </CalendarToolbar>
 
-      {calendar.isError ? (
-        <SectionErrorFallback
-          title="This month's releases could not be loaded"
-          description="This is a failed request, not an empty month. Try again in a moment."
-          reset={() => void calendar.refetch()}
-        />
-      ) : null}
+      <CalendarReadFailures
+        calendar={{
+          failed: calendar.isError,
+          retry: () => void calendar.refetch(),
+        }}
+        overdue={{ failed: overdueRead.failed, retry: overdueRead.retry }}
+      />
 
       {/* With no answer to draw, no grid: every day would otherwise say "no
           releases" about a month that was never read, under an error saying
@@ -376,7 +420,8 @@ function MonthGrid({
   today: DayKey;
   focused: DayKey;
   byDate: Map<string, ReleaseCalendarDay>;
-  overdue: ReadonlySet<string>;
+  /** The ids the server calls overdue, or `null` while not known. */
+  overdue: ReadonlySet<string> | null;
   zone: string;
   isPending: boolean;
   labelledBy: string;
@@ -479,7 +524,8 @@ interface DayCellProps {
   isToday: boolean;
   isFocused: boolean;
   data: ReleaseCalendarDay | undefined;
-  overdue: ReadonlySet<string>;
+  /** The ids the server calls overdue, or `null` while not known. */
+  overdue: ReadonlySet<string> | null;
   zone: string;
   isPending: boolean;
   onKeyDown: (event: React.KeyboardEvent) => void;
@@ -642,7 +688,8 @@ function ReleaseChip({
   tabIndex,
 }: {
   release: Release;
-  status: ReleaseRowStatus;
+  /** `null` while the release's state is not known. */
+  status: ReleaseRowStatus | null;
   zone: string;
   tabIndex: number;
 }) {
@@ -657,7 +704,7 @@ function ReleaseChip({
         aria-hidden
         className={cn(
           "absolute inset-y-0 left-0 w-1",
-          RELEASE_STATUS_TONE[status].bar
+          status ? RELEASE_STATUS_TONE[status].bar : "bg-border"
         )}
       />
       <span
@@ -670,10 +717,17 @@ function ReleaseChip({
       </span>{" "}
       {/* The spaces between the parts are for the link's name: without them
           a screen reader reads the title, time and state as one word. */}
-      <ReleaseStatusMark status={status} className="text-[11px] leading-4">
-        {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}{" "}
-        <span aria-hidden>·</span>
-      </ReleaseStatusMark>
+      {status ? (
+        <ReleaseStatusMark status={status} className="text-[11px] leading-4">
+          {time ? <span className="shrink-0 tabular-nums">{time}</span> : null}{" "}
+          <span aria-hidden>·</span>
+        </ReleaseStatusMark>
+      ) : (
+        // The time alone while the state is not known: nothing is claimed.
+        <span className="text-[11px] leading-4 tabular-nums text-muted-foreground">
+          {time}
+        </span>
+      )}
     </Link>
   );
 }

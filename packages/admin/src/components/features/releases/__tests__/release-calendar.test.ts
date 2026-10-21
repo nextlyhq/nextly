@@ -20,6 +20,7 @@ import {
   CALENDAR_CHIP_LIMIT,
   calendarDayLabel,
   calendarWindow,
+  compareByPlacement,
   dayChips,
   monthGrid,
   monthOf,
@@ -188,6 +189,36 @@ describe("the chips a day draws", () => {
   });
 });
 
+describe("the order a day's releases are drawn in", () => {
+  // The server sends a day's releases by scheduled time. A release scheduled
+  // for 09:00 and published at 11:00 is drawn at 11:00, so by scheduled time
+  // it would come before one that went out on time at 10:00.
+  const late = release("late", {
+    state: "published",
+    scheduledAt: "2026-10-21T09:00:00.000Z",
+    publishedAt: "2026-10-21T11:00:00.000Z",
+  });
+  const onTime = release("on-time", {
+    state: "published",
+    scheduledAt: "2026-10-21T10:00:00.000Z",
+    publishedAt: "2026-10-21T10:00:00.000Z",
+  });
+
+  it("orders by the time each release is drawn at", () => {
+    expect([late, onTime].sort(compareByPlacement).map(r => r.id)).toEqual([
+      "on-time",
+      "late",
+    ]);
+  });
+
+  it("draws a day's chips in that order", () => {
+    expect(dayChips(day(2, [late, onTime])).shown.map(r => r.id)).toEqual([
+      "on-time",
+      "late",
+    ]);
+  });
+});
+
 describe("what each release on the calendar says", () => {
   it("is drawn at the moment a published release went out, not the one it was scheduled for", () => {
     // The server puts a late-published release on its publish day, so its
@@ -203,6 +234,19 @@ describe("what each release on the calendar says", () => {
     expect(releaseCalendarInstant(release("due"))).toBe(
       "2026-10-21T09:00:00.000Z"
     );
+  });
+
+  it("claims no state for a scheduled release while overdue is not known", () => {
+    // Pending or failed: "Scheduled" would be a guess, and wrong for every
+    // release the server calls overdue.
+    expect(releaseCalendarStatus(release("due"), null)).toBeNull();
+    // The control: a state that does not depend on overdue is still said.
+    expect(
+      releaseCalendarStatus(release("x", { state: "blocked" }), null)
+    ).toBe("stopped");
+    expect(
+      releaseCalendarStatus(release("x", { state: "published" }), null)
+    ).toBe("published");
   });
 
   it("takes its state word from the list's vocabulary, overdue from the server's own answer", () => {

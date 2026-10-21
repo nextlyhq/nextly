@@ -73,6 +73,35 @@ beforeEach(() => {
 });
 
 describe("the day's list", () => {
+  it("lists a page's releases in the order of the times it shows", () => {
+    // The page arrives by scheduled time; the 09:00 release went out at
+    // 11:00 and is shown at 11:00, after the one that went out at 10:00.
+    held = [
+      {
+        ...release(1),
+        id: "late",
+        title: "Went out late",
+        state: "published",
+        scheduledAt: "2026-10-23T09:00:00.000Z",
+        publishedAt: "2026-10-23T11:00:00.000Z",
+      },
+      {
+        ...release(2),
+        id: "on-time",
+        title: "Went out on time",
+        state: "published",
+        scheduledAt: "2026-10-23T10:00:00.000Z",
+        publishedAt: "2026-10-23T10:00:00.000Z",
+      },
+    ];
+    renderSheet();
+    const titles = screen
+      .getAllByRole("link")
+      .map(link => link.textContent)
+      .filter(text => text?.startsWith("Went out"));
+    expect(titles).toEqual(["Went out on time", "Went out late"]);
+  });
+
   it("moves back to the last page when the page it is on empties", async () => {
     const view = renderSheet();
     fireEvent.click(screen.getByRole("button", { name: "Go to next page" }));
