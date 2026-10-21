@@ -17,6 +17,12 @@ import { MAX_QUERIES_PER_REQUEST, type WidgetQuery } from "nextly/config";
 vi.mock("@admin/lib/api/protectedApi", () => ({
   protectedApi: { post: vi.fn() },
 }));
+// The batch answered as the `protectedApi.post` mock above describes it; see `batch-over-post`.
+vi.mock("@admin/hooks/queries/widget-query-stream", async () =>
+  (
+    await import("@admin/hooks/queries/__tests__/batch-over-post")
+  ).streamOverPost()
+);
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
@@ -1175,9 +1181,11 @@ describe("useWidgetQueries, a malformed timeline point", () => {
 
 describe("the tier an answer was fetched at", () => {
   it("travels with the cached answer, to a card that returns while it is still in flight", async () => {
-    // A card asked at small leaves before its answer lands, and comes back wider: the new
-    // render takes over the request already in flight. The answer it receives is the small one,
-    // so it must know that, or it never asks for the rows it is missing.
+    // A card asked at small is drawn again wider before its answer lands -- a remount while the
+    // first render still holds the request -- and the first then leaves: the new render takes
+    // over the request already in flight. The answer it receives is the small one, so it must
+    // know that, or it never asks for the rows it is missing. (Once every render has left, the
+    // request is cancelled through its signal, and a card that comes back asks anew.)
     const client = new QueryClient({
       defaultOptions: { queries: { retryDelay: 0, gcTime: 60_000 } },
     });
@@ -1205,11 +1213,11 @@ describe("the tier an answer was fetched at", () => {
       wrapper: shared,
     });
     await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
-    left.unmount();
-
     const back = renderHook(() => useWidgetQueries(asked("medium")), {
       wrapper: shared,
     });
+    left.unmount();
+
     answer({ results: [{ ok: true, result: { op: "list", items: [] } }] });
     await waitFor(() => expect(back.result.current.slots.p1).toBeDefined());
     expect(back.result.current.fetchedTierFor("p1")).toBe("small");

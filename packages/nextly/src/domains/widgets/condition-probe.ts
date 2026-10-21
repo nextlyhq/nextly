@@ -41,6 +41,7 @@ import {
   readableSingleSlugs,
   readerHasContent,
   readerMayCreateEntry,
+  type ContentAnswer,
 } from "./reader-content";
 
 /** What every condition evaluator is handed. */
@@ -51,8 +52,12 @@ export interface ConditionProbe {
   readableSlugs(): Promise<string[]>;
   /** The singles this reader may read, resolved at most once. */
   readableSingles(): Promise<string[]>;
-  /** Whether this reader can see any row at all, resolved at most once. */
-  hasContent(): Promise<boolean>;
+  /**
+   * Whether this reader can see any row at all, resolved at most once:
+   * `"unknown"` when the check ran out of time, which every reader of it treats
+   * as not empty.
+   */
+  hasContent(): Promise<ContentAnswer>;
   /**
    * Whether this reader could write a first entry, resolved at most once.
    *
@@ -77,7 +82,7 @@ export interface ConditionProbe {
 export function conditionProbe(caller: ReadCaller): ConditionProbe {
   let slugs: Promise<string[]> | undefined;
   let singles: Promise<string[]> | undefined;
-  let content: Promise<boolean> | undefined;
+  let content: Promise<ContentAnswer> | undefined;
   let createEntry: Promise<boolean> | undefined;
   let createCollection: Promise<boolean> | undefined;
 
