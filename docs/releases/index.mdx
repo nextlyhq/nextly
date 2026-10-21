@@ -77,10 +77,123 @@ const release = await nextly.releases.create({
 The database holds a single-document release to one document, so the rule holds even when two
 requests add documents to it at once. Adding a second document is refused with a conflict that says to
 put several documents in an ordinary release instead. A single-document release can't be
-scheduled before its document is added. Once it's scheduled, its document can't be taken out:
-cancel the release instead. Releases made before kinds existed read as
+scheduled before its document is added. Releases made before kinds existed read as
 `release`; `nextly migrate` adds the column without rewriting them. The `kind` option is
 experimental.
+
+Taking the document out of a single-document release that has not run (a draft, a scheduled
+or a stopped one) cancels the release, since without its document there is nothing to run.
+It is the cancel itself, so it needs what cancelling needs, the permission to publish
+releases, as well as the permission to create them that removing a document needs; someone
+without it is refused and nothing changes. The release is kept as cancelled, still holding its
+document as the record of what it was for, and is never deleted by this: deleting it is a
+separate act, with its own permission. Out of a single-document release that ran (published
+or cancelled), the document can't be taken at all. This is experimental.
+
+## Adding several documents, and scheduling a document, in one step
+
+<Callout type="info">
+  Both are **experimental**: their names and answers may change before releases
+  are finished.
+</Callout>
+
+Each of these does several things, and does all of them or none. It is one database
+transaction: if any part is refused, or any write fails, the last one included, nothing is
+left behind. No release, no document in it, and no change to a release that was already
+there.
+
+### Adding several documents at once
+
+|            |                                                                           |
+| ---------- | ------------------------------------------------------------------------- |
+| REST       | `POST /api/releases/:id/members/batch` with `{ "members": [ … ] }`        |
+| Direct API | `nextly.releases.addMembers({ releaseId, members })`                      |
+| Permission | Creating releases, plus publishing releases when the release is scheduled |
+
+Each member names a document and its action, `publish` to go live or `unpublish` to come
+down, as a single add does:
+
+```ts
+const { release, members } = await nextly.releases.addMembers({
+  releaseId,
+  members: [
+    {
+      scopeKind: "collection",
+      scopeSlug: "posts",
+      entryId: postId,
+      locale: null,
+      action: "publish",
+    },
+    {
+      scopeKind: "collection",
+      scopeSlug: "authors",
+      entryId: authorId,
+      locale: null,
+      action: "publish",
+    },
+  ],
+  userId,
+});
+```
+
+Every document is checked as adding it alone checks it: you may act on it, it is there for
+you, its collection or Single has drafts, and, when the release is already scheduled, it has
+no hard problem (see [Checks before the moment](#checks-before-the-moment)). The release must
+not have run, a single-document release takes only its one document, and the documents must
+fit: a release holds at most 200, and a selection that would take it past that is refused
+whole, saying how many fit. A document named twice is refused too. The first refusal refuses
+them all. A hard problem is named in the refusal's `data.problems`, with the document it is
+about in `document`, since it has no member id yet.
+
+The answer is the release as the step left it and the new members, in the order given, each
+with `unpublishedLinks` as a single add gives it. The members are judged together, so a linked
+document that goes live in the same step is not reported as one that won't be live. This is
+also how the linked documents an add offers are added.
+
+### Scheduling a document
+
+|            |                                                                       |
+| ---------- | --------------------------------------------------------------------- |
+| REST       | `POST /api/releases/schedule-document`                                |
+| Direct API | `nextly.releases.scheduleDocument({ into, document, linked?, … })`    |
+| Permission | Creating releases, plus publishing releases to schedule it on its own |
+
+A document goes out in one of three ways, chosen by `into`:
+
+- `"own"`: on its own, at `at` in `timezone`, in a release named `title`. This is a
+  single-document release, scheduled. If linked documents go with it (`linked`), it is an
+  ordinary release holding all of them, since a single-document release holds one. Like
+  scheduling, it is refused while any of the documents has a hard problem.
+- `"existing"`: with `releaseId`, an ordinary release that is a draft or scheduled. The
+  documents are added to it as adding several adds them, and go out at that release's time.
+  A single-document release, or a stopped, published or cancelled one, is refused.
+- `"new"`: in a new release named `title`, with an optional `description`. It is a draft
+  holding the documents, and its time is set on it afterwards.
+
+```ts
+await nextly.releases.scheduleDocument({
+  into: "own",
+  document: {
+    scopeKind: "collection",
+    scopeSlug: "posts",
+    entryId: postId,
+    locale: null,
+    action: "publish",
+  },
+  linked: [
+    { scopeKind: "collection", scopeSlug: "authors", entryId: authorId },
+  ],
+  title: "Hello world",
+  at: new Date("2026-11-02T09:00:00Z"),
+  timezone: "Europe/Berlin",
+  userId,
+});
+```
+
+Linked documents always go live with the document, so they name no action, and they are
+refused with a document coming down. Over REST, `at` is an ISO 8601 instant with an offset
+and `timezone` an IANA zone, as for scheduling a release. The answer is the release and its
+new members, as for adding several.
 
 ## Publish now
 
@@ -778,8 +891,9 @@ member.
 
 `links` holds the documents you may read. `hiddenCount` counts links to or from documents you
 may not read, `inHiddenFields` those in fields you may not view, and `deletedLinks` names each
-field linking to deleted documents. All are empty for a document added to come down. Adding the
-linked documents is an ordinary add of each, going live.
+field linking to deleted documents. All are empty for a document added to come down. The
+linked documents are added going live, all in one step with
+[adding several documents at once](#adding-several-documents-at-once).
 
 ### What is not checked yet
 
