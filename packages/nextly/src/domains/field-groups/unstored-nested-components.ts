@@ -95,11 +95,15 @@ function componentCarries(
   resolve: ComponentFieldResolver | undefined
 ): boolean {
   if (value === null || value === undefined) return false;
+  // Each row of a list is added by hand, so a row is a value even while it holds only defaults;
+  // only a list equal to the field's declared default was seeded rather than added.
   if (Array.isArray(value)) {
-    return value.some(row => componentCarries(row, field, resolve));
+    return value.length > 0 && !isDeclaredDefault(value, field);
   }
   // Not an instance at all: nothing could store it, so it is not passed over as empty.
   if (!isPlainObject(value)) return true;
+  // A row that names its component was given that type by someone choosing it.
+  if (readFieldGroupType(value) !== undefined) return true;
   return entriesCarry(value, componentSchema(field, value, resolve), resolve);
 }
 
@@ -120,11 +124,17 @@ function entriesCarry(
   );
 }
 
-/** Unset the way an untouched form input is: nothing, an empty string, or an unticked checkbox. */
-function isUnset(value: unknown): boolean {
-  return (
-    value === null || value === undefined || value === "" || value === false
-  );
+/**
+ * What a form holds for a field nobody touched: its declared default, or, when it declares none,
+ * nothing, an empty string or an unticked checkbox. So `false` is a choice where the default is
+ * `true`, and an emptied input is one where the default is a value.
+ */
+function isSeeded(value: unknown, field: Field | undefined): boolean {
+  if (value === null || value === undefined) return true;
+  if (field?.defaultValue !== undefined) {
+    return isDeepStrictEqual(value, field.defaultValue);
+  }
+  return value === "" || value === false;
 }
 
 /** The value its field declares as its default, which a form seeds without anyone choosing it. */
@@ -136,16 +146,15 @@ function isDeclaredDefault(value: unknown, field: Field | undefined): boolean {
 }
 
 /**
- * Whether one value carries anything: not empty, not `false` (an unticked checkbox), and not its
- * field's declared default. A group's or repeater row's object is judged by its own fields, and a
- * component's by its component's.
+ * Whether one value carries anything: anything but what a form seeds for its field. A group's or
+ * repeater row's object is judged by its own fields, and a component's by its component's.
  */
 function valueCarries(
   value: unknown,
   field: Field | undefined,
   resolve: ComponentFieldResolver | undefined
 ): boolean {
-  if (isUnset(value) || isDeclaredDefault(value, field)) return false;
+  if (isSeeded(value, field)) return false;
   if (field && isFieldGroupFieldType(field.type)) {
     return componentCarries(value, field, resolve);
   }

@@ -10,9 +10,10 @@
  * that carries nothing beyond the inner component's defaults, which is what the admin's form seeds
  * for a component nobody touched, is not a value anyone would lose, and passes.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  checkbox,
   defineCollection,
   defineFieldGroup,
   defineSingle,
@@ -27,6 +28,8 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { FieldGroupRegistryService } from "../services/field-group-registry-service";
+import { writeFieldGroupType } from "../storage/field-group-type-key";
 
 let current: TestNextly | undefined;
 
@@ -67,6 +70,15 @@ const badge = () =>
         validate: (value: unknown) =>
           value !== "forbidden" || "code cannot be forbidden",
       }),
+      // Judged against the component's own values: `data` is this badge, as its own write gives it.
+      text({
+        name: "motto",
+        validate: (value: unknown, { data }) =>
+          value === undefined ||
+          value !== data.label ||
+          "motto cannot repeat the label",
+      }),
+      checkbox({ name: "flag", defaultValue: true }),
     ],
   });
 
@@ -77,6 +89,8 @@ const card = () =>
     fields: [
       text({ name: "title" }),
       fieldGroup({ name: "badge", component: "badge" }),
+      fieldGroup({ name: "badges", component: "badge", repeatable: true }),
+      fieldGroup({ name: "slot", components: ["badge"] }),
       group({
         name: "meta",
         fields: [fieldGroup({ name: "badge", component: "badge" })],
@@ -106,6 +120,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           text({ name: "name" }),
           fieldGroup({ name: "card", component: "card" }),
           fieldGroup({ name: "plaque", component: "plaque" }),
+          fieldGroup({ name: "cards", component: "card", repeatable: true }),
         ],
       }),
     ],
@@ -235,12 +250,94 @@ describe.each(getConfiguredTestDialects())(
             name: "S",
             card: {
               title: "T",
-              badge: { label: "", tone: "plain", code: null },
+              badge: { label: "", tone: "plain", code: null, flag: true },
+              badges: [],
             },
           } as never,
         })
       );
       expect(seeded).toEqual({ ok: true, issues: [] });
+    });
+
+    it("judges a held component's validators against that component's own values", async () => {
+      const t = await boot(dialect);
+      const refused = await outcomeOf(() =>
+        t.nextly.create({
+          collection: "pages" as never,
+          data: {
+            name: "P",
+            card: { meta: { badge: { label: "same", motto: "same" } } },
+          } as never,
+        })
+      );
+      expect(refused.ok).toBe(false);
+      expect(refused.issues).toContainEqual(
+        expect.objectContaining({
+          path: "meta.badge.motto",
+          message: "motto cannot repeat the label.",
+        })
+      );
+    });
+
+    it("refuses a row added to a directly placed list, and a default it turned off", async () => {
+      const t = await boot(dialect);
+      // A row the editor added, still holding only its defaults: it was added, so it is a value.
+      const added = await outcomeOf(() =>
+        t.nextly.create({
+          collection: "pages" as never,
+          data: {
+            name: "A",
+            card: { badges: [{ label: "", tone: "plain", flag: true }] },
+          } as never,
+        })
+      );
+      expect(added.issues).toContainEqual({ path: "badges", ...NOT_STORED });
+
+      // `false` is a choice when the checkbox defaults to `true`.
+      const unticked = await outcomeOf(() =>
+        t.nextly.create({
+          collection: "pages" as never,
+          data: { name: "U", card: { badge: { flag: false } } } as never,
+        })
+      );
+      expect(unticked.issues).toContainEqual({ path: "badge", ...NOT_STORED });
+
+      // A zone row names the component someone chose for it, which is a choice too.
+      const chosen: Record<string, unknown> = { label: "" };
+      writeFieldGroupType(chosen, "badge");
+      const zone = await outcomeOf(() =>
+        t.nextly.create({
+          collection: "pages" as never,
+          data: { name: "Z", card: { slot: chosen } } as never,
+        })
+      );
+      expect(zone.issues).toContainEqual({ path: "slot", ...NOT_STORED });
+    });
+
+    it("reads a held component's schema once per write, however many rows hold it", async () => {
+      const t = await boot(dialect);
+      const lookup = vi.spyOn(
+        FieldGroupRegistryService.prototype,
+        "getComponentBySlug"
+      );
+      const badgeReads = async (rows: number) => {
+        lookup.mockClear();
+        await t.nextly.create({
+          collection: "pages" as never,
+          data: {
+            name: "R",
+            cards: Array.from({ length: rows }, () => ({
+              meta: { badge: { label: "L" } },
+            })),
+          } as never,
+        });
+        return lookup.mock.calls.filter(([slug]) => slug === "badge").length;
+      };
+
+      const one = await badgeReads(1);
+      expect(one).toBeGreaterThan(0);
+      expect(await badgeReads(4)).toBe(one);
+      lookup.mockRestore();
     });
   }
 );

@@ -29,6 +29,5 @@
 "nextly": patch
 ---
 
-A component held inside a group or repeater, whether an entry's or another component's, is now validated against its own fields on every write, its own `validate` included; until now nothing judged it, so existing content that fails it is refused on its next save or publish.
-A component placed directly in another component's fields has never been stored, and since alpha.67 a value for it was dropped without a word. A write that carries one is now refused (`NOT_STORED`), `defineConfig` warns about each such field, and the Schema Builder no longer offers one there and names any an existing field group holds. Put it in a group or repeater instead.
+A component held inside a group or repeater, or inside a component held in one, is now validated against its own fields on every write, its own `validate` included; until now nothing judged it, so existing content that fails it is refused on its next save or publish. A component nested inside a top-level component, directly or through a group or repeater in it, is not validated yet.
 A held Single's first draft records the type of every component it holds, including those it didn't change, so a restore after a retarget stays correct.
