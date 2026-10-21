@@ -173,7 +173,7 @@ describe("a grouped count drawn by bars", () => {
     // Scoped to the drawn graphic: a chart also carries a hidden title, so the first hidden node
     // on the page is not the count's. Sight reads "2,000+", a screen reader "2,000 or more", from
     // one formatter.
-    const graphic = screen.getByRole("img");
+    const graphic = screen.getByRole("group", { name: /Use the arrow keys/ });
     expect(
       [...graphic.querySelectorAll('[aria-hidden="true"]')].map(
         node => node.textContent
