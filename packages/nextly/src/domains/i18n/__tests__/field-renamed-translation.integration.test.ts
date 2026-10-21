@@ -374,9 +374,139 @@ describeEachDialect("a translated field that is renamed", dialect => {
     },
   ];
 
+  /**
+   * Saves that take a translated field away and add another without a rename the rule can pick,
+   * so none is offered: read by name alone, each drops the old companion column and every
+   * language's value with it, and nothing in the change asked the admin about that column.
+   */
+  const NO_RENAME_PICKED = [
+    {
+      shape: "two translated fields renamed",
+      fields: [
+        { name: "title2", type: "text" },
+        { name: "count2", type: "number" },
+      ],
+    },
+    { shape: "a translated field renamed beside a new one", fields: TWO_ADDED },
+    {
+      shape: "a translated field renamed to another type",
+      fields: [
+        { name: "title2", type: "number" },
+        { name: "views", type: "number" },
+      ],
+    },
+  ];
+
+  /** Every path that saves a translated entity's fields, given no rename answer. */
+  const UNANSWERED_SAVES = [
+    {
+      path: "the builder saves the collection",
+      table: "dc_posts",
+      seed: seedCollection,
+      save: async (fields: unknown[]) => {
+        const saved = await handler().updateCollection(
+          { collectionName: "posts" },
+          { fields }
+        );
+        if (!saved.success) throw new Error(JSON.stringify(saved));
+      },
+    },
+    {
+      path: "the collection's schema dialog applies it",
+      table: "dc_posts",
+      seed: seedCollection,
+      save: async (fields: unknown[]) =>
+        dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: [],
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "posts"
+            ),
+          }
+        ),
+    },
+    {
+      path: "a Single's schema is saved",
+      table: "single_hero",
+      seed: seedSingle,
+      save: async (fields: unknown[]) =>
+        dispatchSingles("updateSingleSchema", { slug: "hero" }, { fields }),
+    },
+    {
+      path: "a Single's schema dialog applies it",
+      table: "single_hero",
+      seed: seedSingle,
+      save: async (fields: unknown[]) =>
+        dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "hero" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: [],
+            schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
+          }
+        ),
+    },
+    {
+      path: "a field group's schema dialog applies it",
+      table: "comp_banner",
+      seed: seedFieldGroup,
+      save: async (fields: unknown[]) =>
+        dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            renameResolutions: [],
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
+          }
+        ),
+    },
+  ];
+
+  it.each(
+    NO_RENAME_PICKED.flatMap(shape =>
+      UNANSWERED_SAVES.map(save => ({ ...shape, ...save }))
+    )
+  )(
+    "refuses $shape in one change when $path, keeping every language",
+    async ({ table, seed, save, fields }) => {
+      const id = await seed();
+
+      const refusal = await save(fields).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(reported(refusal)).toMatch(
+        /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+      );
+      expect(reported(refusal)).toMatch(/heading/);
+      expect(await companionValues(table, "heading", id)).toEqual({
+        en: "Hello",
+        es: "Hola",
+      });
+      expect(await columnsOf(`${table}_locales`)).not.toContain("title2");
+    }
+  );
+
   // The apply takes back only the rename its preview offers. An answer naming any other pair,
   // stale or made up, is dropped, as the main table's are, rather than attach one field's
-  // translations to another.
+  // translations to another; the change is then judged with no rename, and refused.
   it.each([
     {
       path: "the collection's schema dialog",
@@ -437,19 +567,23 @@ describeEachDialect("a translated field that is renamed", dialect => {
         ),
     },
   ])(
-    "drops a rename answer it did not offer, when $path applies",
+    "drops a rename answer it did not offer and refuses the change, when $path applies",
     async ({ table, seed, apply }) => {
       const id = await seed();
 
-      await apply();
-
-      expect(await companionValues(table, "title3", id)).toEqual({
-        en: null,
-        es: null,
-      });
-      expect(await columnsOf(`${table}_locales`)).toEqual(
-        expect.arrayContaining(["title2", "title3"])
+      const refusal = await apply().then(
+        () => undefined,
+        (error: unknown) => error
       );
+
+      expect(reported(refusal)).toMatch(
+        /TRANSLATED_FIELD_REMOVED_BESIDE_ADDED/
+      );
+      expect(await companionValues(table, "heading", id)).toEqual({
+        en: "Hello",
+        es: "Hola",
+      });
+      expect(await columnsOf(`${table}_locales`)).not.toContain("title3");
     }
   );
 

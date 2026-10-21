@@ -15,7 +15,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
+import {
+  type ColumnOrigin,
+  fieldProducesColumn,
+} from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 import { companionColumnNames } from "../runtime/companion-io";
 
@@ -27,6 +30,7 @@ import {
   refusalsForFieldsLeavingTranslation,
   refusalsForTranslatedFieldRenamedAndReshaped,
   refusalsForTranslatedFieldRenamedAsTranslationEnds,
+  refusalsForTranslatedFieldsRemovedBesideAdded,
   storageDiffers,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
@@ -139,6 +143,9 @@ export async function archiveFieldsLeavingTranslation(args: {
     : args.oldFields;
   const leaving = new Set(fieldsLeavingTranslation(oldFields, args.newFields));
   const joining = fieldsJoiningTranslation(oldFields, args.newFields);
+  // Before the early return below: a change that only removes and adds translated fields changes
+  // no field's translation, and is exactly the one that would drop a column unasked.
+  refuseTranslatedFieldsRemovedBesideAdded(args, oldFields);
   // Nothing to judge or archive when no field changes whether it is translated, or its name.
   if (leaving.size === 0 && joining.length === 0 && !rename) {
     return;
@@ -198,6 +205,41 @@ export async function archiveFieldsLeavingTranslation(args: {
       renamedFrom: source.renamedFrom,
     })
   );
+}
+
+/**
+ * Refuses a change that removes translated fields while it adds others with no rename decided
+ * for them (`refusalsForTranslatedFieldsRemovedBesideAdded`), before anything runs. An explicit
+ * drop-and-add answer from the schema dialog is the admin choosing the drop, so it passes.
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each removed field and the two saves that work
+ */
+function refuseTranslatedFieldsRemovedBesideAdded(
+  args: Parameters<typeof archiveFieldsLeavingTranslation>[0],
+  oldFields: readonly LeavingFieldLike[]
+): void {
+  if (args.renamed === null) return;
+  const dialect = args.adapter.getCapabilities().dialect;
+  const hasCompanionColumn = (f: LeavingFieldLike) =>
+    isFieldLocalized(f, true) &&
+    fieldToLocalizedColumnSpec(f, dialect, args.builtBy) !== null;
+  const before = new Set(oldFields.map(f => f.name));
+  const after = new Set(args.newFields.map(f => f.name));
+  const refusals = refusalsForTranslatedFieldsRemovedBesideAdded({
+    removed: oldFields
+      .filter(f => !after.has(f.name) && hasCompanionColumn(f))
+      .map(f => f.name),
+    // Any new field with a column, translated or shared: a translated field renamed to a type
+    // that is shared by default reads as one removed and one shared field added.
+    added: args.newFields
+      .filter(f => !before.has(f.name) && fieldProducesColumn(f))
+      .map(f => f.name),
+  });
+  if (refusals.length === 0) return;
+  throw NextlyError.validation({
+    errors: refusals,
+    logContext: { entity: args.entity, fields: refusals.map(r => r.path) },
+  });
 }
 
 /**

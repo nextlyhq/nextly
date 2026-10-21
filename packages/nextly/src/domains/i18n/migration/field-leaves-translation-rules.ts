@@ -34,7 +34,8 @@ export interface LeavingTranslationRefusal {
     | "RESHAPED_FIELD_JOINS_TRANSLATION"
     | "RESHAPED_TRANSLATED_FIELD_RENAMED"
     | "TRANSLATED_FIELD_RENAMED_AS_TRANSLATION_ENDS"
-    | "TRANSLATED_FIELD_RENAME_UNANSWERED";
+    | "TRANSLATED_FIELD_RENAME_UNANSWERED"
+    | "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED";
   /** Why the field cannot leave or join translation in this change, as one sentence. */
   reason: string;
   /** The changes that get there instead, in order, each one sentence. */
@@ -310,4 +311,33 @@ export function refusalsForTranslatedFieldRenamedAndReshaped(args: {
       ["Rename it and save.", "Change its type, length or precision and save."]
     ),
   ];
+}
+
+/**
+ * The refusal for translated fields a change removes while it adds other fields, when no rename was
+ * decided for them. Read by name, each removed field's companion column is dropped with every
+ * language's value, and the change cannot tell that from a rename the rule could not pick (two
+ * renames, a rename beside a new field, a rename to another type), so nothing asked the admin
+ * about the column. A removal on its own, or an addition on its own, is not refused.
+ */
+export function refusalsForTranslatedFieldsRemovedBesideAdded(args: {
+  /** The translated fields the change removes, each of which has a companion column. */
+  removed: readonly string[];
+  /** The fields the change adds that get a column, translated or shared. */
+  added: readonly string[];
+}): LeavingTranslationRefusal[] {
+  if (args.removed.length === 0 || args.added.length === 0) return [];
+  const added = args.added.map(name => `"${name}"`).join(", ");
+  return args.removed.map(name =>
+    refusal(
+      `fields.${name}`,
+      "TRANSLATED_FIELD_REMOVED_BESIDE_ADDED",
+      `"${name}" is translated, and this change removes it while adding ${added}. Removing it ` +
+        `deletes every language's value, and in one change that cannot be told from a rename.`,
+      [
+        "Rename or remove one translated field and save.",
+        "Then add or change the other fields and save.",
+      ]
+    )
+  );
 }
