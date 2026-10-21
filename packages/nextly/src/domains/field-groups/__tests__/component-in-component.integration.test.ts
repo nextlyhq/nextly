@@ -142,10 +142,25 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           fieldGroup({ name: "card", component: "card" }),
           fieldGroup({ name: "plaque", component: "plaque" }),
           fieldGroup({ name: "cards", component: "card", repeatable: true }),
+          // The same outer component, held in the entry's own group: judged by the entry's write.
+          group({
+            name: "box",
+            fields: [fieldGroup({ name: "plaque", component: "plaque" })],
+          }),
         ],
       }),
     ],
     singles: [
+      // Published and edited held: the held save and the publish judge the component too.
+      defineSingle({
+        slug: "landing",
+        status: true,
+        versions: true,
+        fields: [
+          text({ name: "headline" }),
+          fieldGroup({ name: "plaque", component: "plaque" }),
+        ],
+      }),
       defineSingle({
         slug: "home",
         fields: [
@@ -273,6 +288,57 @@ describe.each(getConfiguredTestDialects())(
       expect(required.issues).toContainEqual({ path: "seal", ...NOT_STORED });
     });
 
+    // Held in the entry's group, the outer component's whole value is stored in that group's JSON,
+    // a component placed directly in it included: so there it is drawn, stored and judged, and a
+    // required one is required.
+    it("stores and judges one placed directly in it when the outer component is held in a group", async () => {
+      const t = await boot(dialect);
+      const create = (box: Record<string, unknown>) =>
+        t.nextly.create({
+          collection: "pages" as never,
+          data: { name: "B", box } as never,
+        });
+
+      const missing = await outcomeOf(() => create({ plaque: {} }));
+      expect(missing.issues).toContainEqual(
+        expect.objectContaining({ path: "box.plaque.seal", code: "REQUIRED" })
+      );
+
+      const created = await create({ plaque: { seal: { label: "S" } } });
+      const read = (await t.nextly.findByID({
+        collection: "pages" as never,
+        id: (created.item as { id: string }).id as never,
+      })) as { box?: { plaque?: { seal?: { label?: string } } } };
+      expect(read.box?.plaque?.seal?.label).toBe("S");
+    });
+
+    it("does not require one placed directly in it on a Single, published or held", async () => {
+      const t = await boot(dialect);
+      const update = (data: Record<string, unknown>) =>
+        outcomeOf(() =>
+          t.nextly.updateSingle({
+            slug: "landing" as never,
+            data: data as never,
+          })
+        );
+
+      expect(
+        await update({ headline: "H", plaque: {}, status: "published" })
+      ).toEqual({ ok: true, issues: [] });
+      // A save naming no status on a published Single is held, and judged as the publish is.
+      expect(await update({ headline: "Held" })).toEqual({
+        ok: true,
+        issues: [],
+      });
+      expect(await update({ status: "published" })).toEqual({
+        ok: true,
+        issues: [],
+      });
+      // A value for it is still refused, there as anywhere it is not stored.
+      const refused = await update({ plaque: { seal: { label: "S" } } });
+      expect(refused.issues).toContainEqual({ path: "seal", ...NOT_STORED });
+    });
+
     it("passes an empty value for one placed directly in it", async () => {
       const t = await boot(dialect);
       for (const card of [
@@ -330,6 +396,28 @@ describe.each(getConfiguredTestDialects())(
       const meta = card?.componentFields?.find(field => field.name === "meta");
       expect(meta?.fields?.[0]).toMatchObject({ name: "badge" });
       expect(meta?.fields?.[0]?.componentFields).toBeDefined();
+    });
+
+    it("draws one placed directly in it where the outer component is held in a group", async () => {
+      const t = await boot(dialect);
+      const [box] = (await t
+        .getService("fieldGroupRegistryService")
+        .enrichFieldsWithComponentSchemas([
+          {
+            name: "box",
+            type: "group",
+            fields: [
+              { name: "plaque", type: "component", component: "plaque" },
+            ],
+          },
+        ])) as Array<{
+        fields?: Array<{ componentFields?: Array<{ name?: string }> }>;
+      }>;
+
+      // Stored in the group's JSON, so the form draws it, and can fill a required one.
+      expect(
+        (box?.fields?.[0]?.componentFields ?? []).map(field => field.name)
+      ).toContain("seal");
     });
 
     it("judges a held component's validators against that component's own values", async () => {
