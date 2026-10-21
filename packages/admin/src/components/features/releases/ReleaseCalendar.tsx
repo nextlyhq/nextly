@@ -534,7 +534,7 @@ interface DayCellProps {
 }
 
 function DayCell(props: DayCellProps) {
-  const { day, inMonth, isToday, isFocused, data, isPending } = props;
+  const { day, inMonth, isFocused, data, isPending } = props;
   // Not yet answered is not the same as empty: the cell says neither "no
   // releases" nor a count until the read for its window arrives.
   const loading = isPending && data === undefined;
@@ -555,12 +555,8 @@ function DayCell(props: DayCellProps) {
     >
       <DayButton
         {...props}
-        label={
-          loading
-            ? `${longDayLabel(day)}${isToday ? ", today" : ""}`
-            : calendarDayLabel(known, { isToday })
-        }
         tabIndex={tabIndex}
+        count={loading ? null : known}
       />
       <div className="pointer-events-none relative z-10 flex flex-col gap-1 px-1 pb-1 pt-8 sm:px-1.5 sm:pb-1.5">
         {loading ? (
@@ -583,36 +579,75 @@ function DayButton({
   day,
   inMonth,
   isToday,
-  label,
   tabIndex,
   onKeyDown,
   onFocus,
   onOpen,
-}: DayCellProps & { label: string; tabIndex: number }) {
+  count,
+}: DayCellProps & {
+  tabIndex: number;
+  /** The day's answer, for its count on a narrow screen; `null` until read. */
+  count: ReleaseCalendarDay | null;
+}) {
+  // The date and the count are drawn inside the button rather than beside
+  // it, and not hidden from assistive technology: a button's children are
+  // presentational, so its name stays the label above, and text that is
+  // drawn is text whose contrast a scan can judge.
   return (
     <button
       type="button"
       data-day={day}
       tabIndex={tabIndex}
-      aria-label={label}
+      aria-label={dayButtonLabel(day, count, isToday)}
       aria-current={isToday ? "date" : undefined}
       onKeyDown={onKeyDown}
       onFocus={onFocus}
       onClick={onOpen}
-      className="absolute inset-0 flex items-start justify-center p-1.5 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:justify-start"
+      className="absolute inset-0 flex flex-col items-center justify-start gap-0.5 p-1.5 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:items-start"
     >
-      <span
-        aria-hidden
-        className={cn(
-          "inline-flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
-          isToday && "bg-primary font-semibold text-primary-foreground",
-          !isToday && inMonth && "font-medium text-foreground",
-          !isToday && !inMonth && "text-muted-foreground"
-        )}
-      >
-        {Number(day.slice(8, 10))}
-      </span>
+      <DayNumber day={day} inMonth={inMonth} isToday={isToday} />
+      {count ? <CompactCount day={count} /> : null}
     </button>
+  );
+}
+
+/**
+ * What a day's button is called. Before the read answers, the date and
+ * whether it is today; never "no releases" about a day not yet read.
+ */
+function dayButtonLabel(
+  day: DayKey,
+  count: ReleaseCalendarDay | null,
+  isToday: boolean
+): string {
+  if (count) return calendarDayLabel(count, { isToday });
+  return `${longDayLabel(day)}${isToday ? ", today" : ""}`;
+}
+
+/** The date in a day's corner: filled for today, muted outside the month. */
+function DayNumber({
+  day,
+  inMonth,
+  isToday,
+}: {
+  day: DayKey;
+  inMonth: boolean;
+  isToday: boolean;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex size-6 items-center justify-center rounded-full text-xs tabular-nums",
+        // The foreground and background tokens, a pair made to contrast in
+        // both schemes. The primary is an installation's brand colour, which
+        // promises no contrast with what is drawn on it.
+        isToday && "bg-foreground font-semibold text-background",
+        !isToday && inMonth && "font-medium text-foreground",
+        !isToday && !inMonth && "text-muted-foreground"
+      )}
+    >
+      {Number(day.slice(8, 10))}
+    </span>
   );
 }
 
@@ -646,30 +681,34 @@ function DayReleases({
           tabIndex={tabIndex}
           onClick={onOpen}
           aria-label={`+${more} more releases on ${longDayLabel(day)}`}
-          className="pointer-events-auto hidden self-start rounded px-1 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:block"
+          // At least 24px tall, the smallest target WCAG 2.2 allows, though
+          // the text is smaller.
+          className="pointer-events-auto hidden min-h-6 items-center self-start rounded px-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:inline-flex"
         >
           +{more} more
         </button>
       ) : null}
-      <CompactCount day={known} />
     </>
   );
 }
 
 /**
  * A day's count on a narrow screen, where seven columns leave no room for a
- * chip. The day's own button already says it, so this is not announced.
+ * chip. Drawn inside the day's button, whose label already says it.
  */
 function CompactCount({ day }: { day: ReleaseCalendarDay }) {
   if (day.total === 0) return null;
   return (
     <span
-      aria-hidden
       className={cn(
-        "mx-auto inline-flex min-w-5 justify-center rounded-full px-1 text-[11px] font-medium leading-4 tabular-nums sm:hidden",
+        "inline-flex min-w-5 justify-center rounded-full px-1 text-[11px] font-medium leading-4 tabular-nums sm:hidden",
+        // The badges' own tokens: the neutral badge's, and the destructive
+        // badge's for a day holding a stopped release. Text in the primary or
+        // destructive colour on its own tenth-strength tint falls below AA
+        // (3.9:1 under the suite's indigo, 3.3:1 in destructive red).
         day.counts.blocked > 0
-          ? "bg-destructive/10 text-destructive"
-          : "bg-primary/10 text-primary"
+          ? "bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100"
+          : "bg-muted text-foreground"
       )}
     >
       {day.total}

@@ -36,7 +36,10 @@ the name was checked, so the approved drop took the replacement, and the
 original table and its rows survived under the other name while the plugin
 was recorded uninstalled. Each table is now identified by what the database
 keeps for it (its oid on PostgreSQL, its creation time on MySQL, its root page
-on SQLite), read before and after the hook. On SQLite, where a root page can
+on SQLite), read before the hook's boot and again after the hook. On MySQL the
+creation time has one-second resolution and changes on any `ALTER TABLE`, so a
+hook that alters one of those tables is refused, and a replacement created
+within the same second as its original is not detected. On SQLite, where a root page can
 be given to a new table, a hook that changes the schema at all is refused
 too. The refusal comes after `onUninstall` has run but before any DOWN
 migration, so no table is dropped and every module is still recorded as

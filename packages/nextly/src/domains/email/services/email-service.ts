@@ -47,6 +47,12 @@ import { EmailErrorCode } from "../errors";
 import type { EmailFailure } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
 import {
+  assertIdempotencyKey,
+  CORE_KEY_SCOPE,
+  sendKeyOf,
+  type HeldClaim,
+} from "../send-claims";
+import {
   renderTemplateFrom,
   renderTemplateReplyTo,
   withTemplateCopies,
@@ -86,6 +92,7 @@ import { DEFAULT_APP_NAME } from "./render-template";
 import {
   answeredFailure,
   type EmailSendOutcome,
+  inProgressFailure,
   notAcceptedFailure,
   refusalOf,
   refusedRecipients,
@@ -170,8 +177,17 @@ interface DispatchContext {
   templateSlug?: string;
   person: PrincipalRef | null;
   resolvedAttachments?: ResolvedAttachment[];
+  /** The claim a keyed send holds, and the key its calls are derived from. */
+  keyed?: KeyedSend;
   /** Runs, or queues, the `email.afterSend` actions for this message. */
   afterSend: (value: EmailAfterSendValue) => Promise<void>;
+}
+
+/** A keyed send's claim, while it sends. */
+interface KeyedSend {
+  claim: HeldClaim;
+  /** Push the claim's lease on, before each provider call. */
+  renew(): Promise<void>;
 }
 
 /**
@@ -187,9 +203,15 @@ interface DispatchState {
 /** The message as the adapter is handed it. */
 function adapterMessage(
   message: SendMessage,
-  attachments: ResolvedAttachment[] | undefined
+  context: DispatchContext
 ): Parameters<EmailProviderAdapter["send"]>[0] {
+  const attachments = context.resolvedAttachments;
   return {
+    // Only to an adapter that declares it takes one, so every other adapter
+    // is handed exactly what it was before keys existed.
+    ...(context.keyed && context.adapter.acceptsIdempotencyKey === true
+      ? { idempotencyKey: context.keyed.claim.providerKey(message) }
+      : {}),
     to: message.to[0],
     // Only for a message to several people, so a one-recipient message
     // reaches every adapter exactly as it did before `toList` existed.
@@ -247,6 +269,7 @@ function rowBase(
     providerId: context.resolvedProviderId ?? null,
     providerType: context.providerType,
     templateSlug: context.templateSlug ?? null,
+    keyDigest: context.keyed?.claim.keyDigest ?? null,
   };
 }
 
@@ -276,6 +299,9 @@ function acceptedRow(
 }
 
 export class EmailService extends BaseService {
+  /** Who sends through this instance: a keyed send is scoped to them. */
+  private keyScope: string = CORE_KEY_SCOPE;
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
@@ -331,6 +357,17 @@ export class EmailService extends BaseService {
   // ============================================================
 
   /**
+   * @experimental This service as `scope` sends through it: the same service,
+   * with every idempotency key scoped to that caller. The surface a send came
+   * through chooses the scope, never the caller.
+   */
+  scopedTo(scope: string): EmailService {
+    const view = Object.create(this) as EmailService;
+    view.keyScope = scope;
+    return view;
+  }
+
+  /**
    * Send an email using a named template.
    *
    * Resolution order for templates:
@@ -365,6 +402,8 @@ export class EmailService extends BaseService {
        * the delivery record names them and their deletion report erases it.
        */
       person?: PrincipalRef;
+      /** @experimental Send this message once for the key (see `send`). */
+      idempotencyKey?: string;
     }
   ): Promise<EmailSendOutcome> {
     // Whitespace-only overrides must not shadow the template/provider
@@ -444,6 +483,7 @@ export class EmailService extends BaseService {
         person: options?.person,
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
+        idempotencyKey: options?.idempotencyKey,
       });
     }
 
@@ -496,6 +536,7 @@ export class EmailService extends BaseService {
         }),
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
+        idempotencyKey: options?.idempotencyKey,
       });
     }
 
@@ -555,7 +596,20 @@ export class EmailService extends BaseService {
      * the `to` rows only: a copied address is someone else.
      */
     person?: PrincipalRef;
+    /**
+     * @experimental Send this message once for the key, on every provider.
+     *
+     * Claimed before any provider is contacted. A repeat of a send that
+     * succeeded returns its result, marked `repeat`, without sending; a repeat
+     * while it is still sending reports it in progress; a repeat after it
+     * failed sends again. The same key with a different message is refused.
+     * Keys are scoped to their caller, so two plugins never share one.
+     */
+    idempotencyKey?: string;
   }): Promise<EmailSendOutcome> {
+    if (options.idempotencyKey !== undefined) {
+      assertIdempotencyKey(options.idempotencyKey);
+    }
     // A precondition, before anything is resolved or sent: a person that
     // cannot be read would leave the record unable to be erased with them.
     const person = await this.personToRecord(options.person);
@@ -676,6 +730,16 @@ export class EmailService extends BaseService {
     assertSendableReplyTo(envelope.replyTo);
 
     const messages = messagesFor(envelope, maxToPerMessage);
+
+    // Claimed on the envelope that goes out, so a filter's change is part of
+    // the message the key names. A repeat is answered here, sending nothing.
+    const claimed = await this.claimForSend(options.idempotencyKey, {
+      ...envelope,
+      attachments: resolvedAttachments,
+      person,
+    });
+    if (claimed && "answer" in claimed) return claimed.answer;
+
     const runAfterSend = (value: EmailAfterSendValue) =>
       registry.runActions<EmailAfterSendValue, EmailFilterContext>(
         FilterSeams.EmailAfterSend,
@@ -695,24 +759,29 @@ export class EmailService extends BaseService {
             return Promise.resolve();
           };
 
-    const outcomes: SendOutcome[] = [];
-    for (const message of messages) {
-      // In turn rather than at once: a provider that takes one `to` per
-      // message is usually one that rate-limits, and the delivery records of
-      // each message are written before the next is sent.
-      outcomes.push(
-        await this.dispatchMessage(message, {
-          adapter,
-          providerType,
-          resolvedProviderId,
-          providerId: options.providerId,
-          templateSlug: options.templateSlug,
-          person,
-          resolvedAttachments,
-          afterSend,
-        })
+    const { outcomes, acceptedLegs } = await this.dispatchAll(messages, {
+      adapter,
+      providerType,
+      resolvedProviderId,
+      providerId: options.providerId,
+      templateSlug: options.templateSlug,
+      person,
+      resolvedAttachments,
+      keyed: claimed?.keyed,
+      afterSend,
+    });
+    // One message is today's send, and its result is returned as it is; a
+    // split send's messages are combined into one result.
+    const outcome =
+      outcomes.length === 1 ? outcomes[0] : splitSendOutcome(outcomes);
+    if (claimed) {
+      await this.deliveries?.settleSend(
+        claimed.keyed.claim,
+        outcome,
+        acceptedLegs
       );
     }
+
     for (const value of deferred) {
       // Every message has been handed over by now, so nothing an action or
       // its reporting does can change what was sent. Contained per message,
@@ -727,9 +796,78 @@ export class EmailService extends BaseService {
       }
     }
 
-    // One message is today's send, and its result is returned as it is; a
-    // split send's messages are combined into one result.
-    return outcomes.length === 1 ? outcomes[0] : splitSendOutcome(outcomes);
+    return outcome;
+  }
+
+  /**
+   * Hand each message to the provider in turn, and say which calls of a keyed
+   * send have been accepted, by their provider key.
+   *
+   * In turn rather than at once: a provider that takes one `to` per message
+   * is usually one that rate-limits, and the delivery records of each message
+   * are written before the next is sent. A call an earlier attempt with the
+   * key already had accepted is not sent again.
+   */
+  private async dispatchAll(
+    messages: readonly SendMessage[],
+    context: DispatchContext
+  ): Promise<{ outcomes: SendOutcome[]; acceptedLegs: string[] }> {
+    const claim = context.keyed?.claim;
+    const accepted = new Set(claim?.acceptedLegs ?? []);
+    const outcomes: SendOutcome[] = [];
+    for (const message of messages) {
+      const leg = claim?.providerKey(message);
+      if (leg !== undefined && accepted.has(leg)) {
+        outcomes.push({ success: true });
+        continue;
+      }
+      const outcome = await this.dispatchMessage(message, context);
+      if (leg !== undefined && outcome.success) accepted.add(leg);
+      outcomes.push(outcome);
+    }
+    return { outcomes, acceptedLegs: [...accepted] };
+  }
+
+  /**
+   * Claim a keyed send's key: the claim to send under, or the answer for a
+   * send that must not go out, a repeat or one still in progress. Nothing for
+   * a send without a key.
+   *
+   * @throws {NextlyError} `CONFLICT` when the key was used for a different
+   *   message, and `INTERNAL_ERROR` when no delivery log can hold the claim.
+   */
+  private async claimForSend(
+    key: string | undefined,
+    message: Parameters<typeof sendKeyOf>[2]
+  ): Promise<{ keyed: KeyedSend } | { answer: SendOutcome } | undefined> {
+    if (key === undefined) return undefined;
+    if (!this.deliveries) {
+      throw NextlyError.internal({
+        logContext: { reason: "a keyed send needs the delivery log" },
+      });
+    }
+    const sendKey = sendKeyOf(this.keyScope, key, message);
+    const decided = await this.deliveries.claimSend(sendKey);
+    switch (decided.kind) {
+      case "claimed": {
+        const { claim } = decided;
+        const deliveries = this.deliveries;
+        return {
+          keyed: { claim, renew: () => deliveries.renewSend(claim) },
+        };
+      }
+      case "repeat":
+        return { answer: { ...decided.result, repeat: true } };
+      case "in-progress":
+        return { answer: { success: false, failure: inProgressFailure() } };
+      case "different-message":
+        throw new NextlyError({
+          code: "CONFLICT",
+          publicMessage:
+            "This idempotency key was already used for a different message.",
+          logContext: { reason: "idempotency-key-reused" },
+        });
+    }
   }
 
   /**
@@ -757,10 +895,13 @@ export class EmailService extends BaseService {
     // failed, and an auth flow withholding a token for a message that was
     // delivered.
     const state: DispatchState = {};
+    // A keyed send of several messages renews its claim before each one, so a
+    // later send with the key does not take over a send still in progress.
+    await context.keyed?.renew();
 
     try {
       const result = await context.adapter.send(
-        adapterMessage(message, context.resolvedAttachments)
+        adapterMessage(message, context)
       );
 
       // The provider has answered, and WHAT it answered. Both are recorded
