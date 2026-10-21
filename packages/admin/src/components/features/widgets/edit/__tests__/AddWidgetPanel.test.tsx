@@ -301,4 +301,50 @@ describe("closing", () => {
     rerender(<AddWidgetPanel {...props} open />);
     expect(screen.getByRole("searchbox")).toHaveValue("");
   });
+
+  describe("each visit starts silent", () => {
+    const props: AddWidgetPanelProps = {
+      open: true,
+      onOpenChange: vi.fn(),
+      rows: ROWS,
+      atCapacity: false,
+      onAdd: vi.fn(() => ({ title: "Entries", position: 4, count: 4 })),
+      onAddBack: vi.fn(() => null),
+      onClosed: vi.fn(),
+    };
+
+    it("never says the last visit's add again on opening", () => {
+      // 🔴 The panel stays mounted while closed, so the sentence it last said was still in its
+      // live region when the sheet drew it again.
+      vi.useFakeTimers();
+      const { rerender } = render(<AddWidgetPanel {...props} />);
+      fireEvent.click(screen.getByRole("button", { name: "Add Entries" }));
+      expect(live()).toHaveTextContent("Added Entries at position 4 of 4.");
+
+      rerender(<AddWidgetPanel {...props} open={false} />);
+      act(() => vi.advanceTimersByTime(100));
+      rerender(<AddWidgetPanel {...props} open />);
+      expect(live().textContent).toBe("");
+    });
+
+    it("never lets a count still waiting when it closed speak on the next visit", () => {
+      // 🔴 The count's pause kept running while the sheet was closed, and its sentence was
+      // waiting in the live region when the next visit opened on an empty search.
+      vi.useFakeTimers();
+      const { rerender } = render(<AddWidgetPanel {...props} />);
+      fireEvent.change(
+        screen.getByRole("searchbox", { name: "Search widgets" }),
+        { target: { value: "entr" } }
+      );
+      act(() => vi.advanceTimersByTime(200));
+
+      rerender(<AddWidgetPanel {...props} open={false} />);
+      act(() => vi.advanceTimersByTime(1000));
+      rerender(<AddWidgetPanel {...props} open />);
+      expect(live().textContent).toBe("");
+
+      act(() => vi.advanceTimersByTime(1000));
+      expect(live().textContent).toBe("");
+    });
+  });
 });

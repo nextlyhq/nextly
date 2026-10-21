@@ -16,12 +16,18 @@ const { setLabelSpy, getSpy, readableSpy, canReadSpy, updatableSpy } =
   }));
 
 vi.mock("../../../di", () => ({
-  getService: vi.fn(() => ({ setLabel: setLabelSpy, get: getSpy })),
+  // A version in no language, so the language half of the gate asks nothing.
+  getService: vi.fn(() => ({
+    setLabel: setLabelSpy,
+    get: getSpy,
+    partOfVersion: () => Promise.resolve(null),
+  })),
 }));
 
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: readableSpy,
   assertDocumentUpdatable: updatableSpy,
+  assertHistoryLocalesReadable: () => Promise.resolve(),
   redactSnapshotForUser: vi.fn(),
   resolveSingleDocumentId: vi.fn(),
 }));

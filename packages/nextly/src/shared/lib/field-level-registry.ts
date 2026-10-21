@@ -122,12 +122,11 @@ function grantsResolver(
       listEffectiveGrants(userId),
       listRoleSlugsForUser(userId),
     ])
-      .then(([permissions, roles]) => ({ permissions, roles }))
-      // Fail CLOSED on a lookup error: an empty grant set denies every rule
-      // that asks for a permission, which is the safe direction. Throwing here
-      // would instead be caught by the per-rule guard below and read as a
-      // denial anyway, but only for the rule that happened to ask first.
-      .catch(() => ({ permissions: [], roles: [] }));
+      // A lookup that fails rejects, and every rule awaiting it is denied by
+      // its own guard (`runFieldRule`). Not an empty grant set: that denies
+      // a rule asking for a role or a permission, and allows one asking for
+      // the absence of one.
+      .then(([permissions, roles]) => ({ permissions, roles }));
     return pending;
   };
 }

@@ -34,15 +34,19 @@ import {
   CustomizingFence,
 } from "./CustomizingFence";
 import { DismissWidgetButton } from "./DismissWidgetButton";
-import { SortableWidgetCell } from "./SortableWidgetCell";
+import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
 import type { ArrangedWidget } from "./useDashboardArrangement";
 import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
 
 export interface ArrangedCellProps {
   row: ArrangedWidget;
   isEditing: boolean;
-  /** The card just added from the add panel. */
+  /** The card just placed: moved, resized, added or put back. */
   highlighted?: boolean;
+  /** Its handle's drag, while dragging is on; absent at one column. */
+  drag?: CellDrag;
+  /** Lists the card menu's widths in the menu itself: where the dashboard draws one column. */
+  widthsInPlace?: boolean;
   /**
    * Whether a layout write is in flight anywhere on this dashboard.
    *
@@ -153,6 +157,7 @@ function CardEditActions(props: {
   on: ArrangedCellProps["on"];
   /** Present only when the widget offers settings. */
   openSettings?: () => void;
+  widthsInPlace: boolean;
 }) {
   const { row, width, can, isWriting, refs, on, openSettings } = props;
   return (
@@ -165,6 +170,7 @@ function CardEditActions(props: {
         can={can}
         disabled={isWriting}
         triggerRef={refs.menu}
+        widthsInPlace={props.widthsInPlace}
         on={{
           move: on.move,
           setWidth: on.setWidth,
@@ -281,8 +287,25 @@ function cellClassName(
   );
 }
 
+/** The card's width and menu while customising, or nothing at rest. */
+function editActionsOf(
+  props: ArrangedCellProps,
+  width: WidgetWidth,
+  openSettings: (() => void) | undefined
+): ReactNode {
+  if (!props.isEditing) return null;
+  const { row, can, isWriting, refs, on } = props;
+  return (
+    <CardEditActions
+      {...{ row, width, can, isWriting, refs, on }}
+      widthsInPlace={props.widthsInPlace === true}
+      {...(openSettings ? { openSettings } : {})}
+    />
+  );
+}
+
 export function ArrangedCell(props: ArrangedCellProps) {
-  const { row, isEditing, isWriting, can, data, refs, on } = props;
+  const { row, isEditing, data, on } = props;
   /*
    * Open state lives with the CELL rather than with the grid: the sheet belongs
    * to one card, and hoisting it would make the grid track which of many is
@@ -315,12 +338,11 @@ export function ArrangedCell(props: ArrangedCellProps) {
   // framed card shows them over its own header's right end; an unframed one
   // in the small header the cell draws for it below. Both outside the fence
   // that puts the card's own content out of reach.
-  const editActions = isEditing ? (
-    <CardEditActions
-      {...{ row, width, can, isWriting, refs, on }}
-      {...(hasSettings ? { openSettings: () => setSettingsOpen(true) } : {})}
-    />
-  ) : null;
+  const editActions = editActionsOf(
+    props,
+    width,
+    hasSettings ? () => setSettingsOpen(true) : undefined
+  );
   const unframed = widget.chrome === "none";
   // While customising, a framed card's header keeps the room its controls are
   // drawn over; at rest it holds the dismiss control, if any.
@@ -328,11 +350,12 @@ export function ArrangedCell(props: ArrangedCellProps) {
   const headerAction = unframed ? undefined : framedHeaderAction;
 
   return (
-    <SortableWidgetCell
+    <DraggableWidgetCell
       id={row.placementId}
       title={widget.title}
       isEditing={isEditing}
       highlighted={props.highlighted}
+      {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(row, unframed, isEditing)}
     >
@@ -363,6 +386,6 @@ export function ArrangedCell(props: ArrangedCellProps) {
         {...{ widget, placement, headerAction, data, isEditing }}
         floated={floatingControl !== undefined}
       />
-    </SortableWidgetCell>
+    </DraggableWidgetCell>
   );
 }

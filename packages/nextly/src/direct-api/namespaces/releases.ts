@@ -27,7 +27,6 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
 import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
-import type { ReleaseReadiness } from "../../domains/releases/readiness/evaluate-readiness";
 import type { ReleaseCalendar } from "../../domains/releases/release-calendar";
 import type {
   ReleaseMemberCounts,
@@ -35,13 +34,17 @@ import type {
   ReleaseRow,
 } from "../../domains/releases/releases-repository";
 import type {
+  AddedReleaseMember,
   AddMemberInput,
   FindReleasesQuery,
   ReleaseBlocker,
+  ReleaseBlockersView,
   ReleaseCalendarQuery,
   ReleaseCountQuery,
   ReleaseDetailsChange,
+  ReleaseMembersView,
   ReleaseReadinessEntry,
+  ReleaseReadinessView,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
@@ -172,23 +175,37 @@ export interface ReleasesNamespace {
    * What stands between this release and its instant, per member.
    *
    * Derived from the members on every call rather than recorded when the drain
-   * stopped, so it stops reporting a cause somebody has fixed.
+   * stopped, so it stops reporting a cause somebody has fixed. Names only the
+   * documents the caller may read; {@link blockersOf} also counts the rest.
    */
   blockingReasons(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseBlocker[]>;
   /**
+   * {@link blockingReasons} with the blocked documents the caller may not
+   * read counted by collection in `hidden`, so a release blocked only by
+   * documents they cannot see still reads as blocked.
+   *
+   * @experimental
+   */
+  blockersOf(
+    args: { releaseId: string } & ReleaseCallerArgs
+  ): Promise<ReleaseBlockersView>;
+  /**
    * Every problem the release's documents have now: `hard` ones, which stop
    * it from being scheduled or published now, and `soft` ones, which are
    * notes. Each is a code and the document it is about, in the order the
    * documents were added. Every document is checked, however many the release
-   * holds. An unknown release is refused as not found.
+   * holds. Findings name only documents the caller may read; the rest are
+   * counted by collection in `hidden`, so the release is ready only when
+   * `hard` is empty and no `hidden` entry has a hard problem. An unknown
+   * release is refused as not found.
    *
    * @experimental
    */
   readiness(
     args: { releaseId: string } & ReleaseCallerArgs
-  ): Promise<ReleaseReadiness>;
+  ): Promise<ReleaseReadinessView>;
   /**
    * {@link readiness} for up to fifty releases at once, in the order asked,
    * under the same authority. A release that does not exist is left out; one
@@ -226,10 +243,17 @@ export interface ReleasesNamespace {
    * the author for every call on it. The refusal is at runtime because only
    * runtime knows whether either source produced one, and its message names the
    * field to pass.
+   *
+   * Answers the member with `unpublishedLinks`: for a document going live, the
+   * documents it links to that will not be live at the release's moment, so
+   * they can be offered too. Only documents the caller may read are named; the
+   * rest are counted in `hiddenCount`.
+   *
+   * @experimental The `unpublishedLinks` field.
    */
   addMember(
     args: { releaseId: string } & AddMemberInput & ReleaseCallerArgs
-  ): Promise<ReleaseMemberRow>;
+  ): Promise<AddedReleaseMember>;
   /**
    * Take a document back out of a release.
    *
@@ -241,9 +265,24 @@ export interface ReleasesNamespace {
   removeMember(
     args: { memberId: string; releaseId?: string } & ReleaseCallerArgs
   ): Promise<void>;
+  /**
+   * The release's documents the caller may read, in the order they were
+   * added. A caller acting for a user is given only the documents that user
+   * may read; {@link membersOf} also counts the rest.
+   */
   listMembers(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseMemberRow[]>;
+  /**
+   * The release's documents as the caller sees them: those they may read in
+   * `items`, and the rest counted by collection in `hidden`, with no title,
+   * id or field.
+   *
+   * @experimental
+   */
+  membersOf(
+    args: { releaseId: string } & ReleaseCallerArgs
+  ): Promise<ReleaseMembersView>;
   /**
    * Switch a document in a release between going live (`publish`) and coming
    * down (`unpublish`).
@@ -470,6 +509,9 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
     blockingReasons: args =>
       service().blockingReasons(args.releaseId, actorOf(ctx, args)),
 
+    blockersOf: args =>
+      service().blockersOf(args.releaseId, actorOf(ctx, args)),
+
     addMember: args => {
       const {
         releaseId,
@@ -494,6 +536,8 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
 
     listMembers: args =>
       service().listMembers(args.releaseId, actorOf(ctx, args)),
+
+    membersOf: args => service().membersOf(args.releaseId, actorOf(ctx, args)),
 
     readiness: args => service().readiness(args.releaseId, actorOf(ctx, args)),
 

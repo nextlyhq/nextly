@@ -298,6 +298,22 @@ describe("PostgresAdapter", () => {
     });
   });
 
+  describe("getDrizzle()", () => {
+    it("hands its handles on the pool one $client, with relations or without", async () => {
+      // Each handle is given a view of the pool that reports its queries; made once per pool, so
+      // a caller holding both handles still sees one client, as it did when each held the pool.
+      await adapter.connect();
+      const notes = pgTable("notes", { id: integer("id").primaryKey() });
+      type Handle = { $client: unknown };
+
+      const bare = adapter.getDrizzle<Handle>();
+      const relational = adapter.getDrizzle<Handle>(defineRelations({ notes }));
+
+      expect(relational).not.toBe(bare);
+      expect(relational.$client).toBe(bare.$client);
+    });
+  });
+
   describe("getPoolStats()", () => {
     it("should return null when not connected", () => {
       expect(adapter.getPoolStats()).toBeNull();

@@ -13,6 +13,16 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// A field rule is handed the caller's roles and grants; with no database
+// behind this suite the real lookups refuse, so they answer here.
+vi.mock("../../../services/lib/permissions", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../services/lib/permissions")
+  >()),
+  listRoleSlugsForUser: vi.fn(async () => []),
+  listEffectiveGrants: vi.fn(async () => []),
+}));
+
 import {
   clearFieldFunctions,
   registerFieldFunctions,

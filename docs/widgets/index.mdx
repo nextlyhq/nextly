@@ -62,8 +62,10 @@ the whole row. A card starts at the widget's `defaultSize`, and a reader can cha
 the card's menu to any size between the widget's `minSize` and `maxSize` (every size, when the
 widget declares neither). Widths follow the dashboard's own width rather than the window's: below
 1,024 pixels a quarter, third or half card is drawn at half width and a wider one at full width,
-and below 640 pixels every card is full width. Below the admin's `md` breakpoint the dashboard is
-read-only: arranging it is offered from `md` up, and the arrangement made there applies at every
+and below 640 pixels every card is full width. A reader can arrange the dashboard at every width.
+Where it shows more than one column, a card is dragged by its handle, with the pointer or the
+keyboard, and a line shows where it will land; below 640 pixels, where every card is full width,
+cards are moved, resized and removed from their menu instead. The arrangement applies at every
 width.
 
 ## Declared, not fetched

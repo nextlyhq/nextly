@@ -132,11 +132,21 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
       expect.objectContaining({ collection: "nx_pb_class_usage" })
     );
     // Nor is its activity counted in the recent-changes figure: the activity query leaves out
-    // the collection the registry read above left out. Not the Single: the trail records none.
+    // what the registry reads above left out, each by its kind -- the hidden collection's
+    // collection rows, and the hidden Single's Single rows -- with a row stating no kind read
+    // as a collection's.
     const activity = activityQuery(adapter);
-    expect(String(activity?.[0])).toContain("NOT IN");
-    expect(activity?.[1]).toContain("nx_pb_class_usage");
-    expect(activity?.[1]).not.toContain("hidden-single");
+    expect(String(activity?.[0])).toContain(
+      'NOT (COALESCE("subject_kind", ?) = ? AND "collection" IN (?))'
+    );
+    expect(activity?.[1]?.slice(1)).toEqual([
+      "collection",
+      "collection",
+      "nx_pb_class_usage",
+      "collection",
+      "single",
+      "hidden-single",
+    ]);
   });
 
   it("keeps a visible collection's activity when a hidden Single shares its slug", async () => {
@@ -161,9 +171,10 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
     });
 
     expect(stats.singles).toBe(0);
+    // The hidden Single's slug removes only rows stating a Single: the visible collection's
+    // rows under the same slug, and rows stating no kind, are still counted.
     const activity = activityQuery(adapter);
-    expect(String(activity?.[0])).not.toContain("NOT IN");
-    expect(activity?.[1]).not.toContain("posts");
+    expect(activity?.[1]?.slice(1)).toEqual(["collection", "single", "posts"]);
   });
 });
 

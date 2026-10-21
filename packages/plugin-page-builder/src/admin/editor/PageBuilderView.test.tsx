@@ -189,6 +189,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  useBeforeDocumentAction: () => {},
+  useDocumentActions: () => null,
   useDocumentStatus: () => null,
   // Nothing stored, read successfully: the site's style is ready, so the
   // read-only page is drawn rather than held back for a sheet still coming.

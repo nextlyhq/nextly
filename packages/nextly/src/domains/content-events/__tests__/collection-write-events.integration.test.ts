@@ -155,6 +155,99 @@ describe.each(getConfiguredTestDialects())(
       expect(events[0]?.versionNo).toBe(1);
     }, 120_000);
 
+    it("names the version a publish and a withdrawal produced, on an edit and inside a transaction", async () => {
+      const t = await boot(dialect);
+      const as = { overrideAccess: true, user: ANA };
+      const draft = async () =>
+        (
+          (
+            await t.handler.createEntry(
+              { collectionName: "posts", ...as },
+              { title: "a", status: "draft" }
+            )
+          ).data as { id: string }
+        ).id;
+      /** Each status move's version, beside the version its save recorded. */
+      const movesOf = async (id: string) => {
+        const events = await t.eventsOf(id);
+        return events
+          .filter(e => e.kind === "published" || e.kind === "unpublished")
+          .map(e => ({
+            kind: e.kind,
+            versionNo: e.versionNo,
+            saved: events.find(
+              s => s.kind === "saved" && s.toState === e.toState && s.id < e.id
+            )?.versionNo,
+          }));
+      };
+
+      // An edit, as REST's PATCH makes it.
+      const edited = await draft();
+      for (const status of ["published", "draft"]) {
+        await t.handler.updateEntry(
+          { collectionName: "posts", entryId: edited, ...as },
+          { status }
+        );
+      }
+      // Inside a caller's transaction, as a batch updates: its own write.
+      const batched = await draft();
+      for (const status of ["published", "draft"]) {
+        const result = await current!.adapter.transaction(tx =>
+          t.handler
+            .getEntryService()
+            .updateEntryInTransaction(
+              tx as never,
+              { collectionName: "posts", entryId: batched, ...as },
+              { status }
+            )
+        );
+        expect(result.success).toBe(true);
+      }
+
+      for (const id of [edited, batched]) {
+        const moves = await movesOf(id);
+        expect(moves.map(m => m.kind)).toEqual(["published", "unpublished"]);
+        for (const move of moves) {
+          expect(typeof move.versionNo).toBe("number");
+          expect(move.versionNo).toBe(move.saved);
+        }
+      }
+    }, 120_000);
+
+    it("records publishing a held draft as a publish, naming its version", async () => {
+      const t = await boot(dialect);
+      const as = { overrideAccess: true, user: ANA };
+      const created = await t.handler.createEntry(
+        { collectionName: "posts", ...as },
+        { title: "live", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      // No status on a published document: held as a draft over it.
+      await t.handler.updateEntry(
+        { collectionName: "posts", entryId: id, ...as },
+        { title: "held" }
+      );
+      await t.handler.updateEntry(
+        { collectionName: "posts", entryId: id, ...as },
+        { status: "published" }
+      );
+
+      const events = await t.eventsOf(id);
+      const publishes = events.filter(e => e.kind === "published");
+      // The create's publish, then the held draft's.
+      expect(publishes).toHaveLength(2);
+      const last = publishes[1]!;
+      expect(last).toMatchObject({
+        fromState: "draft",
+        toState: "published",
+        actorName: "Ana",
+      });
+      const save = events.find(
+        e => e.kind === "saved" && e.toState === "published" && e.id < last.id
+      );
+      expect(last.versionNo).toBe(save?.versionNo);
+    }, 120_000);
+
     it("records no save for a save that changed nothing", async () => {
       const t = await boot(dialect);
       const as = { overrideAccess: true, user: ANA };

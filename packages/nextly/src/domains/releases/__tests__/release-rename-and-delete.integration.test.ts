@@ -220,6 +220,10 @@ function interleavedService(
     canManageReleases: async () => true,
     canActOnDocument: async () => true,
     runDrainNow: async () => undefined,
+    // Every reader may read every member: these tests are not about which
+    // documents a reader sees.
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
     // A rename asks no document check; the stub answers every one as ready.
     checks: READY_CHECKS,
     recordActivity: async entry => {

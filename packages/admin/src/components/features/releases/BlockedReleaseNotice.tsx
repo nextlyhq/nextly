@@ -16,9 +16,13 @@
  */
 
 import { Card } from "@admin/components/ui";
-import type { ReleaseBlocker } from "@admin/types/releases";
+import type {
+  HiddenReleaseMembers,
+  ReleaseBlocker,
+} from "@admin/types/releases";
 
 import { blockerExplanation } from "./release-blockers";
+import { describeHiddenNeedFix, hiddenTotal } from "./release-hidden";
 
 /**
  * What the member was going to do, said neutrally enough to be true either way.
@@ -34,13 +38,19 @@ const ACTION_PHRASE: Record<ReleaseBlocker["action"], string> = {
 
 export function BlockedReleaseNotice({
   blockers,
+  hidden,
 }: {
   blockers: ReleaseBlocker[];
+  /** Blocked documents the reader may not read, counted by collection. */
+  hidden?: HiddenReleaseMembers[];
 }) {
+  const hiddenCount = hiddenTotal(hidden);
   // A blocked release with nothing to report means the cause has been fixed
   // since it stopped — which is the point of deriving this rather than storing
-  // it. Saying so beats an empty list, and beats silence.
-  if (blockers.length === 0) {
+  // it. Saying so beats an empty list, and beats silence. Only when nothing
+  // at all blocks it: a cause in a document the reader cannot open is still
+  // a cause.
+  if (blockers.length === 0 && hiddenCount === 0) {
     return (
       <Card className="mb-6 border-warning bg-warning/5 px-4 py-3">
         <p className="text-sm text-foreground">
@@ -71,6 +81,12 @@ export function BlockedReleaseNotice({
             {blockerExplanation(blocker.reason)}
           </li>
         ))}
+        {hiddenCount > 0 ? (
+          <li className="text-sm text-muted-foreground">
+            {describeHiddenNeedFix(hiddenCount)}. Someone who may open{" "}
+            {hiddenCount === 1 ? "it" : "them"} can fix this.
+          </li>
+        ) : null}
       </ul>
       <p className="mt-2 text-sm text-muted-foreground">
         Once it is fixed, schedule the release again.

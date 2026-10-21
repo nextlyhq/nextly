@@ -32,6 +32,7 @@ import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import type { Nextly as NextlyDirectAPI } from "../../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
+import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   buildContext,
@@ -426,10 +427,13 @@ export async function checkSingleAccess(params: {
       userId: user.id,
       error: message,
     });
+    // A typed refusal keeps its own code and status (a busy database is
+    // DATABASE_BUSY, 503).
     return {
       success: false,
       statusCode: 500,
       message: "Failed to verify RBAC permissions",
+      ...errorEnvelopeFields(error),
     };
   }
 

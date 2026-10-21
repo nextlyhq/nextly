@@ -24,6 +24,7 @@ import type { VersionScopeKind } from "../schemas/versions/types";
 
 import { privateToSession, respondList } from "./response-shapes";
 import {
+  historyListLanguages,
   requireRouteVersionReadAccess,
   withLastViewedMarks,
 } from "./versions-access";
@@ -124,6 +125,17 @@ export const GET = privateToSession(
       id
     );
 
+    // The languages this caller may read the history in: the one asked for,
+    // or every one they may read.
+    const languages = await historyListLanguages(
+      scopeKind,
+      slug,
+      id,
+      caller.user,
+      caller.authenticatedScope,
+      locale
+    );
+
     const versions = getService("versionsService");
     // Fetch one more than asked for: its presence is what proves another page
     // exists. Inferring `hasNext` from a full page instead would claim a next
@@ -134,7 +146,7 @@ export const GET = privateToSession(
       {
         limit: limit + 1,
         ...(cursor !== undefined ? { cursor } : {}),
-        ...(locale !== undefined ? { locale } : {}),
+        ...languages,
       }
     );
     const hasNext = window.length > limit;

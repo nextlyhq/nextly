@@ -186,17 +186,7 @@ export async function recordMutationActivity(
 ): Promise<void> {
   if (!willRecordMutationActivity(input.collection, input.actor)) return;
 
-  let service: ActivityLogService | undefined;
-  try {
-    service = container.get<ActivityLogService>("activityLogService");
-  } catch {
-    return;
-  }
-  // A container can report an absent registration two ways — by throwing, and
-  // by answering `undefined` — and only the first was handled. The second then
-  // failed on the property access, turning "no dashboard service registered"
-  // into a failed content write, which is the outcome the catch above exists to
-  // prevent.
+  const service = registeredActivityLogService();
   if (!service) return;
 
   const metadata = changedFieldNames(input);
@@ -222,5 +212,71 @@ export async function recordMutationActivity(
       return heading !== undefined ? { entryTitle: heading } : {};
     })(),
     ...(metadata !== undefined ? { metadata } : {}),
+  });
+}
+
+/**
+ * The activity service the host registered, or `undefined` when it registered
+ * none, which both recorders read as "record nothing".
+ */
+function registeredActivityLogService(): ActivityLogService | undefined {
+  try {
+    // A container can report an absent registration two ways — by throwing,
+    // and by answering `undefined` — and both mean the same here. Handling only
+    // the first once turned "no dashboard service registered" into a failed
+    // content write on the property access that followed.
+    return container.get<ActivityLogService>("activityLogService") ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** What one save of a Single records, as the save already knows it. */
+export interface RecordSingleActivityInput {
+  /** The Single's slug, filed in the trail's scope column. */
+  slug: string;
+  /**
+   * The Single's live document id. Required, not optional as an entry's is:
+   * the feed shows a Single's row only after asking whether the reader may
+   * read that document, and a row with no id could never be asked about.
+   */
+  entryId: string;
+  /** The Single's label when it was saved, the heading the feed falls back to. */
+  label: string;
+  /** The language this save was made in; null or absent for every language. */
+  locale?: string | null;
+  actor?: RequestActor | null;
+}
+
+/**
+ * Record one save of a Single in the activity log, inside the save's
+ * transaction.
+ *
+ * Every save is an update: a Single always exists, and the save that first
+ * stores its row is recorded in the Single's own history as its creation.
+ * Hidden and internal Singles are recorded too and left out when the trail is
+ * read, by the row's stated kind, because a Single and a collection may share
+ * a slug and a write-time filter by slug could not tell them apart.
+ *
+ * A failure propagates, as it does for an entry, so the save and its row commit
+ * together or not at all.
+ */
+export async function recordSingleActivity(
+  db: () => ActivityWriteDb,
+  input: RecordSingleActivityInput
+): Promise<void> {
+  const actor = recordableActor(input.actor);
+  if (!actor) return;
+  const service = registeredActivityLogService();
+  if (!service) return;
+  await service.logActivityInTx(db(), {
+    actorType: actor.type,
+    userId: actor.id,
+    action: "update",
+    collection: input.slug,
+    ...(input.locale === undefined ? {} : { locale: input.locale }),
+    subjectKind: "single" as const,
+    entryId: input.entryId,
+    entryTitle: input.label,
   });
 }

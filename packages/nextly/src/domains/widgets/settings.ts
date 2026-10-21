@@ -58,6 +58,18 @@ export interface WidgetSettingBase {
    * where the renderer reads, not only where the compiler agrees.
    */
   admin?: { description?: string };
+  /**
+   * Whether the setting sits on the card itself, changeable without opening
+   * the settings sheet, as Over time's date range does. At most one per widget.
+   *
+   * A top-level key the field configs do not have, deliberately: it is read by
+   * the card's header, never by `FieldRenderer`, which ignores it.
+   *
+   * @experimental Validated and published now; the card header that draws
+   * the quick setting is not built yet, so until it is, the setting is
+   * changed in the settings sheet like any other.
+   */
+  quick?: boolean;
 }
 
 /**
@@ -101,14 +113,21 @@ export type WidgetSetting =
  * declaration rules and the same reader below. A dependent setting (`filter`,
  * `sort`, `groupBy`) names in `of` the Collection setting it works over.
  *
- * 🔴 Not yet a member of `WidgetSetting`, and that is about drawing, not about
+ * 🔴 Not a member of `WidgetSetting`, and that is about drawing, not about
  * rules. `WidgetSetting` is what the settings sheet hands to `FieldRenderer`
  * with no cast, and no field config draws a collection picker or a filter
- * builder. Joined to it now, a registered widget declaring one would compile
- * and then crash the sheet. So registration refuses these by name
- * (`CONTENT_SETTING_NOT_DRAWN`) and only a declared widget, which nothing
- * offers to the admin yet, may hold one. The sheet gaining these controls is
- * what widens the published type.
+ * builder: the sheet draws these with controls of its own, from the choices
+ * the server offers the reader.
+ *
+ * Registration still refuses them by name (`CONTENT_SETTING_NOT_DRAWN`), for
+ * a reason about the QUERY rather than the sheet: a registered widget's
+ * settings reach its query through `applyWidgetSettings`, whose knobs are
+ * `limit` alone, so a content setting declared there would be drawn and saved
+ * and change nothing the card shows. Only a declared widget, whose card query
+ * is built from these settings, may hold one until those knobs carry them.
+ *
+ * @experimental The shape may still change while the settings sheet's
+ * content controls are built.
  */
 export type ContentSetting =
   | (WidgetSettingBase & { type: "collection"; defaultValue?: string })
@@ -124,7 +143,11 @@ export type ContentSetting =
       defaultValue?: string;
     });
 
-/** Every setting core's rules judge and its reader reads. */
+/**
+ * Every setting core's rules judge and its reader reads.
+ *
+ * @experimental As {@link ContentSetting}, which it includes.
+ */
 export type AnyWidgetSetting = WidgetSetting | ContentSetting;
 
 /**
@@ -159,7 +182,7 @@ const FIELD_DRAWN: Record<WidgetSetting["type"], true> = {
   select: true,
 };
 
-/** Whether a setting is one the settings sheet cannot draw yet. */
+/** Whether a setting is one a registered widget's query cannot apply yet. */
 function isContentSetting(
   setting: AnyWidgetSetting
 ): setting is ContentSetting {
@@ -351,15 +374,15 @@ export function widgetSettingsProblem(settings: unknown): string | undefined {
 }
 
 /**
- * Registration's refusal of a setting the settings sheet cannot draw yet,
- * saying what to use instead. It carries `CONTENT_SETTING_NOT_DRAWN`, so it
+ * Registration's refusal of a setting a registered widget's query cannot apply
+ * yet, saying what to use instead. It carries `CONTENT_SETTING_NOT_DRAWN`, so it
  * can be told apart from every other settings fault by more than its words.
  */
 function contentSettingRefusal({ name, type }: ContentSetting): string {
   return (
-    `setting "${name}" is a "${type}" setting, which the settings sheet cannot draw yet ` +
+    `setting "${name}" is a "${type}" setting, which a registered widget's query cannot apply yet ` +
     `(${CONTENT_SETTING_NOT_DRAWN}): use a text, number, checkbox or select ` +
-    `setting until the sheet supports collection pickers, filters, sorts and groupings`
+    `setting until those settings reach a registered widget's query`
   );
 }
 
@@ -387,8 +410,27 @@ export function widgetSettingsProblems(settings: unknown): string[] {
     if (problem === undefined) wellFormed.push(setting as AnyWidgetSetting);
     else problems.push(problem);
   }
-  // Both kinds in one answer, so one restart names every fault.
-  return [...problems, ...dependencyProblems(wellFormed, settings)];
+  // Every kind in one answer, so one restart names every fault.
+  return [
+    ...problems,
+    ...dependencyProblems(wellFormed, settings),
+    ...quickProblems(wellFormed),
+  ];
+}
+
+/**
+ * Why a widget's settings mark too many as quick, or nothing when they do not.
+ *
+ * A card's header holds one quick setting: two would each take the
+ * header's one place, and which one a person saw would depend on the order
+ * they were declared in.
+ */
+function quickProblems(settings: readonly AnyWidgetSetting[]): string[] {
+  const quick = settings.filter(setting => setting.quick === true);
+  if (quick.length <= 1) return [];
+  return [
+    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most one`,
+  ];
 }
 
 /**
@@ -449,10 +491,11 @@ function settingProblem(
   if (typeof setting !== "object" || setting === null) {
     return SETTING_NOT_AN_OBJECT;
   }
-  const { name, type, defaultValue, ...rest } = setting as {
+  const { name, type, defaultValue, quick, ...rest } = setting as {
     name?: unknown;
     type?: unknown;
     defaultValue?: unknown;
+    quick?: unknown;
     options?: unknown;
     min?: unknown;
     max?: unknown;
@@ -470,6 +513,9 @@ function settingProblem(
 
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
+  }
+  if (quick !== undefined && typeof quick !== "boolean") {
+    return `setting "${name}" has quick ${describeValue(quick)}; expected true or false`;
   }
 
   return problemForType(type, rest, defaultValue, name);
