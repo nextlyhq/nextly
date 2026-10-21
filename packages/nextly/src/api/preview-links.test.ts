@@ -323,9 +323,10 @@ describe("mintPreviewLink for a Single", () => {
       );
     });
 
-    // The token names one translation; the probe must judge that one. A custom
-    // read rule can allow the default document and deny the requested locale,
-    // and authorizing the default while signing the other authorizes nothing
+    // The token names one translation; the probe must judge that one. A rule
+    // told the language may allow one and refuse another, and a localized
+    // Single is a different document in each language, with a lifecycle of its
+    // own, so authorizing the default while signing another authorizes nothing
     // about what the bearer receives.
     it("authorizes the translation the token will name", async () => {
       await mintPreviewLink(post({ single: "homepage", locale: "fr" }));

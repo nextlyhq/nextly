@@ -24,6 +24,11 @@
  * @module api/preview-access
  */
 
+import {
+  everyLanguage,
+  registeredWriteAsNamedLanguagesFor,
+  withRuleLanguage,
+} from "../auth/access/rule-language";
 import { buildUserContext } from "../auth/user-context";
 import { getService } from "../di";
 import {
@@ -106,9 +111,17 @@ export async function assertEntryPreviewable(
      * direction nobody notices.
      */
     routeAuthorized: boolean;
+    /**
+     * The language the link is to, when it names one. The entry is read in it,
+     * at the mint and at every open, and the grant names it, so the grant
+     * answers for that translation and no other. A link naming no language
+     * is read as it always was.
+     */
+    locale?: string | undefined;
   }
 ): Promise<AuthorizedPreviewCaller> {
   const collections = getService("collectionsHandler");
+  const { locale } = options;
 
   // Enforced and as the caller, which is the same evaluation the bearer's read
   // will face. `status: "all"` is the part a plain by-id read cannot express: a
@@ -116,10 +129,11 @@ export async function assertEntryPreviewable(
   // that has never been published reports as missing — exactly the entry an
   // editor most wants to share for review.
   //
-  // Read in every language: an entry grant names none, and a link minted on it
-  // can be signed for any, so it holds only where the read rule admits every
-  // language. A rule that closes one refuses the link rather than being asked
-  // about the default language alone.
+  // Read in the language the link is to, which its grant then names. A link
+  // naming none is to the entry in every language, so it is read in every
+  // language and holds only where the read rule admits each of them: a rule
+  // that closes one refuses the link rather than being asked about the
+  // default language alone.
   const read = await collections.getEntry({
     collectionName: collection,
     entryId,
@@ -127,7 +141,7 @@ export async function assertEntryPreviewable(
     overrideAccess: false,
     user,
     status: "all",
-    locale: EVERY_TRANSLATION,
+    locale: locale ?? EVERY_TRANSLATION,
   });
 
   if (!readVerdict(read)) {
@@ -166,12 +180,23 @@ export async function assertEntryPreviewable(
   // the flag that must not be decided here: skipping a gate that DID run costs
   // nothing, and skipping one that did not is the difference between enforcing
   // a withdrawn role and ignoring it.
-  const mayEdit = await collections.canUpdateEntry({
-    collectionName: collection,
-    entryId,
-    user,
-    routeAuthorized: options.routeAuthorized,
-  });
+  //
+  // Asked in the same languages as the read: the link's own, or every
+  // language for a link naming none. The edit check sets no languages of its
+  // own, so they are set here rather than left to whatever the caller set. A
+  // language the site does not configure is judged in every language.
+  const mayEdit = await withRuleLanguage(
+    locale === undefined
+      ? everyLanguage()
+      : registeredWriteAsNamedLanguagesFor(locale),
+    () =>
+      collections.canUpdateEntry({
+        collectionName: collection,
+        entryId,
+        user,
+        routeAuthorized: options.routeAuthorized,
+      })
+  );
 
   if (!mayEdit) {
     throw NextlyError.forbidden({
@@ -189,7 +214,13 @@ export async function assertEntryPreviewable(
    * exists to establish; minted here it cannot exist unless every refusal above
    * was passed for THIS document.
    */
-  return previewCallerAuthorized(user, { collection, entryId });
+  return previewCallerAuthorized(user, {
+    collection,
+    entryId,
+    // The language the read above was made in, so the grant claims no more
+    // than was checked.
+    ...(locale === undefined ? {} : { locale }),
+  });
 }
 
 /**
@@ -434,7 +465,12 @@ export async function authorizePreviewSharer(
           document.collection,
           document.entryId,
           user,
-          { routeAuthorized: true }
+          {
+            routeAuthorized: true,
+            ...(document.locale === undefined
+              ? {}
+              : { locale: document.locale }),
+          }
         );
 
   return { auth, user, grant };

@@ -28,6 +28,12 @@
  * @module domains/singles/services/single-document-access
  */
 
+import {
+  everyLanguage,
+  registeredReadLanguagesFor,
+  registeredWriteAsNamedLanguagesFor,
+  withRuleLanguage,
+} from "../../../auth/access/rule-language";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { getService } from "../../../di";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -185,7 +191,7 @@ export async function singleStoredDocumentReadable(
 async function storedSingleDocumentAllows(
   slug: string,
   operation: "read" | "update",
-  { user, actor, routeAuthorized }: SingleAccessSubject
+  { user, actor, routeAuthorized, locale }: SingleAccessSubject
 ): Promise<boolean> {
   const registry = getService("singleRegistryService");
   const record = await registry.getSingleBySlug(slug);
@@ -198,16 +204,28 @@ async function storedSingleDocumentAllows(
   );
   if (!document) return false;
 
-  const denied = await checkSingleAccess({
-    slug,
-    operation,
-    user,
-    overrideAccess: false,
-    routeAuthorized,
-    rbacAccessControlService: getService("rbacAccessControlService"),
-    ...(actor === undefined ? {} : { authenticatedScope: actor }),
-    logger: getService("logger"),
-  });
+  // The gate reads no row, so it is told the languages it judges here: the
+  // one asked about, as a read or a write of it would be told, or every
+  // language where none is named. Set rather than inherited, so the answer
+  // does not depend on what the caller happened to set.
+  const languages =
+    locale === undefined
+      ? everyLanguage()
+      : operation === "read"
+        ? registeredReadLanguagesFor(locale)
+        : registeredWriteAsNamedLanguagesFor(locale);
+  const denied = await withRuleLanguage(languages, () =>
+    checkSingleAccess({
+      slug,
+      operation,
+      user,
+      overrideAccess: false,
+      routeAuthorized,
+      rbacAccessControlService: getService("rbacAccessControlService"),
+      ...(actor === undefined ? {} : { authenticatedScope: actor }),
+      logger: getService("logger"),
+    })
+  );
   return denied === null;
 }
 

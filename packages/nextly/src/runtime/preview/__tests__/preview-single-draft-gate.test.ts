@@ -124,6 +124,23 @@ describe("previewSingleDraftGate", () => {
     ).resolves.toEqual({ readAs: SHARER });
   });
 
+  it("judges the sharer in the language the link names", async () => {
+    // Asked of the language the link is to, at every open.
+    await cookieFor({ kind: "single", single: "homepage", locale: "fr" });
+
+    await previewSingleDraftGate()({ slug: "homepage", locale: "fr" });
+
+    for (const check of [
+      singleDocumentEditable,
+      singleStoredDocumentReadable,
+    ]) {
+      expect(check).toHaveBeenCalledWith(
+        "homepage",
+        expect.objectContaining({ routeAuthorized: false, locale: "fr" })
+      );
+    }
+  });
+
   it("refuses a token whose locale is not the one the route reads", async () => {
     await cookieFor({ kind: "single", single: "homepage", locale: "en" });
 
