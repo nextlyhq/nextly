@@ -8,8 +8,9 @@
  * which calls `window` listeners in the order they were added, let Back leave
  * and drop the edits without a word.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const LIST_PATH = /\/admin\/collections\/posts$/;

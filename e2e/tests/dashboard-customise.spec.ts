@@ -13,8 +13,9 @@
  * @module tests/dashboard-customise.spec
  */
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin, type Theme } from "./support/admin";
 
 const CELLS = '[data-testid^="widget-cell-"]';
