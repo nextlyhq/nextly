@@ -1992,6 +1992,29 @@ export class ReleasesService {
   }
 
   /**
+   * Whether the caller may read releases, by the decision every read here makes.
+   *
+   * For a reader outside this service that must withhold what releases hold
+   * from a caller who may not read them — the entry list's `_inRelease` filter
+   * reveals which documents a release will publish and when — so that it asks
+   * this one rule rather than keeping a second. Only a refusal answers `false`;
+   * any other failure is thrown, so a fault is never mistaken for "may not".
+   *
+   * @experimental
+   */
+  async mayRead(actor: ReleaseActor): Promise<boolean> {
+    try {
+      await this.authorize(actor, "read");
+      return true;
+    } catch (error) {
+      if (error instanceof NextlyError && error.code === "FORBIDDEN") {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  /**
    * The list's filters, checked, as the repository takes them.
    *
    * Each refusal is one a caller can act on, and each guards against an answer

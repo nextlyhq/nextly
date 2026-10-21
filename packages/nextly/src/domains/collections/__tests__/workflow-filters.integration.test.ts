@@ -1,0 +1,440 @@
+/**
+ * The workflow filters, `_pendingChange` and `_inRelease`, against a real
+ * database, over REST as people with different read rights.
+ *
+ * What only a database can settle: that each condition keeps exactly the
+ * entries its rule names on every dialect — the working-draft shape and not
+ * any other version row, publishes and not unpublishes, releases still to run
+ * and not those past their time or in another state, each entry once however
+ * many languages or releases hold it — and that the list and its count, the
+ * number the dashboard shows and the page it links to, hold the same entries.
+ *
+ * Runs against whichever dialects the integration run configures; CI covers
+ * SQLite, PostgreSQL and MySQL.
+ */
+
+// Set before the harness boots (env validation reads it once).
+process.env.NEXTLY_SECRET =
+  process.env.NEXTLY_SECRET ??
+  "test-secret-must-be-at-least-32-characters-long!!";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { defineCollection, text } from "../../../config";
+import {
+  createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
+  type TestNextly,
+} from "../../../plugins/test-nextly";
+import { VERSIONS_TABLE } from "../../../schemas/versions/types";
+import type { CollectionsHandler } from "../../../services/collections-handler";
+import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
+import { keyHolding, rest } from "../../releases/__tests__/helpers/rest-key";
+import {
+  RELEASE_MEMBERS_TABLE,
+  RELEASES_TABLE,
+} from "../../releases/release-tables";
+import { releaseMemberKey } from "../../releases/release-member-key";
+
+let current: TestNextly | undefined;
+
+afterEach(async () => {
+  await current?.destroy();
+  current = undefined;
+});
+
+const MINUTE = 60 * 1000;
+const DAY = 24 * 60 * MINUTE;
+
+async function boot(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly({
+    dialect,
+    collections: ["posts", "secrets"].map(slug =>
+      defineCollection({
+        slug,
+        status: true,
+        versions: { drafts: true },
+        fields: [text({ name: "title" })],
+      })
+    ),
+  });
+  return current;
+}
+
+type Collection = "posts" | "secrets";
+
+/** A published entry, through the ordinary write path; its id. */
+async function entry(
+  t: TestNextly,
+  collection: Collection,
+  title: string
+): Promise<string> {
+  const handler = t.getService("collectionsHandler") as CollectionsHandler;
+  const created = await handler.createEntry(
+    { collectionName: collection, overrideAccess: true },
+    { title, status: "published" }
+  );
+  const id = (created.data as { id?: string } | undefined)?.id;
+  if (typeof id !== "string") throw new Error(`no id for ${title}`);
+  return id;
+}
+
+/** A version row of an entry, a working draft unless told otherwise. */
+async function versionRow(
+  t: TestNextly,
+  collection: Collection,
+  entryId: string,
+  row: { locale?: string | null; versionNo?: number; isAutosave?: boolean }
+): Promise<void> {
+  await t.adapter.insert(VERSIONS_TABLE, {
+    id: crypto.randomUUID(),
+    scopeKind: "collection",
+    scopeSlug: collection,
+    entryId,
+    versionNo: row.versionNo ?? null,
+    status: "draft",
+    isAutosave: row.isAutosave ?? false,
+    snapshot: JSON.stringify({ title: "edited" }),
+    label: null,
+    locale: row.locale ?? null,
+    sourceVersionNo: null,
+    createdBy: null,
+    createdAt: new Date("2026-01-01T00:00:00Z"),
+    updatedAt: new Date("2026-01-01T00:00:00Z"),
+  });
+}
+
+/**
+ * A release in the given state at the given instant, written straight into the
+ * production table, because a schedule through the service refuses a time in
+ * the past and the cases below need releases past their time.
+ */
+async function release(
+  t: TestNextly,
+  state: "draft" | "scheduled" | "blocked",
+  at: Date | null
+): Promise<string> {
+  const id = crypto.randomUUID();
+  const created = new Date();
+  await t.adapter.insert(RELEASES_TABLE, {
+    id,
+    title: `Release ${id.slice(0, 8)}`,
+    description: null,
+    scheduledAt: at,
+    timezone: "UTC",
+    state,
+    publishedAt: null,
+    createdBy: null,
+    createdAt: created,
+    updatedAt: created,
+    revision: 0,
+  });
+  return id;
+}
+
+/** A member of a release, in the production table. */
+async function member(
+  t: TestNextly,
+  releaseId: string,
+  collection: Collection,
+  entryId: string,
+  action: "publish" | "unpublish",
+  locale: string | null = null
+): Promise<void> {
+  const ref = {
+    scopeKind: "collection" as const,
+    scopeSlug: collection,
+    entryId,
+    locale,
+  };
+  await t.adapter.insert(RELEASE_MEMBERS_TABLE, {
+    id: crypto.randomUUID(),
+    releaseId,
+    ...ref,
+    action,
+    memberKey: releaseMemberKey(releaseId, ref),
+    createdBy: null,
+    createdAt: new Date(),
+  });
+}
+
+/**
+ * One collection's entries under a filter, as a key holder reads them over
+ * REST: the ids the list returns, its total, and the count endpoint's total.
+ * Every status, as the admin's list asks, because the entries a filter keeps
+ * may be drafts.
+ */
+async function listed(
+  key: string,
+  collection: Collection,
+  where: unknown
+): Promise<{ ids: Set<string>; total: number; counted: number }> {
+  const query = `status=all&limit=100&where=${encodeURIComponent(JSON.stringify(where))}`;
+  const list = await rest(
+    key,
+    "GET",
+    ["collections", collection, "entries"],
+    undefined,
+    query
+  );
+  expect(list.status, JSON.stringify(list.json)).toBe(200);
+  const count = await rest(
+    key,
+    "GET",
+    ["collections", collection, "entries", "count"],
+    undefined,
+    query
+  );
+  expect(count.status, JSON.stringify(count.json)).toBe(200);
+  return {
+    ids: new Set((list.json.items as { id: string }[]).map(item => item.id)),
+    total: (list.json.meta as { total: number }).total,
+    counted: count.json.total as number,
+  };
+}
+
+/** A REST read's refusal: its status and the problems it names. */
+async function refusedWith(
+  key: string,
+  collection: Collection,
+  query: string
+): Promise<{ status: number; errors: unknown }> {
+  const res = await rest(
+    key,
+    "GET",
+    ["collections", collection, "entries"],
+    undefined,
+    query
+  );
+  const error = res.json.error as { data?: { errors?: unknown } } | undefined;
+  return { status: res.status, errors: error?.data?.errors };
+}
+
+describe.each(getConfiguredTestDialects())(
+  "the workflow list filters (%s)",
+  dialect => {
+    /**
+     * Entries in every place the two rules tell apart, and three callers: one
+     * who may read both collections and releases, one who may read posts and
+     * releases, and one who may read posts alone.
+     */
+    async function seed() {
+      const t = await boot(dialect);
+      // The first user is the instance's super admin; every key below is
+      // minted by somebody else, so each is judged on its own grants.
+      await seedLiveAuthor(t);
+      const now = Date.now();
+      const at = (offset: number) => new Date(now + offset);
+
+      const posts = {
+        drafted: await entry(t, "posts", "Drafted"),
+        draftedInFrench: await entry(t, "posts", "Drafted in French"),
+        onlyHistory: await entry(t, "posts", "Only history"),
+        untouched: await entry(t, "posts", "Untouched"),
+        soon: await entry(t, "posts", "Soon"),
+        unpublishedSoon: await entry(t, "posts", "Unpublished soon"),
+        later: await entry(t, "posts", "Later"),
+        inGrace: await entry(t, "posts", "In grace"),
+        overdue: await entry(t, "posts", "Overdue"),
+        inDraftRelease: await entry(t, "posts", "In a draft release"),
+        inStoppedRelease: await entry(t, "posts", "In a stopped release"),
+      };
+      const secret = await entry(t, "secrets", "Secret soon");
+
+      // Working drafts: one unlocalized, one in a single other language.
+      await versionRow(t, "posts", posts.drafted, {});
+      await versionRow(t, "posts", posts.draftedInFrench, { locale: "fr" });
+      // Version rows that are NOT a pending change: an autosave, and a
+      // numbered history version.
+      await versionRow(t, "posts", posts.onlyHistory, { isAutosave: true });
+      await versionRow(t, "posts", posts.onlyHistory, { versionNo: 1 });
+      // A working draft of a secret, to show the condition stays per collection.
+      await versionRow(t, "secrets", secret, {});
+
+      // Two releases within the week both publish `soon` (counted once, in two
+      // languages of one of them); the first also unpublishes another entry.
+      const inTwoDays = await release(t, "scheduled", at(2 * DAY));
+      await member(t, inTwoDays, "posts", posts.soon, "publish");
+      await member(t, inTwoDays, "posts", posts.soon, "publish", "fr");
+      await member(t, inTwoDays, "posts", posts.unpublishedSoon, "unpublish");
+      await member(t, inTwoDays, "secrets", secret, "publish");
+      const inThreeDays = await release(t, "scheduled", at(3 * DAY));
+      await member(t, inThreeDays, "posts", posts.soon, "publish");
+      // Beyond the week: kept by the open form only.
+      const inTenDays = await release(t, "scheduled", at(10 * DAY));
+      await member(t, inTenDays, "posts", posts.later, "publish");
+      // Past its time, inside the grace period and beyond it: neither kept.
+      const graceRelease = await release(t, "scheduled", at(-3 * MINUTE));
+      await member(t, graceRelease, "posts", posts.inGrace, "publish");
+      const overdueRelease = await release(t, "scheduled", at(-60 * MINUTE));
+      await member(t, overdueRelease, "posts", posts.overdue, "publish");
+      // Not scheduled at all, or stopped: neither kept.
+      const draftRelease = await release(t, "draft", null);
+      await member(t, draftRelease, "posts", posts.inDraftRelease, "publish");
+      const stopped = await release(t, "blocked", at(DAY));
+      await member(t, stopped, "posts", posts.inStoppedRelease, "publish");
+
+      const everything = await keyHolding(
+        t,
+        ["read-posts", "read-secrets", "read-content-releases"],
+        { email: "everything@example.com", name: "Everything" }
+      );
+      const postsAndReleases = await keyHolding(
+        t,
+        ["read-posts", "read-content-releases"],
+        { email: "posts-releases@example.com", name: "Posts and releases" }
+      );
+      const postsOnly = await keyHolding(t, ["read-posts"], {
+        email: "posts-only@example.com",
+        name: "Posts only",
+      });
+      return {
+        t,
+        posts,
+        secret,
+        weekEnd: at(7 * DAY),
+        keys: {
+          everything: everything.key,
+          postsAndReleases: postsAndReleases.key,
+          postsOnly: postsOnly.key,
+        },
+      };
+    }
+
+    it("keeps entries whose draft holds unpublished changes, in any language, and counts what it lists", async () => {
+      const { posts, secret, keys } = await seed();
+      for (const key of [keys.everything, keys.postsOnly]) {
+        const pending = await listed(key, "posts", { _pendingChange: true });
+        expect(pending.ids).toEqual(
+          new Set([posts.drafted, posts.draftedInFrench])
+        );
+        expect(pending.total).toBe(2);
+        expect(pending.counted).toBe(2);
+      }
+      const secrets = await listed(keys.everything, "secrets", {
+        _pendingChange: true,
+      });
+      expect(secrets.ids).toEqual(new Set([secret]));
+    });
+
+    it("keeps entries a release will publish within the bound, once each, and counts what it lists", async () => {
+      const { posts, weekEnd, keys } = await seed();
+      const week = await listed(keys.everything, "posts", {
+        _inRelease: { scheduledBefore: weekEnd.toISOString() },
+      });
+      expect(week.ids).toEqual(new Set([posts.soon]));
+      expect(week.total).toBe(1);
+      expect(week.counted).toBe(1);
+    });
+
+    it("keeps releases beyond the week under the open form, with every other rule unchanged", async () => {
+      const { posts, keys } = await seed();
+      const open = await listed(keys.everything, "posts", {
+        _inRelease: true,
+      });
+      expect(open.ids).toEqual(new Set([posts.soon, posts.later]));
+      expect(open.total).toBe(2);
+      expect(open.counted).toBe(2);
+
+      // The bracket form reads the same.
+      const bracket = await rest(
+        keys.everything,
+        "GET",
+        ["collections", "posts", "entries"],
+        undefined,
+        "status=all&limit=100&where[_inRelease]=true"
+      );
+      expect(bracket.status).toBe(200);
+      expect(
+        new Set((bracket.json.items as { id: string }[]).map(i => i.id))
+      ).toEqual(open.ids);
+    });
+
+    it("stays in effect beside the list's own filters", async () => {
+      const { posts, keys } = await seed();
+      const narrowed = await listed(keys.everything, "posts", {
+        _inRelease: true,
+        title: { equals: "Later" },
+      });
+      expect(narrowed.ids).toEqual(new Set([posts.later]));
+      expect(narrowed.counted).toBe(1);
+
+      const both = await listed(keys.everything, "posts", {
+        _pendingChange: true,
+        _inRelease: true,
+      });
+      // No entry is both drafted and due, so the two conditions together keep
+      // none: they are AND-ed, never OR-ed.
+      expect(both.ids).toEqual(new Set());
+      expect(both.counted).toBe(0);
+    });
+
+    it("answers each collection only to a caller who may read it", async () => {
+      const { secret, weekEnd, keys } = await seed();
+      const where = { _inRelease: { scheduledBefore: weekEnd.toISOString() } };
+      expect((await listed(keys.everything, "secrets", where)).ids).toEqual(
+        new Set([secret])
+      );
+      const refused = await rest(
+        keys.postsAndReleases,
+        "GET",
+        ["collections", "secrets", "entries"],
+        undefined,
+        `status=all&where=${encodeURIComponent(JSON.stringify(where))}`
+      );
+      expect(refused.status).toBe(403);
+    });
+
+    it("refuses _inRelease to a caller who may not read releases, exactly as an unknown condition", async () => {
+      const { keys } = await seed();
+      const asInRelease = await refusedWith(
+        keys.postsOnly,
+        "posts",
+        `status=all&where=${encodeURIComponent(JSON.stringify({ _inRelease: true }))}`
+      );
+      const asUnknown = await refusedWith(
+        keys.postsOnly,
+        "posts",
+        `status=all&where=${encodeURIComponent(JSON.stringify({ _noSuchCondition: true }))}`
+      );
+      expect(asInRelease.status).toBe(400);
+      expect(asUnknown.status).toBe(400);
+      // Word for word once the name is the same.
+      expect(
+        JSON.stringify(asInRelease.errors).replaceAll(
+          "_inRelease",
+          "_noSuchCondition"
+        )
+      ).toBe(JSON.stringify(asUnknown.errors));
+
+      // The bounded form too, so a bound reveals nothing either.
+      const bounded = await refusedWith(
+        keys.postsOnly,
+        "posts",
+        `status=all&where[_inRelease][scheduledBefore]=2099-01-01T00:00:00Z`
+      );
+      expect(bounded.errors).toEqual(asInRelease.errors);
+    });
+
+    it("refuses either key inside and/or", async () => {
+      const { keys } = await seed();
+      const nested = await refusedWith(
+        keys.everything,
+        "posts",
+        `status=all&where=${encodeURIComponent(
+          JSON.stringify({
+            and: [{ _pendingChange: true }, { title: { equals: "x" } }],
+          })
+        )}`
+      );
+      expect(nested.status).toBe(400);
+      expect(nested.errors).toEqual([
+        expect.objectContaining({
+          code: "FILTER_MISPLACED_KEY",
+          path: "where.and.0._pendingChange",
+        }),
+      ]);
+    });
+  }
+);

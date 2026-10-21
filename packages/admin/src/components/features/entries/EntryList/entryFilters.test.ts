@@ -82,6 +82,56 @@ describe("buildEntryWhereFilter", () => {
     expect(combined.status).toEqual({ equals: "published" });
   });
 
+  it.each([
+    ["_pendingChange", { _pendingChange: true }],
+    [
+      "_inRelease with a bound",
+      { _inRelease: { scheduledBefore: "2026-10-28T09:00:00Z" } },
+    ],
+    ["_inRelease open", { _inRelease: true }],
+  ])(
+    "keeps a linked %s at the top level when the list adds its own filters",
+    (_name, linked) => {
+      // A dashboard count links with this key alone in `?where=`. The server
+      // refuses it inside `and`, so the status and date filters must sit
+      // beside it rather than wrap it.
+      const where = buildEntryWhereFilter({
+        whereParam: JSON.stringify(linked),
+        status: "draft",
+        createdFrom: "2026-04-03",
+      }) as Record<string, unknown>;
+
+      expect(where).toEqual({
+        ...linked,
+        and: [
+          { status: { equals: "draft" } },
+          { createdAt: { greater_than_equal: "2026-04-03T00:00:00.000Z" } },
+        ],
+      });
+    }
+  );
+
+  it("keeps a linked key at the top level beside the rest of the linked filter", () => {
+    const where = buildEntryWhereFilter({
+      whereParam: JSON.stringify({
+        _pendingChange: true,
+        author: { equals: "user-1" },
+      }),
+      status: "draft",
+    }) as Record<string, unknown>;
+
+    expect(where).toEqual({
+      _pendingChange: true,
+      and: [{ author: { equals: "user-1" } }, { status: { equals: "draft" } }],
+    });
+  });
+
+  it("returns a linked key alone as the whole filter", () => {
+    expect(
+      buildEntryWhereFilter({ whereParam: '{"_pendingChange":true}' })
+    ).toEqual({ _pendingChange: true });
+  });
+
   it("omits _translated when no language filter is active", () => {
     const where = buildEntryWhereFilter({ status: "all", translated: null });
     expect(where).toBeUndefined();

@@ -22,12 +22,35 @@ import { NextlyError } from "../../../errors/nextly-error";
 import { TRANSLATION_FILTER_STATES } from "../../i18n/translation-filter-states";
 
 import { parseNearQuery, parseWithinQuery } from "./geo-utils";
+import {
+  isWorkflowKey,
+  WORKFLOW_KEY_PURPOSE,
+  workflowKeyForm,
+  workflowKeyProblem,
+} from "./workflow-filter";
 
 /** One problem with a filter, as `NextlyError.validation` reports it. */
 export interface FilterProblem {
   path: string;
   code: string;
   message: string;
+}
+
+/**
+ * The refusal of a key that names no field this collection can be filtered on.
+ *
+ * Exported so a condition that must be refused AS IF it were unknown — one a
+ * caller may not use, where saying so would tell them it exists for others —
+ * is refused in exactly these words. It is the same sentence the condition
+ * builder (`services/collections/drizzle-condition`) gives a name it cannot
+ * resolve.
+ */
+export function unknownFieldProblem(path: string, key: string): FilterProblem {
+  return {
+    path,
+    code: "FILTER_UNKNOWN_FIELD",
+    message: `"${key}" is not a field this collection can be filtered on.`,
+  };
 }
 
 /** The reserved key carrying the language filter. */
@@ -282,14 +305,21 @@ function fieldProblems(
     });
     return;
   }
+  // The workflow keys are conditions on other tables, read only at the top
+  // level, like the language filter. Below it they would reach the condition
+  // builder as a field name.
+  if (isWorkflowKey(key)) {
+    into.push({
+      path,
+      code: "FILTER_MISPLACED_KEY",
+      message: `"${key}" ${WORKFLOW_KEY_PURPOSE[key]} and may only be given at the top level of a filter, as ${workflowKeyForm(key)}.`,
+    });
+    return;
+  }
   // Refused before any walk runs: a walk that rebuilds a filter by assignment
   // would set a prototype with it and lose the condition.
   if (key === PROTOTYPE_KEY) {
-    into.push({
-      path,
-      code: "FILTER_UNKNOWN_FIELD",
-      message: `"${key}" is not a field this collection can be filtered on.`,
-    });
+    into.push(unknownFieldProblem(path, key));
     return;
   }
   if (isPlainObject(value)) {
@@ -358,6 +388,11 @@ function nodeProblems(
       translatedProblems(value, into);
       continue;
     }
+    if (isWorkflowKey(key) && allowTranslated) {
+      const problem = workflowKeyProblem(key, value);
+      if (problem) into.push(problem);
+      continue;
+    }
     fieldProblems(at, key, value, into);
   }
 }
@@ -365,9 +400,12 @@ function nodeProblems(
 /**
  * Every problem with a filter's shape, without throwing.
  *
- * `allowTranslated` admits the language filter at the top level. It is set by
- * a caller that receives the whole filter; the condition builder receives one
- * with that key already taken out, so there the key is refused wherever it is.
+ * `allowTranslated` admits the reserved top-level keys: the language filter,
+ * and the workflow keys `workflow-filter` reads (`_pendingChange`,
+ * `_inRelease`). It is set by a caller that receives the whole filter; the
+ * condition builder receives one with those keys already taken out, so there
+ * each is refused wherever it is. The option keeps the name it had when the
+ * language filter was the only reserved key, so no caller changes meaning.
  */
 export function filterShapeProblems(
   where: unknown,

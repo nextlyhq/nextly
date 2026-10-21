@@ -636,9 +636,11 @@ export class VersionsRepository {
           { column: "scopeKind", op: "=", value: scopeKind },
           { column: "scopeSlug", op: "=", value: scopeSlug },
           { column: "entryId", op: "IN", value: entryIds },
-          { column: "isAutosave", op: "=", value: false },
-          { column: "versionNo", op: "IS NULL" },
-          { column: "status", op: "=", value: "draft" },
+          // The shape itself, not a copy of its three conditions: the
+          // languages a list row marks as pending and the `_pendingChange`
+          // filter that keeps the row both read it, and a copy would let the
+          // badge and the filter disagree the first time the shape changed.
+          ...WORKING_DRAFT_SHAPE,
         ],
       },
     });
