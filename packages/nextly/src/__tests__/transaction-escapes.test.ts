@@ -5,6 +5,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  escapeKeyOf,
+  knownEscape,
+  type KnownEscape,
+  OPENED_BY,
   siteKeyOf,
   statementFingerprint,
   UNKNOWN_SITE,
@@ -48,23 +52,44 @@ describe("statementFingerprint", () => {
     ],
     [
       "SELECT `id` FROM `nextly`.`dc_posts` WHERE `id` = ? LIMIT 1",
-      "select dc_posts",
+      "select dc_*",
     ],
     [
       'insert into "nextly_schema_events" ("id") values ($1)',
       "insert nextly_schema_events",
     ],
-    ['update "dc_posts" set "title" = $1', "update dc_posts"],
-    ['delete from "dc_posts" where "id" = $1', "delete dc_posts"],
+    ['update "dc_posts" set "title" = $1', "update dc_*"],
+    ['delete from "dc_posts" where "id" = $1', "delete dc_*"],
     [
       'CREATE TABLE IF NOT EXISTS "nextly_i18n_archive" ("id" text)',
       "create nextly_i18n_archive",
     ],
-    ['ALTER TABLE "dc_posts" ADD COLUMN "x" text', "alter dc_posts"],
+    ['ALTER TABLE "dc_posts" ADD COLUMN "x" text', "alter dc_*"],
     ["SELECT 1", "select"],
+    // The adapters' `tableExists` probes, as PostgreSQL and MySQL spell them.
+    [
+      "SELECT EXISTS ( SELECT FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2 ) as exists",
+      "select tables",
+    ],
+    [
+      "SELECT COUNT(*) as count FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = ?",
+      "select tables",
+    ],
   ])("fingerprints %s as %s", (sql, expected) => {
     expect(statementFingerprint(sql)).toBe(expected);
   });
+
+  it.each([
+    ['select * from "dc_posts_locales"', "select dc_*_locales"],
+    ["SELECT `id` FROM `single_hero`", "select single_*"],
+    ['delete from "comp_banner_locales"', "delete comp_*_locales"],
+    ['select * from "dynamic_collections"', "select dynamic_collections"],
+  ])(
+    "names an entity's own table by its kind, and a system table by its name: %s",
+    (sql, expected) => {
+      expect(statementFingerprint(sql)).toBe(expected);
+    }
+  );
 
   it("drops literals and parameters, so the same query with other values keeps its fingerprint", () => {
     expect(
@@ -74,5 +99,77 @@ describe("statementFingerprint", () => {
 
   it("names a checkout that carried no statement", () => {
     expect(statementFingerprint(undefined)).toBe("checkout");
+  });
+});
+
+describe("escapeKeyOf", () => {
+  const site =
+    "CollectionMutationService.createEntry (/repo/packages/nextly/src/domains/collections/services/collection-mutation-service.ts:120:9)";
+
+  it("keys an escape at its own call site with the statement's verb and table", () => {
+    expect(
+      escapeKeyOf({
+        site,
+        opener: undefined,
+        statement: 'select * from "nextly_webhooks"',
+      })
+    ).toBe(
+      "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry · select nextly_webhooks"
+    );
+  });
+
+  it("keys an escape with no call site by where its transaction was opened, with the statement", () => {
+    expect(
+      escapeKeyOf({
+        site: undefined,
+        opener: site,
+        statement: 'select * from "dynamic_singles"',
+      })
+    ).toBe(
+      `packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry${OPENED_BY} · select dynamic_singles`
+    );
+  });
+
+  it("keys a report with neither as unknown", () => {
+    expect(
+      escapeKeyOf({ site: undefined, opener: undefined, statement: "select 1" })
+    ).toBe(UNKNOWN_SITE);
+  });
+});
+
+describe("knownEscape", () => {
+  const site =
+    "CollectionMutationService.createEntry (/repo/packages/nextly/src/domains/collections/services/collection-mutation-service.ts:120:9)";
+  const listed: KnownEscape = {
+    dialect: "postgresql",
+    key: escapeKeyOf({
+      site,
+      opener: undefined,
+      statement: 'select * from "nextly_webhooks"',
+    }),
+    witness: "packages/nextly/src/w.integration.test.ts",
+    reason: "known: test",
+  };
+
+  it("accepts the listed statement at a listed site", () => {
+    const key = escapeKeyOf({
+      site,
+      opener: undefined,
+      statement: 'select "id" from "nextly_webhooks" where "x" = $1',
+    });
+    expect(knownEscape("postgresql", key, [listed])).toBe(listed);
+  });
+
+  it("does not accept a new statement at the same listed site, so it fails the run", () => {
+    const key = escapeKeyOf({
+      site,
+      opener: undefined,
+      statement: 'insert into "nextly_meta" ("id") values ($1)',
+    });
+    expect(knownEscape("postgresql", key, [listed])).toBeUndefined();
+  });
+
+  it("does not accept the listed statement on another dialect", () => {
+    expect(knownEscape("mysql", listed.key, [listed])).toBeUndefined();
   });
 });

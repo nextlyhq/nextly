@@ -35,8 +35,8 @@ export interface TransactionEscape {
    * it survives ordinary edits to the file. A statement reached through a
    * query builder awaited as a thenable carries no caller, since V8 links none
    * across that; it is keyed by where its transaction was opened instead,
-   * marked `OPENED_BY`, with the statement's verb and table
-   * (`statementFingerprint`), so escapes of one flow stay apart.
+   * marked `OPENED_BY`. Either way it ends with the statement's verb and
+   * table (`escapeKeyOf`), so a new statement at a listed site is new.
    * `UNKNOWN_SITE` when neither was captured.
    */
   key: string;
@@ -73,9 +73,11 @@ export interface KnownEscape {
   /**
    * A test file, from `packages/` on, that reaches the escape. The run fails
    * when it runs and no longer does (`staleKnownEscapes`), so the list only
-   * shrinks.
+   * shrinks. `null` only for an escape that does not happen on every run,
+   * which a witness would report as fixed when it is not; its reason says so,
+   * and a new escape at its key still fails.
    */
-  witness: string;
+  witness: string | null;
   /** Why it is accepted, and which kind of fix removes it. */
   reason: string;
 }
@@ -97,11 +99,38 @@ export const ACCEPTED_ESCAPES: readonly AcceptedEscape[] = [
   },
 ];
 
-/** The known escape a report on `dialect` with `key` is, if it is one. */
-function knownEscape(dialect: string, key: string): KnownEscape | undefined {
-  return KNOWN_ESCAPES.find(
-    entry => entry.dialect === dialect && entry.key === key
-  );
+/**
+ * The known escape a report on `dialect` with `key` is, if it is one: an exact match, so a
+ * statement a listed site did not make before is not taken for the one it did.
+ */
+export function knownEscape(
+  dialect: string,
+  key: string,
+  known: readonly KnownEscape[] = KNOWN_ESCAPES
+): KnownEscape | undefined {
+  return known.find(entry => entry.dialect === dialect && entry.key === key);
+}
+
+/**
+ * An escape's key: where it was made, by its own call site when the stack reaches it and by
+ * where its transaction was opened otherwise (`OPENED_BY`), and in both cases the statement's
+ * verb and table (`statementFingerprint`). The statement is part of every key so that a new
+ * query at a site already listed is a new escape, not the old one again. `UNKNOWN_SITE` when
+ * neither site was captured.
+ */
+export function escapeKeyOf(report: {
+  site: string | undefined;
+  opener: string | undefined;
+  statement: string | undefined;
+}): string {
+  const statement = statementFingerprint(report.statement);
+  if (report.site !== undefined) {
+    return `${siteKeyOf(report.site)} · ${statement}`;
+  }
+  if (report.opener !== undefined) {
+    return `${siteKeyOf(report.opener)}${OPENED_BY} · ${statement}`;
+  }
+  return UNKNOWN_SITE;
 }
 
 const OBSERVER = Symbol.for("nextly.transactionEscapeObserver");
@@ -175,6 +204,21 @@ const TABLE_AFTER: Readonly<Partial<Record<string, RegExp>>> = {
 };
 
 /**
+ * A table a Schema Builder entity owns, named after the entity (`dc_posts`, `single_hero_locales`):
+ * as its kind (`dc_*`, `single_*_locales`), so a test's own entity names no new key. A system
+ * table keeps its name.
+ */
+const ENTITY_TABLE = /^(dc|single|comp|fg)_.+?(_locales)?$/;
+
+function entityKindOf(table: string): string {
+  return table.replace(
+    ENTITY_TABLE,
+    (_match, kind: string, locales: string | undefined) =>
+      `${kind}_*${locales ?? ""}`
+  );
+}
+
+/**
  * A statement as its verb and table, `select nextly_dynamic_collections`:
  * what an escape keyed by its transaction's opener adds, so a new statement in
  * the same flow is told apart from the known ones. No literals, parameters or
@@ -187,8 +231,8 @@ export function statementFingerprint(sql: string | undefined): string {
   const verb = (/^\(?\s*(\w+)/.exec(text)?.[1] ?? "?").toLowerCase();
   const table = TABLE_AFTER[verb]?.exec(text)?.[1];
   if (table === undefined) return verb;
-  const bare = table.split(".").pop() ?? table;
-  return `${verb} ${bare.replace(/[`"]/g, "")}`;
+  const bare = (table.split(".").pop() ?? table).replace(/[`"]/g, "");
+  return `${verb} ${entityKindOf(bare)}`;
 }
 
 /**
@@ -219,10 +263,7 @@ export function installTransactionEscapeObserver(): void {
         ? undefined
         : callSiteOf(report.openedAt, { wrappers: true });
     const stacks = `${report.stack}\n${report.openedAt ?? ""}`;
-    const key =
-      site !== undefined || opener === undefined
-        ? siteKeyOf(site)
-        : `${siteKeyOf(opener)}${OPENED_BY} · ${statementFingerprint(report.statement)}`;
+    const key = escapeKeyOf({ site, opener, statement: report.statement });
     seen.push({
       dialect: report.dialect,
       site:

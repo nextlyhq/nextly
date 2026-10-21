@@ -18,15 +18,80 @@ const PIPELINE =
   "known: the schema pipeline reads tables on another connection while its own transaction is open";
 const CALLER =
   "known: a write made inside a caller's transaction reads or writes on another connection";
+const TIMING =
+  "known, timing-dependent: a schema probe on another connection, made only when the first check of the run happens inside a transaction; unwitnessed, since a run where it does not happen would report it fixed";
 const PLUGIN =
   "known: a statement in a plugin's transaction runs on another connection";
 
 export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   {
     dialect: "mysql",
-    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select COLUMNS",
     witness:
       "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select KEY_COLUMN_USAGE",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select SCHEMATA",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select STATISTICS",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select TABLES",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select TABLE_CONSTRAINTS",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select VIEWS",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select comp_*_locales",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select dc_*_locales",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/archive-entity-kind.integration.test.ts",
+    reason: PIPELINE,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/database/drizzle-kit-lazy.ts#Object.query \u00b7 select single_*_locales",
+    witness:
+      "packages/nextly/src/domains/i18n/__tests__/enable-translation-dialogs.integration.test.ts",
     reason: PIPELINE,
   },
   {
@@ -66,7 +131,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted",
+    key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted \u00b7 select tables",
     witness:
       "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
     reason: CALLER,
@@ -87,7 +152,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_notes",
+    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
@@ -122,13 +187,6 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry",
-    witness:
-      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
-    reason: CALLER,
-  },
-  {
-    dialect: "mysql",
     key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry (opened the transaction) \u00b7 select dynamic_collections",
     witness:
       "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
@@ -146,6 +204,13 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
     key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry (opened the transaction) \u00b7 select nextly_webhooks",
     witness:
       "packages/nextly/src/auth/__tests__/access-every-way-in.mysql.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
+    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry \u00b7 checkout",
+    witness:
+      "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
   },
   {
@@ -192,6 +257,13 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
+    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_meta",
+    witness:
+      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "mysql",
     key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
     witness:
       "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
@@ -213,10 +285,9 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "mysql",
-    key: "packages/nextly/src/domains/notices/notices-service.ts#NoticesService.tablePresent",
-    witness:
-      "packages/nextly/src/domains/notices/__tests__/notices.integration.test.ts",
-    reason: CALLER,
+    key: "packages/nextly/src/domains/notices/notices-service.ts#NoticesService.tablePresent \u00b7 select tables",
+    witness: null,
+    reason: TIMING,
   },
   {
     dialect: "mysql",
@@ -304,7 +375,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted",
+    key: "packages/nextly/src/domains/audit/erase-principal.ts#reportPrincipalDeleted \u00b7 select tables",
     witness:
       "packages/nextly/src/domains/audit/__tests__/principal-audit-and-erasure.integration.test.ts",
     reason: CALLER,
@@ -325,7 +396,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_notes",
+    key: "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select dc_*",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
@@ -381,7 +452,7 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry",
+    key: "packages/nextly/src/domains/collections/services/collection-mutation-service.ts#CollectionMutationService.createEntry \u00b7 checkout",
     witness:
       "packages/nextly/src/domains/collections/__tests__/held-hook-keeps-caller-scope.integration.test.ts",
     reason: CALLER,
@@ -430,6 +501,13 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
+    key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_meta",
+    witness:
+      "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
+    reason: CALLER,
+  },
+  {
+    dialect: "postgresql",
     key: "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts#<anonymous> (opened the transaction) \u00b7 select nextly_one_time_secrets",
     witness:
       "packages/nextly/src/domains/email/__tests__/principal-delivery-erasure.integration.test.ts",
@@ -451,10 +529,9 @@ export const KNOWN_ESCAPES: readonly KnownEscape[] = [
   },
   {
     dialect: "postgresql",
-    key: "packages/nextly/src/domains/notices/notices-service.ts#NoticesService.tablePresent",
-    witness:
-      "packages/nextly/src/domains/notices/__tests__/notices.integration.test.ts",
-    reason: CALLER,
+    key: "packages/nextly/src/domains/notices/notices-service.ts#NoticesService.tablePresent \u00b7 select tables",
+    witness: null,
+    reason: TIMING,
   },
   {
     dialect: "postgresql",
