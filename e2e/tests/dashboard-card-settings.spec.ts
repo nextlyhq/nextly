@@ -90,6 +90,16 @@ function rows(page: Page) {
   return rowsIn(cell(page));
 }
 
+/**
+ * Give the page focus, and let what focus starts finish. The dashboard reads every card again
+ * when its window gains focus, by design, and a test's first click is what first focuses the
+ * page; watched from before it, that read would be counted as caused by whatever was clicked.
+ */
+async function focusPage(page: Page): Promise<void> {
+  await page.getByRole("heading", { level: 1 }).first().click();
+  await page.waitForLoadState("networkidle");
+}
+
 /** Every widget query the dashboard sends from now on. */
 function watchQueries(page: Page): Request[] {
   const sent: Request[] = [];
@@ -126,6 +136,7 @@ for (const viewport of WIDTHS) {
     await page.setViewportSize(viewport);
     await page.reload();
     await expect(rows(page)).toHaveCount(3);
+    await focusPage(page);
     const sent = watchQueries(page);
 
     const accent = cell(page).getByRole("combobox", {
