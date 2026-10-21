@@ -7,8 +7,12 @@
  */
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
-/** The settings that make two measurements comparable. */
-const SETTINGS = ["docs", "iterations", "warmup", "rest-iterations", "seed"];
+/**
+ * The settings that make two measurements comparable. The load limit is one: a
+ * run started again with a stricter limit must not reuse measurements taken
+ * above it.
+ */
+const SETTINGS = ["docs", "iterations", "warmup", "rest-iterations", "seed", "max-load"];
 
 /** Where a measurement sits in a run: its database, run number and mode. */
 export function keyFor(dialect, run, mode) {
@@ -40,9 +44,10 @@ export function readSaved(text, settings) {
 export function openSaved(file, options) {
   if (!file) return { saved: new Map(), save: () => {} };
   const settings = settingsOf(options);
-  const exists = existsSync(file);
-  const saved = readSaved(exists ? readFileSync(file, "utf8") : "", settings);
-  if (!exists) appendFileSync(file, `${JSON.stringify({ settings })}\n`);
+  const text = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const saved = readSaved(text, settings);
+  // A file that exists but holds nothing, as one `mktemp` made does, is new too.
+  if (text.trim() === "") appendFileSync(file, `${JSON.stringify({ settings })}\n`);
   return {
     saved,
     save: (dialect, run, mode, result) => appendFileSync(file, `${JSON.stringify({ dialect, run, mode, result })}\n`),

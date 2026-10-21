@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { keyFor, openSaved, readSaved, settingsOf } from "./saved.mjs";
 
-const options = { docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", seed: "1", dialects: "mysql" };
+const options = { docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", seed: "1", "max-load": "8", dialects: "mysql" };
 const folders = [];
 afterEach(() => folders.splice(0).forEach(f => rmSync(f, { recursive: true, force: true })));
 const fileIn = () => {
@@ -17,7 +17,7 @@ const fileIn = () => {
 
 describe("the measurements a run keeps as it goes", () => {
   it("records only the settings that make measurements comparable", () => {
-    expect(settingsOf(options)).toEqual({ docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", seed: "1" });
+    expect(settingsOf(options)).toEqual({ docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", seed: "1", "max-load": "8" });
   });
 
   it("gives back every measurement saved, by database, run and mode", () => {
@@ -38,7 +38,17 @@ describe("the measurements a run keeps as it goes", () => {
     const file = fileIn();
     openSaved(file, options).save("mysql", 0, "main", { p95: 1 });
     expect(() => openSaved(file, { ...options, seed: "2" })).toThrow(/were taken with/);
+    // A stricter load limit would otherwise reuse measurements taken above it.
+    expect(() => openSaved(file, { ...options, "max-load": "4" })).toThrow(/were taken with/);
     expect(() => readSaved(`${JSON.stringify({ settings: settingsOf(options) })}\n`, settingsOf({ ...options, docs: "50" }))).toThrow(/were taken with/);
+  });
+
+  it("starts a file that exists but is empty with its header", () => {
+    // As a path made by `mktemp` is.
+    const file = fileIn();
+    writeFileSync(file, "");
+    openSaved(file, options).save("sqlite", 0, "main", { p95: 1 });
+    expect(openSaved(file, options).saved.get(keyFor("sqlite", 0, "main"))).toEqual({ p95: 1 });
   });
 
   it("keeps nothing when no file is named", () => {

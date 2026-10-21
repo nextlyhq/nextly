@@ -6,7 +6,7 @@
  * measurement as JSON.
  *
  *   node scripts/read-benchmark/run.mjs [--dialects sqlite,postgresql,mysql]
- *     [--runs 3] [--max-runs 6] [--docs 1000] [--iterations 3000] [--warmup 300]
+ *     [--runs 4] [--max-runs 6] [--docs 1000] [--iterations 3000] [--warmup 300]
  *     [--rest-iterations 600] [--seed 1] [--max-load <cores>] [--spread-limit 0.05]
  *     [--bound 10] [--save measurements.jsonl] [--out results.json]
  *
@@ -19,7 +19,8 @@
  * measurement waits until the one-minute load is at most `--max-load`, runs
  * under the heavy-job bound so no build or suite shares its slot, and is taken
  * again if the load ended above the limit. Runs are added, up to `--max-runs`,
- * while the p95s of a mode's runs spread by more than `--spread-limit`.
+ * while the p95s of a mode's runs spread by more than `--spread-limit`, and
+ * always in pairs, so each mode is measured first as often as second.
  *
  * `--save` keeps every measurement as it is taken, and a run started again
  * with the same file and settings reuses what it holds, so a run stopped part
@@ -56,10 +57,33 @@ export function runsAgree(runs, spreadLimit) {
   return reads.every(read => MODES.every(mode => spread(runs.map(run => run[mode].results[read].p95)) <= spreadLimit));
 }
 
-/** Whether a database needs another run: too few yet, or runs that disagree and room for more. */
+/**
+ * Whether a database needs another run: too few yet, an odd number, or runs
+ * that disagree and room for more. An odd number measured one mode first once
+ * more than the other, so a drift within each run would fall on one mode more.
+ */
 export function needsAnotherRun(runs, { minRuns, maxRuns, spreadLimit }) {
-  if (runs.length < minRuns) return true;
+  if (runs.length < minRuns || runs.length % 2 === 1) return true;
   return runs.length < maxRuns && !runsAgree(runs, spreadLimit);
+}
+
+/** Refuses run limits under which the runs could not end in balanced pairs. */
+export function checkLimits({ minRuns, maxRuns }) {
+  if (maxRuns % 2 === 1) throw new RangeError(`--max-runs ${maxRuns} is odd: runs come in pairs, each mode first once`);
+  if (minRuns > maxRuns) throw new RangeError(`--runs ${minRuns} is above --max-runs ${maxRuns}`);
+}
+
+/** The settings every measurement in a report was taken with, as numbers. */
+export function reportSettings(options) {
+  const number = name => Number(options[name]);
+  return {
+    seed: number("seed"),
+    docs: number("docs"),
+    iterations: number("iterations"),
+    warmup: number("warmup"),
+    restIterations: number("rest-iterations"),
+    maxLoad: number("max-load"),
+  };
 }
 
 /** The call over every database's gating reads: pass, over or inconclusive. */
@@ -178,7 +202,7 @@ async function main(argv) {
     args: argv,
     options: {
       dialects: { type: "string", default: "sqlite,postgresql,mysql" },
-      runs: { type: "string", default: "3" },
+      runs: { type: "string", default: "4" },
       "max-runs": { type: "string", default: "6" },
       docs: { type: "string", default: "1000" },
       iterations: { type: "string", default: "3000" },
@@ -193,8 +217,9 @@ async function main(argv) {
     },
   });
   const limits = { minRuns: Number(options.runs), maxRuns: Number(options["max-runs"]), spreadLimit: Number(options["spread-limit"]) };
+  checkLimits(limits);
   const bound = Number(options.bound) / 100;
-  const report = { seed: Number(options.seed), docs: Number(options.docs), maxLoad: Number(options["max-load"]), ...limits, bound, dialects: {}, skipped: [] };
+  const report = { ...reportSettings(options), ...limits, bound, dialects: {}, skipped: [] };
   const context = { options, skipped: report.skipped, store: openSaved(options.save, options) };
   for (const dialect of options.dialects.split(",")) {
     const runs = await runsFor(dialect, limits, context);

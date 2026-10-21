@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { needsAnotherRun, orderFor, overallCall, runsAgree, tableLines } from "./run.mjs";
+import { checkLimits, needsAnotherRun, orderFor, overallCall, reportSettings, runsAgree, tableLines } from "./run.mjs";
 
 /** A run whose every read took `main` and `perLanguage` at p95 (and half that at p50). */
 const run = (main, perLanguage) => ({
@@ -22,17 +22,37 @@ describe("how the benchmark runs", () => {
   });
 
   it("adds runs until the minimum, then while they disagree and there is room", () => {
-    const limits = { minRuns: 3, maxRuns: 5, spreadLimit: 0.05 };
-    const agreeing = [run(10, 11), run(10, 11), run(10, 11)];
-    const disagreeing = [run(10, 11), run(12, 11), run(10, 11)];
-    expect(needsAnotherRun(agreeing.slice(0, 2), limits)).toBe(true);
-    expect(needsAnotherRun(agreeing, limits)).toBe(false);
+    const limits = { minRuns: 2, maxRuns: 6, spreadLimit: 0.05 };
+    const agreeing = [run(10, 11), run(10, 11), run(10, 11), run(10, 11)];
+    const disagreeing = [run(10, 11), run(12, 11), run(10, 11), run(12, 11)];
+    expect(needsAnotherRun(agreeing.slice(0, 1), limits)).toBe(true);
+    expect(needsAnotherRun(agreeing.slice(0, 2), limits)).toBe(false);
     expect(needsAnotherRun(disagreeing, limits)).toBe(true);
     expect(needsAnotherRun([...disagreeing, run(12, 11), run(10, 11)], limits)).toBe(false);
+  });
+
+  it("stops only after as many runs measured each mode first as second", () => {
+    // Three agreeing runs measured `main` first twice and `per-language` once:
+    // a drift within a run would fall on one mode more than the other.
+    const limits = { minRuns: 3, maxRuns: 6, spreadLimit: 0.05 };
+    const agreeing = Array.from({ length: 4 }, () => run(10, 11));
+    expect(needsAnotherRun(agreeing.slice(0, 3), limits)).toBe(true);
+    expect(needsAnotherRun(agreeing, limits)).toBe(false);
+  });
+
+  it("refuses a run limit that would end on an unbalanced run", () => {
+    expect(() => checkLimits({ minRuns: 3, maxRuns: 6 })).not.toThrow();
+    expect(() => checkLimits({ minRuns: 3, maxRuns: 5 })).toThrow(/--max-runs/);
+    expect(() => checkLimits({ minRuns: 8, maxRuns: 6 })).toThrow(/--runs/);
   });
 });
 
 describe("how the benchmark reports", () => {
+  it("records every setting a measurement was taken with, the warm-up among them", () => {
+    const options = { seed: "1", docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", "max-load": "8" };
+    expect(reportSettings(options)).toEqual({ seed: 1, docs: 1000, iterations: 3000, warmup: 300, restIterations: 600, maxLoad: 8 });
+  });
+
   const verdict = rows => ({ verdict: { reads: rows } });
   const row = (read, v) => ({ read, gates: read.startsWith("direct"), verdict: v, ratio: 1, spread: { main: 0, "per-language": 0 } });
 

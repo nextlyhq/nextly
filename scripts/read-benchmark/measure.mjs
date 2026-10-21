@@ -30,8 +30,10 @@ const AUTHORS = 20;
 export const PAGE_SIZE = 20;
 /**
  * The requests an API key may make in an hour unless the app configures more
- * (`apiKeys.rateLimit`), which a test boot does not. Each REST read gets its
- * own key, and its warm-up, shape check and timed reads must fit under it.
+ * (`apiKeys.rateLimit`), which a test boot does not: Nextly's
+ * `DEFAULT_API_KEYS_CONFIG.requestsPerHour`, which the test holds this to. It
+ * is not read from the build, which does not export it. Each REST read gets
+ * its own key, and its warm-up, shape check and timed reads must fit under it.
  */
 export const KEY_REQUESTS_PER_HOUR = 1000;
 const NEXTLY_DIST = new URL("../../packages/nextly/dist/", import.meta.url);
@@ -53,10 +55,15 @@ function itemsOf(result) {
   return Array.isArray(result?.items) ? result.items : [];
 }
 
-/** Whether an article came back with its translatable fields, its author and its card. */
+/** Whether a value is a record: an object that is neither null nor a list. */
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Whether an article came back with its translatable fields, its populated author and its card. */
 export function isCompleteArticle(item) {
   const { headline, body, author, card } = item ?? {};
-  return [typeof headline === "string", Boolean(body), typeof author === "object", Boolean(card?.heading)].every(Boolean);
+  return [typeof headline === "string", Boolean(body), isRecord(author), Boolean(card?.heading)].every(Boolean);
 }
 
 /**
@@ -65,19 +72,38 @@ export function isCompleteArticle(item) {
  * back empty would time nothing.
  */
 export function checkShape(name, result) {
-  checkArticle(name, name.endsWith("list") ? firstOfFullPage(name, result) : (result?.item ?? result));
+  for (const item of articlesOf(name, result)) checkArticle(name, item);
 }
 
-/** A list read's first article, once the read is known to have given a full page. */
-function firstOfFullPage(name, result) {
+/** The articles a read returned: every one of a list read's full page, or a detail read's one. */
+function articlesOf(name, result) {
+  return name.endsWith("list") ? fullPage(name, result) : [result?.item ?? result];
+}
+
+/** A list read's articles, once the read is known to have given a full page. */
+function fullPage(name, result) {
   const items = itemsOf(result);
   if (items.length !== PAGE_SIZE) throw new Error(`${name} returned ${items.length} items, not ${PAGE_SIZE}`);
-  return items[0];
+  return items;
 }
 
 /** Refuses an article that came back without its fields. */
 function checkArticle(name, item) {
   if (!isCompleteArticle(item)) throw new Error(`${name} returned an article without its fields: ${JSON.stringify(item).slice(0, 300)}`);
+}
+
+/**
+ * What `start` resolves to, with `folder` removed if it rejects instead: a
+ * boot that fails part way would otherwise leave its database behind, and the
+ * runner takes a failed measurement again.
+ */
+export async function removingOnFailure(folder, start) {
+  try {
+    return await start();
+  } catch (error) {
+    rmSync(folder, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /** Boots the site on the requested database. */
@@ -92,8 +118,7 @@ async function boot(options) {
     // it falls back to a default database file.
     process.env.DB_DIALECT = "sqlite";
     process.env.DATABASE_URL = url;
-    const adapter = await createAdapter({ type: "sqlite", url });
-    const handle = await createTestNextly({ ...site, adapter });
+    const handle = await removingOnFailure(folder, async () => createTestNextly({ ...site, adapter: await createAdapter({ type: "sqlite", url }) }));
     return { handle, cleanup: () => rmSync(folder, { recursive: true, force: true }) };
   }
   if (options.dialect !== "postgresql" && options.dialect !== "mysql") throw new RangeError(`unknown dialect ${options.dialect}`);
@@ -118,15 +143,16 @@ async function seedSite(nextly, options) {
  * How many rows each translation table holds, `null` for one that does not
  * exist. The check that a mode stores what it says it does: a `per-language`
  * run with no translation rows would compare a site with itself.
+ *
+ * Absence is asked of the database rather than read from a failed select: a
+ * dropped connection would otherwise read as the absent tables a `main` site
+ * has, and pass its check. Any such failure fails the attempt, which the runner
+ * takes again.
  */
-async function translationRows(adapter) {
+export async function translationRows(adapter) {
   const rows = {};
   for (const table of TRANSLATION_TABLES) {
-    try {
-      rows[table] = (await adapter.select(table)).length;
-    } catch {
-      rows[table] = null;
-    }
+    rows[table] = (await adapter.tableExists(table)) ? (await adapter.select(table)).length : null;
   }
   return rows;
 }
