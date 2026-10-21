@@ -499,9 +499,17 @@ describe.each(getConfiguredTestDialects())(
         await raw(t).delete(userRoles).where(eq(userRoles.userId, userId));
         await assign(t, userId, ROLES.lapsed.id, null);
       };
-      // The service's handle, and any transaction it opens on it, run the
-      // other request just before their first delete: the assignment is
-      // written inside a transaction on PostgreSQL and MySQL.
+      // The service's handle, and any transaction it opens on it, stop just
+      // before their first delete until the other request is done: the
+      // assignment is written inside a transaction on PostgreSQL and MySQL.
+      // The other request is made by the test itself, outside that
+      // transaction's flow, as a second request is.
+      let reachedDelete!: () => void;
+      const atDelete = new Promise<void>(resolve => (reachedDelete = resolve));
+      let otherRequestDone!: () => void;
+      const afterOther = new Promise<void>(
+        resolve => (otherRequestDone = resolve)
+      );
       const intercepted = <T extends object>(handle: T): T =>
         new Proxy(handle, {
           get(target, prop) {
@@ -515,7 +523,9 @@ describe.each(getConfiguredTestDialects())(
                 ).call(target, table);
                 return {
                   where: async (cond: unknown) => {
-                    await otherRequest();
+                    granted = true;
+                    reachedDelete();
+                    await afterOther;
                     return builder.where(cond);
                   },
                 };
@@ -535,9 +545,13 @@ describe.each(getConfiguredTestDialects())(
       Object.defineProperty(service, "db", { get: () => db });
 
       // This request asks for an hour; the grant made meanwhile has no end.
-      await service.assignRoleToUser(userId, ROLES.lapsed.id, {
+      const assigning = service.assignRoleToUser(userId, ROLES.lapsed.id, {
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       });
+      await Promise.race([atDelete, assigning]);
+      await otherRequest();
+      otherRequestDone();
+      await assigning;
 
       expect(granted).toBe(true);
       const rows = (await raw(t)
