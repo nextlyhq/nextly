@@ -188,6 +188,16 @@ describe("the bars archetype", () => {
     ).toBeInTheDocument();
   });
 
+  it("says only part was checked when an empty answer is a floor, not that nothing matched", () => {
+    // A source that stops at a work bound can find no group in what it read
+    // while the rest still holds some: an empty floor is not an empty answer.
+    draw({ op: "groupBy", buckets: [], atLeast: true });
+    const empty = screen.getByTestId("card-empty");
+    expect(empty).toHaveTextContent(/None found in what was checked/);
+    expect(empty).toHaveTextContent(/only part of the content/);
+    expect(empty).not.toHaveTextContent(/Nothing to compare yet/);
+  });
+
   it("says nothing was matched rather than drawing an empty frame", () => {
     draw(grouped([]));
     // The frame's one empty state, worded for groups.

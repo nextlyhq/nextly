@@ -9,6 +9,10 @@
  * flight, so pressing Retry on another card asks that card alone -- a retry never re-asks the
  * cards retried before it, and never replaces their answers.
  *
+ * A card is also asked again on its own, quietly, when it now asks a different question than its
+ * answer was fetched with: it grew into a tier drawing more rows, or its settings changed. It
+ * keeps what it shows until the new answer arrives, and no other card is asked.
+ *
  * @module components/features/widgets/useCardRetries
  */
 
@@ -16,6 +20,7 @@ import type { SizeTier } from "@nextlyhq/ui/format";
 import { useCallback, useEffect, useMemo, useReducer } from "react";
 
 import {
+  appliedKey,
   useWidgetQueries,
   type CellSlots,
   type UseWidgetQueriesResult,
@@ -32,6 +37,8 @@ interface SettledRetry {
   at: Date | null;
   /** The tier the answer was fetched at, which a later rise is judged against. */
   tier?: SizeTier;
+  /** What the answer was asked with (`appliedKey`), which a change of settings is judged against. */
+  applied?: string;
 }
 
 interface RetryState {
@@ -40,17 +47,18 @@ interface RetryState {
   /** Cards whose retry has answered, with that answer. */
   settled: ReadonlyMap<string, SettledRetry & { attempt: number }>;
   /**
-   * In-flight cards asked again because they grew, not because Retry was pressed, with the tier
-   * each grew to: they keep what they were showing until the larger answer arrives, rather than
-   * drawing a skeleton.
+   * In-flight cards asked again because they grew or their settings changed, not because Retry
+   * was pressed, with what each now asks (`askingKey`): they keep what they were showing until
+   * the new answer arrives, rather than drawing a skeleton.
    */
-  quiet: ReadonlyMap<string, SizeTier>;
+  quiet: ReadonlyMap<string, string>;
   /**
-   * Cards whose growth to a tier was refused, with that tier. A refused growth keeps the answer
-   * the card had, and is not asked for again on its own -- each refusal would otherwise start the
-   * next request at once, without end. Retry, or the batch's next answer, clears it.
+   * Cards whose quiet re-ask was refused, with what it asked. A refused re-ask keeps the answer
+   * the card had, and the same question is not asked again on its own -- each refusal would
+   * otherwise start the next request at once, without end. Retry, the batch's next answer, or a
+   * different question clears it.
    */
-  stalled: ReadonlyMap<string, SizeTier>;
+  stalled: ReadonlyMap<string, string>;
 }
 
 type RetryAction =
@@ -58,10 +66,16 @@ type RetryAction =
   | {
       type: "grow";
       placementId: string;
+      /** The query as the card's settings ask it, before sizing. */
       query: WidgetQueryRequest["query"];
-      tier: SizeTier;
+      /** The tier the card is drawn at, for a sized card. */
+      tier?: SizeTier;
+      /** What the card asks with now (`appliedKey`). */
+      applied: string;
       /** The tier the batch's answer for the card was fetched at. */
       batchFetchedAt: SizeTier | undefined;
+      /** What the batch's answer for the card was asked with. */
+      batchApplied: string | undefined;
     }
   | {
       type: "arrived";
@@ -117,14 +131,20 @@ function pressed(state: RetryState, placementId: string): RetryState {
   };
 }
 
+/** What a quiet re-ask asks, as one comparable value: the tier and the settings together. */
+function askingKey(tier: SizeTier | undefined, applied: string): string {
+  return `${tier ?? ""}\u0000${applied}`;
+}
+
 /**
- * A card that grew past what was fetched for it: asked again alone, keeping its answer on
- * screen until the larger one arrives. Ignored while the card is already being asked again,
- * and when its answer already serves its tier.
+ * A card that now asks more than, or other than, what its shown answer was fetched with: it grew
+ * into a tier drawing more rows, or its settings changed. Asked again alone, keeping its answer on
+ * screen until the new one arrives. Ignored while the card is already being asked again, when its
+ * answer already serves it, and when the same question was just refused.
  *
  * Judged here, against the answer the card shows in THIS state, rather than by the caller: the
  * caller's view can be a render old, and a re-ask that answered in the same commit would
- * otherwise read as the batch's smaller answer and be asked again.
+ * otherwise read as the batch's older answer and be asked again.
  */
 function grown(
   state: RetryState,
@@ -132,18 +152,49 @@ function grown(
 ): RetryState {
   const { placementId } = action;
   if (state.inFlight.has(placementId)) return state;
-  if (state.stalled.get(placementId) === action.tier) return state;
+  const asking = askingKey(action.tier, action.applied);
+  if (state.stalled.get(placementId) === asking) return state;
   const settled = state.settled.get(placementId);
-  const fetchedAt = settled ? settled.tier : action.batchFetchedAt;
-  if (!fetchedAt || !asksAgainAt(action.query, fetchedAt, action.tier))
+  if (!grewPast(settled, action) && !settingsChanged(settled, action)) {
     return state;
+  }
   const previous = settled?.attempt ?? 0;
+  // A different question is being asked, so an earlier refusal no longer stands: left in place,
+  // it would keep that question from being asked again should the reader come back to it.
+  const stalled = new Map(state.stalled);
+  stalled.delete(placementId);
   return {
     inFlight: new Map(state.inFlight).set(placementId, previous + 1),
     settled: state.settled,
-    quiet: new Map(state.quiet).set(placementId, action.tier),
-    stalled: state.stalled,
+    quiet: new Map(state.quiet).set(placementId, asking),
+    stalled,
   };
+}
+
+/** Whether the card now draws more rows than its shown answer was fetched for. */
+function grewPast(
+  settled: SettledRetry | undefined,
+  action: Extract<RetryAction, { type: "grow" }>
+): boolean {
+  const fetchedAt = settled ? settled.tier : action.batchFetchedAt;
+  return (
+    action.tier !== undefined &&
+    fetchedAt !== undefined &&
+    asksAgainAt(action.query, fetchedAt, action.tier)
+  );
+}
+
+/**
+ * Whether the card's settings now ask other than its shown answer was asked with. Only once an
+ * answer says what it was asked with: before then there is nothing to differ from, and the
+ * first answer is the batch's own.
+ */
+function settingsChanged(
+  settled: SettledRetry | undefined,
+  action: Extract<RetryAction, { type: "grow" }>
+): boolean {
+  const fetchedWith = settled ? settled.applied : action.batchApplied;
+  return fetchedWith !== undefined && fetchedWith !== action.applied;
 }
 
 /**
@@ -168,8 +219,8 @@ function arrived(
     quiet.delete(placementId);
   }
   for (const placementId of refused) {
-    const tier = quiet.get(placementId);
-    if (tier) stalled.set(placementId, tier);
+    const asking = quiet.get(placementId);
+    if (asking !== undefined) stalled.set(placementId, asking);
     inFlight.delete(placementId);
     quiet.delete(placementId);
   }
@@ -201,6 +252,7 @@ function arrivals(
       cells,
       at: seenAt,
       tier: retried.fetchedTierFor(placementId),
+      applied: retried.fetchedAppliedFor(placementId),
     });
   }
   return { answers, refused };
@@ -213,7 +265,7 @@ export interface CardRetries {
   retry: (placementId: string) => void;
   /** When the answer this card shows arrived: its retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
-  /** Ask one card again if it now draws more than its answer was fetched for; see `grown`. */
+  /** Ask one card again if it now asks more, or other, than its answer was fetched for; see `grown`. */
   grow: (request: WidgetQueryRequest) => void;
   /**
    * The cards being asked again, by Retry or because they grew. A quiet re-ask keeps the answer
@@ -231,6 +283,7 @@ export function useCardRetries(
     cellSlots: CellSlots;
     updatedAt: Date | null;
     fetchedTierFor: (placementId: string) => SizeTier | undefined;
+    fetchedAppliedFor: (placementId: string) => string | undefined;
   }
 ): CardRetries {
   const [state, dispatch] = useReducer(reduce, EMPTY);
@@ -275,18 +328,22 @@ export function useCardRetries(
     []
   );
   const batchTierFor = batch.fetchedTierFor;
+  const batchAppliedFor = batch.fetchedAppliedFor;
   const grow = useCallback(
     (request: WidgetQueryRequest) => {
-      if (!request.sized) return;
+      // A `stats` card's cells ask as declared whatever its settings, and a cell is not a card.
+      if (request.cellKey !== undefined) return;
       dispatch({
         type: "grow",
         placementId: request.placementId,
-        query: request.query,
-        tier: request.sized.tier,
+        query: request.applied ?? request.query,
+        ...(request.sized ? { tier: request.sized.tier } : {}),
+        applied: appliedKey(request),
         batchFetchedAt: batchTierFor(request.placementId),
+        batchApplied: batchAppliedFor(request.placementId),
       });
     },
-    [batchTierFor]
+    [batchTierFor, batchAppliedFor]
   );
 
   const { slots, cellSlots } = useMemo(

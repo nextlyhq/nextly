@@ -129,6 +129,21 @@ vi.mock("@nextly/lib/field-transform", () => ({
   transformRichTextFields: vi.fn((entry: unknown) => entry),
 }));
 
+// The caller lookup a code-defined rule is handed: the real one, unless a test
+// sets `callerLookup.failure`, which it then rejects with.
+const callerLookup = vi.hoisted(() => ({ failure: undefined as unknown }));
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../../../auth/access/resolve-actor")>();
+  return {
+    ...real,
+    actorForUser: (...args: Parameters<typeof real.actorForUser>) =>
+      callerLookup.failure === undefined
+        ? real.actorForUser(...args)
+        : Promise.reject(callerLookup.failure),
+  };
+});
+
 // ── Test suite ────────────────────────────────────────────────────────────
 
 describe("CollectionEntryService — Bulk Operation Contracts", () => {
@@ -569,9 +584,10 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
   // ── a busy database at the bulk gate ──────────────────────────────────
 
   describe("a bulk write whose access check found the database busy", () => {
-    // The real collection gate over an RBAC check that waited out its bound
-    // for a connection: the gate catches what the check throws, and the bulk
-    // write must answer DATABASE_BUSY rather than its 403 for a denial.
+    // The real collection gate, judging a collection with a code-defined rule,
+    // whose read of the caller's roles and permissions waited out its bound
+    // for a connection: the gate refuses, and the bulk write must answer
+    // DATABASE_BUSY rather than its 403 for a denial.
     const REFUSALS = [
       {
         name: "the adapters' raw pool-wait timeout",
@@ -580,9 +596,19 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
       { name: "a typed DATABASE_BUSY", error: NextlyError.databaseBusy() },
     ];
 
+    afterEach(() => {
+      callerLookup.failure = undefined;
+    });
+
     function serviceWithBusyCheck(error: unknown) {
       const rbac = createMockRbacAccessControlService();
-      rbac.checkAccess.mockRejectedValueOnce(error);
+      // A rule is what hands the caller's roles to the decision, so it is
+      // what makes the gate read them.
+      rbac.getRegisteredAccess.mockReturnValue({
+        update: () => true,
+        delete: () => true,
+      });
+      callerLookup.failure = error;
       return new CollectionEntryService(
         createMockAdapter(mockDb) as never,
         silentLogger as never,

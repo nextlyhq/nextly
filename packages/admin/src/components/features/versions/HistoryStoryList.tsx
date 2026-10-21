@@ -31,6 +31,7 @@ import type {
 
 import {
   buildStory,
+  storyShows,
   type HistoryFilter,
   type HistoryView,
   type StoryDay,
@@ -76,6 +77,8 @@ export interface HistoryStoryListProps {
   selected: number | null;
   onSelect: (versionNo: number) => void;
   onRename?: (versionNo: number) => void;
+  /** Ends the preview of a version, when a view change hides its row. */
+  onClearSelection?: () => void;
   /** What sits under the entries, above the retention line: Load more. */
   footer?: React.ReactNode;
 }
@@ -288,6 +291,38 @@ function StoryDays({
   );
 }
 
+/**
+ * The language view, and the change of it. A version the new view no longer
+ * shows is no longer previewed: the document returns to its current state
+ * rather than showing a version whose row has gone.
+ */
+function useHistoryView(
+  input: Omit<Parameters<typeof buildStory>[0], "view">,
+  opening: HistoryView,
+  selected: number | null,
+  onClearSelection: (() => void) | undefined
+): [HistoryView, (next: HistoryView) => void] {
+  const [view, setView] = useState<HistoryView>(opening);
+  const changeView = (next: HistoryView) => {
+    setView(next);
+    if (onClearSelection && hidesSelection(input, next, selected)) {
+      onClearSelection();
+    }
+  };
+  return [view, changeView];
+}
+
+/** Whether a view would stop showing the version being previewed. */
+function hidesSelection(
+  input: Omit<Parameters<typeof buildStory>[0], "view">,
+  view: HistoryView,
+  selected: number | null
+): boolean {
+  return (
+    selected !== null && !storyShows(buildStory({ ...input, view }), selected)
+  );
+}
+
 export function HistoryStoryList({
   scope,
   versions,
@@ -300,13 +335,17 @@ export function HistoryStoryList({
   selected,
   onSelect,
   onRename,
+  onClearSelection,
   footer,
 }: HistoryStoryListProps) {
   const { languageName, partsLabel } = useStoryWords(localized);
-  const [view, setView] = useState<HistoryView>(() =>
-    openingView(localized, editingLocale)
-  );
   const [filter, setFilter] = useState<HistoryFilter>("everything");
+  const [view, changeView] = useHistoryView(
+    { versions, events, lifecycle, localized, filter },
+    openingView(localized, editingLocale),
+    selected,
+    onClearSelection
+  );
   const story = useMemo(
     () => buildStory({ versions, events, lifecycle, localized, view, filter }),
     [versions, events, lifecycle, localized, view, filter]
@@ -315,7 +354,9 @@ export function HistoryStoryList({
 
   return (
     <div>
-      {filter === "everything" ? (
+      {/* The pins say where the document stands, which a filter narrowing
+          the rows does not change; they stand above everything only. */}
+      {filter === "everything" && (
         <HistoryPins
           scope={scope}
           drafts={story.drafts}
@@ -324,26 +365,19 @@ export function HistoryStoryList({
           selected={selected}
           onSelect={onSelect}
         />
-      ) : null}
+      )}
       <StoryTools
         localized={localized}
         editingLocale={editingLocale}
         languageName={languageName}
         view={view}
-        onView={setView}
+        onView={changeView}
         filter={filter}
         onFilter={setFilter}
       />
       <StoryDays
         days={story.days}
-        rowProps={{
-          scope,
-          previous,
-          partsLabel,
-          selected,
-          onSelect,
-          ...(onRename ? { onRename } : {}),
-        }}
+        rowProps={{ scope, previous, partsLabel, selected, onSelect, onRename }}
       />
       {footer}
       <RetentionNote retention={retention} />

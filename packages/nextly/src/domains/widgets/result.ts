@@ -112,6 +112,19 @@ export type WidgetResult =
        * holds. Absent when the source does not declare the field.
        */
       field?: WidgetResultField;
+      /**
+       * Whether each bucket's `count` is a FLOOR rather than its whole count.
+       *
+       * A different claim from `truncated`, and a result can make both.
+       * `truncated` is about the SET of buckets: some were left out. This is
+       * about the numbers inside the buckets that are here. A source that has to
+       * read and authorize rows one at a time before it can group them stops at
+       * a work bound, and past it every bucket it holds is real while every count
+       * may be short. Setting `truncated` instead would say buckets are missing,
+       * which is false; saying nothing would present short counts as whole ones.
+       * Mirrors the count arm's `atLeast`. Absent means every count is whole.
+       */
+      atLeast?: boolean;
     }
   | {
       op: "timeseries";

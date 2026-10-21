@@ -24,7 +24,10 @@
  * @module plugins/widgets/collect-widget-sources
  */
 
-import type { SourceResolver } from "../../domains/widgets/resolved-sources";
+import type {
+  ManySourceResolver,
+  SourceResolver,
+} from "../../domains/widgets/resolved-sources";
 import type { WidgetSource } from "../../domains/widgets/sources";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext, PluginDefinition } from "../plugin-context";
@@ -62,6 +65,26 @@ export type PluginSourceResolver = (
 ) => ReturnType<SourceResolver>;
 
 /**
+ * Answers several of a plugin source's queries in one call, with the plugin's
+ * context; the plugin's counterpart of `ManySourceResolver`, in the same order of
+ * parameters as `PluginSourceResolver`.
+ *
+ * Optional. A source without one is answered one query at a time, as before. A
+ * source with one is asked once for all of its queries in a batch, so work they
+ * share -- one scan feeding several counts -- is done once. It returns one entry
+ * per query, by position: a result, or an `Error` that fails that query alone.
+ * Its answers must equal what `resolve` would give each query on its own.
+ *
+ * @experimental
+ */
+export type PluginManySourceResolver = (
+  queries: Parameters<ManySourceResolver>[0],
+  caller: Parameters<ManySourceResolver>[1],
+  ctx: PluginContext,
+  opts?: Parameters<ManySourceResolver>[2]
+) => ReturnType<ManySourceResolver>;
+
+/**
  * One source a plugin contributes, and the function that answers it.
  *
  * The SOURCE half stays a plain object rather than anything computed, so
@@ -80,6 +103,8 @@ export interface PluginWidgetSource {
    */
   source: WidgetSource & { kind: "plugin" };
   resolve: PluginSourceResolver;
+  /** Answers several of this source's queries at once; see `PluginManySourceResolver`. */
+  resolveMany?: PluginManySourceResolver;
 }
 
 /** A contributed source resolved to what boot needs, plus its provenance. */
@@ -190,15 +215,7 @@ function consider(
     });
   }
 
-  if (typeof contributed.resolve !== "function") {
-    // The half that fails latest if it is not caught here: a source with no
-    // resolver is discoverable and passes validation, and only a reader who
-    // places the card finds out that nothing answers it.
-    throw NextlyError.invalidInput({
-      message: `NEXTLY_WIDGET_SOURCE_INVALID: "${owner}" contributes widget source "${id}" without a resolver function.`,
-      logContext: { id, owner },
-    });
-  }
+  refuseUnanswerable(contributed, owner, id);
 
   const previous = seen.get(id);
   if (previous !== undefined) {
@@ -210,4 +227,35 @@ function consider(
 
   seen.set(id, owner);
   out.push({ ...contributed, owner });
+}
+
+/**
+ * Refuse a contribution whose answering functions are not functions.
+ *
+ * The half that fails latest if it is not caught at boot: a source with no
+ * resolver is discoverable and passes validation, and only a reader who places
+ * the card finds out that nothing answers it. A `resolveMany` that is not a
+ * function would likewise fail only when a batch first asks this source for
+ * more than one card.
+ */
+function refuseUnanswerable(
+  contributed: PluginWidgetSource,
+  owner: string,
+  id: string
+): void {
+  if (typeof contributed.resolve !== "function") {
+    throw NextlyError.invalidInput({
+      message: `NEXTLY_WIDGET_SOURCE_INVALID: "${owner}" contributes widget source "${id}" without a resolver function.`,
+      logContext: { id, owner },
+    });
+  }
+  if (
+    contributed.resolveMany !== undefined &&
+    typeof contributed.resolveMany !== "function"
+  ) {
+    throw NextlyError.invalidInput({
+      message: `NEXTLY_WIDGET_SOURCE_INVALID: "${owner}" contributes widget source "${id}" with a resolveMany that is not a function.`,
+      logContext: { id, owner },
+    });
+  }
 }

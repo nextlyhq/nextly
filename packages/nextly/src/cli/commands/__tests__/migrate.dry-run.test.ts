@@ -48,7 +48,9 @@ const plugins = [
     version: "1.0.0",
     contributes: {
       schema: {
-        migrations: [blankModule("002_more"), blankModule("001_init")],
+        // In name order, as a plugin must list them
+        // (`assertModulesInNameOrder`).
+        migrations: [blankModule("001_init"), blankModule("002_more")],
       },
     },
   },
