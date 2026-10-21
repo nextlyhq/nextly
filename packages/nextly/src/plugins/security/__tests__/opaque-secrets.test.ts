@@ -119,6 +119,23 @@ describe("equal", () => {
     }
   );
 
+  it("derives each buffer from its own value alone", () => {
+    // Varying one side leaves the other side's buffer as it was, and each
+    // value gives a buffer of its own. A buffer built from comparing the two
+    // (`a === b` turned into bytes, say) would change with the other side, and
+    // would leak where they differ before timingSafeEqual ever ran.
+    const opaque = createOpaqueSecrets();
+    const values = ["abcdef", "bbcdef", "abcdeg"];
+    const hex = (buffer: Buffer) => buffer.toString("hex");
+    for (const other of values) opaque.equal("abcdef", other);
+    expect(new Set(compared.calls.map(call => hex(call.a))).size).toBe(1);
+    expect(new Set(compared.calls.map(call => hex(call.b))).size).toBe(3);
+    compared.calls.length = 0;
+    for (const value of values) opaque.equal(value, "abcdef");
+    expect(new Set(compared.calls.map(call => hex(call.b))).size).toBe(1);
+    expect(new Set(compared.calls.map(call => hex(call.a))).size).toBe(3);
+  });
+
   it("answers what timingSafeEqual answered, with nothing deciding before it", () => {
     // Swapping its answer is what tells a comparison that only calls it apart
     // from one it decides: an early `return false` at a difference, or `true`
