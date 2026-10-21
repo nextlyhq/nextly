@@ -1043,6 +1043,61 @@ describe.each(getConfiguredTestDialects())(
       expect(page.meta.hasNext).toBe(false);
     });
 
+    it("stops scanning hidden history after a bounded number of reads, and says where it stopped", async () => {
+      // Newest first, fifteen events about a memo the reader may not read
+      // stand before the post's. A page of one scans its first read and ten
+      // more, finds nothing to show, and answers where the scan stopped; the
+      // walk goes on from there and reaches the post.
+      const t = await boot(dialect);
+      const [post, memo] = [await draft(t), await draft(t, "memos")];
+      const release = await t.nextly.releases.create({
+        title: "Mostly hidden",
+      });
+      const add = (scopeSlug: string, entryId: string) =>
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug,
+          entryId,
+          locale: null,
+          action: "publish",
+          userId: founder!,
+        });
+      await add("posts", post);
+      const memoMember = await add("memos", memo);
+      for (let i = 0; i < 14; i += 1) {
+        await t.nextly.releases.changeMemberAction({
+          releaseId: release.id,
+          memberId: memoMember.id,
+          action: i % 2 === 0 ? "unpublish" : "publish",
+        });
+      }
+      const reader = await personHolding(t, [
+        "read-content-releases",
+        "read-posts",
+      ]);
+      const read = (before?: string) =>
+        t.nextly.contentEvents.list({
+          subject: { kind: "release", id: release.id },
+          limit: 1,
+          ...(before === undefined ? {} : { before }),
+          user: { id: reader },
+          overrideAccess: false,
+        });
+
+      const first = await read();
+      expect(first.items).toEqual([]);
+      expect(first.meta.hasNext).toBe(true);
+      const cursor = first.meta.nextBefore;
+      expect(typeof cursor).toBe("string");
+
+      const second = await read(cursor);
+      expect(second.items.map(event => event.kind)).toEqual([
+        "release-document-added",
+      ]);
+      expect(JSON.stringify(second.items)).toContain(post);
+    });
+
     it("refuses to record Publish now on a release that moved since it was judged due", async () => {
       const t = await boot(dialect);
       const id = await dueRelease(t, [await draft(t)]);

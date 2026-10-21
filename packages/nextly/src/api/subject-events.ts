@@ -194,7 +194,7 @@ export async function readSubjectEvents(
     caller,
     repository
   );
-  const { items, hasNext } =
+  const { items, nextBefore } =
     subject.kind === "release"
       ? await visibleReleasePage(
           subject,
@@ -203,7 +203,7 @@ export async function readSubjectEvents(
           repository,
           page
         )
-      : { items: page.items, hasNext: page.nextBefore !== null };
+      : { items: page.items, nextBefore: page.nextBefore };
   return {
     items,
     // A cursor walk: page and total describe the window returned, and the
@@ -213,11 +213,20 @@ export async function readSubjectEvents(
       page: 1,
       limit,
       totalPages: 1,
-      hasNext,
+      hasNext: nextBefore !== null,
       hasPrev: query.before !== undefined,
+      ...(nextBefore === null ? {} : { nextBefore }),
     },
   };
 }
+
+/**
+ * How many further reads one page of a release's history may make past its
+ * first, looking for events its reader may see. Bounded, so a history mostly
+ * hidden from its reader costs a request a fixed number of reads; the page's
+ * `nextBefore` then says where the scan stopped.
+ */
+const MAX_FURTHER_HISTORY_READS = 10;
 
 /**
  * A page of a release's history as the caller may be shown it: only the
@@ -225,11 +234,11 @@ export async function readSubjectEvents(
  * (`historyVisibleTo`).
  *
  * Filled from further reads, each starting where the last ended, until it
- * holds `limit` events or the history runs out, so the last item returned is
- * always a cursor that moves on: a page is never empty while events the
- * caller may see remain, and the events left out between that item and the
- * next page are read again and left out again. Cut to `limit`, it says there
- * is more.
+ * holds `limit` events, the history runs out, or it has made
+ * {@link MAX_FURTHER_HISTORY_READS} further reads. The cursor it answers
+ * always moves on: the last event returned when the page was cut to
+ * `limit`, and otherwise the last row scanned, so a walk can pass any run of
+ * events the caller may not see, a bounded number of reads at a time.
  */
 async function visibleReleasePage(
   subject: ContentEventSubject,
@@ -237,11 +246,17 @@ async function visibleReleasePage(
   actor: ReturnType<typeof releaseActorOf>,
   repository: ContentEventsRepository,
   first: Awaited<ReturnType<ContentEventsRepository["listForSubject"]>>
-): Promise<{ items: ContentEventRecord[]; hasNext: boolean }> {
+): Promise<{ items: ContentEventRecord[]; nextBefore: string | null }> {
   const releases = getService("releasesService");
   const items = await releases.historyVisibleTo(first.items, actor);
   let next = first.nextBefore;
-  while (items.length < query.limit && next !== null) {
+  for (
+    let reads = 0;
+    items.length < query.limit &&
+    next !== null &&
+    reads < MAX_FURTHER_HISTORY_READS;
+    reads += 1
+  ) {
     const more = await repository.listForSubject(subject, {
       ...query,
       before: next,
@@ -249,9 +264,11 @@ async function visibleReleasePage(
     items.push(...(await releases.historyVisibleTo(more.items, actor)));
     next = more.nextBefore;
   }
-  return items.length > query.limit
-    ? { items: items.slice(0, query.limit), hasNext: true }
-    : { items, hasNext: next !== null };
+  if (items.length > query.limit) {
+    const page = items.slice(0, query.limit);
+    return { items: page, nextBefore: page[page.length - 1]?.id ?? null };
+  }
+  return { items, nextBefore: next };
 }
 
 /** How many times a read is authorized again when a life ends under it. */
