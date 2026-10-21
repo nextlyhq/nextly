@@ -44,6 +44,11 @@ export interface TemplateFormValues {
   replyTo: string;
   variables: TemplateFormVariable[];
   attachments: TemplateFormAttachment[];
+  /** When the template is sent, in a sentence. */
+  description: string;
+  /** Fixed addresses every send copies; none on a template carrying a secret. */
+  cc: string[];
+  bcc: string[];
 }
 
 // ============================================================
@@ -110,6 +115,9 @@ const templateSchema = z.object({
   replyTo: z.string().max(320).optional().or(z.literal("")),
   variables: z.array(templateVariableSchema),
   attachments: z.array(templateAttachmentSchema),
+  description: z.string().max(500).optional().or(z.literal("")),
+  cc: z.array(z.string().email("Enter an email address")),
+  bcc: z.array(z.string().email("Enter an email address")),
 });
 
 export const DEFAULT_VALUES: TemplateFormValues = {
@@ -127,6 +135,9 @@ export const DEFAULT_VALUES: TemplateFormValues = {
   replyTo: "",
   variables: [],
   attachments: [],
+  description: "",
+  cc: [],
+  bcc: [],
 };
 
 // Sentinels for "Use Default" (Radix Select rejects empty values).
@@ -161,6 +172,9 @@ export function formValuesToCreatePayload(
             ...(a.filename ? { filename: a.filename } : {}),
           }))
         : null,
+    description: values.description || null,
+    cc: values.cc.length > 0 ? values.cc : null,
+    bcc: values.bcc.length > 0 ? values.bcc : null,
   };
 }
 
@@ -187,6 +201,9 @@ export function formValuesToUpdatePayload(
             ...(a.filename ? { filename: a.filename } : {}),
           }))
         : null,
+    description: values.description || null,
+    cc: values.cc.length > 0 ? values.cc : null,
+    bcc: values.bcc.length > 0 ? values.bcc : null,
   };
 }
 
@@ -216,5 +233,8 @@ export function templateToFormValues(
       filename: a.filename,
       displayName: a.filename ?? a.mediaId,
     })),
+    description: template.description ?? "",
+    cc: template.cc ?? [],
+    bcc: template.bcc ?? [],
   };
 }

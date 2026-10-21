@@ -36,6 +36,11 @@ import {
   previewTemplate,
   previewDraft,
   sendTestEmail,
+  overrideTemplate,
+  resetTemplate,
+  compareTemplate,
+  applyOwnerUpdate,
+  undoOwnerUpdate,
   type DraftPreviewResult,
   type DraftPreviewTemplate,
   type EmailTemplateRecord,
@@ -43,6 +48,10 @@ import {
   type UpdateEmailTemplatePayload,
   type EmailTemplatePreviewResult,
   type SendTestEmailResult,
+  type EmailTemplateComparison,
+  type EmailTemplateVersion,
+  type OwnerChangeChoice,
+  type OwnerUpdateUndo,
 } from "@admin/services/emailTemplateApi";
 
 // ============================================================
@@ -272,5 +281,94 @@ export function useDraftEmailTemplatePreview(
      */
     staleTime: 30_000,
     retry: false,
+  });
+}
+
+// ============================================================
+// Ownership: override, reset, and an owner's update
+// ============================================================
+
+/**
+ * After an ownership write: the detail shows the record the server returned
+ * at once, and every list and preview refetches, because each one reads the
+ * template's owner state.
+ */
+function useSettleOwnership() {
+  const queryClient = useQueryClient();
+  return (record: EmailTemplateRecord) => {
+    queryClient.setQueryData(emailTemplateKeys.detail(record.id), record);
+    void queryClient.invalidateQueries({ queryKey: emailTemplateKeys.all() });
+  };
+}
+
+/**
+ * Make an owned template the site's, starting from the owner's version, or
+ * from `version` where given.
+ */
+export function useOverrideEmailTemplate() {
+  const settle = useSettleOwnership();
+  return useMutation<
+    EmailTemplateRecord,
+    Error,
+    { id: string; version?: EmailTemplateVersion }
+  >({
+    mutationFn: ({ id, version }) => overrideTemplate(id, version),
+    onSuccess: settle,
+  });
+}
+
+/** Return an overridden template to its owner's current version. */
+export function useResetEmailTemplate() {
+  const settle = useSettleOwnership();
+  return useMutation<EmailTemplateRecord, Error, string>({
+    mutationFn: id => resetTemplate(id),
+    onSuccess: settle,
+  });
+}
+
+/**
+ * The owner's changes since the site's copy, for a review. Read when the
+ * review opens and never served from cache: a review made on a stale
+ * comparison is refused by the server anyway.
+ */
+export function useEmailTemplateComparison(id: string, enabled: boolean) {
+  return useQuery<EmailTemplateComparison, Error>({
+    queryKey: [...emailTemplateKeys.detail(id), "compare"],
+    queryFn: () => compareTemplate(id),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  });
+}
+
+/** Apply a review of the owner's update; returns what Undo needs. */
+export function useApplyOwnerUpdate() {
+  const settle = useSettleOwnership();
+  return useMutation<
+    { item: EmailTemplateRecord; undo: OwnerUpdateUndo },
+    Error,
+    {
+      id: string;
+      choices: Record<string, OwnerChangeChoice>;
+      review: string;
+    }
+  >({
+    mutationFn: ({ id, choices, review }) =>
+      applyOwnerUpdate(id, choices, review),
+    onSuccess: result => settle(result.item),
+  });
+}
+
+/** Undo an applied review. */
+export function useUndoOwnerUpdate() {
+  const settle = useSettleOwnership();
+  return useMutation<
+    EmailTemplateRecord,
+    Error,
+    { id: string; undo: OwnerUpdateUndo }
+  >({
+    mutationFn: ({ id, undo }) => undoOwnerUpdate(id, undo),
+    onSuccess: settle,
   });
 }
