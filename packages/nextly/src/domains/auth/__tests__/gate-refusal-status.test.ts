@@ -8,17 +8,36 @@
  * internal error rather than as the retryable DATABASE_BUSY it is. A refusal
  * that is not a NextlyError still denies with the gate's own 500.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "../../../errors/retry-after";
 import {
+  callerLookupFails,
   createMockAdapter,
   createMockDb,
+  resetCallerAccess,
   silentLogger,
 } from "../../collections/__tests__/collection-test-helpers";
 import { CollectionAccessService } from "../../collections/services/collection-access-service";
 import { checkSingleAccess } from "../../singles/services/single-query-service";
+
+// The caller the collection gate looks up, made to fail per test.
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const fake = await import(
+    "../../collections/__tests__/collection-test-helpers"
+  );
+  return {
+    ...(await importOriginal<object>()),
+    actorForUser: fake.fakeActorForUser,
+    userHoldsPermission: fake.fakeUserHoldsPermission,
+    userIsSuperAdmin: fake.fakeUserIsSuperAdmin,
+  };
+});
+
+beforeEach(() => {
+  resetCallerAccess();
+});
 
 /** An RBAC service whose check refuses with `refusal`. */
 function refusingRbac(refusal: unknown) {
@@ -32,11 +51,24 @@ function refusingRbac(refusal: unknown) {
 
 const user = { id: "user-1", roles: ["editor"] };
 
+/**
+ * The collection gate, asked about a collection whose read rule is handed the
+ * caller's roles and permissions, while reading them refuses with `refusal`.
+ */
 async function collectionGate(refusal: unknown) {
+  callerLookupFails(refusal as Error);
+  const access = { read: () => true };
   const service = new CollectionAccessService(
     createMockAdapter(createMockDb({ rows: [] })) as never,
     silentLogger as never,
-    refusingRbac(refusal) as never
+    {
+      getRegisteredAccess: () => access,
+      getRegisteredTarget: () => ({
+        kind: "collection",
+        slug: "posts",
+        access,
+      }),
+    } as never
   );
   return service.checkCollectionAccess({
     collectionName: "posts",

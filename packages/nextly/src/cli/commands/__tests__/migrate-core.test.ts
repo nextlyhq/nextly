@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from "vitest";
 import { buildExtensionSchema } from "../../../domains/schema/extension/build-extension-schema";
 import { col, defineTable } from "../../../domains/schema/extension/dsl";
 import { createLogger } from "../../utils/logger";
+import {
+  migrationChecksum,
+  type PluginMigration,
+} from "../../../domains/schema/migrate/plugin/plugin-migration";
 import { migrateCore } from "../migrate";
 
 function deps(over: Record<string, unknown> = {}) {
@@ -363,5 +367,97 @@ describe("element owner rows", () => {
     });
     await migrateCore(d as never);
     expect(order).toEqual(["files", "owners"]);
+  });
+});
+
+describe("a plugin's migration history", () => {
+  // Checked before anything changes the database, the core reconcile
+  // included: a deploy refused after the core reconcile would leave core's
+  // tables upgraded under a release that never ran.
+  const content = (name: string) => ({
+    name,
+    schemaVersion: 1,
+    dialects: {
+      postgresql: { up: ["CREATE TABLE fx__a (id text)"], down: [] },
+      mysql: { up: ["CREATE TABLE fx__a (id text)"], down: [] },
+      sqlite: { up: ["CREATE TABLE fx__a (id text)"], down: [] },
+    },
+    snapshot: {
+      postgresql: { tables: [] },
+      mysql: { tables: [] },
+      sqlite: { tables: [] },
+    },
+    before: {
+      postgresql: { tables: [] },
+      mysql: { tables: [] },
+      sqlite: { tables: [] },
+    },
+  });
+  const sealed = (name: string): PluginMigration => ({
+    ...content(name),
+    checksum: migrationChecksum(content(name)),
+  });
+
+  it("refuses a list out of name order before the core reconcile runs", async () => {
+    const d = deps({
+      pluginMigrationSets: [
+        {
+          pluginName: "fx",
+          pluginVersion: "1.0.0",
+          migrations: [sealed("002_b"), sealed("001_a")],
+        },
+      ],
+    });
+    await expect(migrateCore(d as never)).rejects.toMatchObject({
+      code: "PLUGIN_MIGRATIONS_OUT_OF_ORDER",
+    });
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+
+  it("refuses an applied module that changed before the core reconcile runs", async () => {
+    const d = deps({
+      pluginMigrationSets: [
+        {
+          pluginName: "fx",
+          pluginVersion: "1.0.0",
+          migrations: [sealed("001_a")],
+        },
+      ],
+      appliedPluginModulesFn: vi.fn(
+        async () => new Map([["plugin:fx/001_a", "0".repeat(64)]])
+      ),
+    });
+    await expect(migrateCore(d as never)).rejects.toMatchObject({
+      code: "MIGRATION_CHECKSUM_MISMATCH",
+    });
+    expect(d.reconcileCoreFn).not.toHaveBeenCalled();
+    expect(d.runFileMigrationsFn).not.toHaveBeenCalled();
+  });
+
+  it("reads the ledger inside the lock, and goes on to the core reconcile when the history holds", async () => {
+    // The control: the same plugin, its applied module unchanged.
+    const order: string[] = [];
+    const d = deps({
+      pluginMigrationSets: [
+        {
+          pluginName: "fx",
+          pluginVersion: "1.0.0",
+          migrations: [sealed("001_a")],
+        },
+      ],
+      appliedPluginModulesFn: vi.fn(async () => {
+        order.push("ledger");
+        return new Map([["plugin:fx/001_a", sealed("001_a").checksum]]);
+      }),
+      reconcileCoreFn: vi.fn(async () => {
+        order.push("core");
+        return { changed: false };
+      }),
+    });
+    // The plugin phase that follows reads the stub database and fails; only
+    // what ran before it is under test here.
+    await migrateCore(d as never).catch(() => undefined);
+    expect(order).toEqual(["ledger", "core"]);
   });
 });
