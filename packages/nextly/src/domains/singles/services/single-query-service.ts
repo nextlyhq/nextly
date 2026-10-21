@@ -895,21 +895,25 @@ export class SingleQueryService extends BaseService {
       user: fieldAccessUser,
       overrideAccess: skipFieldRules,
       // One grants resolver for both passes, so the caller's roles and
-      // permissions are read once and both passes judge with one authority.
-      grants: callerAccessGrants(fieldAccessUser),
+      // permissions are read once and both passes judge with one authority:
+      // a scoped API key's own grants, never its owner's.
+      grants: callerAccessGrants(fieldAccessUser, options.authenticatedScope),
     };
     // The rules on fields inside field groups, which the Single's own pass
-    // does not reach, judged with the same grants resolver. Before the hooks
-    // and after them, as the collection read runs it: a hook cannot copy a
-    // denied value onto an allowed field, and one it puts back is caught.
+    // does not reach, judged with the same grants resolver and store. Before
+    // the hooks and after them, as the collection read runs it: a hook cannot
+    // copy a denied value onto an allowed field, one it puts back is caught,
+    // and the second run restores what the first removed as evidence.
     const fieldGroupPass = skipFieldRules
       ? undefined
       : await liveFieldGroupReadPass(fields, this.fieldGroupDataService);
+    const sourceRedactions: ReadAccessRedactions = new WeakMap();
     const fieldGroupCaller = {
       user: fieldAccessUser,
+      authenticatedScope: options.authenticatedScope,
       grants: fieldAccess.grants,
+      redactions: sourceRedactions,
     };
-    const sourceRedactions: ReadAccessRedactions = new WeakMap();
     await applyFieldReadAccess(fieldAccess, sourceRedactions);
     await fieldGroupPass?.(doc, fieldGroupCaller);
 

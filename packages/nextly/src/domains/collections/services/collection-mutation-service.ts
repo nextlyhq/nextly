@@ -126,6 +126,7 @@ import {
   type WriteEventInput,
 } from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import { withholdFieldGroupFields } from "../../field-groups/live-read-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
@@ -3882,13 +3883,25 @@ export class CollectionMutationService extends BaseService {
     // role-based updater) does not echo the row creator's user id. Owner-only
     // access reads it from SQL, never from the returned row.
     stripServerOnlyColumns(entry, tableName);
+    const trusted = params.overrideAccess && !params.routeAuthorized;
     await applyFieldReadAccess({
       kind: "collection",
       slug,
       entry,
       user: params.user,
-      overrideAccess: params.overrideAccess && !params.routeAuthorized,
+      overrideAccess: trusted,
     });
+    // The fields inside the field groups the entry holds, by their own rules,
+    // as a read of the document would judge them: a response never echoes a
+    // field-group value the writer may not read.
+    if (!trusted) {
+      await withholdFieldGroupFields(
+        [entry],
+        fields as FieldConfig[],
+        this.fieldGroupDataService,
+        { user: params.user, grants: callerAccessGrants(params.user) }
+      );
+    }
   }
 
   /**

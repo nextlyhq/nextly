@@ -2324,8 +2324,9 @@ export class CollectionQueryService extends BaseService {
     const skipFieldRules =
       params.enforceFieldAccess === true ? false : params.overrideAccess;
     // The rules on fields inside field groups, which the collection's own pass
-    // does not reach: resolved once for the whole read, judged by one grants
-    // resolver across every row, so the caller's roles are read once.
+    // does not reach: resolved once for the whole read. Both passes, over
+    // every row, judge with one grants resolver, so the caller's roles are
+    // read once and every rule is handed one authority.
     const fieldGroupPass = skipFieldRules
       ? undefined
       : await liveFieldGroupReadPass(
@@ -2348,13 +2349,19 @@ export class CollectionQueryService extends BaseService {
         entry: row,
         user: params.fieldAccessUser ?? params.user,
         overrideAccess: skipFieldRules,
+        grants: fieldGroupCaller.grants,
       };
       await applyFieldReadAccess(target, sourceRedactions);
       // The field-group pass runs before the field-level hooks, so a hook on
       // an allowed field cannot copy a denied field-group value onto its own,
-      // and again after them, so one a hook put back is caught. It only
-      // removes, so the second run can narrow the first, never restore it.
-      await fieldGroupPass?.(row, fieldGroupCaller);
+      // and again after them, so one a hook put back is caught. It shares the
+      // row's store, so the second run restores what the first removed as
+      // evidence, as the collection's own second pass does.
+      const rowFieldGroupCaller = {
+        ...fieldGroupCaller,
+        redactions: sourceRedactions,
+      };
+      await fieldGroupPass?.(row, rowFieldGroupCaller);
       await runFieldHooks({
         kind: "collection",
         slug: collectionName,
@@ -2364,7 +2371,7 @@ export class CollectionQueryService extends BaseService {
         user: params.user,
       });
       await applyFieldReadAccess(target, sourceRedactions);
-      await fieldGroupPass?.(row, fieldGroupCaller);
+      await fieldGroupPass?.(row, rowFieldGroupCaller);
     }
 
     // Authoritative related-row sanitization over the assembled response, after

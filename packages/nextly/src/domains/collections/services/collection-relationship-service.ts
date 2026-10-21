@@ -7,6 +7,7 @@ import { relatedRowReads } from "../../../auth/access/population-read";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
+import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -40,11 +41,15 @@ import {
   boundReaches,
   TRUSTS_EVERY_COLLECTION,
 } from "../../../services/collections/trust-grant";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
 import { detachData } from "../../../shared/lib/detach";
 import {
+  anyFieldGroupHasAccessRule,
   applyFieldReadAccess,
+  callerAccessGrants,
+  type CallerGrants,
   runFieldHooks,
   type ReadAccessRedactions,
 } from "../../../shared/lib/field-level-registry";
@@ -55,6 +60,10 @@ import {
 } from "../../../shared/lib/password-fields";
 import type { RBACAccessControlService } from "../../auth/services/rbac-access-control-service";
 import type { DynamicCollectionService } from "../../dynamic-collections";
+import {
+  liveFieldGroupReadPass,
+  type LiveFieldGroupReadPass,
+} from "../../field-groups/live-read-access";
 import {
   NO_DECISIONS,
   type ReleaseDecisions,
@@ -80,6 +89,18 @@ import {
  * camelCase form some conversions produce).
  */
 const SYSTEM_ENTITY_SECRET_COLUMNS = ["passwordHash", "password_hash"] as const;
+
+/**
+ * What one read's walk has resolved for the field groups its related rows
+ * hold: each target's pass, and the caller's grants. Keyed by the read's
+ * access context, so a walk reaching one target through many rows resolves
+ * its field-group schemas once, and reads the caller's roles once.
+ */
+interface RelatedFieldGroupState {
+  passes: Map<string, Promise<LiveFieldGroupReadPass | undefined>>;
+  grants: () => Promise<CallerGrants>;
+}
+const relatedFieldGroupState = new WeakMap<object, RelatedFieldGroupState>();
 
 /**
  * Default depth for relationship population.
@@ -3910,6 +3931,56 @@ export class CollectionRelationshipService extends BaseService {
         redactions
       );
     }
+    await this.applyRelatedFieldGroupReadAccess(
+      targetCollection,
+      rows,
+      access,
+      redactions
+    );
+  }
+
+  /**
+   * Evaluate the rules on fields inside the field groups a related row holds,
+   * by the TARGET collection's schema, so a populated row withholds what a
+   * direct read of it would. Shares the row's store with the pass above, so
+   * a later pass restores what an earlier one removed as evidence.
+   */
+  private async applyRelatedFieldGroupReadAccess(
+    targetCollection: string,
+    rows: Record<string, unknown>[],
+    access: RelatedRowAccess,
+    redactions?: ReadAccessRedactions
+  ): Promise<void> {
+    if (!anyFieldGroupHasAccessRule("read")) return;
+    const user = access.fieldAccessUser ?? access.user;
+    let state = relatedFieldGroupState.get(access);
+    if (!state) {
+      state = { passes: new Map(), grants: callerAccessGrants(user) };
+      relatedFieldGroupState.set(access, state);
+    }
+    let pending = state.passes.get(targetCollection);
+    if (!pending) {
+      pending = this.relatedFieldGroupPass(targetCollection);
+      state.passes.set(targetCollection, pending);
+    }
+    const pass = await pending;
+    if (!pass) return;
+    const caller = { user, grants: state.grants, redactions };
+    for (const row of rows) await pass(row, caller);
+  }
+
+  /** The field-group read pass for one target collection's related rows. */
+  private async relatedFieldGroupPass(
+    targetCollection: string
+  ): Promise<LiveFieldGroupReadPass | undefined> {
+    const target = await this.getRedactionTarget(targetCollection);
+    // A row whose schema cannot be resolved is stripped to its identity when
+    // it is loaded, so it holds no field-group field left to judge.
+    if (target === null) return undefined;
+    const source = container.has("fieldGroupDataService")
+      ? container.get<FieldGroupDataService>("fieldGroupDataService")
+      : undefined;
+    return liveFieldGroupReadPass(target.fields as FieldConfig[], source);
   }
 
   /**

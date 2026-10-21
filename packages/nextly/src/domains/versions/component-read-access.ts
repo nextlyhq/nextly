@@ -21,6 +21,7 @@ import {
   getFieldFunctions,
   type CallerGrants,
   type FieldFunctions,
+  type ReadAccessRedactions,
 } from "../../shared/lib/field-level-registry";
 import {
   extractFieldGroupReferences,
@@ -33,6 +34,14 @@ export interface ComponentReadCaller {
   user?: Record<string, unknown>;
   authenticatedScope?: AuthenticatedScope;
   grants: () => Promise<CallerGrants>;
+  /**
+   * The store shared by the passes one read makes over a document, so a pass
+   * after the hooks restores what an earlier one removed as evidence and
+   * re-judges each instance against it, as the entity's own passes do. Keyed
+   * by object, so it can be the entity's own store. A read judged once has
+   * no use for one.
+   */
+  redactions?: ReadAccessRedactions;
 }
 
 /** Component field schemas, keyed by component slug. */
@@ -133,15 +142,18 @@ async function judgeInstance(
   componentFields: ComponentFieldMap,
   caller: ComponentReadCaller
 ): Promise<void> {
-  await applyFieldReadAccess({
-    kind: "fieldGroup",
-    slug,
-    entry: instance,
-    user: caller.user,
-    authenticatedScope: caller.authenticatedScope,
-    grants: caller.grants,
-    overrideAccess: false,
-  });
+  await applyFieldReadAccess(
+    {
+      kind: "fieldGroup",
+      slug,
+      entry: instance,
+      user: caller.user,
+      authenticatedScope: caller.authenticatedScope,
+      grants: caller.grants,
+      overrideAccess: false,
+    },
+    caller.redactions
+  );
   const inner = componentFields.get(slug);
   if (inner) {
     await applyComponentReadAccess(instance, inner, componentFields, caller);

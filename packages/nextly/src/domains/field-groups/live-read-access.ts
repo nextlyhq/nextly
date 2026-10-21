@@ -48,10 +48,40 @@ export async function liveFieldGroupReadPass(
 ): Promise<LiveFieldGroupReadPass | undefined> {
   if (!anyFieldGroupHasAccessRule("read")) return undefined;
   const fieldGroupFields = source
-    ? await resolveComponentFieldMap([...fields], slug =>
-        source.getComponentFields(slug)
-      )
+    ? await resolveComponentFieldMap([...fields], onceEach(source))
     : new Map<string, FieldConfig[]>();
   return (row, caller) =>
     applyComponentReadAccess(row, fields, fieldGroupFields, caller);
+}
+
+/**
+ * A lookup that asks `source` once per field group, however many fields name
+ * it: the resolver batches the slugs it finds, and a schema that places one
+ * field group in several fields would otherwise ask for it once for each.
+ */
+function onceEach(
+  source: FieldGroupFieldsSource
+): (slug: string) => Promise<FieldConfig[] | null> {
+  const asked = new Map<string, Promise<FieldConfig[] | null>>();
+  return slug => {
+    const pending = asked.get(slug) ?? source.getComponentFields(slug);
+    asked.set(slug, pending);
+    return pending;
+  };
+}
+
+/**
+ * Withhold, from each of `entries`, the field-group fields the caller may not
+ * read: the one-shot form, for a document judged once rather than before and
+ * after hooks, such as a write's response.
+ */
+export async function withholdFieldGroupFields(
+  entries: readonly Record<string, unknown>[],
+  fields: readonly FieldConfig[],
+  source: FieldGroupFieldsSource | undefined,
+  caller: ComponentReadCaller
+): Promise<void> {
+  const pass = await liveFieldGroupReadPass(fields, source);
+  if (!pass) return;
+  for (const entry of entries) await pass(entry, caller);
 }
