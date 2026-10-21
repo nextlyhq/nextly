@@ -120,6 +120,30 @@ describe.each(getConfiguredTestDialects())(
       expect(diff.hasChanges).toBe(true);
     }, 120_000);
 
+    it("is tagged with the language it was saved in, as other saves are", async () => {
+      const { t } = await boot(dialect);
+      const created = await t.nextly.create({
+        collection: "notes",
+        locale: "es",
+        data: { title: "live", hero: { heading: "h1" }, status: "published" },
+      });
+      const id = (created.item as { id: string }).id;
+      // Saved in Spanish: the component was read as Spanish, so the draft is
+      // filed under Spanish, beside the Spanish save before it.
+      await t.nextly.update({
+        collection: "notes",
+        id,
+        locale: "es",
+        data: { hero: { heading: "h2" } },
+      });
+
+      const versions = await versionsOf(t, id);
+      const draft = versions.at(-1)!;
+      const save = versions.at(-2)!;
+      expect(draft.status).toBe("draft");
+      expect([save.locale, draft.locale]).toEqual(["es", "es"]);
+    }, 120_000);
+
     it("compares a version stored untagged with a default-language one", async () => {
       const { t, reader } = await boot(dialect);
       const created = await t.nextly.create({

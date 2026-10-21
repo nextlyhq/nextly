@@ -706,6 +706,8 @@ interface WorkingDraftWriteContext {
   params: {
     collectionName: string;
     entryId: string;
+    /** The language the write named, which its components were read in. */
+    locale?: string;
     user?: UserContext;
     /** Who made the write, for the save's history event. */
     actor?: RequestActor;
@@ -7183,13 +7185,14 @@ export class CollectionMutationService extends BaseService {
       locale: draftLocale,
       // The version is keyed the same way, except where the document has no
       // languages and the snapshot carries a component: that was read in the
-      // default language, and is recorded under it as every other save is.
+      // language the write named, and is recorded under it as every other
+      // save is.
       versionLocale:
         draftLocale ??
         ((fields as unknown as FieldConfig[]).some(
           field => isFieldGroupField(field) && draftDocument[field.name] != null
         )
-          ? this.componentSnapshotLocale(undefined)
+          ? this.componentSnapshotLocale(params.locale)
           : null),
       snapshot: draftDocument,
       replaces,

@@ -91,6 +91,66 @@ function arrangeFields(fields: readonly FieldDiff[]) {
   };
 }
 
+/**
+ * What a comparison with no authored change says: that only system fields
+ * changed, that nothing the reader can see changed (fields were withheld, or
+ * the server found a difference not shown), or, only when the server found
+ * none, that the two are identical.
+ */
+type NoChanges = "system" | "unseen" | "identical";
+
+function noChangesNote(
+  data: { hasChanges: boolean; incomplete?: boolean },
+  system: readonly FieldDiff[]
+): NoChanges {
+  if (system.some(isFieldChange)) return "system";
+  if (data.incomplete || data.hasChanges) return "unseen";
+  return "identical";
+}
+
+const NO_CHANGES_TEXT: Record<NoChanges, string> = {
+  system: "Only system fields changed.",
+  unseen: "No changes in the fields you can read.",
+  identical: "These two versions are identical.",
+};
+
+function NoChangesNote({
+  note,
+  systemToggle,
+}: {
+  note: NoChanges;
+  systemToggle: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 py-3">
+      <p className="text-sm text-muted-foreground">{NO_CHANGES_TEXT[note]}</p>
+      {/* The control that shows them, beside the words that say so. */}
+      {note === "system" ? systemToggle : null}
+    </div>
+  );
+}
+
+/** Shows or hides the framework columns every document keeps. */
+function SystemFieldsToggle({
+  shown,
+  onToggle,
+}: {
+  shown: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      aria-expanded={shown}
+      onClick={onToggle}
+    >
+      {shown ? "Hide system fields" : "Show system fields"}
+    </Button>
+  );
+}
+
 /** A top-level field the moves can land on: in view, and focused. */
 function ChangeAnchor({
   node,
@@ -120,6 +180,11 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
   const arranged = arrangeFields(diff.data?.fields ?? []);
   const changes = diff.data ? versionChangesOf(diff.data) : null;
   const order = arranged.changed.map(node => node.name);
+  // Said only when no authored field changed.
+  const note =
+    diff.data && arranged.changed.length === 0
+      ? noChangesNote(diff.data, arranged.system)
+      : null;
   const { layout, splittable } = layoutFor(
     preference,
     changes?.byField.values() ?? []
@@ -207,14 +272,16 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
           ) : diff.data ? (
             <SystemFieldsProvider value={showSystem}>
               <div className="flex flex-col px-4 pb-4">
-                {arranged.changed.length === 0 ? (
-                  <p className="py-3 text-sm text-muted-foreground">
-                    {/* Withheld fields may differ, so "identical" would claim
-                        too much. */}
-                    {diff.data.incomplete
-                      ? "No changes in the fields you can read."
-                      : "These two versions are identical."}
-                  </p>
+                {note ? (
+                  <NoChangesNote
+                    note={note}
+                    systemToggle={
+                      <SystemFieldsToggle
+                        shown={showSystem}
+                        onToggle={() => setShowSystem(shown => !shown)}
+                      />
+                    }
+                  />
                 ) : null}
                 {arranged.changed.map(node => (
                   <ChangeAnchor key={childKey(node)} node={node}>
@@ -240,16 +307,11 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
                     shown={showUnchanged}
                     onToggle={() => setShowUnchanged(shown => !shown)}
                   />
-                  {arranged.system.length > 0 ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      aria-expanded={showSystem}
-                      onClick={() => setShowSystem(shown => !shown)}
-                    >
-                      {showSystem ? "Hide system fields" : "Show system fields"}
-                    </Button>
+                  {arranged.system.length > 0 && note !== "system" ? (
+                    <SystemFieldsToggle
+                      shown={showSystem}
+                      onToggle={() => setShowSystem(shown => !shown)}
+                    />
                   ) : null}
                 </div>
               </div>

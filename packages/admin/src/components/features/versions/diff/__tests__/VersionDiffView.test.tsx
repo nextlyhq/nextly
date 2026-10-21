@@ -7,7 +7,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import userEvent from "@testing-library/user-event";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { render, screen, within } from "@admin/__tests__/utils";
 import type { VersionScope } from "@admin/services/versionApi";
 
 const { useVersionDiffMock } = vi.hoisted(() => ({
@@ -455,5 +455,67 @@ describe("VersionDiffView", () => {
     render(<VersionDiffView scope={scope} from={1} to={2} />);
 
     expect(screen.getByRole("button", { name: "Side by side" })).toBeDisabled();
+  });
+
+  it("says only system fields changed, never identical, with the control to show them", async () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: true,
+        fields: [
+          {
+            kind: "value",
+            name: "views",
+            label: "Views",
+            type: "number",
+            status: "unchanged",
+            before: 1,
+            after: 1,
+          },
+          {
+            kind: "unknown",
+            name: "firstPublishedAt",
+            status: "changed",
+            reason: "system",
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.queryByText(/identical/)).toBeNull();
+    const note = screen.getByText("Only system fields changed.");
+    await userEvent.click(
+      within(note.parentElement!).getByRole("button", {
+        name: "Show system fields",
+      })
+    );
+    expect(screen.getByText("First Published At")).toBeInTheDocument();
+  });
+
+  it("never calls versions identical when the server reports a difference", () => {
+    // A difference the reader is not shown, such as a removed column the
+    // server compared, is still a difference.
+    useVersionDiffMock.mockReturnValue({
+      data: { from: 1, to: 2, locale: null, hasChanges: true, fields: [] },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.queryByText(/identical/)).toBeNull();
+    expect(
+      screen.getByText("No changes in the fields you can read.")
+    ).toBeInTheDocument();
   });
 });
