@@ -22,6 +22,7 @@ import type { VersionScopeKind } from "../schemas/versions/types";
 
 import { respondDoc } from "./response-shapes";
 import {
+  assertHistoryLocalesReadable,
   hydrateVersionSnapshot,
   redactSnapshotForUser,
   requireRouteVersionReadAccess,
@@ -97,6 +98,17 @@ export const GET = withErrorHandler(
     const row = await versions.get(
       { scopeKind, scopeSlug: slug, entryId: id },
       parsed
+    );
+    // The version is of the language it records, asked about before any of it
+    // is returned.
+    await assertHistoryLocalesReadable(
+      scopeKind,
+      slug,
+      id,
+      user,
+      authenticatedScope,
+      {},
+      [row.locale]
     );
 
     // What the read rules withheld is named beside the snapshot, so a reader is

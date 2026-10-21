@@ -867,11 +867,19 @@ const RELEASE_OPERATIONS: Record<
     // Only for a release that is actually stopped. Asking otherwise would put
     // an identity lookup on every detail read to answer "nothing is wrong",
     // which the state already said.
-    const blockedBy =
+    // Named only where the reader may read the document; blocked documents
+    // they may not are counted by collection beside them.
+    const blockers =
       release.state === "blocked"
-        ? await releases.blockingReasons({ ...caller, releaseId })
+        ? await releases.blockersOf({ ...caller, releaseId })
         : undefined;
-    return respondDoc({ ...item, ...(blockedBy ? { blockedBy } : {}) });
+    return respondDoc({
+      ...item,
+      ...(blockers ? { blockedBy: blockers.items } : {}),
+      ...(blockers && blockers.hidden.length > 0
+        ? { hiddenBlockers: blockers.hidden }
+        : {}),
+    });
   },
 
   createRelease: async ({ request, caller, releases }) => {
@@ -900,14 +908,20 @@ const RELEASE_OPERATIONS: Record<
   },
 
   listReleaseMembers: async ({ caller, releases, releaseId }) => {
-    const members = await releases.listMembers({ ...caller, releaseId });
-    return respondList(members, {
-      total: members.length,
+    // The documents the reader may read, and the rest counted by collection,
+    // so the list reads as the size the release is.
+    const { items, hidden } = await releases.membersOf({
+      ...caller,
+      releaseId,
+    });
+    return respondList(items, {
+      total: items.length,
       page: 1,
-      limit: members.length,
+      limit: items.length,
       totalPages: 1,
       hasNext: false,
       hasPrev: false,
+      ...(hidden.length > 0 ? { hidden } : {}),
     });
   },
 
@@ -968,17 +982,22 @@ const RELEASE_OPERATIONS: Record<
    * something the person scheduling can see.
    */
   listReleaseBlockers: async ({ caller, releases, releaseId }) => {
-    const blockers = await releases.blockingReasons({ ...caller, releaseId });
+    const { items, hidden } = await releases.blockersOf({
+      ...caller,
+      releaseId,
+    });
     // Unpaged, like the member list it derives from: the set is bounded by
     // the release's own member cap, and a blocker you cannot see is a blocker
-    // you cannot fix.
-    return respondList(blockers, {
-      total: blockers.length,
+    // you cannot fix. Those on documents the reader may not read are counted
+    // by collection, so the release still reads as blocked.
+    return respondList(items, {
+      total: items.length,
       page: 1,
-      limit: blockers.length,
+      limit: items.length,
       totalPages: 1,
       hasNext: false,
       hasPrev: false,
+      ...(hidden.length > 0 ? { hidden } : {}),
     });
   },
 

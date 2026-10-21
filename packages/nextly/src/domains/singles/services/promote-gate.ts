@@ -52,7 +52,9 @@ import { entryWriteContext } from "../../collections/services/stored-field-read"
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
 import {
+  type ComponentFieldResolver,
   resolveComponentFieldMap,
+  stripSingleComponentTags,
   tagComponentTypes,
 } from "../../versions/tag-component-types";
 
@@ -76,6 +78,8 @@ export function promoteCallerFor(args: {
   slug: string;
   defaultLocale: string | null;
   fields: FieldConfig[];
+  /** See {@link PromoteGateContext.componentFields}. */
+  componentFields?: ComponentFieldResolver;
   options: {
     user?: Record<string, unknown>;
     overrideAccess?: boolean;
@@ -87,6 +91,7 @@ export function promoteCallerFor(args: {
   | "slug"
   | "write"
   | "fields"
+  | "componentFields"
   | "user"
   | "overrideAccess"
   | "authenticatedScope"
@@ -104,6 +109,7 @@ export function promoteCallerFor(args: {
       },
     }),
     fields: args.fields,
+    componentFields: args.componentFields,
     user: args.options.user,
     overrideAccess: args.options.overrideAccess,
     authenticatedScope: args.options.authenticatedScope,
@@ -192,6 +198,13 @@ export interface PromoteGateContext {
    */
   write?: EntryWriteContext;
   fields: FieldConfig[];
+  /**
+   * The fields of a component by its slug, so the type tags on components
+   * nested in other components are found and taken off as well. Without it,
+   * only the tags on this Single's own component fields, and those inside its
+   * groups and repeaters, are.
+   */
+  componentFields?: ComponentFieldResolver;
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
   /**
@@ -310,7 +323,20 @@ export async function promotionIssues(
     // The document the write will persist, with every field this publisher may
     // not write held at its live value. Validated as THAT document rather than
     // as the one the promotion proposed, so the check and the row agree.
-    const resolved = await resolveForLocale(promoted, live, locale, ctx);
+    // Judged without the component type tags. Both sides carry them, so a
+    // component compares as unchanged either way, but a field rule and a
+    // validator are written against a component's public value, which never
+    // holds the tag: shown it, a validator that refuses unknown keys refused
+    // the publish of an unchanged Single. The tags stay on the stored draft,
+    // which is what the write promotes from.
+    const untagged = (document: Record<string, unknown>) =>
+      stripSingleComponentTags(document, ctx.fields, ctx.componentFields);
+    const resolved = await resolveForLocale(
+      untagged(promoted),
+      untagged(live),
+      locale,
+      ctx
+    );
     const issues = await schemaIssues(resolved, ctx);
     if (issues.length > 0) return issues;
   }

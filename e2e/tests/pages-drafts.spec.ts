@@ -7,8 +7,9 @@
  * over a save that went live anyway, and a test of the collection's
  * configuration cannot tell a draft that is stored from one that is served.
  */
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, type APIRequestContext } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 /**

@@ -349,6 +349,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  useBeforeDocumentAction: () => {},
+  useDocumentActions: () => null,
   // `null` is a real answer the pill handles — "no status has been persisted",
   // which is what a create form and a preview both look like — so this mounts
   // the top bar without putting a second subject in the assertions below.

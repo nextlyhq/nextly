@@ -102,6 +102,10 @@ function service(over: {
     ),
     canActOnDocument: vi.fn(async () => over.mayActOnDocument !== false),
     runDrainNow: vi.fn(async () => undefined),
+    // Every reader may read every member: these tests are not about which
+    // documents a reader sees.
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
     checks,
   };
   return { svc: new ReleasesService(deps), repo, deps, checks };

@@ -342,10 +342,13 @@ export default function SingleEditPage({
   const singleLabel = schema.label || slug;
 
   // Handle form submission
+  // Answers with the stored document, so the form starts from what the server
+  // kept rather than from what it sent.
   const handleSubmit = async (data: Record<string, unknown>) => {
     try {
-      await updateDocument(data);
+      const stored = await updateDocument(data);
       toast.success(`${singleLabel} has been updated successfully.`);
+      return stored;
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Failed to save changes"

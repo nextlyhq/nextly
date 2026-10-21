@@ -20,7 +20,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import { fireEvent, render, screen } from "@admin/__tests__/utils";
 
-import { EntrySystemHeader } from "../EntrySystemHeader";
+import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
 
 /** The header, plus a second surface editing the same field through the form. */
 function Harness() {

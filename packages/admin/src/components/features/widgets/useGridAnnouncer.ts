@@ -71,6 +71,11 @@ export interface GridAnnouncer {
   announceRefused: () => void;
   /** Say that a save failed, and that the draft is still on screen. */
   announceSaveFailed: () => void;
+  /**
+   * Say one step of a drag: a card picked up, the place it would land, a cancel. The sentence
+   * is the drag's own (`edit/drag/drag-messages`); the landing itself is `announceMoved`.
+   */
+  announceDrag: (sentence: string) => void;
 }
 
 /**
@@ -185,6 +190,8 @@ export function useGridAnnouncer(
     [say]
   );
 
+  const announceDrag = useCallback((sentence: string) => say(sentence), [say]);
+
   return {
     announcement,
     announceMoved,
@@ -197,5 +204,6 @@ export function useGridAnnouncer(
     announceSaved,
     announceRefused,
     announceSaveFailed,
+    announceDrag,
   };
 }
