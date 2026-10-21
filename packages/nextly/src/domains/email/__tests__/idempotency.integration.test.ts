@@ -69,7 +69,12 @@ const KEY = `order-1:${A}:confirmation`;
 const messages: Array<{ provider: string; options: SentOptions }> = [];
 
 /** What the next provider calls do: fail a number of times, or wait. */
-const behaviour: { failures: number; gate?: Promise<void> } = { failures: 0 };
+const behaviour: {
+  failures: number;
+  gate?: Promise<void>;
+  /** Fail only the call to this `to` address, while `failures` lasts. */
+  failFor?: string;
+} = { failures: 0 };
 
 const contexts: Record<string, PluginContext> = {};
 let current: TestNextly | undefined;
@@ -80,22 +85,29 @@ afterEach(async () => {
   messages.length = 0;
   behaviour.failures = 0;
   behaviour.gate = undefined;
+  behaviour.failFor = undefined;
 });
 
 /** A provider that records what it is handed, and accepts it unless told. */
-function capturing(type: string, acceptsIdempotencyKey: boolean) {
+function capturing(
+  type: string,
+  acceptsIdempotencyKey: boolean,
+  maxToPerMessage = 10
+) {
   return defineEmailProvider<Record<string, never>>({
     type,
     label: type,
     configFields: [],
     parseConfig: () => ({}),
     createAdapter: () => ({
-      maxToPerMessage: 10,
+      maxToPerMessage,
       ...(acceptsIdempotencyKey ? { acceptsIdempotencyKey } : {}),
       send: async (options: SentOptions) => {
         messages.push({ provider: type, options });
         if (behaviour.gate) await behaviour.gate;
-        if (behaviour.failures > 0) {
+        const failsThis =
+          behaviour.failFor === undefined || behaviour.failFor === options.to;
+        if (behaviour.failures > 0 && failsThis) {
           behaviour.failures -= 1;
           throw new Error("provider down");
         }
@@ -120,6 +132,7 @@ function mailerPlugin(name: string, providers: ReturnType<typeof capturing>[]) {
 async function boot(dialect: TestDialect): Promise<{
   t: TestNextly;
   keyless: string;
+  oneAtATime: string;
 }> {
   const t = await createTestNextly({
     dialect,
@@ -127,6 +140,8 @@ async function boot(dialect: TestDialect): Promise<{
       mailerPlugin("mailer", [
         capturing("capturing-keyed", true),
         capturing("capturing-keyless", false),
+        // One `to` per message, so a send to two people is two calls.
+        capturing("capturing-one", false, 1),
       ]),
       mailerPlugin("other-mailer", []),
     ],
@@ -158,7 +173,15 @@ async function boot(dialect: TestDialect): Promise<{
       isActive: true,
     },
   });
-  return { t, keyless: keyless.item.id };
+  const one = await t.nextly.emailProviders.create({
+    data: {
+      name: "One",
+      type: "capturing-one",
+      fromEmail: "provider@example.com",
+      configuration: {},
+    },
+  });
+  return { t, keyless: keyless.item.id, oneAtATime: one.item.id };
 }
 
 function plugin(name = "mailer"): PluginContext {
@@ -321,6 +344,35 @@ describe.each(getConfiguredTestDialects())(
       expect(messages[1].options.idempotencyKey).toBe(
         messages[0].options.idempotencyKey
       );
+    }, 120_000);
+
+    it("sends a retry of a split send only to the calls not yet accepted, and keeps the claim meanwhile", async () => {
+      const { t, oneAtATime } = await boot(dialect);
+      behaviour.failures = 1;
+      behaviour.failFor = B;
+      const keyed = {
+        to: [A, B],
+        subject: "Hi",
+        html: "<p>x</p>",
+        idempotencyKey: KEY,
+        providerId: oneAtATime,
+      };
+
+      const partly = await t.nextly.email.send(keyed);
+      // A takeover period later the claim still records the accepted call.
+      await pruneSendClaims(
+        t.adapter as never,
+        90 * 24 * 60 * 60 * 1000,
+        new Date(Date.now() + CLAIM_TAKEOVER_MS + 1000)
+      );
+      const retried = await t.nextly.email.send(keyed);
+      const repeated = await t.nextly.email.send(keyed);
+
+      expect(partly).toMatchObject({ success: false });
+      expect(retried).toMatchObject({ success: true });
+      expect(repeated).toMatchObject({ repeat: true });
+      // A once, B twice: the retry went to B alone.
+      expect(messages.map(m => m.options.to)).toEqual([A, B, B]);
     }, 120_000);
 
     it("refuses the key with a different message, through the Direct API and REST", async () => {

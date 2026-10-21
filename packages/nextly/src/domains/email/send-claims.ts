@@ -284,6 +284,29 @@ export interface HeldClaim {
   keyDigest: string;
   /** The key handed to a provider that takes one, for one call. */
   providerKey: (call: ProviderCall) => string;
+  /**
+   * The calls of the send an earlier attempt already had accepted, by their
+   * provider key: a retry of a split send sends only the others.
+   */
+  acceptedLegs: ReadonlySet<string>;
+}
+
+/** The legs a partly delivered claim recorded, from its stored result. */
+function acceptedLegsOf(row: ClaimRow | undefined): Set<string> {
+  // `claimed` too: a send that took a partly delivered claim over and then
+  // stopped leaves the recorded calls in place.
+  if (row?.state !== "partial" && row?.state !== "claimed") return new Set();
+  try {
+    const stored = JSON.parse(row.result ?? "null") as {
+      acceptedLegs?: unknown;
+    } | null;
+    const legs = Array.isArray(stored?.acceptedLegs) ? stored.acceptedLegs : [];
+    return new Set(
+      legs.filter((leg): leg is string => typeof leg === "string")
+    );
+  } catch {
+    return new Set();
+  }
 }
 
 /** What claiming a key decided. */
@@ -371,6 +394,7 @@ async function attemptClaim(
       holder,
       keyDigest: digests.key,
       providerKey: digests.providerKey,
+      acceptedLegs: acceptedLegsOf(found),
     },
   });
   if (!found) {
@@ -391,19 +415,27 @@ async function attemptClaim(
   }
   const decided = decisionOn(found, digests, now);
   if (decided) return decided;
-  // Taken over only from the holder that was read: a send that took it first
-  // has changed the holder, and this one then reads that claim again.
+  // Taken over only as it was read: a send that took it first has changed the
+  // holder, and a lapsed holder that settled it since has changed its state,
+  // and either way this one reads the claim again. The recorded legs are kept
+  // until this send settles it.
   await db
     .update(table)
     .set({
       state: "claimed",
       holder,
-      result: null,
       claimedAt: now,
       leaseExpiresAt: now + CLAIM_TAKEOVER_MS,
       settledAt: null,
     })
-    .where(and(eq(table.id, found.id), eq(table.holder, found.holder)));
+    .where(
+      and(
+        eq(table.id, found.id),
+        eq(table.holder, found.holder),
+        eq(table.state, found.state),
+        eq(table.leaseExpiresAt, found.leaseExpiresAt)
+      )
+    );
   const [after] = (await db
     .select({ holder: table.holder })
     .from(table)
@@ -485,9 +517,11 @@ export async function renewSendClaim(
 
 /**
  * Record a claimed send's outcome: a successful send's result, which a repeat
- * returns, or a failure, which lets the next send with the key try again.
- * `keep: false` removes the claim instead, whatever the outcome, for a site
- * that keeps no delivery history.
+ * returns, or a failure, which lets the next send with the key try again. A
+ * failure after some calls of a split send were accepted is `partial`: it
+ * records those calls, so a retry sends only the rest, and is kept as long as
+ * a successful claim. `keep: false` removes the claim instead, whatever the
+ * outcome, for a site that keeps no delivery history.
  *
  * Written only while this send still holds the claim.
  */
@@ -495,7 +529,7 @@ export async function settleSendClaim(
   adapter: DrizzleAdapter,
   claim: HeldClaim,
   outcome: EmailSendOutcome,
-  options: { keep: boolean; now?: number }
+  options: { keep: boolean; acceptedLegs?: readonly string[]; now?: number }
 ): Promise<void> {
   const table = sendClaimsTableFor(adapter.getCapabilities().dialect);
   const now = options.now ?? Date.now();
@@ -505,12 +539,19 @@ export async function settleSendClaim(
       await db.delete(table).where(held);
       return;
     }
+    const legs = options.acceptedLegs ?? [];
     await db
       .update(table)
       .set(
         outcome.success
           ? { state: "sent", result: JSON.stringify(outcome), settledAt: now }
-          : { state: "failed", leaseExpiresAt: now, settledAt: now }
+          : {
+              state: legs.length > 0 ? "partial" : "failed",
+              result:
+                legs.length > 0 ? JSON.stringify({ acceptedLegs: legs }) : null,
+              leaseExpiresAt: now,
+              settledAt: now,
+            }
       )
       .where(held);
   });

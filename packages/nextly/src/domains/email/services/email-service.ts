@@ -759,31 +759,28 @@ export class EmailService extends BaseService {
             return Promise.resolve();
           };
 
-    const outcomes: SendOutcome[] = [];
-    for (const message of messages) {
-      // In turn rather than at once: a provider that takes one `to` per
-      // message is usually one that rate-limits, and the delivery records of
-      // each message are written before the next is sent.
-      outcomes.push(
-        await this.dispatchMessage(message, {
-          adapter,
-          providerType,
-          resolvedProviderId,
-          providerId: options.providerId,
-          templateSlug: options.templateSlug,
-          person,
-          resolvedAttachments,
-          keyed: claimed?.keyed,
-          afterSend,
-        })
-      );
-    }
+    const { outcomes, acceptedLegs } = await this.dispatchAll(messages, {
+      adapter,
+      providerType,
+      resolvedProviderId,
+      providerId: options.providerId,
+      templateSlug: options.templateSlug,
+      person,
+      resolvedAttachments,
+      keyed: claimed?.keyed,
+      afterSend,
+    });
     // One message is today's send, and its result is returned as it is; a
     // split send's messages are combined into one result.
     const outcome =
       outcomes.length === 1 ? outcomes[0] : splitSendOutcome(outcomes);
-    if (claimed)
-      await this.deliveries?.settleSend(claimed.keyed.claim, outcome);
+    if (claimed) {
+      await this.deliveries?.settleSend(
+        claimed.keyed.claim,
+        outcome,
+        acceptedLegs
+      );
+    }
 
     for (const value of deferred) {
       // Every message has been handed over by now, so nothing an action or
@@ -800,6 +797,35 @@ export class EmailService extends BaseService {
     }
 
     return outcome;
+  }
+
+  /**
+   * Hand each message to the provider in turn, and say which calls of a keyed
+   * send have been accepted, by their provider key.
+   *
+   * In turn rather than at once: a provider that takes one `to` per message
+   * is usually one that rate-limits, and the delivery records of each message
+   * are written before the next is sent. A call an earlier attempt with the
+   * key already had accepted is not sent again.
+   */
+  private async dispatchAll(
+    messages: readonly SendMessage[],
+    context: DispatchContext
+  ): Promise<{ outcomes: SendOutcome[]; acceptedLegs: string[] }> {
+    const claim = context.keyed?.claim;
+    const accepted = new Set(claim?.acceptedLegs ?? []);
+    const outcomes: SendOutcome[] = [];
+    for (const message of messages) {
+      const leg = claim?.providerKey(message);
+      if (leg !== undefined && accepted.has(leg)) {
+        outcomes.push({ success: true });
+        continue;
+      }
+      const outcome = await this.dispatchMessage(message, context);
+      if (leg !== undefined && outcome.success) accepted.add(leg);
+      outcomes.push(outcome);
+    }
+    return { outcomes, acceptedLegs: [...accepted] };
   }
 
   /**

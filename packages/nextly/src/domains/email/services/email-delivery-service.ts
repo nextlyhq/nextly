@@ -286,10 +286,15 @@ export class EmailDeliveryService extends BaseService {
    * claim lives as long as the delivery log keeps its records, so a site that
    * keeps none keeps no claim either.
    */
-  async settleSend(claim: HeldClaim, outcome: EmailSendOutcome): Promise<void> {
+  async settleSend(
+    claim: HeldClaim,
+    outcome: EmailSendOutcome,
+    acceptedLegs: readonly string[] = []
+  ): Promise<void> {
     try {
       await settleSendClaim(this.adapter, claim, outcome, {
         keep: !this.keepsNothing(),
+        acceptedLegs,
       });
     } catch (error) {
       warnQuietly(this.logger, "Email send claim could not be recorded", {

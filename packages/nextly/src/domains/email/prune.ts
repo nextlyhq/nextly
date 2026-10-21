@@ -221,7 +221,9 @@ export async function pruneSendClaims(
   ];
   if (sentLifetimeMs !== false) {
     expired.push([
-      { column: "state", op: "=", value: "sent" },
+      // A partly delivered claim records its accepted calls, so it is kept as
+      // long as a successful one.
+      { column: "state", op: "IN", value: ["sent", "partial"] },
       { column: "settledAt", op: "<", value: at - sentLifetimeMs },
     ]);
   }
@@ -259,20 +261,7 @@ export async function pruneEmailDataSafely(
 ): Promise<EmailPruneResult> {
   try {
     const result = await pruneEmailData(deps, policy, maxBatches);
-    const now = (deps.now ?? (() => new Date()))();
-    // Not inside a caller's transaction: the claims would be read and
-    // deleted on another connection, outside it. The next pass sweeps them.
-    const inTransaction = deps.adapter.transactionOpenInFlow?.() === true;
-    if (
-      !inTransaction &&
-      (deps.deadline === undefined || now < deps.deadline)
-    ) {
-      await pruneSendClaims(
-        deps.adapter,
-        windowForEmailClass(policy, EMAIL_RETENTION_CLASSES[0]),
-        now
-      );
-    }
+    await pruneClaimsAfter(deps, policy);
     return result;
   } catch (error) {
     // `warnQuietly` rather than the logger directly: this is inside the catch
@@ -284,5 +273,33 @@ export async function pruneEmailDataSafely(
     // spent even though nothing was deleted, and handing it back would let the
     // same failing query run again immediately.
     return { deliveries: 0, started: true };
+  }
+}
+
+/**
+ * The send claims' part of a pass, contained on its own: a claim query that
+ * fails must not cost the pass the delivery rows it already removed. Left to
+ * the next pass inside a caller's transaction, where the claims would be read
+ * and deleted on another connection, outside it.
+ */
+async function pruneClaimsAfter(
+  deps: EmailPruneDeps,
+  policy: ResolvedEmailRetentionConfig
+): Promise<void> {
+  const now = (deps.now ?? (() => new Date()))();
+  const inTransaction = deps.adapter.transactionOpenInFlow?.() === true;
+  if (inTransaction || (deps.deadline !== undefined && now >= deps.deadline)) {
+    return;
+  }
+  try {
+    await pruneSendClaims(
+      deps.adapter,
+      windowForEmailClass(policy, EMAIL_RETENTION_CLASSES[0]),
+      now
+    );
+  } catch (error) {
+    warnQuietly(deps.logger, "Email send claims could not be pruned", {
+      error,
+    });
   }
 }
