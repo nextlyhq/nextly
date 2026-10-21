@@ -273,6 +273,12 @@ export function describeEveryWayIn(dialect: TestDialect): void {
           };
           if (ASKS_THE_DECISION.has(door) && named) {
             it(`DEVIATES (${named.join(", ")}): ${name}`, () => {
+              // A listed cell names the deviation that explains it, or it
+              // would pass here having recorded none.
+              expect(
+                named.length,
+                "a disagreement here names its deviation"
+              ).toBeGreaterThan(0);
               const answer = answers.get(rowKey(row))?.get(door);
               expect(answer, "the door was asked").toBeDefined();
               expect(verdictOf(answer ?? ".")).not.toBe(expected);
