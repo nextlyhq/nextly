@@ -136,7 +136,8 @@ export async function handleResetPassword(
       return buildResetErrorResponse(err, requestId);
     }
     return buildResetErrorResponse(
-      NextlyError.internal({ cause: err as Error }),
+      // Internal, unless the database was only busy.
+      NextlyError.fromUnexpected(err),
       requestId
     );
   }

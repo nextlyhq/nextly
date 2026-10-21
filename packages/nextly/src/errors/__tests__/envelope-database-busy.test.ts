@@ -15,6 +15,7 @@ import {
   errorEnvelopeFields,
   errorFromServiceEnvelope,
 } from "../from-service-envelope";
+import { originalErrorOf } from "../original-error";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "../retry-after";
 
 /** The envelope a collection or Single service returns for `error`. */
@@ -62,6 +63,10 @@ describe("a service envelope for a busy database", () => {
       expect(envelope.message).toBe(
         "The database is busy. Please try again shortly."
       );
+
+      // The driver's error stays the original, with its message and stack,
+      // not the busy answer built from it.
+      expect(originalErrorOf(envelope)).toBe(error);
 
       const rebuilt = errorFromServiceEnvelope(envelope);
       expect(rebuilt.code).toBe("DATABASE_BUSY");

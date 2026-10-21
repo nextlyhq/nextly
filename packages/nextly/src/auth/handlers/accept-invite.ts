@@ -134,7 +134,8 @@ export async function handleAcceptInvite(
       return buildErrorResponse(err, requestId);
     }
     return buildErrorResponse(
-      NextlyError.internal({ cause: err as Error }),
+      // Internal, unless the database was only busy.
+      NextlyError.fromUnexpected(err),
       requestId
     );
   }
