@@ -309,6 +309,90 @@ function endedSince(
   );
 }
 
+/** A part's live version, the publish that put it live, and when. */
+interface PartPublish {
+  version: VersionMeta;
+  publishedBy: DocumentEvent | null;
+  at: string;
+}
+
+/** Whether a time falls in a later second than another. */
+function laterSecond(a: string, b: string): boolean {
+  return Math.floor(Date.parse(a) / 1000) > Math.floor(Date.parse(b) / 1000);
+}
+
+/**
+ * What of a part is live: its own newest publish, unless a publish of several
+ * parts shipped it since. That publish records one version, of another part,
+ * so the part went live as it was last saved: its newest version at the
+ * publish.
+ *
+ * @param own The part's own versions, newest first.
+ */
+function publishOf(
+  part: string,
+  own: readonly StoryVersion[],
+  events: readonly DocumentEvent[]
+): PartPublish | undefined {
+  const ownPublish = own.find(e => e.publish);
+  const fromOwn = ownPublish && {
+    version: ownPublish.version,
+    publishedBy: ownPublish.publishedBy,
+    at: ownPublish.at,
+  };
+  const shipped = events.find(
+    e => e.kind === "published" && e.parts.includes(part)
+  );
+  if (
+    !shipped ||
+    shipped === ownPublish?.publishedBy ||
+    (ownPublish && !laterSecond(shipped.occurredAt, ownPublish.at))
+  ) {
+    return fromOwn;
+  }
+  const live = own.find(e => !laterSecond(e.at, shipped.occurredAt));
+  if (!live) return fromOwn;
+  return {
+    version: live.version,
+    publishedBy: shipped,
+    at: shipped.occurredAt,
+  };
+}
+
+/**
+ * A part's working draft: its newest version, while that is a draft that
+ * neither went live nor was discarded since. A discarded draft's version stays
+ * in the history, but it is no longer the document's draft.
+ */
+function draftOf(
+  part: string,
+  newest: StoryVersion | undefined,
+  live: PartPublish | undefined,
+  events: readonly DocumentEvent[]
+): PinnedDraft | undefined {
+  if (!newest || newest.version.status !== "draft") return undefined;
+  if (newest.version === live?.version) return undefined;
+  if (endedSince("draft-discarded", part, newest.at, events)) return undefined;
+  return { part, version: newest.version, published: live !== undefined };
+}
+
+/** Add a part to the published row of its live version, or start one. */
+function pinPublished(
+  published: PinnedPublished[],
+  part: string,
+  live: PartPublish
+): void {
+  const row = published.find(r => r.version === live.version);
+  if (row) row.parts.push(part);
+  else {
+    published.push({
+      parts: [part],
+      version: live.version,
+      publishedBy: live.publishedBy,
+    });
+  }
+}
+
 /** The pinned rows: each part's working draft, and what is published now. */
 function pins(
   entries: readonly StoryVersion[],
@@ -318,39 +402,15 @@ function pins(
   const drafts: PinnedDraft[] = [];
   const published: PinnedPublished[] = [];
   for (const part of pinnedParts(versions)) {
-    const latestPublish = entries.find(
-      e => e.publish && e.parts.includes(part)
-    );
-    // The newest entry holding this part, a publish that shipped it among
-    // others included: a save older than that publish is no longer the draft.
-    const newest = entries.find(e => e.parts.includes(part));
-    // A draft discarded since its version was saved is no longer the
-    // document's draft, though its version stays in the history.
-    if (
-      newest &&
-      newest.version.status === "draft" &&
-      newest !== latestPublish &&
-      !endedSince("draft-discarded", part, newest.at, events)
-    ) {
-      drafts.push({
-        part,
-        version: newest.version,
-        published: latestPublish !== undefined,
-      });
-    }
-    if (
-      latestPublish &&
-      !endedSince("unpublished", part, latestPublish.at, events)
-    ) {
-      const row = published.find(r => r.version === latestPublish.version);
-      if (row) row.parts.push(part);
-      else {
-        published.push({
-          parts: [part],
-          version: latestPublish.version,
-          publishedBy: latestPublish.publishedBy,
-        });
-      }
+    // A part is pinned to versions of its own only: another part's snapshot
+    // holds none of its content, so previewing, comparing or restoring it
+    // under this part's name would act on the other part.
+    const own = entries.filter(e => partOf(e.version) === part);
+    const live = publishOf(part, own, events);
+    const draft = draftOf(part, own[0], live, events);
+    if (draft) drafts.push(draft);
+    if (live && !endedSince("unpublished", part, live.at, events)) {
+      pinPublished(published, part, live);
     }
   }
   return { drafts, published };
@@ -376,13 +436,14 @@ function asParts(input: StoryInput): {
 export function buildStory(input: StoryInput): Story {
   const { lifecycle, view, filter } = input;
   const { versions: own, events: ownEvents } = asParts(input);
-  // A view keeps a version by the parts it holds once its publish is
-  // attached: a publish that shipped several languages belongs to each of
-  // them, though its version records one.
+  // A view keeps the versions of its own parts. A publish that shipped
+  // several languages records one version, holding one language's snapshot:
+  // another language's view tells it by its event, so nothing there
+  // previews, compares or restores content of a language it does not show.
   const versionEntries = own
     .filter(v => v.versionNo !== null)
     .map(v => storyVersion(v, lifecycle, ownEvents))
-    .filter(entry => inView(entry.parts, view));
+    .filter(entry => inView([partOf(entry.version)], view));
   const versions = versionEntries.map(entry => entry.version);
   const attached = new Set(
     versionEntries.flatMap(e => (e.publishedBy ? [e.publishedBy.id] : []))
@@ -395,14 +456,8 @@ export function buildStory(input: StoryInput): Story {
     ...foldSaves(versionEntries),
     ...eventEntries(events, listed, attached),
   ].sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
-  // Pinned for the parts in view only: a Spanish version kept in the English
-  // view for the English it published says nothing of Spanish here.
   const pinned = lifecycle
-    ? pins(
-        versionEntries,
-        versions.filter(v => inView([partOf(v)], view)),
-        events
-      )
+    ? pins(versionEntries, versions, events)
     : { drafts: [], published: [] };
   return {
     ...pinned,
