@@ -66,6 +66,21 @@ export function changeOrder(
   return [...outside, ...layout.filter(name => changes.byField.has(name))];
 }
 
+/**
+ * How many fields changed, in words: the one wording every surface that counts
+ * a comparison's changes uses.
+ */
+export function changesCountText(count: {
+  changed: number;
+  total: number;
+  incomplete: boolean;
+}): string {
+  // Withheld fields may differ, so the count is said as a floor.
+  return count.incomplete
+    ? `${count.changed} of the ${count.total} fields you can read changed`
+    : `${count.changed} of ${count.total} fields changed`;
+}
+
 /** Where reading what a version changed stands, as its bar says it. */
 export type ChangesState =
   | { kind: "reading" }

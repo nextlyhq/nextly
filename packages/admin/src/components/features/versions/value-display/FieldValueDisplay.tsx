@@ -161,8 +161,10 @@ defineValueDisplay(["number"], ({ value }) => {
   );
 });
 
+// On and Off, the words for a setting a reader turned, so a change reads
+// "Off → On" rather than as an answer to a question nobody asked.
 defineValueDisplay(["checkbox", "boolean"], ({ value }) => (
-  <span className="text-foreground">{value === true ? "Yes" : "No"}</span>
+  <span className="text-foreground">{value === true ? "On" : "Off"}</span>
 ));
 
 /**

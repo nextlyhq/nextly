@@ -13,15 +13,14 @@
  * @module components/features/versions/VersionChangesForm
  */
 
-import { ChevronDown, ChevronUp } from "lucide-react";
 import type { FieldConfig } from "nextly/config";
 import { Fragment } from "react";
 
 import { ReadOnlyDocumentForm } from "@admin/components/features/entries/EntryForm/ReadOnlyDocumentForm";
-import { Button } from "@admin/components/ui";
 import { cn } from "@admin/lib/utils";
 
 import { FieldDiffNode } from "./diff/FieldDiffNode";
+import { UnchangedFieldsToggle } from "./UnchangedFieldsToggle";
 import type { VersionChanges } from "./version-changes";
 
 /** The DOM id of a changed field's card, so a move can bring it into view. */
@@ -159,24 +158,11 @@ export function VersionChangesForm({
             : "No changes from the version before it."}
         </p>
       ) : null}
-      {unchangedCount > 0 ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="self-start"
-          aria-expanded={showUnchanged}
-          onClick={onToggleUnchanged}
-        >
-          {showUnchanged ? (
-            <ChevronUp className="h-4 w-4" aria-hidden="true" />
-          ) : (
-            <ChevronDown className="h-4 w-4" aria-hidden="true" />
-          )}
-          {showUnchanged ? "Hide" : "Show"} {unchangedCount} unchanged{" "}
-          {unchangedCount === 1 ? "field" : "fields"}
-        </Button>
-      ) : null}
+      <UnchangedFieldsToggle
+        count={unchangedCount}
+        shown={showUnchanged}
+        onToggle={onToggleUnchanged}
+      />
     </div>
   );
 }

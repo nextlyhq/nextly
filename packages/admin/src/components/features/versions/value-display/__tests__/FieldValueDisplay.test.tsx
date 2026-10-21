@@ -64,16 +64,16 @@ describe("FieldValueDisplay", () => {
     expect(screen.getByText("••••••••")).toBeInTheDocument();
   });
 
-  it("shows a checkbox as a word, including a deliberate no", () => {
+  it("shows a checkbox as On or Off, including a deliberate off", () => {
     const { unmount } = render(
       <FieldValueDisplay field={field("checkbox")} value={1} />
     );
-    expect(screen.getByText("Yes")).toBeInTheDocument();
+    expect(screen.getByText("On")).toBeInTheDocument();
     unmount();
 
-    // false must read as "No", not as "Not set" — the distinction is the point.
+    // false must read as "Off", not as "Not set" — the distinction is the point.
     render(<FieldValueDisplay field={field("checkbox")} value={false} />);
-    expect(screen.getByText("No")).toBeInTheDocument();
+    expect(screen.getByText("Off")).toBeInTheDocument();
   });
 
   it("resolves a select value to its option label", () => {
