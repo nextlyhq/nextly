@@ -106,6 +106,11 @@ import {
 } from "../readiness/unpublished-links";
 import type { ReleaseActivityEntry } from "../release-activity";
 import {
+  planDocumentSchedule,
+  planMemberBatch,
+  type ScheduleDocumentInput,
+} from "../release-batch-plan";
+import {
   RELEASE_CALENDAR_RELEASES_PER_DAY,
   zonedDay,
   zonedDays,
@@ -129,11 +134,18 @@ import {
   resolveReleaseTarget,
   type ReleaseTargetReader,
 } from "../release-targets";
-import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
+import {
+  documentRefKey,
+  draftReleaseRow,
+  RELEASE_LIST_ORDERS,
+} from "../releases-repository";
 import type {
   BlockRequest,
   DocumentRef,
+  MembersWrite,
+  MembersWritten,
   NewRelease,
+  NewReleaseMember,
   ReleaseListOrder,
   ReleaseMemberCounts,
   ReleaseMemberRow,
@@ -157,6 +169,15 @@ export type ReleaseAuthority =
  * service has always found it.
  */
 export { RELEASES_RESOURCE };
+
+/**
+ * What scheduling a document in one step takes, declared beside the plan
+ * that reads it and exported here, where the service's callers find its
+ * other inputs.
+ *
+ * @experimental
+ */
+export type { ScheduleDocumentInput };
 
 /**
  * The longest title every supported dialect can store.
@@ -365,6 +386,20 @@ export type AddedReleaseMember = ReleaseMemberRow & {
 };
 
 /**
+ * A release and the documents one step put into it: adding several at once,
+ * or scheduling a document. `release` is as the step left it, scheduled when
+ * the step scheduled it; `members` are the new ones, in the order given, each
+ * with the documents it links to that will not be live at the release's
+ * moment, as {@link AddedReleaseMember} carries them.
+ *
+ * @experimental
+ */
+export interface ReleaseWithAddedMembers {
+  release: ReleaseRow;
+  members: AddedReleaseMember[];
+}
+
+/**
  * The report for a member with nothing to report: a new one each time, since
  * it is handed to the caller, who may change it.
  */
@@ -512,7 +547,13 @@ function editCapabilities(
     );
   return {
     addMember: mayChange("add") && takesAnother(release.kind, held),
-    removeMember: mayChange("remove"),
+    // Taking the document out of a single release that has not run cancels
+    // it, through `cancel`: offered to whoever may remove a document AND may
+    // cancel, the cancel answer being the one `runCapabilities` gives, so the
+    // two cannot come to ask for different permissions.
+    removeMember: removalCancels(release)
+      ? may.mayCreate && runCapabilities(release, held, may).cancel
+      : mayChange("remove"),
     // Any state, as `update` writes it: the title is a label.
     update: may.mayUpdate,
     delete: may.mayDelete && whyNotDeletable(release, history) === null,
@@ -1174,11 +1215,93 @@ function singleReleaseHoldsOne(releaseId: string): NextlyError {
  */
 const UNWRITTEN_MEMBER_ID = "";
 
+/**
+ * The ids the documents of a step adding several are checked under before
+ * they are written: one each, by position, since the checks tell members
+ * apart by id. Named by a refusal as `null`, as {@link UNWRITTEN_MEMBER_ID}
+ * is, with the document beside it so the caller can tell which.
+ */
+const UNWRITTEN_BATCH_PREFIX = "unwritten:";
+
+/** The id the `index`th document of a step is checked under. */
+function unwrittenBatchId(index: number): string {
+  return `${UNWRITTEN_BATCH_PREFIX}${index}`;
+}
+
+/** A document of a step adding several, checked and resolved to its row. */
+interface BatchTarget {
+  scopeKind: ReleaseScopeKind;
+  scopeSlug: string;
+  entryId: string;
+  action: ReleaseMemberAction;
+  memberKey: string;
+}
+
+/**
+ * The documents of a step as the checks see them before they are written,
+ * each under its own unwritten id, added by `author`.
+ */
+function unwrittenMembers(
+  releaseId: string,
+  targets: readonly BatchTarget[],
+  author: string | null
+): ReleaseMemberRow[] {
+  const now = new Date();
+  return targets.map((target, index) => ({
+    id: unwrittenBatchId(index),
+    releaseId,
+    scopeKind: target.scopeKind,
+    scopeSlug: target.scopeSlug,
+    entryId: target.entryId,
+    locale: null,
+    action: target.action,
+    memberKey: target.memberKey,
+    singleSlot: null,
+    createdBy: author,
+    createdAt: now,
+  }));
+}
+
+/**
+ * A document of a step as the repository writes it. Its author is the
+ * actor, never one the caller names, for the reason one add gives.
+ */
+function newMemberOf(
+  releaseId: string,
+  target: BatchTarget,
+  actor: ReleaseActor
+): NewReleaseMember {
+  return {
+    releaseId,
+    scopeKind: target.scopeKind,
+    scopeSlug: target.scopeSlug,
+    entryId: target.entryId,
+    locale: null,
+    action: target.action,
+    createdBy: actor.userId,
+  };
+}
+
 /** A hard finding as a refusal names it: its code and the member it is about. */
 function problemOf(finding: ReadinessFinding): {
   memberId: string | null;
   code: string;
+  document?: { scopeKind: string; scopeSlug: string; entryId: string };
 } {
+  // A document of a step adding several is named by what the caller sent,
+  // which they could read to send: it has no member id yet, and one null
+  // among several says nothing about which document it is.
+  if (finding.memberId.startsWith(UNWRITTEN_BATCH_PREFIX)) {
+    return {
+      memberId: null,
+      code: finding.code,
+      document: {
+        scopeKind: finding.scopeKind,
+        scopeSlug: finding.scopeSlug,
+        entryId: finding.entryId,
+      },
+    };
+  }
   return {
     memberId:
       finding.memberId === UNWRITTEN_MEMBER_ID ? null : finding.memberId,
@@ -1373,6 +1496,57 @@ function memberLimitRefusal(
     },
   });
 }
+
+/**
+ * The refusal for adding `adding` documents in one step to a release holding
+ * `held`, or null when they all fit. The whole step is refused, saying how
+ * many fit, since adding only some of a selection is not what was chosen.
+ * Nothing fits is the one-document refusal, said as it says it.
+ */
+function batchLimitRefusal(
+  releaseId: string,
+  held: number,
+  adding: number
+): NextlyError | null {
+  const fit = roomFor(held);
+  if (adding <= fit) return null;
+  if (fit === 0) return memberLimitRefusal(releaseId, held);
+  return NextlyError.conflict({
+    message: `This release holds ${held} documents and can hold ${RELEASE_MEMBER_LIMIT}, so ${fit} more fit, not ${adding}. Choose ${fit} or fewer, or start another release.`,
+    logContext: {
+      reason: "release-member-limit",
+      releaseId,
+      held,
+      adding,
+      fit,
+      limit: RELEASE_MEMBER_LIMIT,
+    },
+  });
+}
+
+/**
+ * Whether taking the document out of this release cancels it: a
+ * single-document release that has not run (draft, scheduled or stopped).
+ * It is one document scheduled on its own, so without the document there is
+ * nothing to run, and calling it off is the cancel transition, under the
+ * cancel permission. The release is kept as cancelled; deleting it is a
+ * separate act. The write and `capabilities` both ask this.
+ */
+function removalCancels(
+  release: Pick<ReleaseRow, "kind" | "state"> | undefined
+): boolean {
+  return (
+    release?.kind === "single" &&
+    RELEASE_CANCELLABLE_FROM.includes(release.state)
+  );
+}
+
+/**
+ * The states a document may be scheduled with an existing release in: an
+ * ordinary release still being assembled or scheduled. A stopped one is
+ * fixed and scheduled again first, and a finished one takes nothing.
+ */
+const SCHEDULABLE_WITH_FROM: readonly ReleaseState[] = ["draft", "scheduled"];
 
 /**
  * Whether a release holding `held` documents may take one more: the
@@ -2483,13 +2657,48 @@ export class ReleasesService {
     member: ReleaseMemberRow,
     actor: ReleaseActor
   ): Promise<UnpublishedLinksReport> {
+    return (
+      (await this.unpublishedLinksOfEach(release, [member], actor)).get(
+        member.id
+      ) ?? noUnpublishedLinks()
+    );
+  }
+
+  /**
+   * {@link unpublishedLinksOf} for several members joining `release` together,
+   * by member id: one check over all of them, so a document linked from one
+   * and going live as another is live at the moment, as it will be once they
+   * are in. Every member is answered, one coming down with nothing.
+   */
+  private async unpublishedLinksOfEach(
+    release: ReleaseRow,
+    members: readonly ReleaseMemberRow[],
+    actor: ReleaseActor
+  ): Promise<Map<string, UnpublishedLinksReport>> {
+    const reports = new Map(
+      members.map(member => [member.id, noUnpublishedLinks()])
+    );
     const scan = this.linkScan();
-    if (scan.source === null || member.action !== "publish") {
-      return noUnpublishedLinks();
+    if (
+      scan.source === null ||
+      !members.some(member => member.action === "publish")
+    ) {
+      return reports;
     }
-    const { soft } = await this.checkMembers(release, [member], [scan.source]);
+    // Every member, those coming down included: what a document coming down
+    // in the same step does to a linked one decides whether that one is live.
+    const { soft } = await this.checkMembers(release, members, [scan.source]);
     const [narrowed] = await this.narrowLinksFor([soft], actor, scan.scans);
-    return unpublishedLinksReport(narrowed);
+    for (const member of members) {
+      if (member.action !== "publish") continue;
+      reports.set(
+        member.id,
+        unpublishedLinksReport(
+          narrowed.filter(finding => finding.memberId === member.id)
+        )
+      );
+    }
+    return reports;
   }
 
   /**
@@ -2816,43 +3025,14 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<AddedReleaseMember> {
     await this.authorize(actor, "create");
-    await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
-    requireRunnableMember(input, actor);
-    // The target checks, for every caller: REST, the Direct API and the admin
-    // alike. A precondition, so before anything is written; for a Single it
-    // also replaces the id the caller sent with the row's own.
-    const entryId = await resolveReleaseTarget(
-      this.deps.targets,
-      {
-        scopeKind: input.scopeKind,
-        scopeSlug: input.scopeSlug,
-        entryId: input.entryId,
-      },
-      {
-        userId: actor.userId,
-        trusted: actor.overrideAccess === true,
-        authenticatedScope: actor.authenticatedScope,
-        userRoles: actor.userRoles,
-      }
-    );
+    const entryId = await this.checkedTarget(input, actor);
 
     // Every refusal below is answered BEFORE the write, which is the only
     // statement that changes the release. Keyed by the RESOLVED id: for a
     // Single that is the row's own, whatever the caller sent, so the same
     // Single again is the duplicate it is.
     const memberKey = releaseMemberKey(releaseId, { ...input, entryId });
-    const [release] = await this.deps.repository.findReleases({
-      ids: [releaseId],
-    });
-    // A committed release is a publisher's to change. Asked before anything
-    // about its contents is answered, so a caller without that authority
-    // learns nothing of what the release holds.
-    if (
-      release !== undefined &&
-      RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
-    ) {
-      await this.authorize(actor, "publish");
-    }
+    const release = await this.releaseToChange(releaseId, actor);
     // The early answer for the common case. The guarantee is the database's:
     // two adds racing past this both reach the insert, and the single-slot
     // index refuses the second (translated below).
@@ -2950,6 +3130,396 @@ export class ReleasesService {
     }
   }
 
+  /**
+   * The checks a document makes to join a release, and the id it joins
+   * under: the caller's own authority for its action, that the drain could
+   * perform it, and the target checks, for every caller (REST, the Direct API
+   * and the admin alike). Preconditions, so asked before anything is
+   * written; for a Single the id is the row's own, whatever the caller sent.
+   * One add and a step adding several both ask this.
+   */
+  private async checkedTarget(
+    input: AddMemberInput,
+    actor: ReleaseActor
+  ): Promise<string> {
+    await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
+    requireRunnableMember(input, actor);
+    return resolveReleaseTarget(
+      this.deps.targets,
+      {
+        scopeKind: input.scopeKind,
+        scopeSlug: input.scopeSlug,
+        entryId: input.entryId,
+      },
+      {
+        userId: actor.userId,
+        trusted: actor.overrideAccess === true,
+        authenticatedScope: actor.authenticatedScope,
+        userRoles: actor.userRoles,
+      }
+    );
+  }
+
+  /**
+   * The release a membership change is about, as read now, or `undefined`
+   * when it is not there (the change's judgement refuses that). A committed
+   * release is a publisher's to change, so `publish` is asked for one before
+   * anything about its contents is answered, and a caller without that
+   * authority learns nothing of what it holds.
+   */
+  private async releaseToChange(
+    releaseId: string,
+    actor: ReleaseActor
+  ): Promise<ReleaseRow | undefined> {
+    const [release] = await this.deps.repository.findReleases({
+      ids: [releaseId],
+    });
+    if (
+      release !== undefined &&
+      RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
+    ) {
+      await this.authorize(actor, "publish");
+    }
+    return release;
+  }
+
+  /**
+   * Put several documents into a release in one step, each with its action:
+   * all of them, or none.
+   *
+   * Each document is asked what adding it alone asks: the caller's own
+   * authority for its action, that it is there for the caller with a
+   * draft/published lifecycle, and, for a release already scheduled, that it
+   * has no hard problem. The release is asked once: `create`, and `publish`
+   * when it is scheduled; that it is not finished; that a single-document
+   * release takes only its one document; and that all of them fit within the
+   * limit, judged under the release's lock. The first refusal refuses the
+   * whole step, and nothing is written; the writes are one transaction, so a
+   * failure of the last of them leaves nothing either.
+   *
+   * The accepted linked documents an add offers are added this way too, each
+   * going live.
+   *
+   * @experimental
+   */
+  async addMembers(
+    releaseId: string,
+    inputs: readonly AddMemberInput[],
+    actor: ReleaseActor
+  ): Promise<ReleaseWithAddedMembers> {
+    await this.authorize(actor, "create");
+    return this.addMembersTo(releaseId, inputs, actor, undefined);
+  }
+
+  /**
+   * Schedule a document in one step: on its own at a time, with an existing
+   * release, or in a new release, and with it the linked documents the
+   * caller accepted, each going live.
+   *
+   * - On its own: a single-document release named `title`, holding the
+   *   document, scheduled at `at`. With linked documents, an ordinary
+   *   release holding all of them instead, since a single-document release
+   *   holds one. Needs `publish` as well as `create`, and is refused while
+   *   any of the documents has a hard problem, as scheduling is.
+   * - With an existing release: the documents added to it, as
+   *   {@link addMembers} adds them. Only an ordinary release that is a draft
+   *   or scheduled.
+   * - In a new release: a draft release named `title` holding them, its time
+   *   to be set on it.
+   *
+   * One transaction whatever the path: the release, its documents and its
+   * schedule land together, or nothing does, not even the release.
+   *
+   * @experimental
+   */
+  async scheduleDocument(
+    input: ScheduleDocumentInput,
+    actor: ReleaseActor
+  ): Promise<ReleaseWithAddedMembers> {
+    await this.authorize(actor, "create");
+    const plan = planDocumentSchedule(input);
+    if ("existing" in plan.release) {
+      const releaseId = plan.release.existing;
+      await this.assertSchedulableWith(releaseId);
+      return this.addMembersTo(
+        releaseId,
+        plan.members,
+        actor,
+        SCHEDULABLE_WITH_FROM
+      );
+    }
+    const { create, schedule } = plan.release;
+    // Scheduling is what puts content live later, so its authority is asked
+    // before anything is read, as `schedule` asks it.
+    if (schedule !== undefined) await this.authorize(actor, "publish");
+    assertTitleFits(create.title);
+    const row = draftReleaseRow({ ...create, createdBy: actor.userId });
+    if (schedule !== undefined) {
+      assertUsableSchedule(row.id, schedule.at, schedule.timezone);
+    }
+    const targets = await this.resolveBatch(row.id, plan.members, actor);
+    await this.requireLiveAuthor(actor.userId);
+    const unwritten = unwrittenMembers(row.id, targets, actor.userId);
+    // The release as it will stand once the step lands: scheduled at its
+    // instant on its own, so its links are judged at that moment.
+    const landed: ReleaseRow =
+      schedule === undefined
+        ? row
+        : {
+            ...row,
+            state: "scheduled",
+            scheduledAt: schedule.at,
+            timezone: schedule.timezone,
+          };
+    if (schedule !== undefined) {
+      // The refusal scheduling makes, over the documents it would schedule,
+      // before anything is written.
+      await this.assertNoHardProblems(actor, row, unwritten, {
+        message:
+          "This document cannot be scheduled until the problems blocking it are fixed. Nothing was scheduled.",
+        reason: "schedule-document-not-ready",
+      });
+    }
+    const links = await this.unpublishedLinksOfEach(landed, unwritten, actor);
+    return this.writeMembers(
+      {
+        releaseId: row.id,
+        create: row,
+        members: targets.map(target => newMemberOf(row.id, target, actor)),
+        // A release made in this step is a draft until it is scheduled in it.
+        allowedStates: ["draft"],
+        refuseWhenHolding: (held, adding) =>
+          batchLimitRefusal(row.id, held, adding),
+        ...(schedule === undefined
+          ? {}
+          : {
+              schedule: {
+                ...schedule,
+                from: RELEASE_SCHEDULABLE_FROM_UNBLOCKED,
+              },
+            }),
+        by: releaseEventActorOf(actor),
+      },
+      { release: undefined, unwritten, links }
+    );
+  }
+
+  /**
+   * Refuse a release a document may not be scheduled with: a
+   * single-document release, which holds its own document, or a stopped
+   * one, which is fixed and scheduled again first. A release that is not
+   * there, or has finished, is refused by the add as for any add.
+   */
+  private async assertSchedulableWith(releaseId: string): Promise<void> {
+    const [release] = await this.deps.repository.findReleases({
+      ids: [releaseId],
+    });
+    if (release === undefined || RELEASE_FINAL_STATES.includes(release.state)) {
+      return;
+    }
+    if (release.kind === "single") throw singleReleaseHoldsOne(releaseId);
+    if (!SCHEDULABLE_WITH_FROM.includes(release.state)) {
+      throw NextlyError.conflict({
+        message:
+          "This release is stopped. Fix or remove the documents blocking it and schedule it again before scheduling more documents with it.",
+        logContext: {
+          reason: "schedule-with-stopped-release",
+          releaseId,
+          state: release.state,
+        },
+      });
+    }
+  }
+
+  /**
+   * {@link addMembers} after its `create` authority, narrowed to `onlyInto`
+   * when given: the states the release may be in for the documents to land,
+   * besides those the caller's authority allows.
+   */
+  private async addMembersTo(
+    releaseId: string,
+    inputs: readonly AddMemberInput[],
+    actor: ReleaseActor,
+    onlyInto: readonly ReleaseState[] | undefined
+  ): Promise<ReleaseWithAddedMembers> {
+    // The document checks first, as one add makes them: they are the
+    // caller's preconditions, and none needs the release.
+    const targets = await this.resolveBatch(releaseId, inputs, actor);
+    const release = await this.releaseToChange(releaseId, actor);
+    // A single-document release takes one document, and only while it holds
+    // none. The database's single-slot index is the guarantee, as for one add.
+    if (
+      release?.kind === "single" &&
+      (targets.length > 1 ||
+        (await this.singleReleaseHoldsAnother(release, targets[0].memberKey)))
+    ) {
+      throw singleReleaseHoldsOne(releaseId);
+    }
+    const judged = await this.judgeMembershipChange(
+      release,
+      releaseId,
+      "add",
+      actor
+    );
+    // `judgeMembershipChange` refuses a release that is not there.
+    if (release === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId },
+      });
+    }
+    const allowedStates =
+      onlyInto === undefined
+        ? judged
+        : judged.filter(state => onlyInto.includes(state));
+    await this.requireLiveAuthor(actor.userId);
+    const unwritten = unwrittenMembers(releaseId, targets, actor.userId);
+    // Every document joining a scheduled release is checked, as one joining
+    // alone is, and one with a hard problem refuses them all: the release
+    // stays scheduled as it was.
+    await this.assertCommittedChangesReady(actor, release, unwritten);
+    // Worked out before the write, so a read that fails refuses the step with
+    // nothing written, as for one add.
+    const links = await this.unpublishedLinksOfEach(release, unwritten, actor);
+    return this.writeMembers(
+      {
+        releaseId,
+        members: targets.map(target => newMemberOf(releaseId, target, actor)),
+        allowedStates,
+        refuseWhenHolding: (held, adding) =>
+          batchLimitRefusal(releaseId, held, adding),
+        by: releaseEventActorOf(actor),
+      },
+      { release, unwritten, links }
+    );
+  }
+
+  /**
+   * The documents of a step, checked as one add checks its document, with
+   * the id each joins under and its member key in `releaseId`: the caller's
+   * authority for its action, that it can run, and that it is there for the
+   * caller in a collection or Single with a lifecycle. For a Single, the id is
+   * the row's own. Two of them naming one document are refused.
+   */
+  private async resolveBatch(
+    releaseId: string,
+    inputs: readonly AddMemberInput[],
+    actor: ReleaseActor
+  ): Promise<BatchTarget[]> {
+    const planned = planMemberBatch(inputs);
+    const targets: BatchTarget[] = [];
+    for (const input of planned) {
+      const entryId = await this.checkedTarget(input, actor);
+      targets.push({
+        scopeKind: input.scopeKind,
+        scopeSlug: input.scopeSlug,
+        entryId,
+        action: input.action,
+        memberKey: releaseMemberKey(releaseId, {
+          scopeKind: input.scopeKind,
+          scopeSlug: input.scopeSlug,
+          entryId,
+          locale: null,
+        }),
+      });
+    }
+    // Keyed by the RESOLVED id, so two names of one Single are the one
+    // document they are.
+    const seen = new Set<string>();
+    for (const [index, target] of targets.entries()) {
+      if (seen.has(target.memberKey)) {
+        throw NextlyError.invalidInput({
+          message: `\`members[${index}]\` names a document already named earlier in the same step.`,
+          logContext: { reason: "member-batch-duplicate", index },
+        });
+      }
+      seen.add(target.memberKey);
+    }
+    return targets;
+  }
+
+  /**
+   * Write a step's documents, and answer them with their links; the unique
+   * index's refusal translated as one add translates it. `checked` is what
+   * the step judged before the write: the release (absent when the step
+   * creates it), its documents as they were checked, and their links by the
+   * id they were checked under.
+   *
+   * After the commit, a release now scheduled is checked again for the
+   * documents just added, by the early stop: a hard problem that arose
+   * between the check above and the commit stops it then, rather than at its
+   * instant. Never fails the step, which has committed.
+   */
+  private async writeMembers(
+    write: MembersWrite,
+    checked: {
+      release: ReleaseRow | undefined;
+      unwritten: readonly ReleaseMemberRow[];
+      links: ReadonlyMap<string, UnpublishedLinksReport>;
+    }
+  ): Promise<ReleaseWithAddedMembers> {
+    let written: MembersWritten;
+    try {
+      written = await this.deps.repository.addMembers(write);
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        // Told apart by what the release holds now, as for one add.
+        if (
+          checked.release !== undefined &&
+          (await this.singleReleaseHoldsAnother(
+            checked.release,
+            checked.unwritten[0]?.memberKey ?? ""
+          ))
+        ) {
+          throw singleReleaseHoldsOne(write.releaseId);
+        }
+        throw NextlyError.duplicate({
+          logContext: {
+            reason: "member-already-in-release",
+            releaseId: write.releaseId,
+            documents: write.members.length,
+          },
+        });
+      }
+      throw error;
+    }
+    if (written.release.state === "scheduled") {
+      await this.stopAfterCommit(written.members);
+    }
+    return {
+      release: written.release,
+      members: written.members.map((member, index) => ({
+        ...member,
+        unpublishedLinks:
+          checked.links.get(checked.unwritten[index]?.id ?? "") ??
+          noUnpublishedLinks(),
+      })),
+    };
+  }
+
+  /**
+   * The early stop for these just-added documents, after the commit: the
+   * path every event takes once its write has committed. Never fails the
+   * step it follows; the drain checks every release again at its instant.
+   */
+  private async stopAfterCommit(
+    members: readonly ReleaseMemberRow[]
+  ): Promise<void> {
+    try {
+      await this.stopOnHardProblems({
+        documents: members.map(member => ({
+          scopeKind: member.scopeKind,
+          scopeSlug: member.scopeSlug,
+          entryId: member.entryId,
+        })),
+      });
+    } catch (error) {
+      this.deps.logger?.warn(
+        "The documents just added could not be checked again; the release is checked at its instant",
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+    }
+  }
+
   async removeMember(
     memberId: string,
     actor: ReleaseActor,
@@ -2991,6 +3561,17 @@ export class ReleasesService {
     const [release] = await this.deps.repository.findReleases({
       ids: [member.releaseId],
     });
+    // A single release that has not run is one document scheduled on its
+    // own: taking that document out calls the release off through `cancel`
+    // itself, so it asks exactly the permission cancelling asks, before it
+    // writes, and moves the release by the same fenced transition. The release is kept as cancelled, holding the document as the
+    // record of what it was for; deleting it is a separate act, under its
+    // own permission. A single release that ran is refused below, as any
+    // finished release is.
+    if (removalCancels(release) && release !== undefined) {
+      await this.cancel(release.id, actor);
+      return;
+    }
     await this.assertNotEmptyingCommittedSingle(release, actor);
     const allowedStates = await this.judgeMembershipChange(
       release,
@@ -3136,13 +3717,26 @@ export class ReleasesService {
     release: ReleaseRow | undefined,
     member: ReleaseMemberRow
   ): Promise<void> {
+    await this.assertCommittedChangesReady(actor, release, [member]);
+  }
+
+  /**
+   * {@link assertCommittedChangeReady} for several members at once: one check
+   * over all of them, and one refusal naming every problem, so a step adding
+   * several documents to a scheduled release adds none while any has one.
+   */
+  private async assertCommittedChangesReady(
+    actor: ReleaseActor,
+    release: ReleaseRow | undefined,
+    members: readonly ReleaseMemberRow[]
+  ): Promise<void> {
     if (
       release === undefined ||
       !RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
     ) {
       return;
     }
-    await this.assertNoHardProblems(actor, release, [member], {
+    await this.assertNoHardProblems(actor, release, members, {
       message:
         "This document cannot go into the scheduled release until its problems are fixed. The release is still scheduled.",
       reason: "release-member-not-ready",

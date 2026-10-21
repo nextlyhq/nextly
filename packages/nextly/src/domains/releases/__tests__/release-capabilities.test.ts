@@ -317,20 +317,46 @@ describe("capabilities, for a single-document release", () => {
     expect(can.get("s")?.addMember).toBe(true);
   });
 
-  it("withholds removing its document once scheduled, even from a publisher", async () => {
-    // Removing it would leave a launch that runs with nothing. Cancelling is
-    // the way to call it off.
-    const { svc } = service(ALL, { s: 1, o: 1 });
+  it("offers taking its document out, which cancels it, only to whoever may cancel", async () => {
+    // Out of a single release that has not run, removing the document calls
+    // the release off through `cancel`, so the control follows the cancel
+    // permission: a publisher is offered it in every unrun state.
+    const { svc } = service(ALL, { d: 1, s: 1, b: 1, o: 1 });
     const can = await svc.capabilities(
       [
+        release("draft", "d", "single"),
         release("scheduled", "s", "single"),
+        release("blocked", "b", "single"),
         release("scheduled", "o", "release"),
       ],
       ACTOR
     );
-    expect(can.get("s")?.removeMember).toBe(false);
+    for (const id of ["d", "s", "b"]) {
+      expect(can.get(id)?.removeMember, id).toBe(true);
+      expect(can.get(id)?.cancel, id).toBe(true);
+    }
     expect(can.get("o")?.removeMember).toBe(true);
-    expect(can.get("s")?.cancel).toBe(true);
+
+    // Whoever may only assemble releases is not, even from a draft single,
+    // which once let them remove the document.
+    const assembler = service(["read", "create"], { d: 1, o: 1 });
+    const theirs = await assembler.svc.capabilities(
+      [release("draft", "d", "single"), release("draft", "o", "release")],
+      ACTOR
+    );
+    expect(theirs.get("d")?.removeMember).toBe(false);
+    expect(theirs.get("o")?.removeMember).toBe(true);
+
+    // And a single release that ran is the record of what went live.
+    const ran = await svc.capabilities(
+      [
+        release("published", "p", "single"),
+        release("cancelled", "c", "single"),
+      ],
+      ACTOR
+    );
+    expect(ran.get("p")?.removeMember).toBe(false);
+    expect(ran.get("c")?.removeMember).toBe(false);
   });
 
   it("reads what editable releases hold in ONE query, and nothing for final ones", async () => {

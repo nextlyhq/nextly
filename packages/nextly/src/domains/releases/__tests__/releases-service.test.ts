@@ -454,16 +454,49 @@ describe("ReleasesService keeps a single-document release to one document", () =
     expect(repo.scheduleRelease).not.toHaveBeenCalled();
   });
 
-  it("refuses taking the only document out of a scheduled single release", async () => {
-    const { svc, repo } = service({ holds: ["create", "publish"] });
+  it("cancels a single release that has not run when its document is taken out", async () => {
+    // Through `cancel` itself: the same permission, the same fenced
+    // transition, and the document is not removed from the record.
+    for (const state of ["draft", "scheduled", "blocked"]) {
+      const { svc, repo } = service({ holds: ["create", "publish"] });
+      repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, kind: "single" },
+      ]);
+      await svc.removeMember("m0", ADMIN);
+      expect(repo.cancelRelease, state).toHaveBeenCalledTimes(1);
+      expect(repo.removeMember, state).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses taking it out to whoever may not cancel, and changes nothing", async () => {
+    const { svc, repo, deps } = service({ holds: ["create"] });
     repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
     repo.findReleases.mockResolvedValue([
-      { id: "r1", state: "scheduled", kind: "single" },
+      { id: "r1", state: "draft", kind: "single" },
     ]);
     await expect(svc.removeMember("m0", ADMIN)).rejects.toMatchObject({
-      code: "CONFLICT",
+      code: "FORBIDDEN",
     });
+    // Refused on the permission `cancel` asks for, and nothing written.
+    expect(deps.canManageReleases).toHaveBeenCalledWith("u1", "publish");
+    expect(repo.cancelRelease).not.toHaveBeenCalled();
     expect(repo.removeMember).not.toHaveBeenCalled();
+  });
+
+  it("refuses taking the document out of a single release that ran", async () => {
+    for (const state of ["published", "cancelled"]) {
+      const { svc, repo } = service({ holds: ["create", "publish"] });
+      repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, kind: "single" },
+      ]);
+      await expect(svc.removeMember("m0", ADMIN), state).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+      expect(repo.cancelRelease).not.toHaveBeenCalled();
+      expect(repo.removeMember).not.toHaveBeenCalled();
+    }
   });
 
   const SINGLE = { id: "r1", state: "draft", kind: "single" };
