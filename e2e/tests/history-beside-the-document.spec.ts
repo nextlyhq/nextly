@@ -7,8 +7,9 @@
  * window's width, the layout keeps room for it, and the form has to survive
  * the panel opening and closing without remounting.
  */
-import { test, expect, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const excerpt = (page: Page) =>
