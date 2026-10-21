@@ -1,21 +1,12 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import type { FullConfig } from "@playwright/test";
 
-import { chromium, type FullConfig } from "@playwright/test";
+import { signIn } from "./tests/support/session";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-
-export const STORAGE_STATE = path.join(HERE, ".playwright", "session.json");
+export { STORAGE_STATE } from "./tests/support/session";
 
 /**
- * Signs in once and hands the session to every test.
- *
- * The playground's `admin.devAutoLogin` issues a real session for
- * `dev@nextly.local` on the first `/admin` visit — but only on the first, and
- * the requests the admin fires before it lands come back 401. Letting each test
- * discover that for itself means every one of them starts with a burst of
- * failed requests and a retry, which is both slow and indistinguishable from
- * the thing a test would want to catch.
+ * Signs in once, before the first test, and stores the session every test
+ * opens with; `tests/support/test` renews it as the suite runs.
  *
  * Doing it here once is Playwright's documented shape for authentication, and
  * it buys the smoke tests the right to say "no request failed" and mean it.
@@ -27,35 +18,7 @@ export const STORAGE_STATE = path.join(HERE, ".playwright", "session.json");
 async function globalSetup(config: FullConfig): Promise<void> {
   const baseURL = config.projects[0]?.use?.baseURL;
   if (!baseURL) throw new Error("[e2e] No baseURL configured.");
-
-  const browser = await chromium.launch();
-  try {
-    const page = await browser.newPage({ baseURL });
-    // The admin route compiles lazily, and THIS is the first request that hits
-    // it, so a cold dev server spends the whole compile inside this navigation.
-    // The default 30s is not enough on a slow CI runner: `webServer` already
-    // allows 240s for boot for exactly this reason, and the `main` wait below
-    // already allows 60s. Leaving the navigation at the default made the two
-    // disagree, and the suite failed before a single test ran.
-    await page.goto("/admin", { timeout: 180_000 });
-
-    // The admin is client-rendered: the shell is served empty and filled after
-    // hydration, so the session is only real once a screen has drawn.
-    await page.locator("main").waitFor({ state: "visible", timeout: 60_000 });
-
-    const cookies = await page.context().cookies();
-    const session = cookies.find(c => c.name === "nextly_session");
-    if (!session) {
-      throw new Error(
-        "[e2e] The admin rendered but issued no session cookie. " +
-          "Dev auto-login does not fire for 127.0.0.1 — check baseURL is localhost."
-      );
-    }
-
-    await page.context().storageState({ path: STORAGE_STATE });
-  } finally {
-    await browser.close();
-  }
+  await signIn(baseURL);
 }
 
 export default globalSetup;

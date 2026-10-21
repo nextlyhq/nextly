@@ -18,11 +18,20 @@ import { describe, expect, it } from "vitest";
 
 import { buildErrorResponse } from "../../api/error-response";
 import { isDatabaseBusy, toDbError } from "../../database/errors";
+import { POOL_WAIT_TIMEOUT_CODE as CORE_POOL_WAIT_TIMEOUT_CODE } from "../../database/pool-wait-code";
 import { NextlyError } from "../nextly-error";
 import {
   DATABASE_BUSY_RETRY_AFTER_SECONDS,
   retryAfterSeconds,
 } from "../retry-after";
+
+describe("the pool-wait code core reads", () => {
+  it("is the adapters' own code", () => {
+    // Core keeps its own copy so the browser-reachable error module never
+    // imports the adapter; this is what keeps the copy honest.
+    expect(CORE_POOL_WAIT_TIMEOUT_CODE).toBe(POOL_WAIT_TIMEOUT_CODE);
+  });
+});
 
 /** What Drizzle throws for a failed query: its own error, the driver's on `cause`. */
 function wrappedByDrizzle(cause: Error): Error {
