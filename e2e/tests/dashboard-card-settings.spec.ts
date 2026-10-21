@@ -9,7 +9,12 @@
  * built-in widget offers a quick setting yet. The card is placed by each test, so no other
  * spec's dashboard carries it.
  */
-import { expect, type Page, type Request } from "@playwright/test";
+import {
+  expect,
+  type Locator,
+  type Page,
+  type Request,
+} from "@playwright/test";
 
 import { gotoAdmin } from "./support/admin";
 import { test } from "./support/test";
@@ -72,9 +77,17 @@ function cell(page: Page) {
   return page.getByTestId(`widget-cell-${CARD}`);
 }
 
+/**
+ * The rows drawn inside `within`, however the card draws them: a list at the medium tier, a table
+ * at the large one, which is what a full card on a wide dashboard is.
+ */
+function rowsIn(within: Locator) {
+  return within.locator('[data-testid="widget-list"] > li, table tbody tr');
+}
+
 /** The rows the card draws. */
 function rows(page: Page) {
-  return cell(page).getByTestId("widget-list").locator("li");
+  return rowsIn(cell(page));
 }
 
 /** Every widget query the dashboard sends from now on. */
@@ -164,13 +177,9 @@ test.describe("the settings sheet", () => {
   }) => {
     const sheet = await openSettings(page);
     const preview = sheet.getByRole("region", { name: `Preview of ${TITLE}` });
-    await expect(preview.getByTestId("widget-list").locator("li")).toHaveCount(
-      3
-    );
+    await expect(rowsIn(preview)).toHaveCount(3);
     await chooseRows(sheet, 2);
-    await expect(preview.getByTestId("widget-list").locator("li")).toHaveCount(
-      2
-    );
+    await expect(rowsIn(preview)).toHaveCount(2);
     // The card itself is unchanged until Done.
     await expect(rows(page)).toHaveCount(3);
   });
