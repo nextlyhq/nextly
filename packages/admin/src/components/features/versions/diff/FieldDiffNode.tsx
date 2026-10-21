@@ -8,10 +8,11 @@
  * relationships as added/removed target chips. All colours are theme tokens, so
  * it reads in light and dark alike.
  *
- * A changed field states its two sides in COLUMNS, which is the shape a
- * comparison has. There is one such layout rather than a narrow variant beside
- * it: a container query folds the columns into a stack where the surface cannot
- * hold two, so the available width decides the arrangement and no caller has to.
+ * A changed field is drawn INLINE by default: one run with the removed part
+ * struck through and the added part underlined, each in colour, the way
+ * tracked changes read. Side by side, a person's remembered choice, states the
+ * two sides in columns instead, and a container query folds those into a stack
+ * where the surface cannot hold two (see `changes-layout`).
  *
  * Each value node carries its own display config (`display`), which the engine
  * copied from the real field while it walked, so a `hasMany` array, a `select`
@@ -21,6 +22,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
+import { createContext, useContext, type ReactNode } from "react";
 
 import { Badge } from "@admin/components/ui";
 import type {
@@ -35,7 +37,9 @@ import type {
 
 import { FieldValue } from "../value-display/FieldValueDisplay";
 
+import { useChangesLayout } from "./changes-layout";
 import {
+  DrawnContainersProvider,
   FieldRow,
   StatusBadge,
   TextRuns,
@@ -83,6 +87,67 @@ function renderField(node: ValueFieldDiff): FieldConfig {
  */
 function AbsentSide() {
   return <p className="text-sm italic text-muted-foreground">Not present</p>;
+}
+
+/**
+ * Whether the framework's own fields (such as when a document was first
+ * published) are shown. They are kept behind "Show system fields", since they
+ * change on their own and say nothing about what an author changed.
+ */
+const SystemFieldsContext = createContext(false);
+
+/** Shows or keeps back the system fields below it. */
+export const SystemFieldsProvider = SystemFieldsContext.Provider;
+
+/**
+ * The two sides of a change inline: the earlier one struck through, the later
+ * one underlined, each in colour, with the arrow between them where both
+ * exist. A side the field never reached is left out rather than shown as
+ * absent: an added field is only its new value, underlined.
+ */
+function InlinePair({
+  status,
+  before,
+  after,
+}: {
+  status: DiffStatus;
+  before: React.ReactNode;
+  after: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+      {status !== "added" ? (
+        <del className="min-w-0 rounded-sm px-0.5 bg-destructive-100 text-destructive-700 dark:bg-destructive-900 dark:text-destructive-100">
+          <span className="sr-only">Before: </span>
+          {before}
+        </del>
+      ) : null}
+      {status === "changed" ? (
+        <span className="text-muted-foreground" aria-hidden="true">
+          &rarr;
+        </span>
+      ) : null}
+      {status !== "removed" ? (
+        <ins className="min-w-0 rounded-sm px-0.5 underline decoration-1 underline-offset-2 bg-success-100 text-success-700 dark:bg-success-900 dark:text-success-100">
+          <span className="sr-only">After: </span>
+          {after}
+        </ins>
+      ) : null}
+    </div>
+  );
+}
+
+/** A change's two sides, in the layout this comparison is drawn in. */
+function ChangePair(props: {
+  status: DiffStatus;
+  before: React.ReactNode;
+  after: React.ReactNode;
+}) {
+  return useChangesLayout() === "split" ? (
+    <SplitPair {...props} />
+  ) : (
+    <InlinePair {...props} />
+  );
 }
 
 /**
@@ -152,7 +217,7 @@ function BeforeAfter({
     return <>{renderValue(after)}</>;
   }
   return (
-    <SplitPair
+    <ChangePair
       status={status}
       before={renderValue(before)}
       after={renderValue(after)}
@@ -214,16 +279,19 @@ function UnrecognisedField({ node }: { node: FieldDiff }) {
  * field that existed and held nothing.
  */
 function TextDiff({ node }: { node: TextFieldDiff }) {
-  if (node.status === "unchanged") {
+  const layout = useChangesLayout();
+  // Inline, the runs ARE the change: removed text struck through and added
+  // text underlined, in their place in one paragraph.
+  if (node.status === "unchanged" || layout === "inline") {
     return (
-      <FieldRow label={node.label} status={node.status}>
+      <FieldRow node={node} status={node.status}>
         <TextRuns segments={node.segments} />
       </FieldRow>
     );
   }
   const sides = splitTextSegments(node.segments);
   return (
-    <FieldRow label={node.label} status={node.status}>
+    <FieldRow node={node} status={node.status}>
       <SplitPair
         status={node.status}
         before={<TextRuns segments={sides.before} />}
@@ -245,7 +313,7 @@ function TextDiff({ node }: { node: TextFieldDiff }) {
 function ValueDiff({ node }: { node: ValueFieldDiff }) {
   const field = renderField(node);
   return (
-    <FieldRow label={node.label} status={node.status}>
+    <FieldRow node={node} status={node.status}>
       <BeforeAfter
         status={node.status}
         before={node.before}
@@ -268,7 +336,7 @@ function GroupDiff({ node }: { node: GroupFieldDiff }) {
     node.componentTypeBefore !== undefined ||
     node.componentTypeAfter !== undefined;
   return (
-    <FieldRow label={node.label} status={node.status}>
+    <FieldRow node={node} status={node.status}>
       <div className="pl-3 border-l border-border">
         {swapped ? (
           <p className="text-xs text-muted-foreground mb-1">
@@ -276,9 +344,13 @@ function GroupDiff({ node }: { node: GroupFieldDiff }) {
             {node.componentTypeAfter ?? "none"}
           </p>
         ) : null}
-        {node.fields.map(child => (
-          <FieldDiffNode key={childKey(child)} node={child} />
-        ))}
+        {/* The group's box places its fields, so they name only what lies
+            below it. */}
+        <DrawnContainersProvider value={(node.path?.length ?? 0) + 1}>
+          {node.fields.map(child => (
+            <FieldDiffNode key={childKey(child)} node={child} />
+          ))}
+        </DrawnContainersProvider>
       </div>
     </FieldRow>
   );
@@ -318,7 +390,7 @@ function TargetGroup({
 function SetDiff({ node }: { node: SetFieldDiff }) {
   const empty = node.added.length === 0 && node.removed.length === 0;
   return (
-    <FieldRow label={node.label} status={node.status}>
+    <FieldRow node={node} status={node.status}>
       <div className="flex flex-col gap-1.5">
         <TargetGroup
           label="Removed"
@@ -345,62 +417,87 @@ function SetDiff({ node }: { node: SetFieldDiff }) {
  * renderer is registered for a new kind.
  */
 function BuiltInFieldDiff({ node }: { node: FieldDiff }) {
-  switch (node.kind) {
-    case "text":
-      return <TextDiff node={node} />;
+  // Looked up by kind, so a kind this build predates falls through to the
+  // unrecognised row rather than vanishing.
+  const draw = BUILT_IN[node.kind] as
+    | ((node: FieldDiff) => ReactNode)
+    | undefined;
+  return draw ? <>{draw(node)}</> : <UnrecognisedField node={node} />;
+}
 
-    case "value":
-      return <ValueDiff node={node} />;
+/** A list, item by item, each placed by the list's own box. */
+function ListDiff({ node }: { node: Extract<FieldDiff, { kind: "list" }> }) {
+  return (
+    <FieldRow node={node} status={node.status}>
+      <div className="flex flex-col gap-2">
+        <DrawnContainersProvider value={(node.path?.length ?? 0) + 1}>
+          {node.items.map(item => (
+            <ListItemRow key={item.id} item={item} />
+          ))}
+        </DrawnContainersProvider>
+      </div>
+    </FieldRow>
+  );
+}
 
-    case "set":
-      return <SetDiff node={node} />;
+/**
+ * A field the reader may not read: the server sent nothing of its values, not
+ * even whether they changed. It is named so the reader knows it exists.
+ */
+function HiddenFieldDiff({
+  node,
+}: {
+  node: Extract<FieldDiff, { kind: "hidden" }>;
+}) {
+  return (
+    <FieldRow node={node} status="unchanged">
+      <p className="text-xs text-muted-foreground">
+        Hidden: you don&apos;t have access to this field.
+      </p>
+    </FieldRow>
+  );
+}
 
-    case "group":
-      return <GroupDiff node={node} />;
+/** Each kind this module draws itself, by kind. */
+const BUILT_IN: {
+  [K in FieldDiff["kind"]]?: (
+    node: Extract<FieldDiff, { kind: K }>
+  ) => ReactNode;
+} = {
+  text: node => <TextDiff node={node} />,
+  value: node => <ValueDiff node={node} />,
+  set: node => <SetDiff node={node} />,
+  group: node => <GroupDiff node={node} />,
+  list: node => <ListDiff node={node} />,
+  unknown: node => <UnknownFieldDiff node={node} />,
+  hidden: node => <HiddenFieldDiff node={node} />,
+};
 
-    case "list": {
-      return (
-        <FieldRow label={node.label} status={node.status}>
-          <div className="flex flex-col gap-2">
-            {node.items.map(item => (
-              <ListItemRow key={item.id} item={item} />
-            ))}
-          </div>
-        </FieldRow>
-      );
-    }
-
-    case "unknown": {
-      // A field (or a container's children) gone from the current schema has no
-      // findable access rule, so its historical value cannot be proven readable
-      // and the engine withholds it. Only the field name and that it changed are
-      // shown.
-      return (
-        <FieldRow label={node.name} status={node.status}>
-          <p className="text-xs text-muted-foreground">
-            Value hidden: the schema needed to verify who may read this field is
-            no longer available.
-          </p>
-        </FieldRow>
-      );
-    }
-
-    case "hidden": {
-      // The reader may not read this field, so the server sent nothing of its
-      // values, not even whether they changed. It is named so the reader knows
-      // it exists.
-      return (
-        <FieldRow label={node.label} status="unchanged">
-          <p className="text-xs text-muted-foreground">
-            Hidden: you don&apos;t have access to this field.
-          </p>
-        </FieldRow>
-      );
-    }
-
-    default:
-      return <UnrecognisedField node={node} />;
-  }
+/**
+ * A key with no field behind it: a column the framework keeps on every
+ * document, or a field the content type no longer has. Its value is withheld,
+ * since a field with no definition has no access rule to prove it readable;
+ * the reader is told which of the two it is. A system field shows only when
+ * the reader asks for system fields.
+ */
+function UnknownFieldDiff({
+  node,
+}: {
+  node: Extract<FieldDiff, { kind: "unknown" }>;
+}) {
+  const showSystem = useContext(SystemFieldsContext);
+  if (node.reason === "system" && !showSystem) return null;
+  return (
+    <FieldRow node={node} status={node.status}>
+      <p className="text-xs text-muted-foreground">
+        {node.reason === "system"
+          ? "System field: kept by Nextly on every document."
+          : node.reason === "removed"
+            ? "No longer in this content type."
+            : "Value hidden: the schema needed to verify who may read this field is no longer available."}
+      </p>
+    </FieldRow>
+  );
 }
 
 /**
@@ -437,7 +534,7 @@ function ListItemRow({ item }: { item: ListItemDiff }) {
         <StatusBadge status={item.status} />
         {item.hasMoved && item.fromIndex != null && item.toIndex != null ? (
           <Badge variant="outline">
-            Moved {item.fromIndex + 1} &rarr; {item.toIndex + 1}
+            Moved from {item.fromIndex + 1} to {item.toIndex + 1}
           </Badge>
         ) : null}
       </div>

@@ -37,7 +37,12 @@ import {
 } from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
+import { getNextlyLogger } from "../observability/logger";
 import type { ReadCaller } from "../services/dashboard/readable-resources";
+import {
+  configuredTimezone,
+  normalizeTimestampsInPayload,
+} from "../shared/lib/date-formatting";
 
 import { readAccessCaller, readCaller } from "./authenticated-read";
 import { readJsonBody } from "./read-json-body";
@@ -45,13 +50,18 @@ import { respondData } from "./response-shapes";
 import {
   answerReadyQueries,
   failedSlot,
+  type AnswerOptions,
   type ReadyQuery,
+  type SettledSlot,
 } from "./widget-slots";
 import { withErrorHandler } from "./with-error-handler";
 
+// `Accept` as well as `Cookie`: the same request answers as JSON or as a stream
+// of lines depending on what the client asked for, so a cache that kept one
+// must not hand it to a client asking for the other.
 const PRIVATE_NO_STORE_HEADERS = {
   "Cache-Control": "private, no-store",
-  Vary: "Cookie",
+  Vary: "Cookie, Accept",
 } as const;
 
 /*
@@ -380,7 +390,24 @@ function unanswered(): QuerySlot {
   );
 }
 
-export const postWidgetQuery = withErrorHandler(async (req: Request) => {
+/** A batch every whole-batch check has passed: each query either ready to run, or already refused. */
+interface PreparedBatch {
+  checked: Array<ReadyQuery | QuerySlot>;
+  caller: ReadCaller;
+}
+
+/**
+ * Everything that can fail the WHOLE batch, done before any answer is written:
+ * authentication, the body, the source refresh, the caller, the read-decision
+ * warm-up, and each query's own preconditions.
+ *
+ * 🔴 All of it before the first byte, because a streamed answer has committed
+ * to a 200 the moment it starts: a refusal raised after that could no longer be
+ * the canonical error envelope, and a client would read a failed batch as a
+ * dashboard of cards that never arrive. Everything here throws into
+ * `withErrorHandler` exactly as it did when the answer was only ever JSON.
+ */
+async function prepareBatch(req: Request): Promise<PreparedBatch> {
   const auth = await requireAuthentication(req);
   if (isErrorResponse(auth)) throw toNextlyAuthError(auth);
 
@@ -439,14 +466,156 @@ export const postWidgetQuery = withErrorHandler(async (req: Request) => {
         : Promise.resolve(entry.slot)
     )
   );
+  return { checked, caller };
+}
+
+/**
+ * Every slot of a prepared batch, each settled ONCE and handed to `onSettled`
+ * as it settles: the refused ones first, then each answer as it arrives, then
+ * any the runner lost.
+ *
+ * ONE implementation of which slot is which, read by both encodings. The JSON
+ * answer is what this returns; the stream is what it hands `onSettled`, line by
+ * line. Two assemblies of one batch would agree on the day they were written and
+ * drift after -- a stream that put a slot at another index, or carried a detail
+ * the JSON answer withholds, would look correct in isolation.
+ */
+async function answerBatch(
+  batch: PreparedBatch,
+  options: AnswerOptions = {}
+): Promise<QuerySlot[]> {
+  const { checked, caller } = batch;
+  const refused: SettledSlot[] = [];
+  checked.forEach((entry, index) => {
+    if (!isReady(entry)) refused.push({ index, slot: entry });
+  });
+  if (refused.length > 0) options.onSettled?.(refused);
+
   const answered = await answerReadyQueries(
     checked.filter(isReady),
     caller,
-    createBatchScope()
+    createBatchScope(),
+    options
   );
-  const results: QuerySlot[] = checked.map((entry, index) =>
-    isReady(entry) ? (answered.get(index) ?? unanswered()) : entry
-  );
+  // A batch given up has no reader left to answer: the slots it never settled
+  // are not lost, and nothing more is written or logged for them.
+  if (options.signal?.aborted === true) return [];
+  const lost: SettledSlot[] = [];
+  const results: QuerySlot[] = checked.map((entry, index) => {
+    if (!isReady(entry)) return entry;
+    const slot = answered.get(index);
+    if (slot) return slot;
+    const missing = unanswered();
+    lost.push({ index, slot: missing });
+    return missing;
+  });
+  if (lost.length > 0) options.onSettled?.(lost);
+  return results;
+}
 
+/** The media type a client asks for to have each slot written as it settles. */
+const NDJSON = "application/x-ndjson";
+
+/** Whether the request asked for the streamed answer, by its `Accept` header. */
+function wantsStream(req: Request): boolean {
+  return (req.headers.get("accept") ?? "").toLowerCase().includes(NDJSON);
+}
+
+/**
+ * The batch as a stream of one `{index, slot}` line per settled slot, written
+ * as each settles, so a slow card holds no other.
+ *
+ * Each line is a slot exactly as the JSON answer holds it: settled by
+ * {@link answerBatch}, so the same redaction reaches it, and its timestamps
+ * formatted with the timezone the JSON pass uses -- that pass reads only JSON
+ * bodies, so a streamed answer formats each line itself rather than reach the
+ * reader unformatted.
+ *
+ * A reader that goes away cancels the stream, and that gives the batch up:
+ * every slot still running is told through its own signal, and none not yet
+ * started is started. `X-Accel-Buffering` and `no-transform` ask proxies not to
+ * hold the lines back; one that buffers anyway degrades to today's behaviour,
+ * late but never wrong.
+ */
+function streamBatch(batch: PreparedBatch): Response {
+  const giveUp = new AbortController();
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Not awaited: `start` returns at once, and the lines are written as the
+      // slots settle rather than once the batch has.
+      void (async () => {
+        const timezone = await configuredTimezone();
+        // Each settle is ONE write, so slots one many-query call answered reach
+        // the reader together, as they were settled.
+        const write = (settled: readonly SettledSlot[]) => {
+          if (giveUp.signal.aborted) return;
+          const lines = settled.map(({ index, slot }) =>
+            JSON.stringify({
+              index,
+              slot: normalizeTimestampsInPayload(slot, timezone),
+            })
+          );
+          controller.enqueue(encoder.encode(`${lines.join("\n")}\n`));
+        };
+        try {
+          await answerBatch(batch, {
+            signal: giveUp.signal,
+            onSettled: write,
+          });
+        } catch (error) {
+          // Past the 200 there is no envelope left to answer with. Ending the
+          // stream is the answer: the client files every slot it did not
+          // receive as missing, which is what they are.
+          logStreamFailure(error);
+        } finally {
+          endStream(controller, giveUp.signal);
+        }
+      })();
+    },
+    cancel() {
+      giveUp.abort();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: {
+      ...PRIVATE_NO_STORE_HEADERS,
+      "Cache-Control": "private, no-store, no-transform",
+      "Content-Type": NDJSON,
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
+/** Closes a stream the reader has not cancelled; one already ended is left as it is. */
+function endStream(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  givenUp: AbortSignal
+): void {
+  if (givenUp.aborted) return;
+  try {
+    controller.close();
+  } catch {
+    // Already closed or errored: there is nothing left to end.
+  }
+}
+
+/** A streamed batch that failed after its 200, logged as `failedSlot` logs, guarded likewise. */
+function logStreamFailure(error: unknown): void {
+  try {
+    getNextlyLogger().error({
+      kind: "widget-query-stream-failed",
+      err: error instanceof Error ? error.stack : String(error),
+    });
+  } catch {
+    // Deliberately swallowed: a log line never fails the stream.
+  }
+}
+
+export const postWidgetQuery = withErrorHandler(async (req: Request) => {
+  const batch = await prepareBatch(req);
+  if (wantsStream(req)) return streamBatch(batch);
+  const results = await answerBatch(batch);
   return respondData({ results }, { headers: PRIVATE_NO_STORE_HEADERS });
 });

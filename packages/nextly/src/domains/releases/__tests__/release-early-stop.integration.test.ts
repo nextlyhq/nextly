@@ -41,6 +41,7 @@ import { seedLiveAuthor, seedPlainAuthor } from "./helpers/live-author";
 import {
   ANY_EDITABLE_STATE,
   scheduleAsItStands,
+  lockServerOf,
 } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
@@ -70,13 +71,15 @@ let afterPostChange: (() => Promise<void>) | undefined;
 /** The role slug a note's code-defined rule lets publish. */
 let publisherSlug = "";
 
-const OPEN = {
+/** Every operation a single has, open to all. A single has no `delete`. */
+const SINGLE_OPEN = {
   read: () => true,
   update: () => true,
   publish: () => true,
   unpublish: () => true,
-  delete: () => true,
 };
+
+const OPEN = { ...SINGLE_OPEN, delete: () => true };
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
@@ -154,7 +157,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         versions: { drafts: true },
-        access: OPEN,
+        access: SINGLE_OPEN,
         fields: [text({ name: "headline", localized: true })],
       }),
     ],
@@ -687,7 +690,10 @@ describe.each(getConfiguredTestDialects())(
 
       const pass = await applyDueReleases({
         repository: new ReleasesRepository(t.adapter),
-        mutations: createReleaseMutations({ contentApi: t.nextly }),
+        mutations: createReleaseMutations({
+          contentApi: t.nextly,
+          lockServer: lockServerOf(t),
+        }),
         runAs: {
           findUser: async id => ({ id, isActive: true }),
           listRoleSlugs: async () => [],
@@ -980,7 +986,10 @@ describe.each(getConfiguredTestDialects())(
       const pass = () =>
         applyDueReleases({
           repository: new ReleasesRepository(t.adapter),
-          mutations: createReleaseMutations({ contentApi: t.nextly }),
+          mutations: createReleaseMutations({
+            contentApi: t.nextly,
+            lockServer: lockServerOf(t),
+          }),
           runAs: { findUser: async () => null, listRoleSlugs: async () => [] },
         });
 

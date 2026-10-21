@@ -308,7 +308,10 @@ export function useDashboardArrangement(
   const stageReset = useCallback(() => {
     editor.stageReset();
     announce.reset();
-  }, [editor, announce]);
+    // The reset is the latest change, so no card is ringed for an earlier one: the default may
+    // reuse a ringed card's placement, and it would read as just placed.
+    ring.highlight(null);
+  }, [editor, announce, ring]);
 
   const { begin, cancel, save } = useCustomiseLifecycle(
     editor,

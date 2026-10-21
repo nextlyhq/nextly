@@ -42,6 +42,7 @@ import { ReleasesRepository } from "../releases-repository";
 import {
   ANY_EDITABLE_STATE,
   scheduleAsItStands,
+  lockServerOf,
 } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
@@ -272,7 +273,10 @@ async function dueRelease(
 
 /** The mutations the drain job performs, as the drain job builds them. */
 const mutationsOf = (t: TestNextly): ReleaseMutations =>
-  createReleaseMutations({ contentApi: t.nextly });
+  createReleaseMutations({
+    contentApi: t.nextly,
+    lockServer: lockServerOf(t),
+  });
 
 /** One materialisation pass, as the drain job performs it. */
 function materialise(

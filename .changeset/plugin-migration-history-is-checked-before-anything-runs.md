@@ -34,8 +34,9 @@ anything, the core tables included, and refuses — naming the plugin and the
 migration — when:
 
 - a plugin lists its migrations in an order other than the order of their
-  names, which is the order they run in (also refused when the configuration
-  loads);
+  names, which is the order they run in (also refused wherever the
+  configuration loads, so such a list stops the app from starting, not only
+  `nextly migrate`);
 - a migration the database records as applied has been edited, removed or
   renamed;
 - a migration that has not run is ordered before one that has.
@@ -44,8 +45,9 @@ Lists written by `nextly migrate:create --plugin` are already in name order,
 so only a list edited by hand is affected: list the migrations in name order,
 restore the applied migration, or give a new migration a name that sorts after
 the applied ones. A migration rolled back by hand from the middle of a plugin's
-history is refused the same way until the migrations after it are rolled back,
-or it is recorded applied with `nextly migrate:resolve --applied`.
+history is refused the same way until the migrations after it are rolled back
+with `nextly migrate:down --plugin`; then run `nextly migrate`.
+`nextly migrate:resolve --applied` does not take plugin migrations.
 
 A plugin migration whose run was stopped after its statements committed — on
 MySQL, which commits schema statements as they run, or one marked to run

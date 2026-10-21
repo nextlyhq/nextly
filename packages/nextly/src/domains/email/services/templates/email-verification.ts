@@ -13,11 +13,15 @@
  * @since 1.0.0
  */
 
-import type { EmailTemplateInsert } from "../../../../schemas/email-templates/types";
+import type { OwnerTemplate } from "../../template-ownership";
 
-export const emailVerificationTemplate: EmailTemplateInsert = {
+export const emailVerificationTemplate: OwnerTemplate = {
   name: "Email Verification",
   slug: "email-verification",
+  description:
+    "Sent when someone needs to confirm their email address, with the link that confirms it.",
+  // The link verifies the address for whoever opens it.
+  carriesSecret: true,
   subject: "Verify your {{appName}} email address",
   htmlContent: `<h1 style="margin: 0; padding: 0 0 16px; font-size: 24px; font-weight: 600; color: #18181b; line-height: 32px;">Verify Your Email</h1>
 <p style="margin: 0; padding: 0 0 8px; font-size: 16px; color: #3f3f46; line-height: 24px;">Hi {{userName}},</p>

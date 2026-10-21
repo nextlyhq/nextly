@@ -12,11 +12,15 @@
  * @since 1.0.0
  */
 
-import type { EmailTemplateInsert } from "../../../../schemas/email-templates/types";
+import type { OwnerTemplate } from "../../template-ownership";
 
-export const welcomeTemplate: EmailTemplateInsert = {
+export const welcomeTemplate: OwnerTemplate = {
   name: "Welcome Email",
   slug: "welcome",
+  description:
+    "Sent to a new user when their account is created with a welcome email asked for, with the link that verifies their address.",
+  // The verification link verifies the address for whoever opens it.
+  carriesSecret: true,
   subject: "Welcome to {{appName}}, {{userName}}!",
   htmlContent: `<h1 style="margin: 0; padding: 0 0 16px; font-size: 24px; font-weight: 600; color: #18181b; line-height: 32px;">Welcome, {{userName}}!</h1>
 <p style="margin: 0; padding: 0 0 16px; font-size: 16px; color: #3f3f46; line-height: 24px;">Thank you for joining <strong>{{appName}}</strong>. We're excited to have you on board.</p>

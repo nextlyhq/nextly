@@ -63,16 +63,14 @@ export const RELEASE_ROW_STATUS: Record<
   ReleaseRowStatus,
   {
     label: string;
-    variant:
-      | "primary"
-      | "warning"
-      | "destructive"
-      | "outline"
-      | "success"
-      | "default";
+    variant: "warning" | "destructive" | "outline" | "success" | "default";
   }
 > = {
-  scheduled: { label: "Scheduled", variant: "primary" },
+  // Neutral, not the primary colour: an installation's brand colour becomes
+  // the primary, and a brand colour as text on its own tint falls below AA
+  // contrast (the suite's indigo reads 3.9:1). The icon and the word say
+  // "scheduled"; the colour never had to.
+  scheduled: { label: "Scheduled", variant: "default" },
   overdue: { label: "Overdue", variant: "warning" },
   stopped: { label: "Stopped", variant: "destructive" },
   // Draft and cancelled are drawn differently on purpose: one is still being
