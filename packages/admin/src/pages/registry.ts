@@ -14,9 +14,18 @@ import { apiKeyGrantsFor } from "../lib/permissions/api-key-actions";
 import type { PageProps } from "../lib/routing";
 import type { RouteSection } from "../types/route-section";
 
+import "../hooks/useUnsavedChanges";
+// The unsaved-change guards register their one popstate listener when their
+// module evaluates, and it must evaluate before the router adds its own - the
+// entry editor was this module's only eager consumer before pages loaded on
+// demand, so the module is imported above for that side effect. Ordering is
+// the point: the import pulls no page code with it.
 import { lazyRoute } from "./lazy-route";
 
 
+// Every non-builder page loads through the same wrapper as the builders:
+// its chunk is fetched when its route renders, so opening one screen does
+// not download the other 58.
 const AcceptInvitePage = lazyRoute(() => import("./(auth)/accept-invite"));
 const ForgotPasswordPage = lazyRoute(() => import("./(auth)/forgot-password"));
 const LoginPage = lazyRoute(() => import("./(auth)/login"));

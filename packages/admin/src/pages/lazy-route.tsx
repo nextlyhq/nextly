@@ -40,7 +40,13 @@ function RouteLoading() {
   );
 }
 
-function RouteLoadError({ onRetry }: { onRetry: () => void }) {
+function RouteLoadError({
+  onRetry,
+  exhausted,
+}: {
+  onRetry: () => void;
+  exhausted: boolean;
+}) {
   return (
     <div
       role="alert"
@@ -48,11 +54,19 @@ function RouteLoadError({ onRetry }: { onRetry: () => void }) {
       data-testid="route-load-error"
     >
       <p className="text-sm text-muted-foreground">
-        This page could not be loaded. Check your connection and try again.
+        {exhausted
+          ? "This page still could not be loaded. Reload to start over."
+          : "This page could not be loaded. Check your connection and try again."}
       </p>
-      <Button variant="outline" onClick={onRetry}>
-        Try again
-      </Button>
+      {exhausted ? (
+        <Button variant="outline" onClick={() => window.location.reload()}>
+          Reload the page
+        </Button>
+      ) : (
+        <Button variant="outline" onClick={onRetry}>
+          Try again
+        </Button>
+      )}
     </div>
   );
 }
@@ -85,7 +99,15 @@ export function lazyRoute(
     const retry = useCallback(() => setAttempt(attempt => attempt + 1), []);
 
     if (state.status === "loading") return <RouteLoading />;
-    if (state.status === "error") return <RouteLoadError onRetry={retry} />;
+    // One retry covers a blipped fetch. Past it, a plain re-import may keep
+    // failing — some browsers cache a failed module load, and a chunk that
+    // fails while EVALUATING stays failed everywhere — so the recovery
+    // becomes a reload, which refetches from scratch and lets a real defect
+    // surface as one instead of posing as a connection problem.
+    if (state.status === "error")
+      return (
+        <RouteLoadError exhausted={attempt > 0} onRetry={retry} />
+      );
 
     const { Page } = state;
     return <Page {...props} />;

@@ -1,9 +1,9 @@
 /**
  * The three states a lazy route moves through — loading, page, recoverable
  * error — and the retry that turns a failed fetch into a rendered page
- * (R-2's fetch-failure clauses). The shell is outside the route by
- * construction; a wrapping shell div here stands in for it, asserting it
- * never leaves.
+ * A failed chunk fetch keeps the error recoverable: one retry, then a
+ * reload. The shell is outside the route by construction; a wrapping shell
+ * div here stands in for it, asserting it never leaves.
  */
 import { render, screen, waitFor } from "@admin/__tests__/utils";
 import userEvent from "@testing-library/user-event";
@@ -79,6 +79,47 @@ describe("lazyRoute", () => {
     // The error left with the retry; the shell never did.
     expect(screen.queryByTestId("route-load-error")).toBeNull();
     expect(screen.getByTestId("shell")).toBeTruthy();
+  });
+
+  it("falls back to a reload once a second fetch has failed too", async () => {
+    // jsdom's location cannot be spied in place; it is replaced wholesale
+    // and restored, so only this test sees the fake.
+    const originalLocation = window.location;
+    const reload = vi.fn();
+    Object.defineProperty(window, "location", {
+      value: { ...originalLocation, reload },
+      configurable: true,
+    });
+    try {
+      const loader = vi.fn(() => Promise.reject(new Error("offline")));
+      const Route = lazyRoute(loader);
+      renderInShell(<Route />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("route-load-error")).toBeTruthy()
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: /try again/i })
+      );
+
+      // The second failure is past the fetch-blip stage: the recovery becomes
+      // a reload, which refetches from scratch.
+      await waitFor(() =>
+        expect(
+          screen.getByRole("button", { name: /reload the page/i })
+        ).toBeTruthy()
+      );
+      await userEvent.click(
+        screen.getByRole("button", { name: /reload the page/i })
+      );
+      expect(reload).toHaveBeenCalledTimes(1);
+      expect(loader).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.defineProperty(window, "location", {
+        value: originalLocation,
+        configurable: true,
+      });
+    }
   });
 
   it("passes the route's props through to the page", async () => {

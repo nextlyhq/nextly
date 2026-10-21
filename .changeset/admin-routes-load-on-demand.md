@@ -29,4 +29,4 @@
 "nextly": patch
 ---
 
-Admin pages load on demand: opening any screen fetches the shared shell and that screen's chunk instead of every page's, with a loading state while the chunk arrives and a retry when its fetch fails. Total shipped JavaScript is unchanged; the first screen no longer downloads the other 58 pages.
+Admin pages load on demand: opening any screen fetches the shared shell and that screen's chunk instead of every page's, with a loading state while the chunk arrives and a retry when its fetch fails. The first screen no longer downloads the other 58 pages; the finer split adds per-chunk overhead, so the shipped total is slightly larger.
