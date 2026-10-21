@@ -22,9 +22,9 @@ import {
 } from "@nextlyhq/ui";
 import React, { useState, useCallback, useMemo } from "react";
 
+import { EmailHubLayout } from "@admin/components/features/email-hub/EmailHubLayout";
 import { emailCatalogState } from "@admin/components/features/settings/EmailProviderForm";
 import { clearSelectionValue } from "@admin/components/features/settings/EmailProviderForm/ProviderConfigFields";
-import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import {
   AlertTriangle,
   Edit,
@@ -34,7 +34,6 @@ import {
   Star,
   Trash2,
 } from "@admin/components/icons";
-import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
@@ -47,6 +46,13 @@ import {
   ListView,
   useTableColumns,
 } from "@admin/components/ui/table/list-view";
+import {
+  EMAIL_PROVIDER_CREATE_PERMISSIONS,
+  EMAIL_PROVIDER_DELETE_PERMISSIONS,
+  EMAIL_PROVIDER_TEST_PERMISSIONS,
+  EMAIL_PROVIDER_UPDATE_PERMISSIONS,
+  holdsAny,
+} from "@admin/constants/email-hub";
 import { PAGINATION } from "@admin/constants/pagination";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import {
@@ -57,6 +63,7 @@ import {
   useTestProvider,
 } from "@admin/hooks/queries/useEmailProviders";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
+import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { usePagination } from "@admin/hooks/usePagination";
 import { navigateTo } from "@admin/lib/navigation";
 import type {
@@ -388,14 +395,19 @@ function EmailProviderTable() {
     [catalog, descriptorsByType]
   );
 
+  // Each action shows only with the grant the server checks for it, so a
+  // reader who may only look sees the list without actions they'd be refused.
+  const { hasPermission } = useCurrentUserPermissions();
+  const canUpdate = holdsAny(hasPermission, EMAIL_PROVIDER_UPDATE_PERMISSIONS);
+  const canTest = holdsAny(hasPermission, EMAIL_PROVIDER_TEST_PERMISSIONS);
+  const canDelete = holdsAny(hasPermission, EMAIL_PROVIDER_DELETE_PERMISSIONS);
+
   const { mutate: doDelete, isPending: isDeleting } = useDeleteEmailProvider();
   const { mutate: doSetDefault } = useSetDefaultProvider();
   const { mutate: doTest, isPending: isTesting } = useTestProvider();
 
   const handleEdit = useCallback((provider: EmailProviderRecord) => {
-    navigateTo(
-      buildRoute(ROUTES.SETTINGS_EMAIL_PROVIDERS_EDIT, { id: provider.id })
-    );
+    navigateTo(buildRoute(ROUTES.EMAIL_SENDING_EDIT, { id: provider.id }));
   }, []);
 
   const handleDelete = useCallback((provider: EmailProviderRecord) => {
@@ -584,20 +596,25 @@ function EmailProviderTable() {
 
   const rowActions = useCallback(
     (provider: EmailProviderRecord): RowAction<EmailProviderRecord>[] => {
-      const actions: RowAction<EmailProviderRecord>[] = [
-        {
+      const actions: RowAction<EmailProviderRecord>[] = [];
+      if (canUpdate) {
+        actions.push({
           id: "edit",
           label: "Edit",
           icon: <Edit className="h-4 w-4" />,
           onSelect: () => handleEdit(provider),
-        },
-      ];
+        });
+      }
       // Not offered for a stored provider whose plugin is gone. Promoting one
       // points every unrouted message at a type nothing can build an adapter
       // for, AND clears the working default on the way — so the damage outlives
       // the click. The service refuses it too; this is the affordance, not the
       // rule.
-      if (!provider.isDefault && !typeIsKnownMissing(provider.type)) {
+      if (
+        canUpdate &&
+        !provider.isDefault &&
+        !typeIsKnownMissing(provider.type)
+      ) {
         actions.push({
           id: "set-default",
           label: "Set Default",
@@ -609,7 +626,7 @@ function EmailProviderTable() {
       // stored type and can only fail for one that is gone, and the read-only
       // fallback exists so an orphaned row can be INSPECTED and deleted --
       // offering an action that cannot succeed contradicts that.
-      if (!typeIsKnownMissing(provider.type)) {
+      if (canTest && !typeIsKnownMissing(provider.type)) {
         actions.push({
           id: "test",
           label: "Send Test",
@@ -618,16 +635,21 @@ function EmailProviderTable() {
           onSelect: () => handleTest(provider),
         });
       }
-      actions.push({
-        id: "delete",
-        label: "Delete",
-        icon: <Trash2 className="h-4 w-4" />,
-        destructive: true,
-        onSelect: () => handleDelete(provider),
-      });
+      if (canDelete) {
+        actions.push({
+          id: "delete",
+          label: "Delete",
+          icon: <Trash2 className="h-4 w-4" />,
+          destructive: true,
+          onSelect: () => handleDelete(provider),
+        });
+      }
       return actions;
     },
     [
+      canUpdate,
+      canTest,
+      canDelete,
       handleEdit,
       handleSetDefault,
       handleTest,
@@ -762,7 +784,7 @@ function EmailProviderTable() {
       }}
       columns={columns}
       rows={data?.data ?? []}
-      onRowClick={provider => handleEdit(provider)}
+      onRowClick={canUpdate ? provider => handleEdit(provider) : undefined}
       primaryColumn="name"
       rowActions={rowActions}
       registryKey="email-providers"
@@ -795,26 +817,30 @@ function EmailProviderTable() {
 // Page
 // ============================================================
 
+/**
+ * Sending: the providers email goes out through, as the hub's tab. Adding a
+ * provider shows only with the grant the server checks for it.
+ */
 const EmailProvidersPage: React.FC = () => {
+  const { hasPermission } = useCurrentUserPermissions();
+  const canCreate = holdsAny(hasPermission, EMAIL_PROVIDER_CREATE_PERMISSIONS);
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <PageContainer width="wide">
-        <SettingsLayout
-          title="Email Providers"
-          description="Configure your SMTP and email delivery services"
-          crumb="Email Providers"
-          actions={
-            <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS_CREATE}>
+      <EmailHubLayout
+        tab="sending"
+        actions={
+          canCreate ? (
+            <Link href={ROUTES.EMAIL_SENDING_CREATE}>
               <Button size="md" className="flex items-center gap-1">
                 <Plus className="h-4 w-4" />
                 <span>Add Provider</span>
               </Button>
             </Link>
-          }
-        >
-          <EmailProviderTable />
-        </SettingsLayout>
-      </PageContainer>
+          ) : undefined
+        }
+      >
+        <EmailProviderTable />
+      </EmailHubLayout>
     </QueryErrorBoundary>
   );
 };

@@ -30,8 +30,8 @@ function EditStateMessage({ message }: { message: string }) {
         <Alert variant="destructive">
           <AlertDescription>{message}</AlertDescription>
         </Alert>
-        <Link href={ROUTES.SETTINGS_EMAIL_TEMPLATES}>
-          <Button variant="outline">Back to Templates</Button>
+        <Link href={ROUTES.EMAIL}>
+          <Button variant="outline">Back to Email</Button>
         </Link>
       </div>
     </div>
@@ -65,7 +65,9 @@ export default function EditEmailTemplatePage() {
             toast.success("Template updated", {
               description: `${values.name} has been saved.`,
             });
-            navigateTo(ROUTES.SETTINGS_EMAIL_TEMPLATES);
+            navigateTo(
+              template?.kind === "layout" ? ROUTES.EMAIL_DESIGN : ROUTES.EMAIL
+            );
           },
           onError: (error: Error) => {
             toast.error("Failed to update template", {
@@ -78,7 +80,7 @@ export default function EditEmailTemplatePage() {
         }
       );
     },
-    [templateId, updateTemplate]
+    [templateId, updateTemplate, template?.kind]
   );
 
   if (!templateId) {

@@ -20,6 +20,7 @@ export const NAV_SECTIONS = [
   "media",
   "releases",
   "translations",
+  "email",
   "plugins",
   "settings",
   "builders",

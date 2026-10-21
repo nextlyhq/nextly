@@ -7,7 +7,9 @@ import {
   Puzzle,
   ShieldAlert,
   FileText,
+  Mail,
 } from "@admin/components/icons";
+import { EMAIL_HUB_PERMISSIONS } from "@admin/constants/email-hub";
 import type { ActiveNavSection } from "@admin/constants/nav-sections";
 import { SIDEBAR_NAVIGATION } from "@admin/constants/navigation";
 import { ROUTES } from "@admin/constants/routes";
@@ -103,6 +105,16 @@ export const MAIN_MENU_ITEMS: MainMenuItem[] = [
     label: "Translations",
     icon: Languages,
     href: ROUTES.TRANSLATIONS,
+  },
+  // Email is its own area rather than two pages under Settings: what a site
+  // sends, how it looks and how it goes out are one subject, and a reader
+  // checking a password reset should not have to know it is "configuration".
+  {
+    id: "email",
+    label: "Email",
+    icon: Mail,
+    href: ROUTES.EMAIL,
+    requiredPermission: [...EMAIL_HUB_PERMISSIONS],
   },
   { id: "plugins", label: "Plugins", icon: Puzzle, href: "#" },
   // User management (Users, User Fields, Roles) lives under Settings now —

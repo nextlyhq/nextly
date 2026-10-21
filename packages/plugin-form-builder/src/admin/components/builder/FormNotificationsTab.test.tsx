@@ -267,3 +267,59 @@ describe("the notification list", () => {
     expect(toggle).toHaveAccessibleName("Edit notification Admin notification");
   });
 });
+
+describe("the notification's email template", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("links to the chosen template in the Email hub, in a new tab", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/email-templates")
+          ? new Response(
+              JSON.stringify({
+                templates: [
+                  {
+                    id: "tpl-1",
+                    name: "Form submitted",
+                    slug: "form-submitted",
+                    isActive: true,
+                    kind: "template",
+                  },
+                ],
+              })
+            )
+          : new Response("{}", { status: 404 })
+      )
+    );
+    notifications = [aNotification({ templateSlug: "form-submitted" })];
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.click(
+      screen.getByRole("button", {
+        name: /edit notification admin notification/i,
+      })
+    );
+
+    const link = await screen.findByRole("link", {
+      name: /open form submitted in email/i,
+    });
+    expect(link).toHaveAttribute("href", "/admin/email/messages/edit/tpl-1");
+    // A new tab, so leaving the builder can't lose its unsaved changes.
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("offers no link until a template is chosen", async () => {
+    notifications = [aNotification()];
+    const user = userEvent.setup();
+    render(<FormNotificationsTab defaults={null} />);
+    await user.click(
+      screen.getByRole("button", {
+        name: /edit notification admin notification/i,
+      })
+    );
+    expect(screen.queryByRole("link", { name: /in email/i })).toBeNull();
+  });
+});

@@ -3,6 +3,7 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import { useCallback } from "react";
 
+import { EmailSubpageLayout } from "@admin/components/features/email-hub/EmailSubpageLayout";
 import {
   EMAIL_PROVIDER_FORM_ID,
   EmailProviderForm,
@@ -10,7 +11,6 @@ import {
   isUnregisteredProviderType,
   type EmailProviderPayload,
 } from "@admin/components/features/settings/EmailProviderForm";
-import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { Loader2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -78,7 +78,7 @@ export default function EditEmailProviderPage() {
             toast.success("Provider updated", {
               description: `${payload.name} has been updated successfully.`,
             });
-            navigateTo(ROUTES.SETTINGS_EMAIL_PROVIDERS);
+            navigateTo(ROUTES.EMAIL_SENDING);
           },
           onError: (error: Error) => {
             toast.error("Failed to update provider", {
@@ -104,18 +104,18 @@ export default function EditEmailProviderPage() {
   if (!providerId) {
     return (
       <PageContainer width="form">
-        <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
+        <EmailSubpageLayout {...EMAIL_PROVIDER_PAGE}>
           <Alert variant="destructive">
             <AlertDescription>
               Invalid provider ID. Please go back and try again.
             </AlertDescription>
           </Alert>
           <div className="mt-4">
-            <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS}>
+            <Link href={ROUTES.EMAIL_SENDING}>
               <Button variant="outline">Back to Providers</Button>
             </Link>
           </div>
-        </SettingsLayout>
+        </EmailSubpageLayout>
       </PageContainer>
     );
   }
@@ -124,12 +124,12 @@ export default function EditEmailProviderPage() {
   if (isLoading) {
     return (
       <PageContainer width="form">
-        <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
+        <EmailSubpageLayout {...EMAIL_PROVIDER_PAGE}>
           <div className="space-y-6">
             <Skeleton className="h-12 w-full rounded-md" />
             <Skeleton className="h-[500px] w-full rounded-lg" />
           </div>
-        </SettingsLayout>
+        </EmailSubpageLayout>
       </PageContainer>
     );
   }
@@ -138,7 +138,7 @@ export default function EditEmailProviderPage() {
   if (fetchError) {
     return (
       <PageContainer width="form">
-        <SettingsLayout {...EMAIL_PROVIDER_PAGE}>
+        <EmailSubpageLayout {...EMAIL_PROVIDER_PAGE}>
           <Alert variant="destructive">
             <AlertDescription className="flex items-center justify-between">
               <span>
@@ -160,11 +160,11 @@ export default function EditEmailProviderPage() {
             </AlertDescription>
           </Alert>
           <div className="mt-4">
-            <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS}>
+            <Link href={ROUTES.EMAIL_SENDING}>
               <Button variant="outline">Back to Providers</Button>
             </Link>
           </div>
-        </SettingsLayout>
+        </EmailSubpageLayout>
       </PageContainer>
     );
   }
@@ -205,7 +205,7 @@ export default function EditEmailProviderPage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer width="form">
-        <SettingsLayout
+        <EmailSubpageLayout
           {...EMAIL_PROVIDER_PAGE}
           actions={
             <>
@@ -215,7 +215,7 @@ export default function EditEmailProviderPage() {
               <Button type="button" variant="outline" disabled>
                 Test Connection
               </Button>
-              <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS}>
+              <Link href={ROUTES.EMAIL_SENDING}>
                 <Button type="button" variant="outline" disabled={isPending}>
                   Cancel
                 </Button>
@@ -246,7 +246,7 @@ export default function EditEmailProviderPage() {
             isPending={isPending}
             onSubmit={handleSubmit}
           />
-        </SettingsLayout>
+        </EmailSubpageLayout>
       </PageContainer>
     </QueryErrorBoundary>
   );
@@ -262,7 +262,7 @@ const EMAIL_PROVIDER_PAGE = {
   description: "Update the email provider configuration",
   crumb: "Edit Email Provider",
   parentCrumb: {
-    label: "Email Providers",
-    href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
+    label: "Sending",
+    href: ROUTES.EMAIL_SENDING,
   },
 } as const;

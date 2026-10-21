@@ -35,6 +35,7 @@ import {
 } from "@nextlyhq/ui";
 import {
   Copy,
+  ExternalLink,
   Filter,
   Mail,
   MoreHorizontal,
@@ -82,6 +83,14 @@ interface ProviderOption {
   name: string;
   type: string;
   isDefault: boolean;
+}
+
+/**
+ * Where an email opens in the admin's Email hub. Written out rather than
+ * imported because a plugin builds against the SDK, not the admin's routes.
+ */
+function emailHubEditHref(templateId: string): string {
+  return `/admin/email/messages/edit/${encodeURIComponent(templateId)}`;
 }
 
 interface TemplateOption {
@@ -934,6 +943,9 @@ function NotificationIdentityFields({
   // Derived here, from props this component already holds. Passing them in
   // would be the same answer worked out in the caller.
   const defaultProvider = providers.find(p => p.isDefault);
+  const selectedTemplate = form.templateSlug
+    ? templates.find(t => t.slug === form.templateSlug)
+    : undefined;
   const defaultProviderLabel = defaultProvider
     ? `System default (${defaultProvider.name})`
     : "System default";
@@ -1030,6 +1042,19 @@ function NotificationIdentityFields({
               <TriangleAlert className="h-3 w-3" aria-hidden="true" />
               Required — a notification without a template is never sent.
             </p>
+          )}
+          {selectedTemplate && (
+            // A new tab, so unsaved changes to this form aren't lost by
+            // leaving the builder to edit the email.
+            <a
+              href={emailHubEditHref(selectedTemplate.id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            >
+              Open {selectedTemplate.name} in Email
+              <ExternalLink className="h-3 w-3" aria-hidden="true" />
+            </a>
           )}
         </div>
       </Grid>

@@ -3,13 +3,13 @@
 import { Button } from "@nextlyhq/ui";
 import { useCallback } from "react";
 
+import { EmailSubpageLayout } from "@admin/components/features/email-hub/EmailSubpageLayout";
 import {
   EMAIL_PROVIDER_FORM_ID,
   EmailProviderForm,
   emailCatalogState,
   type EmailProviderPayload,
 } from "@admin/components/features/settings/EmailProviderForm";
-import { SettingsLayout } from "@admin/components/features/settings/SettingsLayout";
 import { Loader2 } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -55,7 +55,7 @@ export default function CreateEmailProviderPage() {
           toast.success("Provider created", {
             description: `${payload.name} has been created successfully.`,
           });
-          navigateTo(ROUTES.SETTINGS_EMAIL_PROVIDERS);
+          navigateTo(ROUTES.EMAIL_SENDING);
         },
         onError: (error: Error) => {
           toast.error("Failed to create provider", {
@@ -78,13 +78,13 @@ export default function CreateEmailProviderPage() {
   return (
     <QueryErrorBoundary fallback={<PageErrorFallback />}>
       <PageContainer width="form">
-        <SettingsLayout
+        <EmailSubpageLayout
           title="New Email Provider"
           description="Configure a new email delivery provider"
           crumb="New Email Provider"
           parentCrumb={{
-            label: "Email Providers",
-            href: ROUTES.SETTINGS_EMAIL_PROVIDERS,
+            label: "Sending",
+            href: ROUTES.EMAIL_SENDING,
           }}
           actions={
             <>
@@ -94,7 +94,7 @@ export default function CreateEmailProviderPage() {
               <Button type="button" variant="outline" disabled>
                 Test Connection
               </Button>
-              <Link href={ROUTES.SETTINGS_EMAIL_PROVIDERS}>
+              <Link href={ROUTES.EMAIL_SENDING}>
                 <Button type="button" variant="outline" disabled={isPending}>
                   Cancel
                 </Button>
@@ -124,7 +124,7 @@ export default function CreateEmailProviderPage() {
             isPending={isPending}
             onSubmit={handleSubmit}
           />
-        </SettingsLayout>
+        </EmailSubpageLayout>
       </PageContainer>
     </QueryErrorBoundary>
   );
