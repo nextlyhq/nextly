@@ -32,7 +32,7 @@
 A release now notes, for each document going live, the documents it links
 to through its relationship and upload fields (field groups and blocks
 included) that will not be live at the release's moment: drafts nothing
-publishes by then, documents another release takes down before then, and
+publishes by then, documents a release takes down by then (another release, or this one), and
 documents that no longer exist. It is a soft problem, `UNPUBLISHED_LINK`, in
 the release's readiness, and never stops scheduling, Publish now or the run.
 Adding a document to a release answers with the same links as
