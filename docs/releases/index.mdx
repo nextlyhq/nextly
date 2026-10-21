@@ -150,7 +150,7 @@ Only a release that never ran can be deleted: a draft, or a cancelled release wh
 
 | `reason`        | The release                                       | What to do                           |
 | --------------- | ------------------------------------------------- | ------------------------------------ |
-| `committed`     | Is scheduled or stopped                           | Cancel it to call it off; it is kept |
+| `committed`     | Is scheduled or stopped                           | Cancel it first; one that never began publishing can then be deleted |
 | `published`     | Has been published                                | Nothing: it is kept for good         |
 | `was-scheduled` | Was cancelled after it may have begun publishing  | Nothing: it is kept as a record      |
 
@@ -162,6 +162,11 @@ cancelled in the middle of its run, because some of its documents may have gone 
 A release created before releases recorded their history has no `release-created` event, so its
 history cannot say whether it ran. It keeps the earlier rule: once it has been scheduled, it is
 kept. Deleting a release that does not exist answers `404`.
+
+A run writing a document takes its release's lock in that write. A delete, which takes the same
+lock, either lands first, and the write is then refused so the document is left as it was, or
+waits for the write, which records the run's start and keeps the release from being deleted. A
+document taken out of a release while the run is writing it is refused the same way.
 
 Both are recorded in the activity log, under `content-releases`, with who made the change.
 A change made through an API key is not recorded there yet; the release's own
@@ -198,7 +203,7 @@ release page reads its history from this record; the activity log stays the site
 | `release-document-action-changed` | A document is switched between going live and coming down      |
 | `release-scheduled`               | A release is given a time (`at`, `timezone`)                   |
 | `release-rescheduled`             | A scheduled or stopped release is given another time (`from`)  |
-| `release-publish-now`             | Publish now moves the release to this moment                   |
+| `release-publish-now`             | Publish now is asked for, whether or not the release was due   |
 | `release-started`                 | The run writes its first document                              |
 | `release-published`               | The run finishes and the release is published                  |
 | `release-stopped`                 | The release stops on a problem, at its moment or before it     |
@@ -214,7 +219,9 @@ before anything is written, since the change has to name the key.
 
 Read a release's history with `GET /api/content-events?subject=release&id=<id>`, or
 `nextly.contentEvents.list({ subject: { kind: "release", id } })`, by anyone who may read
-releases. It stays readable after the release is deleted, for the same window.
+releases. It lists only the documents the reader may read, as the release's document list does:
+an event about a document they may not read is left out. It stays readable after the release is
+deleted, for the same window.
 
 ## Listing releases
 

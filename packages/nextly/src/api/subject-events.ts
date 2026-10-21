@@ -194,12 +194,22 @@ export async function readSubjectEvents(
     caller,
     repository
   );
+  // A release's history lists only the documents the caller may read, as
+  // the release's own document list does. The cursor stays the page's, so
+  // the next page starts where this one's read ended.
+  const items =
+    subject.kind === "release"
+      ? await getService("releasesService").historyVisibleTo(
+          page.items,
+          releaseActorOf(caller)
+        )
+      : page.items;
   return {
-    items: page.items,
+    items,
     // A cursor walk: page and total describe the window returned, and the
     // next page passes the last item's id as `before`.
     meta: {
-      total: page.items.length,
+      total: items.length,
       page: 1,
       limit,
       totalPages: 1,
@@ -361,20 +371,25 @@ async function authorizeRelease(
   caller: SubjectEventsCaller
 ): Promise<void> {
   try {
-    await getService("releasesService").findByID(id, {
-      userId: caller.user?.id ?? null,
-      overrideAccess: caller.overrideAccess === true,
-      ...(caller.authenticatedScope === undefined
-        ? {}
-        : { authenticatedScope: caller.authenticatedScope }),
-      ...(caller.user?.roles ? { userRoles: [...caller.user.roles] } : {}),
-    });
+    await getService("releasesService").findByID(id, releaseActorOf(caller));
   } catch (error) {
     if (error instanceof NextlyError && error.code === "FORBIDDEN") {
       throw refused({ kind: "release", id }, "releases-not-readable");
     }
     throw error;
   }
+}
+
+/** The caller as Releases judges it: its read check and its document reads. */
+function releaseActorOf(caller: SubjectEventsCaller) {
+  return {
+    userId: caller.user?.id ?? null,
+    overrideAccess: caller.overrideAccess === true,
+    ...(caller.authenticatedScope === undefined
+      ? {}
+      : { authenticatedScope: caller.authenticatedScope }),
+    ...(caller.user?.roles ? { userRoles: [...caller.user.roles] } : {}),
+  };
 }
 
 /** Whether the document still exists, read without the caller's access. */
