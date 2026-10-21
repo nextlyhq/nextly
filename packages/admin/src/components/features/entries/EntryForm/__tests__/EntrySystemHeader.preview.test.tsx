@@ -25,7 +25,7 @@ vi.mock("@admin/services/previewLinkApi", () => ({
   previewLinkApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0 }) },
 }));
 
-import { EntrySystemHeader } from "../EntrySystemHeader";
+import { HeaderUnderTest as EntrySystemHeader } from "./header-under-test";
 
 /**
  * The header reads form state through context, so it is given a real form:

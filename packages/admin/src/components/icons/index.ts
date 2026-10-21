@@ -58,8 +58,7 @@ export {
   Clipboard, // Collection Settings: icon picker
   Component, // Plugin appearance: the icon @nextlyhq/plugin-page-builder declares
   Clock, // useFields: time picker
-  Cloud, // AutoSaveIndicator: saved state
-  CloudOff, // AutoSaveIndicator: not saved state
+  Cloud, // SaveStateIndicator: unsaved changes
   ChevronDownSquare, // Rich text editor: collapsible
   Code, // Rich text editor
   Code2, // Rich text editor: code block

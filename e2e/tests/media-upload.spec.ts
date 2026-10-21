@@ -6,8 +6,9 @@
  * cap must upload the first 10 and mark the rest skipped (react-dropzone's
  * `maxFiles` used to reject the entire batch as "Too many files").
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 import { dropFiles, pngBuffer } from "./support/media-files";
 

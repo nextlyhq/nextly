@@ -157,6 +157,11 @@ export interface WidgetRendererProps {
    * cell positions it for those.
    */
   headerAction?: ReactNode;
+  /**
+   * The card's one quick setting, outside customise mode. The frame draws it before
+   * `headerAction` once the card has an answer; see `WidgetCard`'s `quick`.
+   */
+  quick?: ReactNode;
   /** The drag handle in customise mode, drawn before the title. */
   leading?: ReactNode;
   /** Customise mode: the card's content stays visible but out of reach. */
@@ -217,12 +222,39 @@ export interface WidgetRendererProps {
   placement?: { id: string; settings: Record<string, unknown> };
 }
 
+/** What the card frame is handed whatever the widget draws: its heading, chrome and states. */
+function sharedCardProps(
+  definition: WidgetRendererProps["definition"],
+  slot: WidgetRendererProps["slot"],
+  placement: WidgetRendererProps["placement"],
+  chrome: Pick<
+    WidgetRendererProps,
+    "headerAction" | "quick" | "leading" | "customizing" | "answerTier"
+  >
+) {
+  return {
+    title: definition.title,
+    // The declaration's one optional line under the title, which the frame draws.
+    description: definition.description,
+    icon: resolveIconName(definition.icon),
+    link: definition.link,
+    ...chrome,
+    cardId: placement?.id ?? definition.id,
+    skeleton: skeletonFor(definition.archetype),
+    skeletonItems: skeletonItemsFor(definition),
+    skeletonFields: skeletonFieldsFor(definition),
+    awaitsFreshness: awaitsFreshnessFor(definition, slot),
+    skeletonCells: definition.cells?.map(cell => cell.label),
+  };
+}
+
 export function WidgetRenderer({
   definition,
   slot,
   slotFor,
   placement,
   headerAction,
+  quick,
   leading,
   customizing = false,
   onRetry,
@@ -230,23 +262,13 @@ export function WidgetRenderer({
   isFetching = false,
   answerTier,
 }: WidgetRendererProps) {
-  const shared = {
-    title: definition.title,
-    // The declaration's one optional line under the title, which the frame draws.
-    description: definition.description,
-    icon: resolveIconName(definition.icon),
-    link: definition.link,
+  const shared = sharedCardProps(definition, slot, placement, {
     headerAction,
+    quick,
     leading,
     customizing,
-    cardId: placement?.id ?? definition.id,
-    skeleton: skeletonFor(definition.archetype),
-    skeletonItems: skeletonItemsFor(definition),
-    skeletonFields: skeletonFieldsFor(definition),
-    awaitsFreshness: awaitsFreshnessFor(definition, slot),
-    skeletonCells: definition.cells?.map(cell => cell.label),
     answerTier,
-  };
+  });
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
 

@@ -8,8 +8,9 @@
  * branded — visibly broken, but silent. These assert the value both arrives
  * and is usable.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 // Mirrors apps/playground/nextly.config.ts, which only configures these

@@ -71,6 +71,21 @@ export interface GridAnnouncer {
   announceRefused: () => void;
   /** Say that a save failed, and that the draft is still on screen. */
   announceSaveFailed: () => void;
+  /**
+   * Say that one of a card's settings changed outside customise mode, once the card shows it:
+   * "Activity: Date range set to Last 7 days." The card redraws in place, so without this a
+   * screen reader hears nothing of a change that has already been saved.
+   */
+  announceSettingChanged: (
+    title: string,
+    setting: string,
+    value: string
+  ) => void;
+  /**
+   * Say one step of a drag: a card picked up, the place it would land, a cancel. The sentence
+   * is the drag's own (`edit/drag/drag-messages`); the landing itself is `announceMoved`.
+   */
+  announceDrag: (sentence: string) => void;
 }
 
 /**
@@ -185,8 +200,15 @@ export function useGridAnnouncer(
     [say]
   );
 
+  const announceSettingChanged = useCallback(
+    (title: string, setting: string, value: string) =>
+      say(`${title}: ${setting} set to ${value}.`),
+    [say]
+  );
+
   return {
     announcement,
+    announceSettingChanged,
     announceMoved,
     announceWidth,
     announceRemoved,
@@ -197,5 +219,7 @@ export function useGridAnnouncer(
     announceSaved,
     announceRefused,
     announceSaveFailed,
+    // A drag's sentence is already its own, so it is said as it comes.
+    announceDrag: say,
   };
 }

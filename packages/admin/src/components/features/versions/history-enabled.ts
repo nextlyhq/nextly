@@ -27,3 +27,20 @@ export function historyEnabledFrom(schema: unknown): boolean | undefined {
 
   return Boolean(versions?.enabled);
 }
+
+/**
+ * How many durable versions an entity keeps, read from the same payload:
+ * a number, `false` for every version, or undefined when the payload does not
+ * say (an unversioned entity, or one whose payload carries no versioning).
+ */
+export function historyRetentionFrom(
+  schema: unknown
+): number | false | undefined {
+  if (typeof schema !== "object" || schema === null) return undefined;
+  if (!("versions" in schema)) return undefined;
+  const { versions } = schema as {
+    versions?: { maxPerDoc?: number | false } | null;
+  };
+  const max = versions?.maxPerDoc;
+  return typeof max === "number" || max === false ? max : undefined;
+}

@@ -201,7 +201,8 @@ export async function handleForgotPassword(
       return buildAuthErrorResponse(err, requestId);
     }
     return buildAuthErrorResponse(
-      NextlyError.internal({ cause: err as Error }),
+      // Internal, unless the database was only busy.
+      NextlyError.fromUnexpected(err),
       requestId
     );
   }

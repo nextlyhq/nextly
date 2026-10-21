@@ -114,6 +114,15 @@ export interface UseDashboardLayoutResult {
    */
   dismiss: UseMutationResult<unknown, Error, SaveLayoutInput>;
   /**
+   * The write a card's settings make outside customise mode: the quick
+   * setting, and the settings sheet's Done.
+   *
+   * Its own channel for the reason `dismiss` has one: its failures belong to
+   * the card, not to the editor's chrome, and its pending state is what
+   * disables the control while one is in flight.
+   */
+  cardSettings: UseMutationResult<unknown, Error, SaveLayoutInput>;
+  /**
    * Whether the last write lost a race — on EITHER guard.
    *
    * One flag for two causes because the recovery is one action. The server
@@ -207,15 +216,16 @@ interface WriteChannel {
 }
 
 /**
- * What the three write channels say about the layout, read in one place.
+ * What the write channels say about the layout, read in one place.
  *
  * 🔴 The channels are NOT treated alike, and the asymmetry is the point.
  * `isConflict` and `writeError` read `save` and `reset` only: they are rendered
- * by the editor's chrome whatever the mode, and a failed dismissal reported
- * there tells a reader who is not editing that unsaved changes will be lost.
- * `isWriting` reads all three, because all three send a whole-layout snapshot
- * guarded by one cached version, so any of them in flight makes another a
- * conflict the reader caused themselves.
+ * by the editor's chrome whatever the mode, and a failed dismissal or card
+ * setting reported there tells a reader who is not editing that unsaved
+ * changes will be lost. `isWriting` reads every channel, the standing ones
+ * (`dismiss`, `cardSettings`) included, because all of them send a
+ * whole-layout snapshot guarded by one cached version, so any of them in
+ * flight makes another a conflict the reader caused themselves.
  *
  * At module scope, and pure, so the rule can be read without stepping through
  * the hook's queries and effects to find it.
@@ -223,12 +233,15 @@ interface WriteChannel {
 function writeState(
   save: WriteChannel,
   reset: WriteChannel,
-  dismiss: WriteChannel
+  standing: readonly WriteChannel[]
 ): Pick<UseDashboardLayoutResult, "isConflict" | "writeError" | "isWriting"> {
   return {
     isConflict: isConflictError(save.error) || isConflictError(reset.error),
     writeError: nonConflictError(save.error, reset.error),
-    isWriting: save.isPending || reset.isPending || dismiss.isPending,
+    isWriting:
+      save.isPending ||
+      reset.isPending ||
+      standing.some(channel => channel.isPending),
   };
 }
 
@@ -342,6 +355,10 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
    */
   const dismiss = useMutation(writeLayout);
 
+  // A card's settings changed outside customise mode: the same request again,
+  // on its own channel, for the reasons `dismiss` has its own.
+  const cardSettings = useMutation(writeLayout);
+
   const reset = useMutation({
     // Query parameters rather than a body: some clients and proxies drop a
     // DELETE body, and the guards are what stop a stale tab deleting an
@@ -370,7 +387,8 @@ export function useDashboardLayout(): UseDashboardLayoutResult {
     save,
     reset,
     dismiss,
-    ...writeState(save, reset, dismiss),
+    cardSettings,
+    ...writeState(save, reset, [dismiss, cardSettings]),
     hasStoredRow: (query.data?.version ?? 0) > 0,
     isUnreadable: query.data?.source === "unreadable",
     cached,

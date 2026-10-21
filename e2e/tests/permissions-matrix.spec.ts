@@ -8,8 +8,9 @@
  * that reached a person's eyes in this admin, and neither was catchable in the
  * 3,800 tests that already existed.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { contrastRatio, gotoAdmin, toRgb, type Theme } from "./support/admin";
 
 /**

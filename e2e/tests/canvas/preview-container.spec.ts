@@ -1,4 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+
+import { test } from "../support/test";
 
 /**
  * The preview compile, measured in a browser because nowhere else can decide it.

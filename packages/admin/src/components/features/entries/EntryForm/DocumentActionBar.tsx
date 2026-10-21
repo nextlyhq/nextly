@@ -215,8 +215,12 @@ function ActionRow({
   );
 }
 
-/** Both reasons an action may be unusable, or undefined when it is usable. */
-function reasonFor(
+/**
+ * Both reasons an action may be unusable, or undefined when it is usable.
+ * Shared with running an action from elsewhere, so a control and a run refuse
+ * for exactly the same reasons.
+ */
+export function reasonFor(
   action: DocumentAction,
   binding: ActionBinding
 ): string | undefined {

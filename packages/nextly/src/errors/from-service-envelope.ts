@@ -5,6 +5,7 @@
  * @module errors/from-service-envelope
  */
 
+import { isDatabaseBusy } from "../database/errors";
 import { recordFlattenedError } from "../hooks/side-effect-warnings";
 
 import {
@@ -229,8 +230,24 @@ export function errorEnvelopeFields(
   // cases is what stops this being an opt-in: a caller spreads the result and
   // is covered, instead of each failure branch remembering to attach the
   // original itself.
+  //
+  // Except a busy database, which arrives raw too: the request waited out its
+  // bound for a connection, and the caller should be told DATABASE_BUSY and
+  // when to retry, not the 500 a service gives an unexpected failure.
   if (!NextlyError.is(error)) {
-    return error instanceof Error ? withOriginalError({}, error) : {};
+    if (!isDatabaseBusy(error)) {
+      return error instanceof Error ? withOriginalError({}, error) : {};
+    }
+    // The busy answer's public fields, with the raw error kept as the
+    // envelope's original: it carries the driver's message and stack, and the
+    // error a boundary rebuilds logs only its immediate cause.
+    const busy = NextlyError.databaseBusy({
+      cause: error instanceof Error ? error : undefined,
+    });
+    recordFlattenedError(busy);
+    return error instanceof Error
+      ? withOriginalError(publicFieldsOf(busy), error)
+      : publicFieldsOf(busy);
   }
   // Kept for the operator before the detail is dropped. This function IS the
   // flattening for every path that uses it, so recording here covers them all
@@ -242,18 +259,16 @@ export function errorEnvelopeFields(
   // place they record the error — attaching anywhere else would mean each of
   // them opting in separately, which is how the first version of this reached
   // only the collection writes.
-  return withOriginalError(
-    {
-      code: String(error.code),
-      statusCode: error.statusCode,
-      message: error.publicMessage,
-      ...(error.messageKey !== undefined
-        ? { messageKey: error.messageKey }
-        : {}),
-      ...(error.publicData !== undefined
-        ? { publicData: error.publicData }
-        : {}),
-    },
-    error
-  );
+  return withOriginalError(publicFieldsOf(error), error);
+}
+
+/** The fields of an envelope that reach the caller, for a typed error. */
+function publicFieldsOf(error: NextlyError) {
+  return {
+    code: String(error.code),
+    statusCode: error.statusCode,
+    message: error.publicMessage,
+    ...(error.messageKey !== undefined ? { messageKey: error.messageKey } : {}),
+    ...(error.publicData !== undefined ? { publicData: error.publicData } : {}),
+  };
 }

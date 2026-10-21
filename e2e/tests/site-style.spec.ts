@@ -24,8 +24,9 @@
  * Safe to write against: the suite owns its database and empties it before
  * every run.
  */
-import { expect, test, type APIResponse } from "@playwright/test";
+import { expect, type APIResponse } from "@playwright/test";
 
+import { test } from "./support/test";
 import { STORAGE_STATE } from "../global-setup";
 
 test.describe.configure({ mode: "serial" });

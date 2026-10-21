@@ -25,7 +25,10 @@ import { container } from "../../di/container";
 import { requireNextly } from "../../direct-api/nextly";
 import type { CountArgs, FindArgs } from "../../direct-api/types";
 import { COMMON_TITLE_FIELDS } from "../../domains/collections/entry-title";
-import { keptOffDashboard } from "../../domains/widgets/kept-off-dashboard";
+import {
+  keptOffDashboard,
+  type DashboardContentKind,
+} from "../../domains/widgets/kept-off-dashboard";
 import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -119,8 +122,8 @@ function present<K extends string>(
 const MAX_COLLECTIONS_FOR_RECENT = 20;
 
 /**
- * The collections one registry read left out as kept off the dashboard, and whether that read
- * completed. Until it has, the set is not a snapshot of anything: an empty one would mean "nothing
+ * The collections or Singles one registry read left out as kept off the dashboard, and whether
+ * that read completed. Until it has, the set is not a snapshot of anything: an empty one would mean "nothing
  * is hidden" when the truth is "the hidden ones are unknown".
  */
 interface KeptOffRead {
@@ -182,20 +185,21 @@ export class DashboardService extends BaseService {
     // pass one gets an empty dashboard, which is visible and reportable; the
     // old default returned everything, which was not.
     const scope = options.scope ?? someResources([]);
-    // The collections the read below leaves out as kept off the dashboard, so the activity figure
-    // leaves out the same ones from the same read rather than counting them by its own rule.
-    // Collections only: the activity trail records no Single, and its `collection` column holds
-    // collection slugs, so a hidden Single sharing a visible collection's slug must not remove
-    // that collection's activity.
+    // The collections and Singles the reads below leave out as kept off the dashboard, so the
+    // activity figure leaves out the same ones from the same reads rather than counting them by
+    // its own rule. Kept apart by kind: the trail files both under one `collection` column, and a
+    // hidden Single sharing a visible collection's slug must not remove that collection's
+    // activity, nor the other way round.
     const keptOffCollections: KeptOffRead = {
       slugs: new Set(),
       complete: false,
     };
+    const keptOffSingles: KeptOffRead = { slugs: new Set(), complete: false };
     const collections = await this.getRegisteredCollections(
       scope,
       keptOffCollections
     );
-    const singles = await this.getRegisteredSingles(scope);
+    const singles = await this.getRegisteredSingles(scope, keptOffSingles);
 
     // Computed first, rather than folded into the `Promise.all` below: the
     // status breakdown reuses these numbers for every collection without the
@@ -226,7 +230,10 @@ export class DashboardService extends BaseService {
       statusBreakdown,
     ] = await Promise.all([
       ifAllowed("media", () => this.countTable("media")),
-      this.countRecentChangesOutside(scope, keptOffCollections),
+      this.countRecentChangesOutside(scope, {
+        collection: keptOffCollections,
+        single: keptOffSingles,
+      }),
       ifAllowed("users", () => this.countTable("users")),
       ifAllowed("roles", () => this.countTable("roles")),
       ifAllowed("permissions", () => this.countTable("permissions")),
@@ -420,7 +427,9 @@ export class DashboardService extends BaseService {
   }
 
   private async getRegisteredSingles(
-    scope: ReadableResources
+    scope: ReadableResources,
+    /** Collects the slugs left out as kept off the dashboard, for the figures read elsewhere. */
+    keptOff?: KeptOffRead
   ): Promise<Array<{ slug: string }>> {
     try {
       const singleRegistryService = container.get<{
@@ -429,8 +438,9 @@ export class DashboardService extends BaseService {
 
       // Kept off the dashboard, for the reason the collections above are.
       const singles = (await singleRegistryService.getAllSingles()).filter(
-        single => !keptOffDashboard(single)
+        single => !leftOut(single, keptOff?.slugs)
       );
+      if (keptOff) keptOff.complete = true;
       return filterByResource(scope, singles, s => String(s.slug));
     } catch (error) {
       this.logger.error("Failed to get registered singles", {
@@ -553,23 +563,27 @@ export class DashboardService extends BaseService {
    *   built rather than as a driver rejection swallowed by the catch below.
    */
   /**
-   * The recent-changes figure without the collections kept off the dashboard, or 0 when the
-   * registry read that names them did not complete: counting then would include exactly the
-   * activity the figure promises to leave out. 0 is what the count itself answers on a failure.
+   * The recent-changes figure without the collections and Singles kept off the dashboard, or 0
+   * when either registry read that names them did not complete: counting then would include
+   * exactly the activity the figure promises to leave out. 0 is what the count itself answers on
+   * a failure.
    */
   private countRecentChangesOutside(
     scope: ReadableResources,
-    keptOff: KeptOffRead
+    keptOff: Record<DashboardContentKind, KeptOffRead>
   ): Promise<number> {
-    return keptOff.complete
-      ? this.countRecentChanges24h(scope, keptOff.slugs)
+    return keptOff.collection.complete && keptOff.single.complete
+      ? this.countRecentChanges24h(scope, {
+          collection: keptOff.collection.slugs,
+          single: keptOff.single.slugs,
+        })
       : Promise.resolve(0);
   }
 
   private async countRecentChanges24h(
     scope: ReadableResources,
-    /** Collections kept off the dashboard: their activity is not counted. */
-    keptOff: ReadonlySet<string> = new Set()
+    /** Kept off the dashboard, by kind: their activity is not counted. */
+    keptOff: Record<DashboardContentKind, ReadonlySet<string>>
   ): Promise<number> {
     if (scope.kind === "some" && scope.resources.size === 0) return 0;
 
@@ -614,12 +628,12 @@ export class DashboardService extends BaseService {
 
   /**
    * The `collection` conditions of the recent-changes count: inside what the caller may read, and
-   * outside what is kept off the dashboard. Every name goes through `bind`, after the cutoff, so
+   * outside what is kept off the dashboard. Every value goes through `bind`, after the cutoff, so
    * the placeholders number in the order the values were pushed.
    */
   private recentChangesCollectionFilter(
     scope: ReadableResources,
-    keptOff: ReadonlySet<string>,
+    keptOff: Record<DashboardContentKind, ReadonlySet<string>>,
     bind: (value: SqlParam) => string,
     q: string
   ): string {
@@ -630,9 +644,17 @@ export class DashboardService extends BaseService {
         .join(", ");
       sql += ` AND ${q}collection${q} IN (${placeholders})`;
     }
-    if (keptOff.size > 0) {
-      const excluded = [...keptOff].map(slug => bind(slug)).join(", ");
-      sql += ` AND ${q}collection${q} NOT IN (${excluded})`;
+    for (const kind of ["collection", "single"] as const) {
+      const slugs = keptOff[kind];
+      if (slugs.size === 0) continue;
+      // Each kind's hidden slugs remove only that kind's rows, so a Single and a collection
+      // sharing a slug never remove each other's. A row written before the kind was recorded
+      // states none and is read as a collection's, as the feed reads it. COALESCE keeps the
+      // condition true or false on such a row: compared bare, a NULL kind makes the whole NOT
+      // unknown, and the row would be dropped from the count whatever its slug.
+      const kindIs = `COALESCE(${q}subject_kind${q}, ${bind("collection")}) = ${bind(kind)}`;
+      const excluded = [...slugs].map(slug => bind(slug)).join(", ");
+      sql += ` AND NOT (${kindIs} AND ${q}collection${q} IN (${excluded}))`;
     }
     return sql;
   }

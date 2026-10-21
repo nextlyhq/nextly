@@ -1298,12 +1298,15 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("judges a document's author, not the API key the request arrived with", async () => {
-      // The key may update and take down memos; the author, who holds no
-      // grants, may not take one down. The run acts as the author, on nobody's
-      // request, so the author is who is judged.
+      // The key may read, update and take down memos; the author, who holds
+      // no grants, may not take one down. The run acts as the author, on
+      // nobody's request, so the author is who is judged. Reading memos is
+      // what lets the key be told WHICH memo: without it, the finding is only
+      // counted.
       const t = await boot(dialect);
       const { key } = await keyHolding(t, [
         "read-content-releases",
+        "read-memos",
         "update-memos",
         "unpublish-memos",
       ]);

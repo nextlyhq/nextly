@@ -61,7 +61,9 @@ export function useCardRemoval(
   editor: LayoutEditor,
   rows: readonly TitledRow[],
   announce: ArrangementAnnouncer,
-  focus: Pick<DashboardFocus, "request">
+  focus: Pick<DashboardFocus, "request">,
+  /** Rings the card a gesture just placed: the one ring every placing gesture moves. */
+  highlight: (placementId: string | null) => void
 ): CardRemoval {
   const [notice, setNotice] = useState<RemovalNotice | null>(null);
 
@@ -102,9 +104,12 @@ export function useCardRemoval(
     (placementId: string, title: string) => {
       editor.restore(placementId);
       announce.restored(title);
+      // Put back is a placing gesture like any other, so the card is ringed as the add panel's
+      // put-back rings it.
+      highlight(placementId);
       focus.request({ kind: "menu", placementId });
     },
-    [editor, announce, focus]
+    [editor, announce, focus, highlight]
   );
 
   const restore = useCallback(

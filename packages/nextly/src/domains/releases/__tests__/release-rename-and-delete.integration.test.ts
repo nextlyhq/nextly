@@ -11,7 +11,9 @@
  * A delete is tried from each of the five states. Only a draft and a cancelled
  * release go; a scheduled, stopped or published one stays, with its
  * documents, and a deleted release takes its documents with it and nothing of
- * any other release's.
+ * any other release's. Which cancelled releases that were once scheduled may
+ * go is their history's to say, and is tested with that history in
+ * `release-history-events.integration.test.ts`.
  *
  * And each rename and deletion is in the activity log, with who made it.
  *
@@ -220,6 +222,10 @@ function interleavedService(
     canManageReleases: async () => true,
     canActOnDocument: async () => true,
     runDrainNow: async () => undefined,
+    // Every reader may read every member: these tests are not about which
+    // documents a reader sees.
+    readableMembers: async (members: readonly { id: string }[]) =>
+      new Set(members.map(member => member.id)),
     // A rename asks no document check; the stub answers every one as ready.
     checks: READY_CHECKS,
     recordActivity: async entry => {
@@ -533,56 +539,6 @@ describe.each(getConfiguredTestDialects())(
         expect(await membersOf(t, id), state).toEqual([]);
       }
       expect(await membersOf(t, bystander.id)).toHaveLength(1);
-    });
-
-    it("refuses to delete a cancelled release that was ever scheduled, and deletes one that never was", async () => {
-      // Nothing stored says whether a cancelled release began to run: one
-      // stopped part-way and then cancelled has put content live, and reads
-      // like any other cancelled release. So every cancelled release that was
-      // scheduled is kept; one cancelled while still a draft never could run.
-      const t = await boot(dialect);
-      const deleter = await personHolding(t, [DELETE]);
-      const scheduled = await releaseIn(t, "scheduled");
-      await t.nextly.releases.cancel({ id: scheduled });
-      const neverScheduled = await releaseIn(t, "cancelled");
-
-      const refusal = await t.nextly.releases
-        .delete({ id: scheduled, userId: deleter, overrideAccess: false })
-        .then(
-          () => null,
-          (error: unknown) => error
-        );
-      expect(refusal).toMatchObject({
-        code: "CONFLICT",
-        publicMessage:
-          "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
-        publicData: { reason: "was-scheduled" },
-      });
-      expect((await t.nextly.releases.findByID({ id: scheduled }))?.state).toBe(
-        "cancelled"
-      );
-      expect(await membersOf(t, scheduled)).toHaveLength(1);
-
-      // REST answers the same, with the reason for the admin to name.
-      const res = await rest(
-        await keyHolding(t, [DELETE]),
-        "DELETE",
-        scheduled
-      );
-      expect(res.status).toBe(409);
-      expect(await res.json()).toMatchObject({
-        error: { code: "CONFLICT", data: { reason: "was-scheduled" } },
-      });
-
-      // The control: a cancelled release that was never scheduled goes.
-      await t.nextly.releases.delete({
-        id: neverScheduled,
-        userId: deleter,
-        overrideAccess: false,
-      });
-      expect(
-        await t.nextly.releases.findByID({ id: neverScheduled })
-      ).toBeNull();
     });
 
     it.each(["scheduled", "blocked", "published"] as const)(

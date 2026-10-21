@@ -440,6 +440,17 @@ export function withoutPlaceholders<T extends Doc>(
 }
 
 /**
+ * Whether form values hold a placeholder anywhere {@link withoutPlaceholders}
+ * turns one back into a reference: what it makes of them differs from them
+ * only there.
+ */
+export function holdsPlaceholders(fields: FieldConfig[], data: Doc): boolean {
+  return (
+    JSON.stringify(withoutPlaceholders(fields, data)) !== JSON.stringify(data)
+  );
+}
+
+/**
  * The populated document with every stored link kept: a link the populated
  * read gave no row for becomes a placeholder, at its stored position.
  *

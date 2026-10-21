@@ -27,6 +27,11 @@ import safeRegex from "safe-regex2";
 
 import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalog";
 import { isVirtualField } from "../../collections/fields/virtual";
+import {
+  extractFieldGroupReferences,
+  isFieldGroupFieldType,
+} from "../../domains/field-groups/storage/field-group-field-type";
+import { readFieldGroupType } from "../../domains/field-groups/storage/field-group-type-key";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type { ValidationPublicData } from "../../errors/public-data";
 import type {
@@ -37,6 +42,11 @@ import type {
 } from "../../plugins/contributions";
 
 import { detachedField } from "./detached-field";
+import { applyFieldDefaults } from "./field-defaults";
+import {
+  attachFieldValidators,
+  getFieldFunctions,
+} from "./field-level-registry";
 
 export type ValidationIssue = ValidationPublicData["errors"][number];
 
@@ -118,6 +128,18 @@ export interface ValidateEntryOptions {
    * and then no type is handed one.
    */
   write?: EntryWriteContext;
+  /**
+   * A component's fields by its slug. A component held inside a group or a
+   * repeater is stored in that container's value, so the component write,
+   * which validates a component's own fields, never reaches it; with this,
+   * its value is validated against its component's fields here, its own
+   * `validate` functions included. A component at the top level is left to
+   * the component write, so nothing is judged twice. Absent: such a nested
+   * component is not judged, as before.
+   */
+  componentFields?: (slug: string) => ValidatableField[] | undefined;
+  /** Set by the walk itself once it is inside a group or repeater's value. */
+  insideContainer?: boolean;
 }
 
 /**
@@ -634,7 +656,7 @@ async function validateFieldValue(
             write,
             `${path}[${i}]`,
             // Rows are complete objects, so nested required-ness applies.
-            { ...options, mode: "create" },
+            { ...options, mode: "create", insideContainer: true },
             issues
           );
         }
@@ -657,7 +679,7 @@ async function validateFieldValue(
           value as Record<string, unknown>,
           write,
           path,
-          { ...options, mode: "create" },
+          { ...options, mode: "create", insideContainer: true },
           issues
         );
       }
@@ -681,8 +703,19 @@ async function validateFieldValue(
     }
 
     // relationship/upload/component values are shaped by their own
-    // normalization passes and referential checks; no scalar rules apply.
+    // normalization passes and referential checks; no scalar rules apply. A
+    // component inside a container is the exception: nothing else judges it.
     default:
+      if (options.insideContainer && isFieldGroupFieldType(field.type)) {
+        await validateContainedComponents(
+          field,
+          value,
+          path,
+          write,
+          options,
+          issues
+        );
+      }
       break;
   }
 
@@ -809,6 +842,93 @@ async function validatePluginFieldType(
     refuse(`${label ?? "This field"} failed validation.`);
   } catch {
     refuse(`${label ?? "This field"} failed validation.`);
+  }
+}
+
+/**
+ * Whether a component field sits inside a group or repeater anywhere in
+ * `fields`: the case {@link ValidateEntryOptions.componentFields} exists for,
+ * so a caller resolves component schemas only when there is one to judge.
+ * Iterative, with each field list visited once, so a definition that leads
+ * back to itself ends.
+ */
+export function hasComponentInContainer(
+  fields: readonly ValidatableField[]
+): boolean {
+  const seen = new Set<readonly ValidatableField[]>();
+  const work: Array<[readonly ValidatableField[], boolean]> = [[fields, false]];
+  for (let next = work.pop(); next; next = work.pop()) {
+    const [list, inContainer] = next;
+    if (seen.has(list)) continue;
+    seen.add(list);
+    for (const field of list) {
+      if (inContainer && isFieldGroupFieldType(field.type)) return true;
+      if (Array.isArray(field.fields)) {
+        work.push([
+          field.fields,
+          inContainer || field.type === "group" || field.type === "repeater",
+        ]);
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * A component's value held inside a group or repeater, judged against the
+ * component's own fields with its registered `validate` functions attached, as
+ * the component write judges a top-level one. One instance, a repeatable
+ * component's list, or a dynamic zone's rows, each under the component its
+ * field names or, in a zone, the one the row names.
+ */
+async function validateContainedComponents(
+  field: ValidatableField,
+  value: unknown,
+  path: string,
+  write: WriteContext,
+  options: ValidateEntryOptions,
+  issues: ValidationIssue[]
+): Promise<void> {
+  const resolve = options.componentFields;
+  if (!resolve) return;
+  const { single, many } = extractFieldGroupReferences(field);
+  const instances: Array<[unknown, string]> = Array.isArray(value)
+    ? value.map((row, i) => [row, `${path}[${i}]`])
+    : [[value, path]];
+  for (const [instance, at] of instances) {
+    if (instance === null || instance === undefined) continue;
+    // The component write refuses a value that is not an object, and none
+    // reaches this one, so the shape is refused here or it is stored as sent.
+    if (typeof instance !== "object" || Array.isArray(instance)) {
+      issues.push({
+        path: at,
+        code: "INVALID_TYPE",
+        message: "Component data must be an object.",
+      });
+      continue;
+    }
+    const slug =
+      single ??
+      (many?.includes(readFieldGroupType(instance) ?? "")
+        ? readFieldGroupType(instance)
+        : undefined);
+    const own = slug ? resolve(slug) : undefined;
+    if (!slug || !own) continue;
+    // Judged with its declared defaults filled, as the component write fills a
+    // new instance's before judging it, so a required child the caller left to
+    // its default is not refused. Filled on a copy: validation reports, and
+    // the value written is the caller's.
+    const filled = { ...(instance as Record<string, unknown>) };
+    applyFieldDefaults(filled, own, getFieldFunctions("fieldGroup", slug));
+    await validateFields(
+      attachFieldValidators("fieldGroup", slug, own),
+      filled,
+      write,
+      at,
+      // A component's value is written whole, so its required fields apply.
+      { ...options, mode: "create", insideContainer: true },
+      issues
+    );
   }
 }
 
