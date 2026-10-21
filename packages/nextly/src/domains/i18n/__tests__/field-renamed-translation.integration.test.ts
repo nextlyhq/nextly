@@ -561,6 +561,13 @@ describeEachDialect("a translated field that is renamed", dialect => {
   // collection keeps it in a junction table, so replacing a translated field with one is the
   // same removal beside an addition. Asked of the preflight directly: the schema dialog's payload
   // spells relationships without the options object that names a many-to-many.
+  /** A many-to-many relationship, as stored field definitions spell one. */
+  const MANY_TO_MANY = {
+    name: "related",
+    type: "relationship",
+    options: { relationType: "manyToMany", target: "users" },
+  };
+
   it("refuses a field group's translated field replaced by a many-to-many relationship", async () => {
     const id = await seedFieldGroup();
 
@@ -572,14 +579,7 @@ describeEachDialect("a translated field that is renamed", dialect => {
       builtBy: "fieldGroup",
       defaultLocale: "en",
       oldFields: TRANSLATED,
-      newFields: [
-        {
-          name: "related",
-          type: "relationship",
-          options: { relationType: "manyToMany", target: "users" },
-        },
-        { name: "views", type: "number" },
-      ],
+      newFields: [MANY_TO_MANY, { name: "views", type: "number" }],
       wasLocalized: true,
       isLocalized: true,
     }).then(
