@@ -661,54 +661,67 @@ function judgedForReader(
 /**
  * Findings that stand for several links, each gathered into one with how
  * many, in the place of the first: links to deleted documents per member and
- * field set, naming no target (a deleted document has nothing left to name
- * it by); and links in fields the reader may not view, per member.
+ * field, naming no target (a deleted document has nothing left to name it
+ * by), a link counted in every field it is linked from; and links in fields
+ * the reader may not view, per member.
  */
 function byField(findings: readonly ReadinessFinding[]): ReadinessFinding[] {
   const out: ReadinessFinding[] = [];
   const gathered = new Map<string, ReadinessFinding>();
-  for (const finding of findings) {
-    const key = gatherKey(finding);
-    if (key === null) {
-      out.push(finding);
-      continue;
-    }
+  const gather = (key: string, first: () => ReadinessFinding, add: number) => {
     const held = gathered.get(key);
     if (held !== undefined) {
       held.detail = {
         ...held.detail,
-        count: String(weightOf(held) + weightOf(finding)),
+        count: String(weightOf(held) + add),
       };
-      continue;
+      return;
     }
-    const first = gatheredFrom(finding);
-    gathered.set(key, first);
-    out.push(first);
+    const made = first();
+    gathered.set(key, made);
+    out.push(made);
+  };
+  for (const finding of findings) {
+    const kind = gatheringOf(finding);
+    if (kind === null) {
+      out.push(finding);
+    } else if (kind === "hidden field") {
+      gather(
+        JSON.stringify([finding.memberId, kind]),
+        () =>
+          bare(finding, "UNPUBLISHED_LINK_IN_HIDDEN_FIELD", {
+            count: String(weightOf(finding)),
+          }),
+        weightOf(finding)
+      );
+    } else {
+      for (const field of fieldsNamed(finding)) {
+        gather(
+          JSON.stringify([finding.memberId, kind, field]),
+          () =>
+            bare(finding, "UNPUBLISHED_LINK", {
+              fields: [field],
+              cause: "deleted",
+              count: String(weightOf(finding)),
+            }),
+          weightOf(finding)
+        );
+      }
+    }
   }
   return out;
 }
 
-/** What a finding is gathered by, or `null` for one that stands alone. */
-function gatherKey(finding: ReadinessFinding): string | null {
+/** Which gathering a finding joins, or `null` for one that stands alone. */
+function gatheringOf(
+  finding: ReadinessFinding
+): "hidden field" | "deleted" | null {
   if (finding.source !== UNPUBLISHED_LINKS_SOURCE_KEY) return null;
   if (finding.code === "UNPUBLISHED_LINK_IN_HIDDEN_FIELD") {
-    return JSON.stringify([finding.memberId, "hidden field"]);
+    return "hidden field";
   }
   if (finding.code !== "UNPUBLISHED_LINK") return null;
-  if (finding.detail?.cause !== "deleted") return null;
-  return JSON.stringify([finding.memberId, fieldsNamed(finding)]);
-}
-
-/** The first finding of a gathering, as it is shown. */
-function gatheredFrom(finding: ReadinessFinding): ReadinessFinding {
-  if (finding.code === "UNPUBLISHED_LINK_IN_HIDDEN_FIELD") {
-    return bare(finding, finding.code, { count: String(weightOf(finding)) });
-  }
-  return bare(finding, "UNPUBLISHED_LINK", {
-    fields: fieldsNamed(finding),
-    cause: "deleted",
-    count: String(weightOf(finding)),
-  });
+  return finding.detail?.cause === "deleted" ? "deleted" : null;
 }
 
 /** The field paths a link finding names. */

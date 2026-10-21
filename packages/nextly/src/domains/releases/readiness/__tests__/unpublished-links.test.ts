@@ -615,6 +615,23 @@ describe("narrowLinkFindings", () => {
     expect(JSON.stringify(narrowed)).not.toContain("aside-only");
   });
 
+  it("counts each deleted link in every field it is linked from", () => {
+    // One deleted target linked from fields A and B, another from A alone.
+    const both = {
+      ...shown("a", "g1", ["A", "B"]),
+      detail: { ...shown("a", "g1", ["A", "B"]).detail, cause: "deleted" },
+    };
+    const findings = [both, deletedIn("a", "A", "g2")];
+    const perField = [
+      { fields: ["A"], cause: "deleted", count: "2" },
+      { fields: ["B"], cause: "deleted", count: "1" },
+    ];
+    expect(narrowLinkFindings(findings, verdicts()).map(f => f.detail)).toEqual(
+      perField
+    );
+    expect(withoutFieldKeys(findings).map(f => f.detail)).toEqual(perField);
+  });
+
   it("counts five deleted links as five, hidden or in a hidden field", () => {
     const five = ["g1", "g2", "g3", "g4", "g5"].map(id =>
       deletedIn("a", "author", id)
