@@ -520,6 +520,22 @@ describe("REST limit: where it counts", () => {
     expect(await admitted(check, { address: "203.0.113.9" }, 3)).toBe(2);
   });
 
+  it("lets requests through when starting the services never finishes", async () => {
+    // A start held up (a hung database connection, a migration gate) is
+    // waited for no longer than a store call, and the request counts in this
+    // process's memory instead of hanging the route.
+    const check = limiter({
+      store: restLimitCounts(
+        { limitStore: "database" },
+        () => new Promise(() => {})
+      ),
+    });
+    const started = Date.now();
+
+    expect(await admitted(check, { address: "203.0.113.10" }, 1)).toBe(1);
+    expect(Date.now() - started).toBeLessThan(5_000);
+  }, 10_000);
+
   it("starts the services on a cold worker so it counts in the shared store", async () => {
     // A worker serving only requests that never start the services would
     // otherwise count in its own memory for good, a budget per worker.

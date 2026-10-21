@@ -158,10 +158,12 @@ describe("withRateLimitStoreDeadline after calls that never settle", () => {
 });
 
 describe("withRateLimitStoreDeadline against a store that never answers", () => {
-  it("never has more calls under way in the store than its hard cap, however long it runs", async () => {
+  it("starts at most one call a round once its hard cap is full, however long it runs", async () => {
     // Calls past their deadline stop holding a place so the store can be
-    // asked again once it answers, but each still runs in the store; the
-    // hard cap bounds how many of those it ever holds at once.
+    // asked again once it answers, but each still runs in the store. Once the
+    // hard cap's worth are unsettled, only one recovery call at a time starts,
+    // and each round here outlasts the abandon window (ten 5ms deadlines), so
+    // a round starts at most one call where the in-flight cap alone admits two.
     let started = 0;
     const store: RateLimitStore = {
       increment: () => {
@@ -171,17 +173,50 @@ describe("withRateLimitStoreDeadline against a store that never answers", () => 
       reset: () => Promise.resolve(),
     };
     const guarded = withRateLimitStoreDeadline(store, 5, 2);
+    const hardCap = 2 * LIMIT_STORE_HARD_CAP_MULTIPLE;
+    const pastCap: number[] = [];
 
     for (let round = 0; round < 12; round += 1) {
+      const before = started;
       await Promise.allSettled([
         guarded.increment("a", 1_000),
         guarded.increment("b", 1_000),
         guarded.increment("c", 1_000),
       ]);
+      if (before >= hardCap) pastCap.push(started - before);
       await new Promise(resolve => setTimeout(resolve, 60));
     }
 
-    expect(started).toBeLessThanOrEqual(2 * LIMIT_STORE_HARD_CAP_MULTIPLE);
-    expect(started).toBeGreaterThan(2);
+    expect(pastCap.length).toBeGreaterThan(3);
+    expect(Math.max(...pastCap)).toBe(1);
+  });
+
+  it("still reaches a store that answers again once the hard cap is full of calls that never settle", async () => {
+    // A strict bound and guaranteed recovery cannot both hold when calls
+    // never settle; one recovery call at a time is let through past the cap.
+    let hanging = true;
+    const store: RateLimitStore = {
+      increment: (_key, windowMs) =>
+        hanging
+          ? new Promise(() => {})
+          : Promise.resolve({ count: 1, resetTime: Date.now() + windowMs }),
+      reset: () => Promise.resolve(),
+    };
+    const guarded = withRateLimitStoreDeadline(store, 5, 2);
+
+    // Fill the hard cap (eight) with calls that never settle.
+    for (let round = 0; round < 6; round += 1) {
+      await Promise.allSettled([
+        guarded.increment("a", 1_000),
+        guarded.increment("b", 1_000),
+      ]);
+      await new Promise(resolve => setTimeout(resolve, 60));
+    }
+
+    hanging = false;
+    await new Promise(resolve => setTimeout(resolve, 60));
+    await expect(guarded.increment("c", 1_000)).resolves.toMatchObject({
+      count: 1,
+    });
   });
 });

@@ -40,11 +40,20 @@ export const LIMIT_STORE_MAX_IN_FLIGHT = 64;
 const ABANDON_AFTER_TIMEOUTS = 10;
 
 /**
- * The most calls ever under way in the store at once, as a multiple of the
- * in-flight cap, abandoned ones included. An abandoned call may still be
- * running in the store, holding a connection or a lock, so while calls past
- * their deadline stop holding a place under the cap, they never stop counting
- * here: against a store that never answers, the work behind it stays bounded.
+ * The calls under way in the store, as a multiple of the in-flight cap,
+ * abandoned ones included, past which only one recovery call at a time
+ * starts. An abandoned call may still be running in the store, holding a
+ * connection or a lock, so while calls past their deadline stop holding a
+ * place under the cap, they never stop counting here.
+ *
+ * With calls that never settle, a strict bound and a guaranteed way back
+ * cannot both hold: refusing every call past this cap would leave a store
+ * that answers again never asked, if the calls that filled it never settle.
+ * So past it, one call at a time is let through, and a new one only once the
+ * last has settled or been abandoned: the work behind a store that never
+ * answers grows by at most one call per abandon window
+ * ({@link ABANDON_AFTER_TIMEOUTS} deadlines), and the first call a recovered
+ * store answers starts letting calls through again.
  */
 export const LIMIT_STORE_HARD_CAP_MULTIPLE = 4;
 
@@ -140,6 +149,8 @@ function deadlineAnswer(
   /** Every call the store has not settled, abandoned or not. */
   let unsettled = 0;
   const hardCap = maxInFlight * LIMIT_STORE_HARD_CAP_MULTIPLE;
+  /** The one recovery call let past the hard cap, while it is unsettled. */
+  let probe: { call: symbol; began: number } | undefined;
   /** The calls still holding a place, dropping the abandoned ones. */
   const held = (): number => {
     const now = Date.now();
@@ -147,6 +158,39 @@ function deadlineAnswer(
       if (now - began >= abandonAfterMs) running.delete(call);
     }
     return running.size;
+  };
+  /**
+   * Starts a call's count, or refuses it as unavailable: past `maxInFlight`
+   * calls holding a place, or past the hard cap while an earlier recovery
+   * call is still unsettled and within its abandon window.
+   */
+  const begin = (): symbol => {
+    const inFlight = held();
+    const now = Date.now();
+    const pastHardCap = unsettled >= hardCap;
+    if (
+      inFlight >= maxInFlight ||
+      (pastHardCap && probe !== undefined && now - probe.began < abandonAfterMs)
+    ) {
+      throw limitStoreUnavailable("timeout", {
+        logContext: { inFlight, unsettled },
+      });
+    }
+    const id = Symbol("limit store call");
+    running.set(id, now);
+    unsettled += 1;
+    if (pastHardCap) probe = { call: id, began: now };
+    return id;
+  };
+  /**
+   * Ends a call's count once the store settles it, not once its caller is
+   * answered or it is abandoned. A call that fails after its deadline has
+   * nobody waiting for it.
+   */
+  const settle = (id: symbol): void => {
+    running.delete(id);
+    unsettled -= 1;
+    if (probe?.call === id) probe = undefined;
   };
   /**
    * `call`'s answer, or the unavailable answer once `timeoutMs` has passed
@@ -157,44 +201,42 @@ function deadlineAnswer(
     call: () => Promise<T>,
     applyFailure: { failed?: { error: unknown } } = {}
   ): Promise<T> => {
-    const inFlight = held();
-    if (inFlight >= maxInFlight || unsettled >= hardCap) {
-      throw limitStoreUnavailable("timeout", {
-        logContext: { inFlight, unsettled },
-      });
-    }
+    const id = begin();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         reject(limitStoreUnavailable("timeout", { logContext: { timeoutMs } }));
       }, timeoutMs);
     });
-    const id = Symbol("limit store call");
-    running.set(id, Date.now());
-    unsettled += 1;
     const pending = Promise.resolve().then(call);
-    // Counted until the store settles it, not until its caller is answered,
-    // or until it is abandoned. A call that fails after its deadline has
-    // nobody waiting for it.
-    const settle = () => {
-      running.delete(id);
-      unsettled -= 1;
-    };
-    pending.then(settle, settle);
+    const settled = () => settle(id);
+    pending.then(settled, settled);
     try {
       return await Promise.race([pending, deadline]);
     } catch (error) {
-      if (applyFailure.failed) throw applyFailure.failed.error;
-      if (
-        limitStoreUnavailableReason(error) !== undefined ||
-        NextlyError.isCode(error, "INTERNAL_ERROR")
-      ) {
-        throw error;
-      }
-      throw limitStoreUnavailable("unreachable", { cause: error });
+      throw failureAnswer(error, applyFailure);
     } finally {
       clearTimeout(timer);
     }
   };
   return answer;
+}
+
+/**
+ * What a failed call is answered with: the caller's `apply` failure, an
+ * unavailable answer, or a programming error as it is; any other failure is
+ * the store's own, answered as unreachable.
+ */
+function failureAnswer(
+  error: unknown,
+  applyFailure: { failed?: { error: unknown } }
+): unknown {
+  if (applyFailure.failed) return applyFailure.failed.error;
+  if (
+    limitStoreUnavailableReason(error) !== undefined ||
+    NextlyError.isCode(error, "INTERNAL_ERROR")
+  ) {
+    return error;
+  }
+  return limitStoreUnavailable("unreachable", { cause: error });
 }

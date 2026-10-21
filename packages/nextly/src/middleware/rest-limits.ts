@@ -23,6 +23,7 @@
  * @module middleware/rest-limits
  */
 import { container } from "../di/container";
+import { LIMIT_STORE_CALL_TIMEOUT_MS } from "../domains/limits/call-deadline";
 import { openWhileStoreIsDown } from "../domains/limits/core-limit-outage";
 import { guardedAppRateLimitStore } from "../domains/limits/core-limit-store";
 import type { LimitStoreSelection } from "../domains/limits/limit-store-setting";
@@ -512,6 +513,35 @@ export function restLimitCounts(
 }
 
 /**
+ * Whether `start` settled as started within `timeoutMs`: false when it
+ * failed, or was still under way when the time passed.
+ */
+async function startedWithin(
+  start: () => Promise<unknown>,
+  timeoutMs: number
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<false>(resolve => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+    // A pending wait never keeps the process alive on its own.
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(start)
+        .then(
+          () => true,
+          () => false
+        ),
+      late,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Where core's own limits count, read on every call, or `fallback` while the
  * services are not registered yet.
  *
@@ -522,7 +552,9 @@ export function restLimitCounts(
  *
  * @param options.startServices - Registers the services, for a site whose
  *   limits count in a shared store: a cold worker serving only requests that
- *   never start them would otherwise count in its own memory for good.
+ *   never start them would otherwise count in its own memory for good. A
+ *   start is waited for no longer than a store call
+ *   ({@link LIMIT_STORE_CALL_TIMEOUT_MS}).
  * @param options.consume - Whether the store offers `consume`. An app's store
  *   of the older contract may not, and the REST limit picks its counting path
  *   by whether `consume` exists, so it is offered only where the store has it.
@@ -545,16 +577,17 @@ export function coreCountsOr(
     const store = registered();
     if (store !== undefined) return store;
     if (options.startServices === undefined) return fallback;
-    try {
-      await options.startServices();
-    } catch {
-      // The REST limit needs the services only to find its store. A route
-      // that never starts them must not fail because they could not start:
-      // this request counts in this process's memory instead, as the general
-      // limit lets requests through while its store is away.
-      return fallback;
-    }
-    return registered() ?? fallback;
+    // The REST limit needs the services only to find its store. A route that
+    // never starts them must not fail, nor wait, because they could not start
+    // (a failure) or have not yet (a start held up behind a database that does
+    // not answer): this request counts in this process's memory instead, as
+    // the general limit lets requests through while its store is away. The
+    // start itself carries on, and a later request finds its store.
+    const started = await startedWithin(
+      options.startServices,
+      LIMIT_STORE_CALL_TIMEOUT_MS
+    );
+    return started ? (registered() ?? fallback) : fallback;
   };
   const counts: RateLimitStore = {
     increment: async (key, windowMs) =>
