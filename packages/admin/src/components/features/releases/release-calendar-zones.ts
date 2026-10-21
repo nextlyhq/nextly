@@ -22,10 +22,11 @@ export interface CalendarZoneGroup {
 /**
  * The zone control's groups, each zone in exactly one of them.
  *
- * Empty groups are left out. The zone being shown is always offered, even
- * when the platform's list lacks it (an alias such as `Asia/Calcutta`, or a
- * runtime without `Intl.supportedValuesOf`), so the control never shows a
- * value it cannot select.
+ * Empty groups are left out. The zone being shown and UTC are always
+ * offered, even when the platform's list lacks them (an alias such as
+ * `Asia/Calcutta`, UTC itself on Chromium and Node, or a runtime without
+ * `Intl.supportedValuesOf`), so the control never shows a value it cannot
+ * select and UTC is always one choice away.
  */
 export function calendarZoneGroups({
   reader,
@@ -43,10 +44,14 @@ export function calendarZoneGroups({
     .filter(zone => !seen.has(zone) && isValidTimezone(zone))
     .sort();
   for (const zone of fromReleases) seen.add(zone);
-  const rest = [
-    ...(seen.has(current) || supported.includes(current) ? [] : [current]),
-    ...supported.filter(zone => !seen.has(zone)),
-  ];
+  // UTC always, and the zone on screen: the platform's list can lack either
+  // (Chromium and Node list no "UTC"), and a zone the control shows must be
+  // one it can select.
+  const extras = [current, "UTC"].filter(
+    (zone, i, all) =>
+      all.indexOf(zone) === i && !seen.has(zone) && !supported.includes(zone)
+  );
+  const rest = [...extras, ...supported.filter(zone => !seen.has(zone))];
   const groups: CalendarZoneGroup[] = [
     { id: "reader", label: "Your time zone", zones: [reader] },
     { id: "scheduled", label: "Scheduled in", zones: fromReleases },

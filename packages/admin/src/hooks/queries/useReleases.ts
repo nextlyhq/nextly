@@ -8,6 +8,7 @@
  * - `["releases"]` — every release query, the invalidation root
  * - `["releases", "list", params]` — one window
  * - `["releases", "calendar", params]` — one calendar window, in one zone
+ * - `["releases", "every-id", params]` — every id a list read matches
  * - `["releases", "detail", id]` — one release
  * - `["releases", "members", id]` — its contents
  *
@@ -63,6 +64,8 @@ export const releaseKeys = {
   list: (params: ReleaseListParams) => ["releases", "list", params] as const,
   calendar: (params: ReleaseCalendarParams) =>
     ["releases", "calendar", params] as const,
+  everyId: (params: ReleaseListParams) =>
+    ["releases", "every-id", params] as const,
   detail: (id: string) => ["releases", "detail", id] as const,
   members: (id: string) => ["releases", "members", id] as const,
   blockers: (id: string) => ["releases", "blockers", id] as const,
@@ -163,6 +166,53 @@ export function useReleaseCalendar(params: ReleaseCalendarParams) {
       calendarHasPendingRelease(data.state.data)
         ? PENDING_RELEASE_POLL_MS
         : NO_RELEASE_POLL_MS,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/**
+ * The largest page the list route serves, which is the page this asks for
+ * when it has to read a listing in full.
+ */
+const LIST_PAGE_CEILING = 200;
+
+/**
+ * The ids of every release one list read matches, read a page at a time
+ * until the server says there are no more.
+ *
+ * For a question that needs the whole answer rather than a page of it, such
+ * as which releases in a calendar window are overdue: a capped read would
+ * leave the rest looking like something they are not. Bounded by the query
+ * itself, and stopped by an empty page as well as by `hasNext`, so a server
+ * that kept saying "more" could not hold it in a loop.
+ */
+async function readEveryReleaseId(
+  params: ReleaseListParams
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (let page = 1; ; page += 1) {
+    const answer = await fetchReleases({
+      ...params,
+      page,
+      limit: LIST_PAGE_CEILING,
+    });
+    ids.push(...answer.items.map(release => release.id));
+    if (!answer.meta.hasNext || answer.items.length === 0) return ids;
+  }
+}
+
+/**
+ * Every release one list read matches, by id, however many pages it runs to.
+ *
+ * Inside the `releases` root, so every release write refreshes it, and polled
+ * on the list's pending speed: the answer is about releases still waiting.
+ */
+export function useEveryReleaseId(params: ReleaseListParams, enabled = true) {
+  return useQuery({
+    queryKey: releaseKeys.everyId(params),
+    queryFn: () => readEveryReleaseId(params),
+    enabled,
+    refetchInterval: PENDING_RELEASE_POLL_MS,
     refetchOnWindowFocus: true,
   });
 }

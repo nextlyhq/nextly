@@ -10,19 +10,31 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fireEvent, render, screen, within } from "@admin/__tests__/utils";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@admin/__tests__/utils";
 import type { Release, ReleaseCalendarDay } from "@admin/types/releases";
 
-const { calendarMock, releasesMock, dayListMock } = vi.hoisted(() => ({
+const { calendarMock, fetchReleasesMock, dayListMock } = vi.hoisted(() => ({
   calendarMock: vi.fn(),
-  releasesMock: vi.fn(),
+  fetchReleasesMock: vi.fn(),
   dayListMock: vi.fn(),
+}));
+
+// The overdue lookup runs for real, through its paging, over a mocked
+// transport: what is under test is that it reads every page.
+vi.mock("@admin/services/releaseApi", async importOriginal => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  fetchReleases: (...args: unknown[]) => fetchReleasesMock(...args),
 }));
 
 vi.mock("@admin/hooks/queries/useReleases", async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useReleaseCalendar: (...args: unknown[]) => calendarMock(...args),
-  useReleases: (...args: unknown[]) => releasesMock(...args),
   useReleaseListPage: (...args: unknown[]) => dayListMock(...args),
 }));
 
@@ -72,8 +84,11 @@ beforeEach(() => {
   vi.setSystemTime(FROZEN_NOW);
   calendarMock.mockReset();
   calendarMock.mockReturnValue(calendarAnswer());
-  releasesMock.mockReset();
-  releasesMock.mockReturnValue({ data: { items: [] } });
+  fetchReleasesMock.mockReset();
+  fetchReleasesMock.mockResolvedValue({
+    items: [],
+    meta: { total: 0, hasNext: false },
+  });
   dayListMock.mockReset();
   dayListMock.mockReturnValue({
     data: { items: BUSY.releases, meta: { total: 7 } },
@@ -164,18 +179,38 @@ describe("the calendar screen", () => {
     );
   });
 
-  it("marks a release overdue from the server's own overdue read", () => {
-    releasesMock.mockReturnValue({ data: { items: [{ id: "c" }] } });
+  it("marks a release overdue from the server's overdue read, however many pages it runs to", async () => {
+    // Two hundred and one overdue releases in the window: a full first page,
+    // and the 201st alone on the second. A lookup that read one page would
+    // call "c" scheduled.
+    const firstPage = Array.from({ length: 200 }, (_, i) => ({
+      id: `overdue-${i + 1}`,
+    }));
+    fetchReleasesMock.mockImplementation(
+      (params: { tab?: string; page?: number }) =>
+        Promise.resolve(
+          params.tab === "attention" && params.page === 1
+            ? { items: firstPage, meta: { total: 201, hasNext: true } }
+            : params.tab === "attention" && params.page === 2
+              ? { items: [{ id: "c" }], meta: { total: 201, hasNext: false } }
+              : { items: [], meta: { total: 0, hasNext: false } }
+        )
+    );
     calendarMock.mockReturnValue(
       calendarAnswer([{ ...BUSY, total: 3, releases: [release("c")] }])
     );
     render(<ReleaseCalendar />);
     const cell = dayButton("2026-10-23").closest("td") as HTMLElement;
-    expect(within(cell).getByRole("link").textContent).toContain("Overdue");
+    await waitFor(() =>
+      expect(within(cell).getByRole("link").textContent).toContain("Overdue")
+    );
     // Asked of Needs attention's overdue part, not worked out here.
-    expect(releasesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ tab: "attention", reason: "overdue" }),
-      true
+    expect(fetchReleasesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tab: "attention",
+        reason: "overdue",
+        page: 2,
+      })
     );
   });
 
@@ -201,5 +236,9 @@ describe("the calendar screen", () => {
     expect(
       screen.getByText("This month's releases could not be loaded")
     ).toBeTruthy();
+    // No grid of days that would each say "no releases" about a month that
+    // was never read.
+    expect(screen.queryByRole("grid")).toBeNull();
+    expect(document.querySelectorAll("[data-day]")).toHaveLength(0);
   });
 });

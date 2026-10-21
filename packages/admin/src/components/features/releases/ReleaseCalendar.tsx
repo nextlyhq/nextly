@@ -34,7 +34,14 @@
  *
  * @module components/features/releases/ReleaseCalendar
  */
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { ChevronLeft, ChevronRight } from "@admin/components/icons";
 import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
@@ -42,11 +49,15 @@ import { Button, Skeleton } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import {
+  useEveryReleaseId,
   useReleaseCalendar,
-  useReleases,
 } from "@admin/hooks/queries/useReleases";
 import { cn } from "@admin/lib/utils";
-import type { Release, ReleaseCalendarDay } from "@admin/types/releases";
+import type {
+  Release,
+  ReleaseCalendarDay,
+  ReleaseCalendarRead,
+} from "@admin/types/releases";
 
 import {
   calendarDayLabel,
@@ -88,13 +99,6 @@ const WEEKDAYS = [
 const WIDEST_OFFSET_MS = 14 * 3_600_000;
 const DAY_MS = 86_400_000;
 
-/**
- * The most overdue releases one read names. Overdue is an alarm, not a
- * schedule: a window holding more than this many releases its runner never
- * reached has a problem the list's Needs attention tab states in full.
- */
-const OVERDUE_READ_LIMIT = 200;
-
 /** `October 2026`, in the reader's locale. */
 function monthLabel(month: string): string {
   return new Date(`${month}-15T12:00:00.000Z`).toLocaleDateString(undefined, {
@@ -118,20 +122,119 @@ function useOverdueIds(days: { from: DayKey; to: DayKey }, now: number) {
   const after = Date.parse(`${days.from}T00:00:00.000Z`) - WIDEST_OFFSET_MS;
   const before =
     Date.parse(`${days.to}T00:00:00.000Z`) + DAY_MS + WIDEST_OFFSET_MS;
-  const read = useReleases(
+  // Read in full, page by page: a window holding more overdue releases than
+  // one page would otherwise call the rest "Scheduled".
+  const read = useEveryReleaseId(
     {
       tab: "attention",
       reason: "overdue",
       scheduledAfter: new Date(after).toISOString(),
       scheduledBefore: new Date(before).toISOString(),
-      limit: OVERDUE_READ_LIMIT,
     },
     after < now
   );
-  const items = read.data?.items;
-  return useMemo(
-    () => new Set((items ?? []).map(release => release.id)),
-    [items]
+  const ids = read.data;
+  return useMemo(() => new Set(ids ?? []), [ids]);
+}
+
+/**
+ * Which day's list is open, and where focus goes back to when it closes: the
+ * day itself, or its "+N more", whichever opened it.
+ */
+function useDayListOpener() {
+  const [day, setDay] = useState<DayKey | null>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  return {
+    day,
+    open: (next: DayKey) => {
+      opener.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
+      setDay(next);
+    },
+    close: () => setDay(null),
+    /** Back to the opener, or to the focused day if it has gone. */
+    returnFocus: (focused: DayKey) => {
+      const back = opener.current;
+      if (back?.isConnected) {
+        back.focus();
+        return;
+      }
+      document.querySelector<HTMLElement>(`[data-day="${focused}"]`)?.focus();
+    },
+  };
+}
+
+/** The calendar answer's days by date, and the zones its releases name. */
+function useCalendarDays(data: ReleaseCalendarRead | undefined) {
+  return useMemo(() => {
+    const days = data?.days ?? [];
+    return {
+      byDate: new Map(days.map(day => [day.date, day])),
+      scheduledZones: days.flatMap(day =>
+        day.releases.flatMap(release =>
+          release.timezone ? [release.timezone] : []
+        )
+      ),
+    };
+  }, [data]);
+}
+
+/**
+ * Today, the month arrows and the month's name, with the zone control at the
+ * other end.
+ */
+function CalendarToolbar({
+  month,
+  headingId,
+  onToday,
+  onPage,
+  children,
+}: {
+  month: string;
+  headingId: string;
+  onToday: () => void;
+  onPage: (offset: number) => void;
+  /** The zone control. */
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={onToday}>
+          Today
+        </Button>
+        <div className="flex items-center">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Previous month"
+            onClick={() => onPage(-1)}
+          >
+            <ChevronLeft className="size-4" aria-hidden />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Next month"
+            onClick={() => onPage(1)}
+          >
+            <ChevronRight className="size-4" aria-hidden />
+          </Button>
+        </div>
+        {/* Announced when it changes, so paging by keyboard says where it
+              arrived. */}
+        <h2
+          id={headingId}
+          aria-live="polite"
+          className="text-base font-semibold tracking-tight text-foreground"
+        >
+          {monthLabel(month)}
+        </h2>
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -153,17 +256,7 @@ export function ReleaseCalendar() {
     focused: today,
   }));
   const { month, focused } = view;
-  const [openDay, setOpenDay] = useState<DayKey | null>(null);
-  // What opened the day's list: the day itself, or its "+N more". Focus goes
-  // back there when the list closes.
-  const opener = useRef<HTMLElement | null>(null);
-  const openDayList = (day: DayKey) => {
-    opener.current =
-      document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null;
-    setOpenDay(day);
-  };
+  const dayList = useDayListOpener();
 
   const gridDays = useMemo(() => calendarWindow(month), [month]);
   const calendar = useReleaseCalendar({ ...gridDays, timezone: zone });
@@ -181,19 +274,7 @@ export function ReleaseCalendar() {
       )
     );
 
-  const byDate = useMemo(
-    () => new Map((calendar.data?.days ?? []).map(day => [day.date, day])),
-    [calendar.data]
-  );
-  const scheduledZones = useMemo(
-    () =>
-      (calendar.data?.days ?? []).flatMap(day =>
-        day.releases.flatMap(release =>
-          release.timezone ? [release.timezone] : []
-        )
-      ),
-    [calendar.data]
-  );
+  const { byDate, scheduledZones } = useCalendarDays(calendar.data);
 
   const changeZone = (next: string) => {
     // Today is a day in a zone. A reader looking at today keeps looking at
@@ -207,39 +288,12 @@ export function ReleaseCalendar() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => goTo(today)}>
-            Today
-          </Button>
-          <div className="flex items-center">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Previous month"
-              onClick={() => pageBy(-1)}
-            >
-              <ChevronLeft className="size-4" aria-hidden />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label="Next month"
-              onClick={() => pageBy(1)}
-            >
-              <ChevronRight className="size-4" aria-hidden />
-            </Button>
-          </div>
-          {/* Announced when it changes, so paging by keyboard says where it
-              arrived. */}
-          <h2
-            id={headingId}
-            aria-live="polite"
-            className="text-base font-semibold tracking-tight text-foreground"
-          >
-            {monthLabel(month)}
-          </h2>
-        </div>
+      <CalendarToolbar
+        month={month}
+        headingId={headingId}
+        onToday={() => goTo(today)}
+        onPage={pageBy}
+      >
         <ReleaseCalendarZoneControl
           zone={zone}
           readerZone={reader}
@@ -247,7 +301,7 @@ export function ReleaseCalendar() {
           at={new Date(`${month}-15T12:00:00.000Z`)}
           onChange={changeZone}
         />
-      </div>
+      </CalendarToolbar>
 
       {calendar.isError ? (
         <SectionErrorFallback
@@ -257,20 +311,26 @@ export function ReleaseCalendar() {
         />
       ) : null}
 
-      <MonthGrid
-        month={month}
-        today={today}
-        focused={focused}
-        byDate={byDate}
-        overdue={overdue}
-        zone={zone}
-        isPending={calendar.isPending}
-        labelledBy={headingId}
-        describedBy={noteId}
-        onFocusDay={day => setView(current => ({ ...current, focused: day }))}
-        onMoveDay={goTo}
-        onOpenDay={openDayList}
-      />
+      {/* With no answer to draw, no grid: every day would otherwise say "no
+          releases" about a month that was never read, under an error saying
+          it is not empty. A failed refresh keeps the answer it had, and the
+          grid with it. */}
+      {calendar.isError && calendar.data === undefined ? null : (
+        <MonthGrid
+          month={month}
+          today={today}
+          focused={focused}
+          byDate={byDate}
+          overdue={overdue}
+          zone={zone}
+          isPending={calendar.isPending}
+          labelledBy={headingId}
+          describedBy={noteId}
+          onFocusDay={day => setView(current => ({ ...current, focused: day }))}
+          onMoveDay={goTo}
+          onOpenDay={dayList.open}
+        />
+      )}
 
       <p id={noteId} className="text-xs text-muted-foreground">
         Days and times are in {zoneDisplayName(zone)}
@@ -280,20 +340,13 @@ export function ReleaseCalendar() {
       </p>
 
       <ReleaseCalendarDaySheet
-        day={openDay}
+        day={dayList.day}
         zone={zone}
-        isToday={openDay === today}
+        isToday={dayList.day === today}
         overdue={overdue}
         now={now}
-        onClose={() => setOpenDay(null)}
-        onReturnFocus={() => {
-          const back = opener.current;
-          if (back?.isConnected) back.focus();
-          else
-            document
-              .querySelector<HTMLElement>(`[data-day="${focused}"]`)
-              ?.focus();
-        }}
+        onClose={dayList.close}
+        onReturnFocus={() => dayList.returnFocus(focused)}
       />
     </div>
   );

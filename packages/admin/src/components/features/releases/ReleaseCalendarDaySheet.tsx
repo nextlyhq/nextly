@@ -49,6 +49,7 @@ import {
   ReleaseRowMenuButton,
   type OpenDialog,
 } from "./ReleaseRowMenu";
+import { useClampedPage } from "./useClampedPage";
 
 /** Releases per page of a day's list. */
 const DAY_PAGE_SIZE = 20;
@@ -125,6 +126,12 @@ function DayList({
   });
   const total = list.data?.meta.total;
   const rows = list.data?.items ?? [];
+  // A day shrinks under the reader: publishing or moving the only release on
+  // the last page leaves that page empty, with no pager to leave it by.
+  useClampedPage(
+    { page, pageSize: DAY_PAGE_SIZE, setPage },
+    list.isPlaceholderData ? undefined : total
+  );
 
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);

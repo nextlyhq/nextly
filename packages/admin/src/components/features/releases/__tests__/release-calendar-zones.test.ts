@@ -68,6 +68,28 @@ describe("calendarZoneGroups", () => {
     ]);
   });
 
+  it("always offers UTC, which the platform's own list can leave out", () => {
+    // Chromium and Node list no "UTC" among `Intl.supportedValuesOf`'s
+    // zones, so a reader outside UTC could otherwise never choose it.
+    const groups = calendarZoneGroups({
+      reader: "Asia/Karachi",
+      current: "Asia/Karachi",
+      scheduled: [],
+      supported: ["America/New_York", "Asia/Karachi"],
+    });
+    expect(groups.find(group => group.id === "all")?.zones).toContain("UTC");
+    // Once, wherever else it already is.
+    const asReader = calendarZoneGroups({
+      reader: "UTC",
+      current: "UTC",
+      scheduled: ["UTC"],
+      supported: ["UTC"],
+    });
+    expect(
+      asReader.flatMap(group => group.zones).filter(zone => zone === "UTC")
+    ).toHaveLength(1);
+  });
+
   it("drops a scheduled zone the platform cannot read", () => {
     const groups = calendarZoneGroups({
       reader: "UTC",
