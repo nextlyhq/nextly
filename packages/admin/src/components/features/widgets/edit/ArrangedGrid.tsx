@@ -40,6 +40,7 @@ import type { DropLine } from "./drag/drop-geometry";
 import type { CardDrag } from "./drag/useCardDrag";
 import type { CellDrag } from "./DraggableWidgetCell";
 import type { CellSettingsWrite } from "./useCardQuickSetting";
+import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 import type { ArrangedWidget } from "./useDashboardArrangement";
 import type { DashboardFocus } from "./useDashboardFocus";
 
@@ -81,7 +82,7 @@ export interface ArrangedGridProps {
             placementId: string,
             title: string,
             config: Record<string, unknown>,
-            callbacks: { onLanded: () => void; onFailed: () => void }
+            callbacks: CardSettingsWriteCallbacks
           ) => void;
           isWriting: boolean;
           unavailable?: string;

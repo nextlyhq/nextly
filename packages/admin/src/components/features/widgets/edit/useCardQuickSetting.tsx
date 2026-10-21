@@ -27,13 +27,14 @@ import {
   quickValueLabel,
   type QuickSetting,
 } from "./quick-setting";
+import type { CardSettingsWriteCallbacks } from "./useCardSettingsWrite";
 import { initialValues, toStoredConfig } from "./WidgetSettingsSheet";
 
 /** How a cell at rest saves its card's settings, bound to that card by the grid. */
 export interface CellSettingsWrite {
   write: (
     config: Record<string, unknown>,
-    callbacks: { onLanded: () => void; onFailed: () => void }
+    callbacks: CardSettingsWriteCallbacks
   ) => void;
   /** A layout write is in flight anywhere on the dashboard. */
   isWriting: boolean;

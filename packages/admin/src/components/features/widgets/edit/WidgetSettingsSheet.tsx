@@ -10,6 +10,11 @@
  * uses, because a widget setting IS a field definition. A reader meets the
  * inputs they already know, and a plugin author gets a settings form without
  * writing one.
+ *
+ * Done is the one way to keep a change, and what it does depends on where the
+ * reader is (`onDone`): while customising it joins the dashboard's unsaved
+ * changes and the sheet closes; at rest it is saved at once, and the sheet
+ * stays open until the save lands, saying why in place when it does not.
  */
 import {
   Button,
@@ -21,7 +26,7 @@ import {
   SheetTitle,
 } from "@nextlyhq/ui";
 import type { AnyWidgetSetting, PublishedContentSource } from "nextly/config";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FormProvider, useForm } from "react-hook-form";
 
 import { FieldRenderer } from "@admin/components/features/entries/fields/FieldRenderer";
@@ -45,7 +50,19 @@ export interface WidgetSettingsSheetProps {
   settings: AnyWidgetSetting[];
   /** What this placement has stored, if anything. */
   config: Record<string, unknown> | undefined;
-  onSave: (config: Record<string, unknown>) => void;
+  /**
+   * Keep the settings, as `toStoredConfig` builds them, and say how that ended: `saved` closes
+   * the sheet, `failed` keeps it open with the reason beside the form.
+   */
+  onDone: (config: Record<string, unknown>, settled: DoneSettled) => void;
+  /** Why Done cannot keep a change now, when it cannot; said in the sheet, and Done is off. */
+  blocked?: string;
+}
+
+/** How a Done ended, told back to the sheet that asked. */
+export interface DoneSettled {
+  saved: () => void;
+  failed: (message: string) => void;
 }
 
 /**
@@ -169,8 +186,12 @@ export function WidgetSettingsSheet({
   title,
   settings,
   config,
-  onSave,
+  onDone,
+  blocked,
 }: WidgetSettingsSheetProps) {
+  // A Done in flight, and why the last one did not keep the change.
+  const [saving, setSaving] = useState(false);
+  const [failure, setFailure] = useState<string | undefined>(undefined);
   // The collections and fields this reader may be offered, decided on the
   // server; absent until the session-gated half of the payload arrives.
   const sources = useBranding().widgetSources;
@@ -204,7 +225,10 @@ export function WidgetSettingsSheet({
   // what it opens with, and a value a notice says was reset is the value Save
   // writes. Never while it is open, where it would discard the reader's edits.
   useEffect(() => {
-    if (!open) form.reset(defaultValues);
+    if (!open) {
+      form.reset(defaultValues);
+      setFailure(undefined);
+    }
   }, [open, defaultValues, form]);
 
   // A filter, sort or grouping names fields of ONE collection: when a person
@@ -227,14 +251,34 @@ export function WidgetSettingsSheet({
 
   const submit = useCallback(
     (values: Record<string, unknown>) => {
-      onSave(toStoredConfig(settings, values, config));
-      onOpenChange(false);
+      setSaving(true);
+      setFailure(undefined);
+      onDone(toStoredConfig(settings, values, config), {
+        saved: () => {
+          setSaving(false);
+          onOpenChange(false);
+        },
+        failed: message => {
+          setSaving(false);
+          setFailure(message);
+        },
+      });
     },
-    [onSave, onOpenChange, settings, config]
+    [onDone, onOpenChange, settings, config]
+  );
+
+  // Not closed mid-save, by Cancel, Escape or the overlay: the save would land anyway, and the
+  // reader would be left not knowing whether it did.
+  const changeOpen = useCallback(
+    (next: boolean) => {
+      if (!next && saving) return;
+      onOpenChange(next);
+    },
+    [saving, onOpenChange]
   );
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={changeOpen}>
       <SheetContent side="right" className="w-full sm:max-w-md">
         <SheetHeader>
           <SheetTitle>{title} settings</SheetTitle>
@@ -254,6 +298,16 @@ export function WidgetSettingsSheet({
             }}
             className="flex flex-1 flex-col gap-4 overflow-y-auto px-4"
           >
+            {blocked === undefined ? null : (
+              <p role="status" className="text-sm text-muted-foreground">
+                {blocked}
+              </p>
+            )}
+            {failure === undefined ? null : (
+              <p role="alert" className="text-sm text-destructive">
+                {failure}
+              </p>
+            )}
             {stale.map(({ name, notice }) => (
               <p
                 key={name}
@@ -293,11 +347,14 @@ export function WidgetSettingsSheet({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => onOpenChange(false)}
+                disabled={saving}
+                onClick={() => changeOpen(false)}
               >
                 Cancel
               </Button>
-              <Button type="submit">Save</Button>
+              <Button type="submit" disabled={saving || blocked !== undefined}>
+                {saving ? "Saving…" : "Done"}
+              </Button>
             </SheetFooter>
           </form>
         </FormProvider>

@@ -299,7 +299,7 @@ function CardBody(props: {
 
 /**
  * What a card offers at rest: its quick setting, its dismiss control and menu (in its header,
- * or floated over an unframed card), and where its sheet's save goes.
+ * or floated over an unframed card), and where its sheet's Done goes.
  */
 function useRestingControls(
   props: ArrangedCellProps,
@@ -322,7 +322,7 @@ function useRestingControls(
   return {
     quick,
     ...dismissAffordance(widget, props, props.on.dismiss, menu),
-    saveSettings: settingsSaverFor(props),
+    done: doneFor(props),
   };
 }
 
@@ -347,16 +347,35 @@ function restingMenuFor(
 }
 
 /**
- * Where the sheet's save goes. Outside customise mode it is saved at once, through the same
- * write as the quick setting; while customising it is recorded in the draft, saved with the rest.
+ * Where the sheet's Done goes, decided by where the reader is when they press it, since the
+ * sheet stays open across a change of mode. While customising it is recorded in the draft, kept
+ * with the dashboard's other unsaved changes, and the sheet closes. Outside it, it is saved at
+ * once through the same write as the quick setting, and the sheet hears how that ended: it
+ * closes when the save lands and says why in place when it does not.
  */
-function settingsSaverFor(
-  props: ArrangedCellProps
-): (config: Record<string, unknown>) => void {
+function doneFor(props: ArrangedCellProps): {
+  done: ComponentProps<typeof WidgetSettingsSheet>["onDone"];
+  blocked: string | undefined;
+} {
   const write = props.settingsWrite;
-  if (props.isEditing || !write) return props.on.saveSettings;
-  return config =>
-    write.write(config, { onLanded: () => {}, onFailed: () => {} });
+  if (props.isEditing || !write) {
+    return {
+      done: (config, settled) => {
+        props.on.saveSettings(config);
+        settled.saved();
+      },
+      blocked: undefined,
+    };
+  }
+  return {
+    done: (config, settled) =>
+      write.write(config, {
+        onLanded: settled.saved,
+        onFailed: settled.failed,
+        showsFailure: true,
+      }),
+    blocked: write.unavailable,
+  };
 }
 
 /** The cell's classes: its width, its collapse when empty, and its spacing. */
@@ -441,7 +460,7 @@ export function ArrangedCell(props: ArrangedCellProps) {
     quick,
     floating: floatingControl,
     header: dismissControl,
-    saveSettings,
+    done,
   } = useRestingControls(props, widget, hasSettings, setSettingsOpen);
   const width = drawnWidth(row.width, row.allowedWidths);
 
@@ -490,7 +509,8 @@ export function ArrangedCell(props: ArrangedCellProps) {
           title={widget.title}
           settings={widget.settings ?? []}
           config={row.config}
-          onSave={saveSettings}
+          onDone={done.done}
+          {...(done.blocked === undefined ? {} : { blocked: done.blocked })}
         />
       ) : null}
       <CardBody
