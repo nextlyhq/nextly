@@ -10,8 +10,9 @@
  * Each test seeds its own translated collection through the admin API, as the Builder would have
  * saved it. Safe to write against: the suite owns its database and empties it before every run.
  */
-import { expect, test, type Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 const API = "/admin/api";
