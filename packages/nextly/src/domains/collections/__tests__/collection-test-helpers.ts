@@ -286,6 +286,7 @@ const EVERY_ACTION: readonly AccessOperation[] = [
 const callerAccess = {
   actions: new Set<AccessOperation>(EVERY_ACTION),
   failure: undefined as Error | undefined,
+  superAdmin: false,
 };
 
 const SUITE_COLLECTIONS = ["posts"];
@@ -307,9 +308,15 @@ export function callerLookupFails(error: Error): void {
   callerAccess.failure = error;
 }
 
+/** A signed-in user holds super-admin authority. */
+export function callerIsSuperAdmin(): void {
+  callerAccess.superAdmin = true;
+}
+
 export function resetCallerAccess(): void {
   callerAccess.actions = new Set(EVERY_ACTION);
   callerAccess.failure = undefined;
+  callerAccess.superAdmin = false;
 }
 
 /**
@@ -328,7 +335,7 @@ export const fakeActorForUser = vi.fn(
     if (callerAccess.failure) throw callerAccess.failure;
     return userActor({
       userId,
-      roles: [],
+      roles: callerAccess.superAdmin ? ["super-admin"] : [],
       permissions: SUITE_COLLECTIONS.flatMap(resource =>
         [...callerAccess.actions].map(action => ({
           slug: `${action}-${resource}`,
@@ -341,12 +348,13 @@ export const fakeActorForUser = vi.fn(
 );
 
 /**
- * Stands in for `userIsSuperAdmin`: nobody these suites sign in as holds
- * super-admin authority. Mock it beside {@link fakeActorForUser}.
+ * Stands in for `userIsSuperAdmin`: whether the user holds super-admin
+ * authority, set with {@link callerIsSuperAdmin}. Mock it beside
+ * {@link fakeActorForUser}.
  */
 export const fakeUserIsSuperAdmin = vi.fn(async (_userId: string) => {
   if (callerAccess.failure) throw callerAccess.failure;
-  return false;
+  return callerAccess.superAdmin;
 });
 
 /**

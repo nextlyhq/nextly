@@ -20,12 +20,7 @@ import {
   type AuthenticatedScope,
 } from "../authenticated-scope";
 
-import {
-  holdsPermission,
-  isSuperAdmin,
-  type Actor,
-  type UserActor,
-} from "./actor";
+import { holdsPermission, type Actor, type UserActor } from "./actor";
 import {
   askRule,
   askRules,
@@ -35,6 +30,7 @@ import {
   plainRule,
   type AccessTarget,
   type Decision,
+  type RuleOutcome,
 } from "./decide";
 import { deviate } from "./deviations";
 import {
@@ -215,10 +211,11 @@ async function keyVerdict(
     );
   }
   if (isLifecycle(q.action)) {
-    const today = slugHolds && (await ruleAllows(actor, q.action, target));
+    const outcome = await askRule(actor, q.action, target);
+    const today = slugHolds && outcomeAllows(outcome);
     return verdictOf(
       await deviate("lifecycle-judged-alone", today, () =>
-        decided(actor, q.action, target)
+        decidedFrom(actor, q.action, target, outcome)
       )
     );
   }
@@ -239,15 +236,28 @@ function rowsAgree(scope: AuthenticatedScope): boolean {
 }
 
 /** A key's rule allows only by answering `true`; no rule adds no limit. */
-async function ruleAllows(
-  actor: Actor,
-  action: AccessOperation,
-  target: AccessTarget
-): Promise<boolean> {
-  if (actor.kind === "system") return true;
-  const outcome = await askRule(actor, action, target);
+function outcomeAllows(outcome: RuleOutcome): boolean {
   if (!outcome.declared) return true;
   return !("threw" in outcome) && outcome.value === true;
+}
+
+/**
+ * The decision's answer from the action rule's outcome the gate has already
+ * asked, so the rule runs once however its answer is compared. For a publish
+ * or an unpublish its own rule lets through, the update rule, which the gate
+ * itself does not ask, is asked here.
+ */
+async function decidedFrom(
+  actor: Exclude<Actor, { kind: "system" }>,
+  action: AccessOperation,
+  target: AccessTarget,
+  outcome: RuleOutcome
+): Promise<boolean> {
+  const update =
+    isLifecycle(action) && outcomeAllows(outcome)
+      ? await askRule(actor, "update", target)
+      : undefined;
+  return judge(actor, action, target, { action: outcome, update }).allowed;
 }
 
 /** How a signed-in user's verdict is asked, by what the target declares. */
@@ -344,18 +354,19 @@ async function ruleVerdict({
   userId,
   looked,
 }: UserAsk): Promise<GateVerdict> {
-  const actor = await looked();
-  // A super-admin passes without the rule being read, and a user named by no
-  // id holds nothing, so neither asks it.
-  if (isSuperAdmin(actor) || !userId) {
-    return answerOf(judge(actor, q.action, target, null));
+  // A user named by no id holds nothing, and a super-admin passes every rule:
+  // neither asks the rule, nor needs the caller's whole access read for it.
+  if (!userId) return INSUFFICIENT;
+  if (await userIsSuperAdmin(userId, { executor: q.executor })) {
+    return ALLOWED;
   }
+  const actor = await looked();
   const outcome = await askRule(actor, q.action, target);
   const today =
     outcome.declared && !("threw" in outcome) && Boolean(outcome.value);
   return verdictOf(
     await deviate("rule-alone-for-people", today, () =>
-      decided(actor, q.action, target)
+      decidedFrom(actor, q.action, target, outcome)
     )
   );
 }

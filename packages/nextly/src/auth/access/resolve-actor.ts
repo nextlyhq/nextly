@@ -40,8 +40,8 @@ import {
 /**
  * A signed-in user's actor. With `executor`, the lookups read the caller's
  * transaction rather than the pool, as the gates' own lookups do inside one.
- * A failed lookup answers no roles and no permissions, which refuses, as the
- * lookups the gates make today fail closed.
+ * A lookup that fails refuses rather than answering empty: it throws, as the
+ * role and grant lookups do, and the gate denies.
  */
 export async function actorForUser(
   userId: string,
