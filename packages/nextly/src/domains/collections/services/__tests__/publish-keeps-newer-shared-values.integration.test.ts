@@ -48,8 +48,13 @@ async function boot(
         localized: true,
         status: true,
         versions: { drafts: true, maxPerDoc },
-        // The title is translated; the count is shared by every language.
-        fields: [text({ name: "title" }), number({ name: "articleCount" })],
+        // The title is translated; the count and the note are shared by
+        // every language.
+        fields: [
+          text({ name: "title" }),
+          number({ name: "articleCount" }),
+          text({ name: "note", localized: false }),
+        ],
       }),
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
@@ -397,6 +402,92 @@ describe.each(getConfiguredTestDialects())(
       // And it still answers the question it was kept for.
       const refused = await publish(entries, id, "en");
       expect(refused.publicData).toEqual({ outOfDate: ["articleCount"] });
+    });
+
+    it("names a shared text whose new value differs only in spacing from JSON", async () => {
+      // Text that happens to look like JSON is text: a different spelling is
+      // a different value, and putting the old one back is a reversion.
+      const entries = await boot(dialect);
+      const id = await live(entries);
+      expect((await save(entries, id, "en", { note: '{"a":1}' })).success).toBe(
+        true
+      );
+      expect((await publish(entries, id, "en")).success).toBe(true);
+      expect(
+        (await save(entries, id, "en", { title: "en edited" })).success
+      ).toBe(true);
+      expect(
+        (await save(entries, id, "es", { note: '{ "a": 1 }' })).success
+      ).toBe(true);
+      expect((await publish(entries, id, "es")).success).toBe(true);
+
+      const refused = await publish(entries, id, "en");
+
+      expect(refused.statusCode).toBe(409);
+      expect(refused.publicData).toEqual({ outOfDate: ["note"] });
+    });
+
+    it("keeps the base an in-place save made current when retention keeps one version", async () => {
+      // With a cap of 1, the version that matches live is the one the next
+      // save's retention would prune; recorded first, it is kept.
+      const entries = await boot(dialect, 1);
+      const id = await live(entries, { spanish: false });
+      expect(
+        (
+          await save(entries, id, "es", {
+            title: "es",
+            articleCount: 13,
+            status: "draft",
+          })
+        ).success
+      ).toBe(true);
+      // English changes the count itself; nobody publishes meanwhile.
+      expect(
+        (await save(entries, id, "en", { articleCount: 14 })).success
+      ).toBe(true);
+
+      const published = await publish(entries, id, "en");
+
+      expect(published.success).toBe(true);
+      expect((await liveValues(entries, id, "en")).articleCount).toBe(14);
+    });
+
+    it("still refuses writing every language while a language holds a change", async () => {
+      // A collection has no publish of every language that applies pending
+      // changes: the every-language write refuses, so no shared value moves.
+      const entries = await boot(dialect);
+      const id = await spanishPublishesThirteen(entries);
+
+      const refused = await entries.updateEntry(
+        {
+          collectionName: COLLECTION,
+          entryId: id,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "published" }
+      );
+
+      expect(refused.statusCode).toBe(409);
+      expect((await liveValues(entries, id, "en")).articleCount).toBe(13);
+      expect(await pendingLocales(id)).toEqual(["en"]);
+    });
+
+    it("says there is no pending change to bring up to date, as a missing resource", async () => {
+      const entries = await boot(dialect);
+      const id = await live(entries);
+
+      const missing = await entries.takeLiveSharedValues({
+        collectionName: COLLECTION,
+        entryId: id,
+        overrideAccess: true,
+        locale: "en",
+      });
+
+      expect({ statusCode: missing.statusCode, code: missing.code }).toEqual({
+        statusCode: 404,
+        code: "NOT_FOUND",
+      });
     });
   }
 );

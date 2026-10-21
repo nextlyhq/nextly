@@ -269,8 +269,9 @@ export async function releaseSharedBase(
 
 /**
  * The shared fields a pending change may not publish: those whose live value
- * has moved off the change's base. A change with no base compares its own
- * values with live instead.
+ * has moved off the change's base, where the change does not already hold the
+ * live value. A change with no base compares its own values with live
+ * instead.
  *
  * @param live The live document, shaped as a version snapshot is.
  * @param pending The pending change's snapshot.
@@ -289,10 +290,14 @@ export async function outOfDateSharedFields(
   // Only the fields the change holds: a snapshot without a field writes
   // nothing to it.
   const held = args.shared.filter(name => name in pending);
+  // Where the change already holds the live value, publishing it puts back
+  // nothing, whatever the base says: a field whose live value was taken stays
+  // current though the base stays put for another left behind.
+  const changed = differingFields(held, pending, live);
   const base = await baseSnapshotOf(tx, ref, locale);
-  return base
-    ? differingFields(held, base, live)
-    : differingFields(held, pending, live);
+  if (!base) return changed;
+  const moved = new Set(differingFields(held, base, live));
+  return changed.filter(name => moved.has(name));
 }
 
 /** The snapshot a pending change's base pins, or null when it has none. */
