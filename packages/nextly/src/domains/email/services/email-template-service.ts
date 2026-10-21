@@ -399,7 +399,7 @@ export class EmailTemplateService extends BaseService {
     this.registry = registry;
     for (const refusal of refused) {
       this.logger.error(
-        'Refused a plugin\'s email template: it names an engine there is none of (use "liquid" or "legacy")',
+        `Refused a plugin's email template: ${refusal.reason}`,
         {
           slug: refusal.slug,
           plugin: refusal.plugin,
@@ -1587,10 +1587,11 @@ export class EmailTemplateService extends BaseService {
    * declares legacy, or (undeclared) one Liquid can't read, is kept on the
    * old engine. One Liquid reads is released to Liquid when the owner
    * declares it Liquid, when it has just replaced the version the mark was
-   * recorded for, or when the mark names text the row no longer holds (a
-   * release that failed after the owner's write). A mark the switch recorded
-   * for text the row still holds stays: that template renders as it always
-   * did.
+   * recorded for, when the mark was recorded for a legacy declaration the
+   * owner has since dropped, or when the mark names text the row no longer
+   * holds (a release that failed after the owner's write). A mark the switch
+   * recorded for text the row still holds stays: that template renders as it
+   * always did.
    */
   private async settleOwnersEngine(
     row: StoredTemplateRow,
@@ -1601,18 +1602,58 @@ export class EmailTemplateService extends BaseService {
     const key = keptKey(row.id);
     const mark = await this.meta.getEntry<string>(key);
     if (this.keepsOwnersVersion(entry)) {
-      if (!mark.present) {
-        await this.meta.insertIfAbsent(key, flaggedDigests(entry.version));
-      }
+      if (!mark.present) await this.meta.insertIfAbsent(key, ownersMark(entry));
       return;
     }
     if (!mark.present) return;
+    const recorded = mark.value ?? "";
     if (
       entry.engine === "liquid" ||
       replaced ||
-      recordedForOtherText(mark.value ?? "", row)
+      declaredLegacy(recorded) ||
+      recordedForOtherText(recorded, row)
     ) {
-      await this.meta.delete(key);
+      await this.releaseOwnersVersion(row, entry, recorded);
+    }
+  }
+
+  /**
+   * Release a row holding its owner's version to Liquid. A site save that
+   * landed meanwhile was checked while the template was kept, so Liquid never
+   * read it: the mark goes back, as a confirmation overtaken by a save does.
+   */
+  private async releaseOwnersVersion(
+    row: StoredTemplateRow,
+    entry: OwnedTemplate,
+    recorded: string
+  ): Promise<void> {
+    await this.meta.delete(keptKey(row.id));
+    const after = await this.getRowBySlug(row.slug);
+    if (
+      after &&
+      (after.overridden === true ||
+        !sameVersion(versionOf(after), entry.version))
+    ) {
+      await this.meta.insertIfAbsent(keptKey(row.id), recorded);
+    }
+  }
+
+  /**
+   * Settle the engine of a row a running owner has just taken, if it now
+   * follows that owner's version (see settleOwnersEngine).
+   */
+  private async settleIfFollowing(
+    slug: string,
+    entry: OwnedTemplate
+  ): Promise<void> {
+    const after = await this.getRowBySlug(slug);
+    if (
+      after &&
+      after.overridden !== true &&
+      after.ownerKind === storedOwner(entry.owner).ownerKind &&
+      sameVersion(versionOf(after), entry.version)
+    ) {
+      await this.settleOwnersEngine(after, entry, false);
     }
   }
 
@@ -1926,6 +1967,9 @@ export class EmailTemplateService extends BaseService {
         baseDigest: null,
       })
       .where(where);
+    // It now follows the owner, so it renders on the engine the owner's
+    // version was written for.
+    await this.settleIfFollowing(row.slug, entry);
   }
 
   /**
@@ -2028,9 +2072,7 @@ export class EmailTemplateService extends BaseService {
     if (!this.keepsOwnersVersion(entry)) return { kept: false, created: false };
     const key = keptKey(id);
     const present = (await this.meta.getEntry(key)).present;
-    if (!present) {
-      await this.meta.insertIfAbsent(key, flaggedDigests(entry.version));
-    }
+    if (!present) await this.meta.insertIfAbsent(key, ownersMark(entry));
     return { kept: true, created: !present };
   }
 
@@ -2192,6 +2234,32 @@ function flaggedDigests(template: LiquidFieldValues): string {
       ])
     )
   );
+}
+
+/**
+ * In a kept mark, the owner's declaration it was recorded for. A mark the
+ * switch recorded has none, so dropping a declaration never releases one.
+ */
+const DECLARED = "declared";
+
+/** The mark an owner's version is kept on the old engine with. */
+function ownersMark(entry: OwnedTemplate): string {
+  if (entry.engine !== "legacy") return flaggedDigests(entry.version);
+  const digests = JSON.parse(flaggedDigests(entry.version)) as Record<
+    string,
+    string
+  >;
+  return JSON.stringify({ ...digests, [DECLARED]: "legacy" });
+}
+
+/** Whether a kept mark was recorded for an owner's legacy declaration. */
+function declaredLegacy(recorded: string): boolean {
+  try {
+    const mark = JSON.parse(recorded) as Record<string, unknown> | null;
+    return mark?.[DECLARED] === "legacy";
+  } catch {
+    return false;
+  }
 }
 
 /**

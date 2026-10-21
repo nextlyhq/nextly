@@ -181,8 +181,9 @@ export interface PluginEmailTemplate {
    *   Liquid whose text means something else to Liquid.
    *
    * Left out, a template is rendered as Liquid, unless Liquid can't read it,
-   * in which case it is rendered as `"legacy"` is. Any other value is
-   * refused at startup and the template is not registered.
+   * in which case it is rendered as `"legacy"` is. Any other value, and
+   * `"liquid"` on text Liquid can't read, is refused at startup and the
+   * template is not registered.
    */
   engine?: "liquid" | "legacy";
 }

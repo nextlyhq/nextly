@@ -606,6 +606,99 @@ for (const dialect of getConfiguredTestDialects()) {
         );
       });
 
+      it("puts a row a plugin takes over on the engine the plugin declares", async () => {
+        const t = await boot(dialect);
+        // Stored before Liquid exactly as each plugin ships it.
+        const liquidId = await storeAsBefore(
+          t,
+          dialect,
+          "promo-liquid",
+          FILTER
+        );
+        const legacyId = await storeAsBefore(t, dialect, "promo-legacy", PLAIN);
+        await seedPluginTemplates(t, [
+          {
+            name: "promo-liquid",
+            slug: "promo-liquid",
+            subject: "Hello {{name}}",
+            htmlContent: FILTER,
+            engine: "liquid",
+          },
+          {
+            name: "promo-legacy",
+            slug: "promo-legacy",
+            subject: "Hello {{name}}",
+            htmlContent: PLAIN,
+            engine: "legacy",
+          },
+        ]);
+        expect((await templates(t).oldEngineStatus(liquidId)).kept).toBe(false);
+        expect((await templates(t).oldEngineStatus(legacyId)).kept).toBe(true);
+      });
+
+      it("refuses a template declared Liquid that Liquid can't read", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        const service = templates(t) as unknown as {
+          logger: { error: (...args: unknown[]) => void };
+        };
+        const errors = vi.spyOn(service.logger, "error");
+        await shipping(t, UNREADABLE, "liquid");
+        expect(errors).toHaveBeenCalledWith(
+          expect.stringContaining("declared Liquid and Liquid can't read it"),
+          expect.objectContaining({ slug: "promo", plugin: "promo-plugin" })
+        );
+        errors.mockRestore();
+        expect(
+          await t.nextly.emailTemplates.findBySlug({
+            slug: "promo",
+            disableErrors: true,
+          })
+        ).toBeNull();
+      });
+
+      it("releases a template to Liquid when its plugin drops a legacy declaration", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        await shipping(t, LEGACY_TEXT, "legacy");
+        const id = (await promo(t)).id;
+        expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
+        await shipping(t, LEGACY_TEXT);
+        expect((await templates(t).oldEngineStatus(id)).kept).toBe(false);
+        expect((await rendered(t)).html).toBe(
+          "<p>VIP PRIYA &lt;3 Priya &lt;3</p>"
+        );
+      });
+
+      it("keeps a template on the old engine when a site save overtakes its release", async () => {
+        const t = await boot(dialect);
+        await templates(t).ensureBuiltInTemplates();
+        await shipping(t, LEGACY_TEXT, "legacy");
+        const id = (await promo(t)).id;
+        const meta = (
+          templates(t) as unknown as {
+            meta: { delete(key: string): Promise<void> };
+          }
+        ).meta;
+        const original = meta.delete.bind(meta);
+        // Checked while the template is kept, the site's save lands just
+        // before the release deletes the mark.
+        const saved = "<p>Site: {% if vip %}VIP{% endif %} {{name}}</p>";
+        const spy = vi
+          .spyOn(meta, "delete")
+          .mockImplementationOnce(async (key: string) => {
+            await t.nextly.emailTemplates.update({
+              id,
+              data: { htmlContent: saved },
+            });
+            return original(key);
+          });
+        await shipping(t, LEGACY_TEXT, "liquid");
+        spy.mockRestore();
+        expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
+        expect((await rendered(t)).html).toBe(interpolateTemplate(saved, DATA));
+      });
+
       it("releases at the next boot a template whose release failed after its owner's version was written", async () => {
         const t = await boot(dialect);
         await templates(t).ensureBuiltInTemplates();

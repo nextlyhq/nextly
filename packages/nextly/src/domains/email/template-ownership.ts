@@ -22,6 +22,7 @@ import type {
   EmailTemplateVersion,
 } from "../../schemas/email-templates/types";
 
+import { parseLiquid } from "./services/liquid-engine";
 import type { EmailConfig } from "./types";
 
 /** An owner as the registry records it: a plugin there is always running. */
@@ -341,11 +342,40 @@ export interface RegistryConflict {
   ignored: string;
 }
 
-/** A contribution refused because it names an engine there is none of. */
+/**
+ * A contribution refused for its engine: it names one there is none of, or
+ * declares Liquid and Liquid can't read it, which would fail every send.
+ */
 export interface RefusedEngine {
   slug: string;
   plugin: string;
   engine: unknown;
+  /** Why, in a sentence the log shows. */
+  reason: string;
+}
+
+/** Why a contribution can't be registered on the engine it declares, or null. */
+function engineRefusal(template: PluginEmailTemplate): string | null {
+  const engine: unknown = template.engine;
+  if (engine === undefined) return null;
+  if (!TEMPLATE_ENGINES.has(engine as string)) {
+    return 'it names an engine there is none of (use "liquid" or "legacy")';
+  }
+  if (engine !== "liquid") return null;
+  for (const [field, context] of [
+    ["subject", "text"],
+    ["htmlContent", "html"],
+    ["plainTextContent", "text"],
+  ] as const) {
+    const source = template[field];
+    const parsed = source ? parseLiquid(source, context) : null;
+    if (parsed && "problem" in parsed) {
+      const { line, message } = parsed.problem;
+      const where = line !== null ? `${field}, line ${line}` : field;
+      return `it is declared Liquid and Liquid can't read it (${where}: ${message})`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -373,9 +403,14 @@ export function buildTemplateOwnerRegistry(input: RegistryInput): {
       // Checked here as well as by the type: a plugin built without it, or
       // one older than a rename, must not have its template rendered on an
       // engine it never named.
-      const engine: unknown = template.engine;
-      if (engine !== undefined && !TEMPLATE_ENGINES.has(engine as string)) {
-        refused.push({ slug: template.slug, plugin: plugin.name, engine });
+      const reason = engineRefusal(template);
+      if (reason !== null) {
+        refused.push({
+          slug: template.slug,
+          plugin: plugin.name,
+          engine: template.engine,
+          reason,
+        });
         continue;
       }
       const existing = map.get(template.slug);
