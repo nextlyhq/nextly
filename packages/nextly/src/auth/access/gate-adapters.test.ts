@@ -92,6 +92,31 @@ describe("a rule function", () => {
   });
 });
 
+describe("a key that lacks the grant", () => {
+  it("is refused a publish without its rule being asked", async () => {
+    // Today's key check refuses on the missing grant before reading the rule,
+    // so a rule an unauthorised key cannot pass never runs for it.
+    const publish = vi.fn(() => true);
+    const grants = ["read", "update"].map(action => ({
+      slug: `${action}-posts`,
+      action,
+      resource: "posts",
+    }));
+    const verdict = await collectionGateVerdict(
+      asked(
+        { publish },
+        {
+          action: "publish",
+          user: { id: "owner" },
+          scope: apiKeyScope(grants, ["editor"]),
+        }
+      )
+    );
+    expect(verdict.allowed).toBe(false);
+    expect(publish).not.toHaveBeenCalled();
+  });
+});
+
 describe("a super-admin named only by id", () => {
   it("passes a rule function without the caller's whole access being read", async () => {
     callerIsSuperAdmin();

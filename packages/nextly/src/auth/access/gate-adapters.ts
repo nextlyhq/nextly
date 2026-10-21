@@ -211,8 +211,11 @@ async function keyVerdict(
     );
   }
   if (isLifecycle(q.action)) {
+    // A key without the grant is refused before its rule is read, as today
+    // and as the decision does: it lacks the permission either way.
+    if (!slugHolds) return INSUFFICIENT;
     const outcome = await askRule(actor, q.action, target);
-    const today = slugHolds && outcomeAllows(outcome);
+    const today = outcomeAllows(outcome);
     return verdictOf(
       await deviate("lifecycle-judged-alone", today, () =>
         decidedFrom(actor, q.action, target, outcome)
