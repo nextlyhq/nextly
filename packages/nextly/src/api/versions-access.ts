@@ -301,6 +301,43 @@ export async function historyLanguagesOf(
 }
 
 /**
+ * Refuse a caller the language of one version, before anything is written or
+ * returned about it. Returns the version's part, or undefined when there is no
+ * such version, which the read or write that follows refuses in its own way.
+ * Shared by REST's version routes and the plugin service's checked label.
+ */
+export async function assertVersionLanguageReadable(
+  document: {
+    scopeKind: VersionScopeKind;
+    slug: string;
+    entryId: string;
+    user: UserContext;
+    authenticatedScope?: AuthenticatedScope;
+  },
+  versionNo: number
+): Promise<string | null | undefined> {
+  const part = await getService("versionsService").partOfVersion(
+    {
+      scopeKind: document.scopeKind,
+      scopeSlug: document.slug,
+      entryId: document.entryId,
+    },
+    versionNo
+  );
+  if (part === undefined) return undefined;
+  await assertHistoryLocalesReadable(
+    document.scopeKind,
+    document.slug,
+    document.entryId,
+    document.user,
+    document.authenticatedScope,
+    {},
+    [part]
+  );
+  return part;
+}
+
+/**
  * The languages of a document the caller may read its history in.
  *
  * Asked of the document's read in each language, because a read rule or hook

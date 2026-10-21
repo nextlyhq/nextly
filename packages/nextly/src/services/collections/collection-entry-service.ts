@@ -873,7 +873,7 @@ export class CollectionEntryService extends BaseService {
   // naming the language of the pending change it is discarding could not say so.
   async discardWorkingDraft(
     params: Parameters<CollectionMutationService["discardWorkingDraft"]>[0]
-  ): Promise<void> {
+  ): Promise<number> {
     // The draft is deleted under the language as named, so one the site no
     // longer configures is told every language, not the default.
     return withRuleLanguage(

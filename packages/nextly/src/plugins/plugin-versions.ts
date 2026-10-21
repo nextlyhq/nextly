@@ -23,6 +23,7 @@
 import {
   assertDocumentUpdatable,
   assertVersionDocumentReadable,
+  assertVersionLanguageReadable,
   redactSnapshotForUser,
   resolveVersionsPolicy,
   stripAutosavePasswords,
@@ -291,7 +292,6 @@ function refuseOtherAuthor(
  * the key's owner, who did not make it. The count is of the drafts removed.
  */
 async function discardAsWriter(
-  versions: VersionsService,
   ref: VersionRef,
   locale: string | null,
   writer: HistoryWriter
@@ -311,8 +311,7 @@ async function discardAsWriter(
   // Only collections and Singles have a working draft; page history was
   // refused before this, when the writer was judged.
   const scopeKind = ref.scopeKind === "single" ? "single" : "collection";
-  const before = await versions.listWorkingDraftParts(ref);
-  await discardWorkingDraft({
+  const { removed } = await discardWorkingDraft({
     scopeKind,
     slug: ref.scopeSlug,
     entryId: ref.entryId,
@@ -321,8 +320,7 @@ async function discardAsWriter(
     authenticatedScope: writer.authenticatedScope,
     actor: writer.actor,
   });
-  const after = await versions.listWorkingDraftParts(ref);
-  return Math.max(0, before.length - after.length);
+  return removed;
 }
 
 /** `ctx.services.versions`' writes, over the host's versions service. */
@@ -337,6 +335,19 @@ export function pluginVersionWrites(
         if (by && !namesWriter(by.actor, writer)) {
           refuseOtherAuthor(ref, "label");
         }
+        // The version is named in its own language's history, so the writer
+        // must be able to read that language before it is named or handed
+        // back, as REST's label route asks.
+        await assertVersionLanguageReadable(
+          {
+            scopeKind: ref.scopeKind,
+            slug: ref.scopeSlug,
+            entryId: ref.entryId,
+            user: writer.user,
+            authenticatedScope: writer.authenticatedScope,
+          },
+          versionNo
+        );
         // The namer is the writer, by the name the writer is known by: never
         // a name the plugin passes, which could be anyone's. A key whose own
         // id is not known here is named by no one, as an event naming its
@@ -364,7 +375,7 @@ export function pluginVersionWrites(
       return asCalled(opts, async resolved => {
         const writer = await checkedWriter(ref, resolved, "discard");
         if (!writer) return service().deleteWorkingDraft(ref, locale);
-        return discardAsWriter(service(), ref, locale, writer);
+        return discardAsWriter(ref, locale, writer);
       });
     },
 

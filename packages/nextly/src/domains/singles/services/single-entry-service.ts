@@ -218,7 +218,7 @@ export class SingleEntryService extends BaseService {
    */
   async discardWorkingDraft(
     params: Parameters<SingleMutationService["discardWorkingDraft"]>[0]
-  ): Promise<void> {
+  ): Promise<number> {
     // The draft is deleted under the language as named, so one the site no
     // longer configures is told every language, not the default.
     return withRuleLanguage(

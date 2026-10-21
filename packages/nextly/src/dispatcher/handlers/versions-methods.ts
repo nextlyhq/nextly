@@ -21,6 +21,7 @@ import {
 import {
   assertComparisonRequest,
   assertHistoryLocalesReadable,
+  assertVersionLanguageReadable,
   assertVersionDocumentReadable,
   assertDocumentUpdatable,
   compareDocumentVersions,
@@ -335,42 +336,6 @@ export async function getVersionForDocument(
   );
 
   return { ...row, withheld: [...withheld] };
-}
-
-/**
- * Refuse a caller the language of one version, before anything is written or
- * returned about it. Returns the version's part, or undefined when there is no
- * such version, which the read or write that follows refuses in its own way.
- */
-async function assertVersionLanguageReadable(
-  document: {
-    scopeKind: VersionScopeKind;
-    slug: string;
-    entryId: string;
-    user: UserContext;
-    authenticatedScope?: AuthenticatedScope;
-  },
-  versionNo: number
-): Promise<string | null | undefined> {
-  const part = await getService("versionsService").partOfVersion(
-    {
-      scopeKind: document.scopeKind,
-      scopeSlug: document.slug,
-      entryId: document.entryId,
-    },
-    versionNo
-  );
-  if (part === undefined) return undefined;
-  await assertHistoryLocalesReadable(
-    document.scopeKind,
-    document.slug,
-    document.entryId,
-    document.user,
-    document.authenticatedScope,
-    {},
-    [part]
-  );
-  return part;
 }
 
 /**
@@ -843,7 +808,7 @@ export async function discardWorkingDraftForDocument(
     authenticatedScope
   );
 
-  return discardWorkingDraft({
+  const { document } = await discardWorkingDraft({
     scopeKind: args.scopeKind,
     slug: args.slug,
     entryId: args.entryId,
@@ -852,6 +817,7 @@ export async function discardWorkingDraftForDocument(
     authenticatedScope,
     actor: readAuthenticatedActor(),
   });
+  return document;
 }
 
 /**

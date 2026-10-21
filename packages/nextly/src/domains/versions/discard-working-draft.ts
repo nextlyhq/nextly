@@ -80,9 +80,16 @@ export interface DiscardWorkingDraftArgs {
  * published document as a plain read would shape it. A no-op that still returns
  * the live row when no working draft exists.
  */
+/** What a discard leaves: the live document, and how many drafts it removed. */
+export interface DiscardedWorkingDraft {
+  document: unknown;
+  /** Counted by the delete made under the document's lock. */
+  removed: number;
+}
+
 export async function discardWorkingDraft(
   args: DiscardWorkingDraftArgs
-): Promise<unknown> {
+): Promise<DiscardedWorkingDraft> {
   // Read the live published row FIRST, through the full read pipeline (hooks,
   // redaction, field-level access) and WITHOUT the working-draft overlay, so it
   // is the live document the editor resets to. The delete below never touches
@@ -142,22 +149,21 @@ export async function discardWorkingDraft(
   // this request's authorization checks and the delete would otherwise have its
   // brand-new draft removed with both requests reporting success. Deleting when
   // none exists is a no-op, not an error.
-  if (args.scopeKind === "single") {
-    await getService("singleEntryService").discardWorkingDraft({
-      slug: args.slug,
-      locale: args.locale ?? null,
-      actor: args.actor,
-      user: args.user,
-    });
-  } else {
-    await getService("collectionsHandler").discardWorkingDraft({
-      collectionName: args.slug,
-      entryId: args.entryId,
-      locale: args.locale ?? null,
-      actor: args.actor,
-      user: args.user,
-    });
-  }
+  const removed =
+    args.scopeKind === "single"
+      ? await getService("singleEntryService").discardWorkingDraft({
+          slug: args.slug,
+          locale: args.locale ?? null,
+          actor: args.actor,
+          user: args.user,
+        })
+      : await getService("collectionsHandler").discardWorkingDraft({
+          collectionName: args.slug,
+          entryId: args.entryId,
+          locale: args.locale ?? null,
+          actor: args.actor,
+          user: args.user,
+        });
 
-  return result.data;
+  return { document: result.data, removed };
 }
