@@ -33,12 +33,12 @@ import {
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
-  localizedColumnsOnMain,
-  translatedColumnsOnCompanion,
+  liveCompanionShape,
 } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import {
@@ -873,11 +873,26 @@ const COLLECTIONS_METHODS: Record<
         },
       });
 
+      // The dialog's answer on a translated field's rename, refused when it does not say,
+      // before anything changes.
+      const companionRename = await resolveCompanionRename(renameResolutions, {
+        tableName,
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        dialect,
+        builtBy: "collection",
+      });
+
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await archiveFieldsLeavingTranslation({
         // This builder made the table, which decides the column bounds compared.
         builtBy: "collection",
+        // The rename the admin chose, or that none was; when none was offered (a storage change,
+        // or no single candidate), the preflight finds it from the fields and refuses what it must.
+        renamed: companionRename,
         tableName,
         defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
         adapter,
@@ -922,6 +937,7 @@ const COLLECTIONS_METHODS: Record<
             companionExists && wasLocalized && isLocalized
               ? await companionHasStatusColumn(adapter, `${tableName}_locales`)
               : undefined;
+          const renamed = companionRename ?? undefined;
           const plan = buildCompanionTransitionStatements({
             // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
             builtBy: "collection" as const,
@@ -942,26 +958,18 @@ const COLLECTIONS_METHODS: Record<
             newFields,
             companionExists,
             companionHasStatus,
-            // Which translatable columns the main table still carries. A disable must not re-add
-            // one that is already there, and must still restore it: presence says the column
-            // exists, never that its value is current, because every localized write went to the
-            // companion alone.
-            existingMainColumns: await localizedColumnsOnMain(
-              adapter,
-              tableName,
-              oldFields
-            ).then(cols => cols.map(c => c.name)),
             // Added to the companion, with their values, by the apply before its drop.
             joinedBefore: movedOnto(result, tableName),
-            // Taken as they are: an earlier apply that moved a value and stopped before the
-            // registry recorded it left its companion column in place.
-            presentOnCompanion: companionExists
-              ? await translatedColumnsOnCompanion(adapter, {
-                  tableName,
-                  fields: newFields,
-                  builtBy: "collection",
-                })
-              : undefined,
+            // A translated field the admin renamed: the dialog's answer naming the companion.
+            renamed,
+            // What this database holds now, so a re-apply after a part-applied one finishes it.
+            ...(await liveCompanionShape(adapter, {
+              tableName,
+              oldFields,
+              newFields,
+              builtBy: "collection",
+              companionExists,
+            })),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is

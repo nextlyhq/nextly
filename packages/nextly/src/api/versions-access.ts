@@ -1114,6 +1114,28 @@ async function pairingPart(
   return part ?? null;
 }
 
+/**
+ * Whether two versions' language tags name one part of the document. A
+ * document without languages has a single part, and its versions may be
+ * tagged with the default language (a component read in it) or with none:
+ * both name that part. A localized document's parts are its languages.
+ */
+async function onePart(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  a: string | null,
+  b: string | null
+): Promise<boolean> {
+  if (a === b) return true;
+  const entity = await registryEntityOf(scopeKind, slug);
+  if ((entity as { localized?: boolean } | null)?.localized === true) {
+    return false;
+  }
+  const defaultLocale =
+    getService("config").localization?.defaultLocale ?? null;
+  return [a, b].every(tag => tag === null || tag === defaultLocale);
+}
+
 /** The collection's or Single's registry record, or null when it is gone. */
 async function registryEntityOf(scopeKind: VersionScopeKind, slug: string) {
   return scopeKind === "single"
@@ -1186,7 +1208,9 @@ export async function diffDocumentVersions(args: {
     [fromRow.locale, toRow.locale]
   );
 
-  if (fromRow.locale !== toRow.locale) {
+  if (
+    !(await onePart(args.scopeKind, args.slug, fromRow.locale, toRow.locale))
+  ) {
     throw NextlyError.validation({
       errors: [
         {
@@ -1204,6 +1228,9 @@ export async function diffDocumentVersions(args: {
       },
     });
   }
+
+  // The pair's language: either's tag, since they name one part.
+  const pairLocale = fromRow.locale ?? toRow.locale;
 
   // Redact each snapshot for the caller BEFORE diffing, so the diff can never
   // surface a field the caller may not read. What either side withheld is
@@ -1251,13 +1278,13 @@ export async function diffDocumentVersions(args: {
     body.fields,
     args.user,
     args.authenticatedScope,
-    fromRow.locale
+    pairLocale
   );
 
   return {
     from: args.from,
     to: args.to,
-    locale: fromRow.locale,
+    locale: pairLocale,
     hasChanges: body.hasChanges,
     incomplete: body.incomplete,
     fields: body.fields,

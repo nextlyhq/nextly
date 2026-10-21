@@ -750,31 +750,73 @@ describe.each(getConfiguredTestDialects())(
       expect(seenByClerk).toHaveLength(seenByBoss.length);
     });
 
-    it("reports a deleted link by its field to a reader who may not read that collection", async () => {
+    it("tells a reader who may not read the linked collection the same of a live, a draft and a deleted target", async () => {
       const t = await boot(dialect);
       const author = await seedLiveAuthor(t);
+      // May read and add posts, and may not read categories.
       const { key } = await keyHolding(t, [
         "read-content-releases",
+        "create-content-releases",
         "read-posts",
+        "update-posts",
+        "publish-posts",
       ]);
-      const category = await entry(t, "categories", {}, "published");
-      const post = await entry(t, "posts", { category });
-      await t.nextly.delete({
-        collection: "categories" as never,
-        id: category,
-      });
-      const { releaseId } = await releaseWith(t, author, {
-        collection: "posts",
-        id: post,
-      });
-
-      const soft = (
-        (await rest(key, "GET", ["releases", releaseId, "readiness"])).json as {
-          soft: ReadinessFinding[];
+      const answers: unknown[] = [];
+      for (const state of ["published", "draft", "deleted"] as const) {
+        const category = await entry(
+          t,
+          "categories",
+          {},
+          state === "deleted" ? "published" : state
+        );
+        const post = await entry(t, "posts", { category });
+        if (state === "deleted") {
+          await t.nextly.delete({
+            collection: "categories" as never,
+            id: category,
+          });
         }
-      ).soft;
-      expect(linksIn(soft)).toEqual([["deleted", "category", "1"]]);
-      expect(JSON.stringify(soft)).not.toContain(category);
+        const { releaseId } = await releaseWith(t, author, {
+          collection: "posts",
+          id: post,
+        });
+        const soft = (
+          (await rest(key, "GET", ["releases", releaseId, "readiness"]))
+            .json as { soft: ReadinessFinding[] }
+        ).soft;
+        const own = await rest(key, "POST", ["releases"], { title: state });
+        const added = await rest(
+          key,
+          "POST",
+          ["releases", (own.json.item as { id: string }).id, "members"],
+          {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: post,
+            action: "publish",
+          }
+        );
+        const told = {
+          readiness: linksIn(soft),
+          add: (added.json.item as { unpublishedLinks: unknown })
+            .unpublishedLinks,
+        };
+        expect(JSON.stringify(told), state).not.toContain(category);
+        answers.push(told);
+      }
+      // One count each time, with no cause, field or id: nothing tells the
+      // three apart.
+      expect(answers).toEqual(
+        Array(3).fill({
+          readiness: [["hidden", "1"]],
+          add: {
+            links: [],
+            hiddenCount: 1,
+            inHiddenFields: 0,
+            deletedLinks: [],
+          },
+        })
+      );
     });
   }
 );

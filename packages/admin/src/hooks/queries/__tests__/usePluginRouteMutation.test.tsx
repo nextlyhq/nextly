@@ -46,8 +46,9 @@ function wrapper() {
   client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
-      // 🔴 MIRRORS the app's own `QueryProvider`, which sets
-      // `mutations.retry: MUTATION_RETRY_COUNT`. TanStack does not retry
+      // 🔴 MIRRORS the most the app's own `QueryProvider` retries: up to
+      // `MUTATION_RETRY_COUNT` times, for a refusal that says nothing ran
+      // (`shouldRetryMutation`), so here for every failure. TanStack does not retry
       // mutations by default, so a test client that stayed silent here could
       // never observe an unwanted retry — the guard against one would read as
       // covered while nothing exercised it. `retryDelay: 0` so the attempts

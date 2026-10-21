@@ -18,7 +18,9 @@ import {
   upload,
 } from "../../../config";
 import { getDialectTables } from "../../../database/index";
+import { container } from "../../../di/container";
 import { getWidget, registerWidget } from "../../../domains/widgets/registry";
+import type { RateLimitStore } from "../../../middleware/rate-limit";
 import type { Principal } from "../../../plugins/principals/types";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
 import { seedAllPermissions } from "../../../init/seed-permissions";
@@ -891,6 +893,26 @@ async function seedRefs(t: TestNextly, seeded: Map<string, Seeded>) {
   return String((made.item as { id: string | number }).id);
 }
 
+/**
+ * A limit store that counts nothing, so every limit admits.
+ *
+ * The table judges access, not limits, and no row's answer is one. Every
+ * request it makes comes from one address, so in the store core's limits
+ * count in, one per process as a site's is, its thousands of requests would
+ * spend a site's budget and answer 429 where a row asks about access.
+ */
+const UNCOUNTED_LIMITS: RateLimitStore = {
+  increment: (_key, windowMs) =>
+    Promise.resolve({ count: 0, resetTime: Date.now() + windowMs }),
+  reset: () => Promise.resolve(),
+  consume: (_key, _limit, windowMs) =>
+    Promise.resolve({
+      count: 0,
+      resetTime: Date.now() + windowMs,
+      allowed: true,
+    }),
+};
+
 export async function boot(dialect: TestDialect): Promise<World> {
   const t = await createTestNextly({
     ...(dialect === "sqlite" ? {} : { dialect }),
@@ -898,6 +920,12 @@ export async function boot(dialect: TestDialect): Promise<World> {
     singles: ruleSingles(),
     plugins: [probePlugin(), membersPlugin()],
   });
+  // Replaces the boot's registration outright, cached instance and all, so
+  // every limit core asks for counts in the store above.
+  container.register<RateLimitStore>(
+    "coreRateLimitStore",
+    () => UNCOUNTED_LIMITS
+  );
   // The suite only learns of the instance once this returns, so a seeding
   // failure takes it down here; otherwise its connections and its PostgreSQL
   // or MySQL database would outlive the failed run.

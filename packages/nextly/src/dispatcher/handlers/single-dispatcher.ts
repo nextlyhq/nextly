@@ -38,6 +38,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { resolveCompanionRename } from "../../domains/i18n/migration/companion-rename";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -1228,11 +1229,26 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       const adapter = getAdapterFromDI();
       if (!adapter) throw new Error("Database adapter not initialized");
+      // The dialog's answer on a translated field's rename, refused when it does not say,
+      // before anything changes.
+      const companionRename = await resolveCompanionRename(renameResolutions, {
+        tableName,
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        dialect: adapter.dialect,
+        // A Single's table is built by the collection's generator.
+        builtBy: "collection",
+      });
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await archiveFieldsLeavingTranslation({
         // This builder made the table, which decides the column bounds compared.
         builtBy: "collection",
+        // The rename the admin chose, or that none was; when none was offered (a storage change,
+        // or no single candidate), the preflight finds it from the fields and refuses what it must.
+        renamed: companionRename,
         tableName: single.tableName,
         defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
         adapter,
@@ -1327,6 +1343,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           adapter,
           // Added to the companion, with their values, by the apply before its drop.
           joinedBefore: movedOnto(result, tableName),
+          // A translated field the admin renamed: the dialog's answer naming the companion.
+          renamed: companionRename ?? undefined,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

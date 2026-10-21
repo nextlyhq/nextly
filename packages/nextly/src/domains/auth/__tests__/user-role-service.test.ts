@@ -34,6 +34,23 @@ vi.mock("../../users/services/last-super-admin", async importOriginal => {
   };
 });
 
+/** When set, the grant check fails as a lost connection would. */
+const grantRead = vi.hoisted(() => ({ fails: false }));
+
+vi.mock("../services/super-admin-grant", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../services/super-admin-grant")>();
+  return {
+    ...real,
+    refuseGrantingSuperAdmin: async (
+      ...args: Parameters<typeof real.refuseGrantingSuperAdmin>
+    ) => {
+      if (grantRead.fails) throw new Error("Connection lost: read ECONNRESET");
+      return real.refuseGrantingSuperAdmin(...args);
+    },
+  };
+});
+
 describe("UserRoleService", () => {
   let testDb: TestDb;
   let service: UserRoleService;
@@ -178,6 +195,33 @@ describe("UserRoleService", () => {
         expect(result.success).toBe(false);
         expect(result.statusCode).toBe(409);
         expect(result.message).toBe("Role already assigned to this user");
+      });
+    });
+
+    describe("when the grant check cannot read", () => {
+      afterEach(() => {
+        grantRead.fails = false;
+      });
+
+      // Reported as `{ success: false }`, the failure read as a result the
+      // caller could mistake for done, while the assignment had rolled back.
+      it("throws a typed error and assigns nothing", async () => {
+        const user = userFactory();
+        const role = roleFactory();
+        await testDb.db.insert(testDb.schema.users).values(user);
+        await testDb.db.insert(testDb.schema.roles).values(role);
+
+        grantRead.fails = true;
+        const err = await service.assignRoleToUser(user.id, role.id).then(
+          () => undefined,
+          (e: unknown) => e
+        );
+
+        expect(NextlyError.is(err), String(err)).toBe(true);
+        const userRoles = await testDb.db.query.userRoles.findMany({
+          where: { userId: user.id },
+        });
+        expectArrayLength(userRoles, 0);
       });
     });
   });
