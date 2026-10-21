@@ -226,8 +226,11 @@ function refuseTranslatedFieldsRemovedBesideAdded(
   // on the main table or the companion, a junction table, a field group's own table. A translated
   // field renamed to a type that is shared by default reads as one removed and one shared field
   // added. Only a virtual field stores nothing.
+  const storesSomething = (
+    f: LeavingFieldLike & { virtual?: unknown; options?: unknown }
+  ) => !isVirtualField(f);
   const added = args.newFields
-    .filter(f => !before.has(f.name) && !isVirtualField(f))
+    .filter(f => !before.has(f.name) && storesSomething(f))
     .map(f => f.name);
   const removed = oldFields.filter(
     f => !after.has(f.name) && isFieldLocalized(f, true)
