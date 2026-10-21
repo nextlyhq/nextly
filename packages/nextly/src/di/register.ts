@@ -3164,16 +3164,29 @@ async function registerWorkflows(
   transformedConfig: NextlyServiceConfig,
   databaseNotSetUp: boolean
 ): Promise<void> {
-  // Loaded here, not at the top: the config loader reaches back into this
-  // module's graph.
-  const { findNextlyConfig } = await import("../cli/utils/config-loader");
   publishWorkflows(
-    await buildWorkflowRegistry(
-      transformedConfig,
-      findNextlyConfig(process.cwd()) ?? null,
-      { judgeComponents: !databaseNotSetUp }
-    )
+    await buildWorkflowRegistry(transformedConfig, await bootConfigPath(), {
+      judgeComponents: !databaseNotSetUp,
+    })
   );
+}
+
+/**
+ * The `nextly.config.ts` this boot was configured from, as the loader finds
+ * it, or `null` when it cannot be found. The path is shown in Settings beside
+ * each workflow and decides nothing, so a boot whose config file cannot be
+ * located (an app that passes its config directly, a bundle without the
+ * file) records none rather than failing.
+ */
+async function bootConfigPath(): Promise<string | null> {
+  try {
+    // Loaded here, not at the top: the config loader reaches back into this
+    // module's graph.
+    const { findNextlyConfig } = await import("../cli/utils/config-loader");
+    return findNextlyConfig(process.cwd()) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
