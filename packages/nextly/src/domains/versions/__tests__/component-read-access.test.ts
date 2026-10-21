@@ -53,7 +53,7 @@ describe("applyComponentReadAccess", () => {
     expect(JSON.stringify(entry)).toContain('"b"');
   });
 
-  it("judges a single component by its declared component, whatever type it claims", async () => {
+  it("judges a live single component by its declared component, whatever type it claims", async () => {
     registerFieldFunctions("fieldGroup", "card", [
       { name: "title", type: "text" },
       { name: "secret", type: "text", access: denied },
@@ -70,11 +70,36 @@ describe("applyComponentReadAccess", () => {
       entry,
       fields({ name: "hero", type: "component", component: "card" }),
       new Map(),
-      caller
+      { ...caller, declaredComponentDecides: true }
     );
 
     expect(entry.hero).not.toHaveProperty("secret");
     expect(entry.hero.title).toBe("a");
+  });
+
+  it("judges a version's single component by the type it was captured under", async () => {
+    // The field now names `plain`; the snapshot was captured under `card`,
+    // whose rule still withholds what the snapshot holds.
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    registerFieldFunctions("fieldGroup", "plain", [
+      { name: "title", type: "text" },
+    ]);
+    const snapshot = {
+      hero: { _componentType: "card", title: "a", secret: "S-1" },
+    };
+
+    await applyComponentReadAccess(
+      snapshot,
+      fields({ name: "hero", type: "component", component: "plain" }),
+      new Map(),
+      caller
+    );
+
+    expect(snapshot.hero).not.toHaveProperty("secret");
+    expect(snapshot.hero.title).toBe("a");
   });
 });
 

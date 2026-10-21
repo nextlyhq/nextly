@@ -270,6 +270,16 @@ describe.each(getConfiguredTestDialects())(
               }),
             ],
           }),
+          // A held edit: its response is the pending document.
+          defineCollection({
+            slug: "drafted",
+            status: true,
+            versions: { drafts: true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "one", component: "note" }),
+            ],
+          }),
           // The cost control: the same rules, and no field group.
           defineCollection({
             slug: "plain",
@@ -336,6 +346,8 @@ describe.each(getConfiguredTestDialects())(
               "read-pages",
               "read-authors",
               "read-plain",
+              "read-drafted",
+              "update-drafted",
               "read-site",
               "update-site",
             ].map(id),
@@ -496,6 +508,45 @@ describe.each(getConfiguredTestDialects())(
         expect(result.item.title).toBe("s2");
         expect(result.item).not.toHaveProperty("one");
         expect(JSON.stringify(result)).not.toContain("secret-w");
+      });
+    });
+
+    describe("an edit held inside a caller's transaction", () => {
+      it("answers with the pending document, its field-group fields judged", async () => {
+        const { item } = await trusted.create({
+          collection: "drafted",
+          data: {
+            title: "d",
+            status: "published",
+            one: { heading: "h", ...guardedValues("live") },
+          },
+        } as never);
+        const id = String(item.id);
+        const service = t.getService("collectionService") as unknown as {
+          withTransaction: <T>(fn: (tx: unknown) => Promise<T>) => Promise<T>;
+          updateEntryInTransaction: (
+            tx: unknown,
+            slug: string,
+            entryId: string,
+            data: Doc,
+            ctx: Doc
+          ) => Promise<Doc>;
+        };
+        // Status-less, so the edit is held as the pending change.
+        const held = await service.withTransaction(tx =>
+          service.updateEntryInTransaction(
+            tx,
+            "drafted",
+            id,
+            { title: "d2", one: { heading: "h2", ...guardedValues("held") } },
+            { user: { id: editorId }, overrideAccess: false }
+          )
+        );
+        expect(held.title).toBe("d2");
+        const one = held.one as Doc;
+        expect(one.heading).toBe("h2");
+        expect(one).not.toHaveProperty("secret");
+        expect(one.label).toBe("label-held");
       });
     });
 
