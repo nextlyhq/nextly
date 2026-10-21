@@ -2340,7 +2340,7 @@ export class EmailTemplateService extends BaseService {
   /**
    * Which emails the brand settings reach: each template that is not a
    * layout, with the layout a send wraps it in (as `getLayoutFor` chooses
-   * it) and whether that layout reads `brand`. Read from one query of the
+   * it), and whether its own text or that layout reads `brand`. Read from one query of the
    * templates, so the answer costs the same however many there are.
    */
   async brandReach(): Promise<BrandReach[]> {
@@ -2378,6 +2378,7 @@ export class EmailTemplateService extends BaseService {
           ...base,
           reached: false,
           reason: source === "code" ? "setInCode" : "inactive",
+          via: { body: false, layout: false },
           layout: null,
         });
         continue;
@@ -2389,21 +2390,21 @@ export class EmailTemplateService extends BaseService {
             () => defaultLayout
           )
         : null;
-      if (!layout) {
-        reach.push({
-          ...base,
-          reached: false,
-          reason: "noLayout",
-          layout: null,
-        });
-        continue;
-      }
-      const reached = readsVariable(layout.htmlContent, "brand");
+      // The render gives the settings to the body (when its send supplies no
+      // `brand`) and to the layout, so the email is reached through either.
+      const via = {
+        body: LIQUID_FIELDS.some(([field]) =>
+          readsVariable(template[field] ?? "", "brand")
+        ),
+        layout: layout ? readsVariable(layout.htmlContent, "brand") : false,
+      };
+      const reached = via.body || via.layout;
       reach.push({
         ...base,
         reached,
-        reason: reached ? null : "layoutWithoutBrand",
-        layout: {
+        reason: reached ? null : layout ? "layoutWithoutBrand" : "noLayout",
+        via,
+        layout: layout && {
           id: layout.id,
           slug: layout.slug,
           name: layout.name,

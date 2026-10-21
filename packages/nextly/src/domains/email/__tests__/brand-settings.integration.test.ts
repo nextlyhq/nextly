@@ -245,6 +245,12 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         htmlContent: "<p>News</p>",
         layoutId: siteLayout.id,
       });
+      const notice = await service.createTemplate({
+        name: "Notice",
+        slug: "notice",
+        subject: "Notice",
+        htmlContent: "<p>Notice</p>",
+      });
       const plain = await service.createTemplate({
         name: "Plain",
         slug: "plain",
@@ -266,10 +272,20 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       );
 
       const reach = new Map((await service.brandReach()).map(r => [r.slug, r]));
+      // Its button reads the accent, so the settings reach it though its
+      // layout, the edited default one, reads none of them.
       expect(reach.get("welcome")).toMatchObject({
+        reached: true,
+        reason: null,
+        via: { body: true, layout: false },
+        layout: { slug: DEFAULT_LAYOUT_SLUG, overridden: true },
+      });
+      // An email whose text and layout both read none of them is not reached.
+      expect(reach.get(notice.slug)).toMatchObject({
         reached: false,
         reason: "layoutWithoutBrand",
-        layout: { slug: DEFAULT_LAYOUT_SLUG, overridden: true },
+        via: { body: false, layout: false },
+        layout: { slug: DEFAULT_LAYOUT_SLUG },
       });
       expect(reach.get("newsletter")).toMatchObject({
         reached: true,
@@ -279,7 +295,11 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       expect(reach.get(plain.slug)).toMatchObject({
         reached: false,
         reason: "noLayout",
+        via: { body: false, layout: false },
         layout: null,
+      });
+      expect(reach.get("newsletter")).toMatchObject({
+        via: { body: false, layout: true },
       });
       // Layouts are what the settings reach through, not emails of their own.
       expect(reach.has(DEFAULT_LAYOUT_SLUG)).toBe(false);
@@ -326,6 +346,16 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       expect(await reachOf("password-reset")).toMatchObject({
         reached: false,
         reason: "inactive",
+        layout: null,
+      });
+
+      // Sent without a layout, a built-in is still reached through its button.
+      const verify = await template(service, "email-verification");
+      await service.updateTemplate(verify.id, { useLayout: false });
+      expect(await reachOf("email-verification")).toMatchObject({
+        reached: true,
+        reason: null,
+        via: { body: true, layout: false },
         layout: null,
       });
     });

@@ -352,9 +352,11 @@ function linksMarkup(settings: BrandSettings, stack: string): string {
  * Why the brand settings do not reach an email:
  * - `setInCode`: the site's code version sends, which has no stored layout;
  * - `inactive`: it is switched off and has no code version, so nothing sends;
- * - `noLayout`: it sends without a layout, or no layout exists;
- * - `layoutWithoutBrand`: its layout does not read `brand` (an overridden
- *   default layout from before brand settings, or one of the site's own).
+ * - `noLayout`: neither its own text nor a layout reads them: it sends
+ *   without a layout, or no layout exists;
+ * - `layoutWithoutBrand`: neither its own text nor its layout reads `brand`
+ *   (an overridden default layout from before brand settings, say, or one of
+ *   the site's own).
  */
 export type BrandReachReason =
   | "setInCode"
@@ -370,6 +372,11 @@ export interface BrandReach {
   reached: boolean;
   /** Why not, when it is not reached; null when it is. */
   reason: BrandReachReason | null;
+  /**
+   * Where the settings reach it: its own text (a button in the accent, say)
+   * and the layout it is wrapped in. Either one is enough.
+   */
+  via: { body: boolean; layout: boolean };
   /** The layout it is wrapped in, when it is wrapped in one. */
   layout: {
     id: string;
