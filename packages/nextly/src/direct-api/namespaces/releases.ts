@@ -34,6 +34,7 @@ import type {
   ReleaseRow,
 } from "../../domains/releases/releases-repository";
 import type {
+  AddedReleaseMember,
   AddMemberInput,
   FindReleasesQuery,
   ReleaseBlocker,
@@ -250,10 +251,17 @@ export interface ReleasesNamespace {
    * the author for every call on it. The refusal is at runtime because only
    * runtime knows whether either source produced one, and its message names the
    * field to pass.
+   *
+   * Answers the member with `unpublishedLinks`: for a document going live, the
+   * documents it links to that will not be live at the release's moment, so
+   * they can be offered too. Only documents the caller may read are named; the
+   * rest are counted in `hiddenCount`.
+   *
+   * @experimental The `unpublishedLinks` field.
    */
   addMember(
     args: { releaseId: string } & AddMemberInput & ReleaseCallerArgs
-  ): Promise<ReleaseMemberRow>;
+  ): Promise<AddedReleaseMember>;
   /**
    * Take a document back out of a release.
    *

@@ -5,6 +5,7 @@
  * uses, and the handler's order: the token before the rate limit, then one
  * setup at a time.
  */
+import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 import { claimFirstSetup } from "../../setup-token/setup-gate";
@@ -415,5 +416,45 @@ describe("setup in development", () => {
     };
     expect((await handleSetup(setupRequest(), dev)).status).toBe(201);
     expect(createSuperAdmin).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Beside the gate tests for this file's harness: setup-status whose
+// administrator lookup fails.
+describe("setup-status while the database is busy", () => {
+  it("answers DATABASE_BUSY with Retry-After", async () => {
+    const { deps } = await productionInstall();
+    // What the adapters raise for a request that waited out its bound for a
+    // connection, reaching the handler unconverted.
+    deps.hasAdministrator = async () => {
+      throw poolWaitTimeoutError(15000);
+    };
+
+    const res = await handleSetupStatus(
+      new Request(`${ORIGIN}/admin/api/auth/setup-status`),
+      deps
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("5");
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DATABASE_BUSY");
+  });
+
+  it("still answers any other failure as the 503 it was, with no retry hint", async () => {
+    const { deps } = await productionInstall();
+    deps.hasAdministrator = async () => {
+      throw new Error("socket hang up");
+    };
+
+    const res = await handleSetupStatus(
+      new Request(`${ORIGIN}/admin/api/auth/setup-status`),
+      deps
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBeNull();
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("SERVICE_UNAVAILABLE");
   });
 });

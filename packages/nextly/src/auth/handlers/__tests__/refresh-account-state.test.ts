@@ -1,3 +1,4 @@
+import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 import { handleRefresh, type RefreshHandlerDeps } from "../refresh";
@@ -220,4 +221,46 @@ describe("refresh rotation spends the presented token once", () => {
       expect(setCookies(res).every(c => c.includes("Max-Age=0"))).toBe(true);
     }
   );
+});
+
+// Beside the gate tests for this file's harness: a refresh whose database
+// fails while it reads the refresh row.
+describe("a refresh while the database is busy", () => {
+  it("answers DATABASE_BUSY with Retry-After", async () => {
+    const { deps } = makeDeps({
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: new Date(),
+    });
+    // What the adapters raise for a request that waited out its bound for a
+    // connection, reaching the handler unconverted.
+    vi.mocked(deps.findRefreshTokenByHash).mockRejectedValue(
+      poolWaitTimeoutError(15000)
+    );
+
+    const res = await handleRefresh(makeRequest(), deps);
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("5");
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DATABASE_BUSY");
+  });
+
+  it("still answers any other failure as the 503 it was, with no retry hint", async () => {
+    const { deps } = makeDeps({
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: new Date(),
+    });
+    vi.mocked(deps.findRefreshTokenByHash).mockRejectedValue(
+      new Error("socket hang up")
+    );
+
+    const res = await handleRefresh(makeRequest(), deps);
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBeNull();
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("SERVICE_UNAVAILABLE");
+  });
 });

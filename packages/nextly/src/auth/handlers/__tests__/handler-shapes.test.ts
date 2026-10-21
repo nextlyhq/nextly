@@ -22,6 +22,7 @@
  * against accidental re-introduction of a `{ data: ... }` envelope.
  */
 import { jwtVerify } from "jose";
+import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 // These tests read a session with no database behind it. Whether the account
@@ -1464,5 +1465,75 @@ describe("the account-state gate before continuations", () => {
     // The hook never ran: the refusal arrived before anything was done on
     // the account's behalf.
     expect(seen).toEqual([]);
+  });
+});
+
+// Each handler's service failing the way the adapters fail a request that
+// waited out its bound for a connection, reaching the handler unconverted.
+describe.each([
+  {
+    name: "reset-password",
+    run: (failure: Error) =>
+      handleResetPassword(
+        makeRequest("POST", { token: "t", newPassword: "Pass1234!" }),
+        {
+          allowedOrigins: ALLOWED_ORIGINS,
+          resetPasswordWithToken: vi.fn().mockRejectedValue(failure),
+        }
+      ),
+  },
+  {
+    name: "accept-invite",
+    run: (failure: Error) =>
+      handleAcceptInvite(
+        makeRequest("POST", { token: "t", newPassword: "Pass1234!" }),
+        {
+          allowedOrigins: ALLOWED_ORIGINS,
+          acceptInvite: vi.fn().mockRejectedValue(failure),
+        }
+      ),
+  },
+  {
+    name: "forgot-password",
+    run: (failure: Error) =>
+      handleForgotPassword(makeRequest("POST", { email: "a@example.com" }), {
+        allowedOrigins: ALLOWED_ORIGINS,
+        loginStallTimeMs: 0,
+        generatePasswordResetToken: vi.fn().mockRejectedValue(failure),
+      }),
+  },
+  {
+    name: "register",
+    run: (failure: Error) =>
+      handleRegister(
+        makeRequest("POST", {
+          email: "a@example.com",
+          password: "Pass1234!",
+          name: "A",
+        }),
+        {
+          allowedOrigins: ALLOWED_ORIGINS,
+          allowRegistration: true,
+          revealRegistrationConflict: false,
+          loginStallTimeMs: 0,
+          registerUser: vi.fn().mockRejectedValue(failure),
+        }
+      ),
+  },
+])("$name handler, when its database fails", ({ run }) => {
+  it("answers a busy database as DATABASE_BUSY with Retry-After", async () => {
+    const res = await run(poolWaitTimeoutError(15000));
+
+    expect(res.status).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("5");
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("DATABASE_BUSY");
+  });
+
+  it("still answers any other failure as an internal error, with no retry hint", async () => {
+    const res = await run(new Error("socket hang up"));
+
+    expect(res.status).toBe(500);
+    expect(res.headers.get("retry-after")).toBeNull();
   });
 });
