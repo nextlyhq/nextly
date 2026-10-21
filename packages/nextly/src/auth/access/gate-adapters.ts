@@ -146,27 +146,46 @@ export async function singleGateVerdict(
   // Without the service a signed-in user is allowed, the permission unread.
   const asked = { ...q, permissionWithoutService: () => Promise.resolve(true) };
   const today = await gateVerdict("single", asked);
-  const inForce = effectiveCallerScope(q.scope);
-  if (inForce === q.scope) return today;
-  await deviate(
-    "single-explicit-scope-only",
-    today.allowed,
-    async () =>
-      (await gateVerdict("single", { ...asked, scope: inForce })).allowed
-  );
+  await scopeInForceDeviation(asked, today);
   return today;
+}
+
+/**
+ * Where the request's key would have been judged, had the Single gate read the
+ * scope in force: compared with the decision for that key, asked directly, so
+ * recording runs no second gate and takes none of its deviations.
+ */
+async function scopeInForceDeviation(
+  q: GateQuestion,
+  today: GateVerdict
+): Promise<void> {
+  const inForce = effectiveCallerScope(q.scope);
+  if (inForce === q.scope || inForce?.actorType !== "apiKey") return;
+  // A plugin's person, a route-authorized request and a visitor are judged
+  // without the key's scope by either gate.
+  if (q.principal !== null || q.routeAuthorized || !q.user) return;
+  const actor = keyActorOf(inForce, q.user);
+  await deviate("single-explicit-scope-only", today.allowed, () =>
+    decided(actor, q.action, registeredTarget("single", q))
+  );
+}
+
+/**
+ * The registered target, as the access-control service resolves it; one with
+ * no rules where nothing is registered, as without the service.
+ */
+function registeredTarget(
+  kind: "collection" | "single",
+  q: GateQuestion
+): AccessTarget {
+  return q.rules?.getRegisteredTarget(q.slug) ?? { kind, slug: q.slug };
 }
 
 async function gateVerdict(
   kind: "collection" | "single",
   q: GateQuestion
 ): Promise<GateVerdict> {
-  // The registered target, as the access-control service resolves it; one
-  // with no rules where nothing is registered, as without the service.
-  const target: AccessTarget = q.rules?.getRegisteredTarget(q.slug) ?? {
-    kind,
-    slug: q.slug,
-  };
+  const target = registeredTarget(kind, q);
   // A plugin's person is judged by the rule alone, and a target that declares
   // none, as every target does without the service, refuses them.
   if (q.principal !== null) {
@@ -254,14 +273,7 @@ async function keyVerdict(
   user: { id: string; roles?: string[] }
 ): Promise<GateVerdict> {
   const rows = rowsAgree(scope);
-  const actor = rows
-    ? actorForScope(scope, user)
-    : actorForKey({
-        keyId: "",
-        userId: user.id,
-        grants: scope.grants ?? [],
-        roles: scope.roles ?? user.roles ?? [],
-      });
+  const actor = keyActorOf(scope, user);
   // A key holds an action by its stored slug, `<action>-<target>`. The
   // decision reads the grant's action and target, which agree with the slug
   // unless the grant was stored under a slug of its own.
@@ -272,6 +284,21 @@ async function keyVerdict(
     return slugJudgedVerdict(q, target, scope, user, actor);
   }
   return grantJudgedVerdict(q, target, actor, slugHolds);
+}
+
+/** The key a scope stands for, from its grant rows or, without them, its slugs. */
+function keyActorOf(
+  scope: AuthenticatedScope,
+  user: { id: string; roles?: string[] }
+): KeyActor {
+  return rowsAgree(scope)
+    ? actorForScope(scope, user)
+    : actorForKey({
+        keyId: "",
+        userId: user.id,
+        grants: scope.grants ?? [],
+        roles: scope.roles ?? user.roles ?? [],
+      });
 }
 
 /**
