@@ -222,6 +222,39 @@ describe.each(getConfiguredTestDialects())(
         locale: "en",
       });
       expect(taken.success).toBe(true);
+      expect(taken.data).toEqual({ taken: ["articleCount"] });
+      // Saved as any save of the change is: a version history shows and a
+      // restore can undo.
+      const [newest] = await handle!.adapter.select<{
+        status: string;
+        locale: string | null;
+        snapshot: unknown;
+      }>("nextly_versions", {
+        columns: ["status", "locale", "snapshot"],
+        where: {
+          and: [
+            { column: "entryId", op: "=", value: id },
+            { column: "versionNo", op: "IS NOT NULL" },
+          ],
+        },
+        orderBy: [{ column: "versionNo", direction: "desc" }],
+        limit: 1,
+      });
+      const snapshot =
+        typeof newest!.snapshot === "string"
+          ? (JSON.parse(newest!.snapshot) as Record<string, unknown>)
+          : (newest!.snapshot as Record<string, unknown>);
+      expect({
+        status: newest!.status,
+        locale: newest!.locale,
+        articleCount: snapshot.articleCount,
+        title: snapshot.title,
+      }).toEqual({
+        status: "draft",
+        locale: "en",
+        articleCount: 13,
+        title: "en edited",
+      });
       const published = await publish(entries, id, "en");
 
       expect(published.success).toBe(true);

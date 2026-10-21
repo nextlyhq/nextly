@@ -107,6 +107,7 @@ import {
 } from "../../i18n/resolve-locale";
 import {
   buildCompanionSchema,
+  type CompanionSchema,
   splitLocalizedWrite,
 } from "../../i18n/runtime/companion-io";
 import {
@@ -327,6 +328,78 @@ export class SingleMutationService extends BaseService {
    * provided partial data.
    */
   /**
+   * A language's pending change on this Single, under the row lock every save
+   * and publish takes, so the live values read beside it are the ones the
+   * next publish compares. Null when the Single has no row or the language no
+   * pending change.
+   */
+  private async lockedPendingChange(
+    tx: TransactionContext,
+    singleMeta: DynamicSingleRecord,
+    slug: string,
+    requestLocale: string | null
+  ) {
+    const row = await tx.selectOne<{ id?: string }>(singleMeta.tableName, {});
+    const entryId = row?.id;
+    if (entryId === undefined) return null;
+    await tx.lockRow(singleMeta.tableName, entryId);
+    const ref = { scopeKind: "single" as const, scopeSlug: slug, entryId };
+    const locale = workingDraftLocale({
+      documentLocalized: true,
+      requestLocale,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+    const pending = await new VersionsRepository(tx).findWorkingDraft(
+      ref,
+      locale
+    );
+    return pending ? { ref, locale, pending } : null;
+  }
+
+  /**
+   * The body of {@link takeLiveSharedValues}, in its transaction: null when
+   * there is no pending change to bring up to date.
+   */
+  private async takeLiveInTx(
+    tx: TransactionContext,
+    singleMeta: DynamicSingleRecord,
+    companion: CompanionSchema,
+    params: Parameters<SingleMutationService["takeLiveSharedValues"]>[0]
+  ): Promise<string[] | null> {
+    const found = await this.lockedPendingChange(
+      tx,
+      singleMeta,
+      params.slug,
+      params.locale ?? null
+    );
+    if (!found) return null;
+    const { ref, locale, pending } = found;
+    const live = await this.liveSharedDocument(tx, singleMeta, ref.entryId);
+    const took = await takeLiveSharedValuesInto(tx, this.versionCapture, {
+      ref,
+      locale,
+      shared: sharedFieldNames(
+        singleMeta.fields,
+        new Set(companion.localizedFields.map(f => f.name)),
+        live
+      ),
+      live,
+      pending: snapshotRecord(pending.snapshot),
+      createdBy: params.user?.id ?? null,
+      maxPerDoc: singleMeta.versions?.maxPerDoc,
+    });
+    // A save of the pending change, in its history like any other.
+    await this.recordSingleSave(
+      tx,
+      params.slug,
+      ref.entryId,
+      { user: params.user, actor: params.actor },
+      { locale, toState: "draft", versionNo: took.versionNo }
+    );
+    return took.taken;
+  }
+
+  /**
    * Bring a language's pending change up to date with the shared values
    * someone else published after it began: each out-of-date shared field takes
    * its live value, and the change's base moves to the version those live
@@ -341,6 +414,8 @@ export class SingleMutationService extends BaseService {
     slug: string;
     /** Which language's pending change; the default when none is named. */
     locale?: string | null;
+    /** Who took them, for the change's history. */
+    actor?: RequestActor;
     user?: UserContext;
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
@@ -379,49 +454,9 @@ export class SingleMutationService extends BaseService {
           : null;
       const taken =
         singleMeta && companion
-          ? await this.adapter.transaction(async tx => {
-              const row = await tx.selectOne<{ id?: string }>(
-                singleMeta.tableName,
-                {}
-              );
-              if (row?.id === undefined) return null;
-              // The lock every save and publish of this Single takes, so the
-              // live values read here are the ones the next publish compares.
-              await tx.lockRow(singleMeta.tableName, row.id);
-              const ref = {
-                scopeKind: "single" as const,
-                scopeSlug: params.slug,
-                entryId: row.id,
-              };
-              const locale = workingDraftLocale({
-                documentLocalized: singleMeta.localized === true,
-                requestLocale: params.locale ?? null,
-                defaultLocale: this.localization?.defaultLocale ?? null,
-              });
-              const pending = await new VersionsRepository(tx).findWorkingDraft(
-                ref,
-                locale
-              );
-              if (!pending) return null;
-              const live = await this.liveSharedDocument(
-                tx,
-                singleMeta,
-                row.id
-              );
-              const shared = sharedFieldNames(
-                singleMeta.fields,
-                new Set(companion.localizedFields.map(f => f.name)),
-                live
-              );
-              return takeLiveSharedValuesInto(tx, {
-                ref,
-                locale,
-                shared,
-                live,
-                pending: snapshotRecord(pending.snapshot),
-                createdBy: params.user?.id ?? null,
-              });
-            })
+          ? await this.adapter.transaction(tx =>
+              this.takeLiveInTx(tx, singleMeta, companion, params)
+            )
           : null;
       if (taken === null) {
         return {

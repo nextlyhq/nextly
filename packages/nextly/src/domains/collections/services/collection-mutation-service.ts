@@ -3308,6 +3308,8 @@ export class CollectionMutationService extends BaseService {
     entryId: string;
     /** Which language's pending change; the default when none is named. */
     locale?: string | null;
+    /** Who took them, for the change's history. */
+    actor?: RequestActor;
     user?: UserContext;
     overrideAccess?: boolean;
     routeAuthorized?: boolean;
@@ -3369,14 +3371,31 @@ export class CollectionMutationService extends BaseService {
           live,
           tx.getDrizzle()
         );
-        return takeLiveSharedValuesInto(tx, {
+        const took = await takeLiveSharedValuesInto(tx, this.versionCapture, {
           ref,
           locale: draftLocale,
           shared,
           live,
           pending: snapshotRecord(pending.snapshot),
           createdBy: params.user?.id ?? null,
+          maxPerDoc: (
+            collection as { versions?: ResolvedVersionsConfig | null }
+          ).versions?.maxPerDoc,
         });
+        // A save of the pending change, in its history like any other.
+        await this.recordSaveHistory(
+          tx,
+          params.collectionName,
+          params.entryId,
+          {
+            actor: actorForWrite(params.actor, params.user),
+            personName: params.user?.name ?? null,
+            locale: draftLocale,
+            toState: "draft",
+            versionNo: took.versionNo,
+          }
+        );
+        return took.taken;
       });
       if (taken === null) {
         return {

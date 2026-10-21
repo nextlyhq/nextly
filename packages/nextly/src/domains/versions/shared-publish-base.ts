@@ -33,8 +33,10 @@ import {
   type CallerGrants,
 } from "../../shared/lib/field-level-registry";
 
+import { storeDraftSave } from "./draft-save";
+import type { VersionCaptureService } from "./version-capture-service";
 import { registerVersionPinHolder, versionPins } from "./version-pins";
-import { VersionsRepository, type VersionRef } from "./versions-repository";
+import type { VersionRef } from "./versions-repository";
 
 const VERSIONS_TABLE = "nextly_versions";
 
@@ -291,13 +293,17 @@ export async function outOfDateSharedFields(
 
 /**
  * Bring a pending change up to date: write the live value of each out-of-date
- * shared field into it, and move its base to the version those live values
- * are in. Returns the fields taken; the change's other values stay its own.
+ * shared field into it, saved as any other save of the change is, so history
+ * shows it and a restore can undo it, and move its base to the version those
+ * live values are in. Returns the fields taken, the change's other values
+ * staying its own, and the version the save recorded (none when nothing was
+ * out of date).
  *
  * @param live The live document, shaped as a version snapshot is.
  */
 export async function takeLiveSharedValuesInto(
   tx: TransactionContext,
+  capture: VersionCaptureService,
   args: {
     ref: VersionRef;
     locale: string | null;
@@ -305,8 +311,9 @@ export async function takeLiveSharedValuesInto(
     live: Record<string, unknown>;
     pending: Record<string, unknown>;
     createdBy: string | null;
+    maxPerDoc?: number | false;
   }
-): Promise<string[]> {
+): Promise<{ taken: string[]; versionNo: number | null }> {
   const { ref, locale, shared, live, pending, createdBy } = args;
   const stale = await outOfDateSharedFields(tx, {
     ref,
@@ -315,15 +322,17 @@ export async function takeLiveSharedValuesInto(
     live,
     pending,
   });
-  await new VersionsRepository(tx).upsertWorkingDraft({
+  const { versionNo } = await storeDraftSave(tx, capture, {
     ref,
     locale,
     snapshot: {
       ...pending,
       ...Object.fromEntries(stale.map(name => [name, live[name]])),
     },
+    replaces: pending,
     createdBy,
+    maxPerDoc: args.maxPerDoc,
   });
   await recordSharedBase(tx, { ref, locale, shared, live });
-  return stale;
+  return { taken: stale, versionNo };
 }
