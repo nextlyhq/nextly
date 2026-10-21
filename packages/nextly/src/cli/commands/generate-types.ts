@@ -33,6 +33,10 @@ import type { CollectionConfig } from "../../collections/config/define-collectio
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
+import {
+  buildWorkflowRegistry,
+  publishWorkflows,
+} from "../../domains/workflows/registry";
 import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
@@ -44,6 +48,7 @@ import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/
 import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
+import { describeDeclarationFailure } from "../../shared/lib/assert-plugin-field-declarations";
 import {
   generatedTypesFile,
   generatedZodDir,
@@ -190,6 +195,8 @@ export async function runGenerateTypes(
     logger.warn("No config file found, using defaults");
   }
 
+  await publishConfiguredWorkflows(configResult, logger);
+
   const collectionCount = configResult.config.collections.length;
   const singleCount = configResult.config.singles?.length ?? 0;
   const componentCount = configResult.config.fieldGroups?.length ?? 0;
@@ -284,6 +291,32 @@ export async function runGenerateTypes(
     logger.success(`Type generation completed in ${formatDuration(duration)}`);
   } catch (error) {
     logger.error(`Generation failed: ${describeError(error)}`);
+    process.exit(1);
+  }
+}
+
+/**
+ * Check the configuration's attached workflows as boot checks them, plugins'
+ * collections and password fields included, and publish them, so the types
+ * generated next carry their stage and step names. A workflow that cannot be
+ * attached ends the command, reported as a declaration failure. A command
+ * reads no database, so the components an attached collection reaches are
+ * judged at boot.
+ */
+export async function publishConfiguredWorkflows(
+  configResult: LoadConfigResult,
+  logger: { error(message: string): void }
+): Promise<void> {
+  try {
+    publishWorkflows(
+      await buildWorkflowRegistry(
+        configResult.config,
+        configResult.configPath ?? null,
+        { judgeComponents: false }
+      )
+    );
+  } catch (error) {
+    logger.error(describeDeclarationFailure(error));
     process.exit(1);
   }
 }

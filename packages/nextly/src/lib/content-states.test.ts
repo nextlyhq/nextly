@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_WORKFLOW,
   MAX_STATE_NAME_LENGTH,
-  defineWorkflow,
+  defineContentStates,
   nonPublicStateNames,
   type ContentState,
   isPublicState,
@@ -102,7 +102,7 @@ describe("declaring a workflow", () => {
    * here is public" can be seen at all.
    */
   const ok = (states: ContentState[]): ContentWorkflow =>
-    defineWorkflow({ name: "editorial", states });
+    defineContentStates({ name: "editorial", states });
 
   it("returns the workflow unchanged when it is sound", () => {
     const states = [

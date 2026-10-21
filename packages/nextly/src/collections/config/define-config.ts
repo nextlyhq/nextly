@@ -38,6 +38,7 @@ import {
 } from "../../domains/field-groups/storage/field-group-field-type";
 import { validateLocalizationConfig } from "../../domains/i18n/config/validate";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
+import { workflowAttachmentsOf } from "../../domains/workflows/attachments";
 import { NextlyError } from "../../errors";
 import { MAX_FIELD_GROUP_NESTING_DEPTH } from "../../field-groups/config/validate-field-group";
 import { assertNoLegacyFieldGroupKey } from "../../shared/legacy-field-group-key";
@@ -377,6 +378,11 @@ function validateNextlyConfig(config: NextlyConfig): void {
       );
     }
   }
+
+  // Each attached workflow needs drafts kept beside the live version, and one
+  // slug names one definition. What only the server can judge (a password
+  // field, a component) is checked at boot and in `nextly build`.
+  workflowAttachmentsOf(config);
 }
 
 /** True if any field in the tree opts into localization (`localized: true`). */

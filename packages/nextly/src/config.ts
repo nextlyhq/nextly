@@ -43,6 +43,34 @@ export {
   type SinglePreviewConfig,
 } from "./singles/config/define-single";
 
+// Editorial workflows (@experimental): a workflow defined in code, attached
+// to collections and Singles with their `workflow` option. Only modules that
+// reach no Node built-in are exported here, so a collection file can import
+// them beside `defineCollection`; the definition hash is computed at boot.
+export {
+  allowsSelfApproval,
+  defineWorkflow,
+  entersReview,
+  isReviewStage,
+  MAX_WORKFLOW_NAME_LENGTH,
+  primaryStep,
+} from "./domains/workflows/define-workflow";
+export {
+  reviewWorkflow,
+  type ReviewWorkflowOptions,
+} from "./domains/workflows/preset";
+export {
+  WORKFLOW_STEP_KINDS,
+  type ResolvedWorkflowStep,
+  type Workflow,
+  type WorkflowInput,
+  type WorkflowStage,
+  type WorkflowStageName,
+  type WorkflowStep,
+  type WorkflowStepKind,
+  type WorkflowStepName,
+} from "./domains/workflows/types";
+
 // Hook types for collection hooks
 export type { HookContext } from "./hooks/types";
 

@@ -128,6 +128,10 @@ import { publishStoredWebhookRecordingPolicies } from "../domains/webhooks/store
 import { checkDeclaredWidgetReferences } from "../domains/widgets/declaration/references";
 import type { DeferrableEntityKind } from "../domains/widgets/deferred-entities";
 import { registerResolvedSource } from "../domains/widgets/resolved-sources";
+import {
+  buildWorkflowRegistry,
+  publishWorkflows,
+} from "../domains/workflows/registry";
 import { NextlyError } from "../errors/nextly-error";
 import { getEventBus } from "../events/event-bus";
 import type { FieldGroupConfig } from "../field-groups/config/types";
@@ -2113,6 +2117,14 @@ async function syncCodeFirstEntities(
   // ----------------------------------------
   await createMissingCodeFirstTables(adapter, logger, bootTableWork);
 
+  // ----------------------------------------
+  // Layer 6.2: Register the workflows
+  // ----------------------------------------
+  await registerWorkflows(
+    transformedConfig,
+    collectionsNotSetUp || singlesNotSetUp
+  );
+
   // Whether either sync found the registries not yet created: a fresh
   // database, before migrations and `/setup` have run. Reported so a check
   // that reads the registries can tell that apart from a read that failed.
@@ -3138,6 +3150,30 @@ function registerCodeDefinedAccess(
       rbacService.registerSingleAccess(single.slug, single.access);
     }
   }
+}
+
+/**
+ * Register each attached workflow, with its definition hash and the
+ * configuration file that registers it, refusing the boot when an attachment
+ * cannot keep drafts. After the components sync, so a component an attached
+ * collection reaches is judged too; on a database not set up yet the
+ * component registry cannot be read, and the configuration's own rules are
+ * the ones judged.
+ */
+async function registerWorkflows(
+  transformedConfig: NextlyServiceConfig,
+  databaseNotSetUp: boolean
+): Promise<void> {
+  // Loaded here, not at the top: the config loader reaches back into this
+  // module's graph.
+  const { findNextlyConfig } = await import("../cli/utils/config-loader");
+  publishWorkflows(
+    await buildWorkflowRegistry(
+      transformedConfig,
+      findNextlyConfig(process.cwd()) ?? null,
+      { judgeComponents: !databaseNotSetUp }
+    )
+  );
 }
 
 /**
@@ -4726,6 +4762,7 @@ async function releaseServices(opts: {
     // registry; clear it so a later instance never resolves a dead one.
     resetWebhookActivation();
     publishRetentionPolicies(undefined);
+    publishWorkflows(new Map());
     // Collection db options are process-global too; a later registration must
     // start from its own config's, not inherit this one's `allowIdOnCreate`.
     publishCollectionDbOptions([]);
@@ -4787,6 +4824,7 @@ export function clearServices(): void {
   // provider closes over this container's registry.
   resetWebhookActivation();
   publishRetentionPolicies(undefined);
+  publishWorkflows(new Map());
   // Cleared for the same reason as in `releaseServices`.
   publishCollectionDbOptions([]);
   // Cleared for the same reason as in `releaseServices`: the configured

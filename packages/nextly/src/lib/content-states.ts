@@ -159,7 +159,10 @@ export function stateLabel(
 }
 
 /**
- * Validate a workflow at the moment it is DECLARED, and return it unchanged.
+ * Validate a set of content states at the moment it is DECLARED, and return
+ * it unchanged. Named for the states it checks, apart from the editorial
+ * workflow `defineWorkflow` declares (`domains/workflows`), which has stages
+ * and steps rather than states.
  *
  * Every rule here is one whose violation is otherwise discovered at write time,
  * on one dialect, in production. Declaring is the only moment at which the
@@ -170,7 +173,9 @@ export function stateLabel(
  * which also means the check cannot be skipped by accident — an unwrapped
  * literal is a workflow nobody validated, and that is visible in the source.
  */
-export function defineWorkflow(workflow: ContentWorkflow): ContentWorkflow {
+export function defineContentStates(
+  workflow: ContentWorkflow
+): ContentWorkflow {
   const names = workflow.states.map(state => state.name);
 
   if (names.length === 0) {
