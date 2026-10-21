@@ -100,10 +100,17 @@ describe("countLongerThan", () => {
     expect(query.params).toEqual([255]);
   });
 
-  it("refuses an identifier it would have to escape", async () => {
+  it("counts a table whose configured name needs quoting, such as one with a hyphen", async () => {
+    // A custom `dbName` like `my-table` is accepted by the naming rules and created verbatim, so
+    // its narrowing has to be countable; the identifier quoting carries the name, escaped.
+    const execute = vi.fn().mockResolvedValue([[{ count: 0 }], []]);
     await expect(
-      countLongerThan({ execute: vi.fn() }, "mysql", "t`; DROP TABLE x", "c", 1)
-    ).rejects.toThrow(/identifier/i);
+      countLongerThan({ execute }, "mysql", "dc_my-table", "title", 10)
+    ).resolves.toBe(0);
+    const { MySqlDialect } = await import("drizzle-orm/mysql-core");
+    expect(new MySqlDialect().sqlToQuery(execute.mock.calls[0][0]).sql).toBe(
+      "SELECT COUNT(*) AS count FROM `dc_my-table` WHERE CHAR_LENGTH(`title`) > ?"
+    );
   });
 
   it("reports a count query that returned no row as a NextlyError", async () => {

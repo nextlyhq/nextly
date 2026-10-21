@@ -18,16 +18,12 @@ import { NextlyError } from "../../../../errors";
 
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-function assertSafeIdent(name: string): void {
+function quoteIdent(name: string, dialect: SupportedDialect): string {
   if (!SAFE_IDENT.test(name)) {
     throw new Error(
       `unsafe identifier: ${name} (only [A-Za-z_][A-Za-z0-9_]* allowed)`
     );
   }
-}
-
-function quoteIdent(name: string, dialect: SupportedDialect): string {
-  assertSafeIdent(name);
   return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 }
 
@@ -109,9 +105,10 @@ export async function countNulls(
 /**
  * How many rows hold a value in `column` longer than `length` characters: the values a narrowing to
  * `varchar(length)` would cut short. Counted in characters, as `varchar(N)` bounds them, by each
- * dialect's character-length function. The names go through Drizzle's identifier quoting and the
- * length is a bound parameter, so nothing reaches the SQL text as a string; a name that would need
- * escaping is refused all the same, as the other counts refuse it.
+ * dialect's character-length function. The names go through Drizzle's identifier quoting, which
+ * escapes them, and the length is a bound parameter, so nothing reaches the SQL text as a string.
+ * A name is not narrowed to a stricter grammar than the naming rules accept: a configured `dbName`
+ * such as `my-table` is created verbatim, and its narrowing must be countable.
  */
 export async function countLongerThan(
   db: unknown,
@@ -120,8 +117,6 @@ export async function countLongerThan(
   column: string,
   length: number
 ): Promise<number> {
-  assertSafeIdent(table);
-  assertSafeIdent(column);
   const charLength = dialect === "sqlite" ? sql`length` : sql`CHAR_LENGTH`;
   return readCount(
     db,
