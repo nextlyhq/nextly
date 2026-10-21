@@ -46,6 +46,11 @@ import {
 import { EmailErrorCode } from "../errors";
 import type { EmailFailure } from "../failure";
 import { describeProviderFailure } from "../provider-definition";
+import {
+  renderTemplateFrom,
+  renderTemplateReplyTo,
+  withTemplateCopies,
+} from "../template-envelope";
 import { CODE_TEMPLATE_KEYS } from "../template-ownership";
 import type {
   EmailAttachmentInput,
@@ -424,16 +429,19 @@ export class EmailService extends BaseService {
         subject,
         html,
         plainText,
-        from: fromOverride ?? dbTemplate.fromOverride ?? undefined,
-        replyTo: replyToOverride ?? dbTemplate.replyTo ?? undefined,
+        ...this.templateEnvelope(dbTemplate, templateSlug, variables, {
+          to,
+          from: fromOverride,
+          replyTo: replyToOverride,
+          cc: options?.cc,
+          bcc: options?.bcc,
+        }),
         providerId: options?.providerId ?? dbTemplate.providerId ?? undefined,
         // Which template this was, for the delivery log. Without it every
         // password reset, verification and welcome message -- the entire
         // reason the log exists -- records no template at all.
         templateSlug,
         person: options?.person,
-        cc: options?.cc,
-        bcc: options?.bcc,
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
       });
@@ -479,10 +487,13 @@ export class EmailService extends BaseService {
         // Forward cc/bcc/from/replyTo here too — the DB-template path already
         // does, and omitting them on this branch silently dropped them for
         // code-first templates.
-        from: fromOverride ?? settings?.fromOverride ?? undefined,
-        replyTo: replyToOverride ?? settings?.replyTo ?? undefined,
-        cc: options?.cc,
-        bcc: options?.bcc,
+        ...this.templateEnvelope(settings, templateSlug, variables, {
+          to,
+          from: fromOverride,
+          replyTo: replyToOverride,
+          cc: options?.cc,
+          bcc: options?.bcc,
+        }),
         attachments:
           mergedAttachments.length > 0 ? mergedAttachments : undefined,
       });
@@ -1293,6 +1304,49 @@ export class EmailService extends BaseService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * How a template's send is addressed. The send's own From and Reply-To win
+   * over the template's, which are rendered from the send's data; the
+   * template's copies follow the send's own. A template that carries a
+   * secret copies nobody, even with copies stored on it past the save-time
+   * check: those are left out, and the leaving out is logged.
+   *
+   * @throws NextlyError, not retryable, when the template's From or Reply-To
+   *   cannot be used (see `template-envelope.ts`)
+   */
+  private templateEnvelope(
+    template: EmailTemplateRecord | null,
+    slug: string,
+    variables: Record<string, unknown>,
+    given: {
+      to: string | string[];
+      from?: string;
+      replyTo?: string;
+      cc?: string[];
+      bcc?: string[];
+    }
+  ): { from?: string; replyTo?: string; cc?: string[]; bcc?: string[] } {
+    const from =
+      given.from ??
+      (template?.fromOverride != null
+        ? renderTemplateFrom(template.fromOverride, variables, slug)
+        : undefined);
+    const replyTo =
+      given.replyTo ??
+      (template?.replyTo != null
+        ? renderTemplateReplyTo(template.replyTo, variables, slug)
+        : undefined);
+    let copies = { cc: template?.cc ?? null, bcc: template?.bcc ?? null };
+    if (template?.carriesSecret && (copies.cc?.length || copies.bcc?.length)) {
+      this.logger.warn(
+        "Left out an email template's copies: the template carries a secret",
+        { slug }
+      );
+      copies = { cc: null, bcc: null };
+    }
+    return { from, replyTo, ...withTemplateCopies(given, copies) };
   }
 
   /** The site's code version of a template, from `email.templates`, if it sets one. */

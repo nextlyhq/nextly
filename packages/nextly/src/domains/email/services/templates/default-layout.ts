@@ -9,17 +9,19 @@
  * @since 1.0.0
  */
 
-import type { EmailTemplateInsert } from "../../../../schemas/email-templates/types";
+import type { OwnerTemplate } from "../../template-ownership";
 
 export const DEFAULT_LAYOUT_SLUG = "default-layout";
 
 /** Placeholder in a layout's `htmlContent` where the body is injected. */
 export const LAYOUT_CONTENT_PLACEHOLDER = "{{content}}";
 
-export const defaultLayoutTemplate: EmailTemplateInsert = {
+export const defaultLayoutTemplate: OwnerTemplate = {
   name: "Default Layout",
   slug: DEFAULT_LAYOUT_SLUG,
   kind: "layout",
+  description:
+    "Wraps every email that uses a layout and chooses no other, with the site's header and footer.",
   subject: "",
   htmlContent: `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">

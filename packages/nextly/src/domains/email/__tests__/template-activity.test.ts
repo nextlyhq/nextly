@@ -136,6 +136,49 @@ describe("email template activity", () => {
     expect(serialised).not.toContain("security@attacker.example");
   });
 
+  it("names cc, bcc and the description when they change, and carries none of their values", async () => {
+    // A site template: core's `password-reset` carries a secret and takes no
+    // copies at all.
+    const created = await service.createTemplate(
+      { ...INPUT, slug: "order-shipped", cc: ["kept@shop.example"] },
+      ACTOR
+    );
+    logged.length = 0;
+
+    await service.updateTemplate(
+      created.id,
+      {
+        cc: ["watcher@shop.example"],
+        bcc: ["silent@shop.example"],
+        description: "Sent when the parcel leaves the warehouse.",
+      },
+      ACTOR
+    );
+
+    expect(logged).toHaveLength(1);
+    const changed = (logged[0]?.metadata as { changedFields?: string[] })
+      ?.changedFields;
+    expect(changed).toEqual(
+      expect.arrayContaining(["cc", "bcc", "description"])
+    );
+    const serialised = JSON.stringify(logged[0]);
+    for (const value of [
+      "watcher@shop.example",
+      "silent@shop.example",
+      "kept@shop.example",
+      "Sent when the parcel leaves the warehouse.",
+    ]) {
+      expect(serialised).not.toContain(value);
+    }
+
+    // Clearing a list is a change too, and is named the same way.
+    logged.length = 0;
+    await service.updateTemplate(created.id, { bcc: null }, ACTOR);
+    expect(
+      (logged[0]?.metadata as { changedFields?: string[] })?.changedFields
+    ).toEqual(["bcc"]);
+  });
+
   it("records nothing for an update that moved nothing", async () => {
     const created = await service.createTemplate(INPUT, ACTOR);
     logged.length = 0;

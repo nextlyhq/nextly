@@ -8,17 +8,51 @@
  */
 
 import type { EmailFailure } from "../../domains/email/failure";
-import type { OwnerUpdateUndo } from "../../domains/email/services/email-template-service";
+import type {
+  EmailTemplateComparison as TemplateComparison,
+  OwnerUpdateUndo as UpdateUndo,
+} from "../../domains/email/services/email-template-service";
 import type { RefusedRecipient } from "../../domains/email/services/send-failures";
-import type { OwnerChangeChoice } from "../../domains/email/template-merge";
+import type {
+  OwnerChange as Change,
+  OwnerChangeChoice as ChangeChoice,
+} from "../../domains/email/template-merge";
 import type { EmailAttachmentInput } from "../../domains/email/types";
 import type { PrincipalRef } from "../../plugins/principals/types";
 import type { EmailProviderType } from "../../schemas/email-providers/types";
-import type { EmailTemplateVersion } from "../../schemas/email-templates/types";
+import type { EmailTemplateVersion as TemplateVersion } from "../../schemas/email-templates/types";
 
 import type { DirectAPIConfig } from "./shared";
 
 export type { EmailAttachmentInput };
+
+// What the template ownership methods return, and the types their arguments
+// are built from, so code calling them can name each. Declared here rather
+// than re-exported so each public name carries its own release tag.
+
+/**
+ * @experimental An overridden template beside its owner's current version,
+ * as `compare()` returns it.
+ */
+export type EmailTemplateComparison = TemplateComparison;
+
+/**
+ * @experimental The parts of a template an owner's update can change: what
+ * the email says.
+ */
+export type EmailTemplateVersion = TemplateVersion;
+
+/**
+ * @experimental One change the owner made since the base, with the site's
+ * lines beside it.
+ */
+export type OwnerChange = Change;
+
+/** @experimental What the person chose for one change. */
+export type OwnerChangeChoice = ChangeChoice;
+
+/** @experimental What an applied review replaced, so it can be undone. */
+export type OwnerUpdateUndo = UpdateUndo;
 
 /**
  * Arguments for finding email providers.
@@ -178,10 +212,20 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
     preheader?: string;
     /** Layout row that wraps this template at its {{content}} marker. */
     layoutId?: string;
-    /** Override the provider's From address for this template. */
+    /**
+     * Override the provider's From address for this template. Its display
+     * name may use the send's variables; its address may not.
+     */
     fromOverride?: string;
-    /** Reply-To address for this template. */
+    /** Reply-To address for this template; may use the send's variables. */
     replyTo?: string;
+    /**
+     * @experimental Fixed addresses copied on every send, after the send's
+     * own. Refused on a template that carries a secret.
+     */
+    cc?: string[];
+    /** @experimental Fixed addresses blind-copied on every send, as `cc`. */
+    bcc?: string[];
     /** Whether to wrap this template in its layout when sending. */
     useLayout?: boolean;
     /** Specific provider ID to use for this template */
@@ -209,9 +253,16 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
 export interface UpdateEmailTemplateArgs extends DirectAPIConfig {
   /** Template ID (required) */
   id: string;
-  /** Partial template data; `description: null` clears the description. */
-  data: Partial<Omit<CreateEmailTemplateArgs["data"], "description">> & {
+  /**
+   * Partial template data; `description: null` clears the description, and
+   * `cc: null` or `bcc: null` clears the copies.
+   */
+  data: Partial<
+    Omit<CreateEmailTemplateArgs["data"], "description" | "cc" | "bcc">
+  > & {
     description?: string | null;
+    cc?: string[] | null;
+    bcc?: string[] | null;
   };
 }
 
