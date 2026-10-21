@@ -10,9 +10,10 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 /**
  * The settings that make two measurements comparable. The load limit is one: a
  * run started again with a stricter limit must not reuse measurements taken
- * above it.
+ * above it. So is the code's revision: measurements taken by other code
+ * compare something else.
  */
-const SETTINGS = ["docs", "iterations", "warmup", "rest-iterations", "seed", "max-load"];
+const SETTINGS = ["docs", "iterations", "warmup", "rest-iterations", "seed", "max-load", "revision"];
 
 /** Where a measurement sits in a run: its database, run number and mode. */
 export function keyFor(dialect, run, mode) {

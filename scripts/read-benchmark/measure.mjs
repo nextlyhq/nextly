@@ -23,11 +23,18 @@ import { parseArgs } from "node:util";
 
 import { isCliEntry } from "../cli-entry.mjs";
 
-import { TRANSLATION_TABLES, articleData, authorData, siteFor } from "./fixture.mjs";
+import { TRANSLATABLE_COLUMNS, articleData, authorData, localesOf, siteFor } from "./fixture.mjs";
 import { pick, seededRandom, summarize } from "./stats.mjs";
 
 const AUTHORS = 20;
 export const PAGE_SIZE = 20;
+/**
+ * The order list reads page in: a seeded field no two articles share, kept on
+ * the main table in both modes, so a page number holds the same articles in
+ * either and sorting costs both the same. Entries' ids are random, so without
+ * a sort a page would be whichever rows the database reached first.
+ */
+const LIST_SORT = "publishedOn";
 /**
  * The requests an API key may make in an hour unless the app configures more
  * (`apiKeys.rateLimit`), which a test boot does not: Nextly's
@@ -62,8 +69,8 @@ function isRecord(value) {
 
 /** Whether an article came back with its translatable fields, its populated author and its card. */
 export function isCompleteArticle(item) {
-  const { headline, body, author, card } = item ?? {};
-  return [typeof headline === "string", Boolean(body), isRecord(author), Boolean(card?.heading)].every(Boolean);
+  const { headline, excerpt, body, author, card } = item ?? {};
+  return [typeof headline === "string", typeof excerpt === "string", Boolean(body), isRecord(author), Boolean(card?.heading)].every(Boolean);
 }
 
 /**
@@ -139,34 +146,81 @@ async function seedSite(nextly, options) {
   return articleIds;
 }
 
+/** The columns a table's rows hold, read from its first row; none for an empty table. */
+function columnsOf(rows) {
+  return Object.keys(rows[0] ?? {});
+}
+
 /**
- * How many rows each translation table holds, `null` for one that does not
- * exist. The check that a mode stores what it says it does: a `per-language`
- * run with no translation rows would compare a site with itself.
+ * A translation table's row count and columns, `null` when it does not exist.
  *
  * Absence is asked of the database rather than read from a failed select: a
  * dropped connection would otherwise read as the absent tables a `main` site
  * has, and pass its check. Any such failure fails the attempt, which the runner
  * takes again.
  */
-export async function translationRows(adapter) {
-  const rows = {};
-  for (const table of TRANSLATION_TABLES) {
-    rows[table] = (await adapter.tableExists(table)) ? (await adapter.select(table)).length : null;
-  }
-  return rows;
+async function localesStorage(adapter, table) {
+  if (!(await adapter.tableExists(table))) return null;
+  const rows = await adapter.select(table);
+  return { rows: rows.length, columns: columnsOf(rows) };
 }
 
 /**
- * Refuses a site whose storage is not the mode's: one row per article in each
- * translation table for the one language, and no tables at all for a site
- * storing everything on its main tables.
+ * What each table with translatable columns stores: its own columns, and its
+ * translation table's rows and columns. The evidence that a mode stores what it
+ * says it does: a `per-language` run storing its values where `main` does would
+ * compare a site with itself.
  */
-export function checkStorage(mode, docs, rows) {
-  const expected = mode === "per-language" ? docs : null;
-  for (const [table, count] of Object.entries(rows)) {
-    if (count !== expected) throw new Error(`${mode} mode found ${count} rows in ${table}, expected ${expected}`);
+export async function storageOf(adapter) {
+  const storage = {};
+  for (const table of Object.keys(TRANSLATABLE_COLUMNS)) {
+    storage[table] = { columns: columnsOf(await adapter.select(table)), locales: await localesStorage(adapter, localesOf(table)) };
   }
+  return storage;
+}
+
+/** What is wrong with a `main` site's table: a translation table, or translatable columns missing. */
+function mainProblem(translatable, _docs, { columns, locales }) {
+  if (locales !== null) return `has a translation table, of ${locales.rows} rows`;
+  const missing = translatable.filter(column => !columns.includes(column));
+  return missing.length > 0 ? `lacks ${missing.join(", ")}` : undefined;
+}
+
+/**
+ * What is wrong with a `per-language` site's table: no translation table, one
+ * row too few or many for the one language, or a column on the wrong side.
+ */
+function perLanguageProblem(translatable, docs, { columns, locales }) {
+  if (locales === null) return "has no translation table";
+  if (locales.rows !== docs) return `has ${locales.rows} translation rows, expected ${docs}`;
+  return misplaced(translatable, columns, locales.columns);
+}
+
+/**
+ * The columns stored on the wrong side: a translatable one left on the main
+ * table or missing from its translation table, or a shared one moved into it.
+ * A translation table's own bookkeeping columns start with `_`.
+ */
+function misplaced(translatable, onMain, onLocales) {
+  const wrong = [
+    ...translatable.filter(column => onMain.includes(column) || !onLocales.includes(column)),
+    ...onLocales.filter(column => !column.startsWith("_") && !translatable.includes(column)),
+  ];
+  return wrong.length > 0 ? `stores ${wrong.join(", ")} on the wrong side` : undefined;
+}
+
+/** Refuses a site whose storage is not the mode's. */
+export function checkStorage(mode, docs, storage) {
+  const problemOf = mode === "per-language" ? perLanguageProblem : mainProblem;
+  for (const [table, stored] of Object.entries(storage)) {
+    const problem = problemOf(TRANSLATABLE_COLUMNS[table], docs, stored);
+    if (problem) throw new Error(`${mode} mode: ${table} ${problem}`);
+  }
+}
+
+/** Each translation table's row count, `null` for one that does not exist, as a measurement reports them. */
+function translationRows(storage) {
+  return Object.fromEntries(Object.entries(storage).map(([table, { locales }]) => [localesOf(table), locales?.rows ?? null]));
 }
 
 /**
@@ -203,7 +257,7 @@ async function restGet(handlers, key, segments, query) {
 }
 
 /** The four reads, each drawing its page or id from its own seeded sequence. */
-function readsFor({ nextly, handlers, keys, articleIds, options }) {
+export function readsFor({ nextly, handlers, keys, articleIds, options }) {
   const pages = Math.floor(articleIds.length / PAGE_SIZE);
   const page = random => 1 + pick(random, pages);
   const id = random => articleIds[pick(random, articleIds.length)];
@@ -213,9 +267,9 @@ function readsFor({ nextly, handlers, keys, articleIds, options }) {
     return { iterations: count, next: () => call(random) };
   };
   return {
-    "direct list": read(1, options.iterations, r => nextly.find({ collection: "articles", limit: PAGE_SIZE, page: page(r), depth: 1 })),
+    "direct list": read(1, options.iterations, r => nextly.find({ collection: "articles", limit: PAGE_SIZE, page: page(r), sort: LIST_SORT, depth: 1 })),
     "direct detail": read(2, options.iterations, r => nextly.findByID({ collection: "articles", id: id(r), depth: 1 })),
-    "rest list": read(3, options.restIterations, r => restGet(handlers, keys.list, entries, `limit=${PAGE_SIZE}&page=${page(r)}&depth=1`)),
+    "rest list": read(3, options.restIterations, r => restGet(handlers, keys.list, entries, `limit=${PAGE_SIZE}&page=${page(r)}&sort=${LIST_SORT}&depth=1`)),
     "rest detail": read(4, options.restIterations, r => restGet(handlers, keys.detail, [...entries, id(r)], "depth=1")),
   };
 }
@@ -257,6 +311,15 @@ export function optionsFrom(argv) {
   };
 }
 
+/** Shuts the site down, then removes its folder, whether or not the shutdown succeeded. */
+export async function teardown(handle, cleanup) {
+  try {
+    await handle.destroy();
+  } finally {
+    cleanup();
+  }
+}
+
 /** Runs one measurement and prints its JSON line. */
 async function main(argv) {
   const options = optionsFrom(argv);
@@ -265,8 +328,8 @@ async function main(argv) {
   const { handle, cleanup } = await boot(options);
   try {
     const articleIds = await seedSite(handle.nextly, options);
-    const rows = await translationRows(handle.adapter);
-    checkStorage(options.mode, options.docs, rows);
+    const storage = await storageOf(handle.adapter);
+    checkStorage(options.mode, options.docs, storage);
     const { createDynamicHandlers } = await import(new URL("runtime.mjs", NEXTLY_DIST).href);
     const reads = readsFor({ nextly: handle.nextly, handlers: createDynamicHandlers(), keys: await readOnlyKeys(handle), articleIds, options });
     const results = {};
@@ -274,10 +337,9 @@ async function main(argv) {
       checkShape(name, await read.next());
       results[name] = summarize(await time(read, options.warmup));
     }
-    console.log(JSON.stringify({ mode: options.mode, dialect: options.dialect, docs: options.docs, seed: options.seed, translationRows: rows, loadStart, loadEnd: loadavg()[0], results }));
+    console.log(JSON.stringify({ mode: options.mode, dialect: options.dialect, docs: options.docs, seed: options.seed, translationRows: translationRows(storage), loadStart, loadEnd: loadavg()[0], results }));
   } finally {
-    await handle.destroy();
-    cleanup();
+    await teardown(handle, cleanup);
   }
 }
 

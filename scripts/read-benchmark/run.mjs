@@ -23,12 +23,14 @@
  * always in pairs, so each mode is measured first as often as second.
  *
  * `--save` keeps every measurement as it is taken, and a run started again
- * with the same file and settings reuses what it holds, so a run stopped part
- * way loses at most the measurement it was on. A measurement whose process
+ * with the same file, settings and code reuses what it holds, so a run stopped
+ * part way loses at most the pair of measurements it was on: half a pair is
+ * taken again whole, so its two modes are never measured in different sessions. A measurement whose process
  * fails (a dropped database connection, say) is taken again, like one taken
  * under too much load.
  */
-import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { execFileSync, spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { availableParallelism, loadavg } from "node:os";
 import { dirname, join } from "node:path";
@@ -38,6 +40,7 @@ import { parseArgs } from "node:util";
 import { isCliEntry } from "../cli-entry.mjs";
 
 import { MODES } from "./fixture.mjs";
+import { PAGE_SIZE } from "./measure.mjs";
 import { keyFor, openSaved } from "./saved.mjs";
 import { median, spread } from "./stats.mjs";
 import { verdictFor } from "./verdict.mjs";
@@ -67,6 +70,36 @@ export function needsAnotherRun(runs, { minRuns, maxRuns, spreadLimit }) {
   return runs.length < maxRuns && !runsAgree(runs, spreadLimit);
 }
 
+/** A whole number of at least `lowest`. */
+const wholeFrom = lowest => [value => Number.isInteger(value) && value >= lowest, `a whole number from ${lowest}`];
+/** A finite number above zero. */
+const positive = [value => Number.isFinite(value) && value > 0, "a finite number above 0"];
+
+/**
+ * What each numeric option must be. Anything else would quietly turn a control
+ * off: a negative warm-up does none, an infinite load limit or bound accepts
+ * everything, and fewer articles than a page cannot fill one.
+ */
+const NUMBERS = {
+  runs: wholeFrom(1),
+  "max-runs": wholeFrom(2),
+  docs: wholeFrom(PAGE_SIZE),
+  iterations: wholeFrom(1),
+  warmup: wholeFrom(0),
+  "rest-iterations": wholeFrom(1),
+  seed: wholeFrom(0),
+  "max-load": positive,
+  "spread-limit": positive,
+  bound: positive,
+};
+
+/** Refuses a numeric option outside what it must be, before anything is measured or saved. */
+export function checkNumbers(options) {
+  for (const [name, [accepts, what]] of Object.entries(NUMBERS)) {
+    if (!accepts(Number(options[name]))) throw new RangeError(`--${name} ${options[name]} is not ${what}`);
+  }
+}
+
 /** Refuses run limits under which the runs could not end in balanced pairs. */
 export function checkLimits({ minRuns, maxRuns }) {
   if (maxRuns % 2 === 1) throw new RangeError(`--max-runs ${maxRuns} is odd: runs come in pairs, each mode first once`);
@@ -77,6 +110,7 @@ export function checkLimits({ minRuns, maxRuns }) {
 export function reportSettings(options) {
   const number = name => Number(options[name]);
   return {
+    revision: options.revision,
     seed: number("seed"),
     docs: number("docs"),
     iterations: number("iterations"),
@@ -110,6 +144,24 @@ export function tableLines(dialects) {
     }
   }
   return lines;
+}
+
+/**
+ * The code being measured: the commit, and a digest of what the benchmark and
+ * the packages differ from it by, when they do. A saved file records it, so
+ * measurements taken by other code are never mixed into one verdict. The
+ * packages' builds are what run, so build them from this tree first.
+ */
+export function revisionOf(dir) {
+  const git = (...args) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8" });
+  const changes = git("diff", "HEAD", "--", "scripts/read-benchmark", "packages");
+  const digest = changes === "" ? "" : `+${createHash("sha256").update(changes).digest("hex").slice(0, 12)}`;
+  return `${git("rev-parse", "HEAD").trim()}${digest}`;
+}
+
+/** Whether a measurement's load was within the limit when it started and when it ended. */
+export function withinLoad(result, maxLoad) {
+  return result.loadStart <= maxLoad && result.loadEnd <= maxLoad;
 }
 
 /** Resolves once the one-minute load average is at most `maxLoad`. */
@@ -154,9 +206,9 @@ async function attempt(dialect, mode, options, skipped) {
     console.error(`  ${dialect} ${mode}: ${error.message}; taking it again`);
     return null;
   });
-  if (result === null || result.loadEnd <= maxLoad) return result;
+  if (result === null || withinLoad(result, maxLoad)) return result;
   skipped.push({ dialect, mode, loadStart: result.loadStart, loadEnd: result.loadEnd });
-  console.error(`  ${dialect} ${mode}: load ended at ${result.loadEnd.toFixed(1)}, above ${maxLoad}; taking it again`);
+  console.error(`  ${dialect} ${mode}: load went from ${result.loadStart.toFixed(1)} to ${result.loadEnd.toFixed(1)}, above ${maxLoad}; taking it again`);
   return null;
 }
 
@@ -169,24 +221,32 @@ async function steadyMeasure(dialect, mode, options, skipped) {
   throw new Error(`${dialect} ${mode}: no steady measurement in ${MAX_RETAKES + 1} attempts`);
 }
 
-/** A run's measurement of `mode`: the saved one, or one taken now and saved. */
-async function measurementFor(dialect, runIndex, mode, context) {
-  const { options, skipped, store } = context;
-  const saved = store.saved.get(keyFor(dialect, runIndex, mode));
-  if (saved) return saved;
+/** A run's saved measurements, only when both its modes were saved; `null` otherwise. */
+export function savedRun(saved, dialect, runIndex) {
+  const pair = MODES.map(mode => [mode, saved.get(keyFor(dialect, runIndex, mode))]);
+  return pair.every(([, result]) => result !== undefined) ? Object.fromEntries(pair) : null;
+}
+
+/** A measurement of `mode` taken now, and saved. */
+async function measured(dialect, runIndex, mode, context) {
   console.error(`${dialect} run ${runIndex + 1}: ${mode}`);
-  const result = await steadyMeasure(dialect, mode, options, skipped);
-  store.save(dialect, runIndex, mode, result);
+  const result = await steadyMeasure(dialect, mode, context.options, context.skipped);
+  context.store.save(dialect, runIndex, mode, result);
   return result;
 }
 
-/** One database's runs: as many as `needsAnotherRun` asks for, each mode alternating. */
+/** A run taken now: both modes, in the run's order. */
+async function measuredRun(dialect, runIndex, context) {
+  const run = {};
+  for (const mode of orderFor(runIndex)) run[mode] = await measured(dialect, runIndex, mode, context);
+  return run;
+}
+
+/** One database's runs: as many as `needsAnotherRun` asks for, each saved one reused only whole. */
 async function runsFor(dialect, limits, context) {
   const runs = [];
   while (needsAnotherRun(runs, limits)) {
-    const run = {};
-    for (const mode of orderFor(runs.length)) run[mode] = await measurementFor(dialect, runs.length, mode, context);
-    runs.push(run);
+    runs.push(savedRun(context.store.saved, dialect, runs.length) ?? (await measuredRun(dialect, runs.length, context)));
   }
   return runs;
 }
@@ -196,9 +256,9 @@ function writeReport(out, report) {
   if (out) writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
 }
 
-/** Runs the benchmark and prints its table and verdict. */
-async function main(argv) {
-  const { values: options } = parseArgs({
+/** The benchmark's options from its command line, with their defaults, as strings. */
+export function optionsOf(argv) {
+  const { values } = parseArgs({
     args: argv,
     options: {
       dialects: { type: "string", default: "sqlite,postgresql,mysql" },
@@ -216,6 +276,13 @@ async function main(argv) {
       out: { type: "string" },
     },
   });
+  return values;
+}
+
+/** Runs the benchmark and prints its table and verdict. */
+async function main(argv) {
+  const options = { ...optionsOf(argv), revision: revisionOf(root) };
+  checkNumbers(options);
   const limits = { minRuns: Number(options.runs), maxRuns: Number(options["max-runs"]), spreadLimit: Number(options["spread-limit"]) };
   checkLimits(limits);
   const bound = Number(options.bound) / 100;

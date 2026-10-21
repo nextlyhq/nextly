@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MODES, TRANSLATION_TABLES, articleData, authorData, siteFor } from "./fixture.mjs";
+import { MODES, TRANSLATABLE_COLUMNS, articleData, authorData, localesOf, siteFor } from "./fixture.mjs";
 import { seededRandom } from "./stats.mjs";
 
 /** Builders that return what they were given, tagged, so a site's shape can be read without Nextly. */
@@ -41,7 +41,8 @@ describe("the benchmark site, by storage mode", () => {
   });
 
   it("names the per-language tables of both the articles and the card", () => {
-    expect(TRANSLATION_TABLES).toEqual(["dc_articles_locales", "comp_card_locales"]);
+    expect(TRANSLATABLE_COLUMNS).toEqual({ dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] });
+    expect(localesOf("dc_articles")).toBe("dc_articles_locales");
   });
 });
 

@@ -67,10 +67,17 @@ export function siteFor(mode, config) {
 }
 
 /**
- * The tables a `per-language` site keeps its translatable values in: the
- * articles' own, and the card component's. A `main` site has neither.
+ * The translatable columns of each table that has any: the articles' own, and
+ * the card component's. A `main` site keeps them on these tables; a
+ * `per-language` site moves them to each table's translation table, where
+ * its shared columns never go.
  */
-export const TRANSLATION_TABLES = ["dc_articles_locales", "comp_card_locales"];
+export const TRANSLATABLE_COLUMNS = { dc_articles: ["headline", "excerpt", "body"], comp_card: ["heading", "blurb"] };
+
+/** The table a `per-language` site keeps `table`'s translatable values in. */
+export function localesOf(table) {
+  return `${table}_locales`;
+}
 
 const WORDS = (
   "content model editor publish draft release schedule language locale field " +

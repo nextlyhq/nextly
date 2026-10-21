@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { checkLimits, needsAnotherRun, orderFor, overallCall, reportSettings, runsAgree, tableLines } from "./run.mjs";
+import { keyFor } from "./saved.mjs";
+import {
+  checkLimits,
+  checkNumbers,
+  needsAnotherRun,
+  optionsOf,
+  orderFor,
+  overallCall,
+  reportSettings,
+  revisionOf,
+  runsAgree,
+  savedRun,
+  tableLines,
+  withinLoad,
+} from "./run.mjs";
 
 /** A run whose every read took `main` and `perLanguage` at p95 (and half that at p50). */
 const run = (main, perLanguage) => ({
@@ -47,10 +61,45 @@ describe("how the benchmark runs", () => {
   });
 });
 
+describe("what a run accepts", () => {
+  it("accepts a measurement only when its load started and ended within the limit", () => {
+    expect(withinLoad({ loadStart: 7, loadEnd: 8 }, 8)).toBe(true);
+    // Load that rose after the wait, while the heavy-job bound queued it, say.
+    expect(withinLoad({ loadStart: 12, loadEnd: 6 }, 8)).toBe(false);
+    expect(withinLoad({ loadStart: 6, loadEnd: 8.6 }, 8)).toBe(false);
+  });
+
+  it("reuses a saved run only when both its modes were saved", () => {
+    const saved = new Map([
+      [keyFor("sqlite", 0, "main"), { p: 1 }],
+      [keyFor("sqlite", 0, "per-language"), { p: 2 }],
+      [keyFor("sqlite", 1, "per-language"), { p: 3 }],
+    ]);
+    expect(savedRun(saved, "sqlite", 0)).toEqual({ main: { p: 1 }, "per-language": { p: 2 } });
+    // Half a run, its other half lost with the process: both are taken again together.
+    expect(savedRun(saved, "sqlite", 1)).toBeNull();
+    expect(savedRun(saved, "mysql", 0)).toBeNull();
+  });
+
+  it("takes the documented defaults and refuses numbers that would disable a control", () => {
+    expect(() => checkNumbers(optionsOf([]))).not.toThrow();
+    // Each refused by this check's own message: `--warmup=-1`, since a bare
+    // `-1` is read as a flag and refused before it reaches the check.
+    for (const bad of [["--warmup=-1"], ["--max-load", "Infinity"], ["--bound", "Infinity"], ["--docs", "10"], ["--iterations", "1.5"], ["--spread-limit", "0"], ["--seed", "x"]]) {
+      const name = bad[0].split("=")[0];
+      expect(() => checkNumbers(optionsOf(bad)), bad.join(" ")).toThrow(new RegExp(`^${name} .* is not `));
+    }
+  });
+
+  it("names the commit it measures, and what differs from it", () => {
+    expect(revisionOf(process.cwd())).toMatch(/^[0-9a-f]{40}(\+[0-9a-f]{12})?$/);
+  });
+});
+
 describe("how the benchmark reports", () => {
   it("records every setting a measurement was taken with, the warm-up among them", () => {
-    const options = { seed: "1", docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", "max-load": "8" };
-    expect(reportSettings(options)).toEqual({ seed: 1, docs: 1000, iterations: 3000, warmup: 300, restIterations: 600, maxLoad: 8 });
+    const options = { seed: "1", docs: "1000", iterations: "3000", warmup: "300", "rest-iterations": "600", "max-load": "8", revision: "abc" };
+    expect(reportSettings(options)).toEqual({ revision: "abc", seed: 1, docs: 1000, iterations: 3000, warmup: 300, restIterations: 600, maxLoad: 8 });
   });
 
   const verdict = rows => ({ verdict: { reads: rows } });

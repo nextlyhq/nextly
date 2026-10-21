@@ -15,11 +15,13 @@ import {
   idOf,
   isCompleteArticle,
   optionsFrom,
+  readsFor,
   removingOnFailure,
-  translationRows,
+  storageOf,
+  teardown,
 } from "./measure.mjs";
 
-const article = { headline: "A headline", body: { root: {} }, author: { id: "a1" }, card: { heading: "Card" } };
+const article = { headline: "A headline", excerpt: "An excerpt.", body: { root: {} }, author: { id: "a1" }, card: { heading: "Card" } };
 
 describe("the checks a measurement makes before it times anything", () => {
   it("reads a create's id from the item or the record", () => {
@@ -31,6 +33,7 @@ describe("the checks a measurement makes before it times anything", () => {
   it("counts an article complete only with its translatable fields, author and card", () => {
     expect(isCompleteArticle(article)).toBe(true);
     expect(isCompleteArticle({ ...article, headline: undefined })).toBe(false);
+    expect(isCompleteArticle({ ...article, excerpt: undefined })).toBe(false);
     expect(isCompleteArticle({ ...article, body: null })).toBe(false);
     expect(isCompleteArticle({ ...article, author: "a1" })).toBe(false);
     // A relationship that failed to populate comes back null, which is also an "object".
@@ -52,23 +55,50 @@ describe("the checks a measurement makes before it times anything", () => {
   });
 
   it("refuses a site whose storage is not its mode's", () => {
-    const tables = count => ({ dc_articles_locales: count, comp_card_locales: count });
-    expect(() => checkStorage("per-language", 10, tables(10))).not.toThrow();
-    expect(() => checkStorage("main", 10, tables(null))).not.toThrow();
-    expect(() => checkStorage("per-language", 10, tables(null))).toThrow(/expected 10/);
-    expect(() => checkStorage("per-language", 10, { dc_articles_locales: 10, comp_card_locales: null })).toThrow(/comp_card_locales/);
-    expect(() => checkStorage("main", 10, tables(10))).toThrow(/expected null/);
+    // What each mode stores, as the two sites store it.
+    const asMain = {
+      dc_articles: { columns: ["id", "headline", "excerpt", "body", "views"], locales: null },
+      comp_card: { columns: ["id", "heading", "blurb"], locales: null },
+    };
+    const asPerLanguage = {
+      dc_articles: { columns: ["id", "views"], locales: { rows: 10, columns: ["_parent", "_locale", "headline", "excerpt", "body"] } },
+      comp_card: { columns: ["id"], locales: { rows: 10, columns: ["_parent", "_locale", "heading", "blurb"] } },
+    };
+    const articles = (storage, change) => ({ ...storage, dc_articles: { ...storage.dc_articles, ...change } });
+    expect(() => checkStorage("main", 10, asMain)).not.toThrow();
+    expect(() => checkStorage("per-language", 10, asPerLanguage)).not.toThrow();
+    expect(() => checkStorage("main", 10, asPerLanguage)).toThrow(/translation table/);
+    expect(() => checkStorage("main", 10, articles(asMain, { columns: ["id", "headline", "body"] }))).toThrow(/lacks excerpt/);
+    expect(() => checkStorage("per-language", 10, asMain)).toThrow(/no translation table/);
+    const fewer = articles(asPerLanguage, { locales: { ...asPerLanguage.dc_articles.locales, rows: 9 } });
+    expect(() => checkStorage("per-language", 10, fewer)).toThrow(/9 translation rows, expected 10/);
+    // Rows in the right tables are not enough: the columns must be there too.
+    const kept = articles(asPerLanguage, { columns: ["id", "views", "excerpt"] });
+    expect(() => checkStorage("per-language", 10, kept)).toThrow(/excerpt/);
+    const moved = articles(asPerLanguage, { locales: { rows: 10, columns: ["_parent", "_locale", "headline", "excerpt", "body", "views"] } });
+    expect(() => checkStorage("per-language", 10, moved)).toThrow(/views/);
   });
 
-  it("counts a table's rows only once it is known to exist, and lets any other failure through", async () => {
-    const adapter = (exists, select) => ({ tableExists: async table => exists.includes(table), select });
-    const rows = await translationRows(adapter(["dc_articles_locales"], async () => [{}, {}]));
-    expect(rows).toEqual({ dc_articles_locales: 2, comp_card_locales: null });
-    // A failed read of a table that exists is not an absent table: it fails the attempt.
-    const dropped = adapter(["dc_articles_locales", "comp_card_locales"], async () => {
-      throw new Error("connection lost");
+  it("reads each table's columns and its translation table's, and lets any failure through", async () => {
+    const tables = {
+      dc_articles: [{ id: 1, views: 3 }],
+      dc_articles_locales: [{ _parent: 1, headline: "h" }, { _parent: 2, headline: "i" }],
+      comp_card: [{ id: 1 }],
+    };
+    const adapter = {
+      tableExists: async table => table in tables,
+      select: async table => tables[table],
+    };
+    expect(await storageOf(adapter)).toEqual({
+      dc_articles: { columns: ["id", "views"], locales: { rows: 2, columns: ["_parent", "headline"] } },
+      comp_card: { columns: ["id"], locales: null },
     });
-    await expect(translationRows(dropped)).rejects.toThrow(/connection lost/);
+    // A failed read of a table that exists is not an absent table: it fails the attempt.
+    const dropped = { tableExists: async () => true, select: async () => Promise.reject(new Error("connection lost")) };
+    await expect(storageOf(dropped)).rejects.toThrow(/connection lost/);
+    // Nor is a failed question whether it exists, with the main tables still readable.
+    const unasked = { ...adapter, tableExists: async () => Promise.reject(new Error("connection lost")) };
+    await expect(storageOf(unasked)).rejects.toThrow(/connection lost/);
   });
 
   it("removes what a boot made when the boot fails, and keeps it when it succeeds", async () => {
@@ -87,6 +117,33 @@ describe("the checks a measurement makes before it times anything", () => {
       mode: "main", dialect: "sqlite", docs: 1000, iterations: 3000, warmup: 300, restIterations: 600, seed: 1,
     });
     expect(optionsFrom(["--mode", "per-language", "--dialect", "mysql", "--docs", "50", "--seed", "9"])).toMatchObject({ docs: 50, seed: 9 });
+  });
+
+  it("tears the site down and removes its folder even when the teardown fails", async () => {
+    let removed = 0;
+    const failing = { destroy: async () => Promise.reject(new Error("shutdown failed")) };
+    await expect(teardown(failing, () => removed++)).rejects.toThrow(/shutdown failed/);
+    await teardown({ destroy: async () => {} }, () => removed++);
+    expect(removed).toBe(2);
+  });
+
+  it("lists in a seeded order, so a page holds the same articles in both modes", async () => {
+    // Without a sort a page's articles are the database's choice, and seeded
+    // entries take random ids, so one page number could hold other articles
+    // in the other mode.
+    const finds = [];
+    const urls = [];
+    const reads = readsFor({
+      nextly: { find: async query => (finds.push(query), {}), findByID: async () => ({}) },
+      handlers: { GET: async request => (urls.push(new URL(request.url)), { status: 200, json: async () => ({}) }) },
+      keys: { list: "k", detail: "k" },
+      articleIds: Array.from({ length: 40 }, (_, i) => `a${i}`),
+      options: { seed: 1, iterations: 1, restIterations: 1 },
+    });
+    await reads["direct list"].next();
+    await reads["rest list"].next();
+    expect(finds[0].sort).toBe("publishedOn");
+    expect(urls[0].searchParams.get("sort")).toBe("publishedOn");
   });
 
   it("budgets each key what Nextly allows one by default", () => {
