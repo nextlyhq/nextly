@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   relativeTime,
+  releaseTimeOfDay,
   releaseTimeSentence,
   releaseTimeText,
 } from "../release-time";
@@ -143,5 +144,27 @@ describe("relativeTime", () => {
   it("has words for under a minute either side of now", () => {
     expect(relativeTime(now + 20_000, now)).toBe("in under a minute");
     expect(relativeTime(now - 20_000, now)).toBe("just now");
+  });
+});
+
+describe("releaseTimeOfDay", () => {
+  it("reads the clock in the zone it is given, not the reader's", () => {
+    // One instant, two clocks: 02:00 UTC is 22:00 the evening before in New
+    // York and 07:00 in Karachi. A calendar drawn in either zone must say its
+    // own clock's time on the chip.
+    expect(
+      plain(releaseTimeOfDay("2026-10-17T02:00:00.000Z", "America/New_York"))
+    ).toBe("10:00 PM");
+    expect(
+      plain(releaseTimeOfDay("2026-10-17T02:00:00.000Z", "Asia/Karachi"))
+    ).toBe("7:00 AM");
+  });
+
+  it("says nothing for no instant, or a zone it cannot honour", () => {
+    // Never the reader's own time under another zone's name.
+    expect(releaseTimeOfDay(null, "UTC")).toBeNull();
+    expect(
+      releaseTimeOfDay("2026-10-17T02:00:00.000Z", "Not/AZone")
+    ).toBeNull();
   });
 });

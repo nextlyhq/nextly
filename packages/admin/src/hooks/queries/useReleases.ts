@@ -7,6 +7,7 @@
  *
  * - `["releases"]` — every release query, the invalidation root
  * - `["releases", "list", params]` — one window
+ * - `["releases", "calendar", params]` — one calendar window, in one zone
  * - `["releases", "detail", id]` — one release
  * - `["releases", "members", id]` — its contents
  *
@@ -36,6 +37,7 @@ import {
   deleteRelease,
   fetchRelease,
   fetchReleaseBlockers,
+  fetchReleaseCalendar,
   fetchReleaseMembers,
   fetchReleasesReadiness,
   fetchReleases,
@@ -47,6 +49,8 @@ import {
   RELEASE_LIST_TABS,
   type AddReleaseMemberPayload,
   type CreateReleasePayload,
+  type ReleaseCalendarParams,
+  type ReleaseCalendarRead,
   type ReleaseDocumentRef,
   type ReleaseKind,
   type ReleaseListParams,
@@ -57,6 +61,8 @@ import {
 export const releaseKeys = {
   all: () => ["releases"] as const,
   list: (params: ReleaseListParams) => ["releases", "list", params] as const,
+  calendar: (params: ReleaseCalendarParams) =>
+    ["releases", "calendar", params] as const,
   detail: (id: string) => ["releases", "detail", id] as const,
   members: (id: string) => ["releases", "members", id] as const,
   blockers: (id: string) => ["releases", "blockers", id] as const,
@@ -117,7 +123,13 @@ export function useReleaseListPage(params: ReleaseListParams) {
   });
 }
 
-/** Whether two list reads are of the same tab and the same part of it. */
+/**
+ * Whether two list reads are of the same tab and the same part of it, and of
+ * the same calendar day.
+ *
+ * The day counts as a part: a day's list kept on screen while another day's
+ * loads would show one day's releases under the next day's heading.
+ */
 function sameTab(
   previous: ReleaseListParams | undefined,
   next: ReleaseListParams
@@ -125,8 +137,41 @@ function sameTab(
   return (
     previous !== undefined &&
     previous.tab === next.tab &&
-    previous.reason === next.reason
+    previous.reason === next.reason &&
+    previous.day?.date === next.day?.date &&
+    previous.day?.timezone === next.day?.timezone
   );
+}
+
+/**
+ * The calendar of one window of days in one zone, as the server counts it.
+ *
+ * Inside the `releases` root, so every release write refreshes it as it
+ * refreshes the list. Polled on the list's two speeds, and for the list's
+ * reason: a scheduled release runs by itself, and a day left open across its
+ * moment would otherwise go on counting it as scheduled.
+ *
+ * No placeholder while another window loads. The previous answer is of other
+ * days, or of the same dates in another zone, and drawing it under the new
+ * grid would put releases on days they are not on.
+ */
+export function useReleaseCalendar(params: ReleaseCalendarParams) {
+  return useQuery({
+    queryKey: releaseKeys.calendar(params),
+    queryFn: () => fetchReleaseCalendar(params),
+    refetchInterval: data =>
+      calendarHasPendingRelease(data.state.data)
+        ? PENDING_RELEASE_POLL_MS
+        : NO_RELEASE_POLL_MS,
+    refetchOnWindowFocus: true,
+  });
+}
+
+/** Whether any day of a calendar answer still holds a scheduled release. */
+function calendarHasPendingRelease(
+  data: ReleaseCalendarRead | undefined
+): boolean {
+  return (data?.days ?? []).some(day => day.counts.scheduled > 0);
 }
 
 /**

@@ -245,6 +245,55 @@ export interface ReleaseListParams {
    * eleven launches.
    */
   containing?: ReleaseDocumentRef;
+  /**
+   * Only the releases a calendar in `timezone` shows on `date`, in every
+   * state, soonest first: the day's complete list, paged like the rest. The
+   * server places a published release on the day it went out and any other
+   * on the day it is scheduled for, the same rule its calendar read uses, so
+   * a day's list holds exactly what the day's count counted.
+   */
+  day?: ReleaseDayFilter;
+}
+
+/** One day in a named zone: `date` is `YYYY-MM-DD`, `timezone` an IANA zone. */
+export interface ReleaseDayFilter {
+  date: string;
+  timezone: string;
+}
+
+/** How many releases a day holds in each state, every state present. */
+export type ReleaseStateCounts = Record<ReleaseState, number>;
+
+/**
+ * One day of the server's calendar read.
+ *
+ * `total` and `counts` cover every release on the day; `releases` holds the
+ * first few in time order (the server sends at most three), so "+N more" is
+ * worked out from `total` and is complete however busy the day is.
+ */
+export interface ReleaseCalendarDay {
+  date: string;
+  total: number;
+  counts: ReleaseStateCounts;
+  releases: Release[];
+}
+
+/** The server's calendar read: every day of the window asked for, in order. */
+export interface ReleaseCalendarRead {
+  timezone: string;
+  from: string;
+  to: string;
+  days: ReleaseCalendarDay[];
+}
+
+/** What a calendar read asks for: a window of at most six weeks, in a zone. */
+export interface ReleaseCalendarParams {
+  /** The first day, `YYYY-MM-DD`. */
+  from: string;
+  /** The last day, included. */
+  to: string;
+  /** The IANA zone the days are read in. */
+  timezone: string;
 }
 
 /** How many documents a release holds, and what it does with them. */
