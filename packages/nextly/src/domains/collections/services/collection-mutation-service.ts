@@ -5429,6 +5429,10 @@ export class CollectionMutationService extends BaseService {
     // publish busts the entry's cached reads. Publishing every locale, so no
     // single locale tag — the locale-less id tag covers them all.
     let revalidationIntent: RevalidationIntent | undefined;
+    // Set once the publish's transaction has committed, so a failure after it
+    // (the read of the published slugs, say) is reported as a change that was
+    // saved rather than one the caller should send again.
+    let committedWrite = false;
     try {
       const accessUser = params.overrideAccess ? undefined : params.user;
       const schema = await this.fileManager.loadDynamicSchema(
@@ -6103,6 +6107,7 @@ export class CollectionMutationService extends BaseService {
           data: null,
         };
       }
+      committedWrite = true;
 
       // Once the publish is durable: inside an enclosing SQLite transaction,
       // once that commits, and never for a publish it rolls back.
@@ -6222,6 +6227,7 @@ export class CollectionMutationService extends BaseService {
         // a hook's refusal or rate limit as a server fault, and left a boundary
         // nothing to rebuild it from.
         ...errorEnvelopeFields(thrown),
+        committed: committedWrite,
       };
     }
   }
