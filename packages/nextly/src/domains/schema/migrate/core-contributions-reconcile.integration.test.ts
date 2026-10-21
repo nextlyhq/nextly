@@ -319,10 +319,18 @@ describeEachDialect(
     }, 90_000);
 
     if (dialect === "sqlite") {
-      it("keeps a contributed column's VALUES through a rebuild of the core table", async () => {
+      it("keeps a contributed column's VALUES and its index through a rebuild of the core table", async () => {
         const { adapter, close } = await openDatabase(dialect);
         try {
           const { run, users } = await setUp(dialect, adapter);
+          const contributedIndex = async () =>
+            (await users())?.indexes?.find(
+              i => i.name === "idx_users_nickname"
+            );
+          // The control: the index is there before the rebuild, so finding it
+          // afterwards means the rebuild kept it rather than that it was
+          // never looked for.
+          expect((await contributedIndex())?.columns).toEqual(["nickname"]);
           await adapter.executeQuery(
             `INSERT INTO users (id, email, is_active, failed_login_attempts, created_at, updated_at, nickname) ` +
               `VALUES ('u1', 'a@example.com', 0, 0, 0, 0, 'Ace')`
@@ -353,6 +361,9 @@ describeEachDialect(
             `SELECT nickname FROM users WHERE id = 'u1'`
           )) as { nickname: string | null }[];
           expect(rows[0]?.nickname).toBe("Ace");
+          // A rebuild recreates the table from its target definition, so an
+          // index left out of that definition is not recreated with it.
+          expect((await contributedIndex())?.columns).toEqual(["nickname"]);
           // The core table's own account-state values are copied by the
           // same rebuild.
           expect(await accountState(adapter, "u-link")).toEqual({
