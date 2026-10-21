@@ -15,7 +15,10 @@ const TABS = [
     name: "Messages",
     path: "/email",
     // A fresh install's emails, under their owner.
-    loaded: (page: Page) => page.getByText("Welcome").first(),
+    // Visible only: below tablet width the table is hidden and the cards
+    // carry the same names.
+    loaded: (page: Page) =>
+      page.getByText("Welcome").filter({ visible: true }).first(),
   },
   {
     name: "Design",
