@@ -53,7 +53,7 @@ const REPLACED = new Date(2_000);
 function changeAndSettle(settledAt: Date) {
   const announce = vi.fn();
   const settingsWrite: CellSettingsWrite = {
-    write: (_config, callbacks) => callbacks.onLanded(),
+    write: (_config, callbacks) => callbacks.onLanded?.(),
     isWriting: false,
     announce,
   };
