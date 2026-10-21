@@ -103,9 +103,17 @@ export interface PinnedDraft {
 /** What is published now, one row per publish, naming its parts. */
 export interface PinnedPublished {
   parts: string[];
-  version: VersionMeta;
+  /**
+   * The parts' live version, or null for parts that went live with a publish
+   * of several parts. That publish recorded another part's version, and none
+   * of these parts' own versions is known to be what went live, so there is
+   * no version to open.
+   */
+  version: VersionMeta | null;
   /** The publish event, or null for one made before events were recorded. */
   publishedBy: DocumentEvent | null;
+  /** When it went live. */
+  at: string;
 }
 
 export interface Story {
@@ -311,21 +319,43 @@ function endedSince(
 
 /** A part's live version, the publish that put it live, and when. */
 interface PartPublish {
-  version: VersionMeta;
+  version: VersionMeta | null;
   publishedBy: DocumentEvent | null;
   at: string;
 }
 
-/** Whether a time falls in a later second than another. */
-function laterSecond(a: string, b: string): boolean {
-  return Math.floor(Date.parse(a) / 1000) > Math.floor(Date.parse(b) / 1000);
+/** A point in a document's history: a version's number, and its time. */
+interface HistoryPoint {
+  versionNo: number | null;
+  at: string;
+}
+
+/**
+ * Whether one point came after another: by version number where both have
+ * one, since numbers order writes within a second, else by second, the
+ * precision history stores.
+ */
+function cameAfter(a: HistoryPoint, b: HistoryPoint): boolean {
+  if (a.versionNo !== null && b.versionNo !== null) {
+    return a.versionNo > b.versionNo;
+  }
+  return (
+    Math.floor(Date.parse(a.at) / 1000) > Math.floor(Date.parse(b.at) / 1000)
+  );
+}
+
+function entryPoint(entry: StoryVersion): HistoryPoint {
+  return { versionNo: entry.version.versionNo, at: entry.at };
+}
+
+function publishPoint(live: PartPublish): HistoryPoint {
+  return { versionNo: live.publishedBy?.versionNo ?? null, at: live.at };
 }
 
 /**
  * What of a part is live: its own newest publish, unless a publish of several
- * parts shipped it since. That publish records one version, of another part,
- * so the part went live as it was last saved: its newest version at the
- * publish.
+ * parts shipped it since. That publish recorded another part's version, so it
+ * is named without a version of this part.
  *
  * @param own The part's own versions, newest first.
  */
@@ -343,26 +373,19 @@ function publishOf(
   const shipped = events.find(
     e => e.kind === "published" && e.parts.includes(part)
   );
-  if (
-    !shipped ||
-    shipped === ownPublish?.publishedBy ||
-    (ownPublish && !laterSecond(shipped.occurredAt, ownPublish.at))
-  ) {
+  if (!shipped || shipped === ownPublish?.publishedBy) return fromOwn;
+  const shippedAt = { versionNo: shipped.versionNo, at: shipped.occurredAt };
+  if (ownPublish && !cameAfter(shippedAt, entryPoint(ownPublish))) {
     return fromOwn;
   }
-  const live = own.find(e => !laterSecond(e.at, shipped.occurredAt));
-  if (!live) return fromOwn;
-  return {
-    version: live.version,
-    publishedBy: shipped,
-    at: shipped.occurredAt,
-  };
+  return { version: null, publishedBy: shipped, at: shipped.occurredAt };
 }
 
 /**
  * A part's working draft: its newest version, while that is a draft that
- * neither went live nor was discarded since. A discarded draft's version stays
- * in the history, but it is no longer the document's draft.
+ * neither went live nor was discarded since. A save made before a publish that
+ * shipped its part went live with it. A discarded draft's version stays in the
+ * history, but it is no longer the document's draft.
  */
 function draftOf(
   part: string,
@@ -372,23 +395,38 @@ function draftOf(
 ): PinnedDraft | undefined {
   if (!newest || newest.version.status !== "draft") return undefined;
   if (newest.version === live?.version) return undefined;
+  if (
+    live &&
+    !live.version &&
+    !cameAfter(entryPoint(newest), publishPoint(live))
+  ) {
+    return undefined;
+  }
   if (endedSince("draft-discarded", part, newest.at, events)) return undefined;
   return { part, version: newest.version, published: live !== undefined };
 }
 
-/** Add a part to the published row of its live version, or start one. */
+/**
+ * Add a part to the published row it shares, or start one: one row per live
+ * version, and one per publish for parts it shipped without a version.
+ */
 function pinPublished(
   published: PinnedPublished[],
   part: string,
   live: PartPublish
 ): void {
-  const row = published.find(r => r.version === live.version);
+  const row = published.find(r =>
+    live.version
+      ? r.version === live.version
+      : r.version === null && r.publishedBy === live.publishedBy
+  );
   if (row) row.parts.push(part);
   else {
     published.push({
       parts: [part],
       version: live.version,
       publishedBy: live.publishedBy,
+      at: live.at,
     });
   }
 }
@@ -470,7 +508,7 @@ export function buildStory(input: StoryInput): Story {
  */
 export function storyShows(story: Story, versionNo: number): boolean {
   const pinned = [...story.drafts, ...story.published].some(
-    pin => pin.version.versionNo === versionNo
+    pin => pin.version?.versionNo === versionNo
   );
   return (
     pinned ||

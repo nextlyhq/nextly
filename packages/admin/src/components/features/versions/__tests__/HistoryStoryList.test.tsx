@@ -421,11 +421,11 @@ describe("the language being edited", () => {
 
     expect(onSelect).toHaveBeenCalled();
     expect(onSelect.mock.calls.map(([n]) => n)).not.toContain(3);
-    // English is published as it was last saved.
-    await userEvent.click(
-      screen.getByRole("button", { name: /Currently published/ })
-    );
-    expect(onSelect).toHaveBeenLastCalledWith(1);
+    // English is published, by the Spanish publish, with no version to open.
+    expect(screen.getByText("Currently published")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Currently published/ })
+    ).toBeNull();
   });
 
   it("shows every part under All languages", () => {

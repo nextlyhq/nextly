@@ -50,7 +50,7 @@ function DraftChanges({
   // Compared within the part: the server compares two versions of one
   // language, or of the shared fields, never across them.
   const from =
-    published && published.version.locale === draft.version.locale
+    published?.version && published.version.locale === draft.version.locale
       ? published.version.versionNo
       : null;
   const diff = useVersionDiff({
@@ -66,7 +66,10 @@ function DraftChanges({
   return labels.length === 0 ? null : <span>{changeSummary(labels)}</span>;
 }
 
-/** A pinned card: a title, and a line for each part. */
+/**
+ * A pinned card: a title, and a line for each part. It opens a version when
+ * it has one to open; without one it is a plain card.
+ */
 function Pin({
   icon: Icon,
   title,
@@ -79,20 +82,11 @@ function Pin({
   title: string;
   hint?: string;
   active: boolean;
-  onClick: () => void;
+  onClick?: () => void;
   children: React.ReactNode;
 }) {
-  return (
-    <button
-      type="button"
-      aria-current={active ? "true" : undefined}
-      onClick={onClick}
-      className={cn(
-        "grid w-full gap-2 rounded-lg border border-border bg-card p-3 text-left hover:border-input",
-        active &&
-          "border-foreground shadow-[inset_0_0_0_1px_var(--nx-foreground)]"
-      )}
-    >
+  const body = (
+    <>
       <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
         <Icon className="h-4 w-4" aria-hidden />
         {title}
@@ -103,6 +97,24 @@ function Pin({
         ) : null}
       </span>
       <ul className="grid gap-1.5">{children}</ul>
+    </>
+  );
+  const frame =
+    "grid w-full gap-2 rounded-lg border border-border bg-card p-3 text-left";
+  if (!onClick) return <div className={frame}>{body}</div>;
+  return (
+    <button
+      type="button"
+      aria-current={active ? "true" : undefined}
+      onClick={onClick}
+      className={cn(
+        frame,
+        "hover:border-input",
+        active &&
+          "border-foreground shadow-[inset_0_0_0_1px_var(--nx-foreground)]"
+      )}
+    >
+      {body}
     </button>
   );
 }
@@ -143,7 +155,12 @@ export function HistoryPins({
 }: HistoryPinsProps) {
   if (drafts.length === 0 && published.length === 0) return null;
   const draftActive = drafts.some(d => d.version.versionNo === selected);
-  const publishedActive = published.some(p => p.version.versionNo === selected);
+  const publishedActive = published.some(
+    p => p.version !== null && p.version.versionNo === selected
+  );
+  // The first live version the card can open; a part shipped by another
+  // part's publish has none.
+  const openable = published.find(p => p.version !== null)?.version;
   return (
     <div className="grid gap-2 px-4 pb-2 pt-4">
       {drafts.length > 0 ? (
@@ -176,10 +193,15 @@ export function HistoryPins({
           icon={Globe}
           title="Currently published"
           active={publishedActive}
-          onClick={() => onSelect(published[0].version.versionNo ?? 0)}
+          onClick={
+            openable ? () => onSelect(openable.versionNo ?? 0) : undefined
+          }
         >
           {published.map(row => (
-            <PinLine key={row.version.id} part={partsLabel(row.parts)}>
+            <PinLine
+              key={row.version?.id ?? row.publishedBy?.id ?? row.at}
+              part={partsLabel(row.parts)}
+            >
               <span className="text-xs">
                 {row.publishedBy ? (
                   <>
@@ -189,7 +211,7 @@ export function HistoryPins({
                   "Publisher not recorded"
                 )}
                 {" · "}
-                {formatDateTime(row.version.createdAt)}
+                {formatDateTime(row.at)}
               </span>
             </PinLine>
           ))}
