@@ -19,6 +19,7 @@ import {
 } from "../../../../plugins/test-nextly";
 import { consoleLogger } from "../../../../services/shared";
 import { AuthService } from "../auth-service";
+import { AUTH_TOKEN_LIFETIME_MS } from "../token-account-binding";
 
 const between = vi.hoisted(() => ({
   failReset: false,
@@ -219,7 +220,11 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       try {
         const origWithTransaction = auth1["withTransaction"].bind(auth1);
         auth1["withTransaction"] = (async (fn: any) => {
-          vi.setSystemTime(Date.now() + 1000 * 60 * 60 * 24);
+          // Past the token's lifetime by a minute, not exactly at it: MySQL's
+          // `datetime` column keeps whole seconds and rounds, so a stored
+          // expiry can sit up to half a second after the one computed, and a
+          // clock moved by exactly the lifetime would still find it valid.
+          vi.setSystemTime(Date.now() + AUTH_TOKEN_LIFETIME_MS + 60_000);
           return origWithTransaction(fn);
         }) as any;
 

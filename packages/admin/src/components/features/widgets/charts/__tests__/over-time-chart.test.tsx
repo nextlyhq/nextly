@@ -150,7 +150,9 @@ describe("series and their colours", () => {
 describe("the text alternative", () => {
   it("states the range, the total, the latest and the highest", () => {
     drawAt("medium", [series("Posts", [2, 9, 4])]);
-    expect(screen.getByRole("img")).toHaveAccessibleDescription(
+    expect(
+      screen.getByRole("group", { name: /Use the arrow keys/ })
+    ).toHaveAccessibleDescription(
       "Posts created, Day 1 to Day 3: 15 in total. Latest 4 on Day 3; highest 9 on Day 2."
     );
   });

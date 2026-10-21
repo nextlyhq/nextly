@@ -19,7 +19,6 @@
  *
  * @module components/features/widgets/edit/ArrangedGrid
  */
-import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { RefObject } from "react";
 
@@ -37,6 +36,8 @@ import {
 } from "../layout-editor";
 
 import { ArrangedCell } from "./ArrangedCell";
+import type { DropLine } from "./drag/drop-geometry";
+import type { CardDrag } from "./drag/useCardDrag";
 import type { ArrangedWidget } from "./useDashboardArrangement";
 import type { DashboardFocus } from "./useDashboardFocus";
 
@@ -47,8 +48,21 @@ export interface ArrangedGridProps {
   placements: readonly WidgetPlacement[];
   isDrawn: IsDrawn;
   isEditing: boolean;
-  /** The card the add panel just added, ringed until the next add. */
+  /** The card just placed (moved, resized, added or put back), ringed until the next. */
   highlightedId?: string | null;
+  /**
+   * The drag, for its handles and its line. Its handles are drawn only while it is `enabled`:
+   * at one column the card menu moves cards.
+   */
+  drag?: Pick<
+    CardDrag,
+    | "enabled"
+    | "oneColumn"
+    | "drag"
+    | "line"
+    | "onHandleKeyDown"
+    | "onHandleBlur"
+  >;
   /** Whether a layout write is in flight anywhere on this dashboard. */
   isWriting: boolean;
   /** Why a single-card write is unavailable right now, when it is. */
@@ -82,7 +96,7 @@ export interface ArrangedGridProps {
   /** Reload one card's data on its own, from its error state's Retry. */
   retry: (placementId: string) => void;
   announcement: string;
-  focus: Pick<DashboardFocus, "menuRef" | "dismissRef">;
+  focus: Pick<DashboardFocus, "menuRef" | "dismissRef" | "handleRef">;
   /** The region's own ref: where focus lands when nothing nearer can take it. */
   gridRef: RefObject<HTMLElement | null>;
   on: {
@@ -111,23 +125,33 @@ function EmptyArrangement({
       data-testid="widget-grid-empty"
       className="col-span-full rounded-lg border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground"
     >
-      {isEditing ? (
-        "Every card is removed. Put one back from Add widget, or reset to the default dashboard."
-      ) : (
-        <>
-          Your dashboard has no cards on it.{" "}
-          {/* Customise mode is offered from `md` up, so the way back is said
-              per width: naming a control a narrow screen does not show would
-              send the reader looking for it. */}
-          <span className="hidden md:inline">
-            Customize it to bring one back, or reset to the default dashboard.
-          </span>
-          <span className="md:hidden">
-            Customize it on a larger screen to bring one back.
-          </span>
-        </>
-      )}
+      {isEditing
+        ? "Every card is removed. Put one back from Add widget, or reset to the default dashboard."
+        : // Customise mode is offered at every width, so the way back is the same on a phone.
+          "Your dashboard has no cards on it. Customize it to bring one back, or reset to the default dashboard."}
     </p>
+  );
+}
+
+/**
+ * The line where a dragged card will land: beside the card it goes after, or across the grid
+ * where it starts a row. Centred in the gap between cards, in the primary colour, and drawn
+ * only, never announced: the drag says the same in words.
+ */
+function DropLineMark({ line }: { line: DropLine | undefined }) {
+  if (line === undefined) return null;
+  const style =
+    line.orientation === "vertical"
+      ? { left: line.x - 1, top: line.top, width: 2, height: line.length }
+      : { left: line.x, top: line.y - 1, width: line.length, height: 2 };
+  return (
+    <div
+      aria-hidden
+      data-testid="widget-drop-line"
+      data-orientation={line.orientation}
+      className="pointer-events-none absolute z-20 rounded-full bg-primary"
+      style={style}
+    />
   );
 }
 
@@ -137,6 +161,7 @@ export function ArrangedGrid({
   isDrawn,
   isEditing,
   highlightedId = null,
+  drag,
   isWriting,
   singleCardWriteBlocked,
   settingsWrite,
@@ -163,8 +188,9 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
-        className="grid grid-cols-12 gap-[24px]"
+        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts. `relative` so the
+        // drop line is placed from the grid's own corner, where the drag measures from.
+        className="relative grid grid-cols-12 gap-[24px]"
       >
         <span
           role="status"
@@ -175,85 +201,86 @@ export function ArrangedGrid({
           {announcement}
         </span>
         <EmptyArrangement count={rows.length} isEditing={isEditing} />
-        {/* ONE sortable list over the whole order. `rectSortingStrategy`
-            measures a grid rather than a column; the cell itself declines the
-            live reflow for cards of mixed widths (`SortableWidgetCell`). */}
-        <SortableContext
-          items={rows.map(row => row.placementId)}
-          strategy={rectSortingStrategy}
-        >
-          {rows.map(row => (
-            <ArrangedCell
-              key={row.placementId}
-              row={row}
-              isEditing={isEditing}
-              highlighted={highlightedId === row.placementId}
-              isWriting={isWriting}
-              singleCardWriteBlocked={singleCardWriteBlocked}
-              {...(settingsWrite
+        <DropLineMark line={drag?.line} />
+        {rows.map(row => (
+          <ArrangedCell
+            key={row.placementId}
+            row={row}
+            isEditing={isEditing}
+            highlighted={highlightedId === row.placementId}
+            // At one column each card menu lists its widths in place, where a submenu has no room.
+            widthsInPlace={drag?.oneColumn === true}
+            drag={
+              drag?.enabled
                 ? {
-                    settingsWrite: {
-                      write: (config, callbacks) =>
-                        settingsWrite.write(
-                          row.placementId,
-                          row.widget.title,
-                          config,
-                          callbacks
-                        ),
-                      isWriting: settingsWrite.isWriting,
-                      ...(settingsWrite.unavailable === undefined
-                        ? {}
-                        : { unavailable: settingsWrite.unavailable }),
-                      announce: (setting, value) =>
-                        settingsWrite.announce(
-                          row.widget.title,
-                          setting,
-                          value
-                        ),
-                    },
+                    held: drag.drag?.placementId === row.placementId,
+                    onKeyDown: event =>
+                      drag.onHandleKeyDown(row.placementId, event),
+                    onBlur: () => drag.onHandleBlur(row.placementId),
+                    handleRef: focus.handleRef(row.placementId),
                   }
-                : {})}
-              // The same rule the move applies, so an item is enabled exactly
-              // when choosing it would move the card.
-              can={moveAvailability(placements, row.placementId, isDrawn)}
-              data={{
-                slot: slots[row.placementId],
-                // This card's own answers, by cell key.
-                slotFor: key => cellSlots[row.placementId]?.[key],
-                // Only a card that actually ASKED can be waiting on an answer.
-                updatedAt: requested.has(row.placementId)
-                  ? updatedAtFor(row.placementId)
-                  : null,
-                // 🔴 This card's own request, not the batch's: partitions
-                // settle independently, and a settled card must not dim.
-                isFetching: fetchingPlacementIds.has(row.placementId),
-                answerTier: fetchedTierFor(row.placementId),
-                // Retry only for a card in the batch: one rejected before it was asked has no
-                // question to ask again, so the button could change nothing.
-                onRetry: requested.has(row.placementId)
-                  ? () => retry(row.placementId)
-                  : undefined,
-              }}
-              refs={{
-                menu: focus.menuRef(row.placementId),
-                dismiss: focus.dismissRef(row.placementId),
-              }}
-              on={{
-                move: direction => on.move(row.placementId, direction),
-                setWidth: width => on.setWidth(row.placementId, width),
-                remove: () => on.remove(row.placementId),
-                ...(on.dismiss
-                  ? {
-                      dismiss: () =>
-                        on.dismiss?.(row.placementId, row.widget.title),
-                    }
-                  : {}),
-                saveSettings: config =>
-                  on.saveSettings(row.placementId, config),
-              }}
-            />
-          ))}
-        </SortableContext>
+                : undefined
+            }
+            isWriting={isWriting}
+            singleCardWriteBlocked={singleCardWriteBlocked}
+            {...(settingsWrite
+              ? {
+                  settingsWrite: {
+                    write: (config, callbacks) =>
+                      settingsWrite.write(
+                        row.placementId,
+                        row.widget.title,
+                        config,
+                        callbacks
+                      ),
+                    isWriting: settingsWrite.isWriting,
+                    ...(settingsWrite.unavailable === undefined
+                      ? {}
+                      : { unavailable: settingsWrite.unavailable }),
+                    announce: (setting, value) =>
+                      settingsWrite.announce(row.widget.title, setting, value),
+                  },
+                }
+              : {})}
+            // The same rule the move applies, so an item is enabled exactly
+            // when choosing it would move the card.
+            can={moveAvailability(placements, row.placementId, isDrawn)}
+            data={{
+              slot: slots[row.placementId],
+              // This card's own answers, by cell key.
+              slotFor: key => cellSlots[row.placementId]?.[key],
+              // Only a card that actually ASKED can be waiting on an answer.
+              updatedAt: requested.has(row.placementId)
+                ? updatedAtFor(row.placementId)
+                : null,
+              // 🔴 This card's own request, not the batch's: partitions
+              // settle independently, and a settled card must not dim.
+              isFetching: fetchingPlacementIds.has(row.placementId),
+              answerTier: fetchedTierFor(row.placementId),
+              // Retry only for a card in the batch: one rejected before it was asked has no
+              // question to ask again, so the button could change nothing.
+              onRetry: requested.has(row.placementId)
+                ? () => retry(row.placementId)
+                : undefined,
+            }}
+            refs={{
+              menu: focus.menuRef(row.placementId),
+              dismiss: focus.dismissRef(row.placementId),
+            }}
+            on={{
+              move: direction => on.move(row.placementId, direction),
+              setWidth: width => on.setWidth(row.placementId, width),
+              remove: () => on.remove(row.placementId),
+              ...(on.dismiss
+                ? {
+                    dismiss: () =>
+                      on.dismiss?.(row.placementId, row.widget.title),
+                  }
+                : {}),
+              saveSettings: config => on.saveSettings(row.placementId, config),
+            }}
+          />
+        ))}
       </section>
     </div>
   );

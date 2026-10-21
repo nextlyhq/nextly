@@ -63,14 +63,83 @@ import { createDatabaseError, isDatabaseError } from "./types";
 import { buildUpdateStatement } from "./update-statement";
 
 /**
+ * Where a test harness installs the observer {@link DrizzleAdapter.notePoolAccess}
+ * reports a transaction escape to: a global registry key rather than an
+ * import, so the harness and every copy of this package agree on it.
+ */
+const TRANSACTION_ESCAPE_OBSERVER = Symbol.for(
+  "nextly.transactionEscapeObserver"
+);
+
+/** What a test harness installed to hear about escapes, if anything. */
+type EscapeObserver = (report: {
+  dialect: string;
+  stack: string;
+  openedAt?: string;
+  statement?: string;
+}) => void;
+
+/**
+ * The SQL text a pool call was handed: a string, or the `text` (pg) or `sql`
+ * (mysql2) of a query object. Undefined for a connection checkout.
+ */
+function statementOf(argument: unknown): string | undefined {
+  if (typeof argument === "string") return argument;
+  if (typeof argument !== "object" || argument === null) return undefined;
+  const { text, sql } = argument as { text?: unknown; sql?: unknown };
+  if (typeof text === "string") return text;
+  return typeof sql === "string" ? sql : undefined;
+}
+
+/** The escape observer a test harness installed; undefined in production. */
+function escapeObserver(): EscapeObserver | undefined {
+  const observe = (globalThis as Record<symbol, unknown>)[
+    TRANSACTION_ESCAPE_OBSERVER
+  ];
+  return typeof observe === "function"
+    ? (observe as EscapeObserver)
+    : undefined;
+}
+
+/**
+ * The current stack, deep enough to reach the code that made the query. The
+ * driver's and Drizzle's own frames fill V8's default of ten, which cut every
+ * report off before its caller. Raised only for this capture and restored
+ * after, so nothing else sees the deeper limit; it runs only for an observer a
+ * test harness installed.
+ */
+function deepStack(): string {
+  const limit = Error.stackTraceLimit;
+  try {
+    Error.stackTraceLimit = 64;
+    return new Error().stack ?? "";
+  } finally {
+    Error.stackTraceLimit = limit;
+  }
+}
+
+/**
  * A transaction an async flow runs inside, as that flow sees it: its own, or
  * one it was started from inside.
  */
 interface FlowTransaction {
   /** False once the transaction's work has settled. */
   open: boolean;
+  /**
+   * True once the transaction holds a connection of its own. From then on
+   * anything the flow takes from the pool runs outside the transaction
+   * ({@link notePoolAccess}); before it, the checkout is the transaction's own.
+   */
+  connected: boolean;
   /** The transaction the flow that opened this one was itself inside. */
   enclosing: FlowTransaction | undefined;
+  /**
+   * The stack that opened the transaction, kept only while a test harness
+   * observes escapes. A statement that escapes is often reached through a
+   * query builder awaited as a thenable, and V8 links no caller across that,
+   * so where its transaction was opened is the code it can still be traced to.
+   */
+  openedAt?: string;
 }
 
 /**
@@ -428,6 +497,9 @@ export abstract class DrizzleAdapter {
    */
   private readonly flowTransactions = new AsyncLocalStorage<FlowTransaction>();
 
+  /** Each pool's reporting views, by method list (`observedPool`). Gone with the pool. */
+  private readonly observedPools = new WeakMap<object, Map<string, object>>();
+
   /**
    * Whether the calling async flow is inside a transaction on this adapter
    * that has not finished: its own, or one it was started from inside.
@@ -477,7 +549,9 @@ export abstract class DrizzleAdapter {
   protected runInFlowTransaction<T>(run: () => Promise<T>): Promise<T> {
     const scope: FlowTransaction = {
       open: true,
+      connected: false,
       enclosing: this.flowTransactions.getStore(),
+      openedAt: escapeObserver() === undefined ? undefined : deepStack(),
     };
     return this.flowTransactions.run(scope, async () => {
       try {
@@ -486,6 +560,115 @@ export abstract class DrizzleAdapter {
         scope.open = false;
       }
     });
+  }
+
+  /**
+   * Record that the calling flow's transaction now holds its own connection.
+   *
+   * A pooled dialect calls this right after checking out the connection a
+   * transaction runs on, so {@link notePoolAccess} can tell that checkout,
+   * which belongs to the transaction, from any later one, which escapes it.
+   */
+  protected markFlowTransactionConnected(): void {
+    const scope = this.flowTransactions.getStore();
+    if (scope !== undefined) scope.connected = true;
+  }
+
+  /**
+   * Check out, through `checkout`, the connection the calling flow's
+   * transaction runs on. A transaction opened inside another's work takes a
+   * second connection, so the checkout is reported first
+   * ({@link notePoolAccess}); once it holds its own, the transaction is
+   * marked connected, so its later checkouts are told apart from it.
+   *
+   * @param checkout - Takes a connection from the dialect's pool
+   * @returns The connection
+   */
+  protected async connectFlowTransaction<C>(
+    checkout: () => Promise<C>
+  ): Promise<C> {
+    this.notePoolAccess();
+    const connection = await checkout();
+    this.markFlowTransactionConnected();
+    return connection;
+  }
+
+  /**
+   * Called by a pooled dialect before it takes anything from its pool: a
+   * query, or a connection checkout.
+   *
+   * While the calling flow is inside a transaction that already holds its own
+   * connection, a pool access runs on another connection: outside the
+   * transaction, blind to its uncommitted writes, not undone by its rollback,
+   * and able to stall a small pool. Such an access is reported to the
+   * observer a test harness installs under
+   * `Symbol.for("nextly.transactionEscapeObserver")`, with the stack that
+   * names its call site. With no observer installed, which is every
+   * production process, this is one property read.
+   *
+   * @param statement - What the pool call was handed, its SQL passed on so
+   *   the harness can say which statement escaped; nothing for a checkout
+   */
+  protected notePoolAccess(statement?: unknown): void {
+    const observe = escapeObserver();
+    if (observe === undefined) return;
+    for (
+      let at = this.flowTransactions.getStore();
+      at !== undefined;
+      at = at.enclosing
+    ) {
+      if (at.open && at.connected) {
+        observe({
+          dialect: this.dialect,
+          stack: deepStack(),
+          openedAt: at.openedAt,
+          statement: statementOf(statement),
+        });
+        return;
+      }
+    }
+  }
+
+  /**
+   * `pool`, with {@link notePoolAccess} called before each of `methods`, for
+   * handing to code that queries the pool directly, such as Drizzle's handle.
+   * Everything else, `instanceof` included, reaches the pool unchanged.
+   *
+   * One view per pool and method list, made once: every Drizzle handle on the pool is given the
+   * same one, so `getDrizzle()` and `getDrizzle(relations)` share a `$client`, as they did when
+   * each was handed the pool itself.
+   *
+   * @param pool - The driver's pool
+   * @param methods - The pool methods that take a connection
+   * @returns A view of `pool` that reports those calls
+   */
+  protected observedPool<P extends object>(
+    pool: P,
+    methods: readonly string[]
+  ): P {
+    const key = methods.join(",");
+    const views = this.observedPools.get(pool) ?? new Map<string, object>();
+    this.observedPools.set(pool, views);
+    const cached = views.get(key);
+    if (cached) return cached as P;
+    const view = new Proxy(pool, {
+      get: (target, property, receiver) => {
+        const value: unknown = Reflect.get(target, property, receiver);
+        if (
+          typeof property !== "string" ||
+          !methods.includes(property) ||
+          typeof value !== "function"
+        ) {
+          return value;
+        }
+        return (...args: unknown[]) => {
+          this.notePoolAccess(args[0]);
+          return Reflect.apply(value, target, args);
+        };
+      },
+    });
+    views.set(key, view);
+    return view;
   }
 
   /**

@@ -95,7 +95,9 @@ describe("the text alternative", () => {
       group("draft", 3, "Draft"),
       group("published", 5, "Published"),
     ]);
-    expect(screen.getByRole("img")).toHaveAccessibleDescription(
+    expect(
+      screen.getByRole("group", { name: /Use the arrow keys/ })
+    ).toHaveAccessibleDescription(
       "Entries by status: 2 groups, 8 in total. Most: Published, 5."
     );
   });
@@ -110,7 +112,9 @@ describe("the text alternative", () => {
       }
     );
     const description =
-      screen.getByRole("img").getAttribute("aria-describedby") ?? "";
+      screen
+        .getByRole("group", { name: /Use the arrow keys/ })
+        .getAttribute("aria-describedby") ?? "";
     const text = document.getElementById(description)?.textContent ?? "";
     expect(text).toMatch(/lower bounds/);
     expect(text).not.toMatch(/Most/);
@@ -121,7 +125,10 @@ describe("the total a text alternative states", () => {
   const five = () =>
     [1, 2, 3, 4, 5].map(n => group(`g${n}`, 10 - n, `Group ${n}`));
   const described = () => {
-    const id = screen.getByRole("img").getAttribute("aria-describedby") ?? "";
+    const id =
+      screen
+        .getByRole("group", { name: /Use the arrow keys/ })
+        .getAttribute("aria-describedby") ?? "";
     return document.getElementById(id)?.textContent ?? "";
   };
 

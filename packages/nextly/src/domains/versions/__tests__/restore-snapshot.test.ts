@@ -1217,6 +1217,52 @@ describe("buildRestorePayload — a zone that permits nothing", () => {
   });
 });
 
+// A held Single's draft records a component nested in a group with its type,
+// as a captured version does. What that record buys on restore, after the
+// field is pointed at another component: the value is held back rather than
+// written into the new component wherever a field name overlaps.
+describe("buildRestorePayload — a retargeted component nested in a group", () => {
+  const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
+
+  const componentSchemas = componentSchemasOf({
+    gallery: [{ name: "heading", type: "text" }] as FieldConfig[],
+  });
+
+  // `layout.hero` named `banner` when the draft was held; it now names `gallery`.
+  const layout = [
+    {
+      name: "layout",
+      type: "group",
+      fields: [{ name: "hero", type: "component", component: "gallery" }],
+    },
+  ] as FieldConfig[];
+
+  it("holds back a value recorded under the component the field used to name", () => {
+    const { payload, droppedFields } = buildRestorePayload(
+      {
+        layout: {
+          hero: { _componentType: "banner", heading: "Old banner" },
+        },
+      },
+      layout,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(JSON.stringify(payload)).not.toContain("Old banner");
+    expect(droppedFields.join(" ")).toContain("layout");
+  });
+
+  it("admits the same value with no record, which is why the draft records it", () => {
+    const { payload } = buildRestorePayload(
+      { layout: { hero: { heading: "Old banner" } } },
+      layout,
+      { ...ctx, componentSchemas }
+    );
+
+    expect(payload).toEqual({ layout: { hero: { heading: "Old banner" } } });
+  });
+});
+
 describe("buildRestorePayload — a retargeted single component", () => {
   const ctx = { hasStatus: true, hasSlug: true, hasTitle: true };
 

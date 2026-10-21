@@ -39,6 +39,8 @@ export interface ArrangementAnnouncer {
   saveFailed: () => void;
   /** One of a card's settings changed outside customise mode, and the card shows it. */
   settingChanged: (title: string, setting: string, value: string) => void;
+  /** One step of a drag, in the drag's own words. */
+  drag: (sentence: string) => void;
 }
 
 export interface AnnouncerRelay {
@@ -80,6 +82,7 @@ export function useAnnouncerRelay(): AnnouncerRelay {
       saveFailed: () => announcer.current?.announceSaveFailed(),
       settingChanged: (title, setting, value) =>
         announcer.current?.announceSettingChanged(title, setting, value),
+      drag: sentence => announcer.current?.announceDrag(sentence),
     }),
     []
   );

@@ -183,6 +183,7 @@ import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   rehydrateSnapshotDates,
   resolveComponentFieldMap,
+  stripSingleComponentTags,
   tagComponentTypes,
   tagNestedComponentTypes,
 } from "../../versions/tag-component-types";
@@ -7026,6 +7027,31 @@ export class CollectionMutationService extends BaseService {
       ctx,
       existingDraft
     );
+    // The held component values are judged as the publish would judge them:
+    // merged into the draft, since a save carries only the sub-fields it
+    // changed, and without the type tags the draft holds, which no ordinary
+    // write shows a validator. Judged by the pass the component write runs, so
+    // a value the publish would refuse is refused now, with the same issues,
+    // before any draft or version is recorded.
+    const heldComponentNames = Object.keys(ctx.componentFieldData ?? {});
+    if (this.fieldGroupDataService && heldComponentNames.length > 0) {
+      await this.fieldGroupDataService.validateComponentDataInTransaction(tx, {
+        parentId: params.entryId,
+        parentTable: collectionTableName(collection, params.collectionName),
+        fields: fields as unknown as FieldConfig[],
+        data: stripSingleComponentTags(
+          Object.fromEntries(
+            heldComponentNames.map(name => [name, draftDocument[name]])
+          ),
+          fields as unknown as FieldConfig[],
+          componentSlug => splitComponentSchemas?.get(componentSlug)?.fields
+        ),
+        // The language this held write is keyed under: the request's, or the
+        // companion's write locale when the patch touched localized columns.
+        locale: draftLocale ?? undefined,
+        req: params.user ? { user: params.user } : {},
+      });
+    }
     // The response and hooks see the draft as an ordinary read, so
     // shape the accumulated snapshot through the current schema the
     // same way the read overlay does. The persisted `draftDocument`
@@ -8602,7 +8628,9 @@ export class CollectionMutationService extends BaseService {
           // this same post-save copy (ids populated) rather than the raw input.
           const attemptComponentData = structuredClone(componentFieldData);
 
-          // Save component field data to separate comp_{slug} tables
+          // Save component field data to separate comp_{slug} tables. A held
+          // edit writes no component rows; its values are judged with the
+          // working draft they are merged into (see storeWorkingDraftInTx).
           if (
             !storeAsWorkingDraft &&
             this.fieldGroupDataService &&
@@ -8793,6 +8821,8 @@ export class CollectionMutationService extends BaseService {
                 // locale-specific too — the singles path counts it the same way.
                 Object.keys(snapshotComponents ?? {}).length > 0;
 
+              // The version this update produced, which its status moves name below.
+              let producedVersionNo: number | null = null;
               if (versionsConfig?.enabled && !storeAsWorkingDraft) {
                 const savedStatus =
                   (updatePayload as { status?: unknown }).status ??
@@ -8846,6 +8876,7 @@ export class CollectionMutationService extends BaseService {
                     maxPerDoc: versionsConfig.maxPerDoc,
                   }
                 );
+                producedVersionNo = versionNo;
                 await this.recordSaveHistory(
                   tx,
                   params.collectionName,
@@ -9157,16 +9188,35 @@ export class CollectionMutationService extends BaseService {
                   tx,
                   params.collectionName,
                   params.entryId,
-                  { actor, personName: params.user?.name ?? null },
+                  {
+                    actor,
+                    personName: params.user?.name ?? null,
+                    versionNo: producedVersionNo,
+                  },
+                  // Publishing a held draft is a publish though the live row
+                  // was published before and after: the move history records
+                  // is the draft's, from draft to published, so it names the
+                  // publish and who made it.
                   [
                     ...(companionEncodesMainTransition
                       ? []
-                      : [{ from: mainFrom, to: mainTo }]),
+                      : [
+                          {
+                            from:
+                              promotedDraft && mainTo === "published"
+                                ? "draft"
+                                : mainFrom,
+                            to: mainTo,
+                          },
+                        ]),
                     ...(companionStatusWritten
                       ? [
                           {
                             locale: localizedUpdate?.writeLocale,
-                            from: localizedPreviousStatus,
+                            from:
+                              promotedDraft && companionNext === "published"
+                                ? "draft"
+                                : localizedPreviousStatus,
                             to: companionNext,
                           },
                         ]
@@ -11417,6 +11467,8 @@ export class CollectionMutationService extends BaseService {
           manyToManyFields,
           needsRelations,
         });
+      // The version this update produced, which its status moves name below.
+      let producedVersionNo: number | null = null;
       // A held edit records no durable version: nothing was published.
       if (!storeAsWorkingDraft) {
         const localeTag = capturedLocaleState
@@ -11439,6 +11491,7 @@ export class CollectionMutationService extends BaseService {
           // on a collection where they all are.
           localeTag,
         });
+        producedVersionNo = versionNo;
         await this.recordSaveHistory(tx, params.collectionName, entryId, {
           actor: actorForWrite(params.actor, params.user),
           personName: params.user?.name ?? null,
@@ -11541,7 +11594,11 @@ export class CollectionMutationService extends BaseService {
           tx,
           params.collectionName,
           entryId,
-          { actor: eventActor, personName: params.user?.name ?? null },
+          {
+            actor: eventActor,
+            personName: params.user?.name ?? null,
+            versionNo: producedVersionNo,
+          },
           [
             ...(companionEncodesMainTransition
               ? []

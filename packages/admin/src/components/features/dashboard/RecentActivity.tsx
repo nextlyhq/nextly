@@ -111,9 +111,13 @@ const ActivityItem: React.FC<{ activity: Activity; now: number }> = ({
               <span className="font-bold text-foreground tracking-tight underline decoration-primary/20 underline-offset-4">
                 {activity.entryTitle}
               </span>{" "}
-              <span className="text-muted-foreground font-bold uppercase text-xs tracking-widest ml-1 bg-primary/5 px-1.5 py-0.5 rounded-md">
-                {activity.collectionLabel}
-              </span>
+              {/* A Single's row has no collection to name: its title is the
+                  Single's label, and the chip would repeat nothing true. */}
+              {activity.collectionLabel !== undefined && (
+                <span className="text-muted-foreground font-bold uppercase text-xs tracking-widest ml-1 bg-primary/5 px-1.5 py-0.5 rounded-md">
+                  {activity.collectionLabel}
+                </span>
+              )}
             </>
           ) : (
             <span className="font-bold text-foreground tracking-tight">

@@ -81,6 +81,11 @@ export interface GridAnnouncer {
     setting: string,
     value: string
   ) => void;
+  /**
+   * Say one step of a drag: a card picked up, the place it would land, a cancel. The sentence
+   * is the drag's own (`edit/drag/drag-messages`); the landing itself is `announceMoved`.
+   */
+  announceDrag: (sentence: string) => void;
 }
 
 /**
@@ -200,6 +205,7 @@ export function useGridAnnouncer(
       say(`${title}: ${setting} set to ${value}.`),
     [say]
   );
+  const announceDrag = useCallback((sentence: string) => say(sentence), [say]);
 
   return {
     announcement,
@@ -214,5 +220,6 @@ export function useGridAnnouncer(
     announceSaved,
     announceRefused,
     announceSaveFailed,
+    announceDrag,
   };
 }

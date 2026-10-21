@@ -35,7 +35,7 @@ import {
   CustomizingFence,
 } from "./CustomizingFence";
 import { DismissWidgetButton } from "./DismissWidgetButton";
-import { SortableWidgetCell } from "./SortableWidgetCell";
+import { DraggableWidgetCell, type CellDrag } from "./DraggableWidgetCell";
 import {
   useCardQuickSetting,
   type CellSettingsWrite,
@@ -46,8 +46,12 @@ import { WidgetSettingsSheet } from "./WidgetSettingsSheet";
 export interface ArrangedCellProps {
   row: ArrangedWidget;
   isEditing: boolean;
-  /** The card just added from the add panel. */
+  /** The card just placed: moved, resized, added or put back. */
   highlighted?: boolean;
+  /** Its handle's drag, while dragging is on; absent at one column. */
+  drag?: CellDrag;
+  /** Lists the card menu's widths in the menu itself: where the dashboard draws one column. */
+  widthsInPlace?: boolean;
   /**
    * Whether a layout write is in flight anywhere on this dashboard.
    *
@@ -189,6 +193,7 @@ function CardEditActions(props: {
   on: ArrangedCellProps["on"];
   /** Present only when the widget offers settings. */
   openSettings?: () => void;
+  widthsInPlace: boolean;
 }) {
   const { row, width, can, isWriting, refs, on, openSettings } = props;
   return (
@@ -201,6 +206,7 @@ function CardEditActions(props: {
         can={can}
         disabled={isWriting}
         triggerRef={refs.menu}
+        widthsInPlace={props.widthsInPlace}
         on={{
           move: on.move,
           setWidth: on.setWidth,
@@ -352,26 +358,6 @@ function settingsSaverFor(
     write.write(config, { onLanded: () => {}, onFailed: () => {} });
 }
 
-/**
- * While customising, the card's width and its one menu, side by side; nothing at rest. A framed
- * card shows them over its own header's right end; an unframed one in the small header the cell
- * draws for it. Both outside the fence that puts the card's own content out of reach.
- */
-function editActionsFor(
-  props: ArrangedCellProps & { width: WidgetWidth },
-  hasSettings: boolean,
-  setSettingsOpen: (open: boolean) => void
-): ReactNode {
-  if (!props.isEditing) return null;
-  const { row, width, can, isWriting, refs, on } = props;
-  return (
-    <CardEditActions
-      {...{ row, width, can, isWriting, refs, on }}
-      {...(hasSettings ? { openSettings: () => setSettingsOpen(true) } : {})}
-    />
-  );
-}
-
 /** The cell's classes: its width, its collapse when empty, and its spacing. */
 function cellClassName(
   row: ArrangedCellProps["row"],
@@ -404,6 +390,23 @@ function cellClassName(
     // it. On the controls rather than the cell, because the margin that
     // counts is the focused element's own.
     isEditing && "[&_button]:scroll-mt-40"
+  );
+}
+
+/** The card's width and menu while customising, or nothing at rest. */
+function editActionsOf(
+  props: ArrangedCellProps,
+  width: WidgetWidth,
+  openSettings: (() => void) | undefined
+): ReactNode {
+  if (!props.isEditing) return null;
+  const { row, can, isWriting, refs, on } = props;
+  return (
+    <CardEditActions
+      {...{ row, width, can, isWriting, refs, on }}
+      widthsInPlace={props.widthsInPlace === true}
+      {...(openSettings ? { openSettings } : {})}
+    />
   );
 }
 
@@ -441,10 +444,14 @@ export function ArrangedCell(props: ArrangedCellProps) {
   } = useRestingControls(props, widget, hasSettings, setSettingsOpen);
   const width = drawnWidth(row.width, row.allowedWidths);
 
-  const editActions = editActionsFor(
-    { ...props, width },
-    hasSettings,
-    setSettingsOpen
+  // While customising, the card's width and its one menu, side by side. A
+  // framed card shows them over its own header's right end; an unframed one
+  // in the small header the cell draws for it below. Both outside the fence
+  // that puts the card's own content out of reach.
+  const editActions = editActionsOf(
+    props,
+    width,
+    hasSettings ? () => setSettingsOpen(true) : undefined
   );
   const unframed = widget.chrome === "none";
   // While customising, a framed card's header keeps the room its controls are
@@ -453,11 +460,12 @@ export function ArrangedCell(props: ArrangedCellProps) {
   const headerAction = unframed ? undefined : framedHeaderAction;
 
   return (
-    <SortableWidgetCell
+    <DraggableWidgetCell
       id={row.placementId}
       title={widget.title}
       isEditing={isEditing}
       highlighted={props.highlighted}
+      {...(props.drag === undefined ? {} : { drag: props.drag })}
       data-testid={`widget-cell-${widget.id}`}
       className={cellClassName(row, unframed, isEditing)}
     >
@@ -489,6 +497,6 @@ export function ArrangedCell(props: ArrangedCellProps) {
         quick={quick.inline}
         floated={floatingControl !== undefined}
       />
-    </SortableWidgetCell>
+    </DraggableWidgetCell>
   );
 }

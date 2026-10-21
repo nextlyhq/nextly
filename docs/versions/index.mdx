@@ -136,6 +136,22 @@ History fails closed. A rule that throws hides its own field. If the rules canno
 evaluated at all, a version read withholds every field that carries one, and a restore is
 refused.
 
+### Languages in history
+
+A document's read rules and hooks can answer differently per language, because a read in
+a language is handed that language's values. History asks them about each language it
+returns:
+
+- A read that names a language (`?locale=` on a listing or a comparison, `?part=` on
+  events, or a version, which is of its own language) needs read access to the document in
+  that language. Without it, the read answers not found.
+- A read that names none returns only the languages the reader may read the document in.
+  Versions with no language and events about the whole document stay. An event that
+  involved several languages lists only those the reader may read.
+- A language no longer in your localization config is never readable here, because a read
+  in it would answer for the default language instead. That includes history recorded in a
+  language before localization was removed.
+
 ## Restoring
 
 Restore writes **through the same update path a human edit uses**. Validation runs, hooks
@@ -186,7 +202,9 @@ So a run of saves in one language never removes another language's published ver
 
 ## Pinning a version
 
-<Callout type="warn">Experimental: the names and shapes below may change before they are stable.</Callout>
+<Callout type="warn">
+  Experimental: the names and shapes below may change before they are stable.
+</Callout>
 
 A feature that refers to a version, such as the version an approval names, pins it so
 retention keeps it for as long as the feature needs it, whatever the limit.

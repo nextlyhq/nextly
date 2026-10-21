@@ -37,6 +37,9 @@ vi.mock("../../di", () => ({
         return { getCollection: vi.fn().mockResolvedValue({ fields: [] }) };
       case "versionsService":
         return { list: vi.fn().mockResolvedValue([]), get: vi.fn() };
+      // No registered entity is localized, so history asks no language.
+      case "collectionRegistryService":
+        return { getCollectionBySlug: vi.fn().mockResolvedValue(null) };
       default:
         return {};
     }
@@ -58,10 +61,15 @@ import {
 } from "../versions-access";
 import { GET as listVersions } from "../versions";
 
-/** A read that succeeds and returns the entry it was asked for. */
+/** A read that succeeds and reports loading the entry it was asked for. */
 function readsTheAskedForEntry(): void {
   getEntrySpy.mockImplementation(({ entryId }: { entryId: string }) =>
-    Promise.resolve({ success: true, statusCode: 200, data: { id: entryId } })
+    Promise.resolve({
+      success: true,
+      statusCode: 200,
+      data: { id: entryId },
+      resolvedEntryId: entryId,
+    })
   );
 }
 
@@ -261,7 +269,10 @@ describe("version list pagination meta", () => {
           : name === "adapter"
             ? // The caller has no "last looked at" markers.
               { select: vi.fn().mockResolvedValue([]) }
-            : {}) as typeof di.getService);
+            : name === "collectionRegistryService"
+              ? // Not localized, so the listing asks no language.
+                { getCollectionBySlug: vi.fn().mockResolvedValue(null) }
+              : {}) as typeof di.getService);
   });
 
   function ctx() {
@@ -350,10 +361,13 @@ describe("assertVersionDocumentReadable", () => {
   it("rejects with not-found when the read returned another document", async () => {
     // A hook can rewrite the id a read resolves; a read of another document
     // says nothing about this one.
+    // The output still names the document asked about: only the read's own
+    // report of the row it loaded is trusted.
     getEntrySpy.mockResolvedValue({
       success: true,
       statusCode: 200,
-      data: { id: "e2" },
+      data: { id: "e1" },
+      resolvedEntryId: "e2",
     });
 
     await expect(

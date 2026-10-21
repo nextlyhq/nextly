@@ -51,6 +51,22 @@ export type PaginationMeta = {
    * truth at a glance and is the one way such a list can lie.
    */
   notConsulted?: string[];
+  /**
+   * Records on this list the caller may not read, counted per scope (the
+   * collection or Single they belong to), with nothing else about them.
+   *
+   * Omitted when nothing is hidden or the list is not narrowed by reader,
+   * never sent empty. It exists for the same reason as `notConsulted`: a list
+   * that silently drops what its reader may not see reads as smaller than it
+   * is, while one that names those records shows what it must not.
+   */
+  hidden?: Array<{
+    scopeKind: string;
+    scopeSlug: string;
+    count: number;
+    /** The scope's display names, singular and plural, where it has them. */
+    labels?: { singular: string; plural: string };
+  }>;
 };
 
 /**
