@@ -148,7 +148,14 @@ test.describe("comparing two versions", () => {
         });
         await page.setViewportSize({ width, height });
         await gotoAdmin(page, path, theme);
-        await expect(page.getByText(/fields changed/)).toBeVisible({
+        await expect(page.getByText(/^\d+ of .*fields.* changed$/)).toBeVisible(
+          {
+            timeout: 30_000,
+          }
+        );
+        // The versions beside the comparison, loaded, so a shot never catches
+        // their placeholder.
+        await expect(page.getByText(/^Version \d+$/).first()).toBeVisible({
           timeout: 30_000,
         });
         await apply(page);

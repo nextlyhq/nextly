@@ -140,13 +140,17 @@ export function VersionDiffView({ scope, from, to }: VersionDiffViewProps) {
               <span className="font-medium text-foreground">{from}</span> &rarr;{" "}
               <span className="font-medium text-foreground">{to}</span>.{" "}
             </span>
-            {changes
-              ? changesCountText({
+            {changes ? (
+              // Its own element, so the count reads, and is found, apart from
+              // the pair named before it.
+              <span className="font-medium text-foreground">
+                {changesCountText({
                   changed: arranged.changed.length,
                   total: changes.total - arranged.system.length,
                   incomplete: changes.incomplete,
-                })
-              : null}
+                })}
+              </span>
+            ) : null}
           </p>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             {arranged.changed.length > 0 ? (
