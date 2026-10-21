@@ -71,13 +71,15 @@ let afterPostChange: (() => Promise<void>) | undefined;
 /** The role slug a note's code-defined rule lets publish. */
 let publisherSlug = "";
 
-const OPEN = {
+/** Every operation a single has, open to all. A single has no `delete`. */
+const SINGLE_OPEN = {
   read: () => true,
   update: () => true,
   publish: () => true,
   unpublish: () => true,
-  delete: () => true,
 };
+
+const OPEN = { ...SINGLE_OPEN, delete: () => true };
 
 async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
@@ -155,7 +157,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         localized: true,
         status: true,
         versions: { drafts: true },
-        access: OPEN,
+        access: SINGLE_OPEN,
         fields: [text({ name: "headline", localized: true })],
       }),
     ],
