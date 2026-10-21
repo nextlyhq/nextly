@@ -218,8 +218,9 @@ export function renderTemplateFrom(
  * there (`me@x.com, attacker@evil.com`) would send every staff reply to each
  * address in it.
  *
- * @throws NextlyError, not retryable, when it renders to anything but one
- *   address
+ * @returns undefined when it renders empty, so the send has no Reply-To
+ * @throws NextlyError, not retryable, when it renders to a non-empty value
+ *   that is not one address
  */
 export function renderTemplateReplyTo(
   replyTo: string,

@@ -3,9 +3,9 @@
  * copies, and what a send makes of them.
  *
  * - From's display name may use variables; its address may not.
- * - Reply-To may use variables, and one that renders to anything but one
- *   address (a list included) fails the send as not retryable, naming the
- *   field.
+ * - Reply-To may use variables. One that renders empty sets no Reply-To; one
+ *   that renders to anything else but one address (a list included) fails
+ *   the send as not retryable, naming the field.
  * - Copies are fixed addresses, added after the send's own without
  *   duplicates, and refused on a template that carries a secret.
  * - A field that uses no variables is sent exactly as stored.
