@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-A collection or Single write, or a registration, that saved and then met a busy database now answers that the change was saved, without a retry hint, so following the hint no longer repeats a saved change.
+A collection or Single write, or a registration, that saved and then failed answers that the change was saved, without a retry hint, and the admin retries a failed write only when the server refused it before running it, so a saved change is no longer made twice.

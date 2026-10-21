@@ -11,17 +11,20 @@ import { retryAfterSeconds } from "./retry-after";
  * The error to answer with for `failure`, raised after a write committed: a
  * post-commit hook, or the read that builds the response.
  *
- * An error that asks for a retry is replaced. The write is durable, so a caller
- * following the hint would make the change a second time. The caller is told
- * instead that the change was saved and the request still failed, with no
- * retry hint; `failure` stays the cause, for the operator. Any other error is
+ * A server failure, or any error that asks for a retry, is replaced. Either
+ * reads to a caller as "the change did not happen", whatever its code says (a
+ * DATABASE_ERROR for a lost connection tells the caller to try again in its
+ * message alone), and the write is durable, so trying again makes the change a
+ * second time. The caller is told instead that the change was saved and the
+ * request still failed, with no retry hint; `failure` stays the cause, for the
+ * operator. A refusal the caller can act on (a 4xx with no retry hint) is
  * returned as it is.
  */
 export function afterCommittedWrite(
   failure: NextlyError,
   logContext: Record<string, unknown> = {}
 ): NextlyError {
-  if (!asksForRetry(failure)) return failure;
+  if (!readsAsNotSaved(failure)) return failure;
   return new NextlyError({
     code: "INTERNAL_ERROR",
     publicMessage:
@@ -32,12 +35,14 @@ export function afterCommittedWrite(
 }
 
 /**
- * Whether an error tells its caller to send the request again: it carries a
- * retry hint, or answers 503, which says the same without one.
+ * Whether an error tells its caller the change did not happen: a server
+ * failure of any code, or an error carrying a retry hint. Decided by the
+ * outcome rather than by a list of retryable codes, which would miss the next
+ * transient code to be added.
  */
-function asksForRetry(error: NextlyError): boolean {
+function readsAsNotSaved(error: NextlyError): boolean {
   return (
-    retryAfterSeconds(error) !== undefined ||
-    error.statusCode === NEXTLY_ERROR_STATUS.SERVICE_UNAVAILABLE
+    error.statusCode >= NEXTLY_ERROR_STATUS.INTERNAL_ERROR ||
+    retryAfterSeconds(error) !== undefined
   );
 }

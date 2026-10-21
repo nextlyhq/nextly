@@ -15,6 +15,7 @@ import {
   errorEnvelopeFields,
   errorFromServiceEnvelope,
 } from "../from-service-envelope";
+import { DbError } from "../../database/errors";
 import { NextlyError } from "../nextly-error";
 import { originalErrorOf } from "../original-error";
 import {
@@ -100,6 +101,18 @@ describe("a write that committed before the database was busy", () => {
       name: "a SERVICE_UNAVAILABLE without a hint",
       error: NextlyError.serviceUnavailable(),
     },
+    {
+      // A 500 whose message alone tells the caller to try again.
+      name: "a lost connection, mapped to DATABASE_ERROR",
+      error: NextlyError.fromDatabaseError(
+        new DbError({
+          message: "Connection terminated unexpectedly",
+          kind: "connection-lost",
+          dialect: "postgresql",
+        })
+      ),
+    },
+    { name: "an internal error", error: NextlyError.internal() },
   ];
 
   for (const { name, error } of committedBusy) {

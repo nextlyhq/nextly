@@ -5,11 +5,11 @@ import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { useState } from "react";
 
 import {
-  MUTATION_RETRY_COUNT,
   QUERY_GC_TIME,
   QUERY_RETRY_COUNT,
   QUERY_STALE_TIME,
 } from "@admin/constants/query";
+import { shouldRetryMutation } from "@admin/lib/api/mutation-retry";
 
 /**
  * QueryProvider - Provides TanStack Query context to the application
@@ -41,10 +41,10 @@ import {
  *   - Data stays fresh via staleTime, users can manually refresh if needed
  *
  * ### Mutation Defaults
- * - **retry: 2** - Failed mutations retry twice before showing error
- *   - Write operations (create/update/delete) are more critical than reads
- *   - 2 retries handle transient network issues without being too aggressive
- *   - Balances reliability with data integrity concerns
+ * - **retry: shouldRetryMutation** - A failed write is retried, up to twice, only
+ *   when the server said nothing ran and to try again (`DATABASE_BUSY`,
+ *   `RATE_LIMITED`, or a retry hint). Any other failure, a lost response
+ *   included, may follow a saved change, and sending it again repeats it.
  *
  * **Note on throwOnError**: Not enabled globally to allow individual mutations
  * to handle errors locally (e.g., inline validation errors). Use per-mutation
@@ -89,7 +89,7 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
             refetchOnWindowFocus: false, // Prevent refetch on tab switch (admin CMS UX)
           },
           mutations: {
-            retry: MUTATION_RETRY_COUNT,
+            retry: shouldRetryMutation,
             // throwOnError: Not enabled globally - use per-mutation opt-in
           },
         },
