@@ -7,6 +7,7 @@ import type {
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
 
+import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { FieldGroupFieldConfig } from "../../../collections/fields/types/component";
 import { isVirtualField } from "../../../collections/fields/virtual";
@@ -24,6 +25,7 @@ import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   attachFieldValidators,
   getFieldFunctions,
+  type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import {
   coerceDateFieldsToDate,
@@ -74,6 +76,25 @@ import {
 import { INSTANCE_ORDER, instanceKey } from "./instance-query";
 
 /**
+ * Who a field-group write is made as, for the write rules declared on the
+ * field groups' own fields: the same caller, trust and grants the parent
+ * entry's own fields are judged with.
+ *
+ * Required of every write rather than optional, so a door that saves field
+ * groups cannot leave it out and have them saved unjudged: trusted server code
+ * says so with `overrideAccess: true`.
+ */
+export interface FieldGroupWriteAccess {
+  /** True for trusted server code, which writes every field. */
+  overrideAccess: boolean;
+  user?: Record<string, unknown>;
+  /** A scoped API key's own grants, which its rules are judged by. */
+  authenticatedScope?: AuthenticatedScope;
+  /** The parent write's grants resolver, shared so roles are read once. */
+  grants?: () => Promise<CallerGrants>;
+}
+
+/**
  * Parameters for saving component data as part of a parent entry operation.
  */
 export interface SaveComponentDataParams {
@@ -109,6 +130,9 @@ export interface SaveComponentDataParams {
    * anything else the parent write puts on its request travels with it.
    */
   req?: Record<string, unknown>;
+
+  /** Who the write is made as; see {@link FieldGroupWriteAccess}. */
+  access: FieldGroupWriteAccess;
 }
 
 /**
@@ -133,6 +157,8 @@ export interface DeleteComponentDataParams {
  */
 interface WriteScope {
   executor: unknown;
+  /** Who the write is made as, for each instance's own field rules. */
+  access: FieldGroupWriteAccess;
   nested: Map<
     readonly FieldConfig[],
     Promise<ComponentFieldResolver | undefined>
@@ -141,8 +167,11 @@ interface WriteScope {
 
 const writeScope = new AsyncLocalStorage<WriteScope>();
 
-function newWriteScope(executor: unknown): WriteScope {
-  return { executor, nested: new Map() };
+function newWriteScope(
+  executor: unknown,
+  access: FieldGroupWriteAccess
+): WriteScope {
+  return { executor, access, nested: new Map() };
 }
 
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
@@ -436,7 +465,7 @@ export class FieldGroupMutationService extends BaseService {
     const { parentId, parentTable, fields, data, locale, req } = params;
 
     // A pooled write reads pooled; the scope still shares what it resolves; see `writeScope`.
-    await writeScope.run(newWriteScope(undefined), () =>
+    await writeScope.run(newWriteScope(undefined, params.access), () =>
       this.eachFieldGroupWrite(fields, data, {
         clear: async f => {
           await this.deleteFieldComponentData(parentId, parentTable, f.name, f);
@@ -606,7 +635,7 @@ export class FieldGroupMutationService extends BaseService {
 
     // Every read made beneath this write goes through the transaction's own connection; see
     // `writeScope`.
-    await writeScope.run(newWriteScope(tx.getDrizzle()), () =>
+    await writeScope.run(newWriteScope(tx.getDrizzle(), params.access), () =>
       this.eachFieldGroupWrite(fields, data, {
         clear: async f => {
           // Clearing a field holds nothing to validate.

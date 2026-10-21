@@ -2656,6 +2656,13 @@ export class SingleMutationService extends BaseService {
               // field rule nested in a field group to see the same `user` a
               // top-level field rule sees.
               req: options.user ? { user: options.user } : {},
+              // Who the write is made as, for each instance's own field rules:
+              // the caller and trust the Single's own fields are judged with.
+              access: {
+                overrideAccess: options.overrideAccess === true,
+                user: options.user,
+                authenticatedScope: options.authenticatedScope,
+              },
             });
             if (
               !holdEdit &&

@@ -131,6 +131,7 @@ import {
   sharedPerTransaction,
 } from "../../field-groups/live-read-access";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import type { FieldGroupWriteAccess } from "../../field-groups/services/field-group-mutation-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
@@ -756,6 +757,9 @@ interface WorkingDraftWriteContext {
     actor?: RequestActor;
     /** The version a restore write restored; recorded on the save's version. */
     sourceVersionNo?: number | null;
+    /** The write's trust and key scope, for the held field groups' own rules. */
+    overrideAccess?: boolean;
+    authenticatedScope?: AuthenticatedScope;
   };
   parentRow: Record<string, unknown>;
   /**
@@ -2077,6 +2081,8 @@ export class CollectionMutationService extends BaseService {
       fields: FieldDefinition[];
       data: Record<string, unknown>;
       user?: UserContext;
+      /** Who the write is made as, for each instance's own field rules. */
+      access: FieldGroupWriteAccess;
     }
   ): Promise<void> {
     if (!this.fieldGroupDataService || Object.keys(args.data).length === 0) {
@@ -2090,6 +2096,8 @@ export class CollectionMutationService extends BaseService {
         data: args.data,
         locale: undefined,
         req: args.user ? { user: args.user } : {},
+        // Who the write is made as, for each instance's own field rules.
+        access: args.access,
       });
     } catch (error: unknown) {
       throw markWriteIntegrityFailure(error);
@@ -5134,6 +5142,13 @@ export class CollectionMutationService extends BaseService {
             // service, so the request has to travel with it for a field rule nested in
             // a field group to see the same `user` a top-level field rule sees.
             req: params.user ? { user: params.user } : {},
+            // Who the write is made as, for each instance's own field rules: the
+            // caller and trust the entry's own fields are judged with.
+            access: {
+              overrideAccess: params.overrideAccess === true,
+              user: params.user,
+              authenticatedScope: params.authenticatedScope,
+            },
           });
         }
 
@@ -7583,6 +7598,13 @@ export class CollectionMutationService extends BaseService {
         // companion's write locale when the patch touched localized columns.
         locale: draftLocale ?? undefined,
         req: params.user ? { user: params.user } : {},
+        // Who the write is made as, for each instance's own field rules: the
+        // caller and trust the entry's own fields are judged with.
+        access: {
+          overrideAccess: params.overrideAccess === true,
+          user: params.user,
+          authenticatedScope: params.authenticatedScope,
+        },
       });
     }
     // The response and hooks see the draft as an ordinary read, so
@@ -9248,6 +9270,13 @@ export class CollectionMutationService extends BaseService {
                 // service, so the request has to travel with it for a field rule nested in
                 // a field group to see the same `user` a top-level field rule sees.
                 req: params.user ? { user: params.user } : {},
+                // Who the write is made as, for each instance's own field rules: the
+                // caller and trust the entry's own fields are judged with.
+                access: {
+                  overrideAccess: params.overrideAccess === true,
+                  user: params.user,
+                  authenticatedScope: params.authenticatedScope,
+                },
               }
             );
           }
@@ -11120,6 +11149,11 @@ export class CollectionMutationService extends BaseService {
         fields,
         data: componentFieldData,
         user: params.user,
+        access: {
+          overrideAccess: params.overrideAccess === true,
+          user: params.user,
+          authenticatedScope: params.authenticatedScope,
+        },
       });
 
       // Junction rows, the version snapshot, the outbox event and the
@@ -12008,6 +12042,8 @@ export class CollectionMutationService extends BaseService {
               entryId,
               user: params.user,
               actor: params.actor,
+              overrideAccess: params.overrideAccess,
+              authenticatedScope: params.authenticatedScope,
             },
             parentRow: this.readShapeEventDocument(
               {
@@ -12071,6 +12107,11 @@ export class CollectionMutationService extends BaseService {
           fields,
           data: componentFieldData,
           user: params.user,
+          access: {
+            overrideAccess: params.overrideAccess === true,
+            user: params.user,
+            authenticatedScope: params.authenticatedScope,
+          },
         });
       }
 

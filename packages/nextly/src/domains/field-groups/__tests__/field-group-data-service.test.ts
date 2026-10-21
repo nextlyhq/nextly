@@ -19,6 +19,12 @@ import {
   ctaComponentMeta,
 } from "./field-group-test-helpers";
 
+/**
+ * Trusted server code: these cases are about how instances are stored, so
+ * every save is made with no field rules to judge.
+ */
+const TRUSTED = { overrideAccess: true } as const;
+
 type ComponentDataTestCtx = {
   service: FieldGroupDataService;
   adapter: ReturnType<typeof createMockAdapter>;
@@ -90,6 +96,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { seo: { metaTitle: "About Us" } },
       });
@@ -125,6 +132,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { seo: { metaTitle: "About Us", previewLine: "Computed" } },
       });
@@ -151,6 +159,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { seo: { metaTitle: "New Title" } },
       });
@@ -167,6 +176,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { title: "Hello" }, // no seo
       });
@@ -180,6 +190,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField()],
         data: { seo: null },
       });
@@ -193,6 +204,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [{ name: "title", type: "text" }],
         data: { title: "Hello" },
       });
@@ -208,6 +220,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: {
           features: [
@@ -255,6 +268,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: {
           features: [
@@ -292,6 +306,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: {
           features: [{ id: "feat-a", title: "A" }],
@@ -310,6 +325,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: {
           features: [
@@ -328,6 +344,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [repeatableComponentField()],
         data: { features: "not-an-array" },
       });
@@ -344,6 +361,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [multiComponentField()],
         data: {
           layout: [
@@ -372,6 +390,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [multiComponentField()],
         data: {
           layout: [
@@ -391,6 +410,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [multiComponentField()],
         data: {
           layout: [{ heading: "Missing type" }],
@@ -431,6 +451,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [multiComponentField()],
         data: {
           layout: [{ id: "hero-1", _componentType: "hero", heading: "New" }],
@@ -457,6 +478,7 @@ describe("FieldGroupDataService", () => {
         {
           parentId: "entry-1",
           parentTable: "dc_pages",
+          access: TRUSTED,
           fields: [seoComponentField()],
           data: { seo: { metaTitle: "About" } },
         }
@@ -480,6 +502,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "entry-1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [seoComponentField(), virtualHero],
         data: {
           seo: { metaTitle: "About" },
@@ -505,6 +528,7 @@ describe("FieldGroupDataService", () => {
         {
           parentId: "entry-1",
           parentTable: "dc_pages",
+          access: TRUSTED,
           fields: [seoComponentField(), virtualHero],
           data: {
             seo: { metaTitle: "About" },
@@ -1086,6 +1110,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "e1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [accountField()],
         data: { account: { email: "a@b.co", secret: "PlainText123" } },
       });
@@ -1115,6 +1140,7 @@ describe("FieldGroupDataService", () => {
         ctx.service.saveComponentData({
           parentId: "e1",
           parentTable: "dc_pages",
+          access: TRUSTED,
           fields: [accountField()],
           data: { account: "oops" },
         })
@@ -1134,6 +1160,7 @@ describe("FieldGroupDataService", () => {
         ctx.service.saveComponentData({
           parentId: "e1",
           parentTable: "dc_pages",
+          access: TRUSTED,
           fields: [accountField()],
           data: { account: {} },
         })
@@ -1190,6 +1217,7 @@ describe("FieldGroupDataService", () => {
       await ctx.service.saveComponentData({
         parentId: "e1",
         parentTable: "dc_pages",
+        access: TRUSTED,
         fields: [accountField()],
         data: { account: { secret: "" } },
       });
