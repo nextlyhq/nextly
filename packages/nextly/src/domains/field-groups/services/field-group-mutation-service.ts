@@ -23,7 +23,9 @@ import { BaseService } from "../../../shared/base-service";
 import { validateEntryData } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
+  applyFieldWriteAccess,
   attachFieldValidators,
+  callerAccessGrants,
   getFieldFunctions,
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
@@ -171,7 +173,12 @@ function newWriteScope(
   executor: unknown,
   access: FieldGroupWriteAccess
 ): WriteScope {
-  return { executor, access, nested: new Map() };
+  // One grants resolver for the whole write, read on its own connection, so
+  // every instance it judges reads the caller's roles once.
+  const grants =
+    access.grants ??
+    callerAccessGrants(access.user, access.authenticatedScope, executor);
+  return { executor, access: { ...access, grants }, nested: new Map() };
 }
 
 function isFieldGroupField(field: FieldConfig): field is FieldGroupFieldConfig {
@@ -1799,6 +1806,7 @@ export class FieldGroupMutationService extends BaseService {
         ],
       });
     }
+    await this.applyInstanceWriteRules(instance, mode, slug);
     // A new instance takes its declared defaults before validation, as a new
     // entry does, so a required child with a default is not refused on an
     // instance the caller could not have completed. An existing instance is
@@ -1840,6 +1848,45 @@ export class FieldGroupMutationService extends BaseService {
       throw NextlyError.validation({ errors: issues });
     }
     await hashPasswordFieldValues(instance, componentFields);
+  }
+
+  /**
+   * The field group's own write rules on one instance, in place, before
+   * anything else reads it: a field the writer may not set is removed, as the
+   * parent entry's own fields are judged. `mode` is the instance's own: one
+   * that already exists is an update, so a field removed here keeps its stored
+   * value (an existing instance is written key by key); a new one is a create.
+   *
+   * Every save binds who the write is made as on its scope, so an instance
+   * reached without one, or without the field group's slug to look its rules
+   * up by, cannot be judged and is refused rather than written unjudged.
+   */
+  private async applyInstanceWriteRules(
+    instance: ComponentInstanceData,
+    mode: "create" | "update",
+    slug: string | undefined
+  ): Promise<void> {
+    const access = writeScope.getStore()?.access;
+    if (access === undefined || slug === undefined) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "field-group-write-unjudged",
+          fieldGroup: slug ?? null,
+        },
+      });
+    }
+    if (access.overrideAccess) return;
+    await applyFieldWriteAccess({
+      kind: "fieldGroup",
+      slug,
+      data: instance,
+      operation: mode,
+      user: access.user,
+      authenticatedScope: access.authenticatedScope,
+      overrideAccess: false,
+      id: typeof instance.id === "string" ? instance.id : undefined,
+      grants: access.grants,
+    });
   }
 
   /**
