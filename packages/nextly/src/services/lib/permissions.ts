@@ -942,6 +942,14 @@ function unreadable(
   cause: unknown,
   logContext: Record<string, unknown>
 ): NextlyError {
+  // Logged here, where the failure is known: a field rule that receives the
+  // refusal is denied by its own guard, which records nothing of why.
+  getAuthLogger()?.log?.("error", {
+    category: "auth",
+    op: "permissions",
+    ...logContext,
+    error: String(cause),
+  });
   const error = cause instanceof Error ? cause : undefined;
   return isDatabaseBusy(cause)
     ? NextlyError.databaseBusy({ cause: error, logContext })

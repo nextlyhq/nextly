@@ -15,6 +15,7 @@ import { poolWaitTimeoutError } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it } from "vitest";
 
 import {
+  listEffectiveGrants,
   listRoleSlugsForUser,
   listRoleSlugsForUserStrict,
 } from "../permissions";
@@ -40,6 +41,22 @@ describe("role-slug lookup failure semantics", () => {
   it("refuses a lookup that waited out its connection bound as database busy", async () => {
     const busy = failingWith(poolWaitTimeoutError(15000));
     await expect(listRoleSlugsForUser("u1", busy)).rejects.toMatchObject({
+      code: "DATABASE_BUSY",
+      statusCode: 503,
+    });
+  });
+
+  // The permission read, on its own: in a request it runs beside the role
+  // read, which fails first when both read one table, so it needs its own case.
+  it("refuses a permission lookup failure rather than reporting no permissions", async () => {
+    await expect(listEffectiveGrants("u1", refusing)).rejects.toMatchObject({
+      code: "INTERNAL_ERROR",
+    });
+  });
+
+  it("refuses a permission lookup that waited out its connection bound as database busy", async () => {
+    const busy = failingWith(poolWaitTimeoutError(15000));
+    await expect(listEffectiveGrants("u1", busy)).rejects.toMatchObject({
       code: "DATABASE_BUSY",
       statusCode: 503,
     });
