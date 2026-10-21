@@ -7,7 +7,13 @@
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -334,5 +340,57 @@ describe("what the live region reads for a bar", () => {
     await user.keyboard("{ArrowDown}");
     expect(live().textContent).not.toBe(before);
     expect(live()).toHaveTextContent("Done: 4. 2 of 2.");
+  });
+});
+
+describe("keys that belong to the browser", () => {
+  it.each([
+    ["Alt+ArrowLeft", { key: "ArrowLeft", altKey: true }],
+    ["Ctrl+End", { key: "End", ctrlKey: true }],
+    ["Meta+Home", { key: "Home", metaKey: true }],
+  ])(
+    "leaves %s to the browser: not taken, and the point does not move",
+    async (_, key) => {
+      drawGroups();
+      await userEvent.setup().tab();
+      const before = live().textContent;
+      const target = chart(/Use the arrow keys to read each bar/);
+
+      // `fireEvent` answers whether the default went ahead: true means nothing prevented it.
+      expect(fireEvent.keyDown(target, key)).toBe(true);
+      expect(live().textContent).toBe(before);
+    }
+  );
+
+  it("still moves on the same key held alone", async () => {
+    drawGroups();
+    await userEvent.setup().tab();
+    const target = chart(/Use the arrow keys to read each bar/);
+
+    expect(fireEvent.keyDown(target, { key: "End" })).toBe(false);
+    expect(live()).toHaveTextContent("Archived: 3. 3 of 3.");
+  });
+});
+
+describe("one accessible object per chart", () => {
+  it("names and describes the chart once, on the area a reader focuses, with no picture beside it", () => {
+    const { container } = drawGroups();
+    const area = chart(/Use the arrow keys to read each bar/);
+
+    expect(area).toHaveAccessibleDescription(/Entries by status/);
+    // The picture is drawn for sight only: nothing else in the chart is an image to a reader.
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(container.querySelector('[role="img"]')).toBeNull();
+  });
+
+  it("does the same for a chart over time", () => {
+    const { container } = drawOverTime([line("Posts", [2, 9, 4])]);
+
+    expect(
+      chart(/Use the arrow keys to read each point/)
+    ).toHaveAccessibleDescription(/Posts created/);
+    expect(screen.queryByRole("img")).toBeNull();
+    // No SVG title either, which a browser would show as a second hover tooltip.
+    expect(container.querySelector("svg title")).toBeNull();
   });
 });

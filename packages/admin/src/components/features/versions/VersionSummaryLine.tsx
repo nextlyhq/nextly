@@ -17,10 +17,8 @@
 import { useVersionDiff } from "@admin/hooks/queries/useVersions";
 import type { VersionScope } from "@admin/services/versionApi";
 
+import { changeSummary, fieldLabels } from "./history-story-text";
 import type { Predecessor } from "./version-pairing";
-
-/** How many field names are listed before the rest are counted instead. */
-const NAMED_FIELDS = 3;
 
 export interface VersionSummaryLineProps {
   scope: VersionScope;
@@ -42,11 +40,6 @@ export interface VersionSummaryLineProps {
    * can actually see.
    */
   enabled?: boolean;
-}
-
-/** The field labels a comparison reports as changed, in the order it gives them. */
-function changedLabels(fields: readonly { label?: string; name: string }[]) {
-  return fields.map(field => field.label || field.name);
 }
 
 export function VersionSummaryLine({
@@ -82,19 +75,13 @@ export function VersionSummaryLine({
   // for a moment.
   if (diff.isLoading || diff.isError || !diff.data) return null;
 
-  const labels = changedLabels(diff.data.fields);
-  if (labels.length === 0) {
-    return (
-      <span className="text-xs text-muted-foreground">No fields changed</span>
-    );
-  }
-
-  const named = labels.slice(0, NAMED_FIELDS);
-  const remaining = labels.length - named.length;
+  // Only the system's own columns changed, or nothing an editor wrote: no
+  // line, rather than one naming what the editor never touched.
+  const labels = fieldLabels(diff.data.fields);
+  if (labels.length === 0) return null;
   return (
     <span className="text-xs text-muted-foreground">
-      {named.join(", ")}
-      {remaining > 0 ? ` +${remaining} more` : ""}
+      {changeSummary(labels)}
     </span>
   );
 }

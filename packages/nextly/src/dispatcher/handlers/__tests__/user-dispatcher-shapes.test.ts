@@ -117,7 +117,10 @@ describe("dispatchUser — bare data reads (respondData)", () => {
     // permissions library is a free function; mock via vi.mock dynamically would be
     // complex. Just call the dispatcher and verify the response shape — actual
     // permission resolution is tested in services/lib/permissions tests.
-    // The mock here simulates an empty permission set.
+    // The mock here simulates an empty permission set. The module graph is
+    // reset first: this file has already loaded the dispatcher, and the
+    // re-import below would otherwise hand back that copy, unmocked.
+    vi.resetModules();
     vi.doMock("../../../services/lib/permissions", () => ({
       isSuperAdmin: vi.fn().mockResolvedValue(false),
       listEffectivePermissions: vi.fn().mockResolvedValue([]),

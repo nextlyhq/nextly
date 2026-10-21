@@ -94,24 +94,17 @@ export function GroupsChart({
       rows={drawn}
       note={note}
     >
-      {({ titleId, descId, title: heading, description: text }) => (
+      {({ descId, title: heading, description: text }) => (
         <ChartReachArea
           reach={reach}
           name={chartName({ kind: "bars", what: heading })}
           describedBy={descId}
           announcement={announcement}
         >
-          {/* A list of labelled values; `role="img"` prunes the children, so the description is
-            what a screen reader hears, and the table holds the numbers cell by cell. */}
-          <div
-            role="img"
-            aria-labelledby={titleId}
-            aria-describedby={descId}
-            className="flex flex-col gap-1.5"
-          >
-            <span id={titleId} className="sr-only">
-              {heading}
-            </span>
+          {/* The bars are drawn for sight and hidden from assistive tech: the area around them is
+            the chart's one accessible object, named and described once, and the table holds the
+            numbers cell by cell. The description stays here for the area to point at. */}
+          <div aria-hidden="true" className="flex flex-col gap-1.5">
             <span id={descId} className="sr-only">
               {text}
             </span>
