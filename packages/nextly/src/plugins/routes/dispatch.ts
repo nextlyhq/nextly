@@ -500,7 +500,7 @@ async function admitUnresolvedAuthRoute(
   configured: {
     requestsPerHour: number;
     windowMs: number;
-    store?: RateLimitStore;
+    counts?: RateLimitStore;
   }
 ): Promise<number | null> {
   const { noteUnresolvedAuthRequest } = await import(
@@ -514,7 +514,7 @@ async function admitUnresolvedAuthRoute(
     route: matched.route,
     budget: configured.requestsPerHour,
     windowMs: configured.windowMs,
-    ...(configured.store === undefined ? {} : { store: configured.store }),
+    ...(configured.counts === undefined ? {} : { store: configured.counts }),
     secret: env.NEXTLY_SECRET || "",
   });
   return verdict.allowed ? null : verdict.resetAt;
@@ -550,6 +550,48 @@ async function declaredBudget(
  * plugin's traffic exhaust the budget that protects core's login, and the
  * reverse.
  */
+/**
+ * Admit or refuse one request to a limited route: `null` admitted, the time
+ * its window resets when refused, or the answer while the limit's store is
+ * away. A route on the auth budget is refused then, as core's sign-in is; one
+ * on the general or its own budget is let through, as the REST limit is (see
+ * `core-limit-outage`).
+ */
+async function admitRouteRequest(
+  req: Request,
+  matched: RouteMatch,
+  limit: {
+    declared: NonNullable<PluginRoute["rateLimit"]>;
+    resolved: string | null;
+    key: string;
+    budget: { limit: number; windowMs: number };
+    configured: {
+      requestsPerHour: number;
+      windowMs: number;
+      counts?: RateLimitStore;
+    };
+  }
+): Promise<number | null | Response> {
+  const { isLimitStoreDown, openWhileStoreIsDown, signInLimitUnavailable } =
+    await import("../../domains/limits/core-limit-outage");
+  const { declared, configured } = limit;
+  const counts =
+    declared === "auth" || configured.counts === undefined
+      ? configured.counts
+      : openWhileStoreIsDown(configured.counts);
+  try {
+    return declared === "auth" && limit.resolved === null
+      ? await admitUnresolvedAuthRoute(req, matched, configured)
+      : await admitByAddress(limit.key, limit.budget, counts);
+  } catch (error) {
+    if (!isLimitStoreDown(error)) throw error;
+    return buildErrorResponse(signInLimitUnavailable(error), {
+      requestId: readOrGenerateRequestId(req),
+      flattened: currentFlattenedErrors(),
+    });
+  }
+}
+
 async function applyRouteRateLimit(
   req: Request,
   matched: RouteMatch
@@ -581,10 +623,14 @@ async function applyRouteRateLimit(
   // everyone while the core routes the setting was written for ran unlimited.
   if (!budget || budget.limit <= 0) return null;
 
-  const resetAt =
-    declared === "auth" && resolved === null
-      ? await admitUnresolvedAuthRoute(req, matched, configured)
-      : await admitByAddress(key, budget, configured.store);
+  const resetAt = await admitRouteRequest(req, matched, {
+    declared,
+    resolved,
+    key,
+    budget,
+    configured,
+  });
+  if (resetAt instanceof Response) return resetAt;
   if (resetAt === null) return null;
 
   const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));

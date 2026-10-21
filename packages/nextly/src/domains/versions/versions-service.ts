@@ -45,6 +45,11 @@ export interface VersionListOptions {
   includeAutosave?: boolean;
   /** Scope the listing to one locale's versions. Absent lists every locale. */
   locale?: string;
+  /**
+   * Only versions in these languages, and those in none. Absent applies no
+   * such limit. A history read passes the languages its caller may read.
+   */
+  locales?: readonly string[];
 }
 
 export class VersionsService {
@@ -133,7 +138,8 @@ export class VersionsService {
       // rather than named in history while no row takes the name.
       await lockDocument(tx, ref);
       const repo = new VersionsRepository(tx);
-      if (!(await repo.findByVersionNo(ref, versionNo))) {
+      const named = await repo.findByVersionNo(ref, versionNo);
+      if (!named) {
         throw NextlyError.notFound({
           logContext: {
             reason: "version-pruned-while-naming",
@@ -166,11 +172,25 @@ export class VersionsService {
             personName: by.personName,
             versionNo,
             payload: { label },
+            // The language of the version named, so a reader of the history
+            // is shown its name only where they may read that language.
+            ...(named.locale ? { parts: { locales: [named.locale] } } : {}),
           }
         );
       }
     });
     return this.get(ref, versionNo);
+  }
+
+  /**
+   * The part a durable version records: its language, null for none, or
+   * undefined when there is no such version. Reads no snapshot.
+   */
+  async partOfVersion(
+    ref: VersionRef,
+    versionNo: number
+  ): Promise<string | null | undefined> {
+    return this.repo.findPartOfVersion(ref, versionNo);
   }
 
   /** One full version, including its snapshot. */

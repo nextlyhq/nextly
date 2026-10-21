@@ -8,8 +8,9 @@
  * exposes its showcase at `/admin/plugins/style-fixture/showcase`; this asserts
  * it renders rather than 404ing.
  */
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 
+import { test } from "./support/test";
 import { gotoAdmin } from "./support/admin";
 
 test("a deep link to a plugin page resolves and renders (not 404)", async ({

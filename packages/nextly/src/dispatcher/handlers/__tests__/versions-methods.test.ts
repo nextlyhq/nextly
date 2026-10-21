@@ -16,6 +16,11 @@ const getSpy = vi.fn();
 
 vi.mock("../../../api/versions-access", () => ({
   assertVersionDocumentReadable: (...a: unknown[]) => assertReadableSpy(...a),
+  // Every language readable: no language is refused, and a listing reads the
+  // one it names, or the versions in none when it names none.
+  assertHistoryLocalesReadable: () => Promise.resolve(),
+  historyListLanguages: (...a: unknown[]) =>
+    Promise.resolve(a[5] ? { locale: a[5] } : { locales: [] }),
   redactSnapshotForUser: (...a: unknown[]) => redactSpy(...a),
   resolveSingleDocumentId: (...a: unknown[]) => resolveSingleIdSpy(...a),
   // A factory mock replaces the whole module, so anything the handler imports

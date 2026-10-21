@@ -9,6 +9,9 @@
 import { container } from "@nextly/di/container";
 import type { NextlyServiceConfig } from "@nextly/di/register";
 
+import { openWhileStoreIsDown } from "../../domains/limits/core-limit-outage";
+import type { RateLimitStore } from "../../middleware/rate-limit";
+
 import { createErrorResponse, type ErrorResponse } from "./error-response";
 import { authRateLimiter } from "./rate-limiter";
 
@@ -36,6 +39,23 @@ function getConfig(): NextlyServiceConfig | undefined {
 }
 
 /**
+ * Where core's own limits count, as the container registered it, or the
+ * app's own store from config where the container has none.
+ */
+function getCounts(
+  cfg: NextlyServiceConfig | undefined
+): RateLimitStore | undefined {
+  try {
+    if (container.has("coreRateLimitStore")) {
+      return container.get<RateLimitStore>("coreRateLimitStore");
+    }
+  } catch {
+    // DI container not initialized yet — safe to ignore
+  }
+  return cfg?.rateLimit?.store;
+}
+
+/**
  * The 429 an API key has earned, or `null` when it is still within budget,
  * spending one request of it.
  *
@@ -57,11 +77,12 @@ export async function apiKeyRateLimitRefusal(
   const limit = cfg?.apiKeys?.rateLimit.requestsPerHour ?? DEFAULT_RATE_LIMIT;
   const windowMs = cfg?.apiKeys?.rateLimit.windowMs ?? DEFAULT_RATE_WINDOW_MS;
 
-  const rl = await authRateLimiter(cfg?.rateLimit?.store).check(
-    keyId,
-    limit,
-    windowMs
-  );
+  // Counted with the general API limit, so let through while the store is
+  // away rather than refusing every key (see `core-limit-outage`).
+  const counts = getCounts(cfg);
+  const rl = await authRateLimiter(
+    counts === undefined ? undefined : openWhileStoreIsDown(counts)
+  ).check(keyId, limit, windowMs);
   if (rl.allowed) return null;
 
   return createErrorResponse(

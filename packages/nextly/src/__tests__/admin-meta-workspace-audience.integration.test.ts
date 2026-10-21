@@ -135,6 +135,7 @@ interface WorkspaceDeclaration {
 
 interface WorkspaceBody {
   widgets?: WorkspaceDeclaration[];
+  widgetSources?: { collection: string; fields: { name: string }[] }[];
   plugins?: { name: string; widgets?: WorkspaceDeclaration[] }[];
   widgetAudience?: string;
   /** The running server's dev-reload answer — the emission pinned below. */
@@ -497,6 +498,17 @@ describe("GET /api/admin-meta/workspace, per reader", () => {
     expect(ids(everyDeclaration(body))).toEqual(
       expect.arrayContaining(["notes/welcome", "app/board"])
     );
+  });
+
+  it("offers a card's content settings only the collections the reader may read", async () => {
+    // The same reader as above. The collection it may read is offered, which
+    // is the population: the absence of the other is a gate on one
+    // collection, not a payload that offers none.
+    const body = await workspaceFor(await keyHolding([`read-${EVENTS}`]));
+
+    const offered = (body.widgetSources ?? []).map(source => source.collection);
+    expect(offered).toContain(EVENTS);
+    expect(offered).not.toContain(NOTES);
   });
 
   it("carries the audience token the layout read reports for the same reader", async () => {

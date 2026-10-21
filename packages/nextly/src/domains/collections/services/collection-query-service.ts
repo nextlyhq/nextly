@@ -4172,6 +4172,9 @@ export class CollectionQueryService extends BaseService {
           data: null,
         };
       }
+      // The row's own id, as stored, before any overlay or hook can reshape
+      // what this read returns.
+      const resolvedEntryId = String((entry as { id: unknown }).id);
 
       // `localeChain` and `companion` were resolved above the access predicate,
       // which needs the same pair to judge a rule naming a localized field.
@@ -4580,6 +4583,7 @@ export class CollectionQueryService extends BaseService {
         statusCode: 200,
         message: "Entry fetched successfully",
         data: finalData,
+        resolvedEntryId,
       };
     } catch (error: unknown) {
       return {

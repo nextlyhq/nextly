@@ -201,6 +201,30 @@ export {
  * state is invisible to the dirty flag everything else is derived from.
  */
 export { useReportUnsavedWork } from "./components/features/entries/EntryForm/UnsavedWorkContext";
+/**
+ * The document's actions, for a surface drawn inside its editor: the actions
+ * the header draws and running one with a true answer, the one save state,
+ * committing work a surface holds before a save, and counting a write the
+ * document depends on. Exported for the plugin surface: a document view
+ * replaces the form body and its header with it.
+ */
+export {
+  useDocumentActions,
+  useBeforeDocumentAction,
+  useTrackedWrite,
+  type DocumentActions,
+} from "./components/features/entries/EntryForm/useDocumentActionHooks";
+export type {
+  BeforeDocumentAction,
+  DocumentActionOutcome,
+  DocumentSaveState,
+} from "./components/features/entries/EntryForm/useDocumentActionBindings";
+export type {
+  ActionGroup,
+  ActionPlacement,
+  DocumentAction,
+} from "./components/features/entries/EntryForm/document-actions";
+export type { SubmitRefusal } from "./components/features/entries/EntryForm/submit-outcome";
 export {
   pillStateFromForm,
   PILL_LABEL,

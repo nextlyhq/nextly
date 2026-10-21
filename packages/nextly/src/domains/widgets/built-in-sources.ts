@@ -374,18 +374,33 @@ function collectionSource(collection: WidgetSourceCollection): WidgetSource {
       field as FieldDefinition,
     ])
   );
-  const canBucket = (field: WidgetSourceField): boolean =>
+  // Whether a card's settings may offer the field to filter, sort or group
+  // by: no read rule can refuse it and no read hook transforms it. The same
+  // rule a date's bucketing asks, so the two cannot disagree about a field.
+  const offered = (field: WidgetSourceField): boolean =>
     !seen.has(field.name) ||
-    (isGroupKeyDeclaration(declarationOf.get(field.name), field.name) &&
-      isGroupableFieldName("collection", collection.slug, field.name));
+    isGroupableFieldName("collection", collection.slug, field.name);
+  // Whether the read accepts the field as a group key, which is also what
+  // bucketing a date asks: a date is bucketable exactly when it is groupable.
+  const canGroup = (field: WidgetSourceField): boolean =>
+    offered(field) &&
+    (!seen.has(field.name) ||
+      isGroupKeyDeclaration(declarationOf.get(field.name), field.name));
   // Only the REFUSALS are marked. A date the read would reject is stated as
-  // such; everything else is left alone, so a source built anywhere else keeps
-  // whatever it declared.
-  const marked = fields.map(field =>
-    field.type === "date" && !canBucket(field)
-      ? { ...field, bucketable: false }
-      : field
-  );
+  // such, and so is a field no setting may offer; everything else is left
+  // alone, so a source built anywhere else keeps whatever it declared.
+  const marked = fields.map(field => {
+    const refusals = {
+      ...(offered(field) ? {} : { offered: false as const }),
+      ...(canGroup(field) ? {} : { groupable: false as const }),
+      ...(field.type === "date" && !canGroup(field)
+        ? { bucketable: false as const }
+        : {}),
+    };
+    return Object.keys(refusals).length === 0
+      ? field
+      : { ...field, ...refusals };
+  });
   const bucketableDates = marked.filter(
     field => field.type === "date" && field.bucketable !== false
   );
