@@ -162,30 +162,43 @@ export function envelopeOutcomes(
   }
   const lines = linesOf(envelope);
   return LINES.flatMap(kind =>
-    lines[kind].map((address, position) => {
-      if (previouslyAccepted.has(recipientSlot(kind, position))) {
-        return { kind, position, outcome: "accepted" as const };
-      }
-      const found = byMailbox.get(mailboxKey(address));
-      const outcome = found?.outcome ?? "unknown";
-      const classified = found?.refusal ?? found?.failure;
-      return {
-        kind,
-        position,
-        outcome,
-        ...(outcome !== "accepted" && classified
-          ? {
-              retryable: classified.retryable,
-              ...(classified.status !== undefined
-                ? { status: classified.status }
-                : {}),
-            }
-          : {}),
-        ...(found?.failure ? { failure: found.failure } : {}),
-        ...(found?.refusal ? { refusal: true } : {}),
-      };
-    })
+    lines[kind].map((address, position) =>
+      previouslyAccepted.has(recipientSlot(kind, position))
+        ? { kind, position, outcome: "accepted" as const }
+        : placed(kind, position, byMailbox.get(mailboxKey(address)))
+    )
   );
+}
+
+/** One recipient's outcome at its place, from what its mailbox's call said. */
+function placed(
+  kind: EmailDeliveryRecipientKind,
+  position: number,
+  found: MailboxOutcome | undefined
+): RecipientOutcome & { failure?: EmailFailure; refusal?: boolean } {
+  // A mailbox no call carried is one nothing is known about.
+  if (!found) return { kind, position, outcome: "unknown" };
+  return {
+    kind,
+    position,
+    outcome: found.outcome,
+    ...classificationOf(found),
+    ...(found.failure ? { failure: found.failure } : {}),
+    ...(found.refusal ? { refusal: true } : {}),
+  };
+}
+
+/** The `retryable` and `status` a recipient not accepted is reported with. */
+function classificationOf(found: MailboxOutcome): {
+  retryable?: boolean;
+  status?: number;
+} {
+  const classified = found.refusal ?? found.failure;
+  if (found.outcome === "accepted" || !classified) return {};
+  return {
+    retryable: classified.retryable,
+    ...(classified.status !== undefined ? { status: classified.status } : {}),
+  };
 }
 
 /** Whether some recipients were accepted and the send still did not succeed. */
