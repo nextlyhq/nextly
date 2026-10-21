@@ -59,16 +59,13 @@
  * @module domains/releases/release-mutations
  */
 
-import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { container } from "../../di/container";
 import type { RowLockServer } from "../../shared/lib/row-lock";
 import {
   runWithWriteReceipt,
   type WrittenState,
 } from "../../shared/lib/write-receipt";
-import { rowLockServer } from "../audit/audit-log-writer";
 import { EVERY_LOCALE } from "../i18n/locale-selector";
 import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
@@ -78,15 +75,6 @@ import {
   forgetMemberApplied,
   recordMemberApplied,
 } from "./releases-repository";
-
-/**
- * The running install's row-lock facts, read from its adapter: the applied
- * mark takes a locked read of its member inside the content write.
- */
-function installLockServer(): RowLockServer {
-  const adapter = container.get<DrizzleAdapter>("adapter");
-  return rowLockServer(adapter, adapter.getCapabilities().dialect);
-}
 
 /**
  * The status an unpublish lands on.
@@ -101,6 +89,12 @@ const WITHDRAWN_STATUS = "draft";
 export function createReleaseMutations(deps: {
   /** The Direct API. Injected for the reason the applier's own deps are. */
   contentApi: JobContentSource;
+  /**
+   * The row-lock facts of the database the writes go to, for the locked
+   * reads the applied mark takes inside each content write. From the same
+   * injected database as the rest of the job, never a global.
+   */
+  lockServer: RowLockServer;
 }): ReleaseMutations {
   const write = async (
     { ref, user, receipt }: ReleaseWrite,
@@ -125,12 +119,13 @@ export function createReleaseMutations(deps: {
         await forgetMemberApplied(tx, receipt.memberId);
         return;
       }
-      // Refuses the write when the member's release was deleted under it,
-      // so the document never takes an action its release no longer asks.
+      // Refuses the write when the member's release has moved on since the
+      // run planned it, so the document never takes an action its release
+      // no longer asks for.
       await recordMemberApplied(
         tx,
         { id: receipt.memberId, revision: receipt.revision, ref },
-        installLockServer()
+        deps.lockServer
       );
     };
 

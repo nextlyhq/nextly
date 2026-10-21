@@ -194,16 +194,16 @@ export async function readSubjectEvents(
     caller,
     repository
   );
-  // A release's history lists only the documents the caller may read, as
-  // the release's own document list does. The cursor stays the page's, so
-  // the next page starts where this one's read ended.
-  const items =
+  const { items, hasNext } =
     subject.kind === "release"
-      ? await getService("releasesService").historyVisibleTo(
-          page.items,
-          releaseActorOf(caller)
+      ? await visibleReleasePage(
+          subject,
+          { ...query, limit },
+          releaseActorOf(caller),
+          repository,
+          page
         )
-      : page.items;
+      : { items: page.items, hasNext: page.nextBefore !== null };
   return {
     items,
     // A cursor walk: page and total describe the window returned, and the
@@ -213,10 +213,45 @@ export async function readSubjectEvents(
       page: 1,
       limit,
       totalPages: 1,
-      hasNext: page.nextBefore !== null,
+      hasNext,
       hasPrev: query.before !== undefined,
     },
   };
+}
+
+/**
+ * A page of a release's history as the caller may be shown it: only the
+ * documents they may read, as the release's own document list does
+ * (`historyVisibleTo`).
+ *
+ * Filled from further reads, each starting where the last ended, until it
+ * holds `limit` events or the history runs out, so the last item returned is
+ * always a cursor that moves on: a page is never empty while events the
+ * caller may see remain, and the events left out between that item and the
+ * next page are read again and left out again. Cut to `limit`, it says there
+ * is more.
+ */
+async function visibleReleasePage(
+  subject: ContentEventSubject,
+  query: ContentEventQuery,
+  actor: ReturnType<typeof releaseActorOf>,
+  repository: ContentEventsRepository,
+  first: Awaited<ReturnType<ContentEventsRepository["listForSubject"]>>
+): Promise<{ items: ContentEventRecord[]; hasNext: boolean }> {
+  const releases = getService("releasesService");
+  const items = await releases.historyVisibleTo(first.items, actor);
+  let next = first.nextBefore;
+  while (items.length < query.limit && next !== null) {
+    const more = await repository.listForSubject(subject, {
+      ...query,
+      before: next,
+    });
+    items.push(...(await releases.historyVisibleTo(more.items, actor)));
+    next = more.nextBefore;
+  }
+  return items.length > query.limit
+    ? { items: items.slice(0, query.limit), hasNext: true }
+    : { items, hasNext: next !== null };
 }
 
 /** How many times a read is authorized again when a life ends under it. */

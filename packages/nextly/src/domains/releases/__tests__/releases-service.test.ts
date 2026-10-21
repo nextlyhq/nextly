@@ -1165,11 +1165,37 @@ describe("ReleasesService.publishNow", () => {
     await svc.publishNow("r1", ADMIN);
     expect(repo.scheduleRelease).not.toHaveBeenCalled();
     // Not moved, but the history still says who asked.
-    expect(repo.recordPublishNow).toHaveBeenCalledWith("r1", {
-      kind: "person",
-      userId: "u1",
-    });
+    expect(repo.recordPublishNow).toHaveBeenCalledWith(
+      "r1",
+      { kind: "person", userId: "u1" },
+      2
+    );
     expect(deps.runDrainNow).toHaveBeenCalledWith({ maxDurationMs: 15_000 });
+  });
+
+  it("refuses Publish now on a release already due that moved since it was read, and runs nothing", async () => {
+    // Rescheduled or cancelled between the read and the event's lock: the
+    // repository's fence misses, and the caller is told rather than handed a
+    // release it did not run.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      {
+        id: "r1",
+        state: "scheduled",
+        revision: 2,
+        scheduledAt: new Date(Date.now() - 60_000),
+      },
+    ]);
+    repo.recordPublishNow.mockResolvedValueOnce(false);
+    await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(repo.recordPublishNow).toHaveBeenCalledWith(
+      "r1",
+      { kind: "person", userId: "u1" },
+      2
+    );
+    expect(deps.runDrainNow).not.toHaveBeenCalled();
   });
 
   it("still moves a draft to now before running the drain", async () => {

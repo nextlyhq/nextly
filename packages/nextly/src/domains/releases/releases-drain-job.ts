@@ -27,6 +27,7 @@
  */
 
 import type { RunAsDeps } from "../../shared/lib/resolve-run-as";
+import { rowLockServer } from "../audit/audit-log-writer";
 import type { JobContentSource } from "../jobs/job-content-api";
 import { defineJob } from "../jobs/job-registry";
 import type { JobDefinition } from "../jobs/job-registry";
@@ -92,7 +93,10 @@ export function createReleasesDrainJob(deps: {
         // outliving the invocation and being killed part-way.
         deadline: context.deadline,
         repository: new ReleasesRepository(deps.db),
-        mutations: createReleaseMutations({ contentApi: deps.contentApi }),
+        mutations: createReleaseMutations({
+          contentApi: deps.contentApi,
+          lockServer: rowLockServer(deps.db, deps.db.dialect),
+        }),
         runAs: deps.runAs,
       });
       await deps.onOutcome(result);

@@ -512,48 +512,76 @@ export async function recordMemberApplied(
   member: { id: string; revision: number; ref: DocumentRef },
   server: RowLockServer
 ): Promise<void> {
-  await holdMembersRelease(tx, member.id, server);
+  await holdRunningRelease(tx, member, server);
   await markMemberApplied(tx, member);
   await recordRunStart(tx, member);
 }
 
 /**
- * Hold the release `memberId` belongs to for the rest of the content write,
- * or refuse the write when the member is gone: taken out of its release, or
- * its release deleted, so the document must not take its action.
+ * Hold the release a member belongs to for the rest of the content write, or
+ * refuse the write unless that release is still the run the write was
+ * planned for: still there, still `scheduled`, at the revision the run
+ * planned against, and still holding the member. A release deleted,
+ * cancelled, rescheduled, renamed, or with its documents or their actions
+ * changed since has moved on, every such move raises its revision, and the
+ * document must not take an action the release no longer asks for.
  *
  * The release row is locked first, as every release write takes it, and the
- * member is then read again under lock. A deletion is a release write on the
- * same row, so it either commits before this lock and the member is gone, or
- * waits for this write, which then records the run's start and keeps the
- * release from being deleted. The second read is a locked one because a
- * plain read on MySQL would answer from the snapshot taken before the
- * deletion committed. The member's own release is read first, plainly: a
- * member never moves between releases.
+ * release and the member are then read again under lock. A move of the
+ * release is a write on the same row, so it either committed before this
+ * lock and is seen, or waits for this write, which then records the run's
+ * start. The reads are locked ones because a plain read on MySQL would answer
+ * from the snapshot taken before the move committed. The member's own release
+ * is read first, plainly: a member never moves between releases.
  */
-async function holdMembersRelease(
+async function holdRunningRelease(
   tx: ReleaseEventTx & LockingReadTx & Pick<ReleasesTxApi, "lockRow">,
-  memberId: string,
+  member: { id: string; revision: number },
   server: RowLockServer
 ): Promise<void> {
-  const [member] = await tx.select<{ releaseId: string }>(MEMBERS, {
+  const [row] = await tx.select<{ releaseId: string }>(MEMBERS, {
     columns: ["releaseId"],
-    where: { and: [{ column: "id", op: "=", value: memberId }] },
+    where: { and: [{ column: "id", op: "=", value: member.id }] },
   });
-  if (member !== undefined) {
-    await tx.lockRow(RELEASES, member.releaseId);
-    const members = releasesTables(server.dialect).nextlyReleaseMembers;
-    if (
-      (await readOneUnderLock(tx, server, members, memberId, {
-        id: members.id,
-      })) !== undefined
-    ) {
-      return;
-    }
+  if (
+    row !== undefined &&
+    (await isRunAsPlanned(tx, row.releaseId, member, server))
+  ) {
+    return;
   }
   throw NextlyError.conflict({
-    logContext: { reason: "release-member-gone-during-write", memberId },
+    logContext: {
+      reason: "release-moved-during-write",
+      memberId: member.id,
+      revision: member.revision,
+    },
   });
+}
+
+/** Whether release `releaseId`, read under its lock, is the run as planned. */
+async function isRunAsPlanned(
+  tx: ReleaseEventTx & LockingReadTx & Pick<ReleasesTxApi, "lockRow">,
+  releaseId: string,
+  member: { id: string; revision: number },
+  server: RowLockServer
+): Promise<boolean> {
+  await tx.lockRow(RELEASES, releaseId);
+  const { nextlyReleases: releases, nextlyReleaseMembers: members } =
+    releasesTables(server.dialect);
+  const release = await readOneUnderLock(tx, server, releases, releaseId, {
+    state: releases.state,
+    revision: releases.revision,
+  });
+  if (
+    release?.state !== "scheduled" ||
+    Number(release.revision) !== member.revision
+  ) {
+    return false;
+  }
+  const held = await readOneUnderLock(tx, server, members, member.id, {
+    id: members.id,
+  });
+  return held !== undefined;
 }
 
 /**
@@ -1115,16 +1143,27 @@ export class ReleasesRepository {
    * Record that `by` asked for Publish now on a release already due, which
    * Publish now does not move: its history still says who asked. In a short
    * transaction of its own, under the release's lock, and only while the
-   * release is there; `false` when it is not.
+   * release is still the one the caller judged due, at `expectedRevision`;
+   * `false` when it is gone or has moved since (rescheduled, cancelled), so
+   * the caller refuses rather than answering a release it did not run.
    */
-  async recordPublishNow(id: string, by: ReleaseEventActor): Promise<boolean> {
+  async recordPublishNow(
+    id: string,
+    by: ReleaseEventActor,
+    expectedRevision: number
+  ): Promise<boolean> {
     return this.db.transaction(async tx => {
       await tx.lockRow(RELEASES, id);
-      const [release] = await tx.select<Pick<ReleaseRow, "state">>(RELEASES, {
-        columns: ["state"],
-        where: { and: [{ column: "id", op: "=", value: id }] },
-      });
-      if (release === undefined) return false;
+      const [release] = await tx.select<Pick<ReleaseRow, "state" | "revision">>(
+        RELEASES,
+        {
+          columns: ["state", "revision"],
+          where: { and: [{ column: "id", op: "=", value: id }] },
+        }
+      );
+      if (release === undefined || release.revision !== expectedRevision) {
+        return false;
+      }
       await this.recordEvent(tx, id, {
         kind: "publishNow",
         actor: by,

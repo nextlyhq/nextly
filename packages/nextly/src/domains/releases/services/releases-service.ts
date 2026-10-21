@@ -3549,7 +3549,23 @@ export class ReleasesService {
       isDueAt(current.scheduledAt, now);
     if (alreadyDue) {
       // Not moved, but asked for all the same: the history says who did.
-      await this.deps.repository.recordPublishNow(current.id, by);
+      // Fenced on the revision the checks were made against, as the move
+      // below is, so a release rescheduled or cancelled in between is refused
+      // rather than reported as run.
+      if (
+        !(await this.deps.repository.recordPublishNow(
+          current.id,
+          by,
+          current.revision
+        ))
+      ) {
+        throw NextlyError.conflict({
+          logContext: {
+            reason: "release-moved-during-publish-now",
+            releaseId: current.id,
+          },
+        });
+      }
       return;
     }
     // Fenced on the state the checks were made against, so a release

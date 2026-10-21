@@ -50,6 +50,7 @@ import { READY_CHECKS } from "./helpers/ready-checks";
 import {
   ANY_EDITABLE_STATE,
   scheduleAsItStands,
+  lockServerOf,
 } from "./helpers/release-writes";
 
 const DAY = 86_400_000;
@@ -298,7 +299,10 @@ async function until(condition: () => boolean): Promise<void> {
  * every write before that one has committed.
  */
 async function passEndedAfter(t: TestNextly, writes: number): Promise<void> {
-  const real = createReleaseMutations({ contentApi: t.nextly });
+  const real = createReleaseMutations({
+    contentApi: t.nextly,
+    lockServer: lockServerOf(t),
+  });
   let started = 0;
   const cut =
     (write: ReleaseMutations["publish"]): ReleaseMutations["publish"] =>
@@ -888,7 +892,10 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const post = await draft(t);
       const id = await dueRelease(t, [post]);
-      const real = createReleaseMutations({ contentApi: t.nextly });
+      const real = createReleaseMutations({
+        contentApi: t.nextly,
+        lockServer: lockServerOf(t),
+      });
       let deleted = false;
       const afterDelete =
         (write: ReleaseMutations["publish"]): ReleaseMutations["publish"] =>
@@ -925,7 +932,10 @@ describe.each(getConfiguredTestDialects())(
       const id = await dueRelease(t, [kept, taken]);
       const members = await new ReleasesRepository(t.adapter).listMembers(id);
       const takenMember = members.find(member => member.entryId === taken)!;
-      const real = createReleaseMutations({ contentApi: t.nextly });
+      const real = createReleaseMutations({
+        contentApi: t.nextly,
+        lockServer: lockServerOf(t),
+      });
       let removed = false;
       const publish: ReleaseMutations["publish"] = async input => {
         if (input.ref.entryId === taken && !removed) {
@@ -950,6 +960,106 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedStatus(t, "posts", taken)).toBe("draft");
       // The control: the document still in the release was written.
       expect(await storedStatus(t, "posts", kept)).toBe("published");
+    });
+
+    it("leaves a document as it was when its release is cancelled between the run's plan and its write", async () => {
+      // The release still exists and still holds the document, but it has
+      // moved on: cancelled, its revision raised. The write must not happen.
+      const t = await boot(dialect);
+      const post = await draft(t);
+      const id = await dueRelease(t, [post]);
+      const real = createReleaseMutations({
+        contentApi: t.nextly,
+        lockServer: lockServerOf(t),
+      });
+      let cancelled = false;
+      const afterCancel =
+        (write: ReleaseMutations["publish"]): ReleaseMutations["publish"] =>
+        async input => {
+          if (!cancelled) {
+            cancelled = true;
+            await t.nextly.releases.cancel({ id });
+          }
+          return write(input);
+        };
+      await applyDueReleases({
+        repository: new ReleasesRepository(t.adapter),
+        mutations: {
+          publish: afterCancel(input => real.publish(input)),
+          unpublish: afterCancel(input => real.unpublish(input)),
+        },
+        runAs: {
+          findUser: async userId => ({ id: userId, isActive: true }),
+          listRoleSlugs: async () => [],
+        },
+      });
+
+      expect(cancelled).toBe(true);
+      expect((await t.nextly.releases.findByID({ id }))?.state).toBe(
+        "cancelled"
+      );
+      expect(await storedStatus(t, "posts", post)).toBe("draft");
+    });
+
+    it("pages a release's history so a page of events the reader may not see never stops the walk", async () => {
+      // Newest first, the two newest events are about a memo the reader may
+      // not read: a raw page of two holds nothing for them, and the walk must
+      // still reach the post and the release's creation.
+      const t = await boot(dialect);
+      const [post, memo] = [await draft(t), await draft(t, "memos")];
+      const release = await t.nextly.releases.create({ title: "Paged" });
+      const add = (scopeSlug: string, entryId: string) =>
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug,
+          entryId,
+          locale: null,
+          action: "publish",
+          userId: founder!,
+        });
+      await add("posts", post);
+      const memoMember = await add("memos", memo);
+      await t.nextly.releases.changeMemberAction({
+        releaseId: release.id,
+        memberId: memoMember.id,
+        action: "unpublish",
+      });
+      const reader = await personHolding(t, [
+        "read-content-releases",
+        "read-posts",
+      ]);
+      const page = await t.nextly.contentEvents.list({
+        subject: { kind: "release", id: release.id },
+        limit: 2,
+        user: { id: reader },
+        overrideAccess: false,
+      });
+      expect(page.items.map(event => event.kind)).toEqual([
+        "release-document-added",
+        "release-created",
+      ]);
+      expect(JSON.stringify(page.items)).toContain(post);
+      expect(page.meta.hasNext).toBe(false);
+    });
+
+    it("refuses to record Publish now on a release that moved since it was judged due", async () => {
+      const t = await boot(dialect);
+      const id = await dueRelease(t, [await draft(t)]);
+      const repo = new ReleasesRepository(t.adapter);
+      const [due] = await repo.findReleases({ ids: [id] });
+      // Rescheduled after it was judged: its revision moved on.
+      expect(await scheduleAsItStands(repo, id, inDays(7), "UTC")).toBe(true);
+      expect(
+        await repo.recordPublishNow(
+          id,
+          { kind: "person", userId: founder! },
+          due!.revision
+        )
+      ).toBe(false);
+      expect((await eventsOf(t, id)).map(event => event.kind)).not.toContain(
+        "release-publish-now"
+      );
     });
 
     it("records Publish now on a release already due, and refuses a key that does not say which it is", async () => {

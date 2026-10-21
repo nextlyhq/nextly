@@ -41,6 +41,7 @@ import { seedLiveAuthor, seedPlainAuthor } from "./helpers/live-author";
 import {
   ANY_EDITABLE_STATE,
   scheduleAsItStands,
+  lockServerOf,
 } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
@@ -687,7 +688,10 @@ describe.each(getConfiguredTestDialects())(
 
       const pass = await applyDueReleases({
         repository: new ReleasesRepository(t.adapter),
-        mutations: createReleaseMutations({ contentApi: t.nextly }),
+        mutations: createReleaseMutations({
+          contentApi: t.nextly,
+          lockServer: lockServerOf(t),
+        }),
         runAs: {
           findUser: async id => ({ id, isActive: true }),
           listRoleSlugs: async () => [],
@@ -980,7 +984,10 @@ describe.each(getConfiguredTestDialects())(
       const pass = () =>
         applyDueReleases({
           repository: new ReleasesRepository(t.adapter),
-          mutations: createReleaseMutations({ contentApi: t.nextly }),
+          mutations: createReleaseMutations({
+            contentApi: t.nextly,
+            lockServer: lockServerOf(t),
+          }),
           runAs: { findUser: async () => null, listRoleSlugs: async () => [] },
         });
 
