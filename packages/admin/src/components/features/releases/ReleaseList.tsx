@@ -41,10 +41,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@admin/components/ui";
-import type {
-  NextlyColumn,
-  RowAction,
-} from "@admin/components/ui/table/data-table";
+import type { NextlyColumn } from "@admin/components/ui/table/data-table";
 import { ListView, type ListEmpty } from "@admin/components/ui/table/list-view";
 import { PAGINATION } from "@admin/constants/pagination";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
@@ -54,7 +51,7 @@ import {
   useReleaseTabCounts,
 } from "@admin/hooks/queries/useReleases";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
-import { navigateTo, setSearchParams } from "@admin/lib/navigation";
+import { setSearchParams } from "@admin/lib/navigation";
 import { getSearchParam } from "@admin/lib/search-params";
 import { cn } from "@admin/lib/utils";
 import {
@@ -80,10 +77,12 @@ import {
   ReleaseWhenCell,
 } from "./ReleaseListCells";
 import {
-  ReleaseRowActionDialog,
-  type ReleaseRowAction,
-} from "./ReleaseRowActionDialog";
-import { ScheduleReleaseDialog } from "./ScheduleReleaseDialog";
+  ReleaseRowDialogs,
+  rowActionsFor,
+  type OpenDialog,
+} from "./ReleaseRowMenu";
+import { useClampedPage } from "./useClampedPage";
+import { useMinuteClock } from "./useMinuteClock";
 import { useTabStripOverflow } from "./useTabStripOverflow";
 
 /**
@@ -93,9 +92,6 @@ import { useTabStripOverflow } from "./useTabStripOverflow";
  */
 const RELEASE_PAGE_SIZE: number = PAGINATION.TABLE_PAGE_SIZE_OPTIONS[1];
 const RELEASE_PAGE_SIZE_OPTIONS = PAGINATION.TABLE_PAGE_SIZE_OPTIONS;
-
-/** How often relative times ("in 3 minutes") are brought up to date. */
-const CLOCK_TICK_MS = 60_000;
 
 function isListTab(value: string | null): value is ReleaseListTab {
   return (
@@ -107,88 +103,6 @@ function isAttentionReason(
   value: string | null
 ): value is ReleaseAttentionReason {
   return value === "stopped" || value === "overdue";
-}
-
-/** The current time, moved on once a minute so relative times stay true. */
-function useMinuteClock(): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
-    return () => window.clearInterval(id);
-  }, []);
-  return now;
-}
-
-/** The dialog a row's menu opened, and for which release. */
-interface OpenDialog {
-  release: Release;
-  action: ReleaseRowAction | "schedule";
-}
-
-/** One entry of the row menu: when it is offered, and what it is called. */
-interface RowMenuEntry {
-  id: ReleaseRowAction | "schedule";
-  offered: (release: Release) => boolean;
-  label: (release: Release) => string;
-  destructive?: boolean;
-}
-
-const isDraft = (release: Release) => release.state === "draft";
-
-/**
- * The row menu's entries after "Open", in order, each offered from the
- * capabilities the server sent with the release. Nothing here decides what is
- * permitted; it decides only what to call each action and when two would
- * offer the same thing.
- */
-const ROW_MENU: readonly RowMenuEntry[] = [
-  {
-    id: "schedule",
-    offered: release => release.can?.schedule === true,
-    label: release => (isDraft(release) ? "Schedule…" : "Reschedule…"),
-  },
-  {
-    id: "publish",
-    offered: release => release.can?.publishNow === true,
-    label: () => "Publish now…",
-  },
-  {
-    // A draft that may be deleted is offered Delete and not Discard: both end
-    // with nothing going live, and two ways of getting rid of one draft is a
-    // choice with no difference the reader can see from here.
-    id: "cancel",
-    offered: release =>
-      release.can?.cancel === true && !(isDraft(release) && release.can.delete),
-    label: release => (isDraft(release) ? "Discard…" : "Cancel release…"),
-  },
-  {
-    id: "delete",
-    offered: release => release.can?.delete === true,
-    label: () => "Delete…",
-    destructive: true,
-  },
-];
-
-/** The actions a reader may take on a release, for its row menu. */
-function rowActionsFor(
-  release: Release,
-  open: (dialog: OpenDialog) => void
-): RowAction<Release>[] {
-  const openRelease: RowAction<Release> = {
-    id: "open",
-    label: "Open",
-    onSelect: () =>
-      navigateTo(buildRoute(ROUTES.RELEASES_DETAIL, { id: release.id })),
-  };
-  const offered = ROW_MENU.filter(entry => entry.offered(release)).map(
-    (entry): RowAction<Release> => ({
-      id: entry.id,
-      label: entry.label(release),
-      destructive: entry.destructive,
-      onSelect: () => open({ release, action: entry.id }),
-    })
-  );
-  return [openRelease, ...offered];
 }
 
 function releaseColumns(
@@ -560,62 +474,6 @@ function HideSinglesSwitch({
       </Label>
     </div>
   );
-}
-
-/** The dialog the row menu opened, if any. */
-function ReleaseRowDialogs({
-  dialog,
-  open,
-  onOpenChange,
-}: {
-  dialog: OpenDialog | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  if (!dialog) return null;
-  if (dialog.action === "schedule") {
-    return (
-      <ScheduleReleaseDialog
-        // Keyed by release: the dialog seeds its zone from the release it
-        // opens on, and must not carry one release's choice to the next.
-        key={dialog.release.id}
-        release={dialog.release}
-        open={open}
-        onOpenChange={onOpenChange}
-      />
-    );
-  }
-  return (
-    <ReleaseRowActionDialog
-      key={`${dialog.release.id}:${dialog.action}`}
-      release={dialog.release}
-      action={dialog.action}
-      open={open}
-      onOpenChange={onOpenChange}
-    />
-  );
-}
-
-/**
- * Keep the page inside the tab it pages through.
- *
- * A tab shrinks under the reader: the only release on the last page is
- * published, cancelled or deleted, here or by the runner between two polls.
- * The server then answers a page past the end with no rows, and the list would
- * show its empty state with no pager to get back. So once an answer for this
- * page (not a placeholder from the last one) says the page is past the end,
- * the list moves to the last page, or the first when the tab is empty.
- */
-function useClampedPage(
-  q: { page: number; pageSize: number; setPage: (page: number) => void },
-  total: number | undefined
-): void {
-  const { page, pageSize, setPage } = q;
-  useEffect(() => {
-    if (total === undefined) return;
-    const last = Math.max(0, Math.ceil(total / pageSize) - 1);
-    if (page > last) setPage(last);
-  }, [total, page, pageSize, setPage]);
 }
 
 /**

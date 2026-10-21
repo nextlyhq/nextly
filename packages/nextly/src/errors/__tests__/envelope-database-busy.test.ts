@@ -15,8 +15,13 @@ import {
   errorEnvelopeFields,
   errorFromServiceEnvelope,
 } from "../from-service-envelope";
+import { DbError } from "../../database/errors";
+import { NextlyError } from "../nextly-error";
 import { originalErrorOf } from "../original-error";
-import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "../retry-after";
+import {
+  DATABASE_BUSY_RETRY_AFTER_SECONDS,
+  retryAfterSeconds,
+} from "../retry-after";
 
 /** The envelope a collection or Single service returns for `error`. */
 function serviceEnvelope(error: unknown) {
@@ -82,5 +87,73 @@ describe("a service envelope for a busy database", () => {
 
     expect(envelope.statusCode).toBe(500);
     expect(envelope.code).toBeUndefined();
+  });
+});
+
+describe("a write that committed before the database was busy", () => {
+  const committedBusy = [
+    { name: "a raw busy error", error: poolWaitTimeoutError(15000) },
+    {
+      name: "a typed DATABASE_BUSY",
+      error: NextlyError.databaseBusy(),
+    },
+    {
+      name: "a SERVICE_UNAVAILABLE without a hint",
+      error: NextlyError.serviceUnavailable(),
+    },
+    {
+      // A 500 whose message alone tells the caller to try again.
+      name: "a lost connection, mapped to DATABASE_ERROR",
+      error: NextlyError.fromDatabaseError(
+        new DbError({
+          message: "Connection terminated unexpectedly",
+          kind: "connection-lost",
+          dialect: "postgresql",
+        })
+      ),
+    },
+    { name: "an internal error", error: NextlyError.internal() },
+    {
+      // A hook's rate limit with no hint still says "try later".
+      name: "a RATE_LIMITED without a hint",
+      error: NextlyError.rateLimited(),
+    },
+    {
+      name: "a RATE_LIMITED with a hint",
+      error: NextlyError.rateLimited({ retryAfterSeconds: 30 }),
+    },
+  ];
+
+  for (const { name, error } of committedBusy) {
+    it(`is answered as saved, with no retry hint, for ${name}`, () => {
+      const rebuilt = errorFromServiceEnvelope({
+        ...serviceEnvelope(error),
+        committed: true,
+      });
+
+      expect(rebuilt.code).toBe("INTERNAL_ERROR");
+      expect(rebuilt.statusCode).toBe(500);
+      expect(retryAfterSeconds(rebuilt)).toBeUndefined();
+      expect(rebuilt.publicMessage).toMatch(/change was saved/);
+    });
+  }
+
+  it("keeps an error that asks for no retry as it was", () => {
+    const rebuilt = errorFromServiceEnvelope({
+      ...serviceEnvelope(NextlyError.forbidden()),
+      committed: true,
+    });
+
+    expect(rebuilt.code).toBe("FORBIDDEN");
+  });
+
+  it("keeps DATABASE_BUSY when nothing committed", () => {
+    const rebuilt = errorFromServiceEnvelope({
+      ...serviceEnvelope(poolWaitTimeoutError(15000)),
+      committed: false,
+    });
+
+    expect(rebuilt.code).toBe("DATABASE_BUSY");
+    expect(retryAfterSeconds(rebuilt)).toBe(DATABASE_BUSY_RETRY_AFTER_SECONDS);
   });
 });

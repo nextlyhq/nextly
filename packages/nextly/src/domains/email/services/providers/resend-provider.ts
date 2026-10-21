@@ -112,6 +112,7 @@ export function createResendProvider(
 ): EmailProviderAdapter {
   return {
     maxToPerMessage: RESEND_MAX_TO,
+    acceptsIdempotencyKey: true,
     async send(options) {
       // Built conditionally so unset fields are absent from the JSON rather
       // than present and null, which Resend rejects for `reply_to`.
@@ -159,6 +160,10 @@ export function createResendProvider(
       };
       const userAgent = resendUserAgent();
       if (userAgent) headers["User-Agent"] = userAgent;
+      // Resend sends a message once per key for 24 hours.
+      if (options.idempotencyKey) {
+        headers["Idempotency-Key"] = options.idempotencyKey;
+      }
 
       // Whether Resend answered at all: a throw before it did is a network
       // failure, and a throw after it a classified or unreadable answer.

@@ -411,6 +411,18 @@ export interface EmailProviderAdapter {
    */
   maxToPerMessage?: number;
   /**
+   * @experimental Whether this adapter takes an idempotency key for its
+   * provider.
+   *
+   * Declared by an adapter whose provider sends a message once for a key, as
+   * Resend's `Idempotency-Key` header does. Such an adapter receives
+   * `idempotencyKey` for every message of a send that carried a key. Core
+   * claims the key before calling any adapter either way; the provider's key
+   * covers the moment between the provider accepting a message and core
+   * recording that it did.
+   */
+  acceptsIdempotencyKey?: boolean;
+  /**
    * Send an email through this provider.
    *
    * @param options - Email sending options
@@ -454,6 +466,13 @@ export interface EmailProviderAdapter {
      * bytes — adapters forward to their provider's format.
      */
     attachments?: ResolvedAttachment[];
+    /**
+     * @experimental The key the provider should send this message once for:
+     * derived from the caller's key, its scope and this message, never the
+     * caller's key itself. Present only for an adapter that declares
+     * `acceptsIdempotencyKey`, and only for a send that carried a key.
+     */
+    idempotencyKey?: string;
   }): Promise<{
     success: boolean;
     messageId?: string;

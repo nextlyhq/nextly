@@ -18,7 +18,10 @@
 // take, the result contracts the assertions pin, the write-integrity marker
 // whose failures force a rollback, and the typed error the abort paths throw.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import {
+  poolWaitTimeoutError,
+  type TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 
 import { CollectionEntryService } from "../../../services/collections/collection-entry-service";
 import { CollectionMutationService } from "../services/collection-mutation-service";
@@ -28,10 +31,8 @@ import type {
   CollectionServiceResult,
 } from "../services/collection-types";
 import { markWriteIntegrityFailure } from "../../../shared/write-integrity";
-import { errorEnvelopeFields } from "../../../errors/from-service-envelope";
 import { NextlyError } from "../../../errors/nextly-error";
 import { DATABASE_BUSY_RETRY_AFTER_SECONDS } from "../../../errors/retry-after";
-import { CollectionAccessService } from "../services/collection-access-service";
 
 import {
   createMockSchema,
@@ -127,6 +128,21 @@ vi.mock("@nextly/hooks/stored-hook-executor", () => {
 vi.mock("@nextly/lib/field-transform", () => ({
   transformRichTextFields: vi.fn((entry: unknown) => entry),
 }));
+
+// The caller lookup a code-defined rule is handed: the real one, unless a test
+// sets `callerLookup.failure`, which it then rejects with.
+const callerLookup = vi.hoisted(() => ({ failure: undefined as unknown }));
+vi.mock("../../../auth/access/resolve-actor", async importOriginal => {
+  const real =
+    await importOriginal<typeof import("../../../auth/access/resolve-actor")>();
+  return {
+    ...real,
+    actorForUser: (...args: Parameters<typeof real.actorForUser>) =>
+      callerLookup.failure === undefined
+        ? real.actorForUser(...args)
+        : Promise.reject(callerLookup.failure),
+  };
+});
 
 // ── Test suite ────────────────────────────────────────────────────────────
 
@@ -568,55 +584,71 @@ describe("CollectionEntryService — Bulk Operation Contracts", () => {
   // ── a busy database at the bulk gate ──────────────────────────────────
 
   describe("a bulk write whose access check found the database busy", () => {
-    // What the collection gate returns when its access check is refused as
-    // DATABASE_BUSY: the refusal's own fields spread over the gate's 500.
-    const busyGate = {
-      success: false,
-      statusCode: 500,
-      message: "Failed to verify RBAC permissions",
-      data: null,
-      ...errorEnvelopeFields(NextlyError.databaseBusy()),
+    // The real collection gate, judging a collection with a code-defined rule,
+    // whose read of the caller's roles and permissions waited out its bound
+    // for a connection: the gate refuses, and the bulk write must answer
+    // DATABASE_BUSY rather than its 403 for a denial.
+    const REFUSALS = [
+      {
+        name: "the adapters' raw pool-wait timeout",
+        error: poolWaitTimeoutError(15000),
+      },
+      { name: "a typed DATABASE_BUSY", error: NextlyError.databaseBusy() },
+    ];
+
+    afterEach(() => {
+      callerLookup.failure = undefined;
+    });
+
+    function serviceWithBusyCheck(error: unknown) {
+      const rbac = createMockRbacAccessControlService();
+      // A rule is what hands the caller's roles to the decision, so it is
+      // what makes the gate read them.
+      rbac.getRegisteredAccess.mockReturnValue({
+        update: () => true,
+        delete: () => true,
+      });
+      callerLookup.failure = error;
+      return new CollectionEntryService(
+        createMockAdapter(mockDb) as never,
+        silentLogger as never,
+        createMockFileManager(schema) as never,
+        createMockCollectionService() as never,
+        createMockRelationshipService() as never,
+        createMockHookRegistry() as never,
+        createMockComponentDataService() as never,
+        rbac as never
+      );
+    }
+
+    const BUSY = {
+      code: "DATABASE_BUSY",
+      statusCode: 503,
+      publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
     };
-    afterEach(() => vi.restoreAllMocks());
 
-    it("answers bulkUpdateByQuery as DATABASE_BUSY 503, not a 403", async () => {
-      vi.spyOn(
-        CollectionAccessService.prototype,
-        "checkCollectionAccess"
-      ).mockResolvedValue(busyGate as never);
-
-      await expect(
-        service.bulkUpdateByQuery({
-          collectionName: "posts",
-          where: { status: { equals: "draft" } },
-          data: { status: "published" },
-          user: { id: "user-1" },
-        })
-      ).rejects.toMatchObject({
-        code: "DATABASE_BUSY",
-        statusCode: 503,
-        publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
+    for (const { name, error } of REFUSALS) {
+      it(`answers bulkUpdateByQuery as DATABASE_BUSY 503 for ${name}, not a 403`, async () => {
+        await expect(
+          serviceWithBusyCheck(error).bulkUpdateByQuery({
+            collectionName: "posts",
+            where: { status: { equals: "draft" } },
+            data: { status: "published" },
+            user: { id: "user-1" },
+          })
+        ).rejects.toMatchObject(BUSY);
       });
-    });
 
-    it("answers bulkDeleteByQuery as DATABASE_BUSY 503, not a 403", async () => {
-      vi.spyOn(
-        CollectionAccessService.prototype,
-        "checkCollectionAccess"
-      ).mockResolvedValue(busyGate as never);
-
-      await expect(
-        service.bulkDeleteByQuery({
-          collectionName: "posts",
-          where: { status: { equals: "draft" } },
-          user: { id: "user-1" },
-        })
-      ).rejects.toMatchObject({
-        code: "DATABASE_BUSY",
-        statusCode: 503,
-        publicData: { retryAfterSeconds: DATABASE_BUSY_RETRY_AFTER_SECONDS },
+      it(`answers bulkDeleteByQuery as DATABASE_BUSY 503 for ${name}, not a 403`, async () => {
+        await expect(
+          serviceWithBusyCheck(error).bulkDeleteByQuery({
+            collectionName: "posts",
+            where: { status: { equals: "draft" } },
+            user: { id: "user-1" },
+          })
+        ).rejects.toMatchObject(BUSY);
       });
-    });
+    }
   });
 
   // ── duplicateEntry ────────────────────────────────────────────────────
