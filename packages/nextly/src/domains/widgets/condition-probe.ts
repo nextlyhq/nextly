@@ -36,13 +36,20 @@ import {
 import { wouldReadOwnNewCollection } from "../../auth/new-entity-access-policy";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 
+import { getStartedSteps } from "./get-started";
+import type { GetStartedAnswer } from "./get-started-steps";
 import {
-  readableCollectionSlugs,
-  readableSingleSlugs,
+  readableOfKind,
   readerHasContent,
   readerMayCreateEntry,
   type ContentAnswer,
 } from "./reader-content";
+
+/** A registry read for this reader: the slugs, and whether the registry could be read at all. */
+export interface RegistryAnswer {
+  slugs: string[];
+  reachable: boolean;
+}
 
 /** What every condition evaluator is handed. */
 export interface ConditionProbe {
@@ -53,9 +60,16 @@ export interface ConditionProbe {
   /** The singles this reader may read, resolved at most once. */
   readableSingles(): Promise<string[]>;
   /**
+   * The collections this reader may read, and whether the registry could be
+   * read: the one read `readableSlugs` is derived from.
+   */
+  collectionsRead(): Promise<RegistryAnswer>;
+  /** The Singles this reader may read, and whether that registry could be read. */
+  singlesRead(): Promise<RegistryAnswer>;
+  /**
    * Whether this reader can see any row at all, resolved at most once:
-   * `"unknown"` when the check ran out of time, which every reader of it treats
-   * as not empty.
+   * `"unknown"` when the check ran out of time or the collections could not be
+   * listed, which every reader of it treats as not empty.
    */
   hasContent(): Promise<ContentAnswer>;
   /**
@@ -77,19 +91,33 @@ export interface ConditionProbe {
    * reach a new collection.
    */
   mayCreateCollection(): Promise<boolean>;
+  /**
+   * The Get started steps offered to this reader, before their skips, resolved
+   * at most once: the one answer the setup condition and the step list both
+   * read, so the two cannot disagree.
+   */
+  getStarted(): Promise<GetStartedAnswer>;
 }
 
 export function conditionProbe(caller: ReadCaller): ConditionProbe {
-  let slugs: Promise<string[]> | undefined;
-  let singles: Promise<string[]> | undefined;
+  let collectionsRead: Promise<RegistryAnswer> | undefined;
+  let singlesRead: Promise<RegistryAnswer> | undefined;
   let content: Promise<ContentAnswer> | undefined;
   let createEntry: Promise<boolean> | undefined;
   let createCollection: Promise<boolean> | undefined;
+  let started: Promise<GetStartedAnswer> | undefined;
 
-  const readableSlugs = (): Promise<string[]> => {
-    slugs ??= readableCollectionSlugs(caller);
-    return slugs;
+  const readCollections = (): Promise<RegistryAnswer> => {
+    collectionsRead ??= readableOfKind(caller, "collection");
+    return collectionsRead;
   };
+  const readSingles = (): Promise<RegistryAnswer> => {
+    singlesRead ??= readableOfKind(caller, "single");
+    return singlesRead;
+  };
+  // Derived from the one read, so the slugs and whether they are all of them cannot disagree.
+  const readableSlugs = (): Promise<string[]> =>
+    readCollections().then(read => read.slugs);
 
   const mayCreateCollection = (): Promise<boolean> => {
     // 🔴 May create AND would be able to READ what they created. Both halves,
@@ -123,18 +151,21 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
     return createCollection;
   };
 
-  return {
+  const probe: ConditionProbe = {
     caller,
     readableSlugs,
-    readableSingles: () => {
-      singles ??= readableSingleSlugs(caller);
-      return singles;
-    },
+    readableSingles: () => readSingles().then(read => read.slugs),
+    collectionsRead: readCollections,
+    singlesRead: readSingles,
     hasContent: () => {
       // Takes the slugs from the same memo rather than resolving its own, which
       // is the duplication this module was added to remove.
-      content ??= readableSlugs().then(resolved =>
-        readerHasContent(caller, resolved)
+      //
+      // 🔴 A registry that could not be read is "unknown", never "no content".
+      // Counted over the empty list it leaves behind, the answer is `false`, and
+      // `false` offers an established site the empty-install cards.
+      content ??= readCollections().then(read =>
+        read.reachable ? readerHasContent(caller, read.slugs) : "unknown"
       );
       return content;
     },
@@ -162,5 +193,10 @@ export function conditionProbe(caller: ReadCaller): ConditionProbe {
       return createEntry;
     },
     mayCreateCollection,
+    getStarted: () => {
+      started ??= getStartedSteps(probe);
+      return started;
+    },
   };
+  return probe;
 }

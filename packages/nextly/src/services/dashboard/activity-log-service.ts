@@ -925,6 +925,35 @@ export class ActivityLogService extends BaseService {
   }
 
   /**
+   * Which of `singles` the trail has recorded a save of, in ONE query.
+   *
+   * A Single is saved by a named writer through `recordSingleActivity`, which
+   * files a row naming it with `subjectKind: "single"`; one such row is enough.
+   * Asked for every Single at once, with `IN` and `DISTINCT`, because the
+   * setup steps ask it on every layout read and one query per Single would make
+   * a site with many Singles pay for each of them, every time the dashboard
+   * opens. No caller scope: whether a document was ever saved is not the
+   * document, and the caller is already one who may update it.
+   */
+  async singlesWithRecordedSaves(
+    singles: readonly string[]
+  ): Promise<Set<string>> {
+    // An empty `IN ()` is a syntax error on some dialects: answered without a query.
+    if (singles.length === 0) return new Set();
+    const rows = await this.adapter.select<{ collection: string }>(TABLE, {
+      columns: ["collection"],
+      distinct: true,
+      where: {
+        and: [
+          { column: "subjectKind", op: "=", value: "single" },
+          { column: "collection", op: "IN", value: [...singles] },
+        ],
+      },
+    });
+    return new Set(rows.map(row => row.collection));
+  }
+
+  /**
    * Up to `want` activity rows the caller may actually be told about.
    *
    * 🔴 Authorization happens AFTER the read and cannot be pushed into it. A
