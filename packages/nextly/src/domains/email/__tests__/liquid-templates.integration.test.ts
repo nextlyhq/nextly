@@ -942,6 +942,30 @@ for (const dialect of getConfiguredTestDialects()) {
       expect((await templates(t).oldEngineStatus(id)).kept).toBe(true);
     });
 
+    it("renders inside a caller's open transaction on the engine the template is on", async () => {
+      const t = await boot(dialect);
+      const id = await storeAsBefore(t, dialect, "literal-if", LITERAL_IF);
+      await templates(t).ensureBuiltInTemplates();
+      // Loaded before the transaction; only the render runs inside it, as a
+      // plugin's send in its own transaction does.
+      const inTransaction = async () => {
+        const template = await templates(t).getTemplate(id);
+        let html = "";
+        await t.adapter.transaction(async () => {
+          html = (await templates(t).renderStored(template, DATA)).html;
+        });
+        return html;
+      };
+      expect(await inTransaction()).toBe(interpolateTemplate(LITERAL_IF, DATA));
+      // Confirmed on this instance: read as Liquid from then on.
+      await t.nextly.emailTemplates.update({
+        id,
+        data: { htmlContent: FILTER },
+      });
+      await templates(t).confirmLiquid(id);
+      expect(await inTransaction()).toBe("<p>Hi PRIYA &lt;3</p>");
+    });
+
     it("refuses a layout whose body marker sits where Liquid writes nothing", async () => {
       const t = await boot(dialect);
       await templates(t).ensureBuiltInTemplates();
