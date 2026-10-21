@@ -338,7 +338,7 @@ function IntervalInView({
             key={mark.key}
             aria-hidden="true"
             data-testid="chart-point-in-view"
-            className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full ring-2 ring-popover"
+            className="pointer-events-none absolute size-2 -translate-x-1/2 -translate-y-1/2 rounded-full"
             // design-lint-ok: the position is the datum, and the colour is the series' chart slot.
             style={{
               left,
