@@ -31,7 +31,7 @@
     "conf": "^13.1.0",
     "env-paths": "^3.0.0",
     "picocolors": "^1.1.1",
-    "posthog-node": "^5.8.0"
+    "posthog-node": "^5.56.2"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",

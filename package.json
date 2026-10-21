@@ -111,8 +111,8 @@
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
-    "@aws-sdk/client-s3": "^3.1090.0",
-    "@aws-sdk/lib-storage": "^3.1090.0",
+    "@aws-sdk/client-s3": "^3.1152.0",
+    "@aws-sdk/lib-storage": "^3.1152.0",
     "@changesets/changelog-github": "^0.5.1",
     "@changesets/cli": "^2.27.10",
     "@changesets/get-github-info": "^0.7.0",
@@ -125,25 +125,25 @@
     "@nextlyhq/eslint-plugin": "workspace:*",
     "@nextlyhq/prettier-config": "workspace:*",
     "@testing-library/jest-dom": "^6.9.1",
-    "@testing-library/react": "^16.3.0",
-    "@testing-library/user-event": "^14.6.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
     "@vitejs/plugin-react": "^5.1.0",
     "@vitest/coverage-v8": "^4.1.0",
     "@vitest/ui": "^4.1.0",
     "eslint": "^9.39.1",
-    "fallow": "3.15.0",
+    "fallow": "3.34.1",
     "globals": "^16.3.0",
     "husky": "^9.1.7",
     "jsdom": "^27.1.0",
     "lint-staged": "^16.2.6",
     "micromatch": "^4.0.8",
-    "prettier": "^3.6.2",
-    "publint": "^0.3.18",
+    "prettier": "^3.9.10",
+    "publint": "^0.3.25",
     "sherif": "1.13.0",
-    "tsx": "^4.20.5",
-    "turbo": "2.9.18",
+    "tsx": "^4.23.15",
+    "turbo": "2.11.9",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.59.0",
+    "typescript-eslint": "^8.71.2",
     "vitest": "^4.1.0"
   },
   "prettier": "@nextlyhq/prettier-config",
@@ -154,6 +154,6 @@
   "dependencies": {
     "@mdx-js/mdx": "3.1.1",
     "js-yaml": "4.3.2",
-    "zod": "^4.6.2"
+    "zod": "^4.6.7"
   }
 }
