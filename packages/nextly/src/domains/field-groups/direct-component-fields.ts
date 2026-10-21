@@ -6,7 +6,8 @@
  * value for one: both ask this, so the two cannot disagree about which fields are affected. One
  * held in a group or a repeater is stored in that container's JSON, and is not listed.
  *
- * Kept free of anything heavier than the type predicates, because `defineConfig` reads it.
+ * The admin's schema leaves such fields out (`omitDirectComponentFields`), so its forms never draw
+ * one. Kept free of anything heavier than the type predicates, because `defineConfig` reads it.
  *
  * @module domains/field-groups/direct-component-fields
  */
@@ -43,4 +44,26 @@ export function directComponentFields(
     }
   }
   return found;
+}
+
+/**
+ * `fields` without the component fields placed directly in them, keeping layout containers with
+ * their other children. The schema the admin draws a component's form from is built through this,
+ * so a field nothing could store is never rendered, seeded or sent.
+ */
+export function omitDirectComponentFields<T extends DirectField>(
+  fields: readonly T[]
+): T[] {
+  const kept: T[] = [];
+  for (const field of fields) {
+    if (!field.name && field.fields) {
+      kept.push({
+        ...field,
+        fields: omitDirectComponentFields(field.fields),
+      });
+      continue;
+    }
+    if (directComponentFields([field]).length === 0) kept.push(field);
+  }
+  return kept;
 }

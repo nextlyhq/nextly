@@ -27,6 +27,7 @@ import {
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
 import { resolveComponentTableName } from "../../schema/utils/resolve-table-name";
+import { omitDirectComponentFields } from "../direct-component-fields";
 import {
   extractFieldGroupReferences,
   isFieldGroupFieldType,
@@ -1073,7 +1074,12 @@ export class FieldGroupRegistryService extends BaseRegistryService<
 
       for (const result of results) {
         const deserialized = this.deserializeRecord(result);
-        componentMap.set(deserialized.slug, deserialized);
+        // The schema forms are drawn from leaves out a component placed directly in this one's
+        // fields: nothing stores it, so a form must not render, seed or send it.
+        componentMap.set(deserialized.slug, {
+          ...deserialized,
+          fields: omitDirectComponentFields(deserialized.fields),
+        });
       }
     } catch (error) {
       this.logger.error(

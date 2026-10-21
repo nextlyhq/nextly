@@ -6,9 +6,9 @@
  * is what judges it, against the inner component's fields and its registered validators.
  *
  * Placed DIRECTLY in the outer component's fields, it has no column and no table write, so its
- * value cannot be stored. A write carrying one is refused rather than accepted and dropped. A value
- * that carries nothing beyond the inner component's defaults, which is what the admin's form seeds
- * for a component nobody touched, is not a value anyone would lose, and passes.
+ * value cannot be stored. A write carrying one is refused rather than accepted and dropped; only an
+ * empty one passes. The admin's form never draws such a field, since the schema it reads leaves it
+ * out, so it never sends one.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -262,22 +262,63 @@ describe.each(getConfiguredTestDialects())(
       expect(required.issues).toContainEqual({ path: "seal", ...NOT_STORED });
     });
 
-    it("passes one that carries nothing beyond its defaults, as the admin's form seeds it", async () => {
+    it("passes an empty value for one placed directly in it", async () => {
       const t = await boot(dialect);
-      const seeded = await outcomeOf(() =>
+      for (const card of [
+        { title: "T", badge: null },
+        { title: "T", badge: {} },
+        { title: "T", badges: [] },
+      ]) {
+        expect(
+          await outcomeOf(() =>
+            t.nextly.create({
+              collection: "pages" as never,
+              data: { name: "E", card } as never,
+            })
+          )
+        ).toEqual({ ok: true, issues: [] });
+      }
+    });
+
+    // The admin never draws such a field (see below), so nothing seeds it: a value that holds only
+    // the inner component's defaults was still sent by someone, and is lost like any other.
+    it("refuses one holding only its defaults", async () => {
+      const t = await boot(dialect);
+      const refused = await outcomeOf(() =>
         t.nextly.create({
           collection: "pages" as never,
           data: {
-            name: "S",
-            card: {
-              title: "T",
-              badge: { label: "", tone: "plain", code: null, flag: true },
-              badges: [],
-            },
+            name: "D",
+            card: { badge: { label: "", tone: "plain", flag: true } },
           } as never,
         })
       );
-      expect(seeded).toEqual({ ok: true, issues: [] });
+      expect(refused.issues).toContainEqual({ path: "badge", ...NOT_STORED });
+    });
+
+    it("leaves one placed directly in it out of the schema the admin draws", async () => {
+      const t = await boot(dialect);
+      const [card] = (await t
+        .getService("fieldGroupRegistryService")
+        .enrichFieldsWithComponentSchemas([
+          { name: "card", type: "component", component: "card" },
+        ])) as Array<{
+        componentFields?: Array<{
+          name?: string;
+          fields?: Array<{ name?: string; componentFields?: unknown[] }>;
+        }>;
+      }>;
+      const names = (card?.componentFields ?? []).map(field => field.name);
+
+      // Nothing could store these, so the form gets nothing to render, seed or send.
+      expect(names).not.toContain("badge");
+      expect(names).not.toContain("badges");
+      expect(names).not.toContain("slot");
+      // Held in a group or repeater it is stored, and drawn.
+      expect(names).toEqual(expect.arrayContaining(["title", "meta", "chips"]));
+      const meta = card?.componentFields?.find(field => field.name === "meta");
+      expect(meta?.fields?.[0]).toMatchObject({ name: "badge" });
+      expect(meta?.fields?.[0]?.componentFields).toBeDefined();
     });
 
     it("judges a held component's validators against that component's own values", async () => {

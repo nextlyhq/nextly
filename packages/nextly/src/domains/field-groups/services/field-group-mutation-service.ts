@@ -1786,7 +1786,7 @@ export class FieldGroupMutationService extends BaseService {
     // `validate` is attached from the field-level registry, as the parent's
     // fields are; without it that validator never ran on any write.
     const issues = [
-      ...unstoredNestedComponentIssues(instance, componentFields, nested),
+      ...unstoredNestedComponentIssues(instance, componentFields),
       ...(await validateEntryData(
         instance,
         slug

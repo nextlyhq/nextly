@@ -30,4 +30,10 @@
 ---
 
 A component held in a group or repeater of another component is now validated against its own fields on every write, its own `validate` included; until now nothing judged it, so existing content that fails it is refused on its next save or publish.
-A component placed directly in another component's fields has never been stored, and since alpha.67 a value for it was dropped without a word. A write that carries one is now refused (`NOT_STORED`), `defineConfig` warns about each such field, and the Schema Builder no longer offers one there and names any an existing field group holds. Put it in a group or repeater instead.
+A component placed directly in another component's fields has never been stored, and since alpha.67 a value for it was dropped without a word. Now:
+
+- the admin no longer shows such a field in its forms;
+- a write that carries a value for one is refused with `NOT_STORED` (only an empty value, `null`, `{}` or `[]`, passes);
+- `defineConfig` warns about each such field;
+- the Schema Builder no longer offers one there, and names any an existing field group holds.
+  Put such a component in a group or repeater instead, where it's stored and validated.

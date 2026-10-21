@@ -1,106 +1,80 @@
 /**
- * The walk that decides whether a directly nested component's value carries anything ends on any
- * input, including a value that refers back to itself, which a Direct API caller or a hook can
- * hand it. Such a value is refused like any other that carries something, rather than walked until
- * the stack runs out.
+ * Which values for a component placed directly in a component the write refuses.
+ *
+ * Nothing stores such a value, and the admin never draws the field, so no form seeds it: a value
+ * that holds anything was given by someone and would be lost, and is refused. Only an empty value
+ * passes: nothing, an empty list, or an object with no authored key.
  */
 import { describe, expect, it } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
+import { writeFieldGroupType } from "../storage/field-group-type-key";
 import { unstoredNestedComponentIssues } from "../unstored-nested-components";
 
-const note = { name: "note", type: "text" };
-// `extra.back` declares the badge's own fields, so a value that points back to the badge is walked
-// as a badge again: the walk descends for as long as the value lets it.
-const back: { name: string; type: string; fields: unknown[] } = {
-  name: "back",
-  type: "group",
-  fields: [],
-};
-const badgeFields = [
-  { name: "label", type: "text" },
-  { name: "extra", type: "group", fields: [back] },
-  { name: "first", type: "group", fields: [note] },
-  { name: "second", type: "group", fields: [note] },
-] as unknown as FieldConfig[];
-back.fields = badgeFields;
 const cardFields = [
+  { name: "title", type: "text" },
   { name: "badge", type: "component", component: "badge" },
+  { name: "slot", type: "component", components: ["badge"] },
+  // A layout container keeps its children on the same object, so one placed in it is direct too.
+  {
+    type: "row",
+    fields: [{ name: "seal", type: "component", component: "badge" }],
+  },
+  {
+    name: "computed",
+    type: "component",
+    component: "badge",
+    virtual: true,
+  },
 ] as unknown as FieldConfig[];
-const resolve = (slug: string) => (slug === "badge" ? badgeFields : undefined);
+
+/** The one refusal expected, at `path`. */
+const refusedAt = (path: string) => [
+  expect.objectContaining({ path, code: "NOT_STORED" }),
+];
 
 describe("a value for a component placed directly in a component", () => {
-  it("is refused, not walked forever, when it refers back to itself", () => {
-    const badge: Record<string, unknown> = { label: "" };
-    badge.extra = { back: badge };
-
-    expect(
-      unstoredNestedComponentIssues({ badge }, cardFields, resolve)
-    ).toEqual([expect.objectContaining({ path: "badge", code: "NOT_STORED" })]);
-  });
-
-  // Only a value met again INSIDE itself is a cycle; one object reused side by side is not.
-  it("passes a seeded object shared by two of its fields", () => {
-    const empty = {};
-    expect(
-      unstoredNestedComponentIssues(
-        { badge: { label: "", first: empty, second: empty } },
-        cardFields,
-        resolve
-      )
-    ).toEqual([]);
-  });
-
-  // No form seeds a key its component does not declare, so one with any value was given by
-  // someone, `false` and "" included.
-  it("is refused when it carries a key the component does not declare", () => {
-    for (const stray of [false, ""]) {
-      expect(
-        unstoredNestedComponentIssues(
-          { badge: { label: "", stray } },
-          cardFields,
-          resolve
-        )
-      ).toEqual([
-        expect.objectContaining({ path: "badge", code: "NOT_STORED" }),
-      ]);
+  it("passes when empty", () => {
+    for (const badge of [null, undefined, {}, [], { id: "kept-id" }]) {
+      expect(unstoredNestedComponentIssues({ badge }, cardFields)).toEqual([]);
     }
   });
 
-  // The field's own declared default is what a form seeds for it, whatever its parts would say.
-  it("passes the component field's own declared default, and refuses a change to it", () => {
-    const preset = [
-      {
-        name: "badge",
-        type: "component",
-        component: "badge",
-        defaultValue: { label: "Preset" },
-      },
-    ] as unknown as FieldConfig[];
-
-    expect(
-      unstoredNestedComponentIssues(
-        { badge: { label: "Preset" } },
-        preset,
-        resolve
-      )
-    ).toEqual([]);
-    expect(
-      unstoredNestedComponentIssues(
-        { badge: { label: "Other" } },
-        preset,
-        resolve
-      )
-    ).toEqual([expect.objectContaining({ path: "badge", code: "NOT_STORED" })]);
+  it("is refused when it holds anything, an empty string and false included", () => {
+    for (const badge of [
+      { label: "" },
+      { flag: false },
+      [{}],
+      "Just a heading",
+    ]) {
+      expect(unstoredNestedComponentIssues({ badge }, cardFields)).toEqual(
+        refusedAt("badge")
+      );
+    }
   });
 
-  it("still passes one that holds only what a form seeds", () => {
+  it("is refused for a zone row that only names its component", () => {
+    const row: Record<string, unknown> = {};
+    writeFieldGroupType(row, "badge");
+    expect(unstoredNestedComponentIssues({ slot: row }, cardFields)).toEqual(
+      refusedAt("slot")
+    );
+  });
+
+  it("is refused, without walking it, when it refers back to itself", () => {
+    const badge: Record<string, unknown> = { label: "" };
+    badge.self = badge;
+    expect(unstoredNestedComponentIssues({ badge }, cardFields)).toEqual(
+      refusedAt("badge")
+    );
+  });
+
+  it("is found inside a layout container, and passed over when virtual", () => {
     expect(
       unstoredNestedComponentIssues(
-        { badge: { label: "" } },
-        cardFields,
-        resolve
+        { seal: { label: "S" }, computed: { label: "C" }, title: "T" },
+        cardFields
       )
-    ).toEqual([]);
+    ).toEqual(refusedAt("seal"));
   });
 });
