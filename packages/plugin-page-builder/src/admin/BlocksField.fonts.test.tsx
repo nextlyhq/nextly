@@ -131,6 +131,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  useBeforeDocumentAction: () => {},
+  useDocumentActions: () => null,
   useDocumentStatus: () => null,
   /*
    * Reached only on the refusal path, where `site-style-client` asks it to turn

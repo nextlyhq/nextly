@@ -148,7 +148,7 @@ import {
   runWithRestLimitGate,
   type RestLimitTarget,
 } from "./middleware/rest-limit-gate";
-import { createRestLimits } from "./middleware/rest-limits";
+import { createRestLimits, restLimitCounts } from "./middleware/rest-limits";
 import { createSecurityHeadersMiddleware } from "./middleware/security-headers";
 import type { PluginAdminWidget } from "./plugins/admin-contributions";
 import {
@@ -2431,6 +2431,9 @@ export function createDynamicHandlers(options?: {
     {
       enabled: true,
       ...(rateLimitConfig ?? {}),
+      // Where core's own limits count, read per call: the services may not
+      // be registered yet when the handler is built.
+      store: restLimitCounts(rateLimitConfig, ensureServicesInitialized),
       trustProxy:
         rateLimitConfig?.trustProxy ?? securityConfig?.trustProxy ?? false,
       trustedProxyIps:
