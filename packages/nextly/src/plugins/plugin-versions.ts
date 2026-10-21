@@ -23,6 +23,7 @@
 import {
   assertDocumentUpdatable,
   assertVersionDocumentReadable,
+  redactSnapshotForUser,
   resolveVersionsPolicy,
   stripAutosavePasswords,
 } from "../api/versions-access";
@@ -38,6 +39,7 @@ import {
 } from "../direct-api/namespaces/helpers";
 import type { DirectAPIConfig } from "../direct-api/types";
 import type { UserContext } from "../domains/singles/types";
+import { discardWorkingDraft } from "../domains/versions/discard-working-draft";
 import {
   serializeVersionSnapshot,
   type AutosaveWriteResult,
@@ -279,6 +281,50 @@ function refuseOtherAuthor(
   });
 }
 
+/**
+ * A checked discard, made the way REST's is: through the shared discard,
+ * which removes the draft while it holds the document, so a save landing
+ * meanwhile is not lost, and records the discard in the document's history.
+ *
+ * That record names who acted, and a plugin does not know an API key's own
+ * id, so a discard made with a key is refused rather than recorded against
+ * the key's owner, who did not make it. The count is of the drafts removed.
+ */
+async function discardAsWriter(
+  versions: VersionsService,
+  ref: VersionRef,
+  locale: string | null,
+  writer: HistoryWriter
+): Promise<number> {
+  if (writer.actor.id === undefined) {
+    throw NextlyError.forbidden({
+      logContext: {
+        // A key's own id does not reach plugin services yet, so a discard
+        // made with one cannot be recorded as the key.
+        reason: "checked-history-discard-by-key",
+        scopeKind: ref.scopeKind,
+        scopeSlug: ref.scopeSlug,
+        entryId: ref.entryId,
+      },
+    });
+  }
+  // Only collections and Singles have a working draft; page history was
+  // refused before this, when the writer was judged.
+  const scopeKind = ref.scopeKind === "single" ? "single" : "collection";
+  const before = await versions.listWorkingDraftParts(ref);
+  await discardWorkingDraft({
+    scopeKind,
+    slug: ref.scopeSlug,
+    entryId: ref.entryId,
+    user: writer.user,
+    locale,
+    authenticatedScope: writer.authenticatedScope,
+    actor: writer.actor,
+  });
+  const after = await versions.listWorkingDraftParts(ref);
+  return Math.max(0, before.length - after.length);
+}
+
 /** `ctx.services.versions`' writes, over the host's versions service. */
 export function pluginVersionWrites(
   service: () => VersionsService
@@ -299,14 +345,26 @@ export function pluginVersionWrites(
           writer.actor.id === undefined
             ? undefined
             : { actor: writer.actor, personName: writer.user.name ?? null };
-        return service().setLabel(ref, versionNo, label, namer);
+        const row = await service().setLabel(ref, versionNo, label, namer);
+        // The version is a copy of the document, so it is handed back as the
+        // caller may read it: a field their read rules withhold stays out, as
+        // it does from every version read.
+        await redactSnapshotForUser(
+          row.snapshot,
+          ref.scopeKind,
+          ref.scopeSlug,
+          writer.user,
+          writer.authenticatedScope
+        );
+        return row;
       });
     },
 
     deleteWorkingDraft(ref, locale, opts) {
       return asCalled(opts, async resolved => {
-        await checkedWriter(ref, resolved, "discard");
-        return service().deleteWorkingDraft(ref, locale);
+        const writer = await checkedWriter(ref, resolved, "discard");
+        if (!writer) return service().deleteWorkingDraft(ref, locale);
+        return discardAsWriter(service(), ref, locale, writer);
       });
     },
 

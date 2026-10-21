@@ -796,9 +796,9 @@ export async function stripAutosavePasswords(
   // `page` scopes hold block documents rather than user-defined fields, and
   // field resolution has no answer for them.
   if (scopeKind !== "collection" && scopeKind !== "single") return;
-  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
-    return;
-  }
+  // An object or a list of rows: the stripper walks both. REST's autosave
+  // takes only an object; a plugin's may be any value the store takes.
+  if (!snapshot || typeof snapshot !== "object") return;
   const fields = await autosaveFieldsOrRefuse(scopeKind, slug);
   if (fields.length === 0) return;
 
