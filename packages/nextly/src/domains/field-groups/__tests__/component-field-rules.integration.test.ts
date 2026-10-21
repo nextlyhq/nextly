@@ -57,15 +57,31 @@ const onlyAllowed = ({ user }: { user: unknown }) =>
 const whileSecretStored = ({ data }: { data?: Doc }) =>
   typeof data?.secret === "string";
 
+/**
+ * Readable by a caller holding `update-site`: the editors' role does, and a
+ * key they own scoped without it does not, so it tells the key's grants
+ * from its owner's.
+ */
+const holdsUpdateSite = ({
+  permissions,
+}: {
+  permissions?: readonly string[];
+}) => permissions?.includes("update-site") === true;
+
 /** The guarded fields every field group and the collection itself carries. */
 const guarded = () => [
   text({ name: "secret", access: { read: onlyAllowed } }),
   text({ name: "label", access: { read: whileSecretStored } }),
+  text({ name: "ownerOnly", access: { read: holdsUpdateSite } }),
 ];
 
 /** Values for the guarded fields, marked with where they were written. */
 function guardedValues(tag: string): Doc {
-  return { secret: `secret-${tag}`, label: `label-${tag}` };
+  return {
+    secret: `secret-${tag}`,
+    label: `label-${tag}`,
+    ownerOnly: `owner-${tag}`,
+  };
 }
 
 function typed(type: string, data: Doc): Doc {
@@ -282,6 +298,16 @@ describe.each(getConfiguredTestDialects())(
         singles: [
           defineSingle({
             slug: "site",
+            hooks: {
+              // Hands back a field-group value the stored row does not hold,
+              // so the update's response carries one to judge.
+              afterChange: [
+                ({ data }: { data: Doc }) => ({
+                  ...data,
+                  one: { heading: "h-hook", ...guardedValues("hook") },
+                }),
+              ],
+            },
             fields: [
               text({ name: "title" }),
               fieldGroup({ name: "one", component: "note" }),
@@ -468,15 +494,83 @@ describe.each(getConfiguredTestDialects())(
         expect((allowed.one as Doc).secret).toBe("secret-site");
       });
 
-      it("never echoes, in an update's response, a field-group value the writer may not read", async () => {
-        const result = await checkedAs("editor").updateSingle({
+      it("withholds, in an update's response, a field-group field the writer may not read", async () => {
+        const result = (await checkedAs("editor").updateSingle({
           slug: "site",
           data: { title: "s2", one: { heading: "h2", ...guardedValues("w") } },
+        } as never)) as Doc & { item?: Doc };
+        const doc = result.item ?? result;
+        // The instance the afterChange hook handed back, judged by its rules.
+        const one = doc.one as Doc;
+        expect(one.heading).toBe("h-hook");
+        expect(one.label).toBe("label-hook");
+        expect(one).not.toHaveProperty("secret");
+      });
+    });
+
+    describe("a scoped API key", () => {
+      // Owned by the editor, who holds `update-site`; the key does not.
+      const asKey = () =>
+        new Nextly({
+          overrideAccess: false,
+          user: { id: editorId },
+          actor: {
+            actorType: "apiKey",
+            permissions: [
+              "create-pages",
+              "read-pages",
+              "read-authors",
+              "read-site",
+            ],
+          },
         } as never);
-        // The response carries no field-group instance to judge, so the
-        // property is the one a reader relies on: the value is not in it.
-        expect(JSON.stringify(result)).toContain("s2");
-        expect(JSON.stringify(result)).not.toContain("secret-w");
+      const ownerOnlyIn = (doc: Doc) =>
+        noteInstances(doc).map(note => "ownerOnly" in note);
+
+      it("is judged by its own grants in a related row, a create's response and a Single", async () => {
+        const { item: author } = await trusted.create({
+          collection: "authors",
+          data: {
+            name: "key-author",
+            box: { inBox: { heading: "h", ...guardedValues("key-author") } },
+          },
+        } as never);
+        const id = await seed("key", { author: String(author.id) });
+
+        // The owner, the control: the rule lets them read it.
+        const asOwner = (await checkedAs("editor").findByID({
+          collection: "pages",
+          id,
+          depth: 1,
+        } as never)) as Doc;
+        expect(ownerOnlyIn(asOwner.author as Doc)).toContain(true);
+
+        const read = (await asKey().findByID({
+          collection: "pages",
+          id,
+          depth: 1,
+        } as never)) as Doc;
+        const related = noteInstances(read.author as Doc);
+        expect(related.length).toBeGreaterThan(0);
+        expect(related.map(note => "ownerOnly" in note)).toEqual(
+          related.map(() => false)
+        );
+
+        const created = (
+          await asKey().create({
+            collection: "pages",
+            data: pageData("key-write"),
+          } as never)
+        ).item as Doc;
+        expect(ownerOnlyIn(created)).toEqual(
+          noteInstances(created).map(() => false)
+        );
+
+        const single = (await asKey().findSingle({
+          slug: "site",
+        } as never)) as Doc;
+        expect(single.one).toBeDefined();
+        expect(single.one).not.toHaveProperty("ownerOnly");
       });
     });
 

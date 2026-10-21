@@ -52,6 +52,30 @@ describe("applyComponentReadAccess", () => {
     expect(JSON.stringify(entry)).not.toMatch(/S-\d/);
     expect(JSON.stringify(entry)).toContain('"b"');
   });
+
+  it("judges a single component by its declared component, whatever type it claims", async () => {
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "title", type: "text" },
+      { name: "secret", type: "text", access: denied },
+    ]);
+    // `plain` declares no rule: a value retagged as it must not escape `card`.
+    registerFieldFunctions("fieldGroup", "plain", [
+      { name: "title", type: "text" },
+    ]);
+    const entry = {
+      hero: { _componentType: "plain", title: "a", secret: "S-1" },
+    };
+
+    await applyComponentReadAccess(
+      entry,
+      fields({ name: "hero", type: "component", component: "card" }),
+      new Map(),
+      caller
+    );
+
+    expect(entry.hero).not.toHaveProperty("secret");
+    expect(entry.hero.title).toBe("a");
+  });
 });
 
 describe("fieldsCarryingReadRules", () => {
