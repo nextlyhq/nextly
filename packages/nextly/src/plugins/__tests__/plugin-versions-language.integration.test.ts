@@ -36,7 +36,10 @@ import {
 
 /** The version whose language the gate refuses, set by a case. */
 const refuse = vi.hoisted(() => ({ versionOf: "" }));
-const asked = vi.hoisted(() => ({ versions: [] as number[] }));
+const asked = vi.hoisted(() => ({
+  versions: [] as number[],
+  hookInputs: [] as unknown[],
+}));
 
 vi.mock("../../api/versions-access", async importOriginal => {
   const actual =
@@ -44,8 +47,13 @@ vi.mock("../../api/versions-access", async importOriginal => {
   return {
     ...actual,
     assertVersionLanguageReadable: vi.fn(
-      async (document: { entryId: string }, versionNo: number) => {
+      async (
+        document: { entryId: string },
+        versionNo: number,
+        hookInputs?: unknown
+      ) => {
         asked.versions.push(versionNo);
+        asked.hookInputs.push(hookInputs);
         if (document.entryId === refuse.versionOf) {
           throw NextlyError.notFound({
             logContext: { reason: "test-language-refused" },
@@ -145,6 +153,18 @@ describe.each(getConfiguredTestDialects())(
         refuse.versionOf = "";
       }
       expect((await versions.get(ref, 1)).label ?? null).toBeNull();
+    });
+
+    it("hands the language's read hooks the context the plugin passes", async () => {
+      // The language is judged by a read of the document in it, so its hooks
+      // see what the caller's own read would, as the document gate's do.
+      const ref = await published("hooked language");
+      asked.hookInputs.length = 0;
+      await versions.setLabel(ref, 1, "named", undefined, {
+        ...asEditor(),
+        context: { tenant: "acme" },
+      });
+      expect(asked.hookInputs).toEqual([{ context: { tenant: "acme" } }]);
     });
 
     it("asks about the version it names, and names it when allowed", async () => {

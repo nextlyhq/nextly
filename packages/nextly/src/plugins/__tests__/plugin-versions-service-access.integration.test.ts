@@ -459,6 +459,26 @@ describe.each(getConfiguredTestDialects())(
         ]);
       });
 
+      it("hands the discard's own read of the document the context the plugin passes", async () => {
+        // The discard reads the live document before it removes the draft;
+        // a hook that needs the caller's context there gets it.
+        const ref = await withWorkingDraft(NOTES);
+        const needsContext = (ctx: { context: Record<string, unknown> }) => {
+          if (ctx.context.allow !== true) throw new Error("needs its context");
+          return (ctx as { data?: unknown }).data;
+        };
+        registerHook("beforeRead", NOTES, needsContext as never);
+        try {
+          await versions.deleteWorkingDraft(ref, null, {
+            ...asUser(editorId),
+            context: { allow: true },
+          });
+        } finally {
+          unregisterHook("beforeRead", NOTES, needsContext as never);
+        }
+        expect(await draftParts(ref)).toEqual([]);
+      });
+
       it("is refused to an API key, whose own id a plugin cannot name, and the draft stays", async () => {
         const ref = await withWorkingDraft(NOTES);
         await expect(
