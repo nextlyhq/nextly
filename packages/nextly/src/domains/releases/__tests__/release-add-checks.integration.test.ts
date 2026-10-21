@@ -214,6 +214,8 @@ describe.each(getConfiguredTestDialects())(
           userId: owner,
           overrideAccess: false,
           authenticatedScope: { actorType: "apiKey", permissions },
+          // The key's own id, which the release's history names it by.
+          apiKeyId: "memo-key",
         });
       const writes = [
         "create-content-releases",

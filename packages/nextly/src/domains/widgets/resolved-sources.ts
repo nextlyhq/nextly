@@ -105,7 +105,51 @@ export interface ResolverOptions {
    * the state every resolver was in before this existed.
    */
   signal?: AbortSignal;
+  /**
+   * Work this resolver may share with its other calls in the same batch.
+   *
+   * The host hands each source its own view, so a key one source chooses never
+   * reaches another source's computation, and builds a new scope for every
+   * request, so nothing is shared across batches or across callers. A resolver
+   * that ignores it does its work per call, as before.
+   *
+   * @experimental
+   */
+  scope?: WidgetScope;
 }
+
+/**
+ * Work shared within one batch, for one caller.
+ *
+ * `getOrCompute` runs `compute` the first time a key is asked for and hands every
+ * later asker, concurrent ones included, the same in-flight promise: two cards
+ * reading the same scan share one scan. A computation that rejects is not kept,
+ * so a later asker runs it again rather than inheriting one failure for the
+ * whole batch.
+ *
+ * @experimental
+ */
+export interface WidgetScope {
+  getOrCompute<T>(key: string, compute: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Answers several of one source's queries in one call, for one caller.
+ *
+ * One entry per query, by position: a `WidgetResult`, or an `Error` for a query
+ * this source could not answer, which fails that query alone. The host answers
+ * a source with this only when it has more than one query from the source in a
+ * batch; with one, it calls the source's `SourceResolver`. An answer whose
+ * length is not the number of queries fails the whole group, since its entries
+ * could not be matched to their queries.
+ *
+ * @experimental
+ */
+export type ManySourceResolver = (
+  queries: readonly WidgetQuery[],
+  caller: ReadCaller,
+  opts?: ResolverOptions
+) => Promise<ReadonlyArray<WidgetResult | Error>>;
 
 /**
  * Answers one source's query, for one caller.
@@ -142,11 +186,22 @@ export type ResolvedWidgetSource = WidgetSource & { kind: "system" | "plugin" };
  * On `globalThis` so they survive the module re-evaluation Next.js and
  * Turbopack perform, matching the source store beside them.
  */
+/**
+ * What answers one source: its one-query resolver, and the many-query one when
+ * its author wrote it. ONE value per source, so which functions answer an id is
+ * a single decision; a second map could hold a many-query resolver for a source
+ * the first no longer answers.
+ */
+export interface SourceAnswerers {
+  resolve: SourceResolver;
+  resolveMany?: ManySourceResolver;
+}
+
 const globalForResolvers = globalThis as unknown as {
-  __nextly_systemResolvers?: Map<string, SourceResolver>;
+  __nextly_systemResolvers?: Map<string, SourceAnswerers>;
 };
 
-function resolvers(): Map<string, SourceResolver> {
+function resolvers(): Map<string, SourceAnswerers> {
   globalForResolvers.__nextly_systemResolvers ??= new Map();
   return globalForResolvers.__nextly_systemResolvers;
 }
@@ -178,7 +233,8 @@ function resolvers(): Map<string, SourceResolver> {
  */
 export function registerResolvedSource(
   source: ResolvedWidgetSource,
-  resolve: SourceResolver
+  resolve: SourceResolver,
+  resolveMany?: ManySourceResolver
 ): void {
   if (!RESOLVER_ANSWERED_KINDS.has(source?.kind)) {
     // `invalidInput`, matching `sources.ts`: a source registered by core or by
@@ -191,13 +247,29 @@ export function registerResolvedSource(
         `"${String(source?.kind)}"`,
     });
   }
+  // Checked here as well as in the plugin fold, since core registers through this
+  // door too: a value that is not a function would only fail when a batch first
+  // grouped this source's queries.
+  if (resolveMany !== undefined && typeof resolveMany !== "function") {
+    throw NextlyError.invalidInput({
+      message: `Invalid widget source: ${String(source.id)}: resolveMany must be a function`,
+    });
+  }
   const registered = registerSource(source);
-  resolvers().set(registered.id, resolve);
+  resolvers().set(
+    registered.id,
+    resolveMany === undefined ? { resolve } : { resolve, resolveMany }
+  );
 }
 
-/** The resolver for `sourceId`, or `undefined` when nothing answers it. */
-export function sourceResolver(sourceId: string): SourceResolver | undefined {
+/** What answers `sourceId`, or `undefined` when nothing does. */
+export function sourceAnswerers(sourceId: string): SourceAnswerers | undefined {
   return resolvers().get(sourceId);
+}
+
+/** The one-query resolver for `sourceId`, or `undefined` when nothing answers it. */
+export function sourceResolver(sourceId: string): SourceResolver | undefined {
+  return sourceAnswerers(sourceId)?.resolve;
 }
 
 /**

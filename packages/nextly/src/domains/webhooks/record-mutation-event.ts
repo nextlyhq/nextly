@@ -25,7 +25,9 @@ import type {
 import { markWriteIntegrityFailure } from "../../shared/write-integrity";
 import {
   recordMutationActivity,
+  recordSingleActivity,
   type RecordMutationActivityInput,
+  type RecordSingleActivityInput,
 } from "../audit/record-activity";
 
 import { buildEnvelope } from "./envelope";
@@ -154,9 +156,10 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
  * Only the three primary entry events map. The lifecycle events
  * (`entry.published` and its siblings) and a collection's curated event
  * accompany one of them for the SAME write, so mapping those too would file one
- * change as several. Singles are absent deliberately: the trail's scope column
- * is read as a collection slug by everything that renders it, and a single's
- * slug there would resolve to a collection that does not exist.
+ * change as several. Singles are absent: a Single's save is recorded through
+ * its own seam ({@link recordSingleSaveActivity}), once per save, because one
+ * save can append several Single events (an update, a publish, one per
+ * language swept) and the trail records the save, not the events.
  */
 const ACTIVITY_ACTIONS: Partial<Record<WebhookEventType, ActivityLogAction>> = {
   "entry.created": "create",
@@ -178,25 +181,27 @@ async function recordActivity(
   args: RecordMutationEventArgs
 ): Promise<void> {
   const action = ACTIVITY_ACTIONS[args.type];
-  if (!action || args.resource.kind !== "entry") return;
-  await writeActivity(db, {
-    action,
-    collection: args.resource.collection,
-    ...(args.resource.id !== undefined ? { entryId: args.resource.id } : {}),
-    // 🔴 DERIVED from the resource the event already carries, not passed
-    // separately. The write sites that know a language already record it there
-    // for receivers to route on, so taking it from one place means a site
-    // cannot report a locale to a subscriber and a different one — or none — to
-    // the activity trail. A resource without a locale leaves the column NULL,
-    // which the feed reads as the default language: exactly what an unlocalized
-    // write, and every row predating the column, already meant.
-    ...(args.resource.locale !== undefined
-      ? { locale: args.resource.locale }
-      : {}),
-    data: args.data,
-    previous: args.previous ?? null,
-    actor: webhookActorOf(args.actor),
-  });
+  // Held in a const so the narrowing to an entry reaches the callback below.
+  const resource = args.resource;
+  if (!action || resource.kind !== "entry") return;
+  await writeActivity(() =>
+    recordMutationActivity(db, {
+      action,
+      collection: resource.collection,
+      ...(resource.id !== undefined ? { entryId: resource.id } : {}),
+      // 🔴 DERIVED from the resource the event already carries, not passed
+      // separately. The write sites that know a language already record it there
+      // for receivers to route on, so taking it from one place means a site
+      // cannot report a locale to a subscriber and a different one — or none — to
+      // the activity trail. A resource without a locale leaves the column NULL,
+      // which the feed reads as the default language: exactly what an unlocalized
+      // write, and every row predating the column, already meant.
+      ...(resource.locale !== undefined ? { locale: resource.locale } : {}),
+      data: args.data,
+      previous: args.previous ?? null,
+      actor: webhookActorOf(args.actor),
+    })
+  );
 }
 
 /**
@@ -208,12 +213,9 @@ async function recordActivity(
  * change with no entry describing it — the exact outcome recording inside the
  * transaction exists to prevent.
  */
-async function writeActivity(
-  db: () => ActivityWriteDb,
-  input: RecordMutationActivityInput
-): Promise<void> {
+async function writeActivity(record: () => Promise<void>): Promise<void> {
   try {
-    await recordMutationActivity(db, input);
+    await record();
   } catch (err) {
     throw markWriteIntegrityFailure(err);
   }
@@ -232,7 +234,23 @@ export async function recordEntryActivity(
   tx: TransactionContext,
   input: RecordMutationActivityInput
 ): Promise<void> {
-  await writeActivity(() => tx.getDrizzle(), input);
+  await writeActivity(() =>
+    recordMutationActivity(() => tx.getDrizzle(), input)
+  );
+}
+
+/**
+ * Record one save of a Single in the activity trail, in the save's transaction.
+ *
+ * Called once per save whatever the save appends to the outbox, and outside the
+ * outbox gate, for the reason {@link recordActivity} gives: the trail answers
+ * who changed what on every install, webhooks or not.
+ */
+export async function recordSingleSaveActivity(
+  tx: TransactionContext,
+  input: RecordSingleActivityInput
+): Promise<void> {
+  await writeActivity(() => recordSingleActivity(() => tx.getDrizzle(), input));
 }
 
 export async function recordMutationEvent(

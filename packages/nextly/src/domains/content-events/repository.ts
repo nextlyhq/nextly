@@ -9,7 +9,20 @@
  * @experimental
  */
 
-import { and, asc, desc, eq, inArray, isNull, lt, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  inArray,
+  isNull,
+  lt,
+  notExists,
+  or,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { toDbError } from "../../database/errors";
 import { NextlyError } from "../../errors";
@@ -65,6 +78,12 @@ export interface ContentEventQuery {
   parts?: readonly string[];
   /** Only events of these kinds. */
   kinds?: readonly string[];
+  /**
+   * The parts the reader may be shown. An event that involved none of them is
+   * left out, unless it involved no part at all, and each event's parts are
+   * narrowed to them. Absent shows every part.
+   */
+  visibleParts?: readonly string[];
   /** At most this many events. */
   limit: number;
   /** Only events older than this event (its id), for the next page. */
@@ -131,7 +150,7 @@ export class ContentEventsRepository extends BaseService {
         ...row,
         occurredAt: new Date(row.occurredAt),
         payload: parsedPayload(row.payload),
-        parts: partsByEvent.get(row.id) ?? [],
+        parts: visibleOf(partsByEvent.get(row.id) ?? [], query.visibleParts),
       })),
       nextBefore:
         rows.length > query.limit ? (page[page.length - 1]?.id ?? null) : null,
@@ -233,6 +252,9 @@ export class ContentEventsRepository extends BaseService {
     if (query.parts?.length) {
       conditions.push(inArray(this.parts.part, [...query.parts]));
     }
+    if (query.visibleParts !== undefined) {
+      conditions.push(this.involvesVisiblePart(query.visibleParts));
+    }
     if (query.life !== undefined) {
       conditions.push(
         query.life === "current"
@@ -241,6 +263,30 @@ export class ContentEventsRepository extends BaseService {
       );
     }
     return and(...conditions);
+  }
+
+  /**
+   * An event that involved one of these parts, or no part at all: one about
+   * the whole document rather than any part of it.
+   */
+  private involvesVisiblePart(visible: readonly string[]): SQL {
+    const partsOfEvent = eq(this.parts.eventId, this.events.id);
+    const noPart = notExists(
+      this.db
+        .select({ one: sql`1` })
+        .from(this.parts)
+        .where(partsOfEvent)
+    );
+    if (visible.length === 0) return noPart;
+    return or(
+      noPart,
+      exists(
+        this.db
+          .select({ one: sql`1` })
+          .from(this.parts)
+          .where(and(partsOfEvent, inArray(this.parts.part, [...visible])))
+      )
+    )!;
   }
 
   /** One row more than the page, which says whether another page exists. */
@@ -314,6 +360,15 @@ export class ContentEventsRepository extends BaseService {
     for (const parts of byEvent.values()) parts.sort();
     return byEvent;
   }
+}
+
+/** An event's parts, narrowed to those the reader may be shown. */
+function visibleOf(
+  parts: string[],
+  visible: readonly string[] | undefined
+): string[] {
+  if (visible === undefined) return parts;
+  return parts.filter(part => visible.includes(part));
 }
 
 /**

@@ -189,8 +189,10 @@ function frameRules(state: CardState, error: string | null) {
  * an empty or unavailable card's has nothing more to show. It claims no freshness: the timestamp
  * is when the BATCH landed, which is true of the request and not of this card -- "Updated just
  * now" printed under "This card couldn't load" tells the reader the opposite of what happened.
- * And it offers no quick setting, which would change a question the card is not answering, nor
- * one in customise mode, where the card's menu stands in that place. Here rather than at each
+ * It offers the quick setting only once the card has an answer, content or "nothing yet" -- an
+ * empty card is answering, and changing its range may well fill it -- and never while it is
+ * loading, failed or unavailable, where it would change a question the card is not answering,
+ * nor in customise mode, where the card's menu stands in that place. Here rather than at each
  * caller, so an archetype added later inherits all of it rather than having to remember it.
  */
 function frameExtras(
@@ -199,7 +201,7 @@ function frameExtras(
   customizing: boolean
 ) {
   return {
-    quick: rules.showsContent && !customizing ? props.quick : undefined,
+    quick: rules.settled && !customizing ? props.quick : undefined,
     freshness: rules.settled ? (props.updatedAt ?? null) : null,
     link: rules.showsContent ? props.link : undefined,
   };

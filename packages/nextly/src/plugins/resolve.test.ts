@@ -383,15 +383,16 @@ describe("resolvePlugins: schemaVersion declarations", () => {
       },
     } as Partial<PluginDefinition>);
 
-  it("reads the versions in the order the modules run, not as listed", () => {
-    // Listed `002` (v1) then `001` (v2): highest 2, as declared, but `002`
-    // runs last and leaves the database at 1.
+  it("reads the versions in the order the modules run, not by the highest", () => {
+    // `001` (v2) then `002` (v1): highest 2, as declared, but `002` runs
+    // last and leaves the database at 1. Listed in name order, as a plugin
+    // must list them, so only the version check can refuse it.
     expect(() =>
       resolvePlugins(
         [
           shipping(2, [
-            ["002_backfill", 1],
             ["001_init", 2],
+            ["002_backfill", 1],
           ]),
         ],
         opts
@@ -402,8 +403,8 @@ describe("resolvePlugins: schemaVersion declarations", () => {
       resolvePlugins(
         [
           shipping(2, [
-            ["002_more", 2],
             ["001_init", 1],
+            ["002_more", 2],
           ]),
         ],
         opts
@@ -575,5 +576,28 @@ describe("resolvePlugins: schemaVersion declarations", () => {
         opts
       )
     ).toHaveLength(1);
+  });
+
+  it("refuses modules listed out of the order of their names, naming the first out of place", () => {
+    // They would run in name order, which is not the order the plugin wrote;
+    // refused when the configuration loads, before anything runs.
+    let refusal: unknown;
+    try {
+      resolvePlugins(
+        [
+          shipping(2, [
+            ["002_more", 2],
+            ["001_init", 1],
+          ]),
+        ],
+        opts
+      );
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toMatchObject({
+      code: "PLUGIN_MIGRATIONS_OUT_OF_ORDER",
+      logContext: { migration: "001_init", listedAfter: "002_more" },
+    });
   });
 });

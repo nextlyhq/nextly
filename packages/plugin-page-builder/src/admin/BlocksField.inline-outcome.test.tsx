@@ -18,7 +18,13 @@
  * @module admin/BlocksField.inline-outcome.test
  */
 import { ShortcutProvider } from "@nextlyhq/ui";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import * as React from "react";
 import {
   useForm,
@@ -52,6 +58,12 @@ let commits = 0;
  * had just typed, which is the entire defect.
  */
 let savedFrom: unknown;
+
+/**
+ * What the editor asked to run before an action stores the document, as the
+ * editor hosting it registers it. Called here the way that host calls it.
+ */
+let beforeAction: ((action: string) => void | Promise<void>) | undefined;
 
 /** The save-as-pattern verb the editor published, so a test can run it. */
 let offeredSaveVerb: (() => void) | undefined;
@@ -246,6 +258,10 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentCheckpoint: () => ({ schedule: () => {} }),
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
+  useBeforeDocumentAction: (handler: (action: string) => void) => {
+    beforeAction = handler;
+  },
+  useDocumentActions: () => null,
   useSuppressAdminChrome: () => {},
   useDocumentStatus: () => null,
   useSingleDocument: () => ({
@@ -337,6 +353,7 @@ beforeEach(() => {
   commits = 0;
   savedFrom = undefined;
   offeredSaveVerb = undefined;
+  beforeAction = undefined;
 });
 
 afterEach(() => {
@@ -422,19 +439,19 @@ describe("leaving the editor with an inline edit that could not be written", () 
   });
 });
 
-describe("the save shortcut with an inline edit that could not be written", () => {
+describe("saving with an inline edit that could not be written", () => {
   /**
-   * The save chord, on the document, where the capture-phase listener sits.
-   *
-   * Control rather than Command because `mod` resolves per platform and jsdom
-   * reports a non-Apple one. Pressing Command here would assert that the
-   * WRONG modifier saves, which is the defect the exact matcher removes.
+   * A save started any way at all: the editor hosting this asks every action
+   * that stores the document to wait for what the builder registered, and that
+   * is what this calls.
    */
-  function pressSave(): void {
-    fireEvent.keyDown(document, { key: "s", ctrlKey: true });
+  async function save(): Promise<void> {
+    await act(async () => {
+      await beforeAction?.("save");
+    });
   }
 
-  it("still saves the rest of the document when the passage was refused", () => {
+  it("still saves the rest of the document when the passage was refused", async () => {
     /*
      * The opposite of leaving. Withholding the save would lose everything else
      * the author had done in order to protect a paragraph that is not going
@@ -444,49 +461,31 @@ describe("the save shortcut with an inline edit that could not be written", () =
     outcome = { status: "refused", reason: "moved-on" };
 
     openEditor();
-    pressSave();
+    await save();
 
     expect(saved).toMatchObject({ kind: "page" });
     expect(exit).not.toHaveBeenCalled();
     expect(errors).toHaveLength(1);
   });
 
-  it("ignores a modified variant the form does not treat as save", () => {
-    /*
-     * `mod+s` is matched EXACTLY by the shortcut manager, so Ctrl+Shift+S does
-     * not submit the form. A broader predicate here would finish the passage
-     * and change the field for a keystroke that saved nothing — and on several
-     * platforms Ctrl+Shift+S is the browser's Save As, so the author would be
-     * looking at a file dialog while it happened.
-     */
+  it("finishes the passage for a save started without the keyboard", async () => {
+    // Nothing is pressed: a button or a menu item saves through the same
+    // request, which the old shortcut listener never heard.
     outcome = { status: "unchanged" };
 
     openEditor();
-    fireEvent.keyDown(document, { key: "s", ctrlKey: true, shiftKey: true });
-
     expect(saved).toBeUndefined();
-
-    fireEvent.keyDown(document, { key: "s", ctrlKey: true, altKey: true });
-
-    expect(saved).toBeUndefined();
-
-    // The platform's OTHER modifier is not the chord either, and this is the
-    // control: an assertion that nothing ever saves would pass the two above.
-    fireEvent.keyDown(document, { key: "s", metaKey: true });
-
-    expect(saved).toBeUndefined();
-
-    pressSave();
+    await save();
 
     expect(saved).toMatchObject({ kind: "page" });
   });
 
-  it("saves without complaining when the edit finished normally", () => {
+  it("saves without complaining when the edit finished normally", async () => {
     // The control: a message on every save would train the author to ignore it.
     outcome = { status: "unchanged" };
 
     openEditor();
-    pressSave();
+    await save();
 
     expect(saved).toMatchObject({ kind: "page" });
     expect(errors).toEqual([]);

@@ -143,7 +143,7 @@ export function OverTimeChart({
       labelHeading={labelHeading}
       rows={tableRows(series, domain)}
     >
-      {({ titleId, descId, title: heading, description: text }) => (
+      {({ descId, title: heading, description: text }) => (
         <ChartReachArea
           reach={reach}
           name={chartName({
@@ -162,15 +162,15 @@ export function OverTimeChart({
             <div className="flex gap-1.5">
               {tier === "small" ? null : <ValueAxis highest={highest} />}
               <div className="relative min-w-0 flex-1">
+                {/* Drawn for sight and hidden from assistive tech: the area around it is the
+                    chart's one accessible object, named and described once. No `<title>`, which a
+                    browser would also show as a hover tooltip over the chart's own. */}
                 <svg
-                  role="img"
-                  aria-labelledby={titleId}
-                  aria-describedby={descId}
+                  aria-hidden="true"
                   viewBox={`0 0 ${BOX.width} ${BOX.height}`}
                   preserveAspectRatio="none"
                   className="block h-16 w-full"
                 >
-                  <title id={titleId}>{heading}</title>
                   <desc id={descId}>{text}</desc>
                   {tier === "small" ? null : <Gridlines />}
                   {series.map((line, index) => (

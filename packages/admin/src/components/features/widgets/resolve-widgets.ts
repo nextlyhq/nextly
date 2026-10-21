@@ -19,7 +19,7 @@ import type {
   WidgetSize,
   WidgetStatCell,
   WidgetChrome,
-  WidgetSetting,
+  AnyWidgetSetting,
 } from "nextly/config";
 import { widgetGateHolds } from "nextly/widget-gate";
 
@@ -84,7 +84,7 @@ export interface ReadableWidgetDeclaration {
    * The settings this widget offers, carried from whichever channel declared
    * it. The reader's stored answers live on the placement.
    */
-  settings?: WidgetSetting[];
+  settings?: AnyWidgetSetting[];
   id: string;
   size?: "full" | "half";
   requiredPermission?: string | readonly string[];

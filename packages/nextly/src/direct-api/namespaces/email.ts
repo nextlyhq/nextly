@@ -400,6 +400,8 @@ export function createEmailTemplatesNamespace(
           layoutId: args.data.layoutId,
           fromOverride: args.data.fromOverride,
           replyTo: args.data.replyTo,
+          cc: args.data.cc,
+          bcc: args.data.bcc,
           useLayout: args.data.useLayout,
           variables: args.data.variables,
           attachments: args.data.attachments,

@@ -191,6 +191,8 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useEntryFieldsPanel: () => null,
   useReportUnsavedWork: () => {},
   useSuppressAdminChrome: () => {},
+  useBeforeDocumentAction: () => {},
+  useDocumentActions: () => null,
   useDocumentStatus: () => null,
   // Nothing stored, read successfully — so `siteStylePending` and
   // `siteStyleError` both resolve to their "ready" values on the first

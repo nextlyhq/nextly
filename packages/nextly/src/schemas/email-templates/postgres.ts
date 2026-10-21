@@ -182,6 +182,16 @@ export const emailTemplatesPg = pgTable(
     replyTo: text("reply_to"),
 
     /**
+     * Fixed addresses copied on every send of the template, after the send's
+     * own copies. Never variables, and never on a template carrying a secret.
+     * Nullable, so it reaches an existing table as a plain ADD COLUMN.
+     */
+    cc: jsonb("cc").$type<string[]>(),
+
+    /** Fixed addresses blind-copied on every send, on the same rules as `cc`. */
+    bcc: jsonb("bcc").$type<string[]>(),
+
+    /**
      * Default attachments for this template. Merged with per-send
      * attachments at send time (dedupe by mediaId, per-send wins).
      * When null, no default attachments are applied.
@@ -218,6 +228,14 @@ export const emailTemplatesPg = pgTable(
      * update can be reviewed change by change against it.
      */
     baseVersion: jsonb("base_version").$type<EmailTemplateVersion>(),
+
+    /**
+     * Whether the template's owner marks it as carrying a secret (a reset or
+     * verification link). Written from the owner's declaration, never by an
+     * edit; kept so a plugin that is not running keeps its mark. Null reads as
+     * false.
+     */
+    carriesSecret: boolean("carries_secret"),
 
     /** When the template is sent, written by its owner (or the site). */
     description: text("description"),
